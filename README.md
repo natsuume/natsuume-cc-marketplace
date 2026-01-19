@@ -11,18 +11,18 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace
 特定のプラグインのみをインストールする場合：
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=git-workflow
+claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=git-guardrails
 ```
 
 ## プラグイン一覧
 
 | プラグイン | バージョン | 説明 |
 |-----------|-----------|------|
-| [git-workflow](#git-workflow) | 0.1.0 | GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン |
+| [git-guardrails](#git-guardrails) | 0.1.0 | GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン |
 
 ---
 
-## git-workflow
+## git-guardrails
 
 GitHub Flow に準拠した Git ワークフローを支援・強制するプラグインです。
 

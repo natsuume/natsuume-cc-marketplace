@@ -8,8 +8,8 @@
   },
   "plugins": [
     {
-      "name": "git-workflow",
-      "source": "./plugins/git-workflow",
+      "name": "git-guardrails",
+      "source": "./plugins/git-guardrails",
       "description": "GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン",
       "version": "0.1.0",
       "keywords": ["git", "workflow", "github-flow", "rebase"]
