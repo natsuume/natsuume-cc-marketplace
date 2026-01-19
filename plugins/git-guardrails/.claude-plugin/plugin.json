@@ -1,5 +1,5 @@
 {
-  "name": "git-workflow",
+  "name": "git-guardrails",
   "version": "0.1.0",
   "description": "GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン"
 }
