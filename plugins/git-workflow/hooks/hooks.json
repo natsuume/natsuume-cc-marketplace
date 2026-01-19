@@ -1,24 +1,19 @@
-[
-  {
-    "name": "block-default-branch-push",
-    "description": "デフォルトブランチへの直接 push を禁止し、PR 経由を強制する",
-    "event": "PreToolUse",
-    "matcher": {
-      "tool_name": "Bash",
-      "command_pattern": "git\\s+push"
-    },
-    "type": "prompt",
-    "prompt": "You are a Git workflow guardian that prevents direct pushes to the default branch.\n\nAnalyze the following Bash command to determine if it's attempting to push directly to the default branch.\n\n**Command to analyze:**\n{{tool_input.command}}\n\n**Rules:**\n1. Common default branch names: master, main, develop\n2. Block these patterns:\n   - `git push origin master` or `git push origin main`\n   - `git push` when explicitly targeting default branch\n   - Any push to refs/heads/master or refs/heads/main\n3. Allow these patterns:\n   - `git push origin <feature-branch>` (non-default branches)\n   - `git push --force-with-lease` to feature branches\n   - `git push -u origin <feature-branch>`\n\n**Important:**\n- If the command pushes to 'master' or 'main' branch directly, DENY it\n- If the command doesn't specify a branch or pushes to a feature branch, ALLOW it\n\nRespond with ONLY valid JSON (no markdown code blocks):\n\nIf pushing to default branch:\n{\"decision\": \"block\", \"reason\": \"デフォルトブランチ（master/main）への直接 push は禁止されています。PR を作成してマージしてください。\"}\n\nIf not pushing to default branch:\n{\"decision\": \"allow\"}"
-  },
-  {
-    "name": "enforce-draft-pr",
-    "description": "PR 作成時に自動的に draft PR として作成する",
-    "event": "PreToolUse",
-    "matcher": {
-      "tool_name": "Bash",
-      "command_pattern": "gh\\s+pr\\s+create"
-    },
-    "type": "prompt",
-    "prompt": "You are a PR workflow assistant that ensures all PRs are created as drafts.\n\nAnalyze the following command and modify it if necessary to include the --draft flag.\n\n**Command to analyze:**\n{{tool_input.command}}\n\n**Rules:**\n1. If the command already contains `--draft`, allow it as-is\n2. If the command does NOT contain `--draft`, add it to the command\n3. Insert `--draft` right after `gh pr create`\n\n**Examples:**\n- Input: `gh pr create --title \"feat: add feature\" --body \"description\"`\n- Output: `gh pr create --draft --title \"feat: add feature\" --body \"description\"`\n\n- Input: `gh pr create --draft --title \"feat: add feature\"`\n- Output: (no change needed, already has --draft)\n\nRespond with ONLY valid JSON (no markdown code blocks):\n\nIf already has --draft:\n{\"decision\": \"allow\"}\n\nIf needs --draft added:\n{\"decision\": \"allow\", \"updatedInput\": {\"command\": \"<modified command with --draft>\"}, \"systemMessage\": \"PR は draft として作成されます（GitHub Flow に準拠）\"}"
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-default-branch-push.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/enforce-draft-pr.sh"
+          }
+        ]
+      }
+    ]
   }
-]
+}
