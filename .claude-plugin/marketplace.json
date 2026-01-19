@@ -1,0 +1,18 @@
+{
+  "name": "natsuume-plugins",
+  "owner": {
+    "name": "natsuume"
+  },
+  "metadata": {
+    "description": "natsuume's personal Claude Code plugins"
+  },
+  "plugins": [
+    {
+      "name": "git-workflow",
+      "source": "./plugins/git-workflow",
+      "description": "GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン",
+      "version": "0.1.0",
+      "keywords": ["git", "workflow", "github-flow", "rebase"]
+    }
+  ]
+}
