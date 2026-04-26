@@ -209,7 +209,9 @@ REASON=$(cat <<EOF
 
 実行手順 (修正が落ち着くまでループ):
   1. /simplify  (コード変更を伴うため先に実行)
-  2. /codex:review  (read-only のコードレビュー)
+  2. /codex:review --wait  または  /codex:review --background
+     (read-only のコードレビュー。実行方式は Claude が自律判断し、ユーザーには
+      確認しないこと)
   3. 指摘箇所をすべて修正し、\`git add\` で再度ステージングする
   4. ステージング内容が変わったら手順 1〜2 を最初から再実行する
      (/codex:review の修正で /simplify 対象が増える可能性も、その逆もあるため、
@@ -217,6 +219,22 @@ REASON=$(cat <<EOF
   5. Claude の判断で「修正不要」になったら次へ進む
 
 ループ回数の上限は設けません。Claude が自身の判断で「修正不要」または「人間判断を仰ぐべき」と判断したタイミングで進行/エスカレートしてください。
+
+\`/codex:review\` の実行方式選択 (Claude が自律判断する):
+  - 原則 \`--wait\` (フォアグラウンド): pre-commit-review ループは review 結果を
+    受けて次の修正に進むため、結果を待ってから処理するのが基本動作
+  - 例外的に \`--background\`: 差分が大規模 (多数ファイル / 多数行) で、かつ
+    review 完了を待つ間に Claude が並行して進められる独立タスクがある場合のみ
+  - 判断材料: \`git diff --shortstat --cached\` と \`git diff --shortstat\` の
+    ファイル数・行数、および現在 Claude に積まれているタスク量
+  - 判断に迷ったら \`--wait\` を選ぶ
+  - **\`--background\` を選んだ場合でも、手順 3 以降 (修正 / mark-reviewed /
+    commit) に進む前に必ず review 完了を確認し結果を取得すること** (BashOutput
+    で stdout を取得するか \`/codex:status\` で確認)。review 結果を見ずに修正
+    判断や marker 作成を行うとレビュー保証が崩れるため禁止
+  - **いずれの場合もユーザーに実行方式を尋ねないこと** (このプラグインの方針。
+    \`/codex:review\` 単体は通常 AskUserQuestion で確認するが、pre-commit-review
+    の文脈では明示的に \`--wait\` / \`--background\` を渡して質問をスキップする)
 
 ⚠ 重要: \`/codex:review\` であって \`/codex:rescue\` ではありません。両者は別コマンドで、
   - \`/codex:review\`: read-only のコードレビュー (本プラグインが要求する用途)

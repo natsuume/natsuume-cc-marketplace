@@ -56,6 +56,8 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 > **順序の意図**: `/simplify` はコード変更を適用するため先に走らせ、`/codex:review` はその後の最終形を対象にレビューします。逆順だと codex が simplify によって書き換わる前のコードを見ることになり、レビュー結果が陳腐化します。
 
+> **`/codex:review` の実行方式は Claude が自律選択する**: `/codex:review` 単体は通常 `AskUserQuestion` で `--wait` / `--background` をユーザーに確認しますが、pre-commit-review の文脈では `permissionDecisionReason` で **明示的にどちらかの引数を付けて呼び出すよう指示** することで、ユーザーへの確認をスキップさせます。判断基準は「原則 `--wait` (ループは review 結果を待って次の修正に進むため)。差分が大規模かつ並行で進められる独立タスクがある場合のみ `--background`、迷ったら `--wait`」です。レビュー対象サイズと現在の Claude のタスク量から自律的に決定します。`--background` を選んだ場合でも、修正判断 / marker 作成 / commit に進む前に必ず review 完了を確認して結果を取得する必要があります (review 結果を見ずに次手順へ進むとレビュー保証が崩れるため)。
+
 > **ループの意図**: 修正を加えた瞬間、その修正自体は未レビューになります。`/codex:review` の指摘を修正した結果として `/simplify` の対象 (重複・冗長コメント等) が新規発生する可能性も、`/simplify` の修正により `/codex:review` の新規指摘が出る可能性も、いずれもゼロではないため、修正があれば `/simplify` から再度ループします。プラグインは「マーカー作成時のステージング差分 = `git commit` 時のステージング差分」だけを検証するため、ループ回数は強制せず Claude の判断に委ねます。
 
 > **終端の判断**: ループ回数の上限は設けません。Claude が「修正不要」または「人間判断を仰ぐべき」と判断したタイミングでのみ進行 / エスカレートします。固定回数で打ち切るような恣意的な制限はかけず、Claude の自主性に委ねる設計です。
@@ -83,7 +85,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mark-reviewed.sh"
 2. Claude が `git commit` を試行
 3. block-pre-commit.sh が deny を返し、レビュー実行を指示
 4. Claude が /simplify を実行 (コード変更が起こり得るため先)
-5. Claude が /codex:review を実行
+5. Claude が /codex:review を実行 (`--wait` または `--background` を Claude が自律選択。ユーザーには尋ねない)
 6. 指摘があれば修正し、`git add` で再ステージング
 7. ステージング内容が変わったら 4〜5 を再実行 (Claude が「修正不要」と判断するまで `/simplify` → `/codex:review` の両方をループ)
 8. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mark-reviewed.sh"` を実行
