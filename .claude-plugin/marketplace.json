@@ -32,7 +32,7 @@
       "name": "pre-commit-review",
       "source": "./plugins/pre-commit-review",
       "description": "git commit 前に /simplify → /codex:review --wait のループを強制し、PostToolUse で実行完了を自動検知してレビュー差分との同一性を検証することで未レビューのコミットを構造的にブロックするプラグイン",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "keywords": ["commit", "review", "quality", "codex", "simplify"]
     },
     {
