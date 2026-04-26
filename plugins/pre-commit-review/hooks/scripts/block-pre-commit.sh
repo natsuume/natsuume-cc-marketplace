@@ -180,8 +180,7 @@ REASON=$(cat <<EOF
 
 実行手順:
   1. /codex:review
-  2. /code-review:code-review
-  3. /simplify
+  2. /simplify
 
 各レビューで指摘された箇所はすべて修正してください。修正が発生したら \`git add\` で再度ステージングします。
 
@@ -190,6 +189,8 @@ REASON=$(cat <<EOF
   bash "$MARK_SCRIPT"
 
 マーカー作成後の \`git commit\` は許可されます。マーカーは差分のハッシュに紐づくため、ステージング内容が変わると再度レビューが必要になります。
+
+(注: \`/code-review:code-review\` は PR を対象とするため、PR 作成後に post-pr-review プラグイン経由で実行されます。)
 EOF
 )
 

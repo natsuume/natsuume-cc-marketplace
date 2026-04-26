@@ -1,5 +1,5 @@
 {
   "name": "pre-commit-review",
   "version": "0.1.0",
-  "description": "git commit 前に /codex:review, /code-review:code-review, /simplify を強制し、未レビューのコミットをブロックするプラグイン"
+  "description": "git commit 前に /codex:review, /simplify を強制し、未レビューのコミットをブロックするプラグイン (PR 作成後の /code-review:code-review は post-pr-review プラグインに委譲)"
 }

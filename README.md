@@ -20,7 +20,8 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 |-----------|-----------|------|
 | [git-guardrails](#git-guardrails) | 0.1.0 | GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン |
 | [auto-lint-check](#auto-lint-check) | 0.1.0 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
-| [pre-commit-review](#pre-commit-review) | 0.1.0 | `git commit` 前に `/codex:review`, `/code-review:code-review`, `/simplify` の実行を強制するプラグイン |
+| [pre-commit-review](#pre-commit-review) | 0.1.0 | `git commit` 前に `/codex:review`, `/simplify` の実行を強制するプラグイン |
+| [post-pr-review](#post-pr-review) | 0.1.0 | `gh pr create` 成功直後に `/code-review:code-review` の実行を誘導するプラグイン |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 
 ---
@@ -77,7 +78,7 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 ## pre-commit-review
 
-`git commit` を実行する前に `/codex:review`, `/code-review:code-review`, `/simplify` の 3 つのレビューを必ず実行させ、未レビューの状態でのコミットをブロックするプラグインです。
+`git commit` を実行する前に `/codex:review` と `/simplify` を必ず実行させ、未レビューの状態でのコミットをブロックするプラグインです。PR 対象の `/code-review:code-review` は姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
 
 ### 機能
 
@@ -91,11 +92,33 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 | スクリプト | 用途 |
 |-----------|------|
-| `mark-reviewed.sh` | 3 つのレビューを完了した後、コミット直前に手動で実行してマーカーを作成する |
+| `mark-reviewed.sh` | レビュー完了後、コミット直前に手動で実行してマーカーを作成する |
 
 ### キーワード
 
 `commit` `review` `quality` `codex` `simplify`
+
+---
+
+## post-pr-review
+
+Claude Code 経由で `gh pr create` が成功した直後に、`/code-review:code-review <PR-URL>` の実行を `additionalContext` で Claude に誘導するプラグインです。`pre-commit-review` の姉妹プラグインで、PR 対象のレビューを担当します。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `nudge-pr-review` | PostToolUse | `gh pr create` 成功時に PR URL を抽出し、`additionalContext` で `/code-review:code-review <URL>` 実行を促す (強制ではなく誘導) |
+
+### 注意事項
+
+`additionalContext` 経由の誘導なので、Claude が無視することは原理的に可能です。また Web UI など Claude Code 以外で作成された PR には介入しません (これは設計上の意図)。
+
+### キーワード
+
+`pr` `review` `code-review` `github`
 
 ---
 

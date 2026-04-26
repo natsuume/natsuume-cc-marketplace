@@ -1,6 +1,6 @@
 # pre-commit-review プラグイン
 
-`git commit` を実行する前に `/codex:review`, `/code-review:code-review`, `/simplify` の 3 つのレビューを必ず実行させ、未レビューのコミットをブロックするプラグインです。
+`git commit` を実行する前に `/codex:review` と `/simplify` を必ず実行させ、未レビューのコミットをブロックするプラグインです。PR を対象とする `/code-review:code-review` は姉妹プラグイン [post-pr-review](../post-pr-review/) が担当します。
 
 ## バージョン
 
@@ -48,7 +48,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 - 先頭が `bash`/`sh`/`zsh`/`dash`/`ksh`/`eval` のコマンド (例: `bash -c "git commit ..."`) はクォート内に commit が隠れていてもラッパーとして検出され deny されます。Claude には `git commit` を直接実行してもらう前提です。
 
-`deny` 時の `permissionDecisionReason` には、Claude が次に行うべき手順 (3 つのレビュー実行 → 修正 → `mark-reviewed.sh` 実行) が記載されます。
+`deny` 時の `permissionDecisionReason` には、Claude が次に行うべき手順 (`/codex:review` と `/simplify` の実行 → 修正 → `mark-reviewed.sh` 実行) が記載されます。
 
 ### スクリプト
 
@@ -69,14 +69,14 @@ bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mark-reviewed.sh"
 ```
 1. ユーザー: 「コミットして」
 2. Claude が `git commit` を試行
-3. block-pre-commit.sh が deny を返し、3 つのレビュー実行を指示
+3. block-pre-commit.sh が deny を返し、レビュー実行を指示
 4. Claude が以下を順に実行:
    - /codex:review
-   - /code-review:code-review
    - /simplify
 5. 指摘箇所を修正し、`git add` で再ステージング
 6. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mark-reviewed.sh"` を実行
 7. `git commit` を再試行 → マーカー一致で通過、マーカー削除
+8. (PR 作成後) post-pr-review プラグインが `/code-review:code-review` を促す
 ```
 
 ## 注意事項

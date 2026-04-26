@@ -24,9 +24,16 @@
     {
       "name": "pre-commit-review",
       "source": "./plugins/pre-commit-review",
-      "description": "git commit 前に /codex:review, /code-review:code-review, /simplify を強制し、未レビューのコミットをブロックするプラグイン",
+      "description": "git commit 前に /codex:review, /simplify を強制し、未レビューのコミットをブロックするプラグイン",
       "version": "0.1.0",
       "keywords": ["commit", "review", "quality", "codex", "simplify"]
+    },
+    {
+      "name": "post-pr-review",
+      "source": "./plugins/post-pr-review",
+      "description": "gh pr create 成功直後に /code-review:code-review の実行を誘導するプラグイン",
+      "version": "0.1.0",
+      "keywords": ["pr", "review", "code-review", "github"]
     },
     {
       "name": "update-default-branch",
