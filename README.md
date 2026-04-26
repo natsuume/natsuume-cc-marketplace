@@ -20,7 +20,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 |-----------|-----------|------|
 | [git-guardrails](#git-guardrails) | 0.1.0 | GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン |
 | [auto-lint-check](#auto-lint-check) | 0.1.0 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
-| [pre-commit-review](#pre-commit-review) | 0.1.0 | `git commit` 前に `/simplify` → `/codex:review` の順で実行を強制するプラグイン |
+| [pre-commit-review](#pre-commit-review) | 0.1.0 | `git commit` 前に `/simplify` → `/codex:review` (修正が落ち着くまでループ) を強制するプラグイン |
 | [post-pr-review](#post-pr-review) | 0.1.0 | `gh pr create` 成功直後に `/code-review:code-review` の実行を誘導するプラグイン |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
@@ -79,7 +79,7 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 ## pre-commit-review
 
-`git commit` を実行する前に `/simplify` → `/codex:review` の順で必ず実行させ、未レビューの状態でのコミットをブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。PR 対象の `/code-review:code-review` は姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
+`git commit` を実行する前に `/simplify` → `/codex:review` を必ず実行させ、未レビューの状態でのコミットをブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。修正によりステージング内容が変わった場合は `/simplify` から再度ループし、Claude の判断で「修正不要」となった時点で commit に進みます。PR 対象の `/code-review:code-review` は姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
 
 ### 機能
 

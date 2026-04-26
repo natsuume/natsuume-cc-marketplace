@@ -1,6 +1,6 @@
 # pre-commit-review プラグイン
 
-`git commit` を実行する前に `/simplify` → `/codex:review` の順で必ず実行させ、未レビューのコミットをブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。PR を対象とする `/code-review:code-review` は姉妹プラグイン [post-pr-review](../post-pr-review/) が担当します。
+`git commit` を実行する前に `/simplify` → `/codex:review` を必ず実行させ、未レビューのコミットをブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。修正によりステージング内容が変わった場合は `/simplify` → `/codex:review` を最初から再実行 (両方再走) し、Claude が「修正不要」と判断した時点で commit に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。PR を対象とする `/code-review:code-review` は姉妹プラグイン [post-pr-review](../post-pr-review/) が担当します。
 
 ## バージョン
 
@@ -52,9 +52,13 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 - `git -c foo=a\ commit -C ../other commit` のように **オプション値に backslash-escape された空白 + `commit` 文字列が含まれる** ケースでは、COMMIT_DETECT_REGEX が commit を検出できず hook が早期スキップする可能性があります。Claude が意図的にバイパスを試みる adversarial シナリオであり、cooperative な利用では発生しないため受容しています。完全な防御が必要な場合はシェルパーサ (Python `shlex` 等) ベースの再実装が必要です。
 
-`deny` 時の `permissionDecisionReason` には、Claude が次に行うべき手順 (`/simplify` → `/codex:review` の順で実行 → 修正 → `mark-reviewed.sh` 実行) が記載されます。
+`deny` 時の `permissionDecisionReason` には、Claude が次に行うべき手順が記載されます。手順は **修正が落ち着くまで `/simplify` → `/codex:review` の両方をループ** する設計で、Claude が「修正不要」と判断したタイミングで `mark-reviewed.sh` → `git commit` に進みます。
 
 > **順序の意図**: `/simplify` はコード変更を適用するため先に走らせ、`/codex:review` はその後の最終形を対象にレビューします。逆順だと codex が simplify によって書き換わる前のコードを見ることになり、レビュー結果が陳腐化します。
+
+> **ループの意図**: 修正を加えた瞬間、その修正自体は未レビューになります。`/codex:review` の指摘を修正した結果として `/simplify` の対象 (重複・冗長コメント等) が新規発生する可能性も、`/simplify` の修正により `/codex:review` の新規指摘が出る可能性も、いずれもゼロではないため、修正があれば `/simplify` から再度ループします。プラグインは「マーカー作成時のステージング差分 = `git commit` 時のステージング差分」だけを検証するため、ループ回数は強制せず Claude の判断に委ねます。
+
+> **終端の判断**: ループ回数の上限は設けません。Claude が「修正不要」または「人間判断を仰ぐべき」と判断したタイミングでのみ進行 / エスカレートします。固定回数で打ち切るような恣意的な制限はかけず、Claude の自主性に委ねる設計です。
 
 ### スクリプト
 
@@ -76,13 +80,13 @@ bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mark-reviewed.sh"
 1. ユーザー: 「コミットして」
 2. Claude が `git commit` を試行
 3. block-pre-commit.sh が deny を返し、レビュー実行を指示
-4. Claude が以下を順に実行:
-   - /simplify   (コード変更が起こり得るため先)
-   - /codex:review (/simplify 適用後の最終形をレビューする)
-5. 指摘箇所を修正し、`git add` で再ステージング
-6. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mark-reviewed.sh"` を実行
-7. `git commit` を再試行 → マーカー一致で通過、マーカー削除
-8. (PR 作成後) post-pr-review プラグインが `/code-review:code-review` を促す
+4. Claude が /simplify を実行 (コード変更が起こり得るため先)
+5. Claude が /codex:review を実行
+6. 指摘があれば修正し、`git add` で再ステージング
+7. ステージング内容が変わったら 4〜5 を再実行 (Claude が「修正不要」と判断するまで `/simplify` → `/codex:review` の両方をループ)
+8. `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/mark-reviewed.sh"` を実行
+9. `git commit` を再試行 → マーカー一致で通過、マーカー削除
+10. (PR 作成後) post-pr-review プラグインが `/code-review:code-review` を促す
 ```
 
 ## 注意事項
