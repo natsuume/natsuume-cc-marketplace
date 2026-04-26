@@ -25,7 +25,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [post-pr-review](#post-pr-review) | 0.1.0 | `gh pr create` 成功直後に `/code-review:code-review` の実行を誘導するプラグイン |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
-| [codex-review-customize](#codex-review-customize) | 0.1.0 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill 呼び出し許可 + 出力日本語化を setup するプラグイン |
+| [codex-review-customize](#codex-review-customize) | 0.1.0 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
 
 ---
 
@@ -188,10 +188,7 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 ## codex-review-customize
 
-公式 codex プラグインの `/codex:review` コマンド定義 (`commands/review.md`) をローカルでパッチし、以下 2 点を上書きする setup プラグインです。
-
-1. frontmatter の `disable-model-invocation: true` を削除 → Skill tool から呼び出し可能に
-2. 末尾に「Codex の出力を日本語に翻訳して提示する」指示を追記
+公式 codex プラグインの `/codex:review` コマンド定義 (`commands/review.md`) をローカルでパッチし、frontmatter の `disable-model-invocation: true` を削除して Skill tool からの呼び出しを許可する setup プラグインです。
 
 スラッシュコマンドは `<plugin名>:<command名>` でプラグイン名空間が確定するため、別プラグインから `/codex:review` という同名は提供できません。本プラグインはコマンド名を `/codex:review` のまま保持したいユーザー向けに、公式定義のローカルパッチを setup する形を採っています。
 
@@ -205,4 +202,4 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 ### キーワード
 
-`codex` `review` `patch` `i18n` `japanese` `skill`
+`codex` `review` `patch` `skill`
