@@ -90,10 +90,39 @@ EOF
   exit 0
 fi
 
-# 先頭一致を確認した上で、`git -C` 等の対象リポジトリ変更系オプションを deny する
-# (Claude の CWD と commit 先が食い違ってマーカー検証先がズレるのを防ぐため)。
-if printf '%s' "$COMMAND" \
-  | grep -qE '^[[:space:]]*git[[:space:]]+([^[:space:];&|]+[[:space:]]+)*(-C|--git-dir|--work-tree)([[:space:]=])'; then
+# `git -C` 等の対象リポジトリ変更系オプションを deny する。検査範囲はサブコマンド
+# `commit` トークンの **直前** までに限定する。空白区切りトークン化したうえで、
+# 直前のトークンが「別トークン引数を取るグローバルオプション」だった場合は
+# 引数値とみなして subcommand 判定をスキップする。これにより
+# `git --namespace commit -C ../other commit ...` のように option 値が偶然
+# "commit" のケースでも subcommand 境界を取り違えない。`=` 形式
+# (`--namespace=commit`) は単一トークンなので別トークン引数の対象外。
+#
+# `read -ra` は `\<space>` を 2 トークンに分割してしまうため、トークン化前に
+# バックスラッシュエスケープ空白を非空白プレースホルダ \x01 に置換する。
+# これにより `git -c foo=a\ commit ...` の `a commit` 部分が単一トークンとして
+# 維持され、subcommand 境界判定の取り違えを防げる。
+COMMAND_DEQUOTED_NORMALIZED=$(printf '%s' "$COMMAND_DEQUOTED" \
+  | sed -E "s/\\\\[[:space:]]/$(printf '\x01')/g")
+read -ra _tokens <<< "$COMMAND_DEQUOTED_NORMALIZED"
+sandbox_prefix_tokens=()
+prev_is_argopt=0
+for _tok in "${_tokens[@]}"; do
+  if [ "$prev_is_argopt" -eq 1 ]; then
+    sandbox_prefix_tokens+=("$_tok")
+    prev_is_argopt=0
+    continue
+  fi
+  [ "$_tok" = "commit" ] && break
+  case "$_tok" in
+    -C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path)
+      prev_is_argopt=1 ;;
+  esac
+  sandbox_prefix_tokens+=("$_tok")
+done
+SANDBOX_PREFIX="${sandbox_prefix_tokens[*]}"
+if printf '%s' "$SANDBOX_PREFIX" \
+  | grep -qE '(^|[[:space:]=])(-C|--git-dir|--work-tree)([[:space:]=]|$)'; then
   REASON=$(cat <<'EOF'
 コミットをブロックしました。`-C`, `--git-dir`, `--work-tree` で対象リポジトリを変更する形式の commit はサポート外です。
 

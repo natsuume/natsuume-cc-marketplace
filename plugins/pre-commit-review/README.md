@@ -48,6 +48,10 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 - 先頭が `bash`/`sh`/`zsh`/`dash`/`ksh`/`eval` のコマンド (例: `bash -c "git commit ..."`) はクォート内に commit が隠れていてもラッパーとして検出され deny されます。Claude には `git commit` を直接実行してもらう前提です。
 
+**既知の制約 (受容)**:
+
+- `git -c foo=a\ commit -C ../other commit` のように **オプション値に backslash-escape された空白 + `commit` 文字列が含まれる** ケースでは、COMMIT_DETECT_REGEX が commit を検出できず hook が早期スキップする可能性があります。Claude が意図的にバイパスを試みる adversarial シナリオであり、cooperative な利用では発生しないため受容しています。完全な防御が必要な場合はシェルパーサ (Python `shlex` 等) ベースの再実装が必要です。
+
 `deny` 時の `permissionDecisionReason` には、Claude が次に行うべき手順 (`/codex:review` と `/simplify` の実行 → 修正 → `mark-reviewed.sh` 実行) が記載されます。
 
 ### スクリプト
