@@ -24,7 +24,7 @@
     {
       "name": "pre-commit-review",
       "source": "./plugins/pre-commit-review",
-      "description": "git commit 前に /simplify → /codex:review の順で実行を強制し、未レビューのコミットをブロックするプラグイン",
+      "description": "git commit 前に /simplify → /codex:review (修正が落ち着くまでループ) を強制し、未レビューのコミットをブロックするプラグイン",
       "version": "0.1.0",
       "keywords": ["commit", "review", "quality", "codex", "simplify"]
     },
