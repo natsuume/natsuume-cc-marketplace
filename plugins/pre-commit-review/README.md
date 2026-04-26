@@ -4,11 +4,22 @@
 
 ## バージョン
 
-v0.2.0
+v0.3.0
 
 ## 概要
 
 `PreToolUse` フックで `Bash` ツール実行を監視し、`git commit` コマンドを検出した場合、 **2 つのレビューマーカー** (`/simplify` と `/codex:review --wait` それぞれの実行完了マーカー) が現在のステージング差分と同一ハッシュを保持していなければ `deny` を返してコミットを阻止します。マーカーは `PostToolUse` フックが各ツールの実走完了を検知して自動的に書き込みます。手動でスクリプトを呼び出す必要はありません。
+
+### v0.2.0 → v0.3.0 の変更点
+
+- `xxx && git commit ...` のような **連結コマンド形式を許容** するようになりました (`git status && git commit -m ...`, `git add path/ && git commit -m ...` 等)。従来は「`git commit` がコマンド先頭でない」という理由で一律 deny していた制約を撤廃しています。`git commit` がコマンド末尾に位置すること (postfix にシェル区切り文字を続けないこと) は引き続き構造的に強制します。
+- ただし前段に `cd` / `pushd` / `popd` を含む形式 (`cd subdir && git commit ...` 等) は **引き続き deny** します。hook 検証 cwd と commit 実行時の cwd が乖離するため、別リポジトリのマーカーで commit が通る target-mismatch 経路を残してしまうためです (`-C` / `--git-dir` / `--work-tree` を deny する理由と同じ)。`builtin cd`, `command cd`, 連結途中の `eval cd` のような bash builtin/command/eval を介した cd も同列に検出します。サブシェル `(cd /other && git commit ...)` やブレースグループ `{ cd /other; git commit ...; }` 越しの cd も検出します (入力段階で `()` / `{}` をスペースに正規化)。
+- `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` 環境変数による対象リポジトリ・インデックス切替形式 (`GIT_DIR=/foo git commit ...` 等) も **deny** に追加しました。`-C` オプションと同じ target-mismatch を環境変数で起こせるためです。`GIT_AUTHOR_NAME` 等 target を変えない env-var は許容します。
+- 連結プレフィックスでの `export GIT_DIR=...` / `declare -x GIT_DIR=...` / `typeset -x ...` / `readonly -x ...` も同列に **deny** します。bare `GIT_DIR=/foo git commit` は LAST_SEGMENT 検出で済みますが、`export GIT_DIR=/foo && git commit` のように別セグメントで export された場合は LAST_SEGMENT に出ないため、prefix を別途検査します。
+- postfix チェックの基準を「最初の `commit` 文字列」から「実際の `git ... commit` 呼び出しの位置」に修正しました。`echo commit && git commit -m fix` や `grep commit file && git commit -m fix` のように prefix に literal `commit` 文字列がある連結形式が誤検知される問題を解消しています。
+- `-C` / `--git-dir` / `--work-tree` の検出範囲を **最後のシェルセグメント** に限定しました。連結形式で前段コマンドが偶然 `-C` を含む (例: `tar -C /tmp ...`) 場合の false positive を解消しています。
+- `git commit --help` / `-h` のスキップ判定を「最初の `git ... commit` 呼び出しが `--help`/`-h` のみで終わるか」で行うように変更しました。これにより `xxx && git commit --help` (xxx が innocent) はスキップされる一方、`git commit -m bad && git commit --help` のように real commit を help suffix で隠すバイパスは検証へ進みます。
+- `bash -c "..."` 等のシェルラッパー経由 commit は引き続き deny します (クォート内のコマンドを本フックの文字列ベースなパーサで検証できないため)。
 
 ### v0.1.0 → v0.2.0 の変更点 (互換性なし)
 
@@ -46,29 +57,36 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 **動作**:
 
-- 単独実行 (`git commit -m "msg"`) と複合コマンド (`cd dir && git commit`) の双方を検出
+- 単独実行 (`git commit -m "msg"`) と複合コマンド (`xxx && git commit ...`) の双方を検出
 - `git -C dir commit` や `git --git-dir=... commit` のように global option を伴う形式も検出
 - `git commit-tree` 等の別コマンドは除外
-- `git commit --help` / `-h` はスキップ
+- `git commit --help` / `-h` はスキップ (`xxx && git commit --help` のような連結形式も末尾に `--help` がある限りスキップ)
 - 双方のマーカーが一致した場合は使い切りで両方とも削除 (再コミット時は再レビューが必要)
 - ハッシュは `git diff --cached` (staged) と `git diff` (unstaged tracked) の連結に対して計算するため、`git commit -a` や `git commit <pathspec>` で未レビュー変更が紛れ込むケースもブロックされる
 - `deny` 時の `permissionDecisionReason` には、各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と次に Claude が行うべき手順が記載される
 
 **追加の制約 (1 マーカー = 1 commit を保証)**:
 
-- コマンド先頭が `git ... commit` でないものは一律 deny。これにより `cd dir && git commit`, `git add . && git commit`, `git status && git commit` などのチェーン形式は別々の Bash 呼び出しに分割する必要があります
-- `git -C`, `--git-dir`, `--work-tree` で対象リポジトリを切り替える形式の commit は deny (検証先と commit 先が食い違うのを防ぐため)
-- `git commit` の後にシェル区切り文字 (`;`, `&`, `&&`, `||`, `|`) を続けるコマンドは deny (マーカー消費後に未レビュー commit が走るのを防ぐため)
+- `xxx && git commit ...` のように `git commit` 直前に他コマンドを連結する形式は許容します (前段の例: `git status`, `git add path/` 等)
+- ただし前段に `cd` / `pushd` / `popd` を含む連結 commit は deny します (hook 検証 cwd と commit 実行時の cwd が乖離し、別リポジトリのマーカーで commit を許可してしまう経路を防ぐため。`-C` deny と同じ target-mismatch)。`builtin cd ...`, `command cd ...`, 連結途中の `eval cd ...` のように bash builtin/command/eval ラッパーを挟む形式も同列に検出します
+- サブシェル `(cd /other && git commit ...)` やブレースグループ `{ cd /other; git commit ...; }` のように `()` / `{}` で包んだ形も deny します (内部の cd や `GIT_DIR=...` 等を検出しやすくするため、入力段階で `()` / `{}` をスペースに正規化してから他チェックに回します)
+- `git -C`, `--git-dir`, `--work-tree` オプションまたは `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` 環境変数で対象リポジトリ・インデックスを切り替える形式の commit は deny (検証先と commit 先が食い違うのを防ぐため)。検査範囲は最後のシェルセグメント (`;`/`&`/`|` で区切った最終一片) に限定するため、前段コマンドが偶然 `-C` を含む (例: `tar -C /tmp ...`) ケースで誤検知することはありません。`GIT_AUTHOR_NAME` 等の target を変えない git 用 env-var は許容します
+- `export GIT_DIR=...` / `declare -x GIT_DIR=...` / `typeset -x ...` / `readonly -x ...` のように対象切替系 env-var を前段で export する形式も deny します (`-x` の有無は識別せず保守的に検出)。`export FOO=bar` のような対象を変えない export は許容します
+- `git commit` の後にシェル区切り文字 (`;`, `&`, `&&`, `||`, `|`) を続けるコマンドは deny (マーカー消費後に未レビュー commit が走るのを防ぐため)。`git commit` がコマンド末尾に位置することは構造的に強制されます
 - 引用符で囲まれた `git commit` 文字列 (`grep "git commit" README` など) はテキスト参照とみなしフックは介入しません
 - `$(...)` やバッククォートによるコマンド置換を含む commit コマンドは deny (置換が commit より前に評価され、index を書き換える経路となり得るため)
 
 **シェルラッパー経由の commit**:
 
-- 先頭が `bash`/`sh`/`zsh`/`dash`/`ksh`/`eval` のコマンド (例: `bash -c "git commit ..."`) はクォート内に commit が隠れていてもラッパーとして検出され deny されます。Claude には `git commit` を直接実行してもらう前提です。
+- 先頭が `bash`/`sh`/`zsh`/`dash`/`ksh`/`eval` のコマンド (例: `bash -c "git commit ..."`) はクォート内に commit が隠れていてもラッパーとして検出され deny されます。Claude には `git commit` を直接実行してもらう前提です (前段コマンドが必要なら `xxx && git commit ...` 形式で連結してください)。
 
 **既知の制約 (受容)**:
 
+- `xxx && bash -c "git commit ..."` のように、シェルラッパーが連結チェーンの **後段** に位置するケースは検出できません。先頭ラッパー検出は raw COMMAND の `^[[:space:]]*bash` を要求するため、`bash` がチェーン途中にあると wrapper-deny を素通りします。Claude が意図的にバイパスを試みる adversarial シナリオであり、cooperative な利用では発生しないため受容しています。
+- 同じく `git add untracked-file && git commit ...` のように、前段コマンドが index を変更してから commit する形式は許容されます (連結形式を許容する以上、前段の index 変更を構造的に防ぐことはできません)。`git diff --cached` / `git diff` の連結ハッシュには **未トラッキング** ファイルが含まれないため、未トラッキングを連結内で `git add` すると未レビュー差分が紛れ込み得ます。Cooperative 前提で運用してください。新規ファイルは `/simplify` → `/codex:review` の **前** に `git add` してから commit に進むのが安全です。
 - `git -c foo=a\ commit -C ../other commit` のように **オプション値に backslash-escape された空白 + `commit` 文字列が含まれる** ケースでは、COMMIT_DETECT_REGEX が commit を検出できず hook が早期スキップする可能性があります。Claude が意図的にバイパスを試みる adversarial シナリオであり、cooperative な利用では発生しないため受容しています。完全な防御が必要な場合はシェルパーサ (Python `shlex` 等) ベースの再実装が必要です。
+- `git commit -m "'$(...)'"` のように **double-quote 内に single-quote のペアを挟んで `$(...)` を含める** ケースでは、naive sed (`'[^']*'` で `'...'` 範囲を strip) が double-quote 内の single-quote ペアまで誤って消してしまい、本来 bash が評価する `$(...)` を見落とします。これも proper bash quote state machine が必要な adversarial シナリオで、cooperative な利用では発生しないため受容しています。
+- `set -a; GIT_DIR=/other/.git; git commit ...` のように **`set -a` (allexport) を使って後続の代入をすべて自動 export する** 形式では、`GIT_DIR=...` を bare assignment として書けるため `export GIT_DIR=...` の検出を素通りします。`set -a` 自体を deny する判定は cooperative 利用の許容形を狭めすぎるため受容しています (Claude が意図的にバイパスを試みる adversarial シナリオ)。
 
 > **順序の意図**: `/simplify` はコード変更を適用するため先に走らせ、`/codex:review` はその後の最終形を対象にレビューします。逆順だと codex が simplify によって書き換わる前のコードを見ることになり、レビュー結果が陳腐化します。マーカー方式上は順序を強制していませんが、修正後の差分で 2 マーカーを揃えるためには結局両方を走らせる必要があり、無駄を減らすには `/simplify` を先にする運用が合理的です。
 

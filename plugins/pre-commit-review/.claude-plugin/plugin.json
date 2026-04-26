@@ -1,5 +1,5 @@
 {
   "name": "pre-commit-review",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "git commit 前に /simplify → /codex:review --wait のループを強制し、PostToolUse で実行完了を自動検知してレビュー差分との同一性を検証することで未レビューのコミットを構造的にブロックするプラグイン (PR 作成後の /code-review:code-review は post-pr-review プラグインに委譲)"
 }
