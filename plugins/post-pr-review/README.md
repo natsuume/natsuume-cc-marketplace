@@ -58,15 +58,14 @@ PR を作成しました: https://github.com/natsuume/.../pull/<n>
 ## ワークフロー (pre-commit-review との連携)
 
 ```
-1. Claude が編集 → /codex:review + /simplify (pre-commit-review が強制)
-2. mark-reviewed.sh で マーカー作成
-3. git commit (pre-commit-review が許可)
-4. git push
-5. gh pr create ... (姉妹プラグイン enforce-draft-pr 併用時は --draft が自動付与される)
-6. PostToolUse: nudge-pr-review.sh が PR URL を抽出
-7. 次のアシスタント発話に additionalContext として誘導文が注入される
-8. Claude が /code-review:code-review <PR-URL> を実行
-9. 指摘があれば修正 → pre-commit-review に戻る
+1. Claude が編集 → /simplify → /codex:review --wait (pre-commit-review が強制し、PostToolUse で両者のマーカーが自動作成される)
+2. git commit (pre-commit-review が両マーカーの整合を検証して許可)
+3. git push
+4. gh pr create ... (姉妹プラグイン enforce-draft-pr 併用時は --draft が自動付与される)
+5. PostToolUse: nudge-pr-review.sh が PR URL を抽出
+6. 次のアシスタント発話に additionalContext として誘導文が注入される
+7. Claude が /code-review:code-review <PR-URL> を実行
+8. 指摘があれば修正 → pre-commit-review に戻る
 10. (draft 運用の場合のみ) レビュー完了後にユーザーが ready マーク
 ```
 
