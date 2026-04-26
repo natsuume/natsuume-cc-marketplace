@@ -49,6 +49,13 @@ CONTEXT=$(cat <<EOF
 PR を作成しました: $PR_URL
 
 このリポジトリでは PR 作成直後に \`/code-review:code-review $PR_URL\` を実行してコードレビューする運用です。レビューで指摘があれば対応してから ready マーク (\`gh pr ready\`) に進めてください。
+
+**注意**: \`/code-review:code-review\` skill のコメントテンプレートは英語でハードコードされています。本リポジトリは グローバル CLAUDE.md の「やり取りは日本語で行う」方針に従うため、PR へ投稿する直前に下記の対応訳に **すべて翻訳** してから \`gh pr comment\` してください。"🤖 Generated with [Claude Code]" の Trailer 行はそのまま残します。
+
+  - \`### Code review\` → \`### コードレビュー\`
+  - \`Found N issues:\` → \`N 件の指摘が見つかりました:\`
+  - \`No issues found. Checked for bugs and CLAUDE.md compliance.\` → \`指摘なし。バグおよび CLAUDE.md 準拠を確認しました。\`
+  - \`If this code review was useful, please react with 👍. Otherwise, react with 👎.\` → \`このコードレビューが役に立った場合は 👍、そうでなければ 👎 でリアクションしてください。\`
 EOF
 )
 

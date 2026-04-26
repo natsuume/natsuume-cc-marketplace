@@ -44,7 +44,16 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 PR を作成しました: https://github.com/natsuume/.../pull/<n>
 
 このリポジトリでは PR 作成直後に `/code-review:code-review https://github.com/.../pull/<n>` を実行してコードレビューする運用です。レビューで指摘があれば対応してから ready マーク (`gh pr ready`) に進めてください。
+
+**注意**: `/code-review:code-review` skill のコメントテンプレートは英語でハードコードされています。本リポジトリは グローバル CLAUDE.md の「やり取りは日本語で行う」方針に従うため、PR へ投稿する直前に下記の対応訳に **すべて翻訳** してから `gh pr comment` してください。"🤖 Generated with [Claude Code]" の Trailer 行はそのまま残します。
+
+  - `### Code review` → `### コードレビュー`
+  - `Found N issues:` → `N 件の指摘が見つかりました:`
+  - `No issues found. Checked for bugs and CLAUDE.md compliance.` → `指摘なし。バグおよび CLAUDE.md 準拠を確認しました。`
+  - `If this code review was useful, please react with 👍. Otherwise, react with 👎.` → `このコードレビューが役に立った場合は 👍、そうでなければ 👎 でリアクションしてください。`
 ```
+
+**日本語化を post-pr-review で扱う理由**: 公式 `/code-review:code-review` skill の markdown を fork すると保守負債が大きいため、PR 作成→ /code-review 起動の唯一の動線である post-pr-review の nudge で「投稿前に対応訳に翻訳する」指示を一度だけ Claude に渡しています。対応訳を hook と README で同一テキストとして保持することで、Claude が翻訳結果に揺れを生じさせないよう統一しています。
 
 ## ワークフロー (pre-commit-review との連携)
 
