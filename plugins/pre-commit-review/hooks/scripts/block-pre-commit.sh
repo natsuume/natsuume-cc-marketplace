@@ -209,7 +209,7 @@ REASON=$(cat <<EOF
 
 実行手順 (修正が落ち着くまでループ):
   1. /simplify  (コード変更を伴うため先に実行)
-  2. /codex:review
+  2. /codex:review  (read-only のコードレビュー)
   3. 指摘箇所をすべて修正し、\`git add\` で再度ステージングする
   4. ステージング内容が変わったら手順 1〜2 を最初から再実行する
      (/codex:review の修正で /simplify 対象が増える可能性も、その逆もあるため、
@@ -217,6 +217,19 @@ REASON=$(cat <<EOF
   5. Claude の判断で「修正不要」になったら次へ進む
 
 ループ回数の上限は設けません。Claude が自身の判断で「修正不要」または「人間判断を仰ぐべき」と判断したタイミングで進行/エスカレートしてください。
+
+⚠ 重要: \`/codex:review\` であって \`/codex:rescue\` ではありません。両者は別コマンドで、
+  - \`/codex:review\`: read-only のコードレビュー (本プラグインが要求する用途)
+  - \`/codex:rescue\`: 修正・調査を delegate する subagent (本プラグインの用途には不適)
+
+Claude は名前の似た \`/codex:rescue\` を誤って選ぶ傾向が報告されています。コマンド名を必ず確認してください。
+
+\`/codex:review\` は \`disable-model-invocation\` 指定のため Skill tool では呼べません。会話入力としての \`/codex:review\` か、以下の Bash 直接呼び出しを使ってください (codex プラグインの ROOT を \`ROOT\` 変数に一度代入する形にしています):
+
+  ROOT=<codex プラグインの ROOT>
+  CLAUDE_PLUGIN_ROOT="\$ROOT" node "\$ROOT/scripts/codex-companion.mjs" review --wait
+
+ROOT は環境ごとに異なります。例えば公式 marketplace 経由のインストールでは \`~/.claude/plugins/marketplaces/openai-codex/plugins/codex\` ですが、別 marketplace やキャッシュ配下に存在することもあるため、\`find ~/.claude/plugins -path '*/codex/scripts/codex-companion.mjs'\` で動的に解決するのが堅牢です。
 
 ステージング内容が確定したら、コミット直前に以下を実行してマーカーを作成します:
 
