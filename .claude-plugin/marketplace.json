@@ -13,6 +13,13 @@
       "description": "GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン",
       "version": "0.1.0",
       "keywords": ["git", "workflow", "github-flow", "rebase"]
+    },
+    {
+      "name": "auto-lint-check",
+      "source": "./plugins/auto-lint-check",
+      "description": "ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン",
+      "version": "0.1.0",
+      "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
     }
   ]
 }
