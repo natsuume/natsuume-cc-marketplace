@@ -23,6 +23,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [pre-commit-review](#pre-commit-review) | 0.1.0 | `git commit` 前に `/codex:review`, `/simplify` の実行を強制するプラグイン |
 | [post-pr-review](#post-pr-review) | 0.1.0 | `gh pr create` 成功直後に `/code-review:code-review` の実行を誘導するプラグイン |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
+| [statusline](#statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/statusline:setup` で `settings.json` に登録するプラグイン |
 
 ---
 
@@ -137,3 +138,27 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 ### キーワード
 
 `git` `pull` `prune` `branch-cleanup` `merge`
+
+---
+
+## statusline
+
+Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ / ブランチ / 変更量 / レートリミット) を提供するプラグインです。`/statusline:setup` を実行すると、`~/.claude/settings.json` の `statusLine.command` がこのプラグインのエントリポイントに切り替わります。
+
+### 表示内容
+
+- **1 行目**: パス、GitHub repo (所有 namespace は `repo` に短縮)、branch、staged/modified、未コミット件数 / `clean`
+- **2 行目**: 5h / 7d レートリミットのパーセンテージ、リセット残時間、プログレスバー (色は使用率で変化)
+- **3 行目**: 将来拡張用 (現状は空)
+
+### 機能
+
+#### Commands
+
+| コマンド | 説明 |
+|---------|------|
+| `/statusline:setup` | `settings.json` をバックアップしたうえで `statusLine.command` をプラグインのエントリポイントに書き換える |
+
+### キーワード
+
+`statusline` `ui` `git` `ratelimit` `github`

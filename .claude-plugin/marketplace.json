@@ -41,6 +41,13 @@
       "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン",
       "version": "0.1.0",
       "keywords": ["git", "pull", "prune", "branch-cleanup", "merge"]
+    },
+    {
+      "name": "statusline",
+      "source": "./plugins/statusline",
+      "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / レートリミット) を提供し、/statusline:setup で settings.json に登録するプラグイン",
+      "version": "0.1.0",
+      "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     }
   ]
 }
