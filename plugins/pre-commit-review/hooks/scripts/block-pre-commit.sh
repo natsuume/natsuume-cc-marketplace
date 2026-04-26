@@ -23,10 +23,17 @@ fi
 # `git commit` になる。検出ロジックがこれを見落とさないよう、入力段階で空白に正規化する。
 COMMAND=$(printf '%s' "$COMMAND" | awk 'BEGIN { RS = "" } { gsub(/\\\n/, " "); print }')
 
-# クォート部分を空にしてシェル区切り文字や `commit` の有無を判定するための共通処理。
-# ダブル/シングルクォートで囲まれた範囲だけを除去する (シンプルな対応で大半をカバー)。
-dequote() {
-  printf '%s' "$1" | sed -E 's/"[^"]*"//g' | sed -E "s/'[^']*'//g"
+# PreToolUse の deny payload を出力する共通ヘルパ。各 deny 経路で同じ JSON 構造を
+# 生成しているため一箇所に集約しておくと、フィールド名のドリフト (1 箇所だけ
+# `permissionDecisionReason` が `reason` になる、等) を防げる。
+deny() {
+  jq -n --arg reason "$1" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $reason
+    }
+  }'
 }
 
 # `git commit` サブコマンドを検出する。
@@ -38,55 +45,229 @@ OPT='-[^[:space:];&|]+'
 OPT_ARG='([[:space:]]+[^-[:space:];&|][^[:space:];&|]*)?'
 # 検出用 (どこかに `git ... commit` を含むか): 軽量フィルタ
 COMMIT_DETECT_REGEX="(^|[^[:alnum:]_-])git[[:space:]]+(${OPT}${OPT_ARG}[[:space:]]+)*commit"
-# 検証用 (コマンドが `git ... commit` で始まるか): バイパス防止のため厳格なアンカー付き
-COMMIT_ANCHORED_REGEX="^[[:space:]]*git[[:space:]]+(${OPT}${OPT_ARG}[[:space:]]+)*commit"
+# 連結プレフィックス共通形 (CHAIN_PREFIX_REGEX) と、それを土台に定義する各種検出 regex:
+#   セグメント境界 `(^|[;&|])` + 空白 + 任意の env-var assignment + 任意の wrapper
+#   (`builtin`/`command`/`eval`、`command -p` 等の flag 列も許容)。
+# COMMIT_INVOCATION_REGEX / CD_PREFIX_REGEX / EXPORT_TARGET_REGEX は target keyword を
+# CHAIN_PREFIX_REGEX に append して構成する。境界・assignment・wrapper の書き換えが
+# 1 か所で完結し、ドリフトを防げる。
+#
+# COMMIT_INVOCATION_REGEX は help-only スキップ判定と postfix scan の起点取得で
+# `BASH_REMATCH[0]` を取り出すために使う。`(^|[;&|])` の前方境界は
+# `echo git commit && git commit -m x` のような echo 引数内の偽 git commit に最初に
+# match して postfix を `&& git commit -m x` と誤算するのを防ぐ。`GIT_AUTHOR_NAME=bot
+# git commit -m one && git commit -m two` や `command git commit && command git commit`
+# のような env-var / wrapper 経由の最初の commit も同じ仕組みで正しく match させる。
+# BASH_REMATCH[0] に含まれる boundary 文字は postfix 切り出し `${var#*"$rematch"}` の
+# strip 対象として共に消えるので副作用なし。
+CHAIN_PREFIX_REGEX='(^|[;&|])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|]*[[:space:]<>]+)*(builtin[[:space:]<>]+|command([[:space:]<>]+-[^[:space:];&|]*)*[[:space:]<>]+|eval[[:space:]<>]+)?'
+COMMIT_INVOCATION_REGEX="${CHAIN_PREFIX_REGEX}git[[:space:]]+(${OPT}${OPT_ARG}[[:space:]]+)*commit([[:space:]]|\$)"
 
 if ! printf '%s' "$COMMAND" | grep -qE "${COMMIT_DETECT_REGEX}([[:space:]]|$)"; then
   exit 0
 fi
 
+# 置換系の検出には bash の quote 評価規則を反映した dequote を 2 段階で行う:
+#   - Stage 1: single quote (`'...'`) のみ剥がす (`COMMAND_NO_SINGLE`)
+#       → bash は `'...'` 内では何も評価しない一方、`"..."` 内では `$(...)` /
+#         バッククォートを評価する。`$(...)` / バッククォートは single-quote だけ
+#         剥がした文字列で検出すれば、`echo '$(...)'` のようなテキスト参照を
+#         誤検知せず、`git commit -m "$(rm -rf /)"` のような double-quote 内の
+#         実評価ケースは正しく捕捉できる。
+#   - Stage 2: double quote (`"..."`) も剥がす (`COMMAND_DEQUOTED`)
+#       → 後段のセグメント分割・トークン化に使う。プロセス置換 `<(...)` / `>(...)` は
+#         bash の quote 内では評価されないため、完全に dequote した文字列で検出する。
+COMMAND_NO_SINGLE=$(printf '%s' "$COMMAND" | sed -E "s/'[^']*'//g")
+COMMAND_DEQUOTED=$(printf '%s' "$COMMAND_NO_SINGLE" | sed -E 's/"[^"]*"//g')
+
 # `git commit` がクォート内にしか現れない場合は、テキスト参照かラッパー経由のいずれか。
 # クォートを除去した残りに commit がないとき、コマンド先頭がシェルインタプリタなら
-# ラッパー (`bash -c "git commit"` 等) として扱い、それ以外はテキスト参照 (`grep "git commit" ...`) として skip する。
-COMMAND_DEQUOTED=$(dequote "$COMMAND")
+# ラッパー (`bash -c "git commit"` 等) として後段で deny し、それ以外はテキスト参照
+# (`echo 'git commit' && echo $(date)` 等) として skip する。本判定を後段の置換検査
+# よりも **前** に置く: テキスト参照に置換が含まれていても deny ではなく skip するため。
 SHELL_WRAPPER_REGEX='^[[:space:]]*(bash|sh|zsh|dash|ksh|eval)([[:space:]]|$)'
+IS_SHELL_WRAPPER=0
+if printf '%s' "$COMMAND" | grep -qE "$SHELL_WRAPPER_REGEX"; then
+  IS_SHELL_WRAPPER=1
+fi
 if ! printf '%s' "$COMMAND_DEQUOTED" | grep -qE "${COMMIT_DETECT_REGEX}([[:space:]]|$)"; then
-  if ! printf '%s' "$COMMAND" | grep -qE "$SHELL_WRAPPER_REGEX"; then
+  if [ "$IS_SHELL_WRAPPER" -eq 0 ]; then
     exit 0
   fi
 fi
 
-# コマンド全体が単独の `git commit --help` (もしくは `-h`) ならスキップ。
-# 連結 (`git commit --help && git commit -m bad`) を経由するバイパスを防ぐため、
-# 両端アンカー付きで「ヘルプ呼び出し以外を含まない」ことを要求する。
-HELP_ONLY_REGEX="${COMMIT_ANCHORED_REGEX}[[:space:]]+(-h|--help)[[:space:]]*\$"
-if printf '%s' "$COMMAND" | grep -qE "$HELP_ONLY_REGEX"; then
+# コマンド置換 (`$(...)`, バッククォート) とプロセス置換 (`<(...)`, `>(...)`) は本
+# フックの文字列ベースなパーサで内側を解析できず、レビュー検証後に index を
+# 書き換える経路となり得る。`$(...)` / バッククォートは double-quote 内でも評価される
+# ので `COMMAND_NO_SINGLE` で検出し、`<(...)` / `>(...)` は quote 内では評価されない
+# ので `COMMAND_DEQUOTED` で検出する。`<(...)` の検出には paren-strip 前の
+# `COMMAND_DEQUOTED` を使う必要があるため、paren-strip より前に配置する。
+if [[ "$COMMAND_NO_SINGLE" == *'$('* ]] \
+   || [[ "$COMMAND_NO_SINGLE" == *'`'* ]] \
+   || [[ "$COMMAND_DEQUOTED" == *'<('* ]] \
+   || [[ "$COMMAND_DEQUOTED" == *'>('* ]]; then
+  REASON=$(cat <<'EOF'
+コミットをブロックしました。`$(...)` / バッククォート / `<(...)` / `>(...)` (コマンド置換・プロセス置換) を含む `git commit` はサポート外です。
+
+これらは内側のコマンドを別 subshell で評価するため、レビュー検証後に index を書き換えたり commit 内部で別コマンドを走らせたりする経路となり得ます。コマンド置換が必要な処理は別の Bash 呼び出しに分離して、結果を `git commit -m "..."` の文字列として直接埋め込んでください。
+EOF
+)
+  deny "$REASON"
+  exit 0
+fi
+# `()` (サブシェル) と `{}` (group) はコマンド境界として `;`/`&`/`|` と等価なため、
+# スペースに正規化しておくと下流のセグメント分割・トークン化が均一に動く。これに
+# より `(cd /other && git commit)` や `{ GIT_DIR=/x git commit; }` のようなグループ
+# 越しの target-mismatch バイパスを cd-prefix / env-var チェックがそのまま捕捉できる。
+# `[(){}]` を class として一括置換すると `}` がパラメータ展開の終端と衝突して
+# 動かないため、4 回に分けて置換する (各々フォーク無しの parameter expansion)。
+COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\(/ }"
+COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\)/ }"
+COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\{/ }"
+COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\}/ }"
+# 改行も `;` と等価なコマンド区切りなので、`cd /other<newline>git commit` のように
+# 改行で連結された prefix が cd-prefix / 区切り文字検査をすり抜ける経路を塞ぐ。
+# `;` に正規化して下流の `[;&|]` パターンに統一して載せる。
+COMMAND_DEQUOTED="${COMMAND_DEQUOTED//$'\n'/;}"
+# bash の redirection (`>file`, `2>&1`, `&>file`, `<<EOF` 等) は command 名と
+# その引数の間を分断し得る (例: `cd>/dev/null /other`, `builtin>/dev/null cd /other`,
+# `GIT_DIR=/foo>/dev/null git commit`)。本体コマンドの実行可否判定だけが目的なので、
+# redirection 全体をスペースに置換して下流の検査から除外する。pattern は
+# `[0-9]? (>>|<<<|<<|<>|>&|<&|>|<) [[:space:]]* [^[:space:];&|]*` で
+# fd 番号 / target / heredoc word をまとめて吸収する。
+COMMAND_DEQUOTED=$(printf '%s' "$COMMAND_DEQUOTED" \
+  | sed -E 's/[0-9]?(>>|<<<|<<|<>|>&|<&|>|<)[[:space:]]*[^[:space:];&|]*/ /g')
+
+# 最初の `git ... commit` 呼び出しの後ろ (= 「実 commit の引数部分以降」) を
+# COMMIT_POSTFIX として一度だけ抽出する。help-only スキップ判定と postfix scan の
+# 両方が同じ値を必要とするため共通化する (BASH_REMATCH は後段の `[[ =~ ]]` 評価で
+# 上書きされるので、結果はスカラ変数に確保する)。
+# 早期 COMMIT_DETECT_REGEX フィルタは通っているのに COMMIT_INVOCATION_REGEX が
+# 一致しないケース (例: `time git commit ...`, `env git commit ...` のように本フックが
+# 認識していない wrapper を介する形) は、postfix scan 起点が取れず未レビュー commit を
+# 素通しさせるリスクがある (BASH_REMATCH 空 → POSTFIX 空 → postfix チェックで素通り)。
+# wrapper-deny 経路 (`bash -c "..."` 等) は別途 IS_SHELL_WRAPPER で deny されるため、
+# wrapper でも commit でもない「parse 不能」状態は保守的に deny する。
+COMMIT_POSTFIX=""
+if [[ "$COMMAND_DEQUOTED" =~ $COMMIT_INVOCATION_REGEX ]]; then
+  COMMIT_POSTFIX="${COMMAND_DEQUOTED#*"${BASH_REMATCH[0]}"}"
+elif [ "$IS_SHELL_WRAPPER" -eq 0 ]; then
+  REASON=$(cat <<'EOF'
+コミットをブロックしました。本フックが解析できない形式の `git commit` 呼び出しが含まれています (例: `time git commit ...`, `env git commit ...` のように未対応の wrapper 経由など)。
+
+`git commit` を直接実行するか、対応している `xxx && git commit ...` 形式 (前段が `cd` / `pushd` / `popd` / target-mismatch を起こす env-var を含まないもの) で連結してください。
+EOF
+)
+  deny "$REASON"
   exit 0
 fi
 
-# 先頭が `git ... commit` でないコマンドは、ラッパーやチェーンを通じてレビューを
-# すり抜けるリスクがあるため一律 deny する (例: `cd dir && git commit`,
-# `git add . && git commit`, `bash -c '... && git commit'`)。
-if ! printf '%s' "$COMMAND" | grep -qE "${COMMIT_ANCHORED_REGEX}([[:space:]]|$)"; then
+# `git commit --help` (もしくは `-h`) ならスキップ。素朴に「コマンド末尾が --help」を
+# 判定すると `git commit -m bad && git commit --help` のように **最初の commit が
+# real なケース** までスキップしてしまい、未レビュー commit を素通しする致命的な
+# バイパスになる。COMMIT_POSTFIX (= 最初の commit の引数部分以降) が `-h|--help` のみで
+# 構成される場合だけスキップする。`-m bad && git commit --help` のような chain では
+# COMMIT_POSTFIX が `-m bad && git commit --help` となり、ここでは skip しないため
+# real commit として後段の検証へ進む。
+if [[ "$COMMIT_POSTFIX" =~ ^[[:space:]]*(-h|--help)[[:space:]]*$ ]]; then
+  exit 0
+fi
+
+# シェルラッパー (`bash -c "git commit ..."` 等) はクォート内のコマンドを本フックの
+# 文字列ベースなパーサで解析できず、`-C` 等の検証もすり抜ける。`git commit` を
+# 直接実行する経路 (単独 / `xxx && git commit ...`) のみサポートする。
+if [ "$IS_SHELL_WRAPPER" -eq 1 ]; then
   REASON=$(cat <<'EOF'
-コミットをブロックしました。`git commit` はコマンド先頭で単独実行する必要があります。
+コミットをブロックしました。`bash -c "..."` のようなシェルラッパー経由の `git commit` はサポート外です。
 
-以下のような形式はサポート外です:
-  - `cd dir && git commit ...` (作業ディレクトリ変更を伴う)
-  - `git add . && git commit ...` (commit 直前に index を変更する)
-  - `git status && git commit ...` (前段のコマンドと連結する)
-  - `bash -c "... git commit ..."` (シェルラッパー経由)
-
-前段のコマンドと commit を別の Bash 呼び出しに分けて、最後に単独の `git commit ...` を実行してください。
+`git commit` を直接実行してください (前段コマンドが必要な場合は `xxx && git commit ...` 形式で連結できます)。
 EOF
 )
-  jq -n --arg reason "$REASON" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: $reason
-    }
-  }'
+  deny "$REASON"
+  exit 0
+fi
+
+# 単独の `&` (background) と `|` (pipeline) は連結というより並列実行になるため、
+# `git add newfile & git commit ...` や `cmd | git commit ...` の形式はマーカー検証
+# 完了後に index が並行変更されたり stdin 経由で commit に状態が流れ込んだりする
+# 経路になる。chain prefix では `&&` / `||` / `;` のみ許容し、単独の `&` / `|` は
+# COMMAND_DEQUOTED に存在するだけで deny する。`(^|[^X])X([^X]|$)` で「X が連続
+# しないただ 1 個の X」を識別する (`&&` / `||` は連続なのでマッチしない)。
+if [[ "$COMMAND_DEQUOTED" =~ (^|[^&])\&([^&]|$) ]] \
+   || [[ "$COMMAND_DEQUOTED" =~ (^|[^\|])\|([^\|]|$) ]]; then
+  REASON=$(cat <<'EOF'
+コミットをブロックしました。`&` (background) や `|` (pipeline) で `git commit` と他コマンドを連結する形式はサポート外です。
+
+これらの区切りはコマンドを並列実行するため、レビューマーカー検証後に index が変更されたり commit へ状態が流れ込んだりする経路になります。
+
+連結が必要なら `&&` (success-and) や `;` (sequential) を使用してください。並列実行や pager 接続が必要な場合は別の Bash 呼び出しに分けてください。
+EOF
+)
+  deny "$REASON"
+  exit 0
+fi
+
+# 連結プレフィックスに `cd` / `pushd` / `popd` が含まれる場合、hook 検証時の cwd と
+# commit 実行時の cwd が乖離し、別リポジトリ (or 同一 repo の別 worktree) のマーカーで
+# commit を許可してしまう経路になる (`-C` deny と同じ target-mismatch)。
+# 同一リポジトリ内のサブディレクトリへの cd でも cwd 不一致は残るうえ、in-repo か
+# 別 repo かを静的に判別する手段がないため一律 deny する。
+# `${var%[;&|]*}` は最後のシェル区切り文字以降を取り除くので、prefix が full と
+# 異なるとき = 連結が存在するときだけ検査する。`git commit ; cd subdir` のように
+# cd が postfix にあるケースは prefix に cd が出ないため誤検知せず、後段の postfix
+# チェックで適切な deny メッセージが出る。
+#
+# `builtin cd` / `command cd` / `eval cd` のように cd 系コマンドの前に
+# bash の builtin/command/eval ラッパーを挟む形式もカバーする (各々 alias/function
+# を回避して cd 本体を実行できるため、素の `cd` と等価な cwd 変更経路になる)。
+# `eval` は連結先頭にある場合 `IS_SHELL_WRAPPER` の deny で先に弾かれるが、
+# 連結途中 (`xxx && eval cd ...`) では先頭ラッパー検出をすり抜けるため、こちらでも
+# 拾う必要がある。
+# bash の redirection (`cd>/dev/null /other`) は command 名直後に空白なく `>`/`<` が
+# 来ても本体は実行される。command 名の直後・wrapper 名の直後の boundary class に
+# `<>` を含めて、`cd>file /other && git commit` 等の bypass を捕捉する。
+# `command` には `-p` (default PATH 利用), `-v`/`-V` (情報表示) 等の flag があり、
+# `command -p cd /other` のように flag を挟んでも cd 本体は実行される。command の
+# wrapper 部分には flag 列 `(-[^...]*)*` を許容する。`-v` は実行しないが保守的に deny
+# する (cooperative 利用での実害なし)。
+# bash は `FOO=bar cd /other` のように command の前に env-var assignment を置ける。
+# その assignment は cd 実行時の environment に適用されるが cd 本体は実行されるので、
+# `(name=value[[:space:]<>]+)*` を wrapper の前に optional で許容して捕捉する。
+CD_PREFIX_REGEX="${CHAIN_PREFIX_REGEX}(cd|pushd|popd)([[:space:]<>]|\$)"
+# `export GIT_DIR=...` / `declare -x GIT_DIR=...` / `typeset -x ...` / `readonly -x ...`
+# のように、対象切替系の env-var を前段で export すると後段の `git commit` にも
+# 引き継がれて target-mismatch を起こす (bare `GIT_DIR=/foo git commit` は LAST_SEGMENT
+# 経由の TARGET_OVERRIDE_REGEX で捕捉済みだが、別セグメントの export はそこに現れない)。
+# `-x` 有無は識別せず `declare GIT_DIR` 等も保守的に deny する (cooperative 利用では
+# 副作用なし)。
+# `[^;&|]*` を素のままにすると `GIT_DIR` が `MY_GIT_DIR` / `GIT_DIRECTOR` /
+# `FOOGIT_DIR=foo` 等の部分一致でも match して false positive になる。
+# canonical name の左側は「先頭 or 直前にスペース」を要求し (= タンデム空白で区切られた
+# 独立トークンであることを保証)、右側は `[[:space:]]|=|$` で名前末尾を boundary 化する。
+EXPORT_TARGET_REGEX="${CHAIN_PREFIX_REGEX}(export|declare|typeset|readonly)[[:space:]<>]+([^;&|]*[[:space:]<>])?(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)([[:space:]<>]|=|\$)"
+COMMAND_PREFIX="${COMMAND_DEQUOTED%[;&|]*}"
+if [ "$COMMAND_PREFIX" != "$COMMAND_DEQUOTED" ] \
+   && [[ "$COMMAND_PREFIX" =~ $EXPORT_TARGET_REGEX ]]; then
+  REASON=$(cat <<'EOF'
+コミットをブロックしました。`export GIT_DIR=...` / `declare -x GIT_DIR=...` 等で対象リポジトリ・インデックスを切り替える環境変数を前段でセットする形式の commit はサポート外です (検証先と commit 先が食い違うのを防ぐため)。
+
+これらの環境変数を export せず、対象リポジトリへ移動してから `git commit` を実行してください (Claude の作業ディレクトリと commit 先が同じになるようにしてください)。
+EOF
+)
+  deny "$REASON"
+  exit 0
+fi
+if [ "$COMMAND_PREFIX" != "$COMMAND_DEQUOTED" ] \
+   && [[ "$COMMAND_PREFIX" =~ $CD_PREFIX_REGEX ]]; then
+  REASON=$(cat <<'EOF'
+コミットをブロックしました。`cd` / `pushd` / `popd` を前段に含む連結 commit はサポート外です。
+
+hook の検証 cwd と commit 実行時の cwd が乖離するため、別リポジトリ (もしくは別 worktree) のマーカーで commit が許可されてしまう経路になります。これは `-C` / `--git-dir` / `--work-tree` を deny する理由と同じ target-mismatch です。
+
+対象ディレクトリへ移動してから別の Bash 呼び出しで `git commit ...` を実行してください (Claude の作業ディレクトリと commit 先が同じになるようにしてください)。
+EOF
+)
+  deny "$REASON"
   exit 0
 fi
 
@@ -98,13 +279,21 @@ fi
 # "commit" のケースでも subcommand 境界を取り違えない。`=` 形式
 # (`--namespace=commit`) は単一トークンなので別トークン引数の対象外。
 #
+# `xxx && git commit ...` のような連結形式では、前段コマンド (`xxx`) が偶然 `-C`
+# を含む (例: `tar -C /tmp ...`) と false positive で deny になってしまう。
+# 後段の postfix チェックで `commit` がコマンド末尾に位置することを強制するため、
+# `;`/`&`/`|` 区切りの最終セグメント (= `${COMMAND_DEQUOTED##*[;&|]}`) を見れば
+# commit を含むセグメントが取れる。検査範囲をそこに限定することで前段コマンドの
+# `-C` 誤検知を防ぐ。bash の parameter expansion を使って awk フォークを省略する。
+#
 # `read -ra` は `\<space>` を 2 トークンに分割してしまうため、トークン化前に
 # バックスラッシュエスケープ空白を非空白プレースホルダ \x01 に置換する。
 # これにより `git -c foo=a\ commit ...` の `a commit` 部分が単一トークンとして
 # 維持され、subcommand 境界判定の取り違えを防げる。
-COMMAND_DEQUOTED_NORMALIZED=$(printf '%s' "$COMMAND_DEQUOTED" \
+LAST_SEGMENT="${COMMAND_DEQUOTED##*[;&|]}"
+LAST_SEGMENT_NORMALIZED=$(printf '%s' "$LAST_SEGMENT" \
   | sed -E "s/\\\\[[:space:]]/$(printf '\x01')/g")
-read -ra _tokens <<< "$COMMAND_DEQUOTED_NORMALIZED"
+read -ra _tokens <<< "$LAST_SEGMENT_NORMALIZED"
 sandbox_prefix_tokens=()
 prev_is_argopt=0
 for _tok in "${_tokens[@]}"; do
@@ -121,66 +310,35 @@ for _tok in "${_tokens[@]}"; do
   sandbox_prefix_tokens+=("$_tok")
 done
 SANDBOX_PREFIX="${sandbox_prefix_tokens[*]}"
-if printf '%s' "$SANDBOX_PREFIX" \
-  | grep -qE '(^|[[:space:]=])(-C|--git-dir|--work-tree)([[:space:]=]|$)'; then
+# git は `-C` / `--git-dir` / `--work-tree` オプションだけでなく、`GIT_DIR=/path`
+# `GIT_WORK_TREE=/path` `GIT_INDEX_FILE=/path` 環境変数による対象切替もサポートする。
+# どちらも commit 先のリポジトリ/インデックスを hook 検証時の cwd と乖離させる
+# target-mismatch 経路になるため、両形式とも deny する。env-var は `name=value` 形式
+# でコマンド先頭または space 区切りで現れる必要があるため、後段の `=` は不要。
+TARGET_OVERRIDE_REGEX='(^|[[:space:]=<>])(-C|--git-dir|--work-tree)([[:space:]=<>]|$)|(^|[[:space:]<>])(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)='
+if printf '%s' "$SANDBOX_PREFIX" | grep -qE "$TARGET_OVERRIDE_REGEX"; then
   REASON=$(cat <<'EOF'
-コミットをブロックしました。`-C`, `--git-dir`, `--work-tree` で対象リポジトリを変更する形式の commit はサポート外です。
+コミットをブロックしました。`-C` / `--git-dir` / `--work-tree` オプションまたは `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` 環境変数で対象リポジトリ・インデックスを変更する形式の commit はサポート外です (検証先と commit 先が食い違うのを防ぐため)。
 
-対象リポジトリへ `cd` してから `git commit` を実行してください (Claude の作業ディレクトリと commit 先が同じになるようにしてください)。
+これらの設定を使わず、対象リポジトリへ移動してから `git commit` を実行してください (Claude の作業ディレクトリと commit 先が同じになるようにしてください)。
 EOF
 )
-  jq -n --arg reason "$REASON" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: $reason
-    }
-  }'
-  exit 0
-fi
-
-# コマンド置換 (`$(...)`, バッククォート) は commit 本体より前に評価されるため、
-# `git commit -m "$(git add evil; echo msg)"` のような形でマーカー検証後に index を
-# 書き換えるバイパスが可能になる。コマンド全体で検出して deny する。
-# (GNU grep ERE では `\`` がバッファ先頭にマッチするため、固定文字列マッチを使う)
-if printf '%s' "$COMMAND" | grep -qF -e '$(' -e '`'; then
-  REASON=$(cat <<'EOF'
-コミットをブロックしました。`git commit` のコマンド内に `$(...)` やバッククォートによるコマンド置換が含まれています。
-
-コマンド置換は commit 本体の評価より前に実行されるため、レビュー検証後に index を書き換える経路となり得ます。コマンド置換が必要な処理は別の Bash 呼び出しに分離して、結果を `git commit -m "..."` の文字列として直接埋め込んでください。
-EOF
-)
-  jq -n --arg reason "$REASON" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: $reason
-    }
-  }'
+  deny "$REASON"
   exit 0
 fi
 
 # `git commit -m reviewed && ... && git commit unreviewed` のように、commit の後に
 # シェル区切り文字を伴う追加コマンドが続くと、マーカー消費後に未レビューな commit が
-# 走り得る。1 マーカー = 1 commit を保証するため、`commit` 以降に区切り文字を含む
-# コマンドは deny する。引用符で囲まれた commit メッセージ内のメタ文字 (`fix A & B` 等)
-# を誤検知しないよう、ダブル/シングルクォート部分を先に取り除いてから検査する。
-COMMAND_POSTFIX="${COMMAND#*commit}"
-COMMAND_POSTFIX_DEQUOTED=$(dequote "$COMMAND_POSTFIX")
-if printf '%s' "$COMMAND_POSTFIX_DEQUOTED" | grep -qE '[;&|]'; then
+# 走り得る。1 マーカー = 1 commit を保証するため、COMMIT_POSTFIX (= 実 commit 呼び出し
+# 以降のテキスト、上で抽出済み) に区切り文字を含むコマンドは deny する。
+if printf '%s' "$COMMIT_POSTFIX" | grep -qE '[;&|]'; then
   REASON=$(cat <<'EOF'
 コミットをブロックしました。`git commit` の後に `;`, `&`, `&&`, `||`, `|` などのシェル区切り文字が続く複合コマンドはサポート外です (1 マーカー = 1 commit を保証するため)。
 
 `git commit` は単独の Bash コマンドとして実行し、後続コマンドは別の Bash 呼び出しに分けてください。
 EOF
 )
-  jq -n --arg reason "$REASON" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: $reason
-    }
-  }'
+  deny "$REASON"
   exit 0
 fi
 
@@ -274,10 +432,4 @@ post-pr-review プラグイン経由で実行されます。)
 EOF
 )
 
-jq -n --arg reason "$REASON" '{
-  hookSpecificOutput: {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason: $reason
-  }
-}'
+deny "$REASON"
