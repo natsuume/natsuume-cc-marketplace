@@ -14,7 +14,7 @@ allowed-tools: Bash(bash:*)
 
 `${CLAUDE_PLUGIN_ROOT}/scripts/apply-patch.sh` を実行します。スクリプトは:
 
-1. `~/.claude/plugins/marketplaces/*/codex/commands/review.md` を動的に解決
+1. `~/.claude/plugins/marketplaces/*/plugins/codex/commands/review.md` を動的に解決
 2. 既にパッチ済み (末尾マーカーで判定) なら何もせず終了
 3. 未適用なら一時ファイルへパッチ内容を書き出し、frontmatter 健全性をチェックしてから atomic に上書き
 4. 対応する codex の cache (`~/.claude/plugins/cache/*/codex`) を削除し、次回 `/reload-plugins` で marketplace clone から再 build されるようにする

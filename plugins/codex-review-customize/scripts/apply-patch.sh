@@ -38,6 +38,14 @@ trap 'rm -f "$TMP"' EXIT
 
 sed '/^disable-model-invocation:[[:space:]]*true[[:space:]]*$/d' "$REVIEW_MD" > "$TMP"
 
+# sed silent no-op を検出する: TMP の frontmatter (先頭 --- から次の --- まで) に
+# `disable-model-invocation:` で始まる行が残っていれば、上流の表記が変わっており
+# sed パターンが効いていない。マーカーだけ追記して「適用済み」と誤報告する事故を防ぐ。
+if awk '/^---[[:space:]]*$/{c++; if (c==2) exit} c==1 && /^disable-model-invocation:/' "$TMP" | grep -q .; then
+  echo "[codex-review-customize] frontmatter から disable-model-invocation 行を削除できませんでした (上流の表記変更の可能性)。手動でパッチを書き直してください。" >&2
+  exit 1
+fi
+
 # 上流 review.md が trailing newline なしで終わる場合に、append したセクションが
 # 直前行と連結されないよう補正する。
 [ -z "$(tail -c1 "$TMP")" ] || printf '\n' >> "$TMP"
@@ -64,6 +72,11 @@ if ! head -n1 "$TMP" | grep -qE '^---[[:space:]]*$'; then
   echo "[codex-review-customize] 生成された patch の先頭が frontmatter ではありません。原本を変更しません。" >&2
   exit 1
 fi
+
+# `umask 077` で作った TMP は 0600 だが、原本の mode を保持して mv する。
+# 他ツールが review.md を読む可能性があるため、無闇に world-readable を外さない。
+ORIGINAL_MODE=$(stat -c '%a' "$REVIEW_MD" 2>/dev/null || stat -f '%A' "$REVIEW_MD" 2>/dev/null || echo 644)
+chmod "$ORIGINAL_MODE" "$TMP"
 
 mv "$TMP" "$REVIEW_MD"
 trap - EXIT
