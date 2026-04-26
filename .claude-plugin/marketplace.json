@@ -55,6 +55,13 @@
       "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / レートリミット) を提供し、/natsuume-statusline:setup で settings.json に登録するプラグイン",
       "version": "0.1.0",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
+    },
+    {
+      "name": "codex-review-customize",
+      "source": "./plugins/codex-review-customize",
+      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool 呼び出し許可 + 出力日本語化を setup するプラグイン",
+      "version": "0.1.0",
+      "keywords": ["codex", "review", "patch", "i18n", "japanese", "skill"]
     }
   ]
 }
