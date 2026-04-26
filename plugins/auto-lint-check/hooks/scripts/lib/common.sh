@@ -14,7 +14,18 @@ extract_tool_name() {
   printf '%s' "$input" | jq -r '.tool_name // empty'
 }
 
-# hook 入力 JSON から file_path を取り出して realpath -m で正規化する。
+# パスを絶対パスへ正規化する。`realpath -m` の代替として python3 の
+# os.path.abspath を使う (BSD/macOS の realpath には -m が無いため可搬性目的)。
+# 失敗時は何も出力せず非 0 を返す。
+normalize_path() {
+  local path="$1"
+  if [ -z "$path" ]; then
+    return 1
+  fi
+  python3 -c 'import os, sys; sys.stdout.write(os.path.abspath(sys.argv[1]))' "$path" 2>/dev/null
+}
+
+# hook 入力 JSON から file_path を取り出して絶対パスに正規化する。
 # 取得できなければ非 0 を返す。
 extract_file_path() {
   local input="$1"
@@ -23,7 +34,7 @@ extract_file_path() {
   if [ -z "$fp" ]; then
     return 1
   fi
-  realpath -m "$fp" 2>/dev/null
+  normalize_path "$fp"
 }
 
 # 拡張子から JS/TS ファイルかを判定する。
@@ -110,9 +121,13 @@ resolve_prettier() {
 }
 
 # ruff の起動コマンドを RUFF_CMD に解決する。uvx ruff > PATH ruff の優先順位。
+# uvx が PATH にあるだけでは不十分 (オフライン等で実行できないケースがある)
+# ため、`uvx ruff --version` で実際に起動できるかを検証してから採用する。
+# 失敗したら PATH の ruff にフォールバックする。
 resolve_ruff() {
   RUFF_CMD=()
-  if command -v uvx >/dev/null 2>&1; then
+  if command -v uvx >/dev/null 2>&1 \
+    && uvx ruff --version >/dev/null 2>&1; then
     RUFF_CMD=(uvx ruff)
     return 0
   fi
