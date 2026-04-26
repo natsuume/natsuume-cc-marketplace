@@ -27,16 +27,16 @@ PR がマージされた直後に呼び出されるワークフローです。�
 
 ### 2. 元のブランチ名を保存
 
-デフォルトブランチへ切り替える前に、現在のブランチ名を控えておきます。手順 9 でこのブランチに戻すか、`[gone]` で削除された場合は新しい作業ブランチを切るかを判断するために使います。
+デフォルトブランチへ切り替える前に、現在のブランチ名を `.git/.update-default-branch-state` に永続化します。手順 8 でこのブランチに戻すか、`[gone]` で削除された場合は新しい作業ブランチを切るかを判断するために使います。
 
-ユーザー確認のために Bash 呼び出しが分かれてもブランチ名を共有できるよう、`.git` 配下のステートファイルに永続化します。
+各ステップが別々の Bash 呼び出しで実行されてもブランチ名を引き継げるようファイルを使います (シェル変数では呼び出し間で消えるため、復帰や失敗時の switch-back が機能しなくなる)。
 
 ```bash
 GIT_DIR=$(git rev-parse --git-dir)
 git branch --show-current > "$GIT_DIR/.update-default-branch-state"
 ```
 
-`git branch --show-current` は detached HEAD のとき空文字を返します。その場合はファイルが空になり、手順 9 で「ユーザーに新規作業ブランチを促す」分岐に入ります。
+`git branch --show-current` は detached HEAD のとき空文字を返します。その場合はファイルが空になり、手順 8 で「ユーザーに新規作業ブランチを促す」分岐に入ります。
 
 ### 3. デフォルトブランチ名の取得
 
@@ -57,12 +57,22 @@ DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remote
 
 `--ff-only` で fast-forward しか許さないように制御します。これによりローカルが分岐している場合は pull が失敗するため、トラブルシューティング節の手順に従って状況確認できます。`pull.rebase` / `merge.ff` などのユーザー設定に依存して意図せず merge commit がデフォルトブランチに作られるのを避けるためです。
 
+pull が失敗した場合は **デフォルトブランチに居着かない** よう、state file から元のブランチを読み出して復帰したうえで終了します。
+
 ```bash
 git switch "$DEFAULT_BRANCH"
-git pull --ff-only origin "$DEFAULT_BRANCH"
+if ! git pull --ff-only origin "$DEFAULT_BRANCH"; then
+  echo "fast-forward 不可。手動対処が必要です。" >&2
+  GIT_DIR=$(git rev-parse --git-dir)
+  ORIGINAL_BRANCH=$(cat "$GIT_DIR/.update-default-branch-state" 2>/dev/null || true)
+  if [ -n "$ORIGINAL_BRANCH" ] && [ "$ORIGINAL_BRANCH" != "$DEFAULT_BRANCH" ]; then
+    git switch "$ORIGINAL_BRANCH"
+  fi
+  exit 1
+fi
 ```
 
-> **注意**: デフォルトブランチでの作業が禁止されている場合、ここでの切り替えは「最新化のための一時的な遷移」です。手順 9 で必ず元のブランチへ戻るか、`git switch -c <branch>` で新しい作業ブランチを切り直してください。
+> **注意**: デフォルトブランチでの作業が禁止されている場合、ここでの切り替えは「最新化のための一時的な遷移」です。手順 8 で必ず元のブランチへ戻るか、`git switch -c <branch>` で新しい作業ブランチを切り直してください。
 
 ### 5. リモート追跡情報を整理
 
@@ -84,19 +94,13 @@ GONE_BRANCHES=$(git for-each-ref \
     ')
 ```
 
-### 7. 削除候補をユーザーに提示して確認
+### 7. ローカルブランチを削除
 
-抽出結果は事前に表示し、ユーザーの了承を得てから削除します。**勝手に削除してはいけません。**
+`[gone]` 状態のブランチは追跡先のリモートが既に削除済み (PR マージ後に GitHub がブランチを削除した、または別環境でクリーンアップされた) なので、ローカルの後始末を確認なしで実行します。承認ステップは認知負荷を増やすだけで実質的なリスク低減にならないため、検出と削除を一気に行い、削除結果を事後に表示します。
 
-```bash
-echo "$GONE_BRANCHES"
-```
+`-D` を使うのは、`[gone]` 状態では追跡先が無くマージ判定が成立しない、かつ squash/rebase マージでは feature branch のコミット ID が default branch に存在しないため `-d` が「未マージ」として拒否してしまうためです。
 
-該当がない場合はその旨を伝えて手順 9 に進みます。
-
-### 8. ローカルブランチの削除
-
-ユーザーの了承が得られたら、ブランチを削除します。`-d` でも削除できるケースは多いものの、`[gone]` 状態では追跡先が無くなりマージ判定が成立せず拒否されることがあるため、`-D` を使います。
+> **注意 (`[gone]` の意味)**: `[gone]` は「リモート側の対応 ref が消えている」状態を指し、必ずしも「PR がマージ済み」とは限りません。リモートでの force-delete やリネームでも `[gone]` になります。`git branch -D` は merge 検査を skip するため、まれに「ローカルにのみ存在するコミットを保持する `[gone]` ブランチ」が誤削除される可能性があります。`git branch -D` の出力には削除前の SHA が表示されるので、誤削除に気づいた場合は表示された SHA を `git checkout -b <name> <sha>` で復活できます (約 30 日は `git reflog` でも遡れます)。マージ済み以外の理由で `[gone]` になる branch を残しておきたい場合は、本 Skill の手順 7 を実行する前に作業ブランチへ移しておくか、Skill の利用自体を控えてください。
 
 ```bash
 while IFS= read -r branch; do
@@ -105,9 +109,11 @@ while IFS= read -r branch; do
 done <<< "$GONE_BRANCHES"
 ```
 
-### 9. 元のブランチへ戻す (またはユーザーに新ブランチを促す)
+該当がない場合はその旨を伝えて手順 8 に進みます。
 
-手順 2 で保存したステートファイルから `ORIGINAL_BRANCH` を読み戻します。デフォルトブランチに居着いたまま終了させない (CLAUDE.md でデフォルトブランチ作業が禁止されている場合に重要) ことが目的です。
+### 8. 元のブランチへ戻す (またはユーザーに新ブランチを促す)
+
+手順 2 で保存した state file から `ORIGINAL_BRANCH` を読み出し、必要に応じて元の作業ブランチへ復帰させます。デフォルトブランチに居着いたまま終了させない (CLAUDE.md でデフォルトブランチ作業が禁止されている場合に重要) ことが目的です。最後に state file を削除して残骸を残しません。
 
 | 条件 | アクション |
 |-----|-----------|
@@ -115,8 +121,6 @@ done <<< "$GONE_BRANCHES"
 | `ORIGINAL_BRANCH` が削除済み (`GONE_BRANCHES` に含まれていた) | ユーザーに次の作業ブランチ名を確認し、`git switch -c <name>` で作成 |
 | `ORIGINAL_BRANCH` がデフォルトブランチと同じ | (元からデフォルトブランチにいたので) 何もしない。ユーザーに作業ブランチを切るよう促す |
 | それ以外 (元のブランチが残っている) | `git switch "$ORIGINAL_BRANCH"` で復帰 |
-
-最後にステートファイルを必ず削除して残骸を残さないこと。
 
 ```bash
 GIT_DIR=$(git rev-parse --git-dir)
@@ -135,7 +139,7 @@ rm -f "$STATE_FILE"
 
 ## 一連のスクリプト例
 
-最新化と削除候補の検出までは無条件で実行できます。`[gone]` ブランチの **削除はユーザーの了承を得てから別途** 実行してください (下のコードブロックは検出結果を提示するところで止める設計)。
+検出から削除、ブランチ復帰まで一気に実行できます。`[gone]` ブランチはリモートが既に削除済み (PR マージ後の自動削除等) なので、ローカル削除に確認ステップは不要です。
 
 ```bash
 # 1. 状態確認
@@ -144,9 +148,10 @@ if [ -n "$(git status --short)" ]; then
   exit 1
 fi
 
-# 2. 元のブランチをステートファイルへ永続化 (確認ダイアログを挟む後続ブロックでも参照できるよう)
+# 2. 元のブランチを state file に永続化 (Bash 呼び出しが分割されても引き継ぐため)
 GIT_DIR=$(git rev-parse --git-dir)
-git branch --show-current > "$GIT_DIR/.update-default-branch-state"
+STATE_FILE="$GIT_DIR/.update-default-branch-state"
+git branch --show-current > "$STATE_FILE"
 
 # 3-4. デフォルトブランチへ移動して最新化
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
@@ -155,37 +160,36 @@ if [ -z "$DEFAULT_BRANCH" ]; then
   DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
 fi
 git switch "$DEFAULT_BRANCH"
-git pull --ff-only origin "$DEFAULT_BRANCH"
+# fast-forward 不可なら以降の削除フェーズに進ませない。
+# 中断する場合も「デフォルトブランチに居着かない」ポリシーを守るため
+# ORIGINAL_BRANCH へ復帰し、state file は手動対処の検証用に残しておく。
+if ! git pull --ff-only origin "$DEFAULT_BRANCH"; then
+  echo "fast-forward 不可。手動対処が必要です。" >&2
+  ORIGINAL_BRANCH=$(cat "$STATE_FILE" 2>/dev/null || true)
+  if [ -n "$ORIGINAL_BRANCH" ] && [ "$ORIGINAL_BRANCH" != "$DEFAULT_BRANCH" ]; then
+    git switch "$ORIGINAL_BRANCH"
+  fi
+  exit 1
+fi
 
 # 5. リモート追跡情報の整理
 git fetch --prune origin
 
-# 6. [gone] ブランチの検出 (出力をユーザーに提示するところまで)
-git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads \
-  | awk -v default_branch="$DEFAULT_BRANCH" '
-      $2 == "[gone]" && $1 != default_branch { print $1 }
-    '
-```
-
-削除対象が確定し、**ユーザーから明示的な了承を得たあと** にのみ次のブロックを実行します。誤って削除ループだけが先に走らないよう、検出ステップと削除ステップは別コードブロックに分けています。後続ブロックは別 Bash 呼び出しでも動くよう、ステートをファイルから読み戻し、リスト類は再計算します。
-
-```bash
-# 7-9. ユーザーの了承後にだけ実行
-GIT_DIR=$(git rev-parse --git-dir)
-STATE_FILE="$GIT_DIR/.update-default-branch-state"
-ORIGINAL_BRANCH=$(cat "$STATE_FILE" 2>/dev/null || true)
-DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
+# 6. [gone] ブランチの検出
 GONE_BRANCHES=$(git for-each-ref \
   --format='%(refname:short) %(upstream:track)' refs/heads \
   | awk -v default_branch="$DEFAULT_BRANCH" '
       $2 == "[gone]" && $1 != default_branch { print $1 }
     ')
 
+# 7. ローカル削除 (確認なし。リモートが消えた branch は安全に削除可)
 while IFS= read -r branch; do
   [ -z "$branch" ] && continue
   git branch -D "$branch"
 done <<< "$GONE_BRANCHES"
 
+# 8. 元のブランチへ戻す or ユーザーに新ブランチを促す
+ORIGINAL_BRANCH=$(cat "$STATE_FILE" 2>/dev/null || true)
 if [ -z "$ORIGINAL_BRANCH" ] || [ "$ORIGINAL_BRANCH" = "$DEFAULT_BRANCH" ] \
   || printf '%s\n' "$GONE_BRANCHES" | grep -Fxq -- "$ORIGINAL_BRANCH"; then
   echo "次の作業ブランチをユーザーに確認してから git switch -c <name> で作成してください。" >&2
@@ -204,7 +208,7 @@ rm -f "$STATE_FILE"
 
 ### `[gone]` のブランチが想定より多い
 
-過去に `git branch -m` でリネームしたブランチや、別環境で削除されたブランチが含まれることがあります。削除前に必ず一覧をユーザーに提示し、誤削除を防ぎます。
+過去に `git branch -m` でリネームしたブランチや、別環境で削除されたブランチが含まれることがあります。削除自体は確認なしで実行されますが、削除結果はユーザーに事後表示し、想定外のブランチが消えていないかを確認できるようにします (誤削除に気づいたら `git reflog` で復旧可能)。
 
 ### worktree が紐づいているブランチを削除しようとした
 

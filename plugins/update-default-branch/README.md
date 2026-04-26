@@ -12,10 +12,10 @@ v0.1.0
 
 1. 作業ツリーが clean かを確認
 2. リモートのデフォルトブランチ名を動的に取得
-3. デフォルトブランチへ切り替えて `git pull origin <default>`
+3. デフォルトブランチへ切り替えて `git pull --ff-only origin <default>`
 4. `git fetch --prune origin` でリモートから削除されたブランチに対応する remote-tracking ref を整理
 5. `[gone]` 状態のローカルブランチを抽出
-6. ユーザーに削除候補を提示し、了承を得てから `git branch -D` で削除
+6. `git branch -D` で確認なしに削除 (リモートが既に削除済みの branch なので安全。誤削除に気づいた場合は `git reflog` で復旧可能)
 
 ## インストール
 
@@ -42,18 +42,18 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 **実行手順**:
 
 1. `git status --short` で作業ツリーの clean を確認
-2. 現在のブランチ名を `.git/.update-default-branch-state` に保存 (Bash 呼び出しをまたいでも参照できるように)
+2. 現在のブランチ名を `.git/.update-default-branch-state` に保存 (Bash 呼び出しが分かれても引き継げるよう)
 3. `git symbolic-ref refs/remotes/origin/HEAD` でデフォルトブランチを取得 (失敗時は `git remote set-head origin --auto` で再設定)
 4. `git switch <default>` → `git pull --ff-only origin <default>` でデフォルトブランチを最新化 (fast-forward のみ許容)
 5. `git fetch --prune origin` でリモートが消えた ref を整理
 6. `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads` の出力から `[gone]` を検出
-7. ユーザーに候補を提示して了承を得る (勝手に削除しない)
-8. `git branch -D <branch>` で削除
-9. ステートファイルから元のブランチ名を読み戻し、残っていれば `git switch` で復帰、削除済み or detached の場合はユーザーに新ブランチ名を確認。最後にステートファイルを削除
+7. `git branch -D <branch>` で削除 (リモートが既に消えている branch なので確認ステップなし)
+8. state file から元のブランチ名を読み戻し、残っていれば `git switch` で復帰、削除済み or detached の場合はユーザーに新ブランチ名を確認。最後に state file を削除
 
 ## 設計上の注意
 
-- **削除前に必ず確認**: `[gone]` のリストには、リネームしただけのブランチや別環境で削除されたものが含まれる可能性があります。Skill は必ずユーザーに候補を提示してから削除する手順になっています。
+- **`[gone]` 削除に確認ステップなし**: 追跡先が消えている branch はリモート側で既に削除済み (PR マージ後の自動削除等) で、ローカル削除は安全な後始末でしかないため、確認ステップは挟みません。
+- **`[gone]` ≠ "merged"**: ただし `[gone]` には PR マージ以外の経路 (リモートでの force-delete / リネーム等) も含まれます。`git branch -D` は merge 検査を skip するため、ローカルにのみ存在するコミットを抱えた `[gone]` branch は誤削除されえます。削除前の SHA は `git branch -D` の出力に表示されるので、誤削除に気づいたら `git checkout -b <name> <sha>` で復活できます (約 30 日は `git reflog` でも遡れます)。「未マージなのに `[gone]` になっている」branch を温存したい場合、本 Skill 実行前に別 branch へ退避するか、Skill 自体を実行しないでください。
 - **デフォルトブランチに居着かない**: ユーザーの CLAUDE.md でデフォルトブランチでの作業が禁止されている場合に備え、開始時に元のブランチを `ORIGINAL_BRANCH` として保存し、終了時に状況に応じて復帰させる手順になっています。
 - **未コミット変更がある場合は中断**: `git status --short` の出力が空でない場合、stash / commit のいずれかをユーザーに依頼してから再実行する設計です。
 
