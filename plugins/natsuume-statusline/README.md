@@ -1,6 +1,6 @@
-# statusline プラグイン
+# natsuume-statusline プラグイン
 
-Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 / レートリミット) を提供するプラグインです。`/statusline:setup` で `~/.claude/settings.json` に登録できます。
+Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 / レートリミット) を提供するプラグインです。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録できます。
 
 ## バージョン
 
@@ -21,13 +21,13 @@ v0.1.0
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=statusline
+claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=natsuume-statusline
 ```
 
 インストール後、Claude Code 内で次のスラッシュコマンドを実行します。
 
 ```
-/statusline:setup
+/natsuume-statusline:setup
 ```
 
 このコマンドは `~/.claude/settings.json` の `statusLine.command` をこのプラグインのエントリポイント (`bash <plugin-root>/statusline/entrypoint.sh`) に書き換えます。実行前に既存の `settings.json` 全体をタイムスタンプ付きでバックアップします。
@@ -38,7 +38,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 | コマンド | 説明 |
 |---------|------|
-| `/statusline:setup` | `${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh` を実行し、`~/.claude/settings.json` の `statusLine.command` をプラグインのエントリポイントに登録する |
+| `/natsuume-statusline:setup` | `${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh` を実行し、`~/.claude/settings.json` の `statusLine.command` をプラグインのエントリポイントに登録する |
 
 ### スクリプト
 
@@ -54,10 +54,10 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 ## アンインストール / 元に戻す
 
-`/statusline:setup` 実行時に作られたバックアップで `settings.json` を上書きしてください。
+`/natsuume-statusline:setup` 実行時に作られたバックアップで `settings.json` を上書きしてください。
 
 ```bash
-cp ~/.claude/settings.statusline-backup.<timestamp>.json ~/.claude/settings.json
+cp ~/.claude/settings.natsuume-statusline-backup.<timestamp>.json ~/.claude/settings.json
 ```
 
 `<timestamp>` は setup 実行時のメッセージに表示されます。
