@@ -34,7 +34,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 **動作**:
 
 - 単独実行 (`gh pr create --title "foo"`) と global option 付き (`gh -R owner/repo pr create ...`) を検出
-- `tool_response.output` / `tool_response.stdout` / `tool_response.stderr` から PR URL (`https://github.com/.../pull/<n>`) を抽出
+- `tool_response.output` / `tool_response.stdout` から PR URL (`https://github.com/.../pull/<n>`) を抽出 (`tool_response.stderr` は `already exists` 等の関係ない URL が混じり得るため除外)
 - URL が見つからない場合 (失敗ケース等) は何も出力しない
 - 強制ではなく誘導 (`additionalContext`) のため、コマンド実行自体はブロックしない
 
