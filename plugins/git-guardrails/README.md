@@ -11,8 +11,9 @@ v0.1.0
 このプラグインは、以下の機能を提供します：
 
 - **デフォルトブランチの保護**: master/main への直接 push を禁止
-- **Draft PR の強制**: PR 作成時に自動で Draft モードに設定
 - **rebase ワークフロー支援**: リモートの変更を安全に取り込むガイド
+
+> v0.1.0 までは `gh pr create` への `--draft` 自動付与もこのプラグインに含まれていましたが、責務分離のため [enforce-draft-pr](../enforce-draft-pr/) プラグインに切り出しました。draft 強制を使いたい場合はそちらを別途インストールしてください。
 
 ## インストール
 
@@ -45,23 +46,6 @@ claude plugins:add git-guardrails --path /path/to/plugins/git-guardrails
 
 ✅ git push origin feature/my-feature
    → 通常通り実行
-```
-
-#### 2. enforce-draft-pr
-
-**ファイル**: `hooks/scripts/enforce-draft-pr.sh`
-
-PR 作成時に自動で `--draft` フラグを付与します。
-
-**動作**:
-- `gh pr create` コマンドを検知
-- `--draft` フラグがない場合、自動で追加
-- 既に `--draft` がある場合は何もしない
-
-**例**:
-```
-入力: gh pr create --title "新機能"
-出力: gh pr create --draft --title "新機能"
 ```
 
 ### Skills
@@ -100,8 +84,7 @@ git-guardrails/
 ├── hooks/
 │   ├── hooks.json        # フック定義
 │   └── scripts/
-│       ├── block-default-branch-push.sh
-│       └── enforce-draft-pr.sh
+│       └── block-default-branch-push.sh
 ├── skills/
 │   └── rebase-workflow/
 │       └── SKILL.md

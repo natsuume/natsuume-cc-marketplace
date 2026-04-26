@@ -10,9 +10,16 @@
     {
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
-      "description": "GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン",
+      "description": "GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン (デフォルトブランチへの直接 push 禁止 + rebase ワークフロー Skill)",
       "version": "0.1.0",
       "keywords": ["git", "workflow", "github-flow", "rebase"]
+    },
+    {
+      "name": "enforce-draft-pr",
+      "source": "./plugins/enforce-draft-pr",
+      "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)",
+      "version": "0.1.0",
+      "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
       "name": "auto-lint-check",

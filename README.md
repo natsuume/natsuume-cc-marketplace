@@ -18,7 +18,8 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 | プラグイン | バージョン | 説明 |
 |-----------|-----------|------|
-| [git-guardrails](#git-guardrails) | 0.1.0 | GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン |
+| [git-guardrails](#git-guardrails) | 0.1.0 | GitHub Flow に準拠した Git ワークフロー (default branch への直接 push 禁止 + rebase Skill) |
+| [enforce-draft-pr](#enforce-draft-pr) | 0.1.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.1.0 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
 | [pre-commit-review](#pre-commit-review) | 0.1.0 | `git commit` 前に `/simplify` → `/codex:review` (修正が落ち着くまでループ) を強制するプラグイン |
 | [post-pr-review](#post-pr-review) | 0.1.0 | `gh pr create` 成功直後に `/code-review:code-review` の実行を誘導するプラグイン |
@@ -38,7 +39,6 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
 | `block-default-branch-push` | PreToolUse | デフォルトブランチ（master/main）への直接 push を禁止し、PR 経由を強制する |
-| `enforce-draft-pr` | PreToolUse | `gh pr create` 実行時に自動的に `--draft` フラグを付与する |
 
 #### Skills
 
@@ -46,9 +46,29 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 |---------|---------|------|
 | rebase-workflow | `/rebase-workflow` | rebase を用いてリモートのデフォルトブランチの変更を作業ブランチに取り込む |
 
+> v0.1.0 までは `gh pr create` の `--draft` 自動付与もこのプラグインに含まれていましたが、責務分離のため [enforce-draft-pr](#enforce-draft-pr) プラグインへ切り出しました。draft 強制を使いたい場合はそちらを別途インストールしてください。
+
 ### キーワード
 
 `git` `workflow` `github-flow` `rebase`
+
+---
+
+## enforce-draft-pr
+
+`gh pr create` に `--draft` フラグを自動付与する `PreToolUse` フックプラグインです。「PR は必ず draft で起こし、レビュー後に手動で ready 化する」運用を強制したい場合に使います。git-guardrails から切り出した独立プラグインで、利用は任意 (使いたくない場合はインストールしないだけ) です。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `enforce-draft-pr` | PreToolUse | `gh pr create` 実行時に自動的に `--draft` フラグを付与する |
+
+### キーワード
+
+`git` `pr` `draft` `github` `github-flow`
 
 ---
 
