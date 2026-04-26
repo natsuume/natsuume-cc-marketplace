@@ -20,6 +20,20 @@
       "description": "ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン",
       "version": "0.1.0",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
+    },
+    {
+      "name": "pre-commit-review",
+      "source": "./plugins/pre-commit-review",
+      "description": "git commit 前に /codex:review, /code-review:code-review, /simplify を強制し、未レビューのコミットをブロックするプラグイン",
+      "version": "0.1.0",
+      "keywords": ["commit", "review", "quality", "codex", "simplify"]
+    },
+    {
+      "name": "update-default-branch",
+      "source": "./plugins/update-default-branch",
+      "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン",
+      "version": "0.1.0",
+      "keywords": ["git", "pull", "prune", "branch-cleanup", "merge"]
     }
   ]
 }

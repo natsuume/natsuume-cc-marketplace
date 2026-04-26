@@ -1,0 +1,5 @@
+{
+  "name": "update-default-branch",
+  "version": "0.1.0",
+  "description": "PR マージ報告を受けた後にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを削除するプラグイン"
+}
