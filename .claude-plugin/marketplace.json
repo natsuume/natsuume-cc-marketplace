@@ -20,6 +20,34 @@
       "description": "ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン",
       "version": "0.1.0",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
+    },
+    {
+      "name": "pre-commit-review",
+      "source": "./plugins/pre-commit-review",
+      "description": "git commit 前に /simplify → /codex:review の順で実行を強制し、未レビューのコミットをブロックするプラグイン",
+      "version": "0.1.0",
+      "keywords": ["commit", "review", "quality", "codex", "simplify"]
+    },
+    {
+      "name": "post-pr-review",
+      "source": "./plugins/post-pr-review",
+      "description": "gh pr create 成功直後に /code-review:code-review の実行を誘導するプラグイン",
+      "version": "0.1.0",
+      "keywords": ["pr", "review", "code-review", "github"]
+    },
+    {
+      "name": "update-default-branch",
+      "source": "./plugins/update-default-branch",
+      "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン",
+      "version": "0.1.0",
+      "keywords": ["git", "pull", "prune", "branch-cleanup", "merge"]
+    },
+    {
+      "name": "natsuume-statusline",
+      "source": "./plugins/natsuume-statusline",
+      "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / レートリミット) を提供し、/natsuume-statusline:setup で settings.json に登録するプラグイン",
+      "version": "0.1.0",
+      "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     }
   ]
 }
