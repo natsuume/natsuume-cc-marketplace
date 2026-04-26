@@ -224,13 +224,6 @@ REASON=$(cat <<EOF
 
 Claude は名前の似た \`/codex:rescue\` を誤って選ぶ傾向が報告されています。コマンド名を必ず確認してください。
 
-\`/codex:review\` は \`disable-model-invocation\` 指定のため Skill tool では呼べません。会話入力としての \`/codex:review\` か、以下の Bash 直接呼び出しを使ってください (codex プラグインの ROOT を \`ROOT\` 変数に一度代入する形にしています):
-
-  ROOT=<codex プラグインの ROOT>
-  CLAUDE_PLUGIN_ROOT="\$ROOT" node "\$ROOT/scripts/codex-companion.mjs" review --wait
-
-ROOT は環境ごとに異なります。例えば公式 marketplace 経由のインストールでは \`~/.claude/plugins/marketplaces/openai-codex/plugins/codex\` ですが、別 marketplace やキャッシュ配下に存在することもあるため、\`find ~/.claude/plugins -path '*/codex/scripts/codex-companion.mjs'\` で動的に解決するのが堅牢です。
-
 ステージング内容が確定したら、コミット直前に以下を実行してマーカーを作成します:
 
   bash "$MARK_SCRIPT"

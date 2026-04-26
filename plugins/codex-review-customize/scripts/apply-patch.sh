@@ -2,7 +2,6 @@
 # apply-patch.sh
 # 公式 codex プラグインの commands/review.md をローカルでパッチする。
 #   - frontmatter から `disable-model-invocation: true` を削除 (Skill tool から呼び出し可能に)
-#   - 末尾に「出力を日本語に翻訳する」指示を追記
 # 適用済みかはマーカー (<!-- codex-review-customize: patched -->) で判定し、二重適用を避ける。
 # 復元はマーケットプレイス clone 上での `git checkout commands/review.md` か、
 # codex プラグインの再インストールで行う (本スクリプト自身は backup を残さない)。
@@ -29,7 +28,7 @@ if grep -qF "$PATCH_MARKER" "$REVIEW_MD"; then
   exit 0
 fi
 
-# `disable-model-invocation: true` を frontmatter から削除し、末尾に日本語化指示 + マーカーを追記。
+# `disable-model-invocation: true` を frontmatter から削除し、末尾に再適用検出用マーカーを追記。
 # review.md がトークン情報を含む可能性は低いが、temp を world-readable にしないため defense-in-depth で umask を絞る。
 umask 077
 TMP=$(mktemp "$REVIEW_MD.XXXXXX")
@@ -50,22 +49,7 @@ fi
 # 直前行と連結されないよう補正する。
 [ -z "$(tail -c1 "$TMP")" ] || printf '\n' >> "$TMP"
 
-cat >> "$TMP" <<EOF
-
-## 日本語出力指示 (codex-review-customize による上書き)
-
-上記の "Return the command stdout verbatim" 等の verbatim 指示にかかわらず、Codex の出力を取得した後、ユーザーに提示する **前に日本語へ翻訳** すること。本リポジトリのグローバル CLAUDE.md「やり取りは日本語で行う」方針に従う。
-
-以下はそのまま保持 (翻訳しない):
-- ファイルパス、行番号、SHA、コードスニペット、URL アンカー
-- 重要度タグ (\`[P1]\`, \`[P2]\`, \`[P3]\` 等)
-
-以下は翻訳する:
-- 見出し (例: \`# Codex Review\` → \`# Codex レビュー\`、\`Review comment:\` → \`レビュー指摘:\`、\`Full review comments:\` → \`レビュー指摘 (全件):\`、\`Target: working tree diff\` → \`対象: 作業ツリー差分\`)
-- レビュー指摘の本文・概要・推奨アクション
-
-$PATCH_MARKER
-EOF
+printf '\n%s\n' "$PATCH_MARKER" >> "$TMP"
 
 # 簡易な健全性チェック: frontmatter の開始 \`---\` が 1 行目にあること。
 if ! head -n1 "$TMP" | grep -qE '^---[[:space:]]*$'; then
@@ -87,7 +71,7 @@ trap - EXIT
 # (find で `*/codex` を探すと別 marketplace の codex まで巻き込む可能性があるため)。
 MARKETPLACE_ID=$(printf '%s' "$REVIEW_MD" | sed -n 's|.*/plugins/marketplaces/\([^/]*\)/plugins/codex/commands/review\.md$|\1|p')
 if [ -z "$MARKETPLACE_ID" ]; then
-  CACHE_MSG="codex の marketplace ID 抽出に失敗したため cache 削除はスキップしました。/reload-plugins 後に出力が日本語化されない場合は ~/.claude/plugins/cache/*/codex を手動削除してください。"
+  CACHE_MSG="codex の marketplace ID 抽出に失敗したため cache 削除はスキップしました。/reload-plugins 後に Skill tool から呼び出せない場合は ~/.claude/plugins/cache/*/codex を手動削除してください。"
 else
   CACHE_DIR="$HOME/.claude/plugins/cache/$MARKETPLACE_ID/codex"
   if [ -d "$CACHE_DIR" ]; then
@@ -105,13 +89,13 @@ cat <<MSG
 
 変更内容:
   - frontmatter から \`disable-model-invocation: true\` を削除 (Skill tool から呼び出し可能に)
-  - 本文末尾に「出力を日本語に翻訳する」指示と、再適用検出用マーカーを追記
+  - 本文末尾に再適用検出用マーカーを追記
 
 $CACHE_MSG
 
 次のステップ:
   1. Claude Code で \`/reload-plugins\` を実行し、codex プラグインを cache から再 build させる。
-  2. これ以降、\`/codex:review\` (もしくは Skill tool 経由) の出力が日本語化される。
+  2. これ以降、Claude が Skill tool 経由で \`/codex:review\` を呼び出せる (会話入力としての \`/codex:review\` は従前通り利用可能)。
 
 復元 (パッチ削除) が必要な場合は次のいずれか:
   - codex プラグインを再インストール (marketplace から再 clone)

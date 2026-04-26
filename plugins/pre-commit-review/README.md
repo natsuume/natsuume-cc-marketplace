@@ -60,7 +60,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 > **終端の判断**: ループ回数の上限は設けません。Claude が「修正不要」または「人間判断を仰ぐべき」と判断したタイミングでのみ進行 / エスカレートします。固定回数で打ち切るような恣意的な制限はかけず、Claude の自主性に委ねる設計です。
 
-> **`/codex:review` と `/codex:rescue` の混同に注意**: 公式 codex プラグインには `/codex:review` (read-only コードレビュー) と `/codex:rescue` (修正・調査を delegate する subagent) の両方があり、用途が完全に別です。本プラグインが要求するのは前者です。さらに `/codex:review` は frontmatter で `disable-model-invocation: true` 指定されているため Skill tool 経由では呼び出せず、会話入力としての `/codex:review` か、Bash で codex companion script を直接呼び出す必要があります。Bash で呼ぶ際は `CLAUDE_PLUGIN_ROOT` を codex プラグインの ROOT に設定する必要があり、deny メッセージに完全なフォーム (env var + 引用符付き) を記載しています。Claude が誤って `/codex:rescue` を選ぶケースが報告されているため、運用時はコマンド名を明示的に確認してください。
+> **`/codex:review` と `/codex:rescue` の混同に注意**: 公式 codex プラグインには `/codex:review` (read-only コードレビュー) と `/codex:rescue` (修正・調査を delegate する subagent) の両方があり、用途が完全に別です。本プラグインが要求するのは前者です。Claude が誤って `/codex:rescue` を選ぶケースが報告されているため、運用時はコマンド名を明示的に確認してください。`/codex:review` は frontmatter で `disable-model-invocation: true` が指定されており本来 Skill tool から呼び出せませんが、姉妹プラグイン [codex-review-customize](../codex-review-customize/) を導入してパッチを適用すると Skill tool 経由でも呼び出し可能になります。
 
 ### スクリプト
 
