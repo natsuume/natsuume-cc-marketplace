@@ -21,6 +21,7 @@ if [ -z "$FILE_PATH" ] || [ ! -f "$FILE_PATH" ]; then
   exit 0
 fi
 
+# 配列展開で起動するため、空白を含むパスでも安全。
 run_in() {
   local dir="$1"
   shift
@@ -29,31 +30,18 @@ run_in() {
 
 if is_js_like "$FILE_PATH"; then
   ROOT_ESLINT=$(find_config_root "$FILE_PATH" eslint)
-  if [ -n "$ROOT_ESLINT" ]; then
-    BIN=$(resolve_eslint "$ROOT_ESLINT")
-    if [ -n "$BIN" ]; then
-      # shellcheck disable=SC2086
-      run_in "$ROOT_ESLINT" $BIN --fix "$FILE_PATH"
-    fi
+  if [ -n "$ROOT_ESLINT" ] && resolve_eslint "$ROOT_ESLINT"; then
+    run_in "$ROOT_ESLINT" "${ESLINT_CMD[@]}" --fix "$FILE_PATH"
   fi
   ROOT_PRETTIER=$(find_config_root "$FILE_PATH" prettier)
-  if [ -n "$ROOT_PRETTIER" ]; then
-    BIN=$(resolve_prettier "$ROOT_PRETTIER")
-    if [ -n "$BIN" ]; then
-      # shellcheck disable=SC2086
-      run_in "$ROOT_PRETTIER" $BIN --write "$FILE_PATH"
-    fi
+  if [ -n "$ROOT_PRETTIER" ] && resolve_prettier "$ROOT_PRETTIER"; then
+    run_in "$ROOT_PRETTIER" "${PRETTIER_CMD[@]}" --write "$FILE_PATH"
   fi
 elif is_python "$FILE_PATH"; then
   ROOT_RUFF=$(find_config_root "$FILE_PATH" ruff)
-  if [ -n "$ROOT_RUFF" ]; then
-    BIN=$(resolve_ruff)
-    if [ -n "$BIN" ]; then
-      # shellcheck disable=SC2086
-      run_in "$ROOT_RUFF" $BIN check --fix "$FILE_PATH"
-      # shellcheck disable=SC2086
-      run_in "$ROOT_RUFF" $BIN format "$FILE_PATH"
-    fi
+  if [ -n "$ROOT_RUFF" ] && resolve_ruff; then
+    run_in "$ROOT_RUFF" "${RUFF_CMD[@]}" check --fix "$FILE_PATH"
+    run_in "$ROOT_RUFF" "${RUFF_CMD[@]}" format "$FILE_PATH"
   fi
 fi
 

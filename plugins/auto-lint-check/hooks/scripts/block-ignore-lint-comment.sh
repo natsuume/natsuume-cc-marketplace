@@ -2,7 +2,9 @@
 # block-ignore-lint-comment.sh
 #
 # Edit/Write/MultiEdit が「新規挿入する」内容に linter/formatter の ignore
-# コメントが含まれていたらツール実行を deny する。
+# コメントが含まれていたらツール実行を deny する。既に old_string や既存
+# ファイルに含まれていた ignore コメントを保持するだけの編集は許可する
+# (検出は detect-new-ignores.py で多重集合差分により実装)。
 #
 # 対象は eslint / prettier / ruff の代表的な ignore 構文。
 
@@ -11,6 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
 if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+if ! command -v python3 >/dev/null 2>&1; then
   exit 0
 fi
 
@@ -22,36 +27,21 @@ case "$TOOL_NAME" in
   *) exit 0 ;;
 esac
 
-# ツール別に新規挿入分を抽出する (MultiEdit は edits[].new_string を改行区切りで結合)。
-case "$TOOL_NAME" in
-  Write)     INSERTED=$(printf '%s' "$INPUT" | jq -r '.tool_input.content // empty') ;;
-  Edit)      INSERTED=$(printf '%s' "$INPUT" | jq -r '.tool_input.new_string // empty') ;;
-  MultiEdit) INSERTED=$(printf '%s' "$INPUT" | jq -r '.tool_input.edits[]?.new_string // empty') ;;
-esac
+# 新規挿入された ignore コメントだけを Python ヘルパーで列挙する。
+# exit code:
+#   0  追加なし  → そのまま許可
+#   2  追加あり  → DETECT_OUTPUT に検出箇所、deny する
+#   その他      → 入力不正等。安全側で許可してスキップ
+DETECT_OUTPUT=$(printf '%s' "$INPUT" | python3 "$AUTO_LINT_CHECK_LIB_DIR/detect-new-ignores.py")
+DETECT_RC=$?
 
-if [ -z "$INSERTED" ]; then
-  exit 0
-fi
-
-# ESLint / Prettier / Ruff の代表的な ignore コメント構文を一気にマッチ。
-PATTERN='//[[:space:]]*eslint-(disable|enable|disable-line|disable-next-line)'
-PATTERN+='|/\*[[:space:]]*eslint-(disable|enable|disable-next-line)'
-PATTERN+='|//[[:space:]]*prettier-ignore'
-PATTERN+='|/\*[[:space:]]*prettier-ignore[[:space:]]*\*/'
-PATTERN+='|<!--[[:space:]]*prettier-ignore[[:space:]]*-->'
-PATTERN+='|#[[:space:]]*noqa([[:space:]]|$|:)'
-PATTERN+='|#[[:space:]]*ruff:[[:space:]]*noqa'
-PATTERN+='|#[[:space:]]*fmt:[[:space:]]*(off|on|skip)'
-
-MATCH=$(printf '%s' "$INSERTED" | grep -nE "$PATTERN" | head -3)
-
-if [ -n "$MATCH" ]; then
+if [ "$DETECT_RC" = "2" ]; then
   REASON=$(printf '%s\n' \
     "lint/formatter の ignore コメント挿入は禁止されています。" \
     "lint 警告は本体のコードを修正することで解決してください。" \
     "" \
-    "検出箇所 (新規挿入分の最初の3件):" \
-    "$MATCH")
+    "新規挿入された ignore コメント (最初の3件):" \
+    "$DETECT_OUTPUT")
   emit_deny "$REASON"
 fi
 

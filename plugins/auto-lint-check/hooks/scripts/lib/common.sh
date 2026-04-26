@@ -48,67 +48,76 @@ find_config_root() {
   bash "$AUTO_LINT_CHECK_LIB_DIR/find-config-root.sh" "$1" "$2"
 }
 
-# eslint バイナリ呼び出し方法を解決する。検出順は以下の通り:
+# 解決された linter の起動コマンドを格納するグローバル配列。空白を含むパスでも
+# 安全に扱えるよう、文字列ではなく配列で返す。
+ESLINT_CMD=()
+PRETTIER_CMD=()
+RUFF_CMD=()
+
+# eslint バイナリ呼び出し方法を解決して ESLINT_CMD 配列に格納する。検出順は:
 #   1. <root>/node_modules/.bin/eslint
 #   2. pnpm exec eslint
 #   3. npx --no-install eslint
 #   4. グローバル PATH の eslint
-# 見つかった起動コマンドを stdout に出力 (空白区切り)。見つからなければ何も出力せず非 0。
+# 見つからなければ非 0。
 resolve_eslint() {
   local root="$1"
+  ESLINT_CMD=()
   if [ -x "$root/node_modules/.bin/eslint" ]; then
-    echo "$root/node_modules/.bin/eslint"
+    ESLINT_CMD=("$root/node_modules/.bin/eslint")
     return 0
   fi
   if command -v pnpm >/dev/null 2>&1 \
     && (cd "$root" && pnpm exec eslint --version) >/dev/null 2>&1; then
-    echo "pnpm exec eslint"
+    ESLINT_CMD=(pnpm exec eslint)
     return 0
   fi
   if command -v npx >/dev/null 2>&1 \
     && (cd "$root" && npx --no-install eslint --version) >/dev/null 2>&1; then
-    echo "npx --no-install eslint"
+    ESLINT_CMD=(npx --no-install eslint)
     return 0
   fi
   if command -v eslint >/dev/null 2>&1; then
-    echo "eslint"
+    ESLINT_CMD=(eslint)
     return 0
   fi
   return 1
 }
 
-# prettier の起動コマンドを解決する。eslint と同等のロジック。
+# prettier の起動コマンドを PRETTIER_CMD に解決する。eslint と同等のロジック。
 resolve_prettier() {
   local root="$1"
+  PRETTIER_CMD=()
   if [ -x "$root/node_modules/.bin/prettier" ]; then
-    echo "$root/node_modules/.bin/prettier"
+    PRETTIER_CMD=("$root/node_modules/.bin/prettier")
     return 0
   fi
   if command -v pnpm >/dev/null 2>&1 \
     && (cd "$root" && pnpm exec prettier --version) >/dev/null 2>&1; then
-    echo "pnpm exec prettier"
+    PRETTIER_CMD=(pnpm exec prettier)
     return 0
   fi
   if command -v npx >/dev/null 2>&1 \
     && (cd "$root" && npx --no-install prettier --version) >/dev/null 2>&1; then
-    echo "npx --no-install prettier"
+    PRETTIER_CMD=(npx --no-install prettier)
     return 0
   fi
   if command -v prettier >/dev/null 2>&1; then
-    echo "prettier"
+    PRETTIER_CMD=(prettier)
     return 0
   fi
   return 1
 }
 
-# ruff の起動コマンドを解決する。uvx ruff > PATH ruff の優先順位。
+# ruff の起動コマンドを RUFF_CMD に解決する。uvx ruff > PATH ruff の優先順位。
 resolve_ruff() {
+  RUFF_CMD=()
   if command -v uvx >/dev/null 2>&1; then
-    echo "uvx ruff"
+    RUFF_CMD=(uvx ruff)
     return 0
   fi
   if command -v ruff >/dev/null 2>&1; then
-    echo "ruff"
+    RUFF_CMD=(ruff)
     return 0
   fi
   return 1
@@ -122,17 +131,16 @@ LINTER_OUTPUT=""
 run_eslint_stdin() {
   local file="$1"
   local content="$2"
-  local root bin rc
+  local root rc
   root=$(find_config_root "$file" eslint)
   if [ -z "$root" ]; then
     return 0
   fi
-  bin=$(resolve_eslint "$root")
-  if [ -z "$bin" ]; then
+  if ! resolve_eslint "$root"; then
     log_warn "eslint config が $root にあるが eslint バイナリが見つからない。skip"
     return 0
   fi
-  LINTER_OUTPUT=$( (cd "$root" && printf '%s' "$content" | $bin --stdin --stdin-filename "$file") 2>&1 )
+  LINTER_OUTPUT=$( (cd "$root" && printf '%s' "$content" | "${ESLINT_CMD[@]}" --stdin --stdin-filename "$file") 2>&1 )
   rc=$?
   return $rc
 }
@@ -141,17 +149,16 @@ run_eslint_stdin() {
 run_ruff_check_stdin() {
   local file="$1"
   local content="$2"
-  local root bin rc
+  local root rc
   root=$(find_config_root "$file" ruff)
   if [ -z "$root" ]; then
     return 0
   fi
-  bin=$(resolve_ruff)
-  if [ -z "$bin" ]; then
+  if ! resolve_ruff; then
     log_warn "ruff config が $root にあるが ruff バイナリが見つからない。skip"
     return 0
   fi
-  LINTER_OUTPUT=$( (cd "$root" && printf '%s' "$content" | $bin check --stdin-filename "$file" -) 2>&1 )
+  LINTER_OUTPUT=$( (cd "$root" && printf '%s' "$content" | "${RUFF_CMD[@]}" check --stdin-filename "$file" -) 2>&1 )
   rc=$?
   return $rc
 }
