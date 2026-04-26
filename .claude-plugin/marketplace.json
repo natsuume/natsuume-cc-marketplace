@@ -59,9 +59,9 @@
     {
       "name": "codex-review-customize",
       "source": "./plugins/codex-review-customize",
-      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool 呼び出し許可 + 出力日本語化を setup するプラグイン",
+      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン",
       "version": "0.1.0",
-      "keywords": ["codex", "review", "patch", "i18n", "japanese", "skill"]
+      "keywords": ["codex", "review", "patch", "skill"]
     }
   ]
 }

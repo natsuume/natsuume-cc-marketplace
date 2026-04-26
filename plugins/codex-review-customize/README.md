@@ -1,6 +1,6 @@
 # codex-review-customize プラグイン
 
-公式 codex プラグインの `/codex:review` コマンド定義 (`commands/review.md`) をローカルでパッチし、以下 2 点を上書きする setup プラグインです。
+公式 codex プラグインの `/codex:review` コマンド定義 (`commands/review.md`) をローカルでパッチし、Skill tool から呼び出し可能にする setup プラグインです。
 
 ## バージョン
 
@@ -8,17 +8,9 @@ v0.1.0
 
 ## 概要
 
-公式 `/codex:review` には次の制約があり、本リポジトリの運用では取り回しが悪いケースがありました。
+公式 `/codex:review` は frontmatter に `disable-model-invocation: true` 指定があるため、Claude が Skill tool から呼び出せません。
 
-1. frontmatter に `disable-model-invocation: true` 指定 → Claude が Skill tool から呼び出せない
-2. 本文に "Return Codex's output verbatim" 指示 → 出力が英語のままになり、グローバル CLAUDE.md「やり取りは日本語で行う」と整合しない
-
-本プラグインの `/codex-review-customize:setup` を実行すると、`commands/review.md` が atomic にパッチされ:
-
-- `disable-model-invocation: true` を削除 → Skill tool 呼び出し可能に
-- 末尾に「出力を日本語に翻訳して提示」指示を追記
-
-並行して codex の cache を削除し、次回 `/reload-plugins` で patched 版が読み込まれるようにします。
+本プラグインの `/codex-review-customize:setup` を実行すると、`commands/review.md` が atomic にパッチされ `disable-model-invocation: true` 行が削除されます。並行して codex の cache を削除し、次回 `/reload-plugins` で patched 版が読み込まれるようにします。
 
 ## なぜ「別プラグインで `/codex:review` を再定義」しないのか
 
@@ -62,6 +54,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 - 公式 codex の `commands/review.md` の構造 (frontmatter `disable-model-invocation: true` の存在、 trailing newline 等) に依存。公式が大幅に再構成すると `sed` パターンが効かなくなり、frontmatter 健全性チェックで abort する (= 安全に失敗)
 - **再現性**: 環境ごとに `/codex-review-customize:setup` を一度ずつ実行する必要あり (`natsuume-statusline:setup` と同じパターン)
+- **旧バージョン (日本語化指示を含むパッチ) からの移行**: 旧版が適用済みの環境では同名マーカーで no-op 判定されるため、不要な `## 日本語出力指示` セクションが残ります。先に `git checkout commands/review.md` で原本へ戻してから `/codex-review-customize:setup` を再実行してください
 
 ## 必要な実行環境
 
@@ -72,5 +65,5 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 ## 関連プラグイン
 
-- [pre-commit-review](../pre-commit-review/) — `/codex:review` を強制呼び出しする運用。本プラグインを併用すると Skill 経由 + 日本語出力でレビューを取得できる
+- [pre-commit-review](../pre-commit-review/) — `/codex:review` を強制呼び出しする運用。本プラグインを併用すると Skill 経由でレビューを取得できる
 - [post-pr-review](../post-pr-review/) — PR 作成後に `/code-review:code-review` を促す姉妹プラグイン

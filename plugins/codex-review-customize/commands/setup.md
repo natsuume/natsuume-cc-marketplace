@@ -1,14 +1,11 @@
 ---
-description: 公式 codex プラグインの commands/review.md をパッチして Skill tool 呼び出し許可 + 日本語出力にする
+description: 公式 codex プラグインの commands/review.md をパッチして Skill tool から呼び出し可能にする
 allowed-tools: Bash(bash:*)
 ---
 
 # /codex-review-customize:setup
 
-公式 codex プラグインの `commands/review.md` をローカルでパッチし、`/codex:review` の挙動を 2 点変更します。
-
-1. frontmatter の `disable-model-invocation: true` を削除して **Skill tool から呼び出し可能** にする
-2. 本文末尾に「Codex の出力を日本語に翻訳してから提示」する指示を追記
+公式 codex プラグインの `commands/review.md` をローカルでパッチし、frontmatter の `disable-model-invocation: true` を削除して `/codex:review` を **Skill tool から呼び出し可能** にします。
 
 ## 動作
 
@@ -25,7 +22,7 @@ allowed-tools: Bash(bash:*)
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/apply-patch.sh"
 ```
 
-実行後は Claude Code で `/reload-plugins` を実行してください。これ以降の `/codex:review` (Skill 経由含む) の出力が日本語化されます。
+実行後は Claude Code で `/reload-plugins` を実行してください。これ以降 Claude が Skill tool 経由で `/codex:review` を呼び出せるようになります (会話入力としての `/codex:review` は従前通り利用可能)。
 
 ## 復元 / 再適用
 
