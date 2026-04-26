@@ -1,0 +1,5 @@
+{
+  "name": "codex-review-customize",
+  "version": "0.1.0",
+  "description": "公式 codex プラグインの /codex:review コマンド定義をローカルでパッチし、Skill tool からの呼び出しを許可 + 出力を日本語化する setup プラグイン"
+}
