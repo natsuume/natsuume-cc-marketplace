@@ -133,7 +133,7 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
-| update-default-branch | `/update-default-branch` | デフォルトブランチを `git pull` で最新化し、`git fetch --prune` でリモート追跡情報を整理した後、`[gone]` のローカルブランチを検出してユーザー確認後に削除する |
+| update-default-branch | `/update-default-branch` | デフォルトブランチを `git pull --ff-only` で最新化し、`git fetch --prune` でリモート追跡情報を整理した後、`[gone]` のローカルブランチを検出して確認なしに削除する (リモートが既に削除済みの branch なので安全) |
 
 ### キーワード
 
