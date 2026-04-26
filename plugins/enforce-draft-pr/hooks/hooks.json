@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-default-branch-push.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/enforce-draft-pr.sh"
           }
         ]
       }
