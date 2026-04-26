@@ -185,70 +185,92 @@ EOF
 fi
 
 GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-MARKER="$GIT_DIR/.claude-pre-commit-reviewed"
+SIMPLIFIED_MARKER="$GIT_DIR/.claude-pre-commit-simplified"
+CODEX_MARKER="$GIT_DIR/.claude-pre-commit-codex-reviewed"
 
-# マーカーが無ければハッシュ計算をスキップして即 deny。
-if [ -f "$MARKER" ]; then
-  # `git commit -a` / `git commit <pathspec>` は unstaged tracked な変更も commit
-  # 対象にできるため、staged + unstaged を連結したハッシュで同一性を検証する。
-  CURRENT_HASH=$( {
-    git diff --cached 2>/dev/null
-    git diff 2>/dev/null
-  } | sha256sum | awk '{print $1}')
-  STORED_HASH=$(cat "$MARKER" 2>/dev/null)
-  if [ "$STORED_HASH" = "$CURRENT_HASH" ]; then
-    rm -f "$MARKER"
-    exit 0
-  fi
+SIMPLIFIED_HASH=$([ -f "$SIMPLIFIED_MARKER" ] && cat "$SIMPLIFIED_MARKER" 2>/dev/null)
+CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
+
+# 両マーカーとも欠落の最頻 deny パスでは git diff を呼ばずに即 deny できるよう、
+# ハッシュ計算は少なくとも片方のマーカーが存在するときだけ走らせる。
+CURRENT_HASH=""
+if [ -n "$SIMPLIFIED_HASH" ] || [ -n "$CODEX_HASH" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=lib/diff-hash.sh
+  source "$SCRIPT_DIR/lib/diff-hash.sh"
+  CURRENT_HASH=$(compute_review_hash)
 fi
 
-MARK_SCRIPT="${CLAUDE_PLUGIN_ROOT:-}/hooks/scripts/mark-reviewed.sh"
+# 双方のマーカーが現在の差分と一致 = 「現状の staged+unstaged に対して
+# /simplify と /codex:review が直近で実走済み」を意味する。
+# 修正が入って差分が変わると片方または両方が失効し、ループ再実行が要求される。
+if [ -n "$SIMPLIFIED_HASH" ] && [ -n "$CODEX_HASH" ] \
+   && [ "$SIMPLIFIED_HASH" = "$CURRENT_HASH" ] \
+   && [ "$CODEX_HASH" = "$CURRENT_HASH" ]; then
+  rm -f "$SIMPLIFIED_MARKER" "$CODEX_MARKER"
+  exit 0
+fi
+
+format_status() {
+  local stored="$1"
+  if [ -z "$stored" ]; then
+    printf '未実行'
+  elif [ "$stored" = "$CURRENT_HASH" ]; then
+    printf '✓ 最新の差分でレビュー済み'
+  else
+    printf '⚠ 失効 (差分が変わったため再実行が必要)'
+  fi
+}
+SIMPLIFIED_STATUS=$(format_status "$SIMPLIFIED_HASH")
+CODEX_STATUS=$(format_status "$CODEX_HASH")
 
 REASON=$(cat <<EOF
 コミットをブロックしました。コミット前に下記のレビューを実行してください。
 
+レビュー状態 (双方が「✓ 最新の差分でレビュー済み」になるとコミットが許可されます):
+  /simplify      : $SIMPLIFIED_STATUS
+  /codex:review  : $CODEX_STATUS
+
 実行手順 (修正が落ち着くまでループ):
-  1. /simplify  (コード変更を伴うため先に実行)
-  2. /codex:review --wait  または  /codex:review --background
-     (read-only のコードレビュー。実行方式は Claude が自律判断し、ユーザーには
-      確認しないこと)
-  3. 指摘箇所をすべて修正し、\`git add\` で再度ステージングする
-  4. ステージング内容が変わったら手順 1〜2 を最初から再実行する
-     (/codex:review の修正で /simplify 対象が増える可能性も、その逆もあるため、
+  1. /simplify を Skill tool で呼び出す (コード変更を伴うため先に実行)
+  2. /codex:review --wait を Skill tool で呼び出す (read-only のコードレビュー)
+  3. レビュー結果に指摘があれば修正し、\`git add\` で再ステージングする
+  4. ステージング差分が変わるとマーカーは自動的に失効する。
+     その場合は手順 1〜2 を最初から再実行する
+     (/codex:review の修正で /simplify 対象が新たに発生する可能性も、
+      /simplify の修正で /codex:review の新規指摘が出る可能性もあるため、
       両方を再走させる)
-  5. Claude の判断で「修正不要」になったら次へ進む
+  5. 双方のマーカーが「✓ 最新の差分でレビュー済み」になったら \`git commit\` を再試行する
 
-ループ回数の上限は設けません。Claude が自身の判断で「修正不要」または「人間判断を仰ぐべき」と判断したタイミングで進行/エスカレートしてください。
+マーカーは PostToolUse hook (auto-mark.sh) が \`/simplify\` と
+\`/codex:review --wait\` の実行完了を検知して自動的に記録します。手動で
+スクリプトを呼び出す必要はありません。コミット成功時にはマーカーを
+自動削除するため、次回のコミットでは再度レビューが必要になります。
 
-\`/codex:review\` の実行方式選択 (Claude が自律判断する):
-  - 原則 \`--wait\` (フォアグラウンド): pre-commit-review ループは review 結果を
-    受けて次の修正に進むため、結果を待ってから処理するのが基本動作
-  - 例外的に \`--background\`: 差分が大規模 (多数ファイル / 多数行) で、かつ
-    review 完了を待つ間に Claude が並行して進められる独立タスクがある場合のみ
-  - 判断材料: \`git diff --shortstat --cached\` と \`git diff --shortstat\` の
-    ファイル数・行数、および現在 Claude に積まれているタスク量
-  - 判断に迷ったら \`--wait\` を選ぶ
-  - **\`--background\` を選んだ場合でも、手順 3 以降 (修正 / mark-reviewed /
-    commit) に進む前に必ず review 完了を確認し結果を取得すること** (BashOutput
-    で stdout を取得するか \`/codex:status\` で確認)。review 結果を見ずに修正
-    判断や marker 作成を行うとレビュー保証が崩れるため禁止
-  - **いずれの場合もユーザーに実行方式を尋ねないこと** (このプラグインの方針。
-    \`/codex:review\` 単体は通常 AskUserQuestion で確認するが、pre-commit-review
-    の文脈では明示的に \`--wait\` / \`--background\` を渡して質問をスキップする)
+ループ回数の上限は設けません。Claude が自身の判断で「修正不要」または
+「人間判断を仰ぐべき」と判断したタイミングで進行/エスカレートしてください。
+
+\`/codex:review\` の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
+  - **\`--wait\` (フォアグラウンド) のみサポート**。本コンテキストでは
+    \`--background\` は使用しないこと。auto-mark hook は Bash tool 完了時に
+    発火するため、background 起動だとレビュー完了前に PostToolUse が走り、
+    マーカーが更新されない (= ループが永遠に閉じない)
+  - 単体の \`/codex:review\` は通常 AskUserQuestion で実行方式を尋ねるが、
+    pre-commit-review の文脈では明示的に \`--wait\` を渡して質問をスキップする
 
 ⚠ 重要: \`/codex:review\` であって \`/codex:rescue\` ではありません。両者は別コマンドで、
   - \`/codex:review\`: read-only のコードレビュー (本プラグインが要求する用途)
   - \`/codex:rescue\`: 修正・調査を delegate する subagent (本プラグインの用途には不適)
 
-Claude は名前の似た \`/codex:rescue\` を誤って選ぶ傾向が報告されています。コマンド名を必ず確認してください。
+Claude は名前の似た \`/codex:rescue\` を誤って選ぶ傾向が報告されています。
+コマンド名を必ず確認してください。\`/codex:review\` は frontmatter で
+\`disable-model-invocation: true\` が指定されている場合 Skill tool から
+呼び出せません。その場合は姉妹プラグイン
+\`codex-review-customize\` の \`/codex-review-customize:setup\` を実行して
+パッチを適用してください。
 
-ステージング内容が確定したら、コミット直前に以下を実行してマーカーを作成します:
-
-  bash "$MARK_SCRIPT"
-
-マーカー作成後の \`git commit\` は許可されます。マーカーは差分のハッシュに紐づくため、マーカー作成 **後** にステージング内容が変わると再度レビューが必要になります。
-
-(注: \`/code-review:code-review\` は PR を対象とするため、PR 作成後に post-pr-review プラグイン経由で実行されます。)
+(注: \`/code-review:code-review\` は PR を対象とするため、PR 作成後に
+post-pr-review プラグイン経由で実行されます。)
 EOF
 )
 

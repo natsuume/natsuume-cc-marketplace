@@ -1,5 +1,5 @@
 {
-  "description": "git commit を未レビューの状態でブロックする",
+  "description": "git commit を未レビューの状態でブロックし、/simplify と /codex:review --wait の実行完了を自動検知してレビューマーカーを更新する",
   "hooks": {
     "PreToolUse": [
       {
@@ -8,6 +8,17 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-pre-commit.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
           }
         ]
       }

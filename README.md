@@ -21,7 +21,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [git-guardrails](#git-guardrails) | 0.1.0 | GitHub Flow に準拠した Git ワークフロー (default branch への直接 push 禁止 + rebase Skill) |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.1.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.1.0 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
-| [pre-commit-review](#pre-commit-review) | 0.1.0 | `git commit` 前に `/simplify` → `/codex:review` (修正が落ち着くまでループ) を強制するプラグイン |
+| [pre-commit-review](#pre-commit-review) | 0.2.0 | `git commit` 前に `/simplify` → `/codex:review --wait` のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューのコミットを構造的にブロックするプラグイン |
 | [post-pr-review](#post-pr-review) | 0.1.0 | `gh pr create` 成功直後に `/code-review:code-review` の実行を誘導するプラグイン |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
@@ -100,7 +100,7 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 ## pre-commit-review
 
-`git commit` を実行する前に `/simplify` → `/codex:review` を必ず実行させ、未レビューの状態でのコミットをブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。修正によりステージング内容が変わった場合は `/simplify` から再度ループし、Claude の判断で「修正不要」となった時点で commit に進みます。PR 対象の `/code-review:code-review` は姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
+`git commit` を実行する前に `/simplify` → `/codex:review --wait` を必ず実行させ、未レビューの状態でのコミットを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。修正によりステージング内容が変わると `/simplify` と `/codex:review` のマーカーが自動失効するため、Claude は両方を再実行する以外に commit を通す手段がありません (= ループが構造的に強制されます)。PR 対象の `/code-review:code-review` は姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
 
 ### 機能
 
@@ -108,13 +108,8 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-pre-commit` | PreToolUse | `git commit` を検知し、ステージング差分のハッシュと一致するレビュー済みマーカーが無い場合に deny を返す |
-
-#### スクリプト
-
-| スクリプト | 用途 |
-|-----------|------|
-| `mark-reviewed.sh` | レビュー完了後、コミット直前に手動で実行してマーカーを作成する |
+| `block-pre-commit` | PreToolUse (`Bash`) | `git commit` を検知し、`/simplify` と `/codex:review --wait` 双方のマーカーがステージング差分のハッシュと一致しない場合に deny を返す |
+| `auto-mark` | PostToolUse (`*` wildcard) | `/simplify` の launch および `/codex:review --wait` の Bash 完了を自動検知し、対応するマーカーに staged + unstaged tracked 差分のハッシュを書き込む |
 
 ### キーワード
 
