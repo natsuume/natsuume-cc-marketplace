@@ -1,16 +1,24 @@
 #!/bin/bash
 # auto-mark.sh
 # /simplify と /codex:review --wait の実行完了を PostToolUse で検知し、
-# 対応するレビューマーカーを更新する。
+# 対応するレビューマーカーとループカウンタを更新する。
 #
 # 検知対象:
 #   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー
 #   - Bash tool で `codex-companion.mjs review` が完了した瞬間 → codex-reviewed マーカー
+#                                                                + ループカウンタ +1
 #
-# 設計意図: 「Claude が手動で mark-reviewed を呼ぶ」方式は修正後の状態を
-# レビュー済みと偽装できる経路 (= ループが強制されない) を残す。各ツールの
-# 実走を hook が捕捉しハッシュを書き込むことで、`/simplify` と `/codex:review`
-# の双方が「現在の staged+unstaged 差分」に対して直近で走ったことを保証する。
+# 設計意図:
+#   - マーカー: 「Claude が手動で mark-reviewed を呼ぶ」方式は修正後の状態を
+#     レビュー済みと偽装できる経路 (= ループが強制されない) を残す。各ツールの
+#     実走を hook が捕捉しハッシュを書き込むことで、`/simplify` と `/codex:review`
+#     の双方が「現在の staged+unstaged 差分」に対して直近で走ったことを保証する。
+#   - ループカウンタ: 同一ブランチで `/codex:review --wait` が何回走ったかを数える。
+#     block-pre-commit.sh が閾値超過時に `/codex:adversarial-review` (実装方針への
+#     批判的レビュー) を促す案内文を deny メッセージに追加する。`/codex:review` の
+#     表層レビューだけで収束しないループに気づかせるシグナル用途。
+#     `/simplify` 側はカウントしない (Skill PostToolUse は launch 時点で発火するため
+#     完了の signal としては不正確で、cooperative にカウントを膨らませる経路になる)。
 
 INPUT=$(cat)
 
@@ -44,6 +52,9 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
+
+# ループカウンタを更新するか (Bash 分岐 = codex review 完了時のみ true)。
+INCREMENT_LOOP_COUNTER=0
 
 case "$TOOL_NAME" in
   Skill)
@@ -93,6 +104,7 @@ case "$TOOL_NAME" in
       exit 0
     fi
     MARKER_NAME=".claude-pre-commit-codex-reviewed"
+    INCREMENT_LOOP_COUNTER=1
     ;;
   *)
     exit 0
@@ -104,8 +116,13 @@ esac
 # 組み合わさって commit が通ってしまう抜け穴になる)。Skill / Bash 両分岐に共通。
 # `is_error // .isError`: hook payload は snake_case が標準だが、Claude Code 側の
 # 実装揺らぎに備えて camelCase も defensive にフォールバックする。
-IS_ERROR=$(printf '%s' "$INPUT" | jq -r '.tool_response.is_error // .tool_response.isError // false')
-INTERRUPTED=$(printf '%s' "$INPUT" | jq -r '.tool_response.interrupted // false')
+# 1 回の jq invocation で is_error / interrupted を同時取得する (jq 起動コスト節約)。
+{ read -r IS_ERROR; read -r INTERRUPTED; } < <(
+  printf '%s' "$INPUT" | jq -r '
+    (.tool_response.is_error // .tool_response.isError // false),
+    (.tool_response.interrupted // false)
+  '
+)
 if [ "$IS_ERROR" = "true" ] || [ "$INTERRUPTED" = "true" ]; then
   exit 0
 fi
@@ -115,5 +132,19 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/diff-hash.sh
 source "$SCRIPT_DIR/lib/diff-hash.sh"
+# shellcheck source=lib/loop-counter.sh
+source "$SCRIPT_DIR/lib/loop-counter.sh"
 
 printf '%s' "$(compute_review_hash)" > "$GIT_DIR/$MARKER_NAME"
+
+# /codex:review --wait の完了でループカウンタを +1。block-pre-commit.sh が閾値到達時に
+# adversarial review の案内文を deny メッセージに追加する。カウンタは <git-dir> 配下に
+# 置かれるためリポジトリ単位で共有される (ブランチ単位ではない)。commit 成功時にマーカーと
+# 一緒にリセットされるため、commit を通せば 0 起算に戻る。逆に commit 未達のまま
+# `git switch` で別ブランチに移ると、別ブランチの最初の deny でも前ブランチの累積値が
+# 反映され、閾値を跨ぐと adversarial review の案内が先んじて出ることがある (advisory
+# 用途のみで commit 強制 block には影響しない)。
+if [ "$INCREMENT_LOOP_COUNTER" -eq 1 ]; then
+  CURRENT=$(read_loop_count "$GIT_DIR")
+  write_loop_count "$GIT_DIR" "$((CURRENT + 1))"
+fi
