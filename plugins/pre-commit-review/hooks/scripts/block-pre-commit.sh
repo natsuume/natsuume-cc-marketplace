@@ -1,6 +1,7 @@
 #!/bin/bash
 # block-pre-commit.sh
 # git commit を未レビューの状態でブロックする PreToolUse フック。
+# 緩和方針 / 残す deny の根拠は README の v0.4.0 緩和節を参照。
 
 INPUT=$(cat)
 
@@ -21,7 +22,47 @@ fi
 
 # `git \<改行>commit` のような Bash の行継続は実行時にバックスラッシュ+改行が消えて
 # `git commit` になる。検出ロジックがこれを見落とさないよう、入力段階で空白に正規化する。
-COMMAND=$(printf '%s' "$COMMAND" | awk 'BEGIN { RS = "" } { gsub(/\\\n/, " "); print }')
+COMMAND="${COMMAND//$'\\\n'/ }"
+
+# 改行は **context-aware** に変換する:
+#   - quote 内 (`"..."` または `'...'`) の改行 → スペース。`git commit -m "$(cat <<'EOF'
+#       fix
+#       EOF
+#       )"` のような heredoc 埋め込み commit message を後段の sed `s/"[^"]*"//g` が
+#       行単位で動く都合上 double quote として 1 行に纏める必要があるため。
+#   - quote 外の改行 → `;` (コマンド区切り)。素の改行で連結した `git commit -m a\n
+#       git commit -m b` を一律スペース化すると、postfix `[;&|]` deny を素通りして
+#       2 つ目の未レビュー commit が走る (= 1 マーカー = 1 commit 保証の貫通バイパス) ため、
+#       quote 外の改行は区切り文字として保持し下流の deny ロジックに載せる必要がある。
+# 簡易 quote tracker で in_squote / in_dquote を追う。bash のフル POSIX 規則ではなく、
+# cooperative 利用に出てくる範囲 (heredoc の double-quoted、英文 single-quoted) を網羅する
+# 軽量 parser。`\` エスケープは quote 外と double quote 内で次の 1 文字を保護する。
+# 既知の limitation: `<<EOF ... EOF` の heredoc body は bash 上では quote 評価されないが、
+# 本 tracker は body 中の `'` / `"` を素朴にトグルしてしまう。cooperative 利用では
+# 実害が出にくく、仮にトグル誤りで quote 状態がずれても下流の sed quote-strip と postfix
+# scan で deny 寄りに倒れるため、loop discipline の貫通バイパスにはならない。
+COMMAND=$(printf '%s' "$COMMAND" | awk '
+BEGIN { in_squote = 0; in_dquote = 0 }
+{
+  if (NR > 1) {
+    if (in_dquote || in_squote) printf " "; else printf ";"
+  }
+  printf "%s", $0
+  L = length($0); bs = 0
+  for (i = 1; i <= L; i++) {
+    c = substr($0, i, 1)
+    if (in_squote) {
+      if (c == "\047") in_squote = 0
+      continue
+    }
+    if (bs) { bs = 0; continue }
+    if (c == "\\") { bs = 1; continue }
+    if (c == "\"") { in_dquote = !in_dquote; continue }
+    if (c == "\047" && !in_dquote) in_squote = 1
+  }
+}
+END { if (NR > 0) print "" }
+')
 
 # PreToolUse の deny payload を出力する共通ヘルパ。各 deny 経路で同じ JSON 構造を
 # 生成しているため一箇所に集約しておくと、フィールド名のドリフト (1 箇所だけ
@@ -48,9 +89,7 @@ COMMIT_DETECT_REGEX="(^|[^[:alnum:]_-])git[[:space:]]+(${OPT}${OPT_ARG}[[:space:
 # 連結プレフィックス共通形 (CHAIN_PREFIX_REGEX) と、それを土台に定義する各種検出 regex:
 #   セグメント境界 `(^|[;&|])` + 空白 + 任意の env-var assignment + 任意の wrapper
 #   (`builtin`/`command`/`eval`、`command -p` 等の flag 列も許容)。
-# COMMIT_INVOCATION_REGEX / CD_PREFIX_REGEX / EXPORT_TARGET_REGEX は target keyword を
-# CHAIN_PREFIX_REGEX に append して構成する。境界・assignment・wrapper の書き換えが
-# 1 か所で完結し、ドリフトを防げる。
+# COMMIT_INVOCATION_REGEX は target keyword を CHAIN_PREFIX_REGEX に append して構成する。
 #
 # COMMIT_INVOCATION_REGEX は help-only スキップ判定と postfix scan の起点取得で
 # `BASH_REMATCH[0]` を取り出すために使う。`(^|[;&|])` の前方境界は
@@ -67,24 +106,23 @@ if ! printf '%s' "$COMMAND" | grep -qE "${COMMIT_DETECT_REGEX}([[:space:]]|$)"; 
   exit 0
 fi
 
-# 置換系の検出には bash の quote 評価規則を反映した dequote を 2 段階で行う:
-#   - Stage 1: single quote (`'...'`) のみ剥がす (`COMMAND_NO_SINGLE`)
-#       → bash は `'...'` 内では何も評価しない一方、`"..."` 内では `$(...)` /
-#         バッククォートを評価する。`$(...)` / バッククォートは single-quote だけ
-#         剥がした文字列で検出すれば、`echo '$(...)'` のようなテキスト参照を
-#         誤検知せず、`git commit -m "$(rm -rf /)"` のような double-quote 内の
-#         実評価ケースは正しく捕捉できる。
-#   - Stage 2: double quote (`"..."`) も剥がす (`COMMAND_DEQUOTED`)
-#       → 後段のセグメント分割・トークン化に使う。プロセス置換 `<(...)` / `>(...)` は
-#         bash の quote 内では評価されないため、完全に dequote した文字列で検出する。
-COMMAND_NO_SINGLE=$(printf '%s' "$COMMAND" | sed -E "s/'[^']*'//g")
-COMMAND_DEQUOTED=$(printf '%s' "$COMMAND_NO_SINGLE" | sed -E 's/"[^"]*"//g')
+# 後段のセグメント分割・トークン化のために single quote と double quote の両方を剥がす。
+# 1 つの sed invocation で両 quote を strip して fork を 1 つに抑える。
+# **順序重要**: double quote を先に剥がす。逆順だと `git commit -m "don't" && git commit -m "won't"`
+# のような英語アポストロフィを含む commit message で、最初の `'` 〜 最後の `'` までを 1 つの
+# single-quoted region と誤認し、間に挟まれた `&& git commit -m "won` ごと食ってしまう。
+# 結果として COMMIT_POSTFIX が空になり、postfix `[;&|]` deny を素通りして 2 つ目の commit が
+# 通る (= 1 マーカー = 1 commit 保証を貫通する) 致命的バイパスになる。
+# double quote を先に剥がせば、内側の `'` は double quote 削除と同時に消えるため誤誘発しない。
+# `git commit -m "$(cat <<'EOF' ... EOF)"` のような heredoc 埋め込み commit message は
+# 本プラグインの想定する正常 path であり、置換構文 (`$(...)`, バッククォート, `<(...)`, `>(...)`)
+# を deny する旧ロジックは撤廃した (cooperative 利用前提)。
+COMMAND_DEQUOTED=$(printf '%s' "$COMMAND" | sed -E -e 's/"[^"]*"//g' -e "s/'[^']*'//g")
 
 # `git commit` がクォート内にしか現れない場合は、テキスト参照かラッパー経由のいずれか。
 # クォートを除去した残りに commit がないとき、コマンド先頭がシェルインタプリタなら
 # ラッパー (`bash -c "git commit"` 等) として後段で deny し、それ以外はテキスト参照
-# (`echo 'git commit' && echo $(date)` 等) として skip する。本判定を後段の置換検査
-# よりも **前** に置く: テキスト参照に置換が含まれていても deny ではなく skip するため。
+# (`echo 'git commit' && echo $(date)` 等) として skip する。
 SHELL_WRAPPER_REGEX='^[[:space:]]*(bash|sh|zsh|dash|ksh|eval)([[:space:]]|$)'
 IS_SHELL_WRAPPER=0
 if printf '%s' "$COMMAND" | grep -qE "$SHELL_WRAPPER_REGEX"; then
@@ -96,45 +134,19 @@ if ! printf '%s' "$COMMAND_DEQUOTED" | grep -qE "${COMMIT_DETECT_REGEX}([[:space
   fi
 fi
 
-# コマンド置換 (`$(...)`, バッククォート) とプロセス置換 (`<(...)`, `>(...)`) は本
-# フックの文字列ベースなパーサで内側を解析できず、レビュー検証後に index を
-# 書き換える経路となり得る。`$(...)` / バッククォートは double-quote 内でも評価される
-# ので `COMMAND_NO_SINGLE` で検出し、`<(...)` / `>(...)` は quote 内では評価されない
-# ので `COMMAND_DEQUOTED` で検出する。`<(...)` の検出には paren-strip 前の
-# `COMMAND_DEQUOTED` を使う必要があるため、paren-strip より前に配置する。
-if [[ "$COMMAND_NO_SINGLE" == *'$('* ]] \
-   || [[ "$COMMAND_NO_SINGLE" == *'`'* ]] \
-   || [[ "$COMMAND_DEQUOTED" == *'<('* ]] \
-   || [[ "$COMMAND_DEQUOTED" == *'>('* ]]; then
-  REASON=$(cat <<'EOF'
-コミットをブロックしました。`$(...)` / バッククォート / `<(...)` / `>(...)` (コマンド置換・プロセス置換) を含む `git commit` はサポート外です。
-
-これらは内側のコマンドを別 subshell で評価するため、レビュー検証後に index を書き換えたり commit 内部で別コマンドを走らせたりする経路となり得ます。コマンド置換が必要な処理は別の Bash 呼び出しに分離して、結果を `git commit -m "..."` の文字列として直接埋め込んでください。
-EOF
-)
-  deny "$REASON"
-  exit 0
-fi
 # `()` (サブシェル) と `{}` (group) はコマンド境界として `;`/`&`/`|` と等価なため、
-# スペースに正規化しておくと下流のセグメント分割・トークン化が均一に動く。これに
-# より `(cd /other && git commit)` や `{ GIT_DIR=/x git commit; }` のようなグループ
-# 越しの target-mismatch バイパスを cd-prefix / env-var チェックがそのまま捕捉できる。
-# `[(){}]` を class として一括置換すると `}` がパラメータ展開の終端と衝突して
-# 動かないため、4 回に分けて置換する (各々フォーク無しの parameter expansion)。
+# スペースに正規化しておくと下流のセグメント分割・トークン化が均一に動く。`[(){}]` を
+# class として一括置換すると `}` がパラメータ展開の終端と衝突して動かないため、
+# 4 回に分けて置換する (各々フォーク無しの parameter expansion)。
 COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\(/ }"
 COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\)/ }"
 COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\{/ }"
 COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\}/ }"
-# 改行も `;` と等価なコマンド区切りなので、`cd /other<newline>git commit` のように
-# 改行で連結された prefix が cd-prefix / 区切り文字検査をすり抜ける経路を塞ぐ。
-# `;` に正規化して下流の `[;&|]` パターンに統一して載せる。
-COMMAND_DEQUOTED="${COMMAND_DEQUOTED//$'\n'/;}"
+# (改行は入力直後にスペースへ正規化済み — cd deny を撤廃した本バージョンでは
+# 改行を「コマンド境界」として扱う必要がなく、quote 整合を優先している)
 # bash の redirection (`>file`, `2>&1`, `&>file`, `<<EOF` 等) は command 名と
-# その引数の間を分断し得る (例: `cd>/dev/null /other`, `builtin>/dev/null cd /other`,
-# `GIT_DIR=/foo>/dev/null git commit`)。本体コマンドの実行可否判定だけが目的なので、
-# redirection 全体をスペースに置換して下流の検査から除外する。pattern は
-# `[0-9]? (>>|<<<|<<|<>|>&|<&|>|<) [[:space:]]* [^[:space:];&|]*` で
-# fd 番号 / target / heredoc word をまとめて吸収する。
+# その引数の間を分断し得る。本体コマンドの実行可否判定だけが目的なので、
+# redirection 全体をスペースに置換して下流の検査から除外する。
 COMMAND_DEQUOTED=$(printf '%s' "$COMMAND_DEQUOTED" \
   | sed -E 's/[0-9]?(>>|<<<|<<|<>|>&|<&|>|<)[[:space:]]*[^[:space:];&|]*/ /g')
 
@@ -155,7 +167,7 @@ elif [ "$IS_SHELL_WRAPPER" -eq 0 ]; then
   REASON=$(cat <<'EOF'
 コミットをブロックしました。本フックが解析できない形式の `git commit` 呼び出しが含まれています (例: `time git commit ...`, `env git commit ...` のように未対応の wrapper 経由など)。
 
-`git commit` を直接実行するか、対応している `xxx && git commit ...` 形式 (前段が `cd` / `pushd` / `popd` / target-mismatch を起こす env-var を含まないもの) で連結してください。
+`git commit` を直接実行するか、対応している `xxx && git commit ...` 形式 (cd や heredoc 埋め込みは許容) で連結してください。
 EOF
 )
   deny "$REASON"
@@ -166,15 +178,13 @@ fi
 # 判定すると `git commit -m bad && git commit --help` のように **最初の commit が
 # real なケース** までスキップしてしまい、未レビュー commit を素通しする致命的な
 # バイパスになる。COMMIT_POSTFIX (= 最初の commit の引数部分以降) が `-h|--help` のみで
-# 構成される場合だけスキップする。`-m bad && git commit --help` のような chain では
-# COMMIT_POSTFIX が `-m bad && git commit --help` となり、ここでは skip しないため
-# real commit として後段の検証へ進む。
+# 構成される場合だけスキップする。
 if [[ "$COMMIT_POSTFIX" =~ ^[[:space:]]*(-h|--help)[[:space:]]*$ ]]; then
   exit 0
 fi
 
 # シェルラッパー (`bash -c "git commit ..."` 等) はクォート内のコマンドを本フックの
-# 文字列ベースなパーサで解析できず、`-C` 等の検証もすり抜ける。`git commit` を
+# 文字列ベースなパーサで解析できず、postfix scan も成立しない。`git commit` を
 # 直接実行する経路 (単独 / `xxx && git commit ...`) のみサポートする。
 if [ "$IS_SHELL_WRAPPER" -eq 1 ]; then
   REASON=$(cat <<'EOF'
@@ -191,8 +201,7 @@ fi
 # `git add newfile & git commit ...` や `cmd | git commit ...` の形式はマーカー検証
 # 完了後に index が並行変更されたり stdin 経由で commit に状態が流れ込んだりする
 # 経路になる。chain prefix では `&&` / `||` / `;` のみ許容し、単独の `&` / `|` は
-# COMMAND_DEQUOTED に存在するだけで deny する。`(^|[^X])X([^X]|$)` で「X が連続
-# しないただ 1 個の X」を識別する (`&&` / `||` は連続なのでマッチしない)。
+# COMMAND_DEQUOTED に存在するだけで deny する。
 if [[ "$COMMAND_DEQUOTED" =~ (^|[^&])\&([^&]|$) ]] \
    || [[ "$COMMAND_DEQUOTED" =~ (^|[^\|])\|([^\|]|$) ]]; then
   REASON=$(cat <<'EOF'
@@ -201,126 +210,6 @@ if [[ "$COMMAND_DEQUOTED" =~ (^|[^&])\&([^&]|$) ]] \
 これらの区切りはコマンドを並列実行するため、レビューマーカー検証後に index が変更されたり commit へ状態が流れ込んだりする経路になります。
 
 連結が必要なら `&&` (success-and) や `;` (sequential) を使用してください。並列実行や pager 接続が必要な場合は別の Bash 呼び出しに分けてください。
-EOF
-)
-  deny "$REASON"
-  exit 0
-fi
-
-# 連結プレフィックスに `cd` / `pushd` / `popd` が含まれる場合、hook 検証時の cwd と
-# commit 実行時の cwd が乖離し、別リポジトリ (or 同一 repo の別 worktree) のマーカーで
-# commit を許可してしまう経路になる (`-C` deny と同じ target-mismatch)。
-# 同一リポジトリ内のサブディレクトリへの cd でも cwd 不一致は残るうえ、in-repo か
-# 別 repo かを静的に判別する手段がないため一律 deny する。
-# `${var%[;&|]*}` は最後のシェル区切り文字以降を取り除くので、prefix が full と
-# 異なるとき = 連結が存在するときだけ検査する。`git commit ; cd subdir` のように
-# cd が postfix にあるケースは prefix に cd が出ないため誤検知せず、後段の postfix
-# チェックで適切な deny メッセージが出る。
-#
-# `builtin cd` / `command cd` / `eval cd` のように cd 系コマンドの前に
-# bash の builtin/command/eval ラッパーを挟む形式もカバーする (各々 alias/function
-# を回避して cd 本体を実行できるため、素の `cd` と等価な cwd 変更経路になる)。
-# `eval` は連結先頭にある場合 `IS_SHELL_WRAPPER` の deny で先に弾かれるが、
-# 連結途中 (`xxx && eval cd ...`) では先頭ラッパー検出をすり抜けるため、こちらでも
-# 拾う必要がある。
-# bash の redirection (`cd>/dev/null /other`) は command 名直後に空白なく `>`/`<` が
-# 来ても本体は実行される。command 名の直後・wrapper 名の直後の boundary class に
-# `<>` を含めて、`cd>file /other && git commit` 等の bypass を捕捉する。
-# `command` には `-p` (default PATH 利用), `-v`/`-V` (情報表示) 等の flag があり、
-# `command -p cd /other` のように flag を挟んでも cd 本体は実行される。command の
-# wrapper 部分には flag 列 `(-[^...]*)*` を許容する。`-v` は実行しないが保守的に deny
-# する (cooperative 利用での実害なし)。
-# bash は `FOO=bar cd /other` のように command の前に env-var assignment を置ける。
-# その assignment は cd 実行時の environment に適用されるが cd 本体は実行されるので、
-# `(name=value[[:space:]<>]+)*` を wrapper の前に optional で許容して捕捉する。
-CD_PREFIX_REGEX="${CHAIN_PREFIX_REGEX}(cd|pushd|popd)([[:space:]<>]|\$)"
-# `export GIT_DIR=...` / `declare -x GIT_DIR=...` / `typeset -x ...` / `readonly -x ...`
-# のように、対象切替系の env-var を前段で export すると後段の `git commit` にも
-# 引き継がれて target-mismatch を起こす (bare `GIT_DIR=/foo git commit` は LAST_SEGMENT
-# 経由の TARGET_OVERRIDE_REGEX で捕捉済みだが、別セグメントの export はそこに現れない)。
-# `-x` 有無は識別せず `declare GIT_DIR` 等も保守的に deny する (cooperative 利用では
-# 副作用なし)。
-# `[^;&|]*` を素のままにすると `GIT_DIR` が `MY_GIT_DIR` / `GIT_DIRECTOR` /
-# `FOOGIT_DIR=foo` 等の部分一致でも match して false positive になる。
-# canonical name の左側は「先頭 or 直前にスペース」を要求し (= タンデム空白で区切られた
-# 独立トークンであることを保証)、右側は `[[:space:]]|=|$` で名前末尾を boundary 化する。
-EXPORT_TARGET_REGEX="${CHAIN_PREFIX_REGEX}(export|declare|typeset|readonly)[[:space:]<>]+([^;&|]*[[:space:]<>])?(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)([[:space:]<>]|=|\$)"
-COMMAND_PREFIX="${COMMAND_DEQUOTED%[;&|]*}"
-if [ "$COMMAND_PREFIX" != "$COMMAND_DEQUOTED" ] \
-   && [[ "$COMMAND_PREFIX" =~ $EXPORT_TARGET_REGEX ]]; then
-  REASON=$(cat <<'EOF'
-コミットをブロックしました。`export GIT_DIR=...` / `declare -x GIT_DIR=...` 等で対象リポジトリ・インデックスを切り替える環境変数を前段でセットする形式の commit はサポート外です (検証先と commit 先が食い違うのを防ぐため)。
-
-これらの環境変数を export せず、対象リポジトリへ移動してから `git commit` を実行してください (Claude の作業ディレクトリと commit 先が同じになるようにしてください)。
-EOF
-)
-  deny "$REASON"
-  exit 0
-fi
-if [ "$COMMAND_PREFIX" != "$COMMAND_DEQUOTED" ] \
-   && [[ "$COMMAND_PREFIX" =~ $CD_PREFIX_REGEX ]]; then
-  REASON=$(cat <<'EOF'
-コミットをブロックしました。`cd` / `pushd` / `popd` を前段に含む連結 commit はサポート外です。
-
-hook の検証 cwd と commit 実行時の cwd が乖離するため、別リポジトリ (もしくは別 worktree) のマーカーで commit が許可されてしまう経路になります。これは `-C` / `--git-dir` / `--work-tree` を deny する理由と同じ target-mismatch です。
-
-対象ディレクトリへ移動してから別の Bash 呼び出しで `git commit ...` を実行してください (Claude の作業ディレクトリと commit 先が同じになるようにしてください)。
-EOF
-)
-  deny "$REASON"
-  exit 0
-fi
-
-# `git -C` 等の対象リポジトリ変更系オプションを deny する。検査範囲はサブコマンド
-# `commit` トークンの **直前** までに限定する。空白区切りトークン化したうえで、
-# 直前のトークンが「別トークン引数を取るグローバルオプション」だった場合は
-# 引数値とみなして subcommand 判定をスキップする。これにより
-# `git --namespace commit -C ../other commit ...` のように option 値が偶然
-# "commit" のケースでも subcommand 境界を取り違えない。`=` 形式
-# (`--namespace=commit`) は単一トークンなので別トークン引数の対象外。
-#
-# `xxx && git commit ...` のような連結形式では、前段コマンド (`xxx`) が偶然 `-C`
-# を含む (例: `tar -C /tmp ...`) と false positive で deny になってしまう。
-# 後段の postfix チェックで `commit` がコマンド末尾に位置することを強制するため、
-# `;`/`&`/`|` 区切りの最終セグメント (= `${COMMAND_DEQUOTED##*[;&|]}`) を見れば
-# commit を含むセグメントが取れる。検査範囲をそこに限定することで前段コマンドの
-# `-C` 誤検知を防ぐ。bash の parameter expansion を使って awk フォークを省略する。
-#
-# `read -ra` は `\<space>` を 2 トークンに分割してしまうため、トークン化前に
-# バックスラッシュエスケープ空白を非空白プレースホルダ \x01 に置換する。
-# これにより `git -c foo=a\ commit ...` の `a commit` 部分が単一トークンとして
-# 維持され、subcommand 境界判定の取り違えを防げる。
-LAST_SEGMENT="${COMMAND_DEQUOTED##*[;&|]}"
-LAST_SEGMENT_NORMALIZED=$(printf '%s' "$LAST_SEGMENT" \
-  | sed -E "s/\\\\[[:space:]]/$(printf '\x01')/g")
-read -ra _tokens <<< "$LAST_SEGMENT_NORMALIZED"
-sandbox_prefix_tokens=()
-prev_is_argopt=0
-for _tok in "${_tokens[@]}"; do
-  if [ "$prev_is_argopt" -eq 1 ]; then
-    sandbox_prefix_tokens+=("$_tok")
-    prev_is_argopt=0
-    continue
-  fi
-  [ "$_tok" = "commit" ] && break
-  case "$_tok" in
-    -C|-c|--git-dir|--work-tree|--namespace|--super-prefix|--exec-path)
-      prev_is_argopt=1 ;;
-  esac
-  sandbox_prefix_tokens+=("$_tok")
-done
-SANDBOX_PREFIX="${sandbox_prefix_tokens[*]}"
-# git は `-C` / `--git-dir` / `--work-tree` オプションだけでなく、`GIT_DIR=/path`
-# `GIT_WORK_TREE=/path` `GIT_INDEX_FILE=/path` 環境変数による対象切替もサポートする。
-# どちらも commit 先のリポジトリ/インデックスを hook 検証時の cwd と乖離させる
-# target-mismatch 経路になるため、両形式とも deny する。env-var は `name=value` 形式
-# でコマンド先頭または space 区切りで現れる必要があるため、後段の `=` は不要。
-TARGET_OVERRIDE_REGEX='(^|[[:space:]=<>])(-C|--git-dir|--work-tree)([[:space:]=<>]|$)|(^|[[:space:]<>])(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)='
-if printf '%s' "$SANDBOX_PREFIX" | grep -qE "$TARGET_OVERRIDE_REGEX"; then
-  REASON=$(cat <<'EOF'
-コミットをブロックしました。`-C` / `--git-dir` / `--work-tree` オプションまたは `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` 環境変数で対象リポジトリ・インデックスを変更する形式の commit はサポート外です (検証先と commit 先が食い違うのを防ぐため)。
-
-これらの設定を使わず、対象リポジトリへ移動してから `git commit` を実行してください (Claude の作業ディレクトリと commit 先が同じになるようにしてください)。
 EOF
 )
   deny "$REASON"
@@ -346,6 +235,19 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 SIMPLIFIED_MARKER="$GIT_DIR/.claude-pre-commit-simplified"
 CODEX_MARKER="$GIT_DIR/.claude-pre-commit-codex-reviewed"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/loop-counter.sh
+source "$SCRIPT_DIR/lib/loop-counter.sh"
+
+# `/codex:review --wait` の完了が連続して何回走ったか。auto-mark.sh が成功時に +1 する。
+# commit 通過時 (両マーカー一致) にカウンタを削除して 0 起算にリセット。
+# 閾値を超えても commit を block しない (loop discipline はマーカーのハッシュ比較で
+# 既に保証されている)。閾値超過時は deny メッセージに `/codex:adversarial-review` の
+# 案内文を追加する形で「実装表層の修正だけで収束しないなら設計レベルの見直しを」と
+# 促す。adversarial review 自体はマーカーを書かないため、ループ進行をブロックしない。
+LOOP_THRESHOLD=3
+LOOP_COUNT=$(read_loop_count "$GIT_DIR")
+
 SIMPLIFIED_HASH=$([ -f "$SIMPLIFIED_MARKER" ] && cat "$SIMPLIFIED_MARKER" 2>/dev/null)
 CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
 
@@ -353,7 +255,6 @@ CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
 # ハッシュ計算は少なくとも片方のマーカーが存在するときだけ走らせる。
 CURRENT_HASH=""
 if [ -n "$SIMPLIFIED_HASH" ] || [ -n "$CODEX_HASH" ]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   # shellcheck source=lib/diff-hash.sh
   source "$SCRIPT_DIR/lib/diff-hash.sh"
   CURRENT_HASH=$(compute_review_hash)
@@ -366,6 +267,7 @@ if [ -n "$SIMPLIFIED_HASH" ] && [ -n "$CODEX_HASH" ] \
    && [ "$SIMPLIFIED_HASH" = "$CURRENT_HASH" ] \
    && [ "$CODEX_HASH" = "$CURRENT_HASH" ]; then
   rm -f "$SIMPLIFIED_MARKER" "$CODEX_MARKER"
+  reset_loop_count "$GIT_DIR"
   exit 0
 fi
 
@@ -382,12 +284,42 @@ format_status() {
 SIMPLIFIED_STATUS=$(format_status "$SIMPLIFIED_HASH")
 CODEX_STATUS=$(format_status "$CODEX_HASH")
 
+# loop counter が閾値以上なら「設計レベルの再考」を促す追加文を組み立てる。
+# 通常の deny メッセージ末尾に追記される形で出力する。
+ADVERSARIAL_NOTE=""
+if [ "$LOOP_COUNT" -ge "$LOOP_THRESHOLD" ]; then
+  ADVERSARIAL_NOTE=$(cat <<EOF
+
+⚠ レビューループが ${LOOP_COUNT} 回に達しています (閾値 ${LOOP_THRESHOLD} 回)。
+\`/codex:review\` の指摘修正だけで収束しない場合、根本的な実装方針・アーキテクチャ設計に
+ミスマッチがある可能性があります。次のいずれかの対応を検討してください:
+
+  - **\`/codex:adversarial-review --wait --scope working-tree\`** を Skill tool で呼び出し、
+    現在のステージング/作業内容に対する **批判的レビュー** (採用しているアプローチ自体が
+    妥当か、設計選択のトレードオフ、暗黙の前提が壊れていないか) を取得する。
+    実装表層を見直す \`/codex:review\` とは別観点なので、ループの停滞を打開する手がかりに
+    なる場合があります。
+  - 大きな方針転換が必要そうなら、ユーザーに状況をエスカレートして判断を仰ぐ。
+
+\`/codex:adversarial-review\` は本ループのマーカー対象外です (= 実行してもマーカーは更新
+されません)。実行後は通常通り \`/simplify\` → \`/codex:review --wait\` を走らせて
+コミットへ進んでください。
+
+\`/codex:adversarial-review\` を Skill tool から呼ぶには姉妹プラグイン
+\`codex-review-customize\` の \`/codex-review-customize:setup\` でパッチを適用しておく必要が
+あります。未適用の場合は会話入力としての
+\`/codex:adversarial-review --wait --scope working-tree\` を使用してください。
+EOF
+)
+fi
+
 REASON=$(cat <<EOF
 コミットをブロックしました。コミット前に下記のレビューを実行してください。
 
 レビュー状態 (双方が「✓ 最新の差分でレビュー済み」になるとコミットが許可されます):
   /simplify      : $SIMPLIFIED_STATUS
   /codex:review  : $CODEX_STATUS
+  ループ回数     : ${LOOP_COUNT} 回 (閾値 ${LOOP_THRESHOLD} 回でアーキテクチャレビュー誘導)
 
 実行手順 (修正が落ち着くまでループ):
   1. /simplify を Skill tool で呼び出す (コード変更を伴うため先に実行)
@@ -405,8 +337,9 @@ REASON=$(cat <<EOF
 スクリプトを呼び出す必要はありません。コミット成功時にはマーカーを
 自動削除するため、次回のコミットでは再度レビューが必要になります。
 
-ループ回数の上限は設けません。Claude が自身の判断で「修正不要」または
-「人間判断を仰ぐべき」と判断したタイミングで進行/エスカレートしてください。
+ループ回数の上限は設けません (実装表層レビューの強制ブロックはマーカーのハッシュ比較
+のみで行います)。Claude が自身の判断で「修正不要」または「人間判断を仰ぐべき」と
+判断したタイミングで進行/エスカレートしてください。
 
 \`/codex:review\` の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
   - **\`--wait\` (フォアグラウンド) のみサポート**。本コンテキストでは
@@ -427,8 +360,8 @@ Claude は名前の似た \`/codex:rescue\` を誤って選ぶ傾向が報告さ
 \`codex-review-customize\` の \`/codex-review-customize:setup\` を実行して
 パッチを適用してください。
 
-(注: \`/code-review:code-review\` は PR を対象とするため、PR 作成後に
-post-pr-review プラグイン経由で実行されます。)
+(注: PR 作成後の adversarial レビューは post-pr-review プラグイン経由で
+ \`/codex:adversarial-review\` が起動されます。)$ADVERSARIAL_NOTE
 EOF
 )
 

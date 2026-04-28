@@ -31,16 +31,16 @@
     {
       "name": "pre-commit-review",
       "source": "./plugins/pre-commit-review",
-      "description": "git commit 前に /simplify → /codex:review --wait のループを強制し、PostToolUse で実行完了を自動検知してレビュー差分との同一性を検証することで未レビューのコミットを構造的にブロックするプラグイン",
-      "version": "0.3.0",
-      "keywords": ["commit", "review", "quality", "codex", "simplify"]
+      "description": "git commit 前に /simplify → /codex:review --wait のループを強制し、PostToolUse で実行完了を自動検知してレビュー差分との同一性を検証することで未レビューのコミットを構造的にブロックするプラグイン。ループ回数が閾値以上に達した場合は /codex:adversarial-review を促す案内を deny メッセージに追加",
+      "version": "0.4.0",
+      "keywords": ["commit", "review", "quality", "codex", "simplify", "adversarial-review"]
     },
     {
       "name": "post-pr-review",
       "source": "./plugins/post-pr-review",
-      "description": "gh pr create 成功直後に /code-review:code-review の実行を誘導するプラグイン",
-      "version": "0.1.0",
-      "keywords": ["pr", "review", "code-review", "github"]
+      "description": "gh pr create 成功直後に /codex:adversarial-review (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン",
+      "version": "0.2.0",
+      "keywords": ["pr", "review", "codex", "adversarial-review", "github"]
     },
     {
       "name": "update-default-branch",
@@ -59,9 +59,9 @@
     {
       "name": "codex-review-customize",
       "source": "./plugins/codex-review-customize",
-      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン",
-      "version": "0.1.0",
-      "keywords": ["codex", "review", "patch", "skill"]
+      "description": "公式 codex プラグインの /codex:review および /codex:adversarial-review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン",
+      "version": "0.2.0",
+      "keywords": ["codex", "review", "adversarial-review", "patch", "skill"]
     }
   ]
 }

@@ -21,11 +21,11 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [git-guardrails](#git-guardrails) | 0.1.0 | GitHub Flow に準拠した Git ワークフロー (default branch への直接 push 禁止 + rebase Skill) |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.1.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.1.0 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
-| [pre-commit-review](#pre-commit-review) | 0.3.0 | `git commit` 前に `/simplify` → `/codex:review --wait` のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューのコミットを構造的にブロックするプラグイン |
-| [post-pr-review](#post-pr-review) | 0.1.0 | `gh pr create` 成功直後に `/code-review:code-review` の実行を誘導するプラグイン |
+| [pre-commit-review](#pre-commit-review) | 0.4.0 | `git commit` 前に `/simplify` → `/codex:review --wait` のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューのコミットを構造的にブロックするプラグイン。ループ回数が閾値以上に達した場合は `/codex:adversarial-review` を促す案内を deny メッセージに追加 |
+| [post-pr-review](#post-pr-review) | 0.2.0 | `gh pr create` 成功直後に `/codex:adversarial-review` (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
-| [codex-review-customize](#codex-review-customize) | 0.1.0 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
+| [codex-review-customize](#codex-review-customize) | 0.2.0 | 公式 codex プラグインの `/codex:review` および `/codex:adversarial-review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
 
 ---
 
@@ -100,7 +100,11 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 ## pre-commit-review
 
-`git commit` を実行する前に `/simplify` → `/codex:review --wait` を必ず実行させ、未レビューの状態でのコミットを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。修正によりステージング内容が変わると `/simplify` と `/codex:review` のマーカーが自動失効するため、Claude は両方を再実行する以外に commit を通す手段がありません (= ループが構造的に強制されます)。PR 対象の `/code-review:code-review` は姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
+`git commit` を実行する前に `/simplify` → `/codex:review --wait` を必ず実行させ、未レビューの状態でのコミットを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。修正によりステージング内容が変わると `/simplify` と `/codex:review` のマーカーが自動失効するため、Claude は両方を再実行する以外に commit を通す手段がありません (= ループが構造的に強制されます)。
+
+`/codex:review --wait` の完了が `LOOP_THRESHOLD` に達してもまだ commit に至らない場合、deny メッセージに `/codex:adversarial-review` (実装方針・設計選択への批判的レビュー) の実行を促す案内が追加されます。PR 作成後の adversarial レビューは姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
+
+v0.4.0 で `cd dir && git commit ...` / `git -C dir commit ...` / heredoc 埋め込み commit message (`git commit -m "$(cat <<'EOF' ... EOF)"`) などの一般的な利用形態を許容するよう deny を緩和しました (cooperative 利用前提)。
 
 ### 機能
 
@@ -108,18 +112,18 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-pre-commit` | PreToolUse (`Bash`) | `git commit` を検知し、`/simplify` と `/codex:review --wait` 双方のマーカーがステージング差分のハッシュと一致しない場合に deny を返す |
-| `auto-mark` | PostToolUse (`*` wildcard) | `/simplify` の launch および `/codex:review --wait` の Bash 完了を自動検知し、対応するマーカーに staged + unstaged tracked 差分のハッシュを書き込む |
+| `block-pre-commit` | PreToolUse (`Bash`) | `git commit` を検知し、`/simplify` と `/codex:review --wait` 双方のマーカーがステージング差分のハッシュと一致しない場合に deny を返す。ループカウンタが閾値以上に達していれば deny メッセージに `/codex:adversarial-review` の案内文を追加 |
+| `auto-mark` | PostToolUse (`*` wildcard) | `/simplify` の launch および `/codex:review --wait` の Bash 完了を自動検知し、対応するマーカーに staged + unstaged tracked 差分のハッシュを書き込む。`/codex:review --wait` の成功完了時にはループカウンタも +1 する |
 
 ### キーワード
 
-`commit` `review` `quality` `codex` `simplify`
+`commit` `review` `quality` `codex` `simplify` `adversarial-review`
 
 ---
 
 ## post-pr-review
 
-Claude Code 経由で `gh pr create` が成功した直後に、`/code-review:code-review <PR-URL>` の実行を `additionalContext` で Claude に誘導するプラグインです。`pre-commit-review` の姉妹プラグインで、PR 対象のレビューを担当します。
+Claude Code 経由で `gh pr create` が成功した直後に、`/codex:adversarial-review --wait --scope branch` の実行を `additionalContext` で Claude に誘導するプラグインです。`pre-commit-review` の commit 前ループ (`/codex:review` による表層レビュー) と役割を分け、本プラグインは PR タイミングに **設計レベルの challenge** (実装方針・設計選択・トレードオフ・前提条件への批判的レビュー) を差し込みます。
 
 ### 機能
 
@@ -127,15 +131,15 @@ Claude Code 経由で `gh pr create` が成功した直後に、`/code-review:co
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `nudge-pr-review` | PostToolUse | `gh pr create` 成功時に PR URL を抽出し、`additionalContext` で `/code-review:code-review <URL>` 実行を促す (強制ではなく誘導) |
+| `nudge-pr-review` | PostToolUse | `gh pr create` 成功時に PR URL を抽出し、`additionalContext` で `/codex:adversarial-review --wait --scope branch` の実行を促す (強制ではなく誘導) |
 
 ### 注意事項
 
-`additionalContext` 経由の誘導なので、Claude が無視することは原理的に可能です。また Web UI など Claude Code 以外で作成された PR には介入しません (これは設計上の意図)。
+`additionalContext` 経由の誘導なので、Claude が無視することは原理的に可能です。また Web UI など Claude Code 以外で作成された PR には介入しません (これは設計上の意図)。`/codex:adversarial-review` を Skill tool から呼び出すには [codex-review-customize](#codex-review-customize) v0.2.0 以降のパッチを当てておく必要があります。
 
 ### キーワード
 
-`pr` `review` `code-review` `github`
+`pr` `review` `codex` `adversarial-review` `github`
 
 ---
 
@@ -183,9 +187,9 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 ## codex-review-customize
 
-公式 codex プラグインの `/codex:review` コマンド定義 (`commands/review.md`) をローカルでパッチし、frontmatter の `disable-model-invocation: true` を削除して Skill tool からの呼び出しを許可する setup プラグインです。
+公式 codex プラグインの `/codex:review` (`commands/review.md`) および `/codex:adversarial-review` (`commands/adversarial-review.md`) コマンド定義をローカルでパッチし、frontmatter の `disable-model-invocation: true` を削除して Skill tool からの呼び出しを許可する setup プラグインです。
 
-スラッシュコマンドは `<plugin名>:<command名>` でプラグイン名空間が確定するため、別プラグインから `/codex:review` という同名は提供できません。本プラグインはコマンド名を `/codex:review` のまま保持したいユーザー向けに、公式定義のローカルパッチを setup する形を採っています。
+スラッシュコマンドは `<plugin名>:<command名>` でプラグイン名空間が確定するため、別プラグインから `/codex:review` / `/codex:adversarial-review` という同名は提供できません。本プラグインはコマンド名を公式の `/codex:...` のまま保持したいユーザー向けに、公式定義のローカルパッチを setup する形を採っています。
 
 ### 機能
 
@@ -193,8 +197,8 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 | コマンド | 説明 |
 |---------|------|
-| `/codex-review-customize:setup` | `apply-patch.sh` を実行し、公式 codex の `commands/review.md` をパッチする (idempotent、backup なしで git 管理が backup を兼ねる) |
+| `/codex-review-customize:setup` | `apply-patch.sh` を実行し、公式 codex の `commands/review.md` と `commands/adversarial-review.md` の両方をパッチする (idempotent、backup なしで git 管理が backup を兼ねる) |
 
 ### キーワード
 
-`codex` `review` `patch` `skill`
+`codex` `review` `adversarial-review` `patch` `skill`

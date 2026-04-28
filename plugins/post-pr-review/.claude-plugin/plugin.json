@@ -1,5 +1,5 @@
 {
   "name": "post-pr-review",
-  "version": "0.1.0",
-  "description": "gh pr create 成功直後に /code-review:code-review の実行を誘導するプラグイン (Claude Code 経由の PR 作成時のみ機能)"
+  "version": "0.2.0",
+  "description": "gh pr create 成功直後に /codex:adversarial-review (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン (Claude Code 経由の PR 作成時のみ機能)"
 }
