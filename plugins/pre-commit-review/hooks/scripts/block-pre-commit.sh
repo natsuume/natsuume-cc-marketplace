@@ -142,8 +142,9 @@ COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\(/ }"
 COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\)/ }"
 COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\{/ }"
 COMMAND_DEQUOTED="${COMMAND_DEQUOTED//\}/ }"
-# (改行は入力直後にスペースへ正規化済み — cd deny を撤廃した本バージョンでは
-# 改行を「コマンド境界」として扱う必要がなく、quote 整合を優先している)
+# (改行は入力直後の awk parser で context-aware に正規化済み: quote 内 → スペース、
+# quote 外 → `;`。下流の `[;&|]` postfix scan に乗せるため、quote 外の改行で連結された
+# 連続 commit は 1 マーカー = 1 commit 保証で deny される。)
 # bash の redirection (`>file`, `2>&1`, `&>file`, `<<EOF` 等) は command 名と
 # その引数の間を分断し得る。本体コマンドの実行可否判定だけが目的なので、
 # redirection 全体をスペースに置換して下流の検査から除外する。

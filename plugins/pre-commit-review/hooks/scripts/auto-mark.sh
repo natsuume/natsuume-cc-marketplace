@@ -137,9 +137,13 @@ source "$SCRIPT_DIR/lib/loop-counter.sh"
 
 printf '%s' "$(compute_review_hash)" > "$GIT_DIR/$MARKER_NAME"
 
-# /codex:review --wait の完了でループカウンタを +1。block-pre-commit.sh が閾値超過時に
-# adversarial review の案内文を deny メッセージに追加する。commit 成功時にカウンタも
-# まとめて削除されるため、ブランチをまたいだ持ち越しは起きない。
+# /codex:review --wait の完了でループカウンタを +1。block-pre-commit.sh が閾値到達時に
+# adversarial review の案内文を deny メッセージに追加する。カウンタは <git-dir> 配下に
+# 置かれるためリポジトリ単位で共有される (ブランチ単位ではない)。commit 成功時にマーカーと
+# 一緒にリセットされるため、commit を通せば 0 起算に戻る。逆に commit 未達のまま
+# `git switch` で別ブランチに移ると、別ブランチの最初の deny でも前ブランチの累積値が
+# 反映され、閾値を跨ぐと adversarial review の案内が先んじて出ることがある (advisory
+# 用途のみで commit 強制 block には影響しない)。
 if [ "$INCREMENT_LOOP_COUNTER" -eq 1 ]; then
   CURRENT=$(read_loop_count "$GIT_DIR")
   write_loop_count "$GIT_DIR" "$((CURRENT + 1))"
