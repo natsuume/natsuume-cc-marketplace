@@ -10,13 +10,28 @@ v0.1.0
 
 `UserPromptSubmit` と `PostToolBatch` の 2 つのフックで、入力 JSON の `permission_mode` が `"auto"` のときだけ `hookSpecificOutput.additionalContext` を注入します。それ以外のモード (`default` / `plan` / `acceptEdits` / `bypassPermissions`) では何も出力しません。
 
-注入する内容は「変更が一段落したらユーザに確認を求めず、commit → push → PR 作成 → マージまで一気に進めて良い」という方針です。auto mode のときに Claude が「変更を書いて停止」してしまうのを防ぎ、PR マージ完了まで届ける運用にロックします。
+注入する内容は「変更が一段落したらユーザに確認を求めず、commit → push → PR 作成 → (前提条件を満たした上で) マージまで進めて良い」という方針です。auto mode のときに Claude が「変更を書いて停止」してしまうのを防ぎ、PR マージ完了まで届ける運用にロックします。
 
-ただし auto mode でも以下は引き続き禁止 / 要確認である旨を明記します:
+### マージ前提条件 (hard gate)
+
+注入文では **マージのみ** に hard gate を設けています。以下の **すべて** が満たされている場合に限り、PR を独断マージしてよい旨を明記します。1 つでも未充足ならユーザに報告して手を止めます。
+
+- PR が draft ではない (ready for review)
+- リポジトリで required に設定された CI checks が全て成功 (`gh pr checks` で検証)
+- レビューが要求されている場合、必要な承認が揃っている (`gh pr view --json reviewDecision` で検証)
+- post-pr-review が促す `/codex:adversarial-review --wait --scope branch` の verdict が `needs-attention` でないか、重大指摘 (priority high 以上) が解消済み
+- ブランチ保護ルールに違反しない (`mergeable` が `MERGEABLE` かつ `mergeStateStatus` が `CLEAN`)
+
+各 bullet には `gh` CLI で検証する具体的なコマンドを併記してあります。Claude は注入文を見て gate 評価を実行できます (例: `gh pr checks <pr>` で失敗があれば停止)。
+
+### その他の禁止事項
+
+auto mode でも以下は引き続き禁止 / 要確認である旨を明記します:
 
 - master / 既定ブランチへの直接 push、master 上での直接コミット
 - force push / 履歴改変 / 共有データ削除等の破壊的操作
 - 秘匿情報を含むファイルのコミット
+- マージ前提条件を満たさない PR の独断マージ
 
 ## インストール
 
