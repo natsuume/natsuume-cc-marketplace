@@ -1,5 +1,5 @@
 {
   "name": "auto-followthrough",
-  "version": "0.1.0",
-  "description": "permission_mode が auto のとき、変更を commit / PR 作成 / マージ完了まで遂行するよう UserPromptSubmit と PostToolBatch でコンテキストを注入するプラグイン"
+  "version": "0.2.0",
+  "description": "permission_mode が auto のとき、変更を commit / PR 作成 / マージ完了まで遂行するよう UserPromptSubmit と PostToolBatch でコンテキストを注入し、session 開始時の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン"
 }

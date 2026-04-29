@@ -4,7 +4,7 @@ Claude Code が **auto mode** で動作している間、変更の `commit` → 
 
 ## バージョン
 
-v0.1.0
+v0.2.0
 
 ## 概要
 
@@ -62,6 +62,32 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 `PostToolUse` ではなく `PostToolBatch` を採用しているのは、ツール 1 件ごとに毎回介入するとノイズになるためです。`PostToolBatch` はバッチ末尾で 1 回だけ発火するので、自然な「区切り」のフックになります。
 
+#### check-uncommitted-on-session-start (v0.2.0 追加)
+
+**ファイル**: `hooks/scripts/check-uncommitted-on-session-start.sh`
+**イベント**: `UserPromptSubmit`
+
+**動作**:
+
+- auto モードのセッションで cwd に未コミット変更がある場合、**Claude にその出所分析と分類確認を要求** する `additionalContext` を注入する
+- session ごとに 1 回だけ発火するよう `${TMPDIR:-/tmp}/auto-followthrough-markers/<session_id>.checked` でマーカー管理
+- auto モード以外、git リポジトリ外、`jq` 不在環境ではすべて無音 `exit 0`
+
+**なぜ独立した hook が必要か**:
+
+`inject-auto-context` の注入文に caveat を積み続けると追加情報のたびに文章量が肥大化し、Claude が指示を取りこぼしやすくなります。本フックは「未コミット変更が dirty な状態」のチェックを **静的な注入文ではなく実コマンド (`git status --porcelain`)** で行い、検出時のみ動的に警告を出すため、auto モード本体の注入文を簡潔に保てます。
+
+**Claude への指示内容 (要約)**:
+
+ユーザに確認を丸投げするのではなく、以下を Claude が一次分析するよう要求します:
+
+1. `git diff` / `git log` / ファイル内容を確認して各変更の出所を推定
+2. 各ファイルを 4 分類 (今回タスク関連 / 以前の残骸 / 中間状態 / 不明) に振り分け
+3. 推奨アクションをまとめて簡潔にユーザに報告し、同意を取る
+4. ユーザの同意を得てから実際の git 操作 (add / commit / stash / branch 切り出し等) を行う
+
+これにより auto mode の本来の趣旨「Claude に最大限委任する」を維持しつつ、意図しない変更を巻き込むリスクを抑えます。
+
 ## ディレクトリ構成
 
 ```
@@ -71,7 +97,8 @@ auto-followthrough/
 ├── hooks/
 │   ├── hooks.json
 │   └── scripts/
-│       └── inject-auto-context.sh
+│       ├── inject-auto-context.sh
+│       └── check-uncommitted-on-session-start.sh
 └── README.md
 ```
 
