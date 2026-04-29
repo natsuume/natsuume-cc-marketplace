@@ -19,7 +19,7 @@ v0.2.0
 - PR が draft ではない (ready for review)
 - リポジトリで required に設定された CI checks が全て成功 (`gh pr checks` で検証)
 - レビューが要求されている場合、必要な承認が揃っている (`gh pr view --json reviewDecision` で検証)
-- post-pr-review が促す `/codex:adversarial-review --wait --scope branch` の verdict が `needs-attention` でないか、重大指摘 (priority high 以上) が解消済み
+- post-pr-review が促す `/codex:adversarial-review --wait --scope branch` の verdict が `approve` (もしくは `needs-attention` の場合は severity を問わず**すべての** finding が解消済み / ユーザが明示的に waive 済み)
 - ブランチ保護ルールに違反しない (`mergeable` が `MERGEABLE` かつ `mergeStateStatus` が `CLEAN`)
 
 各 bullet には `gh` CLI で検証する具体的なコマンドを併記してあります。Claude は注入文を見て gate 評価を実行できます (例: `gh pr checks <pr>` で失敗があれば停止)。

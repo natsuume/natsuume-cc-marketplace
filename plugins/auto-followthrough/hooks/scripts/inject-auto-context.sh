@@ -41,7 +41,8 @@ Auto mode (permission_mode = "auto") が有効です。以下の方針で**自�
      - リポジトリで required に設定されている CI checks が **全て成功** (`gh pr checks` で確認)
      - レビューが要求されている場合、必要な承認が揃っている (`gh pr view --json reviewDecision`)
      - post-pr-review が促す `/codex:adversarial-review --wait --scope branch` の verdict が
-       `needs-attention` でないか、重大指摘 (priority high 以上) が解消済みであること
+       `approve` (もしくは verdict が `needs-attention` の場合、severity を問わず **すべての**
+       finding が解消済み、または明示的にユーザが waive している) であること
      - ブランチ保護ルールに違反しない (`mergeable` が `MERGEABLE` かつ `mergeStateStatus` が `CLEAN`)
 - 各ステップは reasonable assumption で前進し、軽微な判断は都度ユーザに聞き返さない
 - ただし以下は引き続き禁止 / 要確認:
