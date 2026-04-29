@@ -10,11 +10,12 @@ fi
 
 INPUT=$(cat)
 
-# hook_event_name と permission_mode を 1 回の jq 呼び出しで取得する
-{ read -r HOOK_EVENT; read -r PERMISSION_MODE; } < <(
+# hook_event_name / permission_mode / session_id を 1 回の jq 呼び出しで取得する
+{ read -r HOOK_EVENT; read -r PERMISSION_MODE; read -r RAW_SESSION_ID; } < <(
   printf '%s' "$INPUT" | jq -r '
     (.hook_event_name // ""),
-    (.permission_mode // "")
+    (.permission_mode // ""),
+    (.session_id // "")
   '
 )
 
@@ -28,6 +29,32 @@ fi
 if [ -z "$HOOK_EVENT" ]; then
   exit 0
 fi
+
+# session_id をマーカーファイル名に使うため英数とハイフンのみに sanitize する。
+# (path injection 防止と、ファイル名の素直さを両立)
+SESSION_ID=$(printf '%s' "$RAW_SESSION_ID" | tr -dc 'a-zA-Z0-9-')
+MARKER_DIR="${TMPDIR:-/tmp}/auto-followthrough-markers"
+BATCH_MARKER="$MARKER_DIR/${SESSION_ID}.batch-injected"
+
+# UserPromptSubmit はターン開始の signal なので per-turn dedup マーカーをクリアし、
+# 次の PostToolBatch で 1 回だけ context を再注入できる状態にする。
+# PostToolBatch は同一ターン内に複数回発火しうるため、マーカー有無で once-per-turn 化する
+# (transcript 肥大化と古い文脈の埋没を防ぐ)。
+case "$HOOK_EVENT" in
+  UserPromptSubmit)
+    if [ -n "$SESSION_ID" ]; then
+      rm -f "$BATCH_MARKER" 2>/dev/null
+    fi
+    ;;
+  PostToolBatch)
+    if [ -n "$SESSION_ID" ] && [ -f "$BATCH_MARKER" ]; then
+      exit 0
+    fi
+    if [ -n "$SESSION_ID" ]; then
+      mkdir -p "$MARKER_DIR" 2>/dev/null && touch "$BATCH_MARKER" 2>/dev/null
+    fi
+    ;;
+esac
 
 CONTEXT=$(cat <<'EOF'
 Auto mode (permission_mode = "auto") が有効です。以下の方針で**自走**してください:

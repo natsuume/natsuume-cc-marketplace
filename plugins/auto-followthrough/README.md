@@ -4,7 +4,7 @@ Claude Code が **auto mode** で動作している間、変更の `commit` → 
 
 ## バージョン
 
-v0.2.0
+v0.2.1
 
 ## 概要
 
@@ -61,6 +61,17 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 - `PostToolBatch` — 1 ターンのツール呼び出しが**全て完了した直後**に発火する。ここでもう一度方針を注入することで、編集だけして「完了」と打ち切るのを抑止し、commit / PR / マージへの遷移を促す。
 
 `PostToolUse` ではなく `PostToolBatch` を採用しているのは、ツール 1 件ごとに毎回介入するとノイズになるためです。`PostToolBatch` はバッチ末尾で 1 回だけ発火するので、自然な「区切り」のフックになります。
+
+**v0.2.1 追加: PostToolBatch の once-per-turn 制御**
+
+`PostToolBatch` は同一ユーザターン内に複数回発火する (Claude が複数の model invocation を経由する場合) ため、放置すると同じ static な context が transcript に重複して積まれ、context 肥大化と古い文脈 (例: dirty-worktree 警告) の埋没を招きます。
+
+これを回避するため `${TMPDIR:-/tmp}/auto-followthrough-markers/<session_id>.batch-injected` を per-turn dedup マーカーとして使い、以下の挙動を実装しています:
+
+- `UserPromptSubmit` 発火時: マーカーを削除 (新ターンの signal)
+- `PostToolBatch` 発火時: マーカーが既に存在すれば skip、なければ context を出力してマーカーを set
+
+これにより 1 ユーザターンあたり `PostToolBatch` 経路の注入は最大 1 回に制限されます (`UserPromptSubmit` 経路は従来どおり毎ターン発火します)。
 
 #### check-uncommitted-on-session-start (v0.2.0 追加)
 
