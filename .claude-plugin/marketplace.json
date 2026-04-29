@@ -62,6 +62,13 @@
       "description": "公式 codex プラグインの /codex:review および /codex:adversarial-review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン",
       "version": "0.2.0",
       "keywords": ["codex", "review", "adversarial-review", "patch", "skill"]
+    },
+    {
+      "name": "auto-followthrough",
+      "source": "./plugins/auto-followthrough",
+      "description": "permission_mode が auto のとき、commit / PR 作成 / マージ完了まで自走するよう UserPromptSubmit と PostToolBatch でコンテキストを注入するプラグイン",
+      "version": "0.1.0",
+      "keywords": ["auto", "automation", "followthrough", "permission-mode", "hook", "userpromptsubmit", "posttoolbatch"]
     }
   ]
 }

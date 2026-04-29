@@ -1,0 +1,25 @@
+{
+  "description": "permission_mode が auto のとき、変更の commit / PR 作成 / マージ完了まで一連の自動化を促すコンテキストを注入する",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-auto-context.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-auto-context.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
