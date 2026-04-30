@@ -1,5 +1,5 @@
 {
   "name": "git-guardrails",
-  "version": "0.1.0",
-  "description": "GitHub Flow に準拠した Git ワークフローを支援・強制するプラグイン"
+  "version": "0.2.0",
+  "description": "GitHub Flow に準拠した Git ワークフローを構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供"
 }
