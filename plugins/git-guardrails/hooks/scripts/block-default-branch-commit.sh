@@ -1,0 +1,86 @@
+#!/bin/bash
+# block-default-branch-commit.sh
+# デフォルトブランチ (master/main) 上での `git commit` をブロックする PreToolUse フック。
+#
+# 「デフォルトブランチへの変更は GitHub 上の PR merge 経由のみ」という運用を構造強制する
+# ための一段目。ローカル master で commit が走らなければ、push 段階で改めて止める必要も
+# 減り、誤って master を進める経路を入口で塞げる。
+#
+# 検出対象:
+#   - カレントブランチが master/main のときに実行される `git commit` 系コマンド
+#     (連結プレフィックス `xxx && git commit ...`、`-C` / `--git-dir` / 環境変数による
+#      対象切替も粗くフィルタ済み: pre-commit-review プラグインがクォート/区切り文字を
+#      網羅的に弾いている。本フックはブランチ判定だけを担当し、cooperative 利用前提で
+#      シンプルな substring 検出に留める。)
+#
+# detached HEAD (cherry-pick 中・rebase 中など) では通す: ブランチ名が空文字列で
+# is_default_branch は false 判定になるため、自然に exit 0 経路に流れる。
+
+INPUT=$(cat)
+
+# 大半の Bash 呼び出しは無関係。jq 起動前に粗フィルタで抜ける。
+case "$INPUT" in
+  *commit*) ;;
+  *) exit 0 ;;
+esac
+
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
+COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+[ -n "$COMMAND" ] || exit 0
+
+# 行継続 `\<改行>` を空白に、real newline を `;` に正規化する (詳細は push hook 側の
+# コメント参照)。順序が重要: 行継続を先に処理しないと `git \<NL>commit` が `git \;commit`
+# に化けて invocation regex を素通りする。
+COMMAND="${COMMAND//$'\\\n'/ }"
+COMMAND="${COMMAND//$'\n'/;}"
+
+# `git commit` サブコマンドだけを検出する。`git` と `commit` の間に許容する中間トークンは
+# 「git の global option (`-X` / `--long` / `--long=val`) と任意の option 引数」のみ。
+# 任意の subcommand を許容する旧 regex は `git log --grep commit` のような read-only
+# コマンドまで `git commit` と誤検出していた (`log` を中間トークンとして拾ってしまうため)。
+# pre-commit-review/block-pre-commit.sh の COMMIT_DETECT_REGEX と同じ構造に揃える。
+#   OPT      : `-x` / `--long` / `--long=val` のような option トークン
+#   OPT_ARG  : `-` で始まらないオプション引数 (例: `-C dir` の `dir`)
+OPT='-[^[:space:];&|]+'
+OPT_ARG='([[:space:]]+[^-[:space:];&|][^[:space:];&|]*)?'
+# 左境界はシェルのコマンド開始位置 (`^` / `;` / `&` / `|`) のみ。`[[:space:]]` を境界に
+# 含めると `echo git commit` のような echo 引数内の text reference が誤マッチする。
+# env-var assignment (`GIT_DIR=/foo/.git git commit ...`) も invocation として検出する
+# (検出後 target-mismatch スコープで GIT_DIR= を deny に倒すため)。
+ENV_VAR_PREFIX='([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|]*[[:space:]]+)*'
+COMMIT_INVOCATION_REGEX="(^|[;&|])[[:space:]]*${ENV_VAR_PREFIX}git[[:space:]]+(${OPT}${OPT_ARG}[[:space:]]+)*commit([[:space:]]|\$)"
+
+if ! [[ "$COMMAND" =~ $COMMIT_INVOCATION_REGEX ]]; then
+  exit 0
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/default-branch.sh
+source "$SCRIPT_DIR/lib/default-branch.sh"
+
+# 同一コマンドに複数の commit 呼び出しが含まれる (`git commit && cd /other && git commit`
+# など) ケースに対応するため、while ループで各 commit を独立に検査する。各 iteration で
+# 「当該 commit invocation の前段 + invocation 自体」を target-mismatch 検査範囲に取り、
+# post-commit の cd は対象外、invocation 内の `-C dir` は対象内に倒す。push hook と同じ
+# パターン。
+REM="$COMMAND"
+while [[ "$REM" =~ $COMMIT_INVOCATION_REGEX ]]; do
+  COMMIT_INVOCATION="${BASH_REMATCH[0]}"
+  COMMIT_TARGET_SCOPE="${REM%%"$COMMIT_INVOCATION"*}$COMMIT_INVOCATION"
+  if has_target_mismatch_prefix "$COMMIT_TARGET_SCOPE"; then
+    emit_deny "$TARGET_MISMATCH_DENY_REASON"
+    exit 0
+  fi
+  REM="${REM#*"$COMMIT_INVOCATION"}"
+done
+
+BRANCH=$(current_branch)
+if [ -n "$BRANCH" ] && is_default_branch "$BRANCH"; then
+  emit_deny "デフォルトブランチ ($BRANCH) 上での git commit は禁止されています。working branch を切ってから commit してください (例: git switch -c feat/my-change)。デフォルトブランチへの変更は GitHub 上の PR merge 経由のみで取り込む運用です。"
+  exit 0
+fi
+
+exit 0

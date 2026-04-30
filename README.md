@@ -18,7 +18,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 | プラグイン | バージョン | 説明 |
 |-----------|-----------|------|
-| [git-guardrails](#git-guardrails) | 0.1.0 | GitHub Flow に準拠した Git ワークフロー (default branch への直接 push 禁止 + rebase Skill) |
+| [git-guardrails](#git-guardrails) | 0.2.0 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.1.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.1.0 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
 | [pre-commit-review](#pre-commit-review) | 0.4.0 | `git commit` 前に `/simplify` → `/codex:review --wait` のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューのコミットを構造的にブロックするプラグイン。ループ回数が閾値以上に達した場合は `/codex:adversarial-review` を促す案内を deny メッセージに追加 |
@@ -31,7 +31,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 ## git-guardrails
 
-GitHub Flow に準拠した Git ワークフローを支援・強制するプラグインです。
+GitHub Flow に準拠した Git ワークフローを **構造強制** するプラグインです。「デフォルトブランチ (master/main) への変更は GitHub 上の PR merge 経由のみで取り込む」という運用を、ローカル側の write 経路 (commit / push / PR head) を 3 つの PreToolUse フックで多層防御することで保証します。
 
 ### 機能
 
@@ -39,7 +39,9 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-default-branch-push` | PreToolUse | デフォルトブランチ（master/main）への直接 push を禁止し、PR 経由を強制する |
+| `block-default-branch-commit` | PreToolUse (`Bash`) | カレントブランチが master/main のときに `git commit` を deny。working branch を切ってから commit する運用を強制 |
+| `block-default-branch-push` | PreToolUse (`Bash`) | master/main を更新するすべての push 系を deny。引数省略形 (`git push` 単独 / `git push origin`) や refspec 形式 (`feat:master`) も網羅 |
+| `block-default-branch-pr` | PreToolUse (`Bash`) | `gh pr create` で head が master/main になる PR の作成を deny。`--head` 明示時もカレントブランチ判定時も両方カバー |
 
 #### Skills
 
@@ -51,7 +53,7 @@ GitHub Flow に準拠した Git ワークフローを支援・強制するプラ
 
 ### キーワード
 
-`git` `workflow` `github-flow` `rebase`
+`git` `workflow` `github-flow` `rebase` `default-branch-protection`
 
 ---
 
