@@ -8,10 +8,10 @@
 #
 # 検出対象:
 #   - カレントブランチが master/main のときに実行される `git commit` 系コマンド
-#     (連結プレフィックス `xxx && git commit ...`、`-C` / `--git-dir` / 環境変数による
-#      対象切替も粗くフィルタ済み: pre-commit-review プラグインがクォート/区切り文字を
-#      網羅的に弾いている。本フックはブランチ判定だけを担当し、cooperative 利用前提で
-#      シンプルな substring 検出に留める。)
+#   - 連結プレフィックス `xxx && git commit ...` / `cd /other && git commit ...` /
+#     `git -C dir commit ...` / `GIT_DIR=... git commit ...` のような target-mismatch
+#     経路は `has_target_mismatch_prefix` で本フック自身が deny に倒す (lib 経由の
+#     自前防御で、pre-commit-review プラグインへの依存はない)。
 #
 # detached HEAD (cherry-pick 中・rebase 中など) では通す: ブランチ名が空文字列で
 # is_default_branch は false 判定になるため、自然に exit 0 経路に流れる。

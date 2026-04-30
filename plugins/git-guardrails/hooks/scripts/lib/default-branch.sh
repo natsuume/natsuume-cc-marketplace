@@ -120,9 +120,22 @@ has_target_mismatch_prefix() {
   # ケースで raw grep が誤検出するのを防ぐため。
   local cmd
   cmd=$(strip_quoted_text "$1")
+  # subshell `(cd ...; git commit ...)` / brace group `{ cd ...; git commit ...; }` /
+  # command substitution `$(cd ...; git ...)` のように `()` / `{}` で囲まれたグループ越しの
+  # target-mismatch を捕捉できるよう、これらを空白に正規化する。pre-commit-review
+  # block-pre-commit.sh で同じパターンを採用している (PR #20 の `2d4f2b0` 参照)。
+  # `[(){}]` を class にすると `}` がパラメータ展開と衝突するため、4 回に分けて置換する。
+  cmd="${cmd//\(/ }"
+  cmd="${cmd//\)/ }"
+  cmd="${cmd//\{/ }"
+  cmd="${cmd//\}/ }"
   # cd / pushd / popd
+  # 右境界に `<>` を含めるのは、`cd>/dev/null /other && ...` のように cd 直後にスペース
+  # 無しで redirection 演算子が来ても cd 本体は実行されるため。pre-commit-review でも
+  # 同種の意図 (= command 名直後の redirection を境界と認識) を `CHAIN_PREFIX_REGEX` の
+  # `[[:space:]<>]` 境界 (block-pre-commit.sh) で別経路として実装している。
   if printf '%s' "$cmd" \
-    | grep -qE '(^|[;&|[:space:]])(cd|pushd|popd)([[:space:]]|[;&|]|$)'; then
+    | grep -qE '(^|[;&|[:space:]])(cd|pushd|popd)([[:space:]<>;&|]|$)'; then
     return 0
   fi
   # bare assignment: GIT_DIR=... / GIT_WORK_TREE=... / GIT_INDEX_FILE=...
