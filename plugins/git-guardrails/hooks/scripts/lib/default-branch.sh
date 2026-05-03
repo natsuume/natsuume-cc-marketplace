@@ -74,7 +74,7 @@ normalize_refspec_part() {
 # `'` から最後の `'` までを 1 つの single-quoted region と誤認し、間に挟まれた
 # `&& cd /other &&` ごと食ってしまう。結果として `cd /other` が消えて
 # `has_target_mismatch_prefix` の cd 検出を素通りさせる致命的バイパスになる。
-# pre-commit-review/block-pre-commit.sh の同種 sed と同順で揃える。
+# pre-push-review/block-pre-push.sh の同種 sed と同順で揃える。
 #
 # sed が行単位で動く都合上、複数行にまたがる double-quoted heredoc 等は対象外だが、
 # has_target_mismatch_prefix の入力は単一行 command 想定なので問題なし。
@@ -122,8 +122,9 @@ has_target_mismatch_prefix() {
   cmd=$(strip_quoted_text "$1")
   # subshell `(cd ...; git commit ...)` / brace group `{ cd ...; git commit ...; }` /
   # command substitution `$(cd ...; git ...)` のように `()` / `{}` で囲まれたグループ越しの
-  # target-mismatch を捕捉できるよう、これらを空白に正規化する。pre-commit-review
-  # block-pre-commit.sh で同じパターンを採用している (PR #20 の `2d4f2b0` 参照)。
+  # target-mismatch を捕捉できるよう、これらを空白に正規化する。pre-push-review
+  # block-pre-push.sh で同じパターンを採用している (PR #20 の `2d4f2b0` で旧 pre-commit-review に
+  # 導入され、pre-push-review への移行時に継承された)。
   # `[(){}]` を class にすると `}` がパラメータ展開と衝突するため、4 回に分けて置換する。
   cmd="${cmd//\(/ }"
   cmd="${cmd//\)/ }"
@@ -131,9 +132,9 @@ has_target_mismatch_prefix() {
   cmd="${cmd//\}/ }"
   # cd / pushd / popd
   # 右境界に `<>` を含めるのは、`cd>/dev/null /other && ...` のように cd 直後にスペース
-  # 無しで redirection 演算子が来ても cd 本体は実行されるため。pre-commit-review でも
+  # 無しで redirection 演算子が来ても cd 本体は実行されるため。pre-push-review でも
   # 同種の意図 (= command 名直後の redirection を境界と認識) を `CHAIN_PREFIX_REGEX` の
-  # `[[:space:]<>]` 境界 (block-pre-commit.sh) で別経路として実装している。
+  # `[[:space:]<>]` 境界 (block-pre-push.sh) で別経路として実装している。
   if printf '%s' "$cmd" \
     | grep -qE '(^|[;&|[:space:]])(cd|pushd|popd)([[:space:]<>;&|]|$)'; then
     return 0

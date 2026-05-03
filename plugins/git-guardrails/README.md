@@ -25,7 +25,7 @@ v0.2.0
   - subshell / brace group / command substitution 越し: `(cd /other; git commit)` / `{ cd /other; git push; }` / `$(cd /other; git ...)` (`()` / `{}` を空白に正規化してから検出)
   - redirection 演算子直結: `cd>/dev/null /other && git push` / `cd</dev/null /other && ...` (cd の右境界に `<>` を含める)
   
-  pre-commit-review v0.4.0 の cd 許容方針とは別軸の防御で、本プラグインは default branch 保護が責務。
+  pre-push-review (v0.1.0 で pre-commit-review v0.4.0 から push 境界に移行) の cd 許容方針とは別軸の防御で、本プラグインは default branch 保護が責務。
 - 共通 lib (`hooks/scripts/lib/default-branch.sh`) に `current_branch` / `is_default_branch` / `emit_deny` / `has_target_mismatch_prefix` / `TARGET_MISMATCH_DENY_REASON` を集約し、3 hook 間で判定ロジック・deny ペイロード形式・メッセージ文言がドリフトしないようにしています。
 
 > v0.1.0 までは `gh pr create` への `--draft` 自動付与もこのプラグインに含まれていましたが、責務分離のため [enforce-draft-pr](../enforce-draft-pr/) プラグインに切り出しました。draft 強制を使いたい場合はそちらを別途インストールしてください。
@@ -170,7 +170,7 @@ git-guardrails/
 ## 関連プラグイン
 
 - [enforce-draft-pr](../enforce-draft-pr/) — `gh pr create` 時に `--draft` を自動付与 (任意導入)
-- [pre-commit-review](../pre-commit-review/) — commit 前に `/simplify` → `/codex:review` を強制 (本プラグインのブランチ判定とは別軸の防御)
+- [pre-push-review](../pre-push-review/) — push 前に `/simplify` → `/codex:review --scope branch` を強制 (本プラグインのブランチ判定とは別軸の防御)
 
 ## 関連情報
 

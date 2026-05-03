@@ -10,13 +10,13 @@ v0.2.0
 
 `PostToolUse` フックで `Bash` ツール (`gh pr create`) の実行結果を監視し、出力から PR URL を抽出して `hookSpecificOutput.additionalContext` で次のアシスタント発話に注入します。
 
-`/codex:adversarial-review` は実装方針や設計選択そのものを **批判的にレビュー** するコマンドで、PR 作成直後 (= 1 ブランチ分の変更がまとまったタイミング) に最も活きます。read-only のコードレビューではなく、「採用しているアプローチ自体が妥当か」を問い直す視点を取り入れる位置づけです。表層的な実装レビューは `pre-commit-review` プラグインが commit 前に強制する `/codex:review` が担当しているため、本プラグインは **設計レベルの challenge** に役割を絞っています。
+`/codex:adversarial-review` は実装方針や設計選択そのものを **批判的にレビュー** するコマンドで、PR 作成直後 (= 1 ブランチ分の変更がまとまったタイミング) に最も活きます。read-only のコードレビューではなく、「採用しているアプローチ自体が妥当か」を問い直す視点を取り入れる位置づけです。表層的な実装レビューは `pre-push-review` プラグインが push 前に強制する `/codex:review --wait --scope branch` が担当しているため、本プラグインは **設計レベルの challenge** に役割を絞っています。
 
 これは強制ではなく **誘導** であり、Web UI 等からの PR 操作には影響しません。Claude Code 経由の PR 作成時のみ機能します。draft 強制の有無 (姉妹プラグイン [enforce-draft-pr](../enforce-draft-pr/) 併用時のみ draft 化) には依存せず、ready / draft いずれの PR でもレビューを誘導します。
 
 ### v0.1.0 → v0.2.0 の変更点
 
-- 誘導先を `/code-review:code-review <PR-URL>` から `/codex:adversarial-review --wait --scope branch` へ変更しました。本プラグインの責務は「PR 作成というタイミング」を捉えて adversarial レビューを差し込むことに絞られ、実装表層のコメント投稿系レビューは `pre-commit-review` の commit 前ループ (`/codex:review`) に任せる運用になります。
+- 誘導先を `/code-review:code-review <PR-URL>` から `/codex:adversarial-review --wait --scope branch` へ変更しました。本プラグインの責務は「PR 作成というタイミング」を捉えて adversarial レビューを差し込むことに絞られ、実装表層のコメント投稿系レビューは `pre-push-review` (旧 `pre-commit-review`) の push 前ループ (`/codex:review`) に任せる運用になります。
 - これに伴い、旧版で nudge に含めていた「英語コメントテンプレートを日本語訳してから `gh pr comment` する」指示は削除しました。`/codex:adversarial-review` は対話 stdout でレビューを返すコマンドで、PR コメントを直接投稿しないため翻訳ステップは不要です。
 - `/codex:adversarial-review` を Skill tool から起動するには姉妹プラグイン [codex-review-customize](../codex-review-customize/) v0.2.0 以降のパッチが必要になります。未適用の場合は会話入力としての `/codex:adversarial-review` を実行してください (本プラグインの誘導文にもその旨を明示しています)。
 
@@ -59,17 +59,17 @@ PR を作成しました: https://github.com/natsuume/.../pull/<n>
 `/codex:adversarial-review` は frontmatter で `disable-model-invocation: true` が指定されているため、Skill tool から呼び出すには姉妹プラグイン `codex-review-customize` の `/codex-review-customize:setup` でパッチを適用しておく必要があります。未適用の場合は会話入力としての `/codex:adversarial-review --wait --scope branch` を実行してください。
 ```
 
-## ワークフロー (pre-commit-review との連携)
+## ワークフロー (pre-push-review との連携)
 
 ```
-1. Claude が編集 → /simplify → /codex:review --wait (pre-commit-review が強制し、PostToolUse で両者のマーカーが自動作成される)
-2. git commit (pre-commit-review が両マーカーの整合を検証して許可)
-3. git push
+1. Claude が編集 → 任意のタイミングで git commit (pre-push-review は commit を阻害しない)
+2. push 直前に /simplify → /codex:review --wait --scope branch (pre-push-review が強制し、PostToolUse で両者のマーカーが自動作成される)
+3. git push (pre-push-review が両マーカーの整合を検証して許可)
 4. gh pr create ... (姉妹プラグイン enforce-draft-pr 併用時は --draft が自動付与される)
 5. PostToolUse: nudge-pr-review.sh が PR URL を抽出
 6. 次のアシスタント発話に additionalContext として誘導文が注入される
 7. Claude が /codex:adversarial-review --wait --scope branch を実行 (実装方針・設計選択への challenge)
-8. 大きな方針転換が必要な指摘があれば修正 → pre-commit-review に戻る (commit 前ループ)
+8. 大きな方針転換が必要な指摘があれば修正 → 追加 commit → pre-push-review に戻る (push 前ループ)
 9. (draft 運用の場合のみ) レビュー完了後にユーザーが ready マーク
 ```
 
@@ -100,7 +100,7 @@ post-pr-review/
 
 ## 関連プラグイン
 
-- [pre-commit-review](../pre-commit-review/) — commit 前に `/codex:review` と `/simplify` を強制。ループ閾値到達時は `/codex:adversarial-review` を促す動線も持つ
+- [pre-push-review](../pre-push-review/) — push 前に `/codex:review --scope branch` と `/simplify` を強制。ループ閾値到達時は `/codex:adversarial-review` を促す動線も持つ
 - [codex-review-customize](../codex-review-customize/) — `/codex:adversarial-review` を Skill tool から呼べるようにパッチを当てる setup プラグイン
 - [enforce-draft-pr](../enforce-draft-pr/) — `gh pr create` 時に `--draft` を自動付与 (draft 運用を採用する場合のみ)
 - [git-guardrails](../git-guardrails/) — master ブランチへの直接 push を禁止

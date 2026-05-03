@@ -21,7 +21,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [git-guardrails](#git-guardrails) | 0.2.0 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.1.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.1.0 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
-| [pre-commit-review](#pre-commit-review) | 0.4.0 | `git commit` 前に `/simplify` → `/codex:review --wait` のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューのコミットを構造的にブロックするプラグイン。ループ回数が閾値以上に達した場合は `/codex:adversarial-review` を促す案内を deny メッセージに追加 |
+| [pre-push-review](#pre-push-review) | 0.1.0 | `git push` 前に `/simplify` → `/codex:review --wait --scope branch` のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。ループ回数が閾値以上に達した場合は `/codex:adversarial-review` を促す案内を deny メッセージに追加 |
 | [post-pr-review](#post-pr-review) | 0.2.0 | `gh pr create` 成功直後に `/codex:adversarial-review` (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
@@ -100,13 +100,18 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ---
 
-## pre-commit-review
+## pre-push-review
 
-`git commit` を実行する前に `/simplify` → `/codex:review --wait` を必ず実行させ、未レビューの状態でのコミットを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。修正によりステージング内容が変わると `/simplify` と `/codex:review` のマーカーが自動失効するため、Claude は両方を再実行する以外に commit を通す手段がありません (= ループが構造的に強制されます)。
+`git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです (`pre-commit-review` の後継)。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review --scope branch` はその後の最終形を branch 全差分で (= PR diff のセマンティクスで) レビューします。修正により branch 全差分 + 未コミット差分が変わると `/simplify` と `/codex:review` のマーカーが自動失効するため、Claude は両方を再実行する以外に push を通す手段がありません (= ループが構造的に強制されます)。
 
-`/codex:review --wait` の完了が `LOOP_THRESHOLD` に達してもまだ commit に至らない場合、deny メッセージに `/codex:adversarial-review` (実装方針・設計選択への批判的レビュー) の実行を促す案内が追加されます。PR 作成後の adversarial レビューは姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
+`/codex:review --wait --scope branch` の完了が `LOOP_THRESHOLD` に達してもまだ push に至らない場合、deny メッセージに `/codex:adversarial-review` (実装方針・設計選択への批判的レビュー) の実行を促す案内が追加されます。PR 作成後の adversarial レビューは姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
 
-v0.4.0 で `cd dir && git commit ...` / `git -C dir commit ...` / heredoc 埋め込み commit message (`git commit -m "$(cat <<'EOF' ... EOF)"`) などの一般的な利用形態を許容するよう deny を緩和しました (cooperative 利用前提)。
+### 設計上のメリット
+
+- **commit 履歴の意味的解像度を保てる**: 初期実装 / `/simplify` edits / `/codex:review` 指摘修正をそれぞれ独立 commit として記録できる (`git log` / `blame` / `bisect` の精度が上がる)。`pre-commit-review` ではこれらすべてが 1 commit に圧縮されていた
+- **WIP / checkpoint commit の自由度**: 中間 commit を自由に重ねられるため、長時間 uncommitted 状態による作業損失リスクが減る
+- **Web UI / IDE 経由の PR 作成にも対応**: push 段階で gate するため、PR 作成手段 (`gh CLI` / Web UI / IDE / API) のいずれを使われても **precondition (remote branch の存在) を破壊** することで構造的に PR 成立を阻止できる
+- **多 commit PR の review 回数削減**: PR 全差分に対して 1 周のループで済む (実測ベースで 40-48% の review 回数削減見込み。1-commit PR では同等)
 
 ### 機能
 
@@ -114,18 +119,18 @@ v0.4.0 で `cd dir && git commit ...` / `git -C dir commit ...` / heredoc 埋め
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-pre-commit` | PreToolUse (`Bash`) | `git commit` を検知し、`/simplify` と `/codex:review --wait` 双方のマーカーがステージング差分のハッシュと一致しない場合に deny を返す。ループカウンタが閾値以上に達していれば deny メッセージに `/codex:adversarial-review` の案内文を追加 |
-| `auto-mark` | PostToolUse (`*` wildcard) | `/simplify` の launch および `/codex:review --wait` の Bash 完了を自動検知し、対応するマーカーに staged + unstaged tracked 差分のハッシュを書き込む。`/codex:review --wait` の成功完了時にはループカウンタも +1 する |
+| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、`/simplify` と `/codex:review --wait --scope branch` 双方のマーカーが branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。ループカウンタが閾値以上に達していれば deny メッセージに `/codex:adversarial-review` の案内文を追加。default branch (master/main) 上の push は git-guardrails に委譲して skip |
+| `auto-mark` | PostToolUse (`*` wildcard) | `/simplify` の launch および `/codex:review --wait --scope branch` の Bash 完了を自動検知し、対応するマーカーに branch 全差分 + 未コミット差分のハッシュを書き込む。`/codex:review --wait --scope branch` の成功完了時にはループカウンタも +1 する。`--scope branch` を含まない codex 起動は markers を更新しない (PR diff レビュー保証として不十分なため) |
 
 ### キーワード
 
-`commit` `review` `quality` `codex` `simplify` `adversarial-review`
+`push` `review` `quality` `codex` `simplify` `adversarial-review` `branch-diff` `pr-diff`
 
 ---
 
 ## post-pr-review
 
-Claude Code 経由で `gh pr create` が成功した直後に、`/codex:adversarial-review --wait --scope branch` の実行を `additionalContext` で Claude に誘導するプラグインです。`pre-commit-review` の commit 前ループ (`/codex:review` による表層レビュー) と役割を分け、本プラグインは PR タイミングに **設計レベルの challenge** (実装方針・設計選択・トレードオフ・前提条件への批判的レビュー) を差し込みます。
+Claude Code 経由で `gh pr create` が成功した直後に、`/codex:adversarial-review --wait --scope branch` の実行を `additionalContext` で Claude に誘導するプラグインです。`pre-push-review` の push 前ループ (`/codex:review` による表層レビュー) と役割を分け、本プラグインは PR タイミングに **設計レベルの challenge** (実装方針・設計選択・トレードオフ・前提条件への批判的レビュー) を差し込みます。
 
 ### 機能
 
