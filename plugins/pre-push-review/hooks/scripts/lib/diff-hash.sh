@@ -57,15 +57,26 @@ detect_base_branch() {
 # 副作用: detached HEAD では symbolic-ref が失敗するため、呼び出し側で BRANCH の存在を検証する。
 compute_review_hash() {
   local base="$1"
-  # branch diff 計算が失敗するケース (孤児ブランチ / unrelated history / shallow clone で
-  # merge-base が欠落している等) を明示的に検出する。失敗時に stderr を握り潰すと空文字列が
-  # 出力され、結果ハッシュが意図せず EMPTY_DIFF_HASH と一致して gate を素通りする経路になる
-  # (codex review P2 指摘)。失敗時は非ゼロで return し、呼び出し側で deny に倒す。
+  compute_review_hash_in "" "$base"
+}
+
+# compute_review_hash_in <target_cwd> <base>
+# target_cwd が空文字なら現在の cwd で git を実行 (= compute_review_hash と等価)。
+# 非空なら `git -C <target_cwd> ...` 経由で target repo の diff を計算する。
+# block-pre-push.sh が `cd dir && git push` / `git -C dir push` の target repo に対して
+# 直接 hash 比較を行うために使う。
+compute_review_hash_in() {
+  local target_cwd="$1"
+  local base="$2"
+  local -a git_prefix=()
+  if [ -n "$target_cwd" ]; then
+    git_prefix=(-C "$target_cwd")
+  fi
   local branch_diff
-  branch_diff=$(git diff "origin/${base}...HEAD" 2>/dev/null) || return 1
+  branch_diff=$(git "${git_prefix[@]}" diff "origin/${base}...HEAD" 2>/dev/null) || return 1
   {
     printf '%s' "$branch_diff"
-    git diff --cached 2>/dev/null
-    git diff 2>/dev/null
+    git "${git_prefix[@]}" diff --cached 2>/dev/null
+    git "${git_prefix[@]}" diff 2>/dev/null
   } | sha256sum | awk '{print $1}'
 }
