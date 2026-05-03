@@ -1,24 +1,27 @@
 #!/bin/bash
 # auto-mark.sh
-# /simplify と /codex:review --wait の実行完了を PostToolUse で検知し、
+# /simplify と /codex:review --wait --scope branch の実行完了を PostToolUse で検知し、
 # 対応するレビューマーカーとループカウンタを更新する。
 #
 # 検知対象:
 #   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー
-#   - Bash tool で `codex-companion.mjs review` が完了した瞬間 → codex-reviewed マーカー
-#                                                                + ループカウンタ +1
+#   - Bash tool で `codex-companion.mjs review --scope branch` が完了した瞬間
+#     → codex-reviewed マーカー + ループカウンタ +1
+#
+# /codex:review は **--scope branch のみ受け付ける**。--scope working-tree は
+# committed 部分を review しないため PR diff レビュー保証として不十分、 --scope auto は
+# dirty 時に working-tree にフォールバックするため不確実なので、いずれもマーカー更新を
+# skip する。
 #
 # 設計意図:
 #   - マーカー: 「Claude が手動で mark-reviewed を呼ぶ」方式は修正後の状態を
 #     レビュー済みと偽装できる経路 (= ループが強制されない) を残す。各ツールの
 #     実走を hook が捕捉しハッシュを書き込むことで、`/simplify` と `/codex:review`
-#     の双方が「現在の staged+unstaged 差分」に対して直近で走ったことを保証する。
-#   - ループカウンタ: 同一ブランチで `/codex:review --wait` が何回走ったかを数える。
-#     block-pre-commit.sh が閾値超過時に `/codex:adversarial-review` (実装方針への
-#     批判的レビュー) を促す案内文を deny メッセージに追加する。`/codex:review` の
-#     表層レビューだけで収束しないループに気づかせるシグナル用途。
-#     `/simplify` 側はカウントしない (Skill PostToolUse は launch 時点で発火するため
-#     完了の signal としては不正確で、cooperative にカウントを膨らませる経路になる)。
+#     の双方が「現在のブランチ全差分」に対して直近で走ったことを保証する。
+#   - ループカウンタ: 同一ブランチで `/codex:review --wait --scope branch` が何回
+#     走ったかを数える。block-pre-push.sh が閾値超過時に `/codex:adversarial-review`
+#     を促す案内文を deny メッセージに追加する。表層レビューだけで収束しないループに
+#     気づかせるシグナル用途。
 
 INPUT=$(cat)
 
@@ -36,7 +39,7 @@ INPUT=$(cat)
 #   - `"skill"[[:space:]]*:[[:space:]]*"simplify"`: Skill tool 完了の検出。
 #     hook payload の JSON 整形 (`"skill":"simplify"` / `"skill": "simplify"` 等) に
 #     左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき
-#     payload を弾く) はマーカー未生成 → 永久 commit ブロックの致命経路になるため、
+#     payload を弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、
 #     フィルタは寛容に倒す (false positive は jq 後段の SKILL_NAME 一致判定で
 #     正しく弾かれるので無害)。
 #   - `codex-companion`: Bash tool での codex review companion 起動の粗検出。
@@ -53,7 +56,7 @@ fi
 
 TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
 
-# ループカウンタを更新するか (Bash 分岐 = codex review 完了時のみ true)。
+# ループカウンタを更新するか (Bash 分岐 = codex review --scope branch 完了時のみ true)。
 INCREMENT_LOOP_COUNTER=0
 
 case "$TOOL_NAME" in
@@ -67,11 +70,9 @@ case "$TOOL_NAME" in
     # Skill tool の PostToolUse は `Launching skill: simplify` を返した瞬間 (= skill body
     # 実行 **前**) に発火する。この timing でマーカーを書くことで、launch 時点の差分ハッシュ
     # (= skill body が見た state) を記録する。simplify が edits を起こせば current hash は
-    # launch 時点と異なる値になり、block-pre-commit.sh の比較で marker stale → DENY となる
+    # launch 時点と異なる値になり、block-pre-push.sh の比較で marker stale → DENY となる
     # ため、Claude は **修正後の state で再度 /simplify** を呼ぶ必要が生じる (loop 強制)。
-    # Stop event で finalize する設計も検討したが、その場合 simplify 後の codex review
-    # 修正も「simplified 済み」と誤判定される (loop discipline が崩れる) ため採用しない。
-    MARKER_NAME=".claude-pre-commit-simplified"
+    MARKER_FN=simplified_marker_path
     ;;
   Bash)
     COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
@@ -84,10 +85,7 @@ case "$TOOL_NAME" in
     # 偶発的 substring 一致でマーカーが書かれる経路を防ぐ。
     #
     # `node` の前に `FOO=bar BAZ=qux node ...` のような env-prefix が付くケースもあり得る
-    # ため、`NAME=value` 形式の代入トークンを 0 回以上許容する。 false negative
-    # (= 本来通すべき env-prefix 付き codex 起動を弾く) は永久 commit ブロックの致命経路に
-    # なるため、env-prefix は寛容に許容する (false positive は後段の companion path
-    # チェックで弾かれるので無害)。
+    # ため、`NAME=value` 形式の代入トークンを 0 回以上許容する。
     if ! printf '%s' "$COMMAND" \
       | grep -qE '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*node([[:space:]]|$)'; then
       exit 0
@@ -96,14 +94,39 @@ case "$TOOL_NAME" in
       | grep -qE 'codex-companion\.m[jt]s"?[[:space:]]+review([[:space:]]|$)'; then
       exit 0
     fi
+    # **--scope branch の明示要求**: pre-push-review は PR diff (= 委ねた branch の commit
+    # 列) のレビューを保証する目的なので、 --scope working-tree (= staged+unstaged のみ
+    # review、committed 部分を見ない) や --scope auto (= dirty 時に working-tree にフォール
+    # バックする) ではマーカーを更新しない。Claude には deny メッセージで明示的に
+    # `--scope branch` を指示しているため、未指定なら hook 側で markers を黙って更新せず、
+    # 次回 push 試行で再 deny にして loop を継続させる。
+    # `--scope branch` / `--scope=branch` の両形式を許容。`--scope branchX` のような
+    # prefix bypass を防ぐため、 branch の後ろに [[:space:]] か $ を要求する。
+    if ! printf '%s' "$COMMAND" \
+      | grep -qE -- '--scope[[:space:]=]+branch([[:space:]]|$)'; then
+      exit 0
+    fi
     # `run_in_background: true` 起動は PostToolUse 発火時点で review が完了して
-    # いないため auto-mark の対象外とする。pre-commit-review コンテキストでは
-    # `--wait` のみ許容する設計 (block-pre-commit.sh 側で deny メッセージに記載)。
+    # いないため auto-mark の対象外とする。pre-push-review コンテキストでは
+    # `--wait` のみ許容する設計 (block-pre-push.sh 側で deny メッセージに記載)。
     RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
     if [ "$RUN_IN_BG" = "true" ]; then
       exit 0
     fi
-    MARKER_NAME=".claude-pre-commit-codex-reviewed"
+    # **dirty 状態での codex マーカー書き込みを禁止**: /codex:review --scope branch は
+    # committed 部分のみを review する。 working tree が dirty (staged または unstaged 変更
+    # あり) のときに marker を書くと、ハッシュ式が「committed + uncommitted」を連結する
+    # 都合上、 後で uncommitted を commit した状態のハッシュと一致してしまうケース
+    # (例: 新規ブランチで `git diff --cached` の内容を commit すると `git diff origin/master...HEAD`
+    # と byte-for-byte 同じになる) がある。 つまり「review 時に committed=空、uncommitted=D」
+    # と「commit 後に committed=D、uncommitted=空」が同じハッシュ値になり、未レビューな commit
+    # が markers の整合性チェックを素通りする経路ができる。
+    # 対策: dirty な状態では codex marker を書かない。Claude は commit してから再 review する
+    # 必要があり、その時の marker は committed 部分のみのハッシュになるため上記混同が起きない。
+    if ! git diff --quiet 2>/dev/null || ! git diff --quiet --cached 2>/dev/null; then
+      exit 0
+    fi
+    MARKER_FN=codex_marker_path
     INCREMENT_LOOP_COUNTER=1
     ;;
   *)
@@ -113,10 +136,7 @@ esac
 
 # ツール実行が失敗 / 中断した場合はレビューが完遂していないためマーカーを更新しない
 # (失敗した review / 失敗した simplify でマーカーを書くと、その後別の tool の成功と
-# 組み合わさって commit が通ってしまう抜け穴になる)。Skill / Bash 両分岐に共通。
-# `is_error // .isError`: hook payload は snake_case が標準だが、Claude Code 側の
-# 実装揺らぎに備えて camelCase も defensive にフォールバックする。
-# 1 回の jq invocation で is_error / interrupted を同時取得する (jq 起動コスト節約)。
+# 組み合わさって push が通ってしまう抜け穴になる)。Skill / Bash 両分岐に共通。
 { read -r IS_ERROR; read -r INTERRUPTED; } < <(
   printf '%s' "$INPUT" | jq -r '
     (.tool_response.is_error // .tool_response.isError // false),
@@ -134,16 +154,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/loop-counter.sh
 source "$SCRIPT_DIR/lib/loop-counter.sh"
+# shellcheck source=lib/markers.sh
+source "$SCRIPT_DIR/lib/markers.sh"
 
-printf '%s' "$(compute_review_hash)" > "$GIT_DIR/$MARKER_NAME"
+# default branch が検出できない場合はマーカー更新を skip (block-pre-push.sh も同条件で
+# pass-through するため、整合性が保たれる)。
+BASE=$(detect_base_branch) || exit 0
 
-# /codex:review --wait の完了でループカウンタを +1。block-pre-commit.sh が閾値到達時に
-# adversarial review の案内文を deny メッセージに追加する。カウンタは <git-dir> 配下に
-# 置かれるためリポジトリ単位で共有される (ブランチ単位ではない)。commit 成功時にマーカーと
-# 一緒にリセットされるため、commit を通せば 0 起算に戻る。逆に commit 未達のまま
-# `git switch` で別ブランチに移ると、別ブランチの最初の deny でも前ブランチの累積値が
-# 反映され、閾値を跨ぐと adversarial review の案内が先んじて出ることがある (advisory
-# 用途のみで commit 強制 block には影響しない)。
+# detached HEAD などで現在ブランチが取れない場合も skip。
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+
+# default branch (master/main) では gate しない (= block-pre-push.sh も skip するため、
+# こちらでも markers を書く必要がない)。
+case "$BRANCH" in
+  master|main) exit 0 ;;
+esac
+
+# branch diff 計算失敗時は markers を書かない (block-pre-push.sh は失敗を deny に倒すため、
+# こちらでも書かないことで整合性を保つ。中途半端なハッシュ値で marker 書き込みを許すと、
+# 後続 push で誤判定の元になる)。
+if ! HASH=$(compute_review_hash "$BASE"); then
+  exit 0
+fi
+printf '%s' "$HASH" > "$("$MARKER_FN" "$GIT_DIR")"
+
+# /codex:review --wait --scope branch の完了でループカウンタを +1。block-pre-push.sh が
+# 閾値到達時に adversarial review の案内文を deny メッセージに追加する。カウンタは
+# <git-dir> 配下に置かれるためリポジトリ単位で共有される (ブランチ単位ではない)。
+# push 成功時にマーカーと一緒にリセットされるため、push を通せば 0 起算に戻る。
 if [ "$INCREMENT_LOOP_COUNTER" -eq 1 ]; then
   CURRENT=$(read_loop_count "$GIT_DIR")
   write_loop_count "$GIT_DIR" "$((CURRENT + 1))"

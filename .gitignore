@@ -1,3 +1,4 @@
 # Claude Code local-only state
+.claude/settings.json
 .claude/*.local.json
 .claude/scheduled_tasks.lock

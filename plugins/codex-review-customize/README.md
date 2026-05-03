@@ -14,7 +14,7 @@ v0.2.0
 
 ### v0.1.0 → v0.2.0 の変更点
 
-- パッチ対象に **`commands/adversarial-review.md`** (`/codex:adversarial-review`) を追加しました。`pre-commit-review` のループ閾値到達時の誘導や `post-pr-review` の PR 作成後レビューが Skill tool 経由で起動できるよう、共通の setup 動線に集約しています。
+- パッチ対象に **`commands/adversarial-review.md`** (`/codex:adversarial-review`) を追加しました。`pre-push-review` (旧 `pre-commit-review`) のループ閾値到達時の誘導や `post-pr-review` の PR 作成後レビューが Skill tool 経由で起動できるよう、共通の setup 動線に集約しています。
 
 ## なぜ「別プラグインで `/codex:review` を再定義」しないのか
 
@@ -69,5 +69,5 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 ## 関連プラグイン
 
-- [pre-commit-review](../pre-commit-review/) — `/codex:review` を強制呼び出しする運用。本プラグインを併用すると Skill 経由でレビューを取得できる。ループ閾値到達時には `/codex:adversarial-review` を促す動線も持つため、双方のパッチが必要
+- [pre-push-review](../pre-push-review/) — `/codex:review --scope branch` を強制呼び出しする運用。本プラグインを併用すると Skill 経由でレビューを取得できる。ループ閾値到達時には `/codex:adversarial-review` を促す動線も持つため、双方のパッチが必要
 - [post-pr-review](../post-pr-review/) — PR 作成後に `/codex:adversarial-review` を促す姉妹プラグイン (Skill tool 起動を本プラグインのパッチに依存)

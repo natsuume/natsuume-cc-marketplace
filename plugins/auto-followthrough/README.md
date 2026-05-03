@@ -121,7 +121,7 @@ auto-followthrough/
 ## 関連プラグイン
 
 - [git-guardrails](../git-guardrails/) — master への直接 push を禁止する。auto mode 中の暴走を構造的に止める安全網として併用推奨
-- [pre-commit-review](../pre-commit-review/) — commit 前にレビューループを強制。auto で commit に進むときも本プラグインの動作と矛盾せず、レビュー手順は引き続き機能する
+- [pre-push-review](../pre-push-review/) — push 前にレビューループを強制。auto で push に進むときも本プラグインの動作と矛盾せず、レビュー手順は引き続き機能する
 - [post-pr-review](../post-pr-review/) — PR 作成直後に adversarial review を促す。auto mode 中も本プラグインの誘導と直交して動作する
 - [update-default-branch](../update-default-branch/) — マージ完了後のデフォルトブランチ最新化を支援する Skill
 

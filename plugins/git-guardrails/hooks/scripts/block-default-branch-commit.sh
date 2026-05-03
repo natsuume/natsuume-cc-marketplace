@@ -11,7 +11,7 @@
 #   - 連結プレフィックス `xxx && git commit ...` / `cd /other && git commit ...` /
 #     `git -C dir commit ...` / `GIT_DIR=... git commit ...` のような target-mismatch
 #     経路は `has_target_mismatch_prefix` で本フック自身が deny に倒す (lib 経由の
-#     自前防御で、pre-commit-review プラグインへの依存はない)。
+#     自前防御で、pre-push-review プラグインへの依存はない)。
 #
 # detached HEAD (cherry-pick 中・rebase 中など) では通す: ブランチ名が空文字列で
 # is_default_branch は false 判定になるため、自然に exit 0 経路に流れる。
@@ -41,7 +41,7 @@ COMMAND="${COMMAND//$'\n'/;}"
 # 「git の global option (`-X` / `--long` / `--long=val`) と任意の option 引数」のみ。
 # 任意の subcommand を許容する旧 regex は `git log --grep commit` のような read-only
 # コマンドまで `git commit` と誤検出していた (`log` を中間トークンとして拾ってしまうため)。
-# pre-commit-review/block-pre-commit.sh の COMMIT_DETECT_REGEX と同じ構造に揃える。
+# pre-push-review/block-pre-push.sh の PUSH_DETECT_REGEX と同じ OPT/OPT_ARG 構造に揃える。
 #   OPT      : `-x` / `--long` / `--long=val` のような option トークン
 #   OPT_ARG  : `-` で始まらないオプション引数 (例: `-C dir` の `dir`)
 OPT='-[^[:space:];&|]+'
