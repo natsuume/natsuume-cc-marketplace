@@ -18,8 +18,13 @@
 #   - heredoc (`<<EOF ... EOF`) の body 内 quote toggle は素朴に追跡してしまう。 cooperative
 #     利用で問題は出にくい (重要判定は最終的に `bash -n` のような構文チェックでなく resolver
 #     の positive 判定で行うため)。
-#   - process substitution `<(...)` / `>(...)` の `(`/`)` は paren depth に算入される。 内部の
-#     `git push` を別 segment と見做さないため誤検出は起きないが、 segment 全体に巻き込まれる。
+#   - **command substitution `$(...)` / process substitution `<(...)` `>(...)` /
+#     backtick `` `...` `` の内部は parser から隠蔽される経路**。 これらの置換内に
+#     `git push` がある形式は block-pre-push.sh の事前 shape チェックで substring 検出して
+#     **保守的に deny** する (内部の cwd / push を本 parser では解析しないため)。 paren-based
+#     置換 `$(` `<(` `>(` は paren_depth に算入されて `;` 区切りが発火しないこともあり、
+#     内部の `git push` が segment に巻き込まれて push 検出が token level で失敗する経路が
+#     あった。 それを shape check で塞ぐ。 backtick は depth tracking していない。
 
 # split_command <cmd>
 # stdout: 行ごとに segment を出力。 segment 間には `SEP:<separator>` 行を挟む。

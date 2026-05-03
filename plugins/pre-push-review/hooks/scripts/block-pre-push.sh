@@ -133,9 +133,10 @@ EOF
 fi
 
 # 事前 shape チェック: subshell `(...)` / brace group `{...}` / shell wrapper (`bash -c` 等)
-# は本 parser が安全に解析できない形式。 これら shape 内に `push` substring を含む segment
+# / コマンド置換 `$(...)` / プロセス置換 `<(...)` `>(...)` / バッククォート `` `...` `` は
+# 本 parser が安全に解析できない形式。 これら shape 内に `push` substring を含む segment
 # を見つけたら、 push を hidden に持つ可能性があるため保守的 deny する。
-# (実 push を持たない subshell / brace / wrapper は許容する。)
+# (実 push を持たない subshell / brace / wrapper / 置換は許容する。)
 for seg in "${SEGMENTS[@]}"; do
   trimmed="${seg#"${seg%%[![:space:]]*}"}"
   trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
@@ -149,6 +150,22 @@ for seg in "${SEGMENTS[@]}"; do
 プッシュをブロックしました。 サブシェル `(...)` や ブレースグループ `{...}` 内の `git push` はサポート外です (本 parser では cwd の伝播セマンティクスを正確に解析できないため、 保守的に deny します)。
 
 直接 `git push` を実行するか、 `cd dir && git push` / `git -C dir push` 等の対応形式を使用してください。
+EOF
+)
+      deny "$REASON"
+      exit 0
+      ;;
+  esac
+  # コマンド置換 `$(...)` / プロセス置換 `<(...)` `>(...)` / バッククォート `` `...` ``
+  # は内部の cwd / push を parser から隠蔽する経路。 push substring を含むなら deny する。
+  case "$trimmed" in
+    *'$('*|*'<('*|*'>('*|*'`'*)
+      REASON=$(cat <<'EOF'
+プッシュをブロックしました。 コマンド置換 `$(...)` / プロセス置換 `<(...)` / `>(...)` / バッククォート `` `...` `` 内の `git push` はサポート外です。
+
+これらは内部の cwd や `git push` を本 parser から隠蔽する経路で、 例えば `echo $(cd /other; git push)` のようなコマンドは markers gate を素通りする bypass になり得ます。
+
+直接 `git push` を実行するか、 置換結果を変数 / ファイルに格納してから push してください。
 EOF
 )
       deny "$REASON"
