@@ -276,45 +276,28 @@ EOF
   exit 0
 fi
 
-# parallel separator deny の方針:
-#   - push の **前** に `&` または `|` がある場合は deny: 前段 cmd が push 開始後まで並走し、
-#     index / working tree を変更し得る race 経路 (例: `git commit X & git push`,
-#     `cmd | git push`)。
-#   - push の **後** の `&` (background) も deny: `git push & cmd` で git push が background、
-#     cmd が foreground で走るため、 cmd が新規 commit を作ると push がその commit を巻き込む
-#     race になる (例: `git push & git commit --allow-empty -m x`)。
-#   - push の **後** の `|` (pipeline) のみ許容: 典型ユースケース (`git push 2>&1 | tee log`)
-#     は downstream が tee / grep 等の非 mutating で race になりにくい。 完全な race-free
-#     保証ではないが、 cooperative 利用での logging / filtering 利便性を優先する判断。
-# SEPARATORS[i] は SEGMENTS[i] と SEGMENTS[i+1] の間の区切り文字。
-for sep_i in "${!SEPARATORS[@]}"; do
-  case "${SEPARATORS[$sep_i]:-}" in
+# 単独の `&` (background) や `|` (pipeline) で push 含むコマンドが連結されている場合は
+# 位置を問わず deny する。 bash は `cmd1 | cmd2` の両側を同時起動し、 `cmd & cmd2` も
+# `cmd` を background で走らせ `cmd2` を foreground で並走させるため、 hook の markers gate
+# 検証完了後に並走 cmd が index / working tree / refs を変更し得る race 経路となる
+# (例: `git push | git commit --allow-empty -m x` / `git commit X & git push`)。
+# downstream を `tee` / `grep` 等の非 mutating に絞る allowlist は parser の複雑度に対して
+# 価値が薄いため採らず、 logging / filtering は別の Bash 呼び出しか file redirection
+# (`git push > log.txt 2>&1`) で代替してもらう設計。
+# `&&` / `||` / `;` (sequential) は逐次実行で race にならず許容。
+for sep in "${SEPARATORS[@]}"; do
+  case "${sep:-}" in
     "&"|"|")
-      if [ "$sep_i" -lt "$PUSH_SEGMENT_INDEX" ]; then
-        REASON=$(cat <<'EOF'
-プッシュをブロックしました。 `git push` の **前** に単独の `&` (background) や `|` (pipeline) で連結された command が含まれています。
+      REASON=$(cat <<'EOF'
+プッシュをブロックしました。 単独の `&` (background) や `|` (pipeline) で `git push` を含むコマンドを連結する形式はサポート外です。
 
-これらは並列実行される経路で、 hook の markers gate 検証完了後にも前段 cmd が並走して index / working tree を変更し得るため、 未レビュー commit が push に巻き込まれるレース経路になります (例: `git commit X & git push` / `cmd | git push`)。
+これらの区切りは bash が両側を **同時** に起動するため、 hook の markers gate 検証完了後に並走 cmd が index / working tree / refs を変更すると、 未レビュー commit が push に巻き込まれる race 経路になります (例: `git push | git commit --allow-empty -m x` / `git commit X & git push`)。
 
-連結が必要なら `&&` (success-and) / `||` (success-or) / `;` (sequential) のような **逐次** 実行区切りを使用してください。 並列実行や stdin pipe が必要な場合は別の Bash 呼び出しに分けてください。
+連結が必要なら `&&` (success-and) / `||` (success-or) / `;` (sequential) のような **逐次** 実行区切りを使用してください。 push 出力を logging したい場合は file redirection (`git push > log.txt 2>&1`) か、 push 完了後に別の Bash 呼び出しでファイルを処理してください。
 EOF
 )
-        deny "$REASON"
-        exit 0
-      fi
-      # post-push: `&` (background) のみ deny。 `|` (pipeline) は logging 用途で許容。
-      if [ "${SEPARATORS[$sep_i]}" = "&" ]; then
-        REASON=$(cat <<'EOF'
-プッシュをブロックしました。 `git push` の **後** に単独の `&` (background) で連結された command が含まれています。
-
-`git push & cmd` のような形式では git push が background で走り、 cmd が foreground で走るため、 cmd が新規 commit 等を作ると push がその commit を巻き込んで送信する race 経路になります (例: `git push & git commit --allow-empty -m x`)。
-
-push を background で走らせたい場合は別の Bash 呼び出しに分けてください。 push の出力を logging / filtering したい場合は pipeline `|` (`git push 2>&1 | tee log.txt`) を使用してください (downstream が非 mutating な tee / grep の cooperative 前提で許容)。
-EOF
-)
-        deny "$REASON"
-        exit 0
-      fi
+      deny "$REASON"
+      exit 0
       ;;
   esac
 done
