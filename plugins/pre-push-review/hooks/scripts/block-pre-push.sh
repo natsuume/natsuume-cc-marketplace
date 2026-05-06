@@ -64,16 +64,22 @@ fi
 # 検出ロジックがこれを見落とさないよう、入力段階で空白に正規化する。
 COMMAND="${COMMAND//$'\\\n'/ }"
 
-# **redirection 構文の事前 strip**: `2>&1` / `>&N` / `<&N` / `&>file` / `&>>file` / `>file`
-# / `<file` / `<<EOF` / `<<<word` 等の shell redirection は file descriptor 操作であり、
-# 並列実行ではない。 だが cmd-parser は `&` `|` を一律 separator として扱うため、 redirection
-# に含まれる `&` を parallel separator と誤認して false-positive deny を起こす経路がある
-# (codex adversarial-review 関連指摘 + 実運用で `git push 2>&1 | tee log` 等が deny される)。
-# 並列性に関わるトークン (`&` / `|`) を保つためにも、 redirection をスペースに置換して
-# 後段の parser が並列性 only を判定できる形にする。
-# 旧 block-pre-commit.sh の sed と同形 (順序: `>&` `<&` `&>` 系を最初に拾う)。
+# **redirection 構文の事前 strip**: `2>&1` / `>&N` / `<&N` / `&>file` / `&>>file` / `<<EOF`
+# / `<<<word` 等の **`&` を含む** shell redirection は file descriptor 操作であり、 並列実行
+# ではない。 cmd-parser は `&` を一律 separator として扱うため、 これら redirection に
+# 含まれる `&` を parallel separator と誤認して false-positive deny を起こす経路がある
+# (実運用で `git push 2>&1 | tee log` 等が deny される)。 並列性に関わる token (`&` / `|`)
+# を保つために、 redirection をスペースに置換して後段の parser が並列性 only を判定できる
+# 形にする。
+#
+# **重要**: 単独の `<` / `>` は **strip しない**。 strip すると process substitution
+# `<(...)` / `>(...)` の `<` / `>` まで食ってしまい、 内部の `git push` が parser から
+# 見えなくなって critical bypass になる (codex adversarial-review 指摘)。 process 置換は
+# segment レベルの shape check で別途 deny するため、 ここでは触らない。 単独 `<file` /
+# `>file` redirection には `&` が含まれないので、 strip しなくても parallel-separator 検出に
+# 影響しない。
 COMMAND=$(printf '%s' "$COMMAND" \
-  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>|>|<)[[:space:]]*[^[:space:];&|]*/ /g')
+  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[^[:space:];&|]*/ /g')
 
 # PreToolUse の deny payload を出力する共通ヘルパ。
 deny() {
@@ -256,27 +262,45 @@ EOF
   exit 0
 fi
 
-# **push の前にある parallel separator (`&` / `|`) のみ deny**: 並走 cmd が push 開始後
-# まで動いて index / working tree を変更するレース経路を防ぐ。 push の後の `&` / `|` は
-# 後続 cmd が push 動作に影響しないため許容する (例: `git push 2>&1 | tee log` は logging
-# 用途で valid)。
-# SEPARATORS[i] は SEGMENTS[i] と SEGMENTS[i+1] の間の区切り文字。 push segment の index
-# 未満の SEPARATORS に `&` / `|` が含まれていれば deny。
-for ((sep_i=0; sep_i < PUSH_SEGMENT_INDEX; sep_i++)); do
+# **parallel separator deny の方針**:
+#   - push の **前** に `&` または `|` がある場合は deny: 前段 cmd が push 開始後まで並走し、
+#     index / working tree を変更し得る race 経路 (例: `git commit X & git push`,
+#     `cmd | git push`)。
+#   - push の **後** の `&` (background) も deny: bash で `git push & cmd` だと git push が
+#     background で走り、 cmd が foreground で走る → cmd が新規 commit 等の repo state を
+#     変更すると push が新 commit を巻き込む race (codex adversarial-review 指摘)。
+#   - push の **後** の `|` (pipeline) のみ許容: 典型ユースケース (`git push 2>&1 | tee log`)
+#     は downstream が tee / grep 等の非 mutating で race になりにくい。 完全な race-free
+#     保証ではないが、 cooperative 利用での logging / filtering 利便性を優先する判断。
+# SEPARATORS[i] は SEGMENTS[i] と SEGMENTS[i+1] の間の区切り文字。
+for sep_i in "${!SEPARATORS[@]}"; do
   case "${SEPARATORS[$sep_i]:-}" in
     "&"|"|")
-      REASON=$(cat <<'EOF'
+      if [ "$sep_i" -lt "$PUSH_SEGMENT_INDEX" ]; then
+        REASON=$(cat <<'EOF'
 プッシュをブロックしました。 `git push` の **前** に単独の `&` (background) や `|` (pipeline) で連結された command が含まれています。
 
 これらは並列実行される経路で、 hook の markers gate 検証完了後にも前段 cmd が並走して index / working tree を変更し得るため、 未レビュー commit が push に巻き込まれるレース経路になります (例: `git commit X & git push` / `cmd | git push`)。
 
 連結が必要なら `&&` (success-and) / `||` (success-or) / `;` (sequential) のような **逐次** 実行区切りを使用してください。 並列実行や stdin pipe が必要な場合は別の Bash 呼び出しに分けてください。
-
-(注: `git push` の **後** に続く `&` / `|` は許容します。 例: `git push 2>&1 | tee log.txt` のような logging / filtering は race の元にならないため。)
 EOF
 )
-      deny "$REASON"
-      exit 0
+        deny "$REASON"
+        exit 0
+      fi
+      # post-push: `&` (background) のみ deny。 `|` (pipeline) は logging 用途で許容。
+      if [ "${SEPARATORS[$sep_i]}" = "&" ]; then
+        REASON=$(cat <<'EOF'
+プッシュをブロックしました。 `git push` の **後** に単独の `&` (background) で連結された command が含まれています。
+
+`git push & cmd` のような形式では git push が background で走り、 cmd が foreground で走るため、 cmd が新規 commit 等を作ると push がその commit を巻き込んで送信する race 経路になります (例: `git push & git commit --allow-empty -m x`)。
+
+push を background で走らせたい場合は別の Bash 呼び出しに分けてください。 push の出力を logging / filtering したい場合は pipeline `|` (`git push 2>&1 | tee log.txt`) を使用してください (downstream が非 mutating な tee / grep の cooperative 前提で許容)。
+EOF
+)
+        deny "$REASON"
+        exit 0
+      fi
       ;;
   esac
 done
