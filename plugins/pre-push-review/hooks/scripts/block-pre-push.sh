@@ -453,12 +453,37 @@ for tok in "${PUSH_TOKENS[@]}"; do
     continue
   fi
   REFSPEC_COUNT=$((REFSPEC_COUNT+1))
-  # source 部分 (`:`の左側) を取り出して `+` / `refs/heads/` を剥がし current branch と比較。
-  src="${t#+}"
-  src="${src#refs/heads/}"
-  case "$src" in
-    *:*) src="${src%%:*}" ;;
+  # `+` / `refs/heads/` を剥がし、 source / destination を `:` で分離する。
+  raw="${t#+}"
+  case "$raw" in
+    *:*)
+      src="${raw%%:*}"
+      dst="${raw#*:}"
+      ;;
+    *)
+      src="$raw"
+      dst=""
+      ;;
   esac
+  src="${src#refs/heads/}"
+  dst_norm="${dst#refs/heads/}"
+  # destination が指定されており、 かつ現在ブランチと一致しない場合は deny。
+  # `git push origin HEAD:main` のような destination override で reviewed branch の commit を
+  # 別 ref (例: default branch) に投影する経路を防ぐ。 destination 省略 (= source と同名で
+  # push) や `:branch` (source 空 = remote 削除) は既存ロジックで処理する。
+  if [ -n "$dst" ] && [ "$dst_norm" != "$BRANCH" ] && [ "$dst_norm" != "HEAD" ]; then
+    REASON=$(cat <<EOF
+プッシュをブロックしました。 push 引数の refspec \`${t}\` で source (\`${src:-空}\`) と destination (\`${dst_norm}\`) が異なる形式 (= destination override) はサポート外です。
+
+このプラグインは現在ブランチ (\`${BRANCH}\`) の差分でレビューマーカーを検証するため、 別 ref (例: default branch / 別ブランチ) を destination に指定する形は、 現在ブランチのマーカーで未レビューな別 ref に commit を投影してしまう経路になります (例: \`git push origin HEAD:main\` で reviewed feature を default branch に直接送り込む形)。
+
+destination を現在ブランチと同名に揃えるか、 destination を省略してください:
+  - \`git push\` / \`git push origin\` / \`git push origin HEAD\` / \`git push origin ${BRANCH}\`
+EOF
+)
+    deny "$REASON"
+    exit 0
+  fi
   # `:dest` (source 空) は remote ブランチの削除なのでローカルレビュー対象外、許容。
   [ -z "$src" ] && continue
   if [ "$src" = "HEAD" ] || [ "$src" = "$BRANCH" ]; then
