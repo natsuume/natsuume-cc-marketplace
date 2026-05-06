@@ -64,7 +64,6 @@ fi
 # 検出ロジックがこれを見落とさないよう、入力段階で空白に正規化する。
 COMMAND="${COMMAND//$'\\\n'/ }"
 
-# PreToolUse の deny payload を出力する共通ヘルパ。
 deny() {
   jq -n --arg reason "$1" '{
     hookSpecificOutput: {
