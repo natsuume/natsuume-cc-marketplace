@@ -399,10 +399,7 @@ case "$BRANCH" in
 esac
 
 # default branch を target cwd で解決。 deletion-only / tag-only push は BASE 不要のため、
-# ここでは取得のみして empty 許容。 commit を送る real push に到達した時点で BASE 必須に
-# なるため、 fail-closed deny は compute_review_hash_in 直前で行う (codex review P2 指摘:
-# BASE 未解決環境で `git push --delete branch` / `git push origin v1.0.0` 等まで巻き込み
-# deny していた regression を回避)。
+# ここでは取得のみして empty 許容。 fail-closed deny は real push の hash 計算直前で行う。
 BASE=$(detect_base_branch "$TARGET_CWD") || BASE=""
 
 # refspec / オプションを再走査して deny 判定を行う。
