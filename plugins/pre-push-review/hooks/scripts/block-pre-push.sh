@@ -64,6 +64,17 @@ fi
 # 検出ロジックがこれを見落とさないよう、入力段階で空白に正規化する。
 COMMAND="${COMMAND//$'\\\n'/ }"
 
+# **redirection 構文の事前 strip**: `2>&1` / `>&N` / `<&N` / `&>file` / `&>>file` / `>file`
+# / `<file` / `<<EOF` / `<<<word` 等の shell redirection は file descriptor 操作であり、
+# 並列実行ではない。 だが cmd-parser は `&` `|` を一律 separator として扱うため、 redirection
+# に含まれる `&` を parallel separator と誤認して false-positive deny を起こす経路がある
+# (codex adversarial-review 関連指摘 + 実運用で `git push 2>&1 | tee log` 等が deny される)。
+# 並列性に関わるトークン (`&` / `|`) を保つためにも、 redirection をスペースに置換して
+# 後段の parser が並列性 only を判定できる形にする。
+# 旧 block-pre-commit.sh の sed と同形 (順序: `>&` `<&` `&>` 系を最初に拾う)。
+COMMAND=$(printf '%s' "$COMMAND" \
+  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>|>|<)[[:space:]]*[^[:space:];&|]*/ /g')
+
 # PreToolUse の deny payload を出力する共通ヘルパ。
 deny() {
   jq -n --arg reason "$1" '{
@@ -94,43 +105,22 @@ source "$SCRIPT_DIR/lib/markers.sh"
 # 1 push command per Bash invocation を前提にする (= 同一コマンド内に複数 push があると
 # 1 マーカー = 1 push 保証が崩れるため deny)。
 #
-# 加えて、 単独の `&` (background) と `|` (pipeline) は **並列実行** であり、 markers gate
-# 検証完了後に index / working tree が並行変更される経路になる (例:
-# `git commit X & git push` で push 確認後に新規 unreviewed commit が作られて push に
-# 巻き込まれる、 もしくは `cmd | git push` で stdin 経由で push に状態が流れ込む)。
-# `&&` / `||` / `;` のみ許容し、 単独の `&` / `|` を分離区切りに含むコマンドは deny する。
+# 加えて、 push の **前** にある単独の `&` (background) や `|` (pipeline) は **並列実行**
+# となり、 markers gate 検証完了後に index / working tree が並行変更される経路になる (例:
+# `git commit X & git push` で push 開始後に新規 unreviewed commit が作られて push に
+# 巻き込まれる)。 push の **後** に置く `&` / `|` (例: `git push 2>&1 | tee log`) は後続
+# command が push 動作に影響しないため許容する (race の元にならない)。
+# `&&` / `||` / `;` は逐次実行なので位置に関わらず許容。
 SEGMENTS=()
-HAS_PARALLEL_SEPARATOR=0
+SEPARATORS=()
+SEP_INDEX=0
 while IFS= read -r line; do
   if [[ "$line" == SEP:* ]]; then
-    case "$line" in
-      "SEP:&"|"SEP:|") HAS_PARALLEL_SEPARATOR=1 ;;
-    esac
+    SEPARATORS+=("${line#SEP:}")
     continue
   fi
   SEGMENTS+=("$line")
 done < <(split_command "$COMMAND")
-
-# 単独 `&` / `|` を含み、かつ どこかの segment が push を含む可能性がある場合のみ deny。
-# (parallel separator 自体は無関係なコマンドでも合法なので、 push の文脈に限定する。)
-if [ "$HAS_PARALLEL_SEPARATOR" -eq 1 ]; then
-  for seg in "${SEGMENTS[@]}"; do
-    case "$seg" in
-      *push*)
-        REASON=$(cat <<'EOF'
-プッシュをブロックしました。 単独の `&` (background) や `|` (pipeline) で `git push` を含むコマンドを連結する形式はサポート外です。
-
-これらの区切りはコマンドを並列実行するため、 レビューマーカー検証完了後に index / working tree が並行変更され、 未レビュー commit が push に巻き込まれる経路になります (例: `git commit X & git push` / `cmd | git push`)。
-
-連結が必要なら `&&` (success-and) / `||` (success-or) / `;` (sequential) を使用してください。 並列実行や pager 接続が必要な場合は別の Bash 呼び出しに分けてください。
-EOF
-)
-        deny "$REASON"
-        exit 0
-        ;;
-    esac
-  done
-fi
 
 # 事前 shape チェック: subshell `(...)` / brace group `{...}` / shell wrapper (`bash -c` 等)
 # / コマンド置換 `$(...)` / プロセス置換 `<(...)` `>(...)` / バッククォート `` `...` `` は
@@ -266,6 +256,31 @@ EOF
   exit 0
 fi
 
+# **push の前にある parallel separator (`&` / `|`) のみ deny**: 並走 cmd が push 開始後
+# まで動いて index / working tree を変更するレース経路を防ぐ。 push の後の `&` / `|` は
+# 後続 cmd が push 動作に影響しないため許容する (例: `git push 2>&1 | tee log` は logging
+# 用途で valid)。
+# SEPARATORS[i] は SEGMENTS[i] と SEGMENTS[i+1] の間の区切り文字。 push segment の index
+# 未満の SEPARATORS に `&` / `|` が含まれていれば deny。
+for ((sep_i=0; sep_i < PUSH_SEGMENT_INDEX; sep_i++)); do
+  case "${SEPARATORS[$sep_i]:-}" in
+    "&"|"|")
+      REASON=$(cat <<'EOF'
+プッシュをブロックしました。 `git push` の **前** に単独の `&` (background) や `|` (pipeline) で連結された command が含まれています。
+
+これらは並列実行される経路で、 hook の markers gate 検証完了後にも前段 cmd が並走して index / working tree を変更し得るため、 未レビュー commit が push に巻き込まれるレース経路になります (例: `git commit X & git push` / `cmd | git push`)。
+
+連結が必要なら `&&` (success-and) / `||` (success-or) / `;` (sequential) のような **逐次** 実行区切りを使用してください。 並列実行や stdin pipe が必要な場合は別の Bash 呼び出しに分けてください。
+
+(注: `git push` の **後** に続く `&` / `|` は許容します。 例: `git push 2>&1 | tee log.txt` のような logging / filtering は race の元にならないため。)
+EOF
+)
+      deny "$REASON"
+      exit 0
+      ;;
+  esac
+done
+
 # `git push --help` (もしくは `-h`) ならスキップ。
 declare -a PUSH_TOKENS
 tokenize_segment "$PUSH_SEGMENT" PUSH_TOKENS
@@ -372,7 +387,27 @@ if [ -z "$BASE" ]; then
     fi
   done
 fi
-[ -z "$BASE" ] && exit 0
+
+# **fail-closed**: base branch が解決できない環境 (origin/HEAD 未設定 / 非 origin remote /
+# default branch が master/main 以外) で silent に exit 0 すると、 markers gate が **黙って
+# 無効化** される (codex adversarial-review P1 指摘)。 silent install 失敗を防ぐため、
+# 解決不能なら明示 deny して setup を促す。
+if [ -z "$BASE" ]; then
+  REASON=$(cat <<EOF
+プッシュをブロックしました。 target (\`${TARGET_CWD}\`) の default branch が解決できません。
+
+本プラグインは branch 全差分のレビュー検証に default branch (origin/HEAD or origin/master / origin/main) を必要とします。 以下のいずれかを設定してください:
+
+  - \`git -C ${TARGET_CWD} remote set-head origin --auto\` で origin/HEAD を自動設定
+  - \`git -C ${TARGET_CWD} remote set-head origin <branch-name>\` で明示設定 (例: develop)
+  - origin remote が無い場合は \`git -C ${TARGET_CWD} remote add origin <url>\` で追加
+
+設定後に再度 \`git push\` を試してください。
+EOF
+)
+  deny "$REASON"
+  exit 0
+fi
 
 # refspec / オプションを再走査して deny 判定を行う。
 HAS_DELETE_FLAG=0
@@ -445,9 +480,27 @@ for tok in "${PUSH_TOKENS[@]}"; do
   if [ "$HAS_DELETE_FLAG" -eq 1 ]; then
     continue
   fi
-  # 個別 tag push は cooperative 前提で許容 (HAS_REAL_PUSH を立てない = gate skip 対象)。
-  if git -C "$TARGET_CWD" rev-parse --verify --quiet "refs/tags/$src" >/dev/null 2>&1; then
-    continue
+  # 個別 tag push: tag が指す commit を peel し、 現在ブランチ (HEAD) から reachable
+  # である場合のみ許容 (HAS_REAL_PUSH は立てない = markers gate skip 対象)。 reachable で
+  # ない tag (= 別ブランチや未レビュー commit を指す tag) を push すると、 git は tag が
+  # 指す commit object を remote に転送するため、 未レビュー commit が remote に到達する
+  # 経路になる (codex adversarial-review P1 指摘)。
+  if TAG_COMMIT=$(git -C "$TARGET_CWD" rev-parse --verify --quiet "refs/tags/$src^{commit}" 2>/dev/null); then
+    if git -C "$TARGET_CWD" merge-base --is-ancestor "$TAG_COMMIT" HEAD 2>/dev/null; then
+      continue  # tag commit は HEAD から reachable = 現在ブランチ上の commit、 既にレビュー対象
+    fi
+    REASON=$(cat <<EOF
+プッシュをブロックしました。 tag \`${src}\` が指す commit (\`${TAG_COMMIT}\`) が現在ブランチ (\`${BRANCH}\`) の HEAD から reachable ではありません。
+
+tag を push すると git は tag が指す commit object を remote に転送するため、 別ブランチ / 未レビュー commit を指す tag は markers gate を素通りして未レビュー commit を remote に到達させる経路になります。
+
+対応:
+  - tag が指す commit を含むブランチに \`git switch\` で切り替えてから tag を push
+  - もしくは現在ブランチの HEAD を含む形で tag を再作成: \`git tag -f ${src} HEAD\` (force tag)
+EOF
+)
+    deny "$REASON"
+    exit 0
   fi
   REASON=$(cat <<EOF
 プッシュをブロックしました。push 引数の refspec \`${t}\` が現在ブランチ (\`${BRANCH}\`) と一致していません。

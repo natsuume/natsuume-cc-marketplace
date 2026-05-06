@@ -6,7 +6,16 @@
 
 ## バージョン
 
-v0.1.0 (前身: `pre-commit-review` v0.4.0)
+v0.2.0 (前身: `pre-commit-review` v0.4.0)
+
+### v0.1.0 → v0.2.0 の変更点
+
+codex adversarial-review の指摘を踏まえた gate の精緻化:
+
+- **tag-only push の reachability check**: `git push origin <tag>` で tag が指す commit が現在ブランチ HEAD から reachable でない場合 deny。 旧版は blanket-skip だったため別ブランチの未レビュー commit を tag 経由で push できた経路を塞いだ
+- **default branch 解決失敗時に fail-closed**: `origin/HEAD` 未設定 / 非 origin remote / default が master/main 以外の環境で旧版は silent に exit 0 = gate 無効化していた。 v0.2.0 は明示 deny して setup を促す
+- **redirection 構文を parser 前段で strip**: `git push 2>&1`, `git push 2>&1 | tee log.txt` 等の logging パターンが `&` を含むため誤って parallel-separator deny に倒れていた。 v0.2.0 は `2>&1` / `>&N` / `<&N` / `&>file` 等を sed で事前 strip して redirection と並列性を切り分ける
+- **parallel separator deny を push 前のみに narrow**: 旧版は `&` / `|` がコマンド内のどこにあっても deny していた。 v0.2.0 は **push の前** にある parallel separator のみ deny (race の元になるため)、 **push の後** の `&` / `|` は許容 (logging / filtering 等の race-free 用途)
 
 ## 前身プラグインからの設計変更
 
