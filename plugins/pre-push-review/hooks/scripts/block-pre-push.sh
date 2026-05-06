@@ -213,8 +213,6 @@ done
 
 PUSH_SEGMENT=""
 PUSH_SEGMENT_COUNT=0
-PUSH_SEGMENT_INDEX=-1
-i=0
 for line in "${SEGMENTS[@]}"; do
   # token level で `git ... push` を確認 (text reference を排除)
   declare -a _toks
@@ -245,8 +243,7 @@ for line in "${SEGMENTS[@]}"; do
           -*) _idx=$((_idx+1)); continue ;;
           push)
             PUSH_SEGMENT_COUNT=$((PUSH_SEGMENT_COUNT+1))
-            if [ "$PUSH_SEGMENT_INDEX" -lt 0 ]; then
-              PUSH_SEGMENT_INDEX=$i
+            if [ -z "$PUSH_SEGMENT" ]; then
               PUSH_SEGMENT="$line"
             fi
             break ;;
@@ -256,7 +253,6 @@ for line in "${SEGMENTS[@]}"; do
     fi
   fi
   unset _toks
-  i=$((i+1))
 done
 
 # `git push` を一つも含まないなら本 hook 対象外。
@@ -286,7 +282,7 @@ fi
 # (`git push > log.txt 2>&1`) で代替してもらう設計。
 # `&&` / `||` / `;` (sequential) は逐次実行で race にならず許容。
 for sep in "${SEPARATORS[@]}"; do
-  case "${sep:-}" in
+  case "$sep" in
     "&"|"|")
       REASON=$(cat <<'EOF'
 プッシュをブロックしました。 単独の `&` (background) や `|` (pipeline) で `git push` を含むコマンドを連結する形式はサポート外です。
