@@ -443,7 +443,15 @@ for tok in "${PUSH_TOKENS[@]}"; do
       *) continue ;;
     esac
   fi
-  # push のオプションを skip (`-u`, `--force`, `--delete` 等)。
+  # push の `--repo=<repo>` / `--repo <repo>` は remote を option 経由で指定する形式。
+  # 後続の非オプション token は **refspec** として扱う必要があるため、 SAW_REMOTE=1 に
+  # 倒して以降を refspec としてパースする (こうしないと `git push --repo=origin HEAD:main`
+  # が refspec を remote 名として食って destination-override check を素通りする)。
+  case "$t" in
+    --repo=*) SAW_REMOTE=1; continue ;;
+    --repo) _SKIP_NEXT=1; SAW_REMOTE=1; continue ;;
+  esac
+  # その他 push のオプションを skip (`-u`, `--force`, `--delete` 等)。
   case "$t" in
     -*) continue ;;
   esac
