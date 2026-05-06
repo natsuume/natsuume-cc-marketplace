@@ -99,15 +99,15 @@ esac
 # 別途 segment shape check で deny する。 単独 `<file` / `>file` には `&` が含まれず、
 # parallel-separator 検出にも影響しない。
 #
-# trailing 文字クラスから `(` `)` `$` `` ` `` `<` `>` を除外: redirection 後に置かれた
-# substitution shape (`$(...)` / `` `...` `` / `<(...)` 等) を sed が食うと、 後段の segment
-# shape check が `*$('` / `*'<('` / 連続バッククォート を検出できず critical bypass になる
-# (`cat <<<$(git push)` / `cat <&$(git push)` / `cat <<<\`git push\`` で hidden push を経由
-# できてしまう)。 これら特殊文字を redirection target の filename クラスから除いて生かして
-# おくと、 残存した shape 文字に対して segment shape check が deny に倒せる。 通常 filename
-# (alnum / `.` / `/` / `-` / `_` 等) には影響しない。
+# trailing 文字クラスは「filename-safe な文字」のみ許容する positive-list を取る。 redirection
+# target に substitution shape (`$(...)` / `` `...` `` / `<(...)` / `(...)`) や quote / brace 等
+# 通常 filename に現れない文字が混ざった時点で sed が触らず、 残存した特殊文字に対して segment
+# shape check が deny に倒せる。 negative-list (= 除外文字を列挙) では新しい bypass shape
+# (例: `cat <<<$(git push)` / `cat <<<\`git push\``) を見つけるたびに除外を増やす後手対応に
+# なるため、 攻撃面を絞れる positive-list を採用。 想定する filename 文字は alnum + `.` `/`
+# `_` `-` `=` `+` `@` `:` で日常的なログファイル名・パス・heredoc terminator を覆う。
 COMMAND=$(printf '%s' "$COMMAND" \
-  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[^[:space:];&|()$<>`]*/ /g')
+  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/cmd-parser.sh
