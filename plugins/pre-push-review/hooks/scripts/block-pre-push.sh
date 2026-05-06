@@ -136,7 +136,6 @@ source "$SCRIPT_DIR/lib/markers.sh"
 # `&&` / `||` / `;` は逐次実行なので位置に関わらず許容。
 SEGMENTS=()
 SEPARATORS=()
-SEP_INDEX=0
 while IFS= read -r line; do
   if [[ "$line" == SEP:* ]]; then
     SEPARATORS+=("${line#SEP:}")
@@ -279,6 +278,18 @@ EOF
   exit 0
 fi
 
+# `--help` / `-h` / `--dry-run` / `-n` は実 push を起こさず race 経路を作らないため、
+# parallel separator deny より前に skip 判定する (`git push --help | less` のような
+# pager 経由形式が parallel-sep で誤って deny されないように)。
+declare -a PUSH_TOKENS
+tokenize_segment "$PUSH_SEGMENT" PUSH_TOKENS
+for tok in "${PUSH_TOKENS[@]}"; do
+  t="$(unquote_token "$tok")"
+  case "$t" in
+    -h|--help|--dry-run|-n) exit 0 ;;
+  esac
+done
+
 # 単独の `&` (background) や `|` (pipeline) で push 含むコマンドが連結されている場合は
 # 位置を問わず deny する。 bash は `cmd1 | cmd2` の両側を同時起動し、 `cmd & cmd2` も
 # `cmd` を background で走らせ `cmd2` を foreground で並走させるため、 hook の markers gate
@@ -304,32 +315,6 @@ EOF
       ;;
   esac
 done
-
-# `git push --help` (もしくは `-h`) ならスキップ。
-declare -a PUSH_TOKENS
-tokenize_segment "$PUSH_SEGMENT" PUSH_TOKENS
-PUSH_HAS_HELP=0
-for tok in "${PUSH_TOKENS[@]}"; do
-  t="$(unquote_token "$tok")"
-  case "$t" in
-    -h|--help) PUSH_HAS_HELP=1; break ;;
-  esac
-done
-if [ "$PUSH_HAS_HELP" -eq 1 ]; then
-  exit 0
-fi
-
-# `--dry-run` / `-n` push は remote ref を更新しない。 markers の状態に関わらず通す。
-PUSH_HAS_DRY_RUN=0
-for tok in "${PUSH_TOKENS[@]}"; do
-  t="$(unquote_token "$tok")"
-  case "$t" in
-    --dry-run|-n) PUSH_HAS_DRY_RUN=1; break ;;
-  esac
-done
-if [ "$PUSH_HAS_DRY_RUN" -eq 1 ]; then
-  exit 0
-fi
 
 # `--all` / `--mirror` / `--tags` は複数参照の一括 push でマーカー検証対象外のコミットが
 # 混入する。
