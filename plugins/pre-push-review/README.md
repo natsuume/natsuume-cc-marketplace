@@ -95,7 +95,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
   - `git push` / `git push origin` / `git push origin HEAD` / `git push -u origin <現在ブランチ名>` は引き続き許容 (いずれも現在ブランチを push する形)
   - `git push origin :branch` (削除、source 空) はローカルレビュー対象外なので許容
   - `git push --delete origin <branch>` / `git push -d origin <branch>` (削除フラグ) は新規 commit を送らないので許容
-  - `git push origin <tag-name>` (個別 tag push) は 2 段階の reachability check で扱う。 tag が HEAD から reachable で、 かつ origin/&lt;base&gt; からも reachable (= 既に remote に到達済 = 過去の review を経ている) なら markers gate を skip。 HEAD から reachable だが origin/&lt;base&gt; から未到達なら通常の real push 扱い (markers gate 要求)。 HEAD から reachable でなければ deny
+  - `git push origin <tag-name>` (個別 tag push) は 2 段階の reachability check で扱う。 tag が HEAD から reachable で、 かつ origin/<base> からも reachable (= 既に remote に到達済 = 過去の review を経ている) なら markers gate を skip。 HEAD から reachable だが origin/<base> から未到達なら通常の real push 扱い (markers gate 要求)。 HEAD から reachable でなければ deny
 - **working tree が dirty (staged または unstaged 変更あり) のまま push** は deny (push される committed 部分とレビューされた working tree の乖離を防ぐ。`git status` で変更を確認 → `git add` / `git commit` してから再 review → push)
 - **`git config push.default=matching` 環境での refspec 省略 push** は deny (`matching` モードでは bare push が複数ブランチを一括送信するため、現在ブランチ以外の未レビュー commit が gate を素通りする。`git push origin HEAD` で明示するか、`git config push.default simple` に変更する運用)
   - 現代の git デフォルト (`simple`, 2014 年以降) では bare push は現在ブランチのみ送るため影響なし。明示的に `matching` を設定している環境のみ deny する
@@ -105,7 +105,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 - 別端末・別 clone から行われる `git push` は Claude Code hook の原理的範囲外で gate できない (本気で塞ぐなら `.git/hooks/pre-push` real git hook を別レイヤーで併設)
 - GitHub サーバ側で実施される操作 (Web UI のマージ / rebase 等) も Claude Code hook 範囲外
 - **default branch (master/main) 上での push は本プラグイン単独では gate されない**: 本プラグインは `git-guardrails` の `block-default-branch-push.sh` が default branch push を deny する前提で gate を skip する。 `git-guardrails` を併用していない環境では default branch 上の push が review なしで通る経路が残る。 default branch 保護を確実にしたい場合は `git-guardrails` を必ず併用すること
-- **個別 tag push の reachability check**: `git push origin <tag-name>` は tag が指す commit が HEAD から reachable かつ origin/&lt;base&gt; からも reachable な場合に限り markers gate を skip する。 origin/&lt;base&gt; から未到達な (= 現在ブランチに固有の) commit を指す tag は markers gate を要求し、 別ブランチの commit を指す tag は deny する
+- **個別 tag push の reachability check**: `git push origin <tag-name>` は tag が指す commit が HEAD から reachable かつ origin/<base> からも reachable な場合に限り markers gate を skip する。 origin/<base> から未到達な (= 現在ブランチに固有の) commit を指す tag は markers gate を要求し、 別ブランチの commit を指す tag は deny する
 
 > **target-mismatch の構造的解決**: 本プラグインは独自の bash command parser (`lib/cmd-parser.sh`) と target resolver (`lib/target-resolver.sh`) で `cd dir && git push` / `git -C dir push` / `GIT_DIR=path/.git git push` の **実 push target を決定的に解決** し、 解決した target cwd の `.git` 配下に対して markers / hash 比較を行う。 「hook 検証時の cwd と実 push 時の cwd が乖離」する旧来の問題は、 positive list 設計 (実 target を取り出して直接検証) によって構造的に塞がれている。 解析不能な形式 (subshell `(...)`, brace group `{...}`, `bash -c "..."`, `pushd`/`popd`, `export GIT_DIR=...`, `--work-tree=...`, `time` / `env` 等の未対応 wrapper) は **保守的に deny** する (parser が target を確定できないため)。
 
