@@ -100,10 +100,9 @@ case "$TOOL_NAME" in
     # バックする) ではマーカーを更新しない。Claude には deny メッセージで明示的に
     # `--scope branch` を指示しているため、未指定なら hook 側で markers を黙って更新せず、
     # 次回 push 試行で再 deny にして loop を継続させる。
-    # `--scope branch` / `--scope=branch` の両形式を許容。 Skill 経由の codex companion 呼び
-    # 出しは args を `"--wait --scope branch"` のように quote で括られた単一文字列で渡すため、
-    # branch の直後が `"` / `'` / `[[:space:]]` / 行末いずれでも match する必要がある。
-    # `branch` の後ろに英数字 (= prefix bypass `branchX` 防止) でない文字または行末を要求する。
+    # `--scope branch` / `--scope=branch` を match させつつ、 `branchX` 等の prefix bypass を
+    # 拒否する (英数字で続く場合は不一致)。 trailing 文字を「英数字以外 / 行末」に取る形だと
+    # 引用符・空白・記号いずれの区切りも自然に許容される。
     if ! printf '%s' "$COMMAND" \
       | grep -qE -- '--scope[[:space:]=]+branch([^A-Za-z0-9]|$)'; then
       exit 0
