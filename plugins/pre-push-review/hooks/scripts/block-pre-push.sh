@@ -470,16 +470,16 @@ for tok in "${PUSH_TOKENS[@]}"; do
   if [ "$HAS_DELETE_FLAG" -eq 1 ]; then
     continue
   fi
-  # 個別 tag push: tag が指す commit を peel し、 現在ブランチ (HEAD) から reachable
-  # である場合のみ許容 (HAS_REAL_PUSH は立てない = markers gate skip 対象)。 reachable で
-  # ない tag (= 別ブランチや未レビュー commit を指す tag) を push すると、 git は tag が
-  # 指す commit object を remote に転送するため、 未レビュー commit が remote に到達する
-  # bypass 経路になる。
+  # 個別 tag push: tag を peel して 2 段階の reachability check を行う。
+  # 1. HEAD から reachable でなければ別ブランチ / 任意 commit を指す tag = deny
+  # 2. HEAD から reachable でも、 origin/<base> から既に reachable (= remote に到達済 = 過去
+  #    の review を経ている) でなければ「現在ブランチの未レビュー commit に tag を打って
+  #    push」 経路になるため、 通常の real push と同じ扱いにして markers gate を要求する
+  #    (HAS_REAL_PUSH=1)。 origin/<base> から既に reachable な tag は remote 上の commit を
+  #    指すだけなので skip 安全。
   if TAG_COMMIT=$(git -C "$TARGET_CWD" rev-parse --verify --quiet "refs/tags/$src^{commit}" 2>/dev/null); then
-    if git -C "$TARGET_CWD" merge-base --is-ancestor "$TAG_COMMIT" HEAD 2>/dev/null; then
-      continue  # tag commit は HEAD から reachable = 現在ブランチ上の commit、 既にレビュー対象
-    fi
-    REASON=$(cat <<EOF
+    if ! git -C "$TARGET_CWD" merge-base --is-ancestor "$TAG_COMMIT" HEAD 2>/dev/null; then
+      REASON=$(cat <<EOF
 プッシュをブロックしました。 tag \`${src}\` が指す commit (\`${TAG_COMMIT}\`) が現在ブランチ (\`${BRANCH}\`) の HEAD から reachable ではありません。
 
 tag を push すると git は tag が指す commit object を remote に転送するため、 別ブランチ / 未レビュー commit を指す tag は markers gate を素通りして未レビュー commit を remote に到達させる経路になります。
@@ -489,8 +489,17 @@ tag を push すると git は tag が指す commit object を remote に転送�
   - もしくは現在ブランチの HEAD を含む形で tag を再作成: \`git tag -f ${src} HEAD\` (force tag)
 EOF
 )
-    deny "$REASON"
-    exit 0
+      deny "$REASON"
+      exit 0
+    fi
+    # tag が origin/<base> 側にも到達済なら markers skip 安全 (= 既に review 経由で remote
+    # に到達した commit を指している)。 そうでなければ現在ブランチの未レビュー commit を
+    # 指す可能性があるため real push 扱いにして markers gate を回す。
+    if [ -n "$BASE" ] && git -C "$TARGET_CWD" merge-base --is-ancestor "$TAG_COMMIT" "origin/$BASE" 2>/dev/null; then
+      continue
+    fi
+    HAS_REAL_PUSH=1
+    continue
   fi
   REASON=$(cat <<EOF
 プッシュをブロックしました。push 引数の refspec \`${t}\` が現在ブランチ (\`${BRANCH}\`) と一致していません。
