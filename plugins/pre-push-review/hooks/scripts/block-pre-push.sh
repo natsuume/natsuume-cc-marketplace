@@ -478,8 +478,8 @@ for tok in "${PUSH_TOKENS[@]}"; do
   # destination が指定されており、 かつ現在ブランチと一致しない場合は deny。
   # `git push origin HEAD:main` のような destination override で reviewed branch の commit を
   # 別 ref (例: default branch) に投影する経路を防ぐ。 destination 省略 (= source と同名で
-  # push) や `:branch` (source 空 = remote 削除) は既存ロジックで処理する。
-  if [ -n "$dst" ] && [ "$dst_norm" != "$BRANCH" ] && [ "$dst_norm" != "HEAD" ]; then
+  # push) や `:branch` (source 空 = remote 削除、 後続で許容) は対象外。
+  if [ -n "$src" ] && [ -n "$dst" ] && [ "$dst_norm" != "$BRANCH" ] && [ "$dst_norm" != "HEAD" ]; then
     REASON=$(cat <<EOF
 プッシュをブロックしました。 push 引数の refspec \`${t}\` で source (\`${src:-空}\`) と destination (\`${dst_norm}\`) が異なる形式 (= destination override) はサポート外です。
 
