@@ -99,12 +99,15 @@ esac
 # 別途 segment shape check で deny する。 単独 `<file` / `>file` には `&` が含まれず、
 # parallel-separator 検出にも影響しない。
 #
-# 文字クラスに `(` `)` を除外: `>>(...)` / `<<(...)` / `<<<(...)` (bash 自体は syntax error
-# だが、 hook 側で sed が `(git push)` 部分を食うと、 仮に shell 互換層で実行できる環境が
-# 存在した場合に shape check 不能の経路ができる)。 paren を残すと shape check (`*push*` を
-# 含む segment が `(...` で始まれば subshell deny) に処理が回る。
+# trailing 文字クラスから `(` `)` `$` `` ` `` `<` `>` を除外: redirection 後に置かれた
+# substitution shape (`$(...)` / `` `...` `` / `<(...)` 等) を sed が食うと、 後段の segment
+# shape check が `*$('` / `*'<('` / 連続バッククォート を検出できず critical bypass になる
+# (`cat <<<$(git push)` / `cat <&$(git push)` / `cat <<<\`git push\`` で hidden push を経由
+# できてしまう)。 これら特殊文字を redirection target の filename クラスから除いて生かして
+# おくと、 残存した shape 文字に対して segment shape check が deny に倒せる。 通常 filename
+# (alnum / `.` / `/` / `-` / `_` 等) には影響しない。
 COMMAND=$(printf '%s' "$COMMAND" \
-  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[^[:space:];&|()]*/ /g')
+  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[^[:space:];&|()$<>`]*/ /g')
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/cmd-parser.sh
