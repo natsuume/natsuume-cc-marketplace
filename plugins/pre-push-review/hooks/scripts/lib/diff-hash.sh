@@ -26,11 +26,19 @@
 # の早期 skip 判定に使う。
 readonly EMPTY_DIFF_HASH="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
+# detect_base_branch [<target_cwd>]
 # 出力: default branch 名 (master/main 等)、検出失敗時は空文字列を返し非ゼロで exit
+# target_cwd を指定すると `git -C <target_cwd>` 経由で resolve する (block-pre-push.sh が
+# `cd dir && git push` の target repo に対して使う)。 省略 / 空文字なら現在の cwd を使う。
 detect_base_branch() {
+  local target_cwd="${1:-}"
+  local -a git_prefix=()
+  if [ -n "$target_cwd" ]; then
+    git_prefix=(-C "$target_cwd")
+  fi
   # 最優先: origin/HEAD のシンボリックリンク (`git clone` 時に自動設定される)
   local ref
-  ref=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null)
+  ref=$(git "${git_prefix[@]}" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null)
   if [ -n "$ref" ]; then
     printf '%s' "${ref#refs/remotes/origin/}"
     return 0
@@ -38,7 +46,7 @@ detect_base_branch() {
   # フォールバック: master / main の存在を順に確認
   local b
   for b in master main; do
-    if git rev-parse --verify "origin/$b" >/dev/null 2>&1; then
+    if git "${git_prefix[@]}" rev-parse --verify "origin/$b" >/dev/null 2>&1; then
       printf '%s' "$b"
       return 0
     fi

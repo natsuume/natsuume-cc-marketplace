@@ -64,24 +64,8 @@ fi
 # 検出ロジックがこれを見落とさないよう、入力段階で空白に正規化する。
 COMMAND="${COMMAND//$'\\\n'/ }"
 
-# **redirection 構文の事前 strip**: `2>&1` / `>&N` / `<&N` / `&>file` / `&>>file` / `<<EOF`
-# / `<<<word` 等の **`&` を含む** shell redirection は file descriptor 操作であり、 並列実行
-# ではない。 cmd-parser は `&` を一律 separator として扱うため、 これら redirection に
-# 含まれる `&` を parallel separator と誤認して false-positive deny を起こす経路がある
-# (実運用で `git push 2>&1 | tee log` 等が deny される)。 並列性に関わる token (`&` / `|`)
-# を保つために、 redirection をスペースに置換して後段の parser が並列性 only を判定できる
-# 形にする。
-#
-# **重要**: 単独の `<` / `>` は **strip しない**。 strip すると process substitution
-# `<(...)` / `>(...)` の `<` / `>` まで食ってしまい、 内部の `git push` が parser から
-# 見えなくなって critical bypass になる (codex adversarial-review 指摘)。 process 置換は
-# segment レベルの shape check で別途 deny するため、 ここでは触らない。 単独 `<file` /
-# `>file` redirection には `&` が含まれないので、 strip しなくても parallel-separator 検出に
-# 影響しない。
-COMMAND=$(printf '%s' "$COMMAND" \
-  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[^[:space:];&|]*/ /g')
-
-# PreToolUse の deny payload を出力する共通ヘルパ。
+# PreToolUse の deny payload を出力する共通ヘルパ。 sed strip 前に malformed
+# redirection-paren 形を deny するため、 ヘルパ定義を前段に置く。
 deny() {
   jq -n --arg reason "$1" '{
     hookSpecificOutput: {
@@ -91,6 +75,38 @@ deny() {
     }
   }'
 }
+
+# `<<(` / `<<<(` / `>>(` の連続: bash 自体は syntax error で実行不能だが、 後段の sed strip
+# が `>>` 等を redirection と誤認して `(...)` を食う経路を作るため、 sed の前に明示 deny して
+# fail-closed に倒す (互換 shell や将来のシェル拡張で動く可能性に対する defense-in-depth)。
+case "$COMMAND" in
+  *'<<('*|*'<<<('*|*'>>('*)
+    REASON=$(cat <<'EOF'
+プッシュをブロックしました。 `<<(` / `<<<(` / `>>(` 形式のリダイレクト・パレン連続はサポート外です (bash 自体も syntax error として拒否する形式ですが、 hook 側で fail-closed に deny します)。
+
+プロセス置換が必要なら `<(...)` / `>(...)` (前後に空白なし、または `> >(...)` のように間に空白を入れる) を使用してください。
+EOF
+)
+    deny "$REASON"
+    exit 0
+    ;;
+esac
+
+# `&` を含む shell redirection (`2>&1` / `&>file` / `<<EOF` 等) を空白に置換する。
+# cmd-parser は `&` を一律 separator として扱うため、 redirection 内の `&` を parallel
+# separator と誤認して false-positive deny を起こす経路を塞ぐ目的。
+#
+# 単独の `<` / `>` は strip しない: process substitution `<(...)` `>(...)` の `<` / `>` まで
+# 食って内部の `git push` を parser から隠蔽する critical bypass になるため。 process 置換は
+# 別途 segment shape check で deny する。 単独 `<file` / `>file` には `&` が含まれず、
+# parallel-separator 検出にも影響しない。
+#
+# 文字クラスに `(` `)` を除外: `>>(...)` / `<<(...)` / `<<<(...)` (bash 自体は syntax error
+# だが、 hook 側で sed が `(git push)` 部分を食うと、 仮に shell 互換層で実行できる環境が
+# 存在した場合に shape check 不能の経路ができる)。 paren を残すと shape check (`*push*` を
+# 含む segment が `(...` で始まれば subshell deny) に処理が回る。
+COMMAND=$(printf '%s' "$COMMAND" \
+  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[^[:space:];&|()]*/ /g')
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/cmd-parser.sh
@@ -262,13 +278,13 @@ EOF
   exit 0
 fi
 
-# **parallel separator deny の方針**:
+# parallel separator deny の方針:
 #   - push の **前** に `&` または `|` がある場合は deny: 前段 cmd が push 開始後まで並走し、
 #     index / working tree を変更し得る race 経路 (例: `git commit X & git push`,
 #     `cmd | git push`)。
-#   - push の **後** の `&` (background) も deny: bash で `git push & cmd` だと git push が
-#     background で走り、 cmd が foreground で走る → cmd が新規 commit 等の repo state を
-#     変更すると push が新 commit を巻き込む race (codex adversarial-review 指摘)。
+#   - push の **後** の `&` (background) も deny: `git push & cmd` で git push が background、
+#     cmd が foreground で走るため、 cmd が新規 commit を作ると push がその commit を巻き込む
+#     race になる (例: `git push & git commit --allow-empty -m x`)。
 #   - push の **後** の `|` (pipeline) のみ許容: 典型ユースケース (`git push 2>&1 | tee log`)
 #     は downstream が tee / grep 等の非 mutating で race になりにくい。 完全な race-free
 #     保証ではないが、 cooperative 利用での logging / filtering 利便性を優先する判断。
@@ -402,20 +418,11 @@ case "$BRANCH" in
   master|main) exit 0 ;;
 esac
 
-# default branch を target cwd で解決
-BASE=$(git -C "$TARGET_CWD" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|^refs/remotes/origin/||')
-if [ -z "$BASE" ]; then
-  for b in master main; do
-    if git -C "$TARGET_CWD" rev-parse --verify "origin/$b" >/dev/null 2>&1; then
-      BASE="$b"; break
-    fi
-  done
-fi
-
-# **fail-closed**: base branch が解決できない環境 (origin/HEAD 未設定 / 非 origin remote /
-# default branch が master/main 以外) で silent に exit 0 すると、 markers gate が **黙って
-# 無効化** される (codex adversarial-review P1 指摘)。 silent install 失敗を防ぐため、
-# 解決不能なら明示 deny して setup を促す。
+# default branch を target cwd で解決。 fail-closed: 解決できない環境 (origin/HEAD 未設定 /
+# 非 origin remote / default branch が master/main 以外) で silent に exit 0 すると markers
+# gate が黙って無効化される silent install 失敗の経路になるため、 解決不能なら明示 deny して
+# setup を促す。
+BASE=$(detect_base_branch "$TARGET_CWD") || BASE=""
 if [ -z "$BASE" ]; then
   REASON=$(cat <<EOF
 プッシュをブロックしました。 target (\`${TARGET_CWD}\`) の default branch が解決できません。
@@ -448,12 +455,9 @@ HAS_REAL_PUSH=0  # 1 if any refspec sends commits (= HEAD or current branch)
 SAW_GIT=0
 SAW_PUSH=0
 _SKIP_NEXT=0  # `-C dir` / `--git-dir dir` / `-c key=val` のような separate-arg option の
-              # 引数を次イテレーションで skip するためのフラグ。 ループ先頭で消費するので
-              # SAW_PUSH 遷移を跨いでも誤起動しない (旧版は SAW_PUSH 遷移後に消費判定が
-              # 走る設計で、 separate-arg option の引数が wildcard `*) continue` で
-              # silently 食われた後に _SKIP_NEXT が leak し、 `git -C /t push origin master`
-              # の `origin` を skip 対象に誤認、 `master` を remote 名扱いして refspec
-              # 検証を素通りさせていた)。
+              # 引数を次イテレーションで skip するためのフラグ。 ループ先頭で必ず消費する
+              # ことで SAW_PUSH 遷移を跨いでも leak しない (各 phase で消費漏れすると後段
+              # の refspec 検証が誤動作する)。
 for tok in "${PUSH_TOKENS[@]}"; do
   t="$(unquote_token "$tok")"
   # 直前 iter で separate-arg option の存在を検出した場合、 現 token はその引数なので
@@ -508,7 +512,7 @@ for tok in "${PUSH_TOKENS[@]}"; do
   # である場合のみ許容 (HAS_REAL_PUSH は立てない = markers gate skip 対象)。 reachable で
   # ない tag (= 別ブランチや未レビュー commit を指す tag) を push すると、 git は tag が
   # 指す commit object を remote に転送するため、 未レビュー commit が remote に到達する
-  # 経路になる (codex adversarial-review P1 指摘)。
+  # bypass 経路になる。
   if TAG_COMMIT=$(git -C "$TARGET_CWD" rev-parse --verify --quiet "refs/tags/$src^{commit}" 2>/dev/null); then
     if git -C "$TARGET_CWD" merge-base --is-ancestor "$TAG_COMMIT" HEAD 2>/dev/null; then
       continue  # tag commit は HEAD から reachable = 現在ブランチ上の commit、 既にレビュー対象
@@ -542,7 +546,8 @@ EOF
   exit 0
 done
 
-# deletion / tag-only push は markers gate を skip (codex review P2 指摘に対応)。
+# deletion / tag-only push (HEAD と一致する refspec が無く、 削除 / reachable tag のみ) は
+# markers gate を skip。 新規 commit は送らないため。
 if [ "$REFSPEC_COUNT" -gt 0 ] && [ "$HAS_REAL_PUSH" -eq 0 ]; then
   exit 0
 fi
