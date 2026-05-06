@@ -46,8 +46,9 @@ resolve_push_target() {
     fi
     segments+=("$line")
     if [ "$push_index" -lt 0 ]; then
-      # 先頭が `git ... push` (option を許容) かを軽量判定
-      if [[ "$line" =~ (^|[[:space:]])git([[:space:]]+[^[:space:]]+)*[[:space:]]+push([[:space:]]|$) ]]; then
+      # 先頭が `git ... push` (option を許容、 path-qualified `/usr/bin/git` も許容) かを
+      # 軽量判定。 boundary は空白 / 行頭 / `/` (path 前段からの遷移)。
+      if [[ "$line" =~ (^|[[:space:]/])git([[:space:]]+[^[:space:]]+)*[[:space:]]+push([[:space:]]|$) ]]; then
         push_index=$i
       fi
     fi
@@ -214,11 +215,14 @@ _process_push_segment() {
     esac
   fi
 
-  # `git` を期待
+  # `git` または path-qualified (`/usr/bin/git`, `./git` 等) を期待
   [ "$idx" -ge "$n" ] && return 1
   local cmd_name
   cmd_name="$(unquote_token "${tokens[$idx]}")"
-  [ "$cmd_name" != "git" ] && return 1
+  case "$cmd_name" in
+    git|*/git) ;;
+    *) return 1 ;;
+  esac
   idx=$((idx+1))
 
   # git の global option を walk: -C / --git-dir / --work-tree を検出

@@ -231,10 +231,14 @@ for line in "${SEGMENTS[@]}"; do
       break
     fi
   done
-  # `git` を期待
+  # `git` または path-qualified (`/usr/bin/git`, `./git` 等) を期待
   if [ "$_idx" -lt "$_n" ]; then
     _first="$(unquote_token "${_toks[$_idx]}")"
-    if [ "$_first" = "git" ]; then
+    case "$_first" in
+      git|*/git) _is_git=1 ;;
+      *) _is_git=0 ;;
+    esac
+    if [ "$_is_git" -eq 1 ]; then
       _idx=$((_idx+1))
       # global option を walk して subcommand を探す
       while [ "$_idx" -lt "$_n" ]; do
@@ -428,10 +432,13 @@ for tok in "${PUSH_TOKENS[@]}"; do
     _SKIP_NEXT=0
     continue
   fi
-  # env-var prefix / wrapper / git の global option を skip
+  # env-var prefix / wrapper / git の global option を skip。 path-qualified git も許容
+  # (例: `/usr/bin/git push`, `./git push`)。
   if [ "$SAW_GIT" -eq 0 ]; then
     if [[ "$t" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then continue; fi
-    if [ "$t" = "git" ]; then SAW_GIT=1; continue; fi
+    case "$t" in
+      git|*/git) SAW_GIT=1; continue ;;
+    esac
     continue
   fi
   if [ "$SAW_PUSH" -eq 0 ]; then
