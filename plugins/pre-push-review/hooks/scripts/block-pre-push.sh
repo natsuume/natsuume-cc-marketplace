@@ -398,27 +398,12 @@ case "$BRANCH" in
   master|main) exit 0 ;;
 esac
 
-# default branch を target cwd で解決。 fail-closed: 解決できない環境 (origin/HEAD 未設定 /
-# 非 origin remote / default branch が master/main 以外) で silent に exit 0 すると markers
-# gate が黙って無効化される silent install 失敗の経路になるため、 解決不能なら明示 deny して
-# setup を促す。
+# default branch を target cwd で解決。 deletion-only / tag-only push は BASE 不要のため、
+# ここでは取得のみして empty 許容。 commit を送る real push に到達した時点で BASE 必須に
+# なるため、 fail-closed deny は compute_review_hash_in 直前で行う (codex review P2 指摘:
+# BASE 未解決環境で `git push --delete branch` / `git push origin v1.0.0` 等まで巻き込み
+# deny していた regression を回避)。
 BASE=$(detect_base_branch "$TARGET_CWD") || BASE=""
-if [ -z "$BASE" ]; then
-  REASON=$(cat <<EOF
-プッシュをブロックしました。 target (\`${TARGET_CWD}\`) の default branch が解決できません。
-
-本プラグインは branch 全差分のレビュー検証に default branch (origin/HEAD or origin/master / origin/main) を必要とします。 以下のいずれかを設定してください:
-
-  - \`git -C ${TARGET_CWD} remote set-head origin --auto\` で origin/HEAD を自動設定
-  - \`git -C ${TARGET_CWD} remote set-head origin <branch-name>\` で明示設定 (例: develop)
-  - origin remote が無い場合は \`git -C ${TARGET_CWD} remote add origin <url>\` で追加
-
-設定後に再度 \`git push\` を試してください。
-EOF
-)
-  deny "$REASON"
-  exit 0
-fi
 
 # refspec / オプションを再走査して deny 判定を行う。
 HAS_DELETE_FLAG=0
@@ -570,6 +555,27 @@ SIMPLIFIED_MARKER=$(simplified_marker_path "$GIT_DIR")
 CODEX_MARKER=$(codex_marker_path "$GIT_DIR")
 SIMPLIFIED_HASH=$([ -f "$SIMPLIFIED_MARKER" ] && cat "$SIMPLIFIED_MARKER" 2>/dev/null)
 CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
+
+# 真の commit push (real push) に到達した時点で BASE が解決できないと branch 全差分が
+# 計算できないため fail-closed deny。 ここに到達するのは deletion / tag-only / matching skip
+# のいずれにも該当しなかった real push。 silent exit 0 すると markers gate が黙って無効化
+# される silent install 失敗の経路になるため、 setup を促す明示 deny に倒す。
+if [ -z "$BASE" ]; then
+  REASON=$(cat <<EOF
+プッシュをブロックしました。 target (\`${TARGET_CWD}\`) の default branch が解決できません。
+
+本プラグインは branch 全差分のレビュー検証に default branch (origin/HEAD or origin/master / origin/main) を必要とします。 以下のいずれかを設定してください:
+
+  - \`git -C ${TARGET_CWD} remote set-head origin --auto\` で origin/HEAD を自動設定
+  - \`git -C ${TARGET_CWD} remote set-head origin <branch-name>\` で明示設定 (例: develop)
+  - origin remote が無い場合は \`git -C ${TARGET_CWD} remote add origin <url>\` で追加
+
+設定後に再度 \`git push\` を試してください。
+EOF
+)
+  deny "$REASON"
+  exit 0
+fi
 
 # branch diff hash 計算。 失敗時 (orphan branch / shallow clone 等) は明示 deny。
 if ! CURRENT_HASH=$(compute_review_hash_in "$TARGET_CWD" "$BASE"); then
