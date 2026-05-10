@@ -49,6 +49,8 @@ time_remaining() {
     # GNU date は `-d`、BSD/macOS date には `-d` がない。
     # 共通の portable な経路として python3 の datetime.fromisoformat に委譲する
     # (`Z` 接尾辞は Python 3.11+ で直接読めるが、3.7-3.10 のため `+00:00` に置換)。
+    # `python3` が無い環境では silent return (statusline は毎回呼ばれるため
+    # warning 出力はノイズになる。README で optional 依存として明記している)。
     reset_epoch=$(date -d "$resets_at" +%s 2>/dev/null) \
       || reset_epoch=$(python3 -c 'import sys, datetime; s=sys.argv[1].replace("Z","+00:00"); print(int(datetime.datetime.fromisoformat(s).timestamp()))' "$resets_at" 2>/dev/null) \
       || return

@@ -72,6 +72,7 @@ cp ~/.claude/settings.natsuume-statusline-backup.<timestamp>.json ~/.claude/sett
 - `git` — 無いとリポジトリ情報セグメント全体がスキップ
 - `gh` — 無いと所有 namespace 判定が無効化され `owner/repo` 形式のまま表示
 - `tput` または `stty` — 無いと環境変数 `COLUMNS`、最終的に 80 桁にフォールバック
+- `python3` (3.7+) — Claude Code が将来 `resets_at` を ISO 8601 文字列で渡すように変更された場合の epoch 変換に利用。BSD/macOS の `date` には `-d` が無いため `python3` を fallback として呼び出す。`python3` も無い環境では 2 行目のリセット残時間が空表示になる (現状の Claude Code は epoch 秒整数を渡すため、いずれの依存も実際には呼ばれない)
 
 ## 関連情報
 
