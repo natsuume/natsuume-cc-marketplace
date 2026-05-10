@@ -29,8 +29,13 @@ patch_one() {
   local target_filename="$1"
 
   # 候補が複数あると上書き対象を間違えるため、先頭採用ではなく明示的に件数で分岐する。
-  local CANDIDATES
-  mapfile -t CANDIDATES < <(find "$HOME/.claude/plugins/marketplaces" -path "*/plugins/codex/commands/$target_filename" 2>/dev/null)
+  # macOS の default /bin/bash は 3.2.57 で `mapfile` (bash 4.0+) が使えないため、
+  # 互換性のため `while read` ループで配列を組み立てる。
+  local CANDIDATES=()
+  local line
+  while IFS= read -r line; do
+    CANDIDATES+=("$line")
+  done < <(find "$HOME/.claude/plugins/marketplaces" -path "*/plugins/codex/commands/$target_filename" 2>/dev/null)
   case "${#CANDIDATES[@]}" in
     0)
       echo "[codex-review-customize] codex プラグインの commands/$target_filename が見つかりません。先に codex プラグインをインストールしてください。" >&2
