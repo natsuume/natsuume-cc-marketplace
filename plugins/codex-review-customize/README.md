@@ -14,7 +14,7 @@ v0.2.1
 
 ### v0.2.0 → v0.2.1 の変更点
 
-- `apply-patch.sh` の bash 4.0 専用 built-in (`mapfile`) を `while read` ループに置換し、macOS の default `/bin/bash` (3.2.57) でも動作するようにしました。Linux の bash 4+/5+ 環境への互換性は維持されています。
+- `apply-patch.sh` の bash 4.0 専用 built-in (`mapfile`) を `while read` ループに置換し、macOS の default `/bin/bash` (3.2.57) でも動作するようにしました。
 
 ### v0.1.0 → v0.2.0 の変更点
 

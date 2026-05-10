@@ -29,8 +29,7 @@ patch_one() {
   local target_filename="$1"
 
   # 候補が複数あると上書き対象を間違えるため、先頭採用ではなく明示的に件数で分岐する。
-  # macOS の default /bin/bash は 3.2.57 で `mapfile` (bash 4.0+) が使えないため、
-  # 互換性のため `while read` ループで配列を組み立てる。
+  # macOS の default /bin/bash 3.2.57 は mapfile (bash 4.0+) 非対応のため while read で代用。
   local CANDIDATES=()
   local line
   while IFS= read -r line; do
