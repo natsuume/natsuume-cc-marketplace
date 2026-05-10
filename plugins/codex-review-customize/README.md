@@ -4,13 +4,17 @@
 
 ## バージョン
 
-v0.2.0
+v0.2.1
 
 ## 概要
 
 公式 `/codex:review` および `/codex:adversarial-review` は frontmatter に `disable-model-invocation: true` 指定があるため、Claude が Skill tool から呼び出せません。
 
 本プラグインの `/codex-review-customize:setup` を実行すると、`commands/review.md` と `commands/adversarial-review.md` の双方が atomic にパッチされ `disable-model-invocation: true` 行が削除されます。並行して codex の cache を削除し、次回 `/reload-plugins` で patched 版が読み込まれるようにします。
+
+### v0.2.0 → v0.2.1 の変更点
+
+- `apply-patch.sh` の bash 4.0 専用 built-in (`mapfile`) を `while read` ループに置換し、macOS の default `/bin/bash` (3.2.57) でも動作するようにしました。
 
 ### v0.1.0 → v0.2.0 の変更点
 
