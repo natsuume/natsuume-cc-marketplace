@@ -72,6 +72,7 @@ cp ~/.claude/settings.natsuume-statusline-backup.<timestamp>.json ~/.claude/sett
 - `git` — 無いとリポジトリ情報セグメント全体がスキップ
 - `gh` — 無いと所有 namespace 判定が無効化され `owner/repo` 形式のまま表示
 - `tput` または `stty` — 無いと環境変数 `COLUMNS`、最終的に 80 桁にフォールバック
+- `python3` (3.7+) — `resets_at` が ISO 8601 形式で渡された場合の epoch 変換 fallback (BSD/macOS の `date` に `-d` が無い環境用)。無いと 2 行目のリセット残時間が空表示
 
 ## 関連情報
 
