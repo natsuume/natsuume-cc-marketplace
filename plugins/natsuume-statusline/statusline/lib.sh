@@ -46,7 +46,12 @@ time_remaining() {
   if [[ "$resets_at" =~ ^[0-9]+$ ]]; then
     reset_epoch="$resets_at"
   else
-    reset_epoch=$(date -d "$resets_at" +%s 2>/dev/null) || return
+    # GNU date は `-d`、BSD/macOS date には `-d` がない。
+    # 共通の portable な経路として python3 の datetime.fromisoformat に委譲する
+    # (`Z` 接尾辞は Python 3.11+ で直接読めるが、3.7-3.10 のため `+00:00` に置換)。
+    reset_epoch=$(date -d "$resets_at" +%s 2>/dev/null) \
+      || reset_epoch=$(python3 -c 'import sys, datetime; s=sys.argv[1].replace("Z","+00:00"); print(int(datetime.datetime.fromisoformat(s).timestamp()))' "$resets_at" 2>/dev/null) \
+      || return
   fi
 
   local now diff_sec
