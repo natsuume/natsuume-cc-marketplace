@@ -188,13 +188,7 @@ EOF
   tokenize_segment "$trimmed" _first_toks
   _fi=0
   _fn=${#_first_toks[@]}
-  while [ "$_fi" -lt "$_fn" ]; do
-    _ft="$(unquote_token "${_first_toks[$_fi]}")"
-    if [[ "$_ft" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-      _fi=$((_fi+1)); continue
-    fi
-    break
-  done
+  skip_env_assignments _first_toks _fi
   if [ "$_fi" -lt "$_fn" ]; then
     _fc="$(unquote_token "${_first_toks[$_fi]}")"
     case "$_fc" in
@@ -221,15 +215,7 @@ for line in "${SEGMENTS[@]}"; do
   tokenize_segment "$line" _toks
   _idx=0
   _n=${#_toks[@]}
-  # env-var prefix を skip
-  while [ "$_idx" -lt "$_n" ]; do
-    _t="$(unquote_token "${_toks[$_idx]}")"
-    if [[ "$_t" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-      _idx=$((_idx+1))
-    else
-      break
-    fi
-  done
+  skip_env_assignments _toks _idx
   # `git` または path-qualified (`/usr/bin/git`, `./git` 等) を期待
   if [ "$_idx" -lt "$_n" ]; then
     _first="$(unquote_token "${_toks[$_idx]}")"

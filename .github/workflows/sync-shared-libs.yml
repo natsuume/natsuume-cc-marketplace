@@ -1,0 +1,51 @@
+name: sync-shared-libs
+
+on:
+  pull_request:
+    paths:
+      - "plugins/*/hooks/scripts/lib/cmd-parser.sh"
+      - ".github/workflows/sync-shared-libs.yml"
+  push:
+    branches: [master]
+    paths:
+      - "plugins/*/hooks/scripts/lib/cmd-parser.sh"
+      - ".github/workflows/sync-shared-libs.yml"
+
+jobs:
+  cmd-parser-sync:
+    name: cmd-parser.sh must be byte-identical across plugins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # cmd-parser.sh は plugin 配布の制約 (cache 経由 install で plugin 外ファイルは
+      # 解決されない、 https://docs.claude.com/en/docs/claude-code/plugins-reference) のため
+      # 各 plugin に物理コピーで配置している。 canonical は pre-push-review 配下とし、
+      # 他の plugin 配下のコピーが drift していないことを sha256 で強制する。
+      # canonical 側を編集したら、 PR で他コピーも同時に更新する運用とする。
+      - name: Compare sha256 of all cmd-parser.sh copies
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find plugins -type f -path '*/hooks/scripts/lib/cmd-parser.sh' | sort)
+          if [ "${#files[@]}" -lt 2 ]; then
+            echo "Skipping: fewer than 2 cmd-parser.sh copies found." >&2
+            exit 0
+          fi
+          echo "Found ${#files[@]} copies:"
+          printf '  %s\n' "${files[@]}"
+          mapfile -t hashes < <(sha256sum "${files[@]}" | awk '{print $1}')
+          first="${hashes[0]}"
+          drift=0
+          for i in "${!files[@]}"; do
+            if [ "${hashes[$i]}" != "$first" ]; then
+              echo "::error file=${files[$i]}::cmd-parser.sh diverged from canonical (${files[0]})"
+              drift=1
+            fi
+          done
+          if [ "$drift" -ne 0 ]; then
+            echo "" >&2
+            echo "Resolution: copy the canonical file to all locations:" >&2
+            echo "  cp ${files[0]} <other-copy>" >&2
+            exit 1
+          fi
+          echo "OK: all ${#files[@]} cmd-parser.sh copies are byte-identical."
