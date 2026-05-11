@@ -148,6 +148,10 @@ unquote_token() {
 # env-var assignment が cmd 名の前に並ぶ (`FOO=bar BAZ=qux git push ...` 等)。 各 hook で
 # 「実コマンド token を取り出す」ためにこのループを書く必要があり、 同形のループが複数
 # 箇所に重複していた。 構文解析 (= cmd-parser の責務) として 1 箇所に集約する。
+#
+# **nameref 名衝突に注意**: 呼び出し側の変数名が `_toks_ref` / `_idx_ref` / `_t` / `_n` と
+# 一致すると bash の nameref が circular reference エラーになる。 呼び出し側は別 prefix
+# (例: `_first_toks _fi`) を使うこと。
 skip_env_assignments() {
   local -n _toks_ref="$1"
   local -n _idx_ref="$2"
