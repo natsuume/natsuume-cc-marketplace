@@ -1,0 +1,58 @@
+name: sync-shared-libs
+
+on:
+  pull_request:
+    paths:
+      - "plugins/*/hooks/scripts/lib/cmd-parser.sh"
+      - ".github/workflows/sync-shared-libs.yml"
+  push:
+    branches: [master]
+    paths:
+      - "plugins/*/hooks/scripts/lib/cmd-parser.sh"
+      - ".github/workflows/sync-shared-libs.yml"
+
+jobs:
+  cmd-parser-sync:
+    name: cmd-parser.sh must be byte-identical across plugins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # cmd-parser.sh は plugin 配布の制約 (cache 経由 install で plugin 外ファイルは
+      # 解決されない、 https://docs.claude.com/en/docs/claude-code/plugins-reference) のため
+      # 各 plugin に物理コピーで配置している。 canonical は pre-push-review 配下とし、
+      # 他の plugin 配下のコピーが drift していないことを sha256 で強制する。
+      # canonical 側を編集したら、 PR で他コピーも同時に更新する運用とする。
+      - name: Compare sha256 of all cmd-parser.sh copies
+        env:
+          # canonical は pre-push-review 配下 (parser の元の住処)。 他 plugin のコピーが
+          # ここから drift していたら fail する。 canonical を変えるときは本 workflow の env
+          # も更新する。
+          CANONICAL: plugins/pre-push-review/hooks/scripts/lib/cmd-parser.sh
+        run: |
+          set -euo pipefail
+          if [ ! -f "$CANONICAL" ]; then
+            echo "::error::canonical cmd-parser.sh not found at $CANONICAL"
+            exit 1
+          fi
+          canonical_hash=$(sha256sum "$CANONICAL" | awk '{print $1}')
+          mapfile -t files < <(find plugins -type f -path '*/hooks/scripts/lib/cmd-parser.sh' | sort)
+          echo "canonical: $CANONICAL ($canonical_hash)"
+          echo "checking ${#files[@]} copies:"
+          printf '  %s\n' "${files[@]}"
+          drift=0
+          for f in "${files[@]}"; do
+            [ "$f" = "$CANONICAL" ] && continue
+            h=$(sha256sum "$f" | awk '{print $1}')
+            if [ "$h" != "$canonical_hash" ]; then
+              echo "::error file=${f}::cmd-parser.sh diverged from canonical ($CANONICAL)"
+              drift=1
+            fi
+          done
+          if [ "$drift" -ne 0 ]; then
+            echo "" >&2
+            echo "Resolution: copy the canonical file to drifted locations:" >&2
+            echo "  cp $CANONICAL <drifted-copy>" >&2
+            exit 1
+          fi
+          echo "OK: all ${#files[@]} cmd-parser.sh copies match canonical."
