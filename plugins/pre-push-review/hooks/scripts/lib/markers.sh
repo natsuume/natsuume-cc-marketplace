@@ -9,6 +9,7 @@
 # `<git-dir>` 配下に置くマーカーファイルの basename。
 SIMPLIFIED_MARKER_NAME=".claude-pre-push-simplified"
 CODEX_MARKER_NAME=".claude-pre-push-codex-reviewed"
+SECURITY_MARKER_NAME=".claude-pre-push-security-reviewed"
 
 # 引数: <git-dir>
 # 出力: simplified マーカーの絶対パス
@@ -20,4 +21,10 @@ simplified_marker_path() {
 # 出力: codex-reviewed マーカーの絶対パス
 codex_marker_path() {
   printf '%s/%s' "$1" "$CODEX_MARKER_NAME"
+}
+
+# 引数: <git-dir>
+# 出力: security-reviewed マーカーの絶対パス
+security_marker_path() {
+  printf '%s/%s' "$1" "$SECURITY_MARKER_NAME"
 }

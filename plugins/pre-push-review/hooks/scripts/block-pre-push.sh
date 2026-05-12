@@ -564,7 +564,7 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C ${TARGET_CWD} status\` で変更を確認し、commit してから \`/simplify\` → \`/codex:review --wait --scope branch\` を再走させて push してください。
+\`git -C ${TARGET_CWD} status\` で変更を確認し、commit してから \`/simplify\` → \`/codex:review --wait --scope branch\` → \`/security-review\` を再走させて push してください。
 EOF
 )
   deny "$REASON"
@@ -573,8 +573,10 @@ fi
 
 SIMPLIFIED_MARKER=$(simplified_marker_path "$GIT_DIR")
 CODEX_MARKER=$(codex_marker_path "$GIT_DIR")
+SECURITY_MARKER=$(security_marker_path "$GIT_DIR")
 SIMPLIFIED_HASH=$([ -f "$SIMPLIFIED_MARKER" ] && cat "$SIMPLIFIED_MARKER" 2>/dev/null)
 CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
+SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
 
 # 真の commit push (real push) に到達した時点で BASE が解決できないと branch 全差分が
 # 計算できないため fail-closed deny。 ここに到達するのは deletion / tag-only / matching skip
@@ -626,14 +628,15 @@ fi
 LOOP_THRESHOLD=3
 LOOP_COUNT=$(read_loop_count "$GIT_DIR")
 
-# 双方のマーカーが現在の差分と一致 = 「現状の branch 全差分 + 未コミットに対して
-# /simplify と /codex:review --wait --scope branch が直近で実走済み」を意味する。
-# markers は明示削除しない: PreToolUse は push 成功確認できないため、 remote rejection /
-# 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを
-# 避ける。 markers は次の編集で hash が変わったときに自然に失効する。
-if [ -n "$SIMPLIFIED_HASH" ] && [ -n "$CODEX_HASH" ] \
+# 3 つのマーカーが現在の差分と一致 = 「現状の branch 全差分 + 未コミットに対して
+# /simplify と /codex:review --wait --scope branch と /security-review が直近で実走済み」
+# を意味する。 markers は明示削除しない: PreToolUse は push 成功確認できないため、 remote
+# rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる
+# 無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する。
+if [ -n "$SIMPLIFIED_HASH" ] && [ -n "$CODEX_HASH" ] && [ -n "$SECURITY_HASH" ] \
    && [ "$SIMPLIFIED_HASH" = "$CURRENT_HASH" ] \
-   && [ "$CODEX_HASH" = "$CURRENT_HASH" ]; then
+   && [ "$CODEX_HASH" = "$CURRENT_HASH" ] \
+   && [ "$SECURITY_HASH" = "$CURRENT_HASH" ]; then
   reset_loop_count "$GIT_DIR"
   exit 0
 fi
@@ -650,6 +653,7 @@ format_status() {
 }
 SIMPLIFIED_STATUS=$(format_status "$SIMPLIFIED_HASH")
 CODEX_STATUS=$(format_status "$CODEX_HASH")
+SECURITY_STATUS=$(format_status "$SECURITY_HASH")
 
 ADVERSARIAL_NOTE=""
 if [ "$LOOP_COUNT" -ge "$LOOP_THRESHOLD" ]; then
@@ -665,7 +669,8 @@ if [ "$LOOP_COUNT" -ge "$LOOP_THRESHOLD" ]; then
   - 大きな方針転換が必要そうなら、ユーザーに状況をエスカレートして判断を仰ぐ。
 
 \`/codex:adversarial-review\` は本ループのマーカー対象外です。 実行後は通常通り
-\`/simplify\` → \`/codex:review --wait --scope branch\` を走らせて push へ進んでください。
+\`/simplify\` → \`/codex:review --wait --scope branch\` → \`/security-review\` を走らせて
+push へ進んでください。
 EOF
 )
 fi
@@ -676,23 +681,27 @@ REASON=$(cat <<EOF
 target: ${TARGET_CWD}
 ブランチ: ${BRANCH} (基準: origin/${BASE})
 
-レビュー状態 (双方が「✓ 最新の差分でレビュー済み」になると push が許可されます):
+レビュー状態 (3 つすべて「✓ 最新の差分でレビュー済み」になると push が許可されます):
   /simplify                        : $SIMPLIFIED_STATUS
   /codex:review --scope branch     : $CODEX_STATUS
+  /security-review                 : $SECURITY_STATUS
   ループ回数                       : ${LOOP_COUNT} 回 (閾値 ${LOOP_THRESHOLD} 回でアーキテクチャレビュー誘導)
 
 実行手順 (修正が落ち着くまでループ):
   1. /simplify を Skill tool で呼び出す (コード変更を伴うため先に実行)
   2. /codex:review --wait --scope branch を Skill tool で呼び出す
      (--scope branch 必須: branch 全差分 = PR diff のレビューを保証するため)
-  3. レビュー結果に指摘があれば修正し、必要に応じて新規 commit を作成する
-  4. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
-     その場合は手順 1〜2 を最初から再実行する
-  5. 双方のマーカーが「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
+  3. /security-review を Skill tool で呼び出す (claude code 標準 skill)
+     現在ブランチの pending changes に対する security review を行う
+  4. レビュー結果に指摘があれば修正し、必要に応じて新規 commit を作成する
+  5. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
+     その場合は手順 1〜3 を最初から再実行する
+  6. 3 つすべてのマーカーが「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
 
-マーカーは PostToolUse hook (auto-mark.sh) が \`/simplify\` と
-\`/codex:review --wait --scope branch\` の実行完了を検知して自動的に記録します。マーカーは
-push 通過時に明示削除されません (次の編集でハッシュが変わると自動的に失効するため)。
+マーカーは PostToolUse hook (auto-mark.sh) が \`/simplify\` /
+\`/codex:review --wait --scope branch\` / \`/security-review\` の実行完了を検知して自動的に
+記録します。マーカーは push 通過時に明示削除されません (次の編集でハッシュが変わると
+自動的に失効するため)。
 
 \`/codex:review\` の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
   - **\`--wait\` (フォアグラウンド) のみサポート**

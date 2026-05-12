@@ -1,6 +1,6 @@
 # pre-push-review プラグイン
 
-`git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形をレビューします。修正により branch 全差分が変わると **2 つのレビューマーカーが自動的に失効** するため、Claude は `/simplify` → `/codex:review` を再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
+`git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` → `/security-review` を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形を品質観点でレビューし、`/security-review` は同じ最終形を security 観点でレビューします。修正により branch 全差分が変わると **3 つのレビューマーカーが自動的に失効** するため、Claude は `/simplify` → `/codex:review` → `/security-review` を再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
 
 ループが一定回数以上続いても収束しない場合、deny メッセージに **`/codex:adversarial-review`** (実装方針・設計選択への批判的レビュー) を促す案内が追加されます。表層レビューだけで収束しないループに対し「採用しているアプローチ自体が妥当か」を問い直す視点を取り入れる動線です。PR 作成直後の adversarial review は姉妹プラグイン [post-pr-review](../post-pr-review/) が誘導します。
 
@@ -49,7 +49,7 @@ PR 作成側で gate する設計だと、以下の経路が捕捉できませ�
 
 ## 概要
 
-`PreToolUse` フックで `Bash` ツール実行を監視し、`git push` コマンドを検出した場合、 **2 つのレビューマーカー** (`/simplify` と `/codex:review --wait --scope branch` それぞれの実行完了マーカー) が現在の **branch 全差分 + 未コミット差分** のハッシュと一致しなければ `deny` を返して push を阻止します。マーカーは `PostToolUse` フックが各ツールの実走完了を検知して自動的に書き込みます。手動でスクリプトを呼び出す必要はありません。
+`PreToolUse` フックで `Bash` ツール実行を監視し、`git push` コマンドを検出した場合、 **3 つのレビューマーカー** (`/simplify` / `/codex:review --wait --scope branch` / `/security-review` それぞれの実行完了マーカー) が現在の **branch 全差分 + 未コミット差分** のハッシュと一致しなければ `deny` を返して push を阻止します。マーカーは `PostToolUse` フックが各ツールの実走完了を検知して自動的に書き込みます。手動でスクリプトを呼び出す必要はありません。
 
 加えて、`/codex:review --wait --scope branch` が完了するたびに **ループカウンタ** が +1 され、閾値以上になると deny メッセージに `/codex:adversarial-review --wait --scope branch` の実行を促す案内が追加されます (push を追加で block する判定は変えず、案内文のみ追加する設計)。閾値の現在値は `block-pre-push.sh` の `LOOP_THRESHOLD` で定義されており、運用経験で調整できます。push が PreToolUse を通過した時点でカウンタはリセットされます (マーカーは明示削除されず、次の編集で hash が変わるまで残ります)。
 
@@ -67,7 +67,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 **ファイル**: `hooks/scripts/block-pre-push.sh`
 
-`git push` を含むコマンドを検出した際、現在のブランチ全差分 + 未コミット差分のハッシュと 2 つのレビューマーカーのハッシュを比較し、両方一致しなければ `deny` を返します。加えてループカウンタが閾値以上のときは deny メッセージに `/codex:adversarial-review` の案内文を追加します (push の block / 通過判定自体には影響しない)。
+`git push` を含むコマンドを検出した際、現在のブランチ全差分 + 未コミット差分のハッシュと 3 つのレビューマーカーのハッシュを比較し、すべて一致しなければ `deny` を返します。加えてループカウンタが閾値以上のときは deny メッセージに `/codex:adversarial-review` の案内文を追加します (push の block / 通過判定自体には影響しない)。
 
 **動作**:
 
@@ -77,7 +77,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 - カレントブランチが default branch (master/main) の場合は本フックでは gate せず、`git-guardrails` の `block-default-branch-push.sh` に委譲 (重複 deny メッセージを避けるため)
 - ブランチ全差分 + 未コミット差分が空 (= base と同一) の場合は gate しない (空 push は通す)
 - **working tree が dirty (staged または unstaged 変更あり) の場合は markers の状態に関わらず deny**: push される committed 部分とレビューされた working tree の乖離を防ぐため、push 前に commit 完了を要求する
-- 双方のマーカーが一致した場合はそのまま push を許容し、ループカウンタをリセット (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。markers は次の編集で hash が変わったときに自然に失効する)
+- 3 つすべてのマーカーが一致した場合はそのまま push を許容し、ループカウンタをリセット (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。markers は次の編集で hash が変わったときに自然に失効する)
 - ハッシュは `git diff origin/<base>...HEAD` (PR diff) と `git diff --cached`、`git diff` の連結に対して計算するため、未コミットの edit があると markers のハッシュが変わる仕組み。実際の push gate は dirty-tree 検出で行うが、ハッシュ算式に未コミット差分を含めることで「review 後に edit して push」のような経路もマーカー失効で再 review に倒せる
 - `deny` 時の `permissionDecisionReason` には、各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と次に Claude が行うべき手順、ループ回数 / 閾値が記載される
 
@@ -125,7 +125,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`/simplify` と `/codex:review --wait --scope branch` の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。`/codex:review --wait --scope branch` の成功完了時にはループカウンタも +1 します (`/simplify` 側はカウントしません — Skill PostToolUse は launch 時点で発火するため完了 signal としては不正確で、cooperative にカウントが膨らむ経路になるため)。
+`/simplify` / `/codex:review --wait --scope branch` / `/security-review` の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。`/codex:review --wait --scope branch` の成功完了時にはループカウンタも +1 します (`/simplify` と `/security-review` はカウントしません — Skill PostToolUse は launch 時点で発火するため完了 signal としては不正確で、cooperative にカウントが膨らむ経路になるため、また loop 閾値判定は codex review の繰り返しを軸にした設計のため)。
 
 hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に本フックが呼ばれます。`Skill` matcher の挙動が公式ドキュメント上完全に明記されていないため、tool 名に依存しない構造にしてあります。フィルタリングはスクリプト側の bash 内蔵正規表現マッチが行うため、対象外 tool は subprocess を立てずに即離脱します。
 
@@ -134,6 +134,7 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 | 検知対象                                                | tool 名 | 判定                                                                                                                                                                            | 書き込むマーカー                              | 副作用                  |
 | ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------- |
 | `/simplify` skill の launch                             | `Skill` | `tool_input.skill == "simplify"`                                                                                                                                                | `<git-dir>/.claude-pre-push-simplified`       | (なし)                  |
+| `/security-review` skill の launch                      | `Skill` | `tool_input.skill == "security-review"`                                                                                                                                         | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
 | `/codex:review --wait --scope branch` の Bash 完了      | `Bash`  | コマンドが `^node` で始まる (env-prefix 許容) / `codex-companion.m[jt]s review` を含む / `--scope branch` を含む / `run_in_background == false` / 失敗・中断ではない                | `<git-dir>/.claude-pre-push-codex-reviewed`   | ループカウンタ +1       |
 
 **`/simplify` を launch タイミングで検知する設計上のトレードオフ**:
@@ -161,6 +162,7 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 |---|---|---|
 | `.claude-pre-push-simplified` | `/simplify` 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-codex-reviewed` | `/codex:review --wait --scope branch` 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-security-reviewed` | `/security-review` 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-codex-loop-count` | `/codex:review --wait --scope branch` 連続実行回数 | push 通過時にリセット |
 
 ## 関連プラグイン
