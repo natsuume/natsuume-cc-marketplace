@@ -1,10 +1,11 @@
 #!/bin/bash
 # auto-mark.sh
-# /simplify と /codex:review --wait --scope branch の実行完了を PostToolUse で検知し、
-# 対応するレビューマーカーとループカウンタを更新する。
+# /simplify / /codex:review --wait --scope branch / /security-review の実行完了を
+# PostToolUse で検知し、対応するレビューマーカーとループカウンタを更新する。
 #
 # 検知対象:
 #   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー
+#   - Skill tool で `security-review` skill が完了した瞬間 → security-reviewed マーカー
 #   - Bash tool で `codex-companion.mjs review --scope branch` が完了した瞬間
 #     → codex-reviewed マーカー + ループカウンタ +1
 #
@@ -35,17 +36,21 @@ INPUT=$(cat)
 # subprocess を立てずに済ませる (Read/Edit/Write 等の対象外 tool 完了でも本 hook が
 # 呼ばれるが、ここで即離脱できればフォーク無しで通り抜けられる)。
 #
-# 2 つの OR ブランチの意図:
-#   - `"skill"[[:space:]]*:[[:space:]]*"simplify"`: Skill tool 完了の検出。
-#     hook payload の JSON 整形 (`"skill":"simplify"` / `"skill": "simplify"` 等) に
-#     左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき
-#     payload を弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、
-#     フィルタは寛容に倒す (false positive は jq 後段の SKILL_NAME 一致判定で
-#     正しく弾かれるので無害)。
+# 3 つの OR ブランチの意図:
+#   - `"skill"[[:space:]]*:[[:space:]]*"simplify"`: Skill tool で `simplify` skill が
+#     完了したことを検出する粗フィルタ。
+#   - `"skill"[[:space:]]*:[[:space:]]*"security-review"`: Skill tool で `security-review`
+#     skill (= claude code 標準の /security-review) が完了したことを検出する粗フィルタ。
+#     simplify と同形の whitespace 寛容パターンを取る。
 #   - `codex-companion`: Bash tool での codex review companion 起動の粗検出。
 #     Bash 分岐側に `^node` + companion path + `review` サブコマンドの厳密な
 #     後段検証があるため、ここは単純 substring で十分 (false positive は後段で弾かれる)。
-PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"simplify"|codex-companion'
+#
+# hook payload の JSON 整形 (`"skill":"simplify"` / `"skill": "simplify"` 等) に左右され
+# ないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を弾く) は
+# マーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
+# (false positive は jq 後段の SKILL_NAME 一致判定で正しく弾かれるので無害)。
+PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(simplify|security-review)"|codex-companion'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0
 fi
@@ -62,17 +67,23 @@ INCREMENT_LOOP_COUNTER=0
 case "$TOOL_NAME" in
   Skill)
     SKILL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_input.skill // empty')
-    # `/simplify` のみ対象。namespace 付き skill (例: pr-review-toolkit:code-simplifier)
-    # は別物として扱い、本プラグインのマーカーは更新しない。
-    if [ "$SKILL_NAME" != "simplify" ]; then
-      exit 0
-    fi
-    # Skill tool の PostToolUse は `Launching skill: simplify` を返した瞬間 (= skill body
-    # 実行 **前**) に発火する。この timing でマーカーを書くことで、launch 時点の差分ハッシュ
-    # (= skill body が見た state) を記録する。simplify が edits を起こせば current hash は
+    # 対応する skill 名 → マーカー関数のマッピング。namespace 付き skill (例:
+    # pr-review-toolkit:code-simplifier) は別物として扱い、本プラグインのマーカーは更新しない。
+    #
+    # Skill tool の PostToolUse は `Launching skill: <name>` を返した瞬間 (= skill body 実行
+    # **前**) に発火する。この timing でマーカーを書くことで、launch 時点の差分ハッシュ
+    # (= skill body が見た state) を記録する。skill body が edits を起こせば current hash は
     # launch 時点と異なる値になり、block-pre-push.sh の比較で marker stale → DENY となる
-    # ため、Claude は **修正後の state で再度 /simplify** を呼ぶ必要が生じる (loop 強制)。
-    MARKER_FN=simplified_marker_path
+    # ため、Claude は **修正後の state で再度 skill** を呼ぶ必要が生じる (loop 強制)。
+    #
+    # /security-review (claude code 標準コマンド) も read-only review ではあるが、 review 後に
+    # 別の simplify が edits を起こすケースを考えると、 同じく launch 時点ハッシュを書いて
+    # 「edits 後は再 review を要求」 する loop 強制が一貫している。
+    case "$SKILL_NAME" in
+      simplify) MARKER_FN=simplified_marker_path ;;
+      security-review) MARKER_FN=security_marker_path ;;
+      *) exit 0 ;;
+    esac
     ;;
   Bash)
     COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
