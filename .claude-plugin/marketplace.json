@@ -25,7 +25,7 @@
       "name": "auto-lint-check",
       "source": "./plugins/auto-lint-check",
       "description": "ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
     },
     {

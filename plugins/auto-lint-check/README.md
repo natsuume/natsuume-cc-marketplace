@@ -4,7 +4,11 @@
 
 ## バージョン
 
-v0.1.0
+v0.1.1
+
+### v0.1.0 → v0.1.1 の変更点
+
+- 編集前 lint の deny メッセージに「PreToolUse は Edit/Write/MultiEdit 単位で発火するため、中間状態が lint clean にならない一連の編集は MultiEdit でまとめる必要がある」旨の案内を追加
 
 ## 概要
 
@@ -48,6 +52,10 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 - `MultiEdit` → 実ファイルを読み、`edits[]` を順に適用した結果を流す
 
 設定ファイルが見つからなかったり linter バイナリが利用できない場合は何もせずスキップします (false positive 抑制)。
+
+**編集単位の制約**:
+
+PreToolUse は Edit/Write/MultiEdit ごとに発火し、その都度「適用後の予測内容」に対して lint します。そのため一連の編集が最終的に lint clean になるとしても、**各 tool 呼び出し時点での予測内容が lint clean** でなければ deny されます。例えば「新規 import を追加する Edit」と「import を使用する箇所を追加する Edit」を分けて呼ぶと、1 つ目の Edit が未使用 import 検出で deny され、2 つ目の Edit に進めず stuck します。このような場合は関連する変更を 1 つの `MultiEdit` にまとめ、すべての変更を適用した予測内容に対して lint が通るようにしてください。deny メッセージにも同様の案内を含めています。
 
 #### 2. block-ignore-lint-comment
 

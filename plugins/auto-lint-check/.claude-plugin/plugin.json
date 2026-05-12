@@ -1,5 +1,5 @@
 {
   "name": "auto-lint-check",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン"
 }
