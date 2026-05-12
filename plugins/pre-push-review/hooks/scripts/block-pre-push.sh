@@ -694,9 +694,11 @@ target: ${TARGET_CWD}
   3. **\`Task\` / \`Agent\` tool (Claude Code で同じ subagent invocation tool に
      付いた 2 つの名前 — どちらでも可) で \`pre-push-review:security-reviewer\`
      subagent を起動する**
-     (この subagent が内部で /security-review skill を呼び出して branch 全差分の
-      security review を行い、結果のマークダウンレポートを返す。 PostToolUse hook が
-      subagent 内の skill 起動を検知して security マーカーを自動更新する)
+     (この subagent は self-contained に branch 全差分の security review を実行し、
+      結果のマークダウンレポートを返す。 標準 /security-review skill は呼び出さない
+      設計 (subagent 内では nested subagent が動かないため self-contained 化している)。
+      PostToolUse hook が **subagent の完了** (Agent / Task tool の終了) を検知して
+      security マーカーを自動更新する)
   4. レビュー結果に指摘があれば修正し、必要に応じて新規 commit を作成する
   5. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
      その場合は手順 1〜3 を最初から再実行する
@@ -705,12 +707,17 @@ target: ${TARGET_CWD}
 ⚠ **security review を直接 \`/security-review\` で呼ばないこと**: 標準 skill の
 prompt は最終応答をマークダウンレポートだけにするよう指示しているため、 主 session の
 Claude が直接呼ぶと turn が終了して push まで進めなくなります。 必ず \`pre-push-review:security-reviewer\`
-subagent を \`Task\` / \`Agent\` tool 経由で呼び出してください。 subagent の context 内で turn が終わるだけで、
-親 session は subagent invocation の結果として report を受け取って後続フロー (\`git push\`) を継続できます。
+subagent を \`Task\` / \`Agent\` tool 経由で呼び出してください。 subagent は標準 skill を
+invoke せず self-contained に同等のセキュリティレビューを実行するため、 subagent の
+turn は通常通り終了し、 親 session は subagent invocation の結果として report を
+受け取って後続フロー (\`git push\`) を継続できます。 (なお主 session 直接呼び出しの
+場合も、 後方互換として security マーカーは書かれます — ただし turn 終了でループが
+止まるため subagent 経由が推奨です。)
 
 マーカーは PostToolUse hook (auto-mark.sh) が \`/simplify\` /
-\`/codex:review --wait --scope branch\` / \`/security-review\` (subagent 内呼び出し含む) の
-実行完了を検知して自動的に記録します。マーカーは push 通過時に明示削除されません
+\`/codex:review --wait --scope branch\` / \`pre-push-review:security-reviewer\` subagent
+完了 (推奨パス) または \`/security-review\` skill launch (後方互換パス) を検知して
+自動的に記録します。マーカーは push 通過時に明示削除されません
 (次の編集でハッシュが変わると自動的に失効するため)。
 
 \`/codex:review\` の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
