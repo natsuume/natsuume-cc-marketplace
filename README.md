@@ -20,7 +20,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 |-----------|-----------|------|
 | [git-guardrails](#git-guardrails) | 0.2.0 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.1.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
-| [auto-lint-check](#auto-lint-check) | 0.1.0 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
+| [auto-lint-check](#auto-lint-check) | 0.1.1 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
 | [pre-push-review](#pre-push-review) | 0.2.0 | `git push` 前に `/simplify` → `/codex:review --wait --scope branch` のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。ループ回数が閾値以上に達した場合は `/codex:adversarial-review` を促す案内を deny メッセージに追加 |
 | [post-pr-review](#post-pr-review) | 0.2.0 | `gh pr create` 成功直後に `/codex:adversarial-review` (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
