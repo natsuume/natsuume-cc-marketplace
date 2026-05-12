@@ -45,11 +45,11 @@ PREDICTED="${PREDICTED%X}"
 
 if is_js_like "$FILE_PATH"; then
   if ! run_eslint_stdin "$FILE_PATH" "$PREDICTED"; then
-    emit_lint_deny "ESLint"
+    emit_lint_deny "ESLint" "$LINTER_OUTPUT"
   fi
 elif is_python "$FILE_PATH"; then
   if ! run_ruff_check_stdin "$FILE_PATH" "$PREDICTED"; then
-    emit_lint_deny "Ruff"
+    emit_lint_deny "Ruff" "$LINTER_OUTPUT"
   fi
 fi
 

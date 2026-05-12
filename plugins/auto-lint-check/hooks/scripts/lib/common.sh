@@ -197,17 +197,18 @@ emit_deny() {
   exit 0
 }
 
-# lint エラー専用の deny ヘルパー。linter 名を受け取り、共通の hint と直前に
-# 設定された $LINTER_OUTPUT を含む REASON を組み立てて emit_deny に渡す。
-# Usage: emit_lint_deny "ESLint" / emit_lint_deny "Ruff"
+# lint エラー専用の deny ヘルパー。linter 名と linter の出力を受け取り、共通の
+# hint を含む REASON を組み立てて emit_deny に渡す。
+# Usage: emit_lint_deny "ESLint" "$LINTER_OUTPUT"
 emit_lint_deny() {
   local linter="$1"
+  local output="$2"
   local reason
   reason=$(printf '%s\n' \
     "${linter} がエラーを検出しました。修正してから再度編集してください。" \
     "" \
     "$AUTO_LINT_CHECK_UNIT_HINT" \
     "" \
-    "$LINTER_OUTPUT")
+    "$output")
   emit_deny "$reason"
 }
