@@ -669,8 +669,8 @@ if [ "$LOOP_COUNT" -ge "$LOOP_THRESHOLD" ]; then
   - 大きな方針転換が必要そうなら、ユーザーに状況をエスカレートして判断を仰ぐ。
 
 \`/codex:adversarial-review\` は本ループのマーカー対象外です。 実行後は通常通り
-\`/simplify\` → \`/codex:review --wait --scope branch\` → \`/security-review\` を走らせて
-push へ進んでください。
+\`/simplify\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\`
+subagent (Agent tool 経由) を走らせて push へ進んでください。
 EOF
 )
 fi

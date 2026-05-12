@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: pre-push-review のセキュリティレビュー専用 subagent。 `git push` 前にレビューマーカー `.claude-pre-push-security-reviewed` を更新する必要があるとき (= block-pre-push.sh の deny メッセージで「`/security-review` の `security-reviewed` マーカーが未実行 / 失効」と指摘されたとき) に呼び出す。 内部で `/security-review` (claude code 標準 skill) を invoke して branch 全差分のセキュリティレビューを実行し、 結果のマークダウンレポートを返す。 主 session の Claude が `/security-review` を直接呼ぶと skill prompt の「Your final reply must contain the markdown report and nothing else」によって主 session が turn 終了して停止してしまうため、 subagent 内に閉じ込めて主 session のフロー (続く `git push` 等) を継続させる目的。
+description: pre-push-review のセキュリティレビュー専用 subagent。 `git push` 前のレビューループで block-pre-push.sh の deny メッセージが「security review (subagent 経由)」のマーカーを「未実行」または「失効」と指摘したときに呼び出す。 内部で `/security-review` (claude code 標準 skill) を invoke して branch 全差分のセキュリティレビューを実行し、 結果のマークダウンレポートを返す。 主 session の Claude が `/security-review` を直接呼ぶと skill prompt の「Your final reply must contain the markdown report and nothing else」によって主 session が turn 終了して停止してしまうため、 subagent 内に閉じ込めて主 session のフロー (続く `git push` 等) を継続させる目的。
 tools: Skill, Bash, Read, Glob, Grep, LS, Task
 model: inherit
 color: red
@@ -26,6 +26,6 @@ The `PostToolUse` hook that records the `security-reviewed` marker (`auto-mark.s
 
 - **Do not perform the security analysis yourself.** Delegate fully to `/security-review`. The skill is the source of truth for the analysis; reimplementing it here would drift from the official version.
 - **Do not modify any files.** This subagent is read-only. Even if the security review surfaces fixable issues, leave the fix to the main session.
-- **Do not stop at `/codex:rescue` or any other skill.** `/security-review` is the only skill you should invoke for this task.
+- **Do not invoke any other skill** besides `/security-review` for this task.
 - **Do not append commentary** to the markdown report. The main session is parsing the result as a security report; preambles or follow-up suggestions are noise.
 - **If `/security-review` returns an empty / "no findings" report**, return it unchanged. An empty report is a valid signal to the main session that the branch is clean.

@@ -1,6 +1,6 @@
 # pre-push-review プラグイン
 
-`git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (内部で `/security-review` を呼ぶ) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形を品質観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。 security review を subagent でラップするのは、 標準 skill `/security-review` の prompt が「マークダウンレポートだけで応答せよ」と指示しており、 主 session から直接呼ぶと turn が終了して後続フローが進まなくなるため。 修正により branch 全差分が変わると **3 つのレビューマーカーが自動的に失効** するため、Claude は 3 つのレビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
+`git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (内部で `/security-review` を呼ぶ; 詳細は下記 [Agents](#agents) を参照) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形を品質観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。修正により branch 全差分が変わると **3 つのレビューマーカーが自動的に失効** するため、Claude は 3 つのレビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
 
 ループが一定回数以上続いても収束しない場合、deny メッセージに **`/codex:adversarial-review`** (実装方針・設計選択への批判的レビュー) を促す案内が追加されます。表層レビューだけで収束しないループに対し「採用しているアプローチ自体が妥当か」を問い直す視点を取り入れる動線です。PR 作成直後の adversarial review は姉妹プラグイン [post-pr-review](../post-pr-review/) が誘導します。
 
@@ -10,8 +10,8 @@ v0.3.0 (前身: `pre-commit-review` v0.4.0)
 
 ### v0.2.0 → v0.3.0 の変更点
 
-- **`/security-review` を subagent 経由に変更**: 標準 skill `/security-review` の prompt 末尾は "Your final reply must contain the markdown report and nothing else." と指示しており、 主 session の Claude が直接呼ぶと turn が終了して後続フロー (`git push` 等) が停止する問題があった。 v0.3.0 では `pre-push-review:security-reviewer` subagent を新設し、 deny メッセージは subagent 経由での呼び出しを推奨する。 subagent 内で skill が turn 終了しても親 session には Task tool の result として報告が返るだけで、 親 session は後続の `git push` 等を継続できる。 PostToolUse hook (auto-mark.sh) は subagent 内の tool use にも発火するため、 security マーカーの自動更新は subagent 経路でも変わらず動作する (hook 側の変更は不要)
-- **agent: `security-reviewer` を追加**: 上記 subagent 経路を実装する agent ファイル。 tools は `Skill, Bash, Read, Glob, Grep, LS, Task` に制限 (`/security-review` skill body が内部で Task を起動するため Task を含める)。 Edit / Write は非許可で read-only。 description で「block-pre-push.sh の deny メッセージで security マーカーが未実行 / 失効と指摘されたときに呼ぶ」と明示
+- **`/security-review` を subagent 経由に変更** (詳細は [Agents](#agents) セクション): 主 session から直接 `/security-review` を呼ぶと skill の終端指示で turn が終わり、 後続 `git push` まで進まない問題への対応。 `pre-push-review:security-reviewer` subagent を新設し、 deny メッセージは subagent 経由の呼び出しを推奨するよう更新
+- **PostToolUse hook (auto-mark.sh) の変更は不要**: hook は subagent 内の tool use にも発火するため、 既存の `tool_input.skill == "security-review"` 検知ロジックが subagent 経路でも動作する
 
 ### v0.1.0 → v0.2.0 の変更点
 
@@ -126,7 +126,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 > **`/codex:review` と `/codex:rescue` の混同に注意**: 公式 codex プラグインには `/codex:review` (read-only コードレビュー) と `/codex:rescue` (修正・調査を delegate する subagent) の両方があり、用途が完全に別です。本プラグインが要求するのは前者です。Claude が誤って `/codex:rescue` を選ぶケースが報告されているため、運用時はコマンド名を明示的に確認してください。`/codex:review` (および閾値到達時に促される `/codex:adversarial-review`) は frontmatter で `disable-model-invocation: true` が指定されており本来 Skill tool から呼び出せませんが、姉妹プラグイン [codex-review-customize](../codex-review-customize/) を導入してパッチを適用すると Skill tool 経由でも呼び出し可能になります。
 
-> **`/security-review` を直接呼ばずに subagent 経由で呼ぶ理由**: 標準 skill `/security-review` の prompt は末尾で "Your final reply must contain the markdown report and nothing else." と指示しているため、 主 session の Claude が直接 Skill tool で呼ぶと turn が終了し、 push を含む後続フローが停止します。 v0.3.0 から本プラグインは `pre-push-review:security-reviewer` という subagent を同梱し、 deny メッセージで subagent 経由の呼び出しを推奨します (詳細は下記 Agents セクション)。 subagent 内で skill が turn 終了しても、 親 session には Task tool の result として report が返るだけで、 親 session は後続の `git push` 等を継続できます。 PostToolUse hook (auto-mark.sh) は subagent 内の tool use にも発火するため、 security マーカーの自動更新ロジックは subagent 経路でも変わらず動作します。
+> **security review は subagent 経由で呼ぶ**: 詳細は下記 [Agents](#agents) セクション。
 
 #### 2. auto-mark (PostToolUse, matcher: `*` — wildcard)
 
