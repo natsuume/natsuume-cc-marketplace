@@ -59,6 +59,11 @@ find_config_root() {
   bash "$AUTO_LINT_CHECK_LIB_DIR/find-config-root.sh" "$1" "$2"
 }
 
+# lint deny メッセージに添える構造的制約の案内 (詳細は README 参照)。
+AUTO_LINT_CHECK_UNIT_HINT="このフックは PreToolUse で Edit/Write/MultiEdit ごとに「編集後の予測内容」を
+lint しています。一連の編集の途中状態が lint clean にならない場合は、関連する
+変更を 1 つの MultiEdit にまとめてください。"
+
 # 解決された linter の起動コマンドを格納するグローバル配列。空白を含むパスでも
 # 安全に扱えるよう、文字列ではなく配列で返す。
 ESLINT_CMD=()
@@ -190,4 +195,19 @@ emit_deny() {
     }
   }'
   exit 0
+}
+
+# lint エラー専用の deny ヘルパー。linter 名を受け取り、共通の hint と直前に
+# 設定された $LINTER_OUTPUT を含む REASON を組み立てて emit_deny に渡す。
+# Usage: emit_lint_deny "ESLint" / emit_lint_deny "Ruff"
+emit_lint_deny() {
+  local linter="$1"
+  local reason
+  reason=$(printf '%s\n' \
+    "${linter} がエラーを検出しました。修正してから再度編集してください。" \
+    "" \
+    "$AUTO_LINT_CHECK_UNIT_HINT" \
+    "" \
+    "$LINTER_OUTPUT")
+  emit_deny "$reason"
 }

@@ -45,19 +45,11 @@ PREDICTED="${PREDICTED%X}"
 
 if is_js_like "$FILE_PATH"; then
   if ! run_eslint_stdin "$FILE_PATH" "$PREDICTED"; then
-    REASON=$(printf '%s\n' \
-      "ESLint がエラーを検出しました。修正してから再度編集してください。" \
-      "" \
-      "$LINTER_OUTPUT")
-    emit_deny "$REASON"
+    emit_lint_deny "ESLint"
   fi
 elif is_python "$FILE_PATH"; then
   if ! run_ruff_check_stdin "$FILE_PATH" "$PREDICTED"; then
-    REASON=$(printf '%s\n' \
-      "Ruff がエラーを検出しました。修正してから再度編集してください。" \
-      "" \
-      "$LINTER_OUTPUT")
-    emit_deny "$REASON"
+    emit_lint_deny "Ruff"
   fi
 fi
 
