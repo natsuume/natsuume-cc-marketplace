@@ -670,7 +670,7 @@ if [ "$LOOP_COUNT" -ge "$LOOP_THRESHOLD" ]; then
 
 \`/codex:adversarial-review\` は本ループのマーカー対象外です。 実行後は通常通り
 \`/simplify\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\`
-subagent (Agent tool 経由) を走らせて push へ進んでください。
+subagent (\`Task\` / \`Agent\` tool 経由) を走らせて push へ進んでください。
 EOF
 )
 fi
@@ -691,7 +691,9 @@ target: ${TARGET_CWD}
   1. /simplify を Skill tool で呼び出す (コード変更を伴うため先に実行)
   2. /codex:review --wait --scope branch を Skill tool で呼び出す
      (--scope branch 必須: branch 全差分 = PR diff のレビューを保証するため)
-  3. **Agent tool で \`pre-push-review:security-reviewer\` subagent を起動する**
+  3. **subagent invocation tool (Claude Code では \`Task\` または \`Agent\` という名前で
+     公開されている — どちらの名前でも同じ tool を指す) で \`pre-push-review:security-reviewer\`
+     subagent を起動する**
      (この subagent が内部で /security-review skill を呼び出して branch 全差分の
       security review を行い、結果のマークダウンレポートを返す。 PostToolUse hook が
       subagent 内の skill 起動を検知して security マーカーを自動更新する)
@@ -703,8 +705,8 @@ target: ${TARGET_CWD}
 ⚠ **security review を直接 \`/security-review\` で呼ばないこと**: 標準 skill の
 prompt は最終応答をマークダウンレポートだけにするよう指示しているため、 主 session の
 Claude が直接呼ぶと turn が終了して push まで進めなくなります。 必ず \`pre-push-review:security-reviewer\`
-subagent (Agent tool) 経由で呼び出してください。 subagent の context 内で turn が終わるだけで、
-親 session は Task tool の結果として report を受け取って後続フロー (\`git push\`) を継続できます。
+subagent を \`Task\` / \`Agent\` tool 経由で呼び出してください。 subagent の context 内で turn が終わるだけで、
+親 session は subagent invocation の結果として report を受け取って後続フロー (\`git push\`) を継続できます。
 
 マーカーは PostToolUse hook (auto-mark.sh) が \`/simplify\` /
 \`/codex:review --wait --scope branch\` / \`/security-review\` (subagent 内呼び出し含む) の

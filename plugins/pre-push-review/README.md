@@ -187,7 +187,7 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 - PostToolUse hook (auto-mark.sh) は subagent 内の Skill tool 呼び出しにも発火するため、 `tool_input.skill == "security-review"` の既存検知ロジックが自然に動作し、 security マーカーが自動更新される。 auto-mark.sh 側の変更は不要
 - model は `inherit` で親 session と同じモデルを使用
 
-**呼び出しタイミング**: block-pre-push.sh の deny メッセージで「security マーカー未実行 / 失効」と指摘された際に Agent tool 経由で起動する。 Claude が直接 `/security-review` を Skill tool で呼ばないよう deny メッセージに明示の警告がある
+**呼び出しタイミング**: block-pre-push.sh の deny メッセージで「security マーカー未実行 / 失効」と指摘された際に subagent invocation tool (Claude Code では `Task` または `Agent` という名前 — 同じ tool を指す) で起動する。 Claude が直接 `/security-review` を Skill tool で呼ばないよう deny メッセージに明示の警告がある
 
 ## 関連プラグイン
 
