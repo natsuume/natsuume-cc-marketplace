@@ -141,7 +141,8 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 | 検知対象                                                | tool 名 | 判定                                                                                                                                                                            | 書き込むマーカー                              | 副作用                  |
 | ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------- |
 | `/simplify` skill の launch                             | `Skill` | `tool_input.skill == "simplify"`                                                                                                                                                | `<git-dir>/.claude-pre-push-simplified`       | (なし)                  |
-| `pre-push-review:security-reviewer` subagent の完了 | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` または `security-reviewer` (name-only 形式も許容) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
+| `pre-push-review:security-reviewer` subagent の完了 (推奨) | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` または `security-reviewer` (name-only 形式も許容) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
+| `/security-review` skill の launch (後方互換)        | `Skill` | `tool_input.skill == "security-review"` (主 session 直接呼び出しのみ。 subagent は tools から Skill を外しているため呼べない) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
 | `/codex:review --wait --scope branch` の Bash 完了      | `Bash`  | コマンドが `^node` で始まる (env-prefix 許容) / `codex-companion.m[jt]s review` を含む / `--scope branch` を含む / `run_in_background == false` / 失敗・中断ではない                | `<git-dir>/.claude-pre-push-codex-reviewed`   | ループカウンタ +1       |
 
 **`/simplify` を launch タイミングで検知する設計上のトレードオフ**:
@@ -159,7 +160,7 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 
 - `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない / カウンタも増やさない)
 - `tool_input.run_in_background` が `true` (background 起動は完了タイミングを捉えられないため)
-- `tool_input.skill` が `simplify` 以外 (namespace 付き skill は別物として扱う)
+- `tool_input.skill` が `simplify` / `security-review` 以外 (namespace 付き skill は別物として扱う)
 - `tool_input.subagent_type` が `pre-push-review:security-reviewer` / `security-reviewer` 以外 (別の subagent 起動はマーカー対象外)
 - Bash codex 起動でコマンドに `--scope branch` が含まれていない (PR diff レビュー保証として不十分)
 - **Bash codex 起動時に working tree が dirty (staged または unstaged 変更あり)** (`/codex:review --scope branch` は committed 部分のみ review するため、dirty 状態で marker を書くと commit 後のハッシュと衝突して未レビュー commit を通す経路ができる。clean なときに review してから marker を書く運用に倒す)

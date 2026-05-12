@@ -1,25 +1,31 @@
 #!/bin/bash
 # auto-mark.sh
 # /simplify / /codex:review --wait --scope branch / pre-push-review:security-reviewer
-# subagent の実行完了を PostToolUse で検知し、対応するレビューマーカーとループカウンタを
-# 更新する。
+# subagent / /security-review 標準 skill (主 session 直接呼び出しのみ) の実行完了を
+# PostToolUse で検知し、対応するレビューマーカーとループカウンタを更新する。
 #
 # 検知対象:
 #   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー (launch 時点ハッシュ)
+#   - Skill tool で `security-review` skill が完了した瞬間 → security-reviewed マーカー
+#     (launch 時点ハッシュ。 主 session が直接呼んだ場合のみ動く後方互換パス)
 #   - Bash tool で `codex-companion.mjs review --scope branch` が完了した瞬間
 #     → codex-reviewed マーカー + ループカウンタ +1
 #   - Agent / Task tool で `pre-push-review:security-reviewer` subagent が完了した瞬間
-#     → security-reviewed マーカー (subagent 完了時点ハッシュ)
+#     → security-reviewed マーカー (subagent 完了時点ハッシュ。 推奨パス)
 #
-# `/security-review` 標準 skill 自体は検知対象から **外している**。 理由:
-#   1. 標準 skill は内部で sub-task (Task tool) を spawn する設計だが、 主 session の
-#      Claude が直接呼ぶと「Your final reply must contain the markdown report and
-#      nothing else.」で turn が終了して後続フロー (`git push`) が止まる
-#   2. subagent 内から invoke しようとしても、 Claude Code は subagent 内での
-#      Task tool 利用 (= nested subagent) を禁止しているため sub-task が動かない
-#   結果として、 標準 skill を直接呼ぶ経路はどちらの context でも完全には機能しない。
-#   pre-push-review:security-reviewer subagent が self-contained に同等の review を
-#   行い、 親 session に markdown report を返す設計に倒している。
+# **`/security-review` 標準 skill を残しつつ subagent も併用する理由**:
+#   推奨は subagent 経由。 主 session から直接 `/security-review` を呼ぶと
+#   「Your final reply must contain the markdown report and nothing else.」で
+#   turn が終了して後続フロー (`git push`) が止まるため、 block-pre-push.sh の
+#   deny メッセージは subagent 経由を案内している。 ただし「直接呼ばれた場合は
+#   マーカーを書かない」 設計だと、 誤ってまたは旧運用で直接呼んだとき marker が
+#   永久に更新されない user-hostile な経路が残るため、 直接呼び出しも検知して
+#   marker を書く後方互換パスを維持する。
+#
+#   silent-pass のリスク (subagent が標準 skill を invoke → sub-task が動かず失敗
+#   → でも marker は書かれる) は、 subagent の tools から **`Skill` を外す** ことで
+#   構造的に塞いでいる。 subagent は標準 skill を invoke できないため、 直接
+#   呼び出しの検知パスは subagent 経路と衝突しない。
 #
 # /codex:review は **--scope branch のみ受け付ける**。--scope working-tree は
 # committed 部分を review しないため PR diff レビュー保証として不十分、 --scope auto は
@@ -52,9 +58,9 @@ INPUT=$(cat)
 # subprocess を立てずに済ませる (Read/Edit/Write 等の対象外 tool 完了でも本 hook が
 # 呼ばれるが、ここで即離脱できればフォーク無しで通り抜けられる)。
 #
-# 3 つの OR ブランチの意図:
-#   - `"skill"[[:space:]]*:[[:space:]]*"simplify"`: Skill tool で `simplify` skill が
-#     完了したことを検出する粗フィルタ。
+# 4 つの OR ブランチの意図:
+#   - `"skill"[[:space:]]*:[[:space:]]*"(simplify|security-review)"`: Skill tool で
+#     `simplify` または `security-review` skill が完了したことを検出する粗フィルタ。
 #   - `"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"`: Agent / Task
 #     tool で `pre-push-review:security-reviewer` subagent が完了したことを検出する粗
 #     フィルタ。 namespace 付き形式 (`pre-push-review:security-reviewer`) と name-only
@@ -68,7 +74,7 @@ INPUT=$(cat)
 # ないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を弾く) は
 # マーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
 # (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
-PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"simplify"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"|codex-companion'
+PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(simplify|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"|codex-companion'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0
 fi
@@ -95,6 +101,7 @@ case "$TOOL_NAME" in
     # ため、Claude は **修正後の state で再度 skill** を呼ぶ必要が生じる (loop 強制)。
     case "$SKILL_NAME" in
       simplify) MARKER_FN=simplified_marker_path ;;
+      security-review) MARKER_FN=security_marker_path ;;
       *) exit 0 ;;
     esac
     ;;
