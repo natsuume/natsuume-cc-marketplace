@@ -1,6 +1,6 @@
 # pre-push-review プラグイン
 
-`git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (内部で `/security-review` を呼ぶ; 詳細は下記 [Agents](#agents) を参照) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形を品質観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。修正により branch 全差分が変わると **3 つのレビューマーカーが自動的に失効** するため、Claude は 3 つのレビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
+`git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に branch 全差分のセキュリティレビューを実行; 詳細は下記 [Agents](#agents) を参照) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形を品質観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。修正により branch 全差分が変わると **3 つのレビューマーカーが自動的に失効** するため、Claude は 3 つのレビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
 
 ループが一定回数以上続いても収束しない場合、deny メッセージに **`/codex:adversarial-review`** (実装方針・設計選択への批判的レビュー) を促す案内が追加されます。表層レビューだけで収束しないループに対し「採用しているアプローチ自体が妥当か」を問い直す視点を取り入れる動線です。PR 作成直後の adversarial review は姉妹プラグイン [post-pr-review](../post-pr-review/) が誘導します。
 
@@ -10,8 +10,8 @@ v0.3.0 (前身: `pre-commit-review` v0.4.0)
 
 ### v0.2.0 → v0.3.0 の変更点
 
-- **`/security-review` を subagent 経由に変更** (詳細は [Agents](#agents) セクション): 主 session から直接 `/security-review` を呼ぶと skill の終端指示で turn が終わり、 後続 `git push` まで進まない問題への対応。 `pre-push-review:security-reviewer` subagent を新設し、 deny メッセージは subagent 経由の呼び出しを推奨するよう更新
-- **PostToolUse hook (auto-mark.sh) の変更は不要**: hook は subagent 内の tool use にも発火するため、 既存の `tool_input.skill == "security-review"` 検知ロジックが subagent 経路でも動作する
+- **security review を self-contained subagent に切り出し** (詳細は [Agents](#agents) セクション): 主 session から直接 `/security-review` を呼ぶと skill の終端指示「Your final reply must contain the markdown report and nothing else.」で turn が終わり、 後続 `git push` まで進まない問題への対応。 `pre-push-review:security-reviewer` subagent を新設し、 deny メッセージは subagent 経由の呼び出しを推奨する。 subagent は **`/security-review` 標準 skill を呼び出さず**、 自前の prompt で同等のセキュリティレビューを self-contained に実行する。 これは Claude Code が subagent 内で別の subagent (= Task tool による sub-task) を spawn できない制約のため。 標準 skill 本体は内部で sub-task を spawn する設計だが、 subagent 内ではそれが機能しないため。
+- **auto-mark.sh のマーカートリガを変更**: `Skill(security-review)` の launch ではなく、 `Agent` / `Task` tool で `pre-push-review:security-reviewer` subagent が完了したタイミングで security マーカーを書く。 launch ではなく completion を使うのは、 subagent がレビュー本体を完了させたことを確認した上でマーカーを書くため (= subagent 失敗時に silent-pass しない)。 hook は subagent 内の tool use にも発火する Claude Code の挙動に依存しない設計
 
 ### v0.1.0 → v0.2.0 の変更点
 
@@ -132,7 +132,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`/simplify` / `/codex:review --wait --scope branch` / `/security-review` の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。`/codex:review --wait --scope branch` の成功完了時にはループカウンタも +1 します (`/simplify` と `/security-review` はカウントしません — Skill PostToolUse は launch 時点で発火するため完了 signal としては不正確で、cooperative にカウントが膨らむ経路になるため、また loop 閾値判定は codex review の繰り返しを軸にした設計のため)。
+`/simplify` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。`/codex:review --wait --scope branch` の成功完了時にはループカウンタも +1 します (`/simplify` と security-reviewer はカウントしません — Skill PostToolUse は launch 時点で発火するため完了 signal としては不正確で、cooperative にカウントが膨らむ経路になるため、また loop 閾値判定は codex review の繰り返しを軸にした設計のため)。
 
 hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に本フックが呼ばれます。`Skill` matcher の挙動が公式ドキュメント上完全に明記されていないため、tool 名に依存しない構造にしてあります。フィルタリングはスクリプト側の bash 内蔵正規表現マッチが行うため、対象外 tool は subprocess を立てずに即離脱します。
 
@@ -141,7 +141,7 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 | 検知対象                                                | tool 名 | 判定                                                                                                                                                                            | 書き込むマーカー                              | 副作用                  |
 | ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------- |
 | `/simplify` skill の launch                             | `Skill` | `tool_input.skill == "simplify"`                                                                                                                                                | `<git-dir>/.claude-pre-push-simplified`       | (なし)                  |
-| `/security-review` skill の launch                      | `Skill` | `tool_input.skill == "security-review"`                                                                                                                                         | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
+| `pre-push-review:security-reviewer` subagent の完了 | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` または `security-reviewer` (name-only 形式も許容) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
 | `/codex:review --wait --scope branch` の Bash 完了      | `Bash`  | コマンドが `^node` で始まる (env-prefix 許容) / `codex-companion.m[jt]s review` を含む / `--scope branch` を含む / `run_in_background == false` / 失敗・中断ではない                | `<git-dir>/.claude-pre-push-codex-reviewed`   | ループカウンタ +1       |
 
 **`/simplify` を launch タイミングで検知する設計上のトレードオフ**:
@@ -151,11 +151,16 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 - メリット (loop discipline): simplify body が edits を行えば current hash は launch 時点と異なる値になります。block-pre-push.sh はこの hash と current hash を比較するため、edit 後は marker stale → DENY となり、Claude は **修正後の state で再度 `/simplify` を呼ぶ** 必要が生じます。これにより「修正後の差分は必ず simplify を再走させる」という loop discipline が構造的に強制されます。
 - 既知の限界 (lie attack): Claude が `Skill(simplify)` を呼んでも skill body の meta prompt を実際に実行せず、その後 `/codex:review --wait --scope branch` を呼んで push する経路では、両マーカーが launch 時点の hash で揃ってしまい push が通ってしまいます。これは Claude が instructions を真摯に follow するという信頼を前提とした設計で、構造的には防げません。
 
+**security-reviewer subagent を completion タイミングで検知する理由**:
+
+subagent は内部で `/security-review` 標準 skill を呼ばずに self-contained でレビューを実行します。 PostToolUse hook が Skill launch ではなく Task 完了で発火するように倒すことで、 subagent が **実際にレビューを完了させた** ことを確認した上でマーカーを書きます。 subagent が途中で失敗した場合 (`tool_response.is_error` / `interrupted`) はマーカーが書かれないため、 push gate がそのまま deny を返してループが続きます (silent-pass しない設計)。
+
 **書き込みをスキップする条件**:
 
 - `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない / カウンタも増やさない)
 - `tool_input.run_in_background` が `true` (background 起動は完了タイミングを捉えられないため)
 - `tool_input.skill` が `simplify` 以外 (namespace 付き skill は別物として扱う)
+- `tool_input.subagent_type` が `pre-push-review:security-reviewer` / `security-reviewer` 以外 (別の subagent 起動はマーカー対象外)
 - Bash codex 起動でコマンドに `--scope branch` が含まれていない (PR diff レビュー保証として不十分)
 - **Bash codex 起動時に working tree が dirty (staged または unstaged 変更あり)** (`/codex:review --scope branch` は committed 部分のみ review するため、dirty 状態で marker を書くと commit 後のハッシュと衝突して未レビュー commit を通す経路ができる。clean なときに review してから marker を書く運用に倒す)
 - カレントブランチが default branch (master/main)
@@ -169,7 +174,7 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 |---|---|---|
 | `.claude-pre-push-simplified` | `/simplify` 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-codex-reviewed` | `/codex:review --wait --scope branch` 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
-| `.claude-pre-push-security-reviewed` | `/security-review` (subagent 経由含む) 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-codex-loop-count` | `/codex:review --wait --scope branch` 連続実行回数 | push 通過時にリセット |
 
 ### Agents
@@ -178,14 +183,21 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 
 **ファイル**: `agents/security-reviewer.md`
 
-`/security-review` 標準 skill を **subagent の context 内で** 呼び出し、 結果のマークダウンレポートを親 session に返す delegator subagent です。 v0.3.0 で追加されました。
+branch 全差分に対するセキュリティレビューを **self-contained に** 実行し、 結果のマークダウンレポートを親 session に返す subagent です。 v0.3.0 で追加されました。
 
 **動作**:
 
-- tools は `Skill, Bash, Read, Glob, Grep, LS, Task` に制限 (Edit / Write は非許可で read-only)。 `Task` を含むのは `/security-review` skill body 自体が "Use a sub-task to identify vulnerabilities" として内部で Task tool (= sub-task) を起動するため
-- subagent 内で `/security-review` が "Your final reply must contain the markdown report and nothing else." の指示に従って turn 終了しても、 影響範囲は subagent の turn だけで親 session には及ばない。 親 session は Task tool の result として report を受け取り、 後続フロー (`git push` 等) を継続できる
-- PostToolUse hook (auto-mark.sh) は subagent 内の Skill tool 呼び出しにも発火するため、 `tool_input.skill == "security-review"` の既存検知ロジックが自然に動作し、 security マーカーが自動更新される。 auto-mark.sh 側の変更は不要
+- tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/security-review` skill を invoke できないようにしている (理由は下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため、 列挙しても動かない
+- subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
+- 親 session は `Agent` / `Task` tool の result として markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。 subagent の system prompt 終端で `Return the report as your final reply. No tool use, no further actions after composing the report.` と明示しているため、 親 session のフローは止まらない
+- PostToolUse hook (auto-mark.sh) は subagent **完了時** に発火する Agent / Task tool 検知ロジックで security マーカーを更新する (launch 時点ではなく completion で書くことで、 subagent 失敗時の silent-pass を防ぐ)
 - model は `inherit` で親 session と同じモデルを使用
+
+**標準 `/security-review` skill を invoke しない理由**:
+
+(1) 主 session の Claude が直接呼ぶと skill prompt 末尾「Your final reply must contain the markdown report and nothing else.」によって turn が終了し、 後続フロー (`git push`) まで進まない。
+(2) subagent 内から invoke しても、 標準 skill 本体は内部で sub-task (Task tool) を spawn する設計だが、 Claude Code は **subagent 内での nested subagent 起動を禁止** している (公式ドキュメント `subagents cannot spawn other subagents`)。 sub-task が動かないため degraded mode で実行されるが、 PostToolUse は Skill launch 時点で発火するためマーカーは書かれてしまい、 silent-pass の経路ができる。
+(3) このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)
 
 **呼び出しタイミング**: block-pre-push.sh の deny メッセージで「security マーカー未実行 / 失効」と指摘された際に subagent invocation tool (Claude Code では `Task` または `Agent` という名前 — 同じ tool を指す) で起動する。 Claude が直接 `/security-review` を Skill tool で呼ばないよう deny メッセージに明示の警告がある
 
