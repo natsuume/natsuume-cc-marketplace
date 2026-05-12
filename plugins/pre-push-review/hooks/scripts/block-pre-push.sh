@@ -564,7 +564,7 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C ${TARGET_CWD} status\` で変更を確認し、commit してから \`/simplify\` → \`/codex:review --wait --scope branch\` → \`/security-review\` を再走させて push してください。
+\`git -C ${TARGET_CWD} status\` で変更を確認し、commit してから \`/simplify\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\` subagent (\`Task\` / \`Agent\` tool 経由) を再走させて push してください。
 EOF
 )
   deny "$REASON"
@@ -669,8 +669,8 @@ if [ "$LOOP_COUNT" -ge "$LOOP_THRESHOLD" ]; then
   - 大きな方針転換が必要そうなら、ユーザーに状況をエスカレートして判断を仰ぐ。
 
 \`/codex:adversarial-review\` は本ループのマーカー対象外です。 実行後は通常通り
-\`/simplify\` → \`/codex:review --wait --scope branch\` → \`/security-review\` を走らせて
-push へ進んでください。
+\`/simplify\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\`
+subagent (\`Task\` / \`Agent\` tool 経由) を走らせて push へ進んでください。
 EOF
 )
 fi
@@ -684,24 +684,41 @@ target: ${TARGET_CWD}
 レビュー状態 (3 つすべて「✓ 最新の差分でレビュー済み」になると push が許可されます):
   /simplify                        : $SIMPLIFIED_STATUS
   /codex:review --scope branch     : $CODEX_STATUS
-  /security-review                 : $SECURITY_STATUS
+  security review (subagent 経由)  : $SECURITY_STATUS
   ループ回数                       : ${LOOP_COUNT} 回 (閾値 ${LOOP_THRESHOLD} 回でアーキテクチャレビュー誘導)
 
 実行手順 (修正が落ち着くまでループ):
   1. /simplify を Skill tool で呼び出す (コード変更を伴うため先に実行)
   2. /codex:review --wait --scope branch を Skill tool で呼び出す
      (--scope branch 必須: branch 全差分 = PR diff のレビューを保証するため)
-  3. /security-review を Skill tool で呼び出す (claude code 標準 skill)
-     現在ブランチの pending changes に対する security review を行う
+  3. **\`Task\` / \`Agent\` tool (Claude Code で同じ subagent invocation tool に
+     付いた 2 つの名前 — どちらでも可) で \`pre-push-review:security-reviewer\`
+     subagent を起動する**
+     (この subagent は self-contained に branch 全差分の security review を実行し、
+      結果のマークダウンレポートを返す。 標準 /security-review skill は呼び出さない
+      設計 (subagent 内では nested subagent が動かないため self-contained 化している)。
+      PostToolUse hook が **subagent の完了** (Agent / Task tool の終了) を検知して
+      security マーカーを自動更新する)
   4. レビュー結果に指摘があれば修正し、必要に応じて新規 commit を作成する
   5. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
      その場合は手順 1〜3 を最初から再実行する
   6. 3 つすべてのマーカーが「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
 
+⚠ **security review を直接 \`/security-review\` で呼ばないこと**: 標準 skill の
+prompt は最終応答をマークダウンレポートだけにするよう指示しているため、 主 session の
+Claude が直接呼ぶと turn が終了して push まで進めなくなります。 必ず \`pre-push-review:security-reviewer\`
+subagent を \`Task\` / \`Agent\` tool 経由で呼び出してください。 subagent は標準 skill を
+invoke せず self-contained に同等のセキュリティレビューを実行するため、 subagent の
+turn は通常通り終了し、 親 session は subagent invocation の結果として report を
+受け取って後続フロー (\`git push\`) を継続できます。 (なお主 session 直接呼び出しの
+場合も、 後方互換として security マーカーは書かれます — ただし turn 終了でループが
+止まるため subagent 経由が推奨です。)
+
 マーカーは PostToolUse hook (auto-mark.sh) が \`/simplify\` /
-\`/codex:review --wait --scope branch\` / \`/security-review\` の実行完了を検知して自動的に
-記録します。マーカーは push 通過時に明示削除されません (次の編集でハッシュが変わると
-自動的に失効するため)。
+\`/codex:review --wait --scope branch\` / \`pre-push-review:security-reviewer\` subagent
+完了 (推奨パス) または \`/security-review\` skill launch (後方互換パス) を検知して
+自動的に記録します。マーカーは push 通過時に明示削除されません
+(次の編集でハッシュが変わると自動的に失効するため)。
 
 \`/codex:review\` の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
   - **\`--wait\` (フォアグラウンド) のみサポート**
