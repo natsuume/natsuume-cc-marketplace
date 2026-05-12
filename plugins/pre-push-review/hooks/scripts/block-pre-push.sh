@@ -691,8 +691,8 @@ target: ${TARGET_CWD}
   1. /simplify を Skill tool で呼び出す (コード変更を伴うため先に実行)
   2. /codex:review --wait --scope branch を Skill tool で呼び出す
      (--scope branch 必須: branch 全差分 = PR diff のレビューを保証するため)
-  3. **subagent invocation tool (Claude Code では \`Task\` または \`Agent\` という名前で
-     公開されている — どちらの名前でも同じ tool を指す) で \`pre-push-review:security-reviewer\`
+  3. **\`Task\` / \`Agent\` tool (Claude Code で同じ subagent invocation tool に
+     付いた 2 つの名前 — どちらでも可) で \`pre-push-review:security-reviewer\`
      subagent を起動する**
      (この subagent が内部で /security-review skill を呼び出して branch 全差分の
       security review を行い、結果のマークダウンレポートを返す。 PostToolUse hook が
