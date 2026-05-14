@@ -68,27 +68,19 @@ cd "$REPO_ROOT" || exit 0
 # 本フック発火時点では、同一コマンド内の `git add` / `git stage` がまだ走って
 # おらず、`git commit -a` / `--all` の自動 stage や `git commit <pathspec>`
 # (pathspec form: 引数で指定したパスを working tree からそのまま commit) も
-# 未実行。staged だけ見ると lint をすり抜けるため、コマンド文字列からこれら
-# の兆候を検出した場合 (HAS_STAGING=1) は working tree の変更 (modified +
-# untracked) も lint 対象に含め、ソースを working tree から読む。
+# 未実行。staged だけ見ると lint をすり抜けるため、これらの兆候を検出した
+# 場合 (HAS_STAGING=1) は working tree の変更 (modified + untracked) も lint
+# 対象に含め、ソースを working tree から読む。
 #
-# pathspec 検出には Python の `shlex` でクォート対応トークン化を行う
-# (`-m "long message"` を正しく扱うため)。失敗時は安全側で HAS_STAGING=1。
+# 検出は Python の shlex (punctuation_chars=";&|") でシェルトークン化した
+# 結果に対して行う。`-m "msg with git add"` のような commit message 内の
+# 文字列を staging 操作として誤検出しないために、bash の `case` / `=~` で
+# 生コマンドを scan することは避けている。
 #
 # 過検出 (commit に含めない予定の編集まで lint) は許容する設計トレードオフ。
+# 失敗時は安全側で HAS_STAGING=1。
 HAS_STAGING=0
-case "$COMMAND" in
-  *"git add"*|*"git stage"*) HAS_STAGING=1 ;;
-esac
-if [[ "$COMMAND" =~ commit[^\;\&\|]*[[:space:]]-a[^[:space:]]*([[:space:]]|;|\&|\||$) ]] \
-  || [[ "$COMMAND" =~ commit[^\;\&\|]*[[:space:]]--all([[:space:]]|;|\&|\||$) ]]; then
-  HAS_STAGING=1
-fi
-if [ "$HAS_STAGING" -eq 0 ] && command -v python3 >/dev/null 2>&1; then
-  # shlex.shlex に punctuation_chars=";&|" を渡してシェルセパレータを独立
-  # トークン化する (`shlex.split` は `ok;` のように連結したまま返すため不適)。
-  # `commit` 以降の位置引数 (pathspec) を検出する。
-  # exit 0 → pathspec あり、1 → 無し、それ以外 → 解析失敗。
+if command -v python3 >/dev/null 2>&1; then
   if python3 - "$COMMAND" <<'PY'; then
 import shlex, sys
 lex = shlex.shlex(sys.argv[1], posix=True, punctuation_chars=";&|")
@@ -97,45 +89,66 @@ try:
     toks = list(lex)
 except ValueError:
     sys.exit(2)
+
 VALUE_FLAGS = {
     "-m", "--message", "-F", "--file", "-t", "--template",
     "-c", "--reedit-message", "-C", "--reuse-message",
     "-S", "--gpg-sign", "--author", "--date", "--cleanup",
     "--fixup", "--squash", "--trailer",
 }
-# `-o` (`--only`) / `-i` (`--include`) は flag に続く pathspec を working tree
-# から取り込む。出現した時点で pathspec mode 確定。
+# `-o` (`--only`) / `-i` (`--include`) は flag に続く pathspec を working
+# tree から取り込む → 出現で pathspec mode 確定。
 PATHSPEC_MODE_FLAGS = {"-o", "--only", "-i", "--include"}
-# punctuation_chars でクラスタになった `&&` / `||` / `;` / `&` / `|` の全て
 SEPARATORS = {";", "&&", "||", "|", "&"}
-i = 0
+
+
+def short_cluster_has_a(t: str) -> bool:
+    # `-am` / `-ma` / `-aS` のような short cluster で `a` を含むものを auto-stage
+    # と判定。`--amend` は `--` 開始なので除外、`-m` は `a` を含まない。
+    return len(t) >= 2 and t[0] == "-" and t[1] != "-" and "a" in t[1:]
+
+
 n = len(toks)
+i = 0
 while i < n:
-    if toks[i] != "commit":
-        i += 1
+    t = toks[i]
+    # git add / git stage
+    if t == "git" and i + 1 < n and toks[i + 1] in ("add", "stage"):
+        sys.exit(0)
+    if t == "commit":
+        j = i + 1
+        expect_val = False
+        while j < n:
+            u = toks[j]
+            if u in SEPARATORS:
+                break
+            if expect_val:
+                expect_val = False
+            elif u == "--":
+                sys.exit(0)
+            elif u in PATHSPEC_MODE_FLAGS:
+                sys.exit(0)
+            elif u == "--all":
+                sys.exit(0)
+            elif u in VALUE_FLAGS:
+                expect_val = True
+            elif u.startswith("--"):
+                pass  # other long flag
+            elif u.startswith("-") and short_cluster_has_a(u):
+                sys.exit(0)
+            elif u.startswith("-"):
+                pass  # other short flag without `a`
+            else:
+                sys.exit(0)  # positional → pathspec
+            j += 1
+        i = j
         continue
-    j = i + 1
-    expect_val = False
-    while j < n:
-        t = toks[j]
-        if t in SEPARATORS:
-            break
-        if expect_val:
-            expect_val = False
-        elif t == "--":
-            sys.exit(0)
-        elif t in PATHSPEC_MODE_FLAGS:
-            sys.exit(0)
-        elif t in VALUE_FLAGS:
-            expect_val = True
-        elif t.startswith("-"):
-            pass
-        else:
-            sys.exit(0)
-        j += 1
-    i = j
+    i += 1
 sys.exit(1)
 PY
+    HAS_STAGING=1
+  elif [ $? -eq 2 ]; then
+    # parse failure: 安全側で有効化
     HAS_STAGING=1
   fi
 fi
