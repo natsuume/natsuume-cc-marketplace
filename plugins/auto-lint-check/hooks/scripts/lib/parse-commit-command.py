@@ -151,10 +151,22 @@ def _is_repo_override_env(tok: str) -> bool:
     return key in REPO_OVERRIDE_ENV_VARS
 
 
+# attached value を取る short option の prefix。`-madd` (= `-m add`) のように
+# flag 直後に value が連結する形式では、後続文字は value の一部であり short
+# cluster の auto-stage 判定対象にしない。`-S` も attached value (`-Skeyid`)
+# を取る。
+_SHORT_VALUE_PREFIXES: frozenset[str] = frozenset({"m", "F", "t", "c", "C", "S"})
+
+
 def _short_cluster_has_a(t: str) -> bool:
     """`-am` / `-ma` / `-aS` のような short cluster で `a` を含むものを
-    auto-stage と判定。`--amend` は `--` 開始なので除外、`-m` は `a` を含まない。"""
-    return len(t) >= 2 and t[0] == "-" and t[1] != "-" and "a" in t[1:]
+    auto-stage と判定。`--amend` は `--` 開始なので除外、`-m` は `a` を含まない。
+    `-madd` / `-Fpath` 等の value attached 形式は cluster 扱いせず除外。"""
+    if len(t) < 2 or t[0] != "-" or t[1] == "-":
+        return False
+    if t[1] in _SHORT_VALUE_PREFIXES:
+        return False
+    return "a" in t[1:]
 
 
 def _find_subcommand_after_git(toks: list[str], start: int) -> tuple[int, str, bool] | None:

@@ -113,6 +113,20 @@ if [ "$HAS_STAGING" -eq 1 ]; then
   while IFS= read -r -d '' f; do
     add_source "$f" working
   done < <(git ls-files --others --exclude-standard -z 2>/dev/null)
+  # HAS_STAGING=1 の場合、commit までに working tree が再 stage される
+  # (`commit -a` / `git add path` / pathspec form 等)。dual-membership
+  # (staged + working) のファイルは新しい working tree 内容が commit される
+  # ため、古い staged blob を lint する必要がない。staged を外し working
+  # のみ残す (古い staged の誤検出による false-positive deny を回避)。
+  for f in "${!FILE_SOURCES[@]}"; do
+    # 値は "staged" / "working" / "staged working" / "working staged" のいずれか。
+    # 両方含むなら dual-membership として working のみに統一。
+    case "${FILE_SOURCES[$f]}" in
+      *staged*working*|*working*staged*)
+        FILE_SOURCES[$f]="working"
+        ;;
+    esac
+  done
 fi
 
 [ ${#FILE_SOURCES[@]} -gt 0 ] || exit 0
