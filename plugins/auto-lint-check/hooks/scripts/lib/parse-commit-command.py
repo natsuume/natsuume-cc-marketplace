@@ -62,7 +62,18 @@ COMMIT_VALUE_FLAGS: frozenset[str] = frozenset(
 # tree から取り込む → 出現で pathspec mode 確定。
 PATHSPEC_MODE_FLAGS: frozenset[str] = frozenset({"-o", "--only", "-i", "--include"})
 
-SEPARATORS: frozenset[str] = frozenset({";", "&&", "||", "|", "&"})
+SEPARATORS: frozenset[str] = frozenset({";", "&&", "||", "|", "&", "(", ")"})
+
+# `>`, `<`, `>>`, `<<`, `2>`, `2>&1` などの redirection token を識別する。
+# shlex は `punctuation_chars` に `<>` を含めないため `>log` / `2>` が単一
+# トークンとして残り、これを pathspec と誤認すると無関係な working tree を
+# lint してしまう。`commit` 引数解析時に redirection token に到達したら
+# 「シェルの redirection 開始 = commit args 終端」として break する。
+_REDIRECT_TOKEN_RE = re.compile(r"^\d*[<>]")
+
+
+def _is_redirection_token(tok: str) -> bool:
+    return bool(_REDIRECT_TOKEN_RE.match(tok))
 
 # `git` の global option で value を取るもの (subcommand を見つけるために skip)。
 GIT_GLOBAL_VALUE_FLAGS: frozenset[str] = frozenset(
@@ -121,7 +132,7 @@ def _find_subcommand_after_git(toks: list[str], start: int) -> tuple[int, str, b
     has_override = False
     while j < n:
         u = toks[j]
-        if u in SEPARATORS:
+        if u in SEPARATORS or _is_redirection_token(u):
             return None
         if expect_val:
             if pending_override:
@@ -158,7 +169,7 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
     expect_val = False
     while j < n:
         u = toks[j]
-        if u in SEPARATORS:
+        if u in SEPARATORS or _is_redirection_token(u):
             break
         if expect_val:
             expect_val = False
@@ -183,7 +194,12 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
 
 
 def _classify(command: str) -> int:
-    lex = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+    # `()` も punctuation に含めて `(git commit ...)` の `(` `)` を独立トークン
+    # 化する (shlex デフォルトでは `(git` を一塊として返してしまう)。`<>` は
+    # 含めない: `2>&1` / `>log` の `>` 直前の数字を分離してしまうと redirection
+    # の意味が崩れるため、redirection token はそのまま 1 トークンで受け取り
+    # commit 引数解析側で _is_redirection_token として break する。
+    lex = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
     lex.whitespace_split = True
     try:
         toks = list(lex)
