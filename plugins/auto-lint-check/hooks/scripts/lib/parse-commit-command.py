@@ -160,6 +160,26 @@ def _find_subcommand_after_git(toks: list[str], start: int) -> tuple[int, str, b
     return None
 
 
+# `git commit --dry-run` / `--help` / `-h` は実 commit を作らない。検出時は
+# skip コードを返して何も lint しない。
+NON_MUTATING_COMMIT_FLAGS: frozenset[str] = frozenset({"--dry-run", "--help", "-h"})
+
+
+def _commit_is_non_mutating(toks: list[str], sub_idx: int) -> bool:
+    """commit invocation の引数に `--dry-run` / `--help` / `-h` が含まれるか
+    判定する。これらが含まれる場合、実際の commit は走らないため lint も不要。"""
+    n = len(toks)
+    j = sub_idx + 1
+    while j < n:
+        u = toks[j]
+        if u in SEPARATORS or _is_redirection_token(u):
+            break
+        if u in NON_MUTATING_COMMIT_FLAGS:
+            return True
+        j += 1
+    return False
+
+
 def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
     """`commit` subcommand 以降の引数を見て、working tree を取り込む形式
     (-a / --all / -am 系 / -o / --only / -i / --include / `--` / pathspec)
@@ -207,31 +227,40 @@ def _classify(command: str) -> int:
         return 2
 
     # Phase 1: コマンド全体を走査し、各 git invocation の (subcommand, index,
-    # has_repo_override) を抽出する。env override (`GIT_DIR=...` 等) は次の
-    # simple command にのみ effect する POSIX セマンティクスを尊重し、
-    # SEPARATORS や他の command で消費される。
+    # has_repo_override) を抽出する。`git` は command position (コマンド先頭、
+    # SEPARATORS の直後、または env-var assignment 列の直後) でのみ意味を持つ
+    # ため、`echo git commit` のような他コマンドの引数として現れる `git` は
+    # 無視する。env override (`GIT_DIR=...` 等) は次の simple command にのみ
+    # effect する POSIX セマンティクス。
     invocations: list[tuple[str, int, bool]] = []
     n = len(toks)
     i = 0
     pending_env_override = False
+    at_command_position = True
     while i < n:
         tok = toks[i]
         if tok in SEPARATORS:
             pending_env_override = False
+            at_command_position = True
             i += 1
             continue
-        if _is_env_assignment(tok):
+        if at_command_position and _is_env_assignment(tok):
             if _is_repo_override_env(tok):
                 pending_env_override = True
             i += 1
             continue
+        if not at_command_position:
+            i += 1
+            continue
         if tok != "git":
             pending_env_override = False
+            at_command_position = False
             i += 1
             continue
         result = _find_subcommand_after_git(toks, i)
         if result is None:
             pending_env_override = False
+            at_command_position = False
             i += 1
             continue
         sub_idx, sub, has_override = result
@@ -240,6 +269,7 @@ def _classify(command: str) -> int:
         pending_env_override = False
         invocations.append((sub, sub_idx, has_override))
         i = sub_idx + 1
+        at_command_position = False
 
     # Phase 2: invocation 列を解析。`add` / `stage` で repo override がないもの
     # は cwd repo の staging trigger としてフラグ立て (後続の cwd commit で
@@ -257,6 +287,9 @@ def _classify(command: str) -> int:
             # 別 repo に対する commit → cwd repo を silently lint しないよう
             # skip を要求する (bash 側で exit 3 を受け取って exit 0 で抜ける)。
             return 3
+        if _commit_is_non_mutating(toks, sub_idx):
+            # `--dry-run` / `--help` / `-h`: 実 commit は走らないので lint 不要。
+            return 4
         # cwd repo に対する commit。同 invocation 内の `-a` / pathspec 等で
         # 引き起こされる staging を見る。先行 cwd add があれば既に staging
         # trigger 確定。どちらか true なら HAS_STAGING。
