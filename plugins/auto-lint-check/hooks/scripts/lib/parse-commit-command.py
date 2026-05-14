@@ -318,6 +318,7 @@ def _classify(command: str) -> int:
     # 1 つ消費した時点で False に倒し、以降のトークンは command の引数として
     # 解釈する (= `echo git commit` の "git" を invocation と誤認しない)。
     at_command_position = True
+    sticky_cd = False
     while i < n:
         tok = toks[i]
         if tok in SEPARATORS:
@@ -328,9 +329,14 @@ def _classify(command: str) -> int:
         if at_command_position and tok == "cd":
             # `cd dir && git commit` は cwd を切り替えてから commit を実行。
             # 本 hook は元の cwd repo を見るため、cd 先 repo の lint を素通り
-            # させる silent bypass 経路になる。repo override と同等として
-            # 即 fail closed (exit 3) を返す。
-            return 3
+            # する silent bypass 経路になる。ただし `cd docs && grep "git
+            # commit" .` のような非 commit コマンドで即 fail closed すると
+            # false-positive deny になるので、sticky flag を立て、後で
+            # 実 commit invocation を見つけた場合のみ repo override と同等
+            # の exit 3 を返す。
+            sticky_cd = True
+            i += 1
+            continue
         if at_command_position and tok == "env":
             # `env [VAR=val ...] git commit` の env wrapper。env 自身は
             # builtin で、続く env-var assignment 列と command 名を渡す。
@@ -389,9 +395,12 @@ def _classify(command: str) -> int:
             continue
         if sub != "commit":
             continue
-        if has_override:
-            # 別 repo に対する commit → cwd repo を silently lint しないよう
-            # skip を要求する (bash 側で exit 3 を受け取って exit 0 で抜ける)。
+        if has_override or sticky_cd:
+            # 別 repo に対する commit (`-C` / `--git-dir` / `--work-tree` /
+            # `GIT_DIR=` 等) または同一 Bash 内で先行 `cd` で cwd を切り替えた
+            # 状態での commit。本 hook は元の cwd を見るため、いずれも
+            # silent に間違った repo を lint する経路になる。fail closed (deny)
+            # を要求する (bash 側で exit 3 を受け取って emit_deny する)。
             return 3
         if _commit_is_non_mutating(toks, sub_idx):
             # `--dry-run` / `--help` / `-h`: 実 commit は走らない → skip して
