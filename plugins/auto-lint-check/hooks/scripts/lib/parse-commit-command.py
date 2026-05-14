@@ -300,6 +300,14 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
 
 
 def _classify(command: str) -> int:
+    # Backtick command substitution は shell が文字列内部で commit を実行する
+    # シンタックスだが、shlex は backtick を quote / substitution として扱わ
+    # ないため内部の `git commit` が token 列に現れず parser を bypass する。
+    # `$(...)` も同様。silent bypass を避けるため、これらの substitution を
+    # 含むコマンドは fail closed (exit 3) する。
+    if "`" in command or "$(" in command:
+        return 3
+
     # punctuation_chars に `()` を含める: `(git commit ...)` の `(` `)` を独立
     # トークン化し subshell 内の commit を検出するため。`<>` は含めない:
     # `2>&1` / `>log` の redirection 構造が崩れるので、redirection は 1 トークン

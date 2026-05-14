@@ -22,10 +22,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 
-if (( BASH_VERSINFO[0] < 4 )); then
-  log_warn "block-commit-lint requires bash 4+. found $BASH_VERSION."
-  emit_deny "auto-lint-check の block-commit-lint hook には bash 4+ が必要ですが、現在 bash $BASH_VERSION で実行されています。Homebrew 等で bash 4+ を導入して PATH の先頭に置くか、auto-lint-check プラグインを無効化してください。silently skip すると lint がすり抜けるため fail closed (deny) しています。"
-fi
+# jq-free な deny エミッタ。bash <4 + jq missing の組み合わせでも fail closed
+# できるよう、emit_deny (jq に依存) より先に静的 heredoc で deny を出力する。
+emit_deny_no_jq() {
+  local reason="$1"
+  # JSON-escape: " と \ をエスケープ、改行は \n。reason は本ファイル内の固定
+  # 文字列のみ渡す前提なので、簡易エスケープで十分。
+  local escaped="${reason//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  cat <<EOF
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "$escaped"
+  }
+}
+EOF
+  exit 0
+}
 
 INPUT=$(cat)
 
@@ -38,22 +53,19 @@ case "$INPUT" in
   *) exit 0 ;;
 esac
 
+# jq / bash 4+ / python3 のいずれが欠けても本フックは正しく lint できない。
+# silent skip だと `git commit` を含む Bash で lint が走らないまま commit が
+# 通る経路になるため fail closed (deny) する。
+# 注: bash 4+ check より先に jq check する。bash <4 は emit_deny を呼ぶが
+# emit_deny は jq に依存するので、jq missing が先に handle されていないと
+# silent skip 経路ができてしまう。
 if ! command -v jq >/dev/null 2>&1; then
-  # jq は本フックの parser 入出力と deny メッセージの JSON 整形に必須。silent
-  # skip すると `git commit` を含む Bash で lint が走らないまま commit が通る
-  # 経路になるため fail closed (deny) する。jq 自体が無いので emit_deny が
-  # 使えず、JSON は手動構築する。
   echo "[auto-lint-check] block-commit-lint requires jq. found nothing." >&2
-  cat <<'JSON_DENY'
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "deny",
-    "permissionDecisionReason": "auto-lint-check の block-commit-lint hook には jq が必要ですが見つかりません。jq をインストールするか、auto-lint-check プラグインを無効化してください。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
-  }
-}
-JSON_DENY
-  exit 0
+  emit_deny_no_jq "auto-lint-check の block-commit-lint hook には jq が必要ですが見つかりません。jq をインストールするか、auto-lint-check プラグインを無効化してください。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
+fi
+if (( BASH_VERSINFO[0] < 4 )); then
+  log_warn "block-commit-lint requires bash 4+. found $BASH_VERSION."
+  emit_deny "auto-lint-check の block-commit-lint hook には bash 4+ が必要ですが、現在 bash $BASH_VERSION で実行されています。Homebrew 等で bash 4+ を導入して PATH の先頭に置くか、auto-lint-check プラグインを無効化してください。silently skip すると lint がすり抜けるため fail closed (deny) しています。"
 fi
 if ! command -v python3 >/dev/null 2>&1; then
   log_warn "block-commit-lint requires python3. found nothing."
