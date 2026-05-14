@@ -92,6 +92,13 @@ if command -v python3 >/dev/null 2>&1; then
       log_warn "block-commit-lint: git global option (-C / --git-dir / --work-tree) で repo を切り替える commit はサポート対象外。skip"
       exit 0
       ;;
+    4)
+      # 初期の COMMIT_INVOCATION_REGEX が quote 非対応のため、`echo "; git
+      # commit"` のような quoted 文字列に誤マッチした場合に shlex parser
+      # が「commit subcommand 不在」を返す。実コマンドは git commit ではない
+      # ので何もせず通す。
+      exit 0
+      ;;
   esac
 fi
 

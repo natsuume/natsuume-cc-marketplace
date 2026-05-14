@@ -14,10 +14,12 @@
 判定結果は exit code で返す:
 
     0  HAS_STAGING (working tree も lint 対象に含めるべき)
-    1  no staging (staged blob のみ lint で十分)
+    1  commit はあるが staging trigger なし (staged blob のみ lint で十分)
     2  parse failure (呼び出し側で安全側に倒すこと)
     3  repo override (cwd と異なる repo を commit するため、cwd repo を
        silently lint しないよう呼び出し側で skip すべき)
+    4  実際の commit subcommand なし (例: `echo "; git commit"` のような
+       quoted 文字列が初期 regex に誤マッチしただけ → skip すべき)
 
 bash の `case` / `=~` ベース検出ではコミットメッセージ内 (`-m "git add"`)
 を staging 操作として誤検出するため、shlex 経由のトークン解析に集約している。
@@ -178,7 +180,9 @@ def _classify(command: str) -> int:
                 return 0
             j += 1
         return 1
-    return 1
+    # commit subcommand を一度も見つけなかった (初期 regex が quoted 文字列に
+    # 誤マッチしたケース)。
+    return 4
 
 
 if __name__ == "__main__":
