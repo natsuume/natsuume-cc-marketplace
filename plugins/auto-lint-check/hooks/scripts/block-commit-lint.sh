@@ -79,6 +79,7 @@ python3 "$SCRIPT_DIR/lib/parse-commit-command.py" "$COMMAND"
 PY_RC=$?
 case "$PY_RC" in
   0|2) HAS_STAGING=1 ;;
+  1) ;;  # commit はあるが staging trigger なし
   3)
     # `-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` / `cd dir &&` 等で repo
     # override する commit。本フックは cwd repo を見るため、別 repo を指す
@@ -90,6 +91,14 @@ case "$PY_RC" in
     emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` / \`cd dir &&\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。"
     ;;
   4) exit 0 ;;
+  *)
+    # 想定外の exit code (例: Python 3.6 以前の SyntaxError, import 失敗 等で
+    # parser が exit 1 する経路)。silent skip だと lint が走らないまま commit
+    # を通す経路になるため、安全側で HAS_STAGING=1 に倒して working tree も
+    # 含めて lint する (over-detect は false-positive deny で気付ける)。
+    log_warn "block-commit-lint: parser returned unexpected exit code $PY_RC. fail-safe to HAS_STAGING=1."
+    HAS_STAGING=1
+    ;;
 esac
 
 # parser で「実 commit が cwd の repo に対して走る」と判定された場合に、cwd が
