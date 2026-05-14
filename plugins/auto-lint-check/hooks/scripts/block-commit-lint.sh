@@ -130,12 +130,26 @@ PY
   fi
 fi
 
-# Lint 対象ファイルを集める。SEEN で重複を排除する。
+# Lint 対象ファイルを 2 つの set で管理する: IS_STAGED (現 index にある =
+# staged blob を lint) と IS_WT (working tree で変更/未追跡 = working tree
+# を lint)。両方に属するファイルは両ソースを lint し、どちらかが失敗したら
+# deny する。これにより
+#   - 元から staged で dirty → staged lint で検出 (再 stage されない場合に
+#     こちらが committed される)
+#   - working tree で変更されて新たに staged される予定 → working tree lint
+#     で検出
+# の両方を取りこぼさない。
+declare -A IS_STAGED
+declare -A IS_WT
 FILES_TO_LINT=()
 declare -A SEEN_FILES
 
 add_file() {
-  local f="$1"
+  local f="$1" set_name="$2"
+  case "$set_name" in
+    staged) IS_STAGED[$f]=1 ;;
+    wt)     IS_WT[$f]=1 ;;
+  esac
   if [ -z "${SEEN_FILES[$f]+x}" ]; then
     SEEN_FILES[$f]=1
     FILES_TO_LINT+=("$f")
@@ -143,15 +157,15 @@ add_file() {
 }
 
 while IFS= read -r -d '' f; do
-  add_file "$f"
+  add_file "$f" staged
 done < <(git diff --cached --name-only --diff-filter=ACMR -z 2>/dev/null)
 
 if [ "$HAS_STAGING" -eq 1 ]; then
   while IFS= read -r -d '' f; do
-    add_file "$f"
+    add_file "$f" wt
   done < <(git diff --name-only --diff-filter=ACMR -z 2>/dev/null)
   while IFS= read -r -d '' f; do
-    add_file "$f"
+    add_file "$f" wt
   done < <(git ls-files --others --exclude-standard -z 2>/dev/null)
 fi
 
@@ -184,7 +198,14 @@ for REL_PATH in "${FILES_TO_LINT[@]}"; do
   fi
   ROOT=$(resolve_root_cached "$REL_PATH" "$LINTER")
   [ -n "$ROOT" ] || continue
-  FILES_BY_KEY["${LINTER}|${ROOT}"]+="$REL_PATH"$'\n'
+  # 各 source ごとに別エントリ。dual-membership は両方 lint される。エントリ
+  # は <path>\t<source>\n 形式 (path に TAB が含まれることはまず無いと想定)。
+  if [ -n "${IS_STAGED[$REL_PATH]+x}" ]; then
+    FILES_BY_KEY["${LINTER}|${ROOT}"]+="$REL_PATH"$'\t'"staged"$'\n'
+  fi
+  if [ -n "${IS_WT[$REL_PATH]+x}" ]; then
+    FILES_BY_KEY["${LINTER}|${ROOT}"]+="$REL_PATH"$'\t'"working"$'\n'
+  fi
 done
 
 # Pass 2: 各 (linter, root) で linter binary を 1 回だけ解決し、配下のファイル
@@ -213,18 +234,23 @@ for KEY in "${!FILES_BY_KEY[@]}"; do
       ;;
   esac
 
-  while IFS= read -r REL_PATH; do
+  while IFS=$'\t' read -r REL_PATH SOURCE; do
     [ -n "$REL_PATH" ] || continue
-    # Lint 対象ソース: HAS_STAGING=1 のとき working tree (これから index に
-    # 取り込まれる内容)、それ以外は staged blob。`$()` の trailing newline
-    # strip を避けるため `&& printf X` センチネルで末尾改行を保持する
-    # (ESLint `eol-last` / Ruff W292 の false positive 防止)。
-    if [ "$HAS_STAGING" -eq 1 ]; then
-      [ -f "$REL_PATH" ] || continue
-      CONTENT_PADDED=$(cat "$REL_PATH" 2>/dev/null && printf X)
-    else
-      CONTENT_PADDED=$(git show ":$REL_PATH" 2>/dev/null && printf X)
-    fi
+    # Lint 対象ソース: staged → `git show :path`, working → working tree。
+    # `$()` の trailing newline strip を避けるため `&& printf X` センチネル
+    # で末尾改行を保持する (ESLint `eol-last` / Ruff W292 の false positive 防止)。
+    case "$SOURCE" in
+      staged)
+        CONTENT_PADDED=$(git show ":$REL_PATH" 2>/dev/null && printf X)
+        SRC_LABEL="staged"
+        ;;
+      working)
+        [ -f "$REL_PATH" ] || continue
+        CONTENT_PADDED=$(cat "$REL_PATH" 2>/dev/null && printf X)
+        SRC_LABEL="working tree"
+        ;;
+      *) continue ;;
+    esac
     [ -n "$CONTENT_PADDED" ] || continue
     LINT_CONTENT="${CONTENT_PADDED%X}"
     ABS_PATH=$(normalize_path "$REL_PATH") || continue
@@ -242,7 +268,7 @@ for KEY in "${!FILES_BY_KEY[@]}"; do
 
     if [ "$RC" -ne 0 ]; then
       HAS_ERROR=1
-      COMBINED_OUTPUT+=$'--- '"$REL_PATH"$' ('"$LABEL"$') ---\n'"$LINT_OUT"$'\n\n'
+      COMBINED_OUTPUT+=$'--- '"$REL_PATH"$' ('"$LABEL, $SRC_LABEL"$') ---\n'"$LINT_OUT"$'\n\n'
     fi
   done <<< "${FILES_BY_KEY[$KEY]}"
 done

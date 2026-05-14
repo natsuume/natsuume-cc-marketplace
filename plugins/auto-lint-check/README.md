@@ -95,6 +95,16 @@ Bash 経由で実行されるコマンドが `git commit` を含む場合に発�
 
 pathspec の検出には Python の `shlex` でクォート対応トークン化を行うため、`git commit -m "long message with spaces"` のような引用符付きメッセージは pathspec として誤検出しません。
 
+**lint ソースの選択**:
+
+各ファイルは「どの set に属するか」で lint ソースを決定します:
+
+- staged set のみ → `git show :path` (staged blob)
+- working tree set のみ → working tree の現物
+- 両方に属する (例: 元から staged + working tree でも変更されている) → **両方を別個に lint** し、どちらかが失敗すれば deny
+
+これにより、元から staged にあった lint dirty なファイルが working tree で fix されたが再 stage されないまま `git add <other> && git commit` するケースで、staged blob のエラーを取りこぼしません。
+
 過検出 (commit に含めない予定の編集まで lint) は許容しています。Claude が commit する状況では作業中ファイルだけが working tree にある運用が一般的で、不要な lint がほとんど発生しないためです。
 
 **検出のスコープ外** (lint をスキップして通す):
