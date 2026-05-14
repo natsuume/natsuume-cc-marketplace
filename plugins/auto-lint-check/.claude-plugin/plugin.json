@@ -1,5 +1,5 @@
 {
   "name": "auto-lint-check",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用するプラグイン"
 }
