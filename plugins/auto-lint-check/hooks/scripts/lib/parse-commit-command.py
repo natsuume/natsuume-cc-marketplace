@@ -148,6 +148,10 @@ def _classify(command: str) -> int:
             continue
         if has_override:
             return 3
+        # ここで最初の commit invocation を見つけた。判定対象はこの commit
+        # なので、これ以降の token (例: `commit -m ok && git add foo` の `&&`
+        # 以降) は同じ Bash コマンドでも commit が走った後に実行されるため、
+        # この commit の判定には影響しない。flag を見終えたら即 return する。
         j = sub_idx + 1
         expect_val = False
         while j < n:
@@ -173,7 +177,7 @@ def _classify(command: str) -> int:
             else:
                 return 0
             j += 1
-        i = j
+        return 1
     return 1
 
 
