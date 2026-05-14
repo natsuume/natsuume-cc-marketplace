@@ -325,6 +325,21 @@ def _classify(command: str) -> int:
             at_command_position = True
             i += 1
             continue
+        if at_command_position and tok == "cd":
+            # `cd dir && git commit` は cwd を切り替えてから commit を実行。
+            # 本 hook は元の cwd repo を見るため、cd 先 repo の lint を素通り
+            # させる silent bypass 経路になる。repo override と同等として
+            # 即 fail closed (exit 3) を返す。
+            return 3
+        if at_command_position and tok == "env":
+            # `env [VAR=val ...] git commit` の env wrapper。env 自身は
+            # builtin で、続く env-var assignment 列と command 名を渡す。
+            # 後続を env-var prefix と同じく扱う (pending_env_override
+            # ロジックに乗せる) ことで `env GIT_DIR=... git commit` のような
+            # repo override も正しく検出される。env -i / env -- 等の特殊
+            # フラグは現状非対応で boundary に到達するまでスキップ。
+            i += 1
+            continue
         if at_command_position and tok in SHELL_KEYWORDS:
             # shell keywords は bash 構文上 command position に出現した時のみ
             # keyword (例: `time git commit` の `time`、`if foo; then git ...`
