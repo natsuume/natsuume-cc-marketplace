@@ -101,8 +101,11 @@ VALUE_FLAGS = {
     "-m", "--message", "-F", "--file", "-t", "--template",
     "-c", "--reedit-message", "-C", "--reuse-message",
     "-S", "--gpg-sign", "--author", "--date", "--cleanup",
-    "--fixup", "--squash", "--trailer", "-o",
+    "--fixup", "--squash", "--trailer",
 }
+# `-o` (`--only`) / `-i` (`--include`) は flag に続く pathspec を working tree
+# から取り込む。出現した時点で pathspec mode 確定。
+PATHSPEC_MODE_FLAGS = {"-o", "--only", "-i", "--include"}
 # punctuation_chars でクラスタになった `&&` / `||` / `;` / `&` / `|` の全て
 SEPARATORS = {";", "&&", "||", "|", "&"}
 i = 0
@@ -120,6 +123,8 @@ while i < n:
         if expect_val:
             expect_val = False
         elif t == "--":
+            sys.exit(0)
+        elif t in PATHSPEC_MODE_FLAGS:
             sys.exit(0)
         elif t in VALUE_FLAGS:
             expect_val = True
