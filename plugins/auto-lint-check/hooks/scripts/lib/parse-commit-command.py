@@ -52,11 +52,10 @@ COMMIT_VALUE_FLAGS: frozenset[str] = frozenset(
     }
 )
 
-# `-S` / `--gpg-sign` は man git-commit によれば optional argument を取り、
-# value は space 区切りで離さず `-S<keyid>` / `--gpg-sign=<keyid>` の形でのみ
-# 受け付ける。これらを上記 VALUE_FLAGS に含めると次の pathspec token を value
-# として消費してしまうため、ここでは含めない。`-Skeyid` / `--gpg-sign=keyid`
-# 形式の単一 token は他の "starts with -" 分岐で無害に flag として読み飛ばされる。
+# `-S` / `--gpg-sign` は意図的に COMMIT_VALUE_FLAGS に含めない: man git-commit
+# によれば value は `-S<keyid>` / `--gpg-sign=<keyid>` のように stuck 形式しか
+# 受け付けず space 区切りは不可。VALUE_FLAGS に入れると `git commit -S foo.py`
+# の `foo.py` を value として消費して pathspec 検出を取り逃す。
 
 # `-o` (`--only`) / `-i` (`--include`) は flag に続く pathspec を working
 # tree から取り込む → 出現で pathspec mode 確定。
@@ -230,11 +229,10 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
 
 
 def _classify(command: str) -> int:
-    # `()` も punctuation に含めて `(git commit ...)` の `(` `)` を独立トークン
-    # 化する (shlex デフォルトでは `(git` を一塊として返してしまう)。`<>` は
-    # 含めない: `2>&1` / `>log` の `>` 直前の数字を分離してしまうと redirection
-    # の意味が崩れるため、redirection token はそのまま 1 トークンで受け取り
-    # commit 引数解析側で _is_redirection_token として break する。
+    # punctuation_chars に `()` を含める: `(git commit ...)` の `(` `)` を独立
+    # トークン化し subshell 内の commit を検出するため。`<>` は含めない:
+    # `2>&1` / `>log` の redirection 構造が崩れるので、redirection は 1 トークン
+    # で受け取り `_is_redirection_token` で break する。
     lex = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
     lex.whitespace_split = True
     try:
@@ -252,6 +250,11 @@ def _classify(command: str) -> int:
     n = len(toks)
     i = 0
     pending_env_override = False
+    # at_command_position: 現在の token がシェルの simple command 先頭
+    # (= command name) に相当するか。SEPARATORS 直後、または env-var
+    # assignment 列の途中まで True を維持する。non-env / non-git の token を
+    # 1 つ消費した時点で False に倒し、以降のトークンは command の引数として
+    # 解釈する (= `echo git commit` の "git" を invocation と誤認しない)。
     at_command_position = True
     while i < n:
         tok = toks[i]
@@ -312,8 +315,8 @@ def _classify(command: str) -> int:
         if cwd_add_seen or _commit_triggers_staging(toks, sub_idx):
             return 0
         return 1
-    # commit subcommand を一度も見つけなかった (初期 regex が quoted 文字列
-    # 等に誤マッチしたケース)。
+    # コマンド内に command-position の `git commit` が存在しなかった。
+    # (例: `echo "git commit"` / `xargs git commit` / quoted 文字列)。
     return 4
 
 

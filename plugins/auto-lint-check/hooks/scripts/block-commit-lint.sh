@@ -25,9 +25,12 @@ source "$SCRIPT_DIR/lib/common.sh"
 
 INPUT=$(cat)
 
-# 高速パス: jq 起動前に粗フィルタで抜ける。
+# 高速パス: jq / python3 起動前の粗フィルタ。`git` と `commit` の両方を含む
+# 入力 (= 実 commit invocation の必要条件) でなければ抜ける。
+# 注: substring match なので `commit-graph` や `--commit-msg` のような関連
+# 語も拾うが、後段の shlex parser が正確に判定するため害はない。
 case "$INPUT" in
-  *commit*) ;;
+  *git*commit*) ;;
   *) exit 0 ;;
 esac
 
@@ -64,8 +67,8 @@ cd "$REPO_ROOT" || exit 0
 #   2  parse failure (安全側で HAS_STAGING=1 に倒す)
 #   3  repo override (`-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` 等で cwd
 #      と異なる repo に commit するため、silent に cwd を lint しないよう skip)
-#   4  実際の commit subcommand 不在 (例: `echo "; git commit"` のような quoted
-#      文字列を含むコマンド)。skip
+#   4  実 commit が走らない (commit subcommand 不在 / `echo "git commit"` の
+#      ような非 command position の git / `--dry-run` / `--help` 等)。skip
 #
 # 過検出 (commit に含めない予定の編集まで lint) は許容する設計トレードオフ。
 HAS_STAGING=0
