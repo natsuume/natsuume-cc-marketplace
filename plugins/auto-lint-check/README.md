@@ -6,6 +6,15 @@
 
 v0.2.1
 
+### v0.2.0 → v0.2.1 の変更点
+
+- **macOS 標準 `/bin/bash` 3.2 互換化**: `block-commit-lint.sh` から bash 4+ 専用機能 (連想配列) を除去
+  - lint plan 構築 (ファイル → ソース集合のマッピング、(linter, config-root) でのグルーピング、linter 表示名解決) を新規 Python helper `lib/build-lint-plan.py` に委譲
+  - shell 側は indexed array と jq の TSV iteration のみで完結
+  - bash version check を削除し、必須依存は jq / python3 (3.7+) に整理
+- `mktemp` 呼び出しを template 引数明示形式 (`"${TMPDIR:-/tmp}/auto-lint-check.XXXXXX"`) に修正し、macOS/BSD でも動作するように
+- 非 UTF-8 ファイル名の扱いを修正: lint 対象拡張子の判定を byte 段階で行い、対象外ファイルは silent skip、対象ファイルのみ UTF-8 デコードを試みて失敗時は fail-closed deny に倒す
+
 ### v0.1.1 → v0.2.0 の変更点
 
 - **lint 検査のタイミングを「ファイル編集前 (PreToolUse / Edit)」から「`git commit` 直前 (PreToolUse / Bash)」に移行**
