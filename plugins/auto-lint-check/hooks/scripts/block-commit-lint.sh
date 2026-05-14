@@ -85,12 +85,16 @@ if [[ "$COMMAND" =~ commit[^\;\&\|]*[[:space:]]-a[^[:space:]]*([[:space:]]|;|\&|
   HAS_STAGING=1
 fi
 if [ "$HAS_STAGING" -eq 0 ] && command -v python3 >/dev/null 2>&1; then
-  # shlex でトークン化し、`commit` 以降の位置引数 (pathspec) を検出する。
+  # shlex.shlex に punctuation_chars=";&|" を渡してシェルセパレータを独立
+  # トークン化する (`shlex.split` は `ok;` のように連結したまま返すため不適)。
+  # `commit` 以降の位置引数 (pathspec) を検出する。
   # exit 0 → pathspec あり、1 → 無し、それ以外 → 解析失敗。
   if python3 - "$COMMAND" <<'PY'; then
 import shlex, sys
+lex = shlex.shlex(sys.argv[1], posix=True, punctuation_chars=";&|")
+lex.whitespace_split = True
 try:
-    toks = shlex.split(sys.argv[1], comments=False, posix=True)
+    toks = list(lex)
 except ValueError:
     sys.exit(2)
 VALUE_FLAGS = {
@@ -99,6 +103,7 @@ VALUE_FLAGS = {
     "-S", "--gpg-sign", "--author", "--date", "--cleanup",
     "--fixup", "--squash", "--trailer", "-o",
 }
+# punctuation_chars でクラスタになった `&&` / `||` / `;` / `&` / `|` の全て
 SEPARATORS = {";", "&&", "||", "|", "&"}
 i = 0
 n = len(toks)
