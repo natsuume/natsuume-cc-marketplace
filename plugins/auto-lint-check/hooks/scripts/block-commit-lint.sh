@@ -81,7 +81,7 @@ cd "$REPO_ROOT" || exit 0
 # 失敗時は安全側で HAS_STAGING=1。
 HAS_STAGING=0
 if command -v python3 >/dev/null 2>&1; then
-  if python3 - "$COMMAND" <<'PY'; then
+  python3 - "$COMMAND" <<'PY'
 import shlex, sys
 lex = shlex.shlex(sys.argv[1], posix=True, punctuation_chars=";&|")
 lex.whitespace_split = True
@@ -117,32 +117,50 @@ def short_cluster_has_a(t: str) -> bool:
     return len(t) >= 2 and t[0] == "-" and t[1] != "-" and "a" in t[1:]
 
 
+# `git` の global option で repo の場所自体を切り替えるもの。これらが
+# `git ... commit` の前に付いている場合、commit 対象は cwd repo ではない。
+# hook は cwd repo を見るため、silently 別 repo の commit を素通りさせる
+# リスクがある (Codex adversarial review 指摘)。検出時は skip + warn する。
+REPO_OVERRIDE_FLAGS = {"-C", "--git-dir", "--work-tree"}
+
+
 def find_subcommand_after_git(toks, start):
     """`git` トークンの位置 (`start`) から global option を読み飛ばして
-    最初の non-option トークン (subcommand) の (index, value) を返す。
-    無ければ None。"""
+    最初の non-option トークン (subcommand) の (index, value, has_repo_override)
+    を返す。無ければ None。`has_repo_override` は `-C` / `--git-dir` /
+    `--work-tree` のいずれかが global option として現れたかを示す。"""
     j = start + 1
     n_local = len(toks)
     expect_val = False
+    pending_override = False
+    has_override = False
     while j < n_local:
         u = toks[j]
         if u in SEPARATORS:
             return None
         if expect_val:
+            if pending_override:
+                has_override = True
+                pending_override = False
             expect_val = False
             j += 1
             continue
         if u in GIT_GLOBAL_VALUE_FLAGS:
+            if u in REPO_OVERRIDE_FLAGS:
+                pending_override = True
             expect_val = True
             j += 1
             continue
         if u.startswith("--") and "=" in u:
+            key = u.split("=", 1)[0]
+            if key in REPO_OVERRIDE_FLAGS:
+                has_override = True
             j += 1
             continue
         if u.startswith("-"):
             j += 1
             continue
-        return (j, u)
+        return (j, u, has_override)
     return None
 
 
@@ -156,12 +174,16 @@ while i < n:
     if result is None:
         i += 1
         continue
-    sub_idx, sub = result
+    sub_idx, sub, has_override = result
     if sub in ("add", "stage"):
         sys.exit(0)
     if sub != "commit":
         i = sub_idx + 1
         continue
+    if has_override:
+        # commit の対象 repo が cwd と異なる。hook は cwd repo を見るため
+        # 別 repo を silently lint してしまう経路を避け、skip させる。
+        sys.exit(3)
     # `git ... commit` のオプション解析
     j = sub_idx + 1
     expect_val = False
@@ -191,11 +213,18 @@ while i < n:
     i = j
 sys.exit(1)
 PY
-    HAS_STAGING=1
-  elif [ $? -eq 2 ]; then
-    # parse failure: 安全側で有効化
-    HAS_STAGING=1
-  fi
+  PY_RC=$?
+  case "$PY_RC" in
+    0) HAS_STAGING=1 ;;
+    2) HAS_STAGING=1 ;;  # parse failure: 安全側で有効化
+    3)
+      # `-C` / `--git-dir` / `--work-tree` 経由で別 repo に commit する形式。
+      # hook は cwd repo を見るため、silent に別 repo を lint する経路を避け
+      # る (= 何もせず通す + 警告を stderr に出す)。
+      log_warn "block-commit-lint: git global option (-C / --git-dir / --work-tree) で repo を切り替える commit はサポート対象外。skip"
+      exit 0
+      ;;
+  esac
 fi
 
 # Lint 対象ファイルを 2 つの set で管理する: IS_STAGED (現 index にある =

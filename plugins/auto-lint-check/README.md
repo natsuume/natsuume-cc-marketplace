@@ -116,7 +116,8 @@ pathspec の検出には Python の `shlex` でクォート対応トークン化
 
 **Edge case**:
 
-- `git -C dir commit` や `cd /other && git commit` のような cwd を切り替える形式では、本フックは現在の cwd の git を見るため、対象 repo がズレる可能性があります。明示的にプロジェクトルートで commit する運用を推奨します。
+- `git -C dir commit` / `git --git-dir ... commit` / `git --work-tree ... commit` のように global option で repo を切り替える commit は、本フックが cwd の git を見るため対象 repo がズレます。silent に間違った repo を lint することを避けるため、これらの形式を検出した場合は `[auto-lint-check] block-commit-lint: ... skip` を stderr に出して何もせず通します。これらの形式を使う場合は、対象 repo に `cd` してから別の Bash 呼び出しとして commit してください。
+- `cd /other && git commit` のように同一コマンド内で cwd を切り替える形式も、`cd` 自体は本フックの検出対象外で、後段の `git commit` は cwd repo を対象として lint します (実行時には cwd が変わっているが hook はそれを認識できない)。同様に対象 repo に `cd` してから別の Bash 呼び出しで commit してください。
 - `git add path` で stage 後、その path を working tree でさらに変更してから `git commit` (path に対する `git add` を含まない) を実行した場合、本フックは「working tree 上書き」モードに入らないため staged blob (古い内容) を lint します。実害は少ないですが、認識ズレを避けるため commit 直前に再 stage することを推奨します。
 
 #### 3. code-format
