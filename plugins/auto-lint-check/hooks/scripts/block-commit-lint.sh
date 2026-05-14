@@ -90,7 +90,7 @@ try:
 except ValueError:
     sys.exit(2)
 
-VALUE_FLAGS = {
+COMMIT_VALUE_FLAGS = {
     "-m", "--message", "-F", "--file", "-t", "--template",
     "-c", "--reedit-message", "-C", "--reuse-message",
     "-S", "--gpg-sign", "--author", "--date", "--cleanup",
@@ -101,6 +101,15 @@ VALUE_FLAGS = {
 PATHSPEC_MODE_FLAGS = {"-o", "--only", "-i", "--include"}
 SEPARATORS = {";", "&&", "||", "|", "&"}
 
+# git の global option で value-taking なもの (subcommand を見つけるために skip)。
+# `-c name=value`, `git -C path`, `--git-dir <path>` 等。
+GIT_GLOBAL_VALUE_FLAGS = {
+    "-C", "-c",
+    "--exec-path",
+    "--git-dir", "--work-tree", "--namespace", "--super-prefix",
+    "--list-cmds", "--attr-source",
+}
+
 
 def short_cluster_has_a(t: str) -> bool:
     # `-am` / `-ma` / `-aS` のような short cluster で `a` を含むものを auto-stage
@@ -108,42 +117,78 @@ def short_cluster_has_a(t: str) -> bool:
     return len(t) >= 2 and t[0] == "-" and t[1] != "-" and "a" in t[1:]
 
 
+def find_subcommand_after_git(toks, start):
+    """`git` トークンの位置 (`start`) から global option を読み飛ばして
+    最初の non-option トークン (subcommand) の (index, value) を返す。
+    無ければ None。"""
+    j = start + 1
+    n_local = len(toks)
+    expect_val = False
+    while j < n_local:
+        u = toks[j]
+        if u in SEPARATORS:
+            return None
+        if expect_val:
+            expect_val = False
+            j += 1
+            continue
+        if u in GIT_GLOBAL_VALUE_FLAGS:
+            expect_val = True
+            j += 1
+            continue
+        if u.startswith("--") and "=" in u:
+            j += 1
+            continue
+        if u.startswith("-"):
+            j += 1
+            continue
+        return (j, u)
+    return None
+
+
 n = len(toks)
 i = 0
 while i < n:
-    t = toks[i]
-    # git add / git stage
-    if t == "git" and i + 1 < n and toks[i + 1] in ("add", "stage"):
-        sys.exit(0)
-    if t == "commit":
-        j = i + 1
-        expect_val = False
-        while j < n:
-            u = toks[j]
-            if u in SEPARATORS:
-                break
-            if expect_val:
-                expect_val = False
-            elif u == "--":
-                sys.exit(0)
-            elif u in PATHSPEC_MODE_FLAGS:
-                sys.exit(0)
-            elif u == "--all":
-                sys.exit(0)
-            elif u in VALUE_FLAGS:
-                expect_val = True
-            elif u.startswith("--"):
-                pass  # other long flag
-            elif u.startswith("-") and short_cluster_has_a(u):
-                sys.exit(0)
-            elif u.startswith("-"):
-                pass  # other short flag without `a`
-            else:
-                sys.exit(0)  # positional → pathspec
-            j += 1
-        i = j
+    if toks[i] != "git":
+        i += 1
         continue
-    i += 1
+    result = find_subcommand_after_git(toks, i)
+    if result is None:
+        i += 1
+        continue
+    sub_idx, sub = result
+    if sub in ("add", "stage"):
+        sys.exit(0)
+    if sub != "commit":
+        i = sub_idx + 1
+        continue
+    # `git ... commit` のオプション解析
+    j = sub_idx + 1
+    expect_val = False
+    while j < n:
+        u = toks[j]
+        if u in SEPARATORS:
+            break
+        if expect_val:
+            expect_val = False
+        elif u == "--":
+            sys.exit(0)
+        elif u in PATHSPEC_MODE_FLAGS:
+            sys.exit(0)
+        elif u == "--all":
+            sys.exit(0)
+        elif u in COMMIT_VALUE_FLAGS:
+            expect_val = True
+        elif u.startswith("--"):
+            pass  # その他の long flag
+        elif u.startswith("-") and short_cluster_has_a(u):
+            sys.exit(0)
+        elif u.startswith("-"):
+            pass  # `a` を含まない short flag
+        else:
+            sys.exit(0)  # positional → pathspec
+        j += 1
+    i = j
 sys.exit(1)
 PY
     HAS_STAGING=1
