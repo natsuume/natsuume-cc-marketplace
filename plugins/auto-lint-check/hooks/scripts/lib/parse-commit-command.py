@@ -57,11 +57,29 @@ COMMIT_VALUE_FLAGS: frozenset[str] = frozenset(
 # 受け付けず space 区切りは不可。VALUE_FLAGS に入れると `git commit -S foo.py`
 # の `foo.py` を value として消費して pathspec 検出を取り逃す。
 
-# `-o` (`--only`) / `-i` (`--include`) は flag に続く pathspec を working
-# tree から取り込む → 出現で pathspec mode 確定。
-PATHSPEC_MODE_FLAGS: frozenset[str] = frozenset({"-o", "--only", "-i", "--include"})
+# 以下のフラグが付くと commit は working tree から内容を取り込む:
+# - `-o` / `--only`, `-i` / `--include`: 続く pathspec を working tree から
+#   合成して commit
+# - `-p` / `--patch`, `--interactive`: 対話的に hunk を選択して staging
+#   (本 hook の発火後に working tree から index に取り込まれる)
+PATHSPEC_MODE_FLAGS: frozenset[str] = frozenset(
+    {"-o", "--only", "-i", "--include", "-p", "--patch", "--interactive"}
+)
 
 SEPARATORS: frozenset[str] = frozenset({";", "&&", "||", "|", "&", "(", ")"})
+
+# bash の shell keywords / control 構造の prefix。これらの直後は新しい simple
+# command の開始位置 (= command position) になる。SEPARATORS と同列に扱う
+# ことで `if ... ; then git commit ; fi` の git commit や `time git commit`
+# のような形を正しく検出する。
+SHELL_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "if", "then", "else", "elif", "fi",
+        "while", "until", "do", "done",
+        "for", "in", "case", "esac",
+        "time", "!", "{", "}", "function",
+    }
+)
 
 # `>`, `<`, `>>`, `<<`, `2>`, `2>&1` などの redirection token を識別する。
 # shlex は `punctuation_chars` に `<>` を含めないため `>log` / `2>` が単一
@@ -73,6 +91,13 @@ _REDIRECT_TOKEN_RE = re.compile(r"^\d*[<>]")
 
 def _is_redirection_token(tok: str) -> bool:
     return bool(_REDIRECT_TOKEN_RE.match(tok))
+
+
+def _is_command_boundary(tok: str) -> bool:
+    """token が「simple command の終端 / 新規 command の開始位置 (command
+    position) を意味する」境界か判定する。SEPARATORS、shell keywords、
+    redirection を含む。args scan 系の break 条件として使う。"""
+    return tok in SEPARATORS or tok in SHELL_KEYWORDS or _is_redirection_token(tok)
 
 # `git` の global option で value を取るもの (subcommand を見つけるために skip)。
 GIT_GLOBAL_VALUE_FLAGS: frozenset[str] = frozenset(
@@ -131,7 +156,7 @@ def _find_subcommand_after_git(toks: list[str], start: int) -> tuple[int, str, b
     has_override = False
     while j < n:
         u = toks[j]
-        if u in SEPARATORS or _is_redirection_token(u):
+        if _is_command_boundary(u):
             return None
         if expect_val:
             if pending_override:
@@ -178,7 +203,7 @@ def _commit_is_non_mutating(toks: list[str], sub_idx: int) -> bool:
     after_dash_dash = False
     while j < n:
         u = toks[j]
-        if u in SEPARATORS or _is_redirection_token(u):
+        if _is_command_boundary(u):
             break
         if after_dash_dash:
             j += 1
@@ -197,14 +222,14 @@ def _commit_is_non_mutating(toks: list[str], sub_idx: int) -> bool:
 
 def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
     """`commit` subcommand 以降の引数を見て、working tree を取り込む形式
-    (-a / --all / -am 系 / -o / --only / -i / --include / `--` / pathspec)
-    が含まれるか判定する。"""
+    (-a / --all / -am 系 / -o / --only / -i / --include / -p / --patch /
+    --interactive / `--` / pathspec) が含まれるか判定する。"""
     n = len(toks)
     j = sub_idx + 1
     expect_val = False
     while j < n:
         u = toks[j]
-        if u in SEPARATORS or _is_redirection_token(u):
+        if _is_command_boundary(u):
             break
         if expect_val:
             expect_val = False
@@ -258,7 +283,10 @@ def _classify(command: str) -> int:
     at_command_position = True
     while i < n:
         tok = toks[i]
-        if tok in SEPARATORS:
+        if tok in SEPARATORS or tok in SHELL_KEYWORDS:
+            # SEPARATORS と shell keywords どちらの直後も新しい simple command
+            # の開始位置 (= command position) として扱う。`if ... ; then git
+            # commit` の `git`、`time git commit` の `git` を正しく検出する。
             pending_env_override = False
             at_command_position = True
             i += 1
