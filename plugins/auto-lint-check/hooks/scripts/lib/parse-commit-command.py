@@ -343,9 +343,13 @@ def _classify(command: str) -> int:
             # builtin で、続く env-var assignment 列と command 名を渡す。
             # 後続を env-var prefix と同じく扱う (pending_env_override
             # ロジックに乗せる) ことで `env GIT_DIR=... git commit` のような
-            # repo override も正しく検出される。env -i / env -- 等の特殊
-            # フラグは現状非対応で boundary に到達するまでスキップ。
+            # repo override も正しく検出される。
+            # env -i / env -u / env -- などフラグ付き呼び出しは環境を完全に
+            # 操作し commit 挙動が不定 (= cwd や HEAD と異なる経路で commit
+            # が走る可能性) なので silent bypass を避けるため fail closed。
             i += 1
+            if i < n and toks[i].startswith("-"):
+                return 3
             continue
         if at_command_position and tok in SHELL_KEYWORDS:
             # shell keywords は bash 構文上 command position に出現した時のみ
