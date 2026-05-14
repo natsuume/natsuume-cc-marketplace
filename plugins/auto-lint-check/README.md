@@ -65,7 +65,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 **ファイル**: `hooks/scripts/block-commit-lint.sh`
 **イベント**: PreToolUse (matcher: `Bash`)
 
-Bash 経由で実行されるコマンドが `git commit` を含む場合に発火します。`git diff --cached --name-only --diff-filter=ACMR` で staged ファイルを列挙し、対応する linter に staged 内容 (`git show :path`) を stdin で流して検査します。エラーが出たら commit を `deny` し、`permissionDecisionReason` に各ファイルの linter 出力を含めます。
+Bash 経由で実行されるコマンドが `git commit` を含む場合に発火します。`git diff --cached --name-only` で staged ファイルを列挙し、対応する linter に内容を stdin で流して検査します。エラーが出たら commit を `deny` し、`permissionDecisionReason` に各ファイルの linter 出力を含めます。
 
 **検出する commit 形式**:
 
@@ -74,17 +74,30 @@ Bash 経由で実行されるコマンドが `git commit` を含む場合に発�
 - `FOO=bar git commit ...` のような env-var prefix
 - `git -c user.email=... commit ...` のような global option を挟む形式
 
+**`git add` / `-a` 同時実行時の挙動**:
+
+本フックは Bash ツールの **実行前** に発火するため、同一コマンドの `git add` がまだ走っていない時点では index が古いまま見える。これを避けるため、コマンド文字列に `git add` / `git stage` / `git commit -a` / `--all` のいずれかを検出した場合は、staged だけでなく working tree の変更 (modified + untracked) も lint 対象に含め、ソースを working tree から読み込みます。
+
+これにより以下のパターンが正しく lint されます:
+
+- `git add path && git commit -m ...`
+- `git add -A && git commit -m ...`
+- `git add . && git commit -m ...`
+- `git commit -am ...`
+
+過検出 (commit に含めない予定の編集まで lint) は許容しています。Claude が commit する状況では作業中ファイルだけが working tree にある運用が一般的で、不要な lint がほとんど発生しないためです。
+
 **検出のスコープ外** (lint をスキップして通す):
 
-- リポジトリ外での実行 (`git rev-parse --git-dir` 失敗)
-- staged ファイルが 0 件 (空 commit、`--allow-empty` など)
+- リポジトリ外での実行 (`git rev-parse --show-toplevel` 失敗)
+- 対象ファイルが 0 件 (空 commit、`--allow-empty` など)
 - 対応する linter 設定ファイルが見つからない
 - linter バイナリが見つからない (skip し、警告を stderr に出す)
 
 **Edge case**:
 
-- `git commit -a` で working tree から自動 stage されるパスは、本フックの発火タイミングではまだ staged になっていないため lint 対象から漏れます。`-a` を避けて明示的に `git add` してから commit する運用を推奨します。
 - `git -C dir commit` や `cd /other && git commit` のような cwd を切り替える形式では、本フックは現在の cwd の git を見るため、対象 repo がズレる可能性があります。明示的にプロジェクトルートで commit する運用を推奨します。
+- `git add path` で stage 後、その path を working tree でさらに変更してから `git commit` (path に対する `git add` を含まない) を実行した場合、本フックは「working tree 上書き」モードに入らないため staged blob (古い内容) を lint します。実害は少ないですが、認識ズレを避けるため commit 直前に再 stage することを推奨します。
 
 #### 3. code-format
 

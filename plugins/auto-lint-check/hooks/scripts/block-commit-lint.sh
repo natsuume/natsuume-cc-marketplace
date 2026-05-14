@@ -1,12 +1,14 @@
 #!/bin/bash
 # block-commit-lint.sh
 #
-# PreToolUse / Bash で `git commit` を検出し、staged blob (`git show :path`) を
+# PreToolUse / Bash で `git commit` を検出し、commit 対象になるファイルを
 # ESLint / Ruff に流して lint する。エラーがあれば commit を deny する。
 #
-# `git commit -a` は本フックの発火タイミングでは working tree がまだ stage
-# されていないため lint 対象から漏れる。明示的に `git add` してから commit
-# する運用を推奨 (README 参照)。
+# 本フックは Bash ツールの **実行前** に発火するため、同一コマンドの `git add`
+# / `commit -a` がまだ走っていない時点で index を見ても lint をすり抜ける。
+# これを避けるため、コマンド文字列を見て `git add` / `git stage` / `commit -a`
+# / `--all` を検出した場合 (HAS_STAGING=1) は staged だけでなく working tree
+# の変更 (modified + untracked) も lint 対象に含め、ソースは working tree を読む。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -54,12 +56,51 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -n "$REPO_ROOT" ] || exit 0
 cd "$REPO_ROOT" || exit 0
 
-STAGED_FILES=()
+# 同一 Bash コマンドで commit の前に `git add` / `git stage` が走るか、commit が
+# `-a` / `-am` / `--all` で working tree を auto-stage する場合、本フックの発火
+# タイミングでは対象ファイルがまだ index に入っていない。staged だけを見ると
+# lint をすり抜けるため、HAS_STAGING=1 のとき working tree の変更 (modified +
+# untracked) も lint 対象に含める。
+#
+# 過検出 (commit に含めない予定の編集まで lint) は許容。Claude が commit する
+# ときは作業中ファイルだけ working tree に置く運用が一般的で、過検出による
+# false positive は少ない。`--amend` (working tree を取り込まない) は `-a` パター
+# ンに引っかからないので影響なし。
+HAS_STAGING=0
+case "$COMMAND" in
+  *"git add"*|*"git stage"*) HAS_STAGING=1 ;;
+esac
+if [[ "$COMMAND" =~ commit[^\;\&\|]*[[:space:]]-a[^[:space:]]*([[:space:]]|;|\&|\||$) ]] \
+  || [[ "$COMMAND" =~ commit[^\;\&\|]*[[:space:]]--all([[:space:]]|;|\&|\||$) ]]; then
+  HAS_STAGING=1
+fi
+
+# Lint 対象ファイルを集める。SEEN で重複を排除する。
+FILES_TO_LINT=()
+declare -A SEEN_FILES
+
+add_file() {
+  local f="$1"
+  if [ -z "${SEEN_FILES[$f]+x}" ]; then
+    SEEN_FILES[$f]=1
+    FILES_TO_LINT+=("$f")
+  fi
+}
+
 while IFS= read -r -d '' f; do
-  STAGED_FILES+=("$f")
+  add_file "$f"
 done < <(git diff --cached --name-only --diff-filter=ACMR -z 2>/dev/null)
 
-[ ${#STAGED_FILES[@]} -gt 0 ] || exit 0
+if [ "$HAS_STAGING" -eq 1 ]; then
+  while IFS= read -r -d '' f; do
+    add_file "$f"
+  done < <(git diff --name-only --diff-filter=ACMR -z 2>/dev/null)
+  while IFS= read -r -d '' f; do
+    add_file "$f"
+  done < <(git ls-files --others --exclude-standard -z 2>/dev/null)
+fi
+
+[ ${#FILES_TO_LINT[@]} -gt 0 ] || exit 0
 
 # Pass 1: staged ファイルを (linter, config-root) でグルーピングする。Pass 2 で
 # linter 解決 (resolve_eslint / resolve_ruff は `pnpm exec --version` 等の子
@@ -78,7 +119,7 @@ resolve_root_cached() {
   printf '%s' "${CFG_ROOT_CACHE[$key]}"
 }
 
-for REL_PATH in "${STAGED_FILES[@]}"; do
+for REL_PATH in "${FILES_TO_LINT[@]}"; do
   if is_js_like "$REL_PATH"; then
     LINTER=eslint
   elif is_python "$REL_PATH"; then
@@ -119,21 +160,27 @@ for KEY in "${!FILES_BY_KEY[@]}"; do
 
   while IFS= read -r REL_PATH; do
     [ -n "$REL_PATH" ] || continue
-    # `git show :path` は末尾改行を含むが、`$()` は trailing newline を strip
-    # する。`&& printf X` のセンチネルで実 trailing newline を保持し、ESLint
-    # `eol-last` / Ruff W292 の false positive を防ぐ。
-    STAGED_PADDED=$(git show ":$REL_PATH" 2>/dev/null && printf X)
-    [ -n "$STAGED_PADDED" ] || continue
-    STAGED_CONTENT="${STAGED_PADDED%X}"
+    # Lint 対象ソース: HAS_STAGING=1 のとき working tree (これから index に
+    # 取り込まれる内容)、それ以外は staged blob。`$()` の trailing newline
+    # strip を避けるため `&& printf X` センチネルで末尾改行を保持する
+    # (ESLint `eol-last` / Ruff W292 の false positive 防止)。
+    if [ "$HAS_STAGING" -eq 1 ]; then
+      [ -f "$REL_PATH" ] || continue
+      CONTENT_PADDED=$(cat "$REL_PATH" 2>/dev/null && printf X)
+    else
+      CONTENT_PADDED=$(git show ":$REL_PATH" 2>/dev/null && printf X)
+    fi
+    [ -n "$CONTENT_PADDED" ] || continue
+    LINT_CONTENT="${CONTENT_PADDED%X}"
     ABS_PATH=$(normalize_path "$REL_PATH") || continue
 
     case "$LINTER" in
       eslint)
-        LINT_OUT=$( (cd "$ROOT" && printf '%s' "$STAGED_CONTENT" | "${ESLINT_CMD[@]}" --stdin --stdin-filename "$ABS_PATH") 2>&1 )
+        LINT_OUT=$( (cd "$ROOT" && printf '%s' "$LINT_CONTENT" | "${ESLINT_CMD[@]}" --stdin --stdin-filename "$ABS_PATH") 2>&1 )
         RC=$?
         ;;
       ruff)
-        LINT_OUT=$( (cd "$ROOT" && printf '%s' "$STAGED_CONTENT" | "${RUFF_CMD[@]}" check --stdin-filename "$ABS_PATH" -) 2>&1 )
+        LINT_OUT=$( (cd "$ROOT" && printf '%s' "$LINT_CONTENT" | "${RUFF_CMD[@]}" check --stdin-filename "$ABS_PATH" -) 2>&1 )
         RC=$?
         ;;
     esac
@@ -147,7 +194,7 @@ done
 
 if [ "$HAS_ERROR" -eq 1 ]; then
   REASON=$(printf '%s\n' \
-    "git commit を中断しました。staged ファイルに lint エラーがあります。" \
+    "git commit を中断しました。commit 対象ファイルに lint エラーがあります。" \
     "本体のコードを修正してから再度 commit してください。" \
     "" \
     "$COMBINED_OUTPUT")
