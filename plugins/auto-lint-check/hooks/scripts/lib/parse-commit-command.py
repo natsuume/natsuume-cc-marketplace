@@ -94,10 +94,19 @@ def _is_redirection_token(tok: str) -> bool:
 
 
 def _is_command_boundary(tok: str) -> bool:
-    """token が「simple command の終端 / 新規 command の開始位置 (command
-    position) を意味する」境界か判定する。SEPARATORS、shell keywords、
-    redirection を含む。args scan 系の break 条件として使う。"""
+    """新しい simple command の開始位置 (command position) の境界判定。
+    SEPARATORS / SHELL_KEYWORDS / redirection を含む。subcommand 検出
+    (`_find_subcommand_after_git`) のように「command position に shell
+    keyword が現れたら別 command の開始」を扱う場面で使う。"""
     return tok in SEPARATORS or tok in SHELL_KEYWORDS or _is_redirection_token(tok)
+
+
+def _is_args_boundary(tok: str) -> bool:
+    """commit / git の引数解析中の境界判定。SHELL_KEYWORDS は含めない:
+    `git commit if` のように pathspec が shell keyword と同名の場合に、
+    その引数を pathspec として認識するため (args 位置の `if` は keyword
+    としての意味を持たない)。"""
+    return tok in SEPARATORS or _is_redirection_token(tok)
 
 # `git` の global option で value を取るもの (subcommand を見つけるために skip)。
 GIT_GLOBAL_VALUE_FLAGS: frozenset[str] = frozenset(
@@ -212,7 +221,7 @@ def _commit_is_non_mutating(toks: list[str], sub_idx: int) -> bool:
             expect_val = False
             j += 1
             continue
-        if _is_command_boundary(u):
+        if _is_args_boundary(u):
             break
         if after_dash_dash:
             j += 1
@@ -242,7 +251,7 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
             expect_val = False
             j += 1
             continue
-        if _is_command_boundary(u):
+        if _is_args_boundary(u):
             break
         if u == "--":
             return True
