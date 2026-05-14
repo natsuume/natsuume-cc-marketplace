@@ -34,6 +34,10 @@ esac
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
+if ! command -v python3 >/dev/null 2>&1; then
+  log_warn "block-commit-lint: python3 が見つかりません。skip"
+  exit 0
+fi
 
 TOOL_NAME=$(extract_tool_name "$INPUT")
 [ "$TOOL_NAME" = "Bash" ] || exit 0
@@ -41,22 +45,10 @@ TOOL_NAME=$(extract_tool_name "$INPUT")
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
 
-# 行継続 `\<改行>` を空白に、real newline を `;` に正規化する
-# (block-default-branch-commit.sh と同じ前処理)。
+# 行継続 `\<改行>` を空白に、real newline を `;` に正規化する。shlex は
+# 行継続を保持しないため、明示的に space 化する。
 COMMAND="${COMMAND//$'\\\n'/ }"
 COMMAND="${COMMAND//$'\n'/;}"
-
-# `git commit` invocation を正規表現で検出 (block-default-branch-commit.sh と
-# 同じ構造)。OPT_ARG までを許容して `git -c user.email=... commit` のような
-# global option 経由の呼び出しも拾う。
-OPT='-[^[:space:];&|]+'
-OPT_ARG='([[:space:]]+[^-[:space:];&|][^[:space:];&|]*)?'
-ENV_VAR_PREFIX='([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|]*[[:space:]]+)*'
-COMMIT_INVOCATION_REGEX="(^|[;&|])[[:space:]]*${ENV_VAR_PREFIX}git[[:space:]]+(${OPT}${OPT_ARG}[[:space:]]+)*commit([[:space:]]|\$)"
-
-if ! [[ "$COMMAND" =~ $COMMIT_INVOCATION_REGEX ]]; then
-  exit 0
-fi
 
 # `git diff --cached --name-only` は repo root 相対のパスを返すため、cwd を
 # repo root に切り替えてから以降の処理を行う (sub-directory での commit 時の
@@ -65,42 +57,28 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -n "$REPO_ROOT" ] || exit 0
 cd "$REPO_ROOT" || exit 0
 
-# 本フック発火時点では、同一コマンド内の `git add` / `git stage` がまだ走って
-# おらず、`git commit -a` / `--all` の自動 stage や `git commit <pathspec>`
-# (pathspec form: 引数で指定したパスを working tree からそのまま commit) も
-# 未実行。staged だけ見ると lint をすり抜けるため、これらの兆候を検出した
-# 場合 (HAS_STAGING=1) は working tree の変更 (modified + untracked) も lint
-# 対象に含め、ソースを working tree から読む。
-#
-# 検出は Python の shlex (punctuation_chars=";&|") でシェルトークン化した
-# 結果に対して行う (`lib/parse-commit-command.py` 参照)。`-m "msg with git add"`
-# のような commit message 内の文字列を staging 操作として誤検出しないため、
-# bash の `case` / `=~` で生コマンドを scan することは避けている。
+# `lib/parse-commit-command.py` が shlex でシェルトークン化したコマンドを解析し、
+# exit code で以下を返す:
+#   0  HAS_STAGING (working tree も lint 対象に含めるべき)
+#   1  commit はあるが staging trigger なし (staged blob のみ lint)
+#   2  parse failure (安全側で HAS_STAGING=1 に倒す)
+#   3  repo override (`-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` 等で cwd
+#      と異なる repo に commit するため、silent に cwd を lint しないよう skip)
+#   4  実際の commit subcommand 不在 (例: `echo "; git commit"` のような quoted
+#      文字列を含むコマンド)。skip
 #
 # 過検出 (commit に含めない予定の編集まで lint) は許容する設計トレードオフ。
-# 失敗時は安全側で HAS_STAGING=1。
 HAS_STAGING=0
-if command -v python3 >/dev/null 2>&1; then
-  python3 "$SCRIPT_DIR/lib/parse-commit-command.py" "$COMMAND"
-  PY_RC=$?
-  case "$PY_RC" in
-    0|2) HAS_STAGING=1 ;;  # 2 は parse failure: 安全側で有効化
-    3)
-      # `-C` / `--git-dir` / `--work-tree` で別 repo に commit する形式。
-      # 本フックは cwd repo を見るため、silent に別 repo を lint する経路を
-      # 避けて何もせず通す (警告は stderr に出す)。
-      log_warn "block-commit-lint: git global option (-C / --git-dir / --work-tree) で repo を切り替える commit はサポート対象外。skip"
-      exit 0
-      ;;
-    4)
-      # 初期の COMMIT_INVOCATION_REGEX が quote 非対応のため、`echo "; git
-      # commit"` のような quoted 文字列に誤マッチした場合に shlex parser
-      # が「commit subcommand 不在」を返す。実コマンドは git commit ではない
-      # ので何もせず通す。
-      exit 0
-      ;;
-  esac
-fi
+python3 "$SCRIPT_DIR/lib/parse-commit-command.py" "$COMMAND"
+PY_RC=$?
+case "$PY_RC" in
+  0|2) HAS_STAGING=1 ;;
+  3)
+    log_warn "block-commit-lint: repo を切り替える commit (-C / --git-dir / --work-tree / GIT_DIR= 等) はサポート対象外。skip"
+    exit 0
+    ;;
+  4) exit 0 ;;
+esac
 
 # Lint 対象ファイルを単一の assoc array で管理する。値は source の集合を
 # `staged` / `working` / `staged working` の形で持つ。dual-membership 時には

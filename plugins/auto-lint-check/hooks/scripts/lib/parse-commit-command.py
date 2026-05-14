@@ -43,8 +43,6 @@ COMMIT_VALUE_FLAGS: frozenset[str] = frozenset(
         "--reedit-message",
         "-C",
         "--reuse-message",
-        "-S",
-        "--gpg-sign",
         "--author",
         "--date",
         "--cleanup",
@@ -53,6 +51,12 @@ COMMIT_VALUE_FLAGS: frozenset[str] = frozenset(
         "--trailer",
     }
 )
+
+# `-S` / `--gpg-sign` は man git-commit によれば optional argument を取り、
+# value は space 区切りで離さず `-S<keyid>` / `--gpg-sign=<keyid>` の形でのみ
+# 受け付ける。これらを上記 VALUE_FLAGS に含めると次の pathspec token を value
+# として消費してしまうため、ここでは含めない。`-Skeyid` / `--gpg-sign=keyid`
+# 形式の単一 token は他の "starts with -" 分岐で無害に flag として読み飛ばされる。
 
 # `-o` (`--only`) / `-i` (`--include`) は flag に続く pathspec を working
 # tree から取り込む → 出現で pathspec mode 確定。
