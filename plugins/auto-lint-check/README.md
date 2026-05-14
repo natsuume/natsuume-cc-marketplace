@@ -180,9 +180,9 @@ auto-lint-check/
 ## 必要な実行環境
 
 - `bash` (4.0+ 必須 — block-commit-lint.sh は連想配列を使用。macOS 標準 `/bin/bash` 3.2 では実行不能なので **fail closed (deny) で commit をブロック** し、警告を stderr に出します。silently skip すると lint がすり抜けるため意図的に deny に倒しています。Homebrew 等で `bash` 4+ を導入して `PATH` の先頭に置いてください)
-- `jq`
+- `jq` (block-commit-lint.sh の input 解析 / deny メッセージ JSON 整形に必須 — 不在時は fail closed で commit を deny します)
 - `git`
-- `python3` (block-ignore-lint-comment.sh の差分検出、および block-commit-lint.sh の commit コマンド解析。block-commit-lint.sh では python3 必須 — 不在時は警告を出して skip する)
+- `python3` (block-ignore-lint-comment.sh の差分検出、および block-commit-lint.sh の commit コマンド解析。block-commit-lint.sh で `git commit` を含む Bash コマンドを検出した時に python3 が不在の場合は fail closed で commit を deny します)
 - 利用したい linter / formatter (`eslint`, `prettier`, `ruff` または `uvx`)
 
 ## 関連情報

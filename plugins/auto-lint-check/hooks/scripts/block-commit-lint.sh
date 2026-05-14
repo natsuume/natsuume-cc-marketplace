@@ -39,11 +39,25 @@ case "$INPUT" in
 esac
 
 if ! command -v jq >/dev/null 2>&1; then
+  # jq は本フックの parser 入出力と deny メッセージの JSON 整形に必須。silent
+  # skip すると `git commit` を含む Bash で lint が走らないまま commit が通る
+  # 経路になるため fail closed (deny) する。jq 自体が無いので emit_deny が
+  # 使えず、JSON は手動構築する。
+  echo "[auto-lint-check] block-commit-lint requires jq. found nothing." >&2
+  cat <<'JSON_DENY'
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "auto-lint-check の block-commit-lint hook には jq が必要ですが見つかりません。jq をインストールするか、auto-lint-check プラグインを無効化してください。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
+  }
+}
+JSON_DENY
   exit 0
 fi
 if ! command -v python3 >/dev/null 2>&1; then
-  log_warn "block-commit-lint: python3 が見つかりません。skip"
-  exit 0
+  log_warn "block-commit-lint requires python3. found nothing."
+  emit_deny "auto-lint-check の block-commit-lint hook には python3 が必要ですが見つかりません。python3 をインストールするか、auto-lint-check プラグインを無効化してください。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
 fi
 
 TOOL_NAME=$(extract_tool_name "$INPUT")
