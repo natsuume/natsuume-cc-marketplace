@@ -81,8 +81,14 @@ PY_RC=$?
 case "$PY_RC" in
   0|2) HAS_STAGING=1 ;;
   3)
-    log_warn "block-commit-lint: repo を切り替える commit (-C / --git-dir / --work-tree / GIT_DIR= 等) はサポート対象外。skip"
-    exit 0
+    # `-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` 等で repo override する
+    # commit。本フックは cwd repo を見るため、別 repo を指す場合は silent
+    # に cwd を lint する経路、`git -C . commit` のような同一 repo を指す
+    # 場合も exit 0 で skip すれば lint をすり抜ける経路になる。
+    # 静的に同一性を判別できないため fail closed (deny) する。利用者は
+    # 対象 repo に `cd` してから別の Bash 呼び出しで commit すれば通る。
+    log_warn "block-commit-lint: repo override (-C / --git-dir / --work-tree / GIT_DIR= 等) を伴う commit はサポート対象外。"
+    emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。"
     ;;
   4) exit 0 ;;
 esac
