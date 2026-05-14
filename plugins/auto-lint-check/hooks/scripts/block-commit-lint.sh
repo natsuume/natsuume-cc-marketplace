@@ -113,21 +113,17 @@ if [ "$HAS_STAGING" -eq 1 ]; then
   while IFS= read -r -d '' f; do
     add_source "$f" working
   done < <(git ls-files --others --exclude-standard -z 2>/dev/null)
-  # HAS_STAGING=1 の場合、commit までに working tree が再 stage される
-  # (`commit -a` / `git add path` / pathspec form 等)。dual-membership
-  # (staged + working) のファイルは新しい working tree 内容が commit される
-  # ため、古い staged blob を lint する必要がない。staged を外し working
-  # のみ残す (古い staged の誤検出による false-positive deny を回避)。
-  for f in "${!FILE_SOURCES[@]}"; do
-    # 値は "staged" / "working" / "staged working" / "working staged" のいずれか。
-    # 両方含むなら dual-membership として working のみに統一。
-    case "${FILE_SOURCES[$f]}" in
-      *staged*working*|*working*staged*)
-        FILE_SOURCES[$f]="working"
-        ;;
-    esac
-  done
 fi
+
+# 設計判断: dual-membership (staged + working) のファイルは両方を lint する。
+# `git add path && commit` のように当該 path が確実に再 stage されるケースでは
+# 古い staged blob は committed されないため、staged 側の lint は over-detect
+# (false-positive deny) になりうる。逆に `git add other && commit` のように
+# 当該 path が再 stage されない場合は staged blob が committed されるため、
+# working 側だけ lint すると真の lint エラーを見逃す (under-detect)。両者の
+# 厳密な判別には `git add` の引数 pathspec resolution が必要。本実装では
+# under-detect を避ける方を優先し、両ソースを lint する。dual-membership で
+# false-positive deny が出た場合は commit 直前の re-stage を促す挙動として扱う。
 
 [ ${#FILE_SOURCES[@]} -gt 0 ] || exit 0
 
