@@ -114,7 +114,7 @@ case "$PARSER_RC" in
     log_warn "block-commit-lint: repo override (-C / --git-dir / --work-tree / GIT_DIR= / cd 等) を伴う commit はサポート対象外。"
     emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` / \`cd dir &&\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。"
     ;;
-  4) exit 0 ;;
+  4) exit 0 ;;  # 実 commit が走らない (dry-run / help / 非 command position の git 等)
   *)
     # 想定外の exit code (例: Python 3.6 以前の SyntaxError, import 失敗 等で
     # parser が exit 1 する経路)。silent skip だと lint が走らないまま commit
@@ -133,9 +133,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 cd "$REPO_ROOT" || exit 0
 
 # lint plan の入力 (NUL 区切り `<source>\t<rel_path>` レコード) を一時ファイル
-# 経由で build-lint-plan.py に渡す。bash の shell variable は NUL terminate
-# なので NUL を含む中間データを変数に保持できない。pipe 中継だと pipeline の
-# exit code 取得が複雑になるため、tmpfile が最も素直。
+# 経由で build-lint-plan.py に渡す。bash の shell variable は NUL を保持
+# できないうえ、3 つの git source (staged / working diff / untracked) を 1 つの
+# pipeline でも concat できないため、tmpfile に追記して 1 入力にまとめる。
 TMP_INPUT=$(mktemp 2>/dev/null)
 if [ -z "$TMP_INPUT" ]; then
   log_warn "block-commit-lint: mktemp failed. cannot build lint plan."
