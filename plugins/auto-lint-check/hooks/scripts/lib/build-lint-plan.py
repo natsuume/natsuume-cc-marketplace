@@ -79,29 +79,44 @@ def detect_linter(rel_path: str) -> str | None:
 def parse_records(raw: bytes) -> dict[str, set[str]]:
     """stdin の raw bytes を {rel_path: {source, ...}} に集約する。
 
-    git のパスはバイト列で UTF-8 valid とは限らないが、本 helper は path を
-    str として扱い JSON 出力するため UTF-8 デコードが必須。失敗時に silent
-    skip すると非 UTF-8 ファイル名を持つ .js/.py が lint をすり抜けるため、
-    fail-closed のため呼び出し側に exit 2 を伝播させる (shell 側で deny)。
+    git のパスは UTF-8 valid とは限らないため、判定は二段階で行う:
+    1. 拡張子は ASCII でしかありえない (`.py` / `.ts` 等) ため、byte 段階で
+       lint 対象拡張子か判定する。マッチしないファイルは silent skip
+       (asset / 非 lint 対象は無関係なので blocker にしない)。
+    2. lint 対象に該当する path のみ UTF-8 デコードする。失敗時は silent
+       skip すると非 UTF-8 ファイル名を持つ .js/.py が lint をすり抜けるため、
+       fail-closed で呼び出し側に exit 2 を伝播させる (shell 側で deny)。
     """
+    lint_suffixes_bytes = tuple(
+        suffix.encode("ascii") for suffix in (JS_LIKE_SUFFIXES | PYTHON_SUFFIXES)
+    )
     result: dict[str, set[str]] = {}
     for record in raw.split(b"\x00"):
         if not record:
             continue
+        sep = record.find(b"\t")
+        if sep == -1:
+            continue
+        source_bytes = record[:sep]
+        path_bytes = record[sep + 1 :]
+        if not path_bytes:
+            continue
         try:
-            decoded = record.decode("utf-8")
+            source = source_bytes.decode("ascii")
+        except UnicodeDecodeError:
+            continue
+        if source not in VALID_SOURCES:
+            continue
+        if not path_bytes.endswith(lint_suffixes_bytes):
+            continue
+        try:
+            rel_path = path_bytes.decode("utf-8")
         except UnicodeDecodeError:
             print(
-                "build-lint-plan: non-UTF-8 path in stdin; cannot route to linter safely",
+                "build-lint-plan: non-UTF-8 lint-target path in stdin; cannot route to linter safely",
                 file=sys.stderr,
             )
             raise SystemExit(2)
-        parts = decoded.split("\t", 1)
-        if len(parts) != 2:
-            continue
-        source, rel_path = parts
-        if source not in VALID_SOURCES or not rel_path:
-            continue
         result.setdefault(rel_path, set()).add(source)
     return result
 
