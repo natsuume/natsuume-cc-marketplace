@@ -1,32 +1,39 @@
 # auto-lint-check プラグイン
 
-ファイル編集前に linter による事前チェックを行い、ignore コメントの挿入をブロックし、編集後に自動フォーマットを適用するプラグインです。
+ファイル編集時に lint ignore コメントの挿入をブロックし、`git commit` 直前に staged ファイルを linter で検査し、編集後に自動フォーマットを適用するプラグインです。
 
 ## バージョン
 
-v0.1.1
+v0.2.0
 
-### v0.1.0 → v0.1.1 の変更点
+### v0.1.1 → v0.2.0 の変更点
 
-- 編集前 lint の deny メッセージに「PreToolUse は Edit/Write/MultiEdit 単位で発火するため、中間状態が lint clean にならない一連の編集は MultiEdit でまとめる必要がある」旨の案内を追加
+- **lint 検査のタイミングを「ファイル編集前 (PreToolUse / Edit)」から「`git commit` 直前 (PreToolUse / Bash)」に移行**
+  - 旧 `auto-lint-check.sh` (Edit/Write/MultiEdit 単位の編集後予測 lint) を廃止
+  - 新 `block-commit-lint.sh` を追加: Bash 経由で `git commit` が実行される直前に staged ファイルを lint する
+  - これにより「中間状態が lint clean にならない一連の編集」が deny で stuck する問題が解消される (関連する変更を 1 つの MultiEdit にまとめる必要が無くなる)
+  - 編集予測ロジック (`predict-content.py`) を削除
+- 編集時の ignore コメント挿入禁止 (`block-ignore-lint-comment.sh`) と編集後の自動フォーマット (`code-format.sh`) は従来通り PreToolUse / PostToolUse で動作する
 
 ## 概要
 
-このプラグインは Claude Code が `Edit` / `Write` / `MultiEdit` ツールでファイルを変更する際の品質ガードを 3 つ提供します。
+このプラグインは 3 段階のコード品質ガードを提供します。
 
-- **編集前 lint**: 編集後の予測内容を ESLint / Ruff の stdin に流し、エラーがあればツール実行を `deny` する
-- **ignore コメントの新規挿入を禁止**: `// eslint-disable`, `// prettier-ignore`, `# noqa`, `# ruff: noqa` 等を含む変更を `deny` する
-- **編集後 auto-format**: 対応する formatter / `linter --fix` を実行してコードを自動整形する
+| タイミング | フック | 役割 |
+|------------|--------|------|
+| 編集直前 | `block-ignore-lint-comment` (PreToolUse / Write\|Edit\|MultiEdit) | ESLint/Prettier/Ruff の ignore コメント挿入を deny |
+| 編集直後 | `code-format` (PostToolUse / Write\|Edit\|MultiEdit) | ESLint `--fix` / Prettier / Ruff で自動整形 |
+| `git commit` 直前 | `block-commit-lint` (PreToolUse / Bash) | staged ファイルに lint エラーがあれば commit を deny |
 
-モノレポ構成 (例: `front/`, `server/` 配下にそれぞれ linter 設定がある) でも、編集対象ファイルから上向きに最寄りの設定ファイルを探索し、その所在ディレクトリを実行 CWD として linter を起動します。
+モノレポ構成 (例: `front/`, `server/` 配下にそれぞれ linter 設定がある) でも、対象ファイルから上向きに最寄りの設定ファイルを探索し、その所在ディレクトリを実行 CWD として linter を起動します。
 
 ## 対応 linter / formatter
 
 - JavaScript / TypeScript (`.js .jsx .ts .tsx .mjs .cjs`)
-  - ESLint (`--stdin` で事前チェック、`--fix` で事後修正)
+  - ESLint (commit 直前 lint、`--fix` 事後修正)
   - Prettier (事後フォーマットのみ、`--write`)
 - Python (`.py`)
-  - Ruff (`check --stdin-filename` で事前チェック、`check --fix` と `format` で事後修正)
+  - Ruff (commit 直前 lint、`check --fix` と `format` で事後修正)
 
 ## インストール
 
@@ -38,31 +45,12 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 ### Hooks
 
-#### 1. auto-lint-check
-
-**ファイル**: `hooks/scripts/auto-lint-check.sh`
-**イベント**: PreToolUse (matcher: `Write|Edit|MultiEdit`)
-
-編集後の予測内容を構築し、対応する linter に stdin 経由で渡してチェックします。エラーが出たらツール実行を `deny` し、`permissionDecisionReason` に linter の出力を含めます。
-
-**動作**:
-
-- `Write` → `tool_input.content` をそのまま linter に流す
-- `Edit` → 実ファイルを読み、`old_string` → `new_string` を 1 回 (`replace_all: true` のときは全置換) 適用した結果を流す
-- `MultiEdit` → 実ファイルを読み、`edits[]` を順に適用した結果を流す
-
-設定ファイルが見つからなかったり linter バイナリが利用できない場合は何もせずスキップします (false positive 抑制)。
-
-**編集単位の制約**:
-
-PreToolUse は Edit/Write/MultiEdit ごとに発火し、その都度「適用後の予測内容」に対して lint します。そのため一連の編集が最終的に lint clean になるとしても、**各 tool 呼び出し時点での予測内容が lint clean** でなければ deny されます。例えば「新規 import を追加する Edit」と「import を使用する箇所を追加する Edit」を分けて呼ぶと、1 つ目の Edit が未使用 import 検出で deny され、2 つ目の Edit に進めず stuck します。このような場合は関連する変更を 1 つの `MultiEdit` にまとめ、すべての変更を適用した予測内容に対して lint が通るようにしてください。deny メッセージにも同様の案内を含めています。
-
-#### 2. block-ignore-lint-comment
+#### 1. block-ignore-lint-comment
 
 **ファイル**: `hooks/scripts/block-ignore-lint-comment.sh`
 **イベント**: PreToolUse (matcher: `Write|Edit|MultiEdit`)
 
-新規挿入される内容に下記の ignore コメントが含まれていたらツール実行を `deny` します。
+新規挿入される内容に下記の ignore コメントが含まれていたらツール実行を `deny` します。挿入の瞬間に止めることで、「commit 時に検出 → どこに入れたか探して除去」というループを回避します。
 
 | linter / formatter | 検出パターン (抜粋) |
 |--------------------|------------------|
@@ -70,14 +58,74 @@ PreToolUse は Edit/Write/MultiEdit ごとに発火し、その都度「適用�
 | Prettier | `// prettier-ignore`, `/* prettier-ignore */`, `<!-- prettier-ignore -->` |
 | Ruff | `# noqa`, `# noqa: E501`, `# ruff: noqa`, `# fmt: off` / `# fmt: on` / `# fmt: skip` |
 
-例外的にどうしても必要なときは、ユーザー側で hook を一時的に無効化してください。
+既に `old_string` や既存ファイルに含まれていた ignore コメントを保持するだけの編集は許可します (多重集合差分で「新規挿入分」だけを抽出)。例外的にどうしても必要なときは、ユーザー側で hook を一時的に無効化してください。
+
+#### 2. block-commit-lint
+
+**ファイル**: `hooks/scripts/block-commit-lint.sh`
+**イベント**: PreToolUse (matcher: `Bash`)
+
+Bash 経由で実行されるコマンドが `git commit` を含む場合に発火します。`git diff --cached --name-only` で staged ファイルを列挙し、対応する linter に内容を stdin で流して検査します。エラーが出たら commit を `deny` し、`permissionDecisionReason` に各ファイルの linter 出力を含めます。
+
+**検出する commit 形式**:
+
+- `git commit ...` / `git commit -m "..."` / `git commit --amend` 等の通常形式
+- `&& git commit`、`; git commit`、`| git commit` などの連結形式
+- `FOO=bar git commit ...` のような env-var prefix
+- `git -c user.email=... commit ...` のような global option を挟む形式
+
+**`git add` / `-a` / pathspec 同時実行時の挙動**:
+
+本フックは Bash ツールの **実行前** に発火するため、同一コマンドの `git add` や `git commit -a` の自動 stage、`git commit <pathspec>` の working tree 直接 commit は、フック発火時点では index にまだ反映されていません。staged だけを見ると lint をすり抜けるため、コマンド文字列に以下のいずれかを検出した場合は、staged だけでなく working tree の変更 (modified + untracked) も lint 対象に含め、ソースを working tree から読み込みます。
+
+検出パターン:
+
+- `git add ...` / `git stage ...` を同一コマンド内に含む
+- `git commit -a` / `-am` / `--all` (tracked-modified を auto-stage)
+- `git commit <pathspec>` / `git commit -- <pathspec>` (pathspec form: 引数で指定したパスを working tree から commit)
+
+これにより以下のパターンが正しく lint されます:
+
+- `git add path && git commit -m ...`
+- `git add -A && git commit -m ...`
+- `git add . && git commit -m ...`
+- `git commit -am ...`
+- `git commit src/foo.py -m ...`
+- `git commit -- src/foo.py`
+
+pathspec の検出には Python の `shlex` でクォート対応トークン化を行うため、`git commit -m "long message with spaces"` のような引用符付きメッセージは pathspec として誤検出しません。
+
+**lint ソースの選択**:
+
+各ファイルは「どの set に属するか」で lint ソースを決定します:
+
+- staged set のみ → `git show :path` (staged blob)
+- working tree set のみ → working tree の現物
+- 両方に属する (例: 元から staged + working tree でも変更されている) → **両方を別個に lint** し、どちらかが失敗すれば deny
+
+これにより、元から staged にあった lint dirty なファイルが working tree で fix されたが再 stage されないまま `git add <other> && git commit` するケースで、staged blob のエラーを取りこぼしません。
+
+過検出 (commit に含めない予定の編集まで lint) は許容しています。Claude が commit する状況では作業中ファイルだけが working tree にある運用が一般的で、不要な lint がほとんど発生しないためです。
+
+**検出のスコープ外** (lint をスキップして通す):
+
+- リポジトリ外での実行 (`git rev-parse --show-toplevel` 失敗)
+- 対象ファイルが 0 件 (空 commit、`--allow-empty` など)
+- 対応する linter 設定ファイルが見つからない
+- linter バイナリが見つからない (skip し、警告を stderr に出す)
+
+**Edge case**:
+
+- `git -C dir commit` / `git --git-dir ... commit` / `git --work-tree ... commit` / `GIT_DIR=... git commit` のように global option / env-var で repo override する commit は、本フックが cwd の git を見るため対象 repo がズレます。`git -C . commit` のように cwd と一致する場合も静的に判別できず lint をすり抜ける経路になるため、これらの形式は **fail closed (deny) でブロック** します。対象 repo に `cd` してから別の Bash 呼び出しとして `git commit` を実行してください。
+- `cd /other && git commit` のように同一コマンド内で cwd を切り替える形式も、`cd` 自体は本フックの検出対象外で、後段の `git commit` は cwd repo を対象として lint します (実行時には cwd が変わっているが hook はそれを認識できない)。同様に対象 repo に `cd` してから別の Bash 呼び出しで commit してください。
+- `git add path` で stage 後、その path を working tree でさらに変更してから `git commit` (path に対する `git add` を含まない) を実行した場合、本フックは「working tree 上書き」モードに入らないため staged blob (古い内容) を lint します。実害は少ないですが、認識ズレを避けるため commit 直前に再 stage することを推奨します。
 
 #### 3. code-format
 
 **ファイル**: `hooks/scripts/code-format.sh`
 **イベント**: PostToolUse (matcher: `Write|Edit|MultiEdit`)
 
-編集後に対応する formatter / `--fix` を順に実行します。
+編集後に対応する formatter / `--fix` を順に実行します。これにより commit 直前 lint で出る format-only エラーをあらかじめ抑制します。
 
 | 言語 | 実行コマンド |
 |-----|-------------|
@@ -99,7 +147,7 @@ Ruff は `uvx ruff` を最優先、次にグローバル PATH の `ruff` を使�
 
 ## モノレポ対応
 
-編集対象ファイルから上向きに以下の設定ファイル/フィールドを探索し、最初に見つかったディレクトリを実行 CWD にします。
+対象ファイルから上向きに以下の設定ファイル/フィールドを探索し、最初に見つかったディレクトリを実行 CWD にします。
 
 | linter | 設定ファイル / フィールド |
 |--------|------------------------|
@@ -118,21 +166,23 @@ auto-lint-check/
 ├── hooks/
 │   ├── hooks.json
 │   └── scripts/
-│       ├── auto-lint-check.sh
 │       ├── block-ignore-lint-comment.sh
+│       ├── block-commit-lint.sh
 │       ├── code-format.sh
 │       └── lib/
 │           ├── common.sh
 │           ├── find-config-root.sh
-│           └── predict-content.py
+│           ├── detect-new-ignores.py
+│           └── parse-commit-command.py
 └── README.md
 ```
 
 ## 必要な実行環境
 
-- `bash`
-- `jq`
-- `python3` (auto-lint-check.sh の編集後予測のみ)
+- `bash` (4.0+ 必須 — block-commit-lint.sh は連想配列を使用。macOS 標準 `/bin/bash` 3.2 では実行不能なので **fail closed (deny) で commit をブロック** し、警告を stderr に出します。silently skip すると lint がすり抜けるため意図的に deny に倒しています。Homebrew 等で `bash` 4+ を導入して `PATH` の先頭に置いてください)
+- `jq` (block-commit-lint.sh の input 解析 / deny メッセージ JSON 整形に必須 — 不在時は fail closed で commit を deny します)
+- `git`
+- `python3` (block-ignore-lint-comment.sh の差分検出、および block-commit-lint.sh の commit コマンド解析。block-commit-lint.sh で `git commit` を含む Bash コマンドを検出した時に python3 が不在の場合は fail closed で commit を deny します)
 - 利用したい linter / formatter (`eslint`, `prettier`, `ruff` または `uvx`)
 
 ## 関連情報

@@ -1,5 +1,5 @@
 {
   "name": "auto-lint-check",
-  "version": "0.1.1",
-  "description": "ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン"
+  "version": "0.2.0",
+  "description": "ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用するプラグイン"
 }
