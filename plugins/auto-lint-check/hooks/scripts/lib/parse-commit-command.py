@@ -158,6 +158,14 @@ def _is_repo_override_env(tok: str) -> bool:
 # を取る。
 _SHORT_VALUE_PREFIXES: frozenset[str] = frozenset({"m", "F", "t", "c", "C", "S"})
 
+# 別 command を実行する transparent wrapper。`command git commit` / `exec git
+# commit` / `sudo git commit` / `nice git commit` / `timeout 5 git commit` 等。
+# wrapper の引数仕様 (`sudo` options, `timeout` の DURATION 等) は多岐にわたり
+# 静的解析が複雑なため、silent bypass を避けるため出現時は fail closed (exit 3)。
+COMMAND_WRAPPERS: frozenset[str] = frozenset(
+    {"command", "exec", "sudo", "doas", "nice", "ionice", "timeout", "chrt", "stdbuf"}
+)
+
 
 def _short_cluster_has_a(t: str) -> bool:
     """`-am` / `-ma` / `-aS` のような short cluster で `a` を含むものを
@@ -338,6 +346,12 @@ def _classify(command: str) -> int:
             sticky_cd = True
             i += 1
             continue
+        if at_command_position and tok in COMMAND_WRAPPERS:
+            # command / exec / sudo / nice / timeout 等の透過 wrapper。
+            # 後続の git commit が silent bypass する経路になるため fail
+            # closed (exit 3) で deny。利用者は wrapper を外して別 Bash
+            # 呼び出しで commit すれば通る。
+            return 3
         if at_command_position and tok == "env":
             # `env [VAR=val ...] git commit` の env wrapper。env 自身は
             # builtin で、続く env-var assignment 列と command 名を渡す。
