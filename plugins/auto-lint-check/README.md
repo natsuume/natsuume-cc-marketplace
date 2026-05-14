@@ -172,6 +172,7 @@ auto-lint-check/
 │       └── lib/
 │           ├── common.sh
 │           ├── find-config-root.sh
+│           ├── build-lint-plan.py
 │           ├── detect-new-ignores.py
 │           └── parse-commit-command.py
 └── README.md
@@ -179,10 +180,10 @@ auto-lint-check/
 
 ## 必要な実行環境
 
-- `bash` (4.0+ 必須 — block-commit-lint.sh は連想配列を使用。macOS 標準 `/bin/bash` 3.2 では実行不能なので **fail closed (deny) で commit をブロック** し、警告を stderr に出します。silently skip すると lint がすり抜けるため意図的に deny に倒しています。Homebrew 等で `bash` 4+ を導入して `PATH` の先頭に置いてください)
+- `bash` (macOS 標準の `/bin/bash` 3.2 でも動作。lint plan 構築は `lib/build-lint-plan.py` に委譲しており、shell 側は連想配列等の bash 4+ 専用機能を使いません)
 - `jq` (block-commit-lint.sh の input 解析 / deny メッセージ JSON 整形に必須 — 不在時は fail closed で commit を deny します)
 - `git`
-- `python3` (block-ignore-lint-comment.sh の差分検出、および block-commit-lint.sh の commit コマンド解析。block-commit-lint.sh で `git commit` を含む Bash コマンドを検出した時に python3 が不在の場合は fail closed で commit を deny します)
+- `python3` (block-ignore-lint-comment.sh の差分検出、block-commit-lint.sh の commit コマンド解析および lint plan 構築。不在時は fail closed で commit を deny します)
 - 利用したい linter / formatter (`eslint`, `prettier`, `ruff` または `uvx`)
 
 ## 関連情報
