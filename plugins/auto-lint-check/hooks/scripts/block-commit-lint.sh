@@ -11,19 +11,22 @@
 # だけでなく working tree の変更 (modified + untracked) も lint 対象に含め、
 # ソースは working tree を読む。
 #
-# 必要: bash 4+ (連想配列 / nameref を利用)。macOS 標準 /bin/bash は 3.2 で
-# あり連想配列を使えないため、本フックは実行不能になる。silently skip すると
-# 「commit 直前 lint が走っているつもりで実は素通り」という silent failure
-# になり最も危険なので、明示的に deny に倒す (fail closed)。利用者は
-# Homebrew 等で bash 4+ を入れて PATH に置くか、本プラグインを無効化する
-# 判断を取ることになる。
+# lint plan の構築 (ファイル → ソース集合のマッピング、(linter, config-root)
+# でのグルーピング) は `lib/build-lint-plan.py` に委譲しており、本スクリプトは
+# git からの入力収集と linter 実行の orchestration だけを担う。これにより
+# bash 4+ 専用機能 (連想配列、`${!arr[@]}`) を使わずに済み、macOS 標準
+# /bin/bash 3.2 でも動作する。
+#
+# 必須ツール (jq, python3) が欠ける、もしくは想定外の状況で lint を実行
+# できない場合は silent skip せず deny に倒す (fail closed)。silently skip
+# すると lint が走らないまま commit が通る経路ができてしまうため。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
 
-# jq-free な deny エミッタ。bash <4 + jq missing の組み合わせでも fail closed
-# できるよう、emit_deny (jq に依存) より先に静的 heredoc で deny を出力する。
+# jq-free な deny エミッタ。jq missing でも fail closed できるよう、
+# emit_deny (jq に依存) より先に静的 heredoc で deny を出力する。
 emit_deny_no_jq() {
   local reason="$1"
   # JSON-escape: " と \ をエスケープ、改行は \n。reason は本ファイル内の固定
@@ -53,19 +56,14 @@ case "$INPUT" in
   *) exit 0 ;;
 esac
 
-# jq / bash 4+ / python3 のいずれが欠けても本フックは正しく lint できない。
+# jq / python3 のいずれが欠けても本フックは正しく lint できない。
 # silent skip だと `git commit` を含む Bash で lint が走らないまま commit が
 # 通る経路になるため fail closed (deny) する。
-# 注: bash 4+ check より先に jq check する。bash <4 は emit_deny を呼ぶが
-# emit_deny は jq に依存するので、jq missing が先に handle されていないと
-# silent skip 経路ができてしまう。
+# 注: 先に jq check する。emit_deny は jq に依存するため、jq missing が
+# 先に handle されていないと silent skip 経路ができてしまう。
 if ! command -v jq >/dev/null 2>&1; then
   echo "[auto-lint-check] block-commit-lint requires jq. found nothing." >&2
   emit_deny_no_jq "auto-lint-check の block-commit-lint hook には jq が必要ですが見つかりません。jq をインストールするか、auto-lint-check プラグインを無効化してください。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
-fi
-if (( BASH_VERSINFO[0] < 4 )); then
-  log_warn "block-commit-lint requires bash 4+. found $BASH_VERSION."
-  emit_deny "auto-lint-check の block-commit-lint hook には bash 4+ が必要ですが、現在 bash $BASH_VERSION で実行されています。Homebrew 等で bash 4+ を導入して PATH の先頭に置くか、auto-lint-check プラグインを無効化してください。silently skip すると lint がすり抜けるため fail closed (deny) しています。"
 fi
 if ! command -v python3 >/dev/null 2>&1; then
   log_warn "block-commit-lint requires python3. found nothing."
@@ -104,8 +102,8 @@ COMMAND="${COMMAND//$'\n'/;}"
 # 過検出 (commit に含めない予定の編集まで lint) は許容する設計トレードオフ。
 HAS_STAGING=0
 python3 "$SCRIPT_DIR/lib/parse-commit-command.py" "$COMMAND"
-PY_RC=$?
-case "$PY_RC" in
+PARSER_RC=$?
+case "$PARSER_RC" in
   0|2) HAS_STAGING=1 ;;
   5) ;;  # commit はあるが staging trigger なし (staged blob のみ lint)
   3)
@@ -124,7 +122,7 @@ case "$PY_RC" in
     # parser が exit 1 する経路)。silent skip だと lint が走らないまま commit
     # を通す経路になるため、安全側で HAS_STAGING=1 に倒して working tree も
     # 含めて lint する (over-detect は false-positive deny で気付ける)。
-    log_warn "block-commit-lint: parser returned unexpected exit code $PY_RC. fail-safe to HAS_STAGING=1."
+    log_warn "block-commit-lint: parser returned unexpected exit code $PARSER_RC. fail-safe to HAS_STAGING=1."
     HAS_STAGING=1
     ;;
 esac
@@ -136,36 +134,33 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -n "$REPO_ROOT" ] || exit 0
 cd "$REPO_ROOT" || exit 0
 
-# Lint 対象ファイルを単一の assoc array で管理する。値は source の集合を
-# `staged` / `working` / `staged working` の形で持つ。dual-membership 時には
-# 両ソースを別個に lint してどちらか失敗で deny する:
-#   - 元から staged で dirty → staged lint で検出 (再 stage されない場合に
-#     こちらが committed される)
-#   - working tree で変更されて新たに staged される予定 → working tree lint
-#     で検出
-declare -A FILE_SOURCES
+# lint plan の入力 (NUL 区切り `<source>\t<rel_path>` レコード) を一時ファイル
+# 経由で build-lint-plan.py に渡す。bash の shell variable は NUL terminate
+# なので NUL を含む中間データを変数に保持できない。pipe 中継だと pipeline の
+# exit code 取得が複雑になるため、tmpfile が最も素直。
+TMP_INPUT=$(mktemp 2>/dev/null)
+if [ -z "$TMP_INPUT" ]; then
+  log_warn "block-commit-lint: mktemp failed. cannot build lint plan."
+  emit_deny "auto-lint-check の block-commit-lint hook が lint plan 用の一時ファイル作成に失敗しました。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
+fi
+trap 'rm -f "$TMP_INPUT"' EXIT
 
-add_source() {
-  local f="$1" src="$2"
-  # space delimiter で token 単位の完全一致を取る (substring 誤マッチ防止)。
-  case " ${FILE_SOURCES[$f]:-} " in
-    *" $src "*) ;;
-    "  ")       FILE_SOURCES[$f]="$src" ;;
-    *)          FILE_SOURCES[$f]+=" $src" ;;
-  esac
+# git -z の NUL 区切り出力に source ラベルを前置して TMP_INPUT に追記する。
+prepend_source_label() {
+  local source="$1"
+  while IFS= read -r -d '' f; do
+    printf '%s\t%s\0' "$source" "$f"
+  done
 }
 
-while IFS= read -r -d '' f; do
-  add_source "$f" staged
-done < <(git diff --cached --name-only --diff-filter=ACMR -z 2>/dev/null)
+git diff --cached --name-only --diff-filter=ACMR -z 2>/dev/null \
+  | prepend_source_label staged >> "$TMP_INPUT"
 
 if [ "$HAS_STAGING" -eq 1 ]; then
-  while IFS= read -r -d '' f; do
-    add_source "$f" working
-  done < <(git diff --name-only --diff-filter=ACMR -z 2>/dev/null)
-  while IFS= read -r -d '' f; do
-    add_source "$f" working
-  done < <(git ls-files --others --exclude-standard -z 2>/dev/null)
+  git diff --name-only --diff-filter=ACMR -z 2>/dev/null \
+    | prepend_source_label working >> "$TMP_INPUT"
+  git ls-files --others --exclude-standard -z 2>/dev/null \
+    | prepend_source_label working >> "$TMP_INPUT"
 fi
 
 # 設計判断: dual-membership (staged + working) のファイルは両方を lint する。
@@ -178,65 +173,38 @@ fi
 # under-detect を避ける方を優先し、両ソースを lint する。dual-membership で
 # false-positive deny が出た場合は commit 直前の re-stage を促す挙動として扱う。
 
-[ ${#FILE_SOURCES[@]} -gt 0 ] || exit 0
+PLAN_JSON=$(python3 "$SCRIPT_DIR/lib/build-lint-plan.py" < "$TMP_INPUT")
+PLAN_RC=$?
+if [ "$PLAN_RC" -ne 0 ]; then
+  log_warn "block-commit-lint: build-lint-plan.py が exit $PLAN_RC で失敗。"
+  emit_deny "auto-lint-check の block-commit-lint hook が lint plan の構築に失敗しました (build-lint-plan.py exit $PLAN_RC)。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
+fi
 
-# Pass 1: ファイルを (linter, config-root) でグルーピングする。Pass 2 で
-# linter 解決 (resolve_eslint / resolve_ruff は `pnpm exec --version` 等の
-# 子プロセスを起こす) を root あたり 1 回に抑えるため。`find_config_root`
-# の結果も dirname 単位でキャッシュする (同じ dir のファイルは同じ root)。
-declare -A CFG_ROOT_CACHE
-declare -A FILES_BY_KEY
+GROUP_COUNT=$(printf '%s' "$PLAN_JSON" | jq '.groups | length' 2>/dev/null)
+if [ -z "$GROUP_COUNT" ]; then
+  log_warn "block-commit-lint: build-lint-plan.py の出力 (PLAN_JSON) が parse できない。"
+  emit_deny "auto-lint-check の block-commit-lint hook が lint plan JSON の parse に失敗しました。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
+fi
+[ "$GROUP_COUNT" -gt 0 ] || exit 0
 
-# FILES_BY_KEY entry separator: 制御文字 (US, \x1f) を使うことで path と
-# source field の区切りを衝突なく行える (path に TAB が含まれる場合への保険)。
-FS_SEP=$'\x1f'
-RS_SEP=$'\n'
-
-resolve_root_cached() {
-  local file="$1" linter="$2"
-  local key
-  key="${linter}:$(dirname "$file")"
-  if [ -z "${CFG_ROOT_CACHE[$key]+x}" ]; then
-    CFG_ROOT_CACHE[$key]=$(find_config_root "$file" "$linter")
-  fi
-  printf '%s' "${CFG_ROOT_CACHE[$key]}"
-}
-
-for REL_PATH in "${!FILE_SOURCES[@]}"; do
-  if is_js_like "$REL_PATH"; then
-    LINTER=eslint
-  elif is_python "$REL_PATH"; then
-    LINTER=ruff
-  else
-    continue
-  fi
-  ROOT=$(resolve_root_cached "$REL_PATH" "$LINTER")
-  [ -n "$ROOT" ] || continue
-  for SRC in ${FILE_SOURCES[$REL_PATH]}; do
-    FILES_BY_KEY["${LINTER}|${ROOT}"]+="$REL_PATH$FS_SEP$SRC$RS_SEP"
-  done
-done
-
-# (linter, root) ごとに linter binary を 1 回だけ解決し、配下のファイルを
-# 順に lint する。LINTER_LABEL は LINTER → 表示名のマッピング。
-declare -A LINTER_LABEL=(
-  [eslint]=ESLint
-  [ruff]=Ruff
-)
 HAS_ERROR=0
 COMBINED_OUTPUT=""
 
-for KEY in "${!FILES_BY_KEY[@]}"; do
-  LINTER="${KEY%%|*}"
-  ROOT="${KEY#*|}"
-  LABEL="${LINTER_LABEL[$LINTER]}"
+# 各 (linter, root) group ごとに linter binary を 1 回だけ解決し、配下の
+# items を順に lint する。group / items の順序は build-lint-plan.py 側で
+# 安定ソート済み。jq -j で NUL 区切りの (file, source) ストリームを出力させ、
+# process substitution 経由で `while read -d ''` に流す。
+for ((i = 0; i < GROUP_COUNT; i++)); do
+  LINTER=$(printf '%s' "$PLAN_JSON" | jq -r ".groups[$i].linter")
+  LABEL=$(printf '%s' "$PLAN_JSON" | jq -r ".groups[$i].label")
+  ROOT=$(printf '%s' "$PLAN_JSON" | jq -r ".groups[$i].root")
 
   case "$LINTER" in
     eslint) resolve_eslint "$ROOT" || { log_warn "eslint config が $ROOT にあるが eslint バイナリが見つからない。skip"; continue; } ;;
     ruff)   resolve_ruff           || { log_warn "ruff config が $ROOT にあるが ruff バイナリが見つからない。skip";   continue; } ;;
   esac
 
-  while IFS="$FS_SEP" read -r REL_PATH SOURCE; do
+  while IFS= read -r -d '' REL_PATH && IFS= read -r -d '' SOURCE; do
     [ -n "$REL_PATH" ] || continue
     # Lint 対象ソース: staged → `git show :path`, working → working tree。
     # `$()` の trailing newline strip を避けるため `&& printf X` センチネル
@@ -272,7 +240,7 @@ for KEY in "${!FILES_BY_KEY[@]}"; do
       HAS_ERROR=1
       COMBINED_OUTPUT+=$'--- '"$REL_PATH"$' ('"$LABEL, $SRC_LABEL"$') ---\n'"$LINT_OUT"$'\n\n'
     fi
-  done <<< "${FILES_BY_KEY[$KEY]}"
+  done < <(printf '%s' "$PLAN_JSON" | jq -j --argjson i "$i" '.groups[$i].items[] | "\(.file)\u0000\(.source)\u0000"')
 done
 
 if [ "$HAS_ERROR" -eq 1 ]; then
