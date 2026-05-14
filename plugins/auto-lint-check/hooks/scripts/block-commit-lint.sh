@@ -12,16 +12,20 @@
 # ソースは working tree を読む。
 #
 # 必要: bash 4+ (連想配列 / nameref を利用)。macOS 標準 /bin/bash は 3.2 で
-# 動作しないため、版が低い場合は gracefully skip する (lint せず通す)。
-
-if (( BASH_VERSINFO[0] < 4 )); then
-  printf '[auto-lint-check] block-commit-lint requires bash 4+. found %s. skip\n' "$BASH_VERSION" >&2
-  exit 0
-fi
+# あり連想配列を使えないため、本フックは実行不能になる。silently skip すると
+# 「commit 直前 lint が走っているつもりで実は素通り」という silent failure
+# になり最も危険なので、明示的に deny に倒す (fail closed)。利用者は
+# Homebrew 等で bash 4+ を入れて PATH に置くか、本プラグインを無効化する
+# 判断を取ることになる。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+
+if (( BASH_VERSINFO[0] < 4 )); then
+  log_warn "block-commit-lint requires bash 4+. found $BASH_VERSION."
+  emit_deny "auto-lint-check の block-commit-lint hook には bash 4+ が必要ですが、現在 bash $BASH_VERSION で実行されています。Homebrew 等で bash 4+ を導入して PATH の先頭に置くか、auto-lint-check プラグインを無効化してください。silently skip すると lint がすり抜けるため fail closed (deny) しています。"
+fi
 
 INPUT=$(cat)
 
