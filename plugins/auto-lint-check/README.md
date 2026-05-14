@@ -172,7 +172,8 @@ auto-lint-check/
 │       └── lib/
 │           ├── common.sh
 │           ├── find-config-root.sh
-│           └── detect-new-ignores.py
+│           ├── detect-new-ignores.py
+│           └── parse-commit-command.py
 └── README.md
 ```
 
