@@ -44,17 +44,16 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Literal
 
-Linter = Literal["eslint", "ruff"]
-Source = Literal["staged", "working"]
-
+# linter / source の有効値は str リテラルで持つ。typing.Literal を使うと
+# Python 3.8 未満で import 失敗 → fail-closed deny になり、現役の python3
+# 環境を不必要に締め出してしまうため避ける。
 JS_LIKE_SUFFIXES: frozenset[str] = frozenset(
     {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 )
 PYTHON_SUFFIXES: frozenset[str] = frozenset({".py"})
 
-LINTER_LABEL: dict[Linter, str] = {
+LINTER_LABEL: dict[str, str] = {
     "eslint": "ESLint",
     "ruff": "Ruff",
 }
@@ -62,13 +61,13 @@ LINTER_LABEL: dict[Linter, str] = {
 VALID_SOURCES: frozenset[str] = frozenset({"staged", "working"})
 # items の出力順を決めるためのスコア。staged → working で固定すると、
 # dual-membership 時の lint 実行順が決定的になり review の noise が減る。
-SOURCE_ORDER: dict[Source, int] = {"staged": 0, "working": 1}
+SOURCE_ORDER: dict[str, int] = {"staged": 0, "working": 1}
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 FIND_CONFIG_ROOT = SCRIPT_DIR / "find-config-root.sh"
 
 
-def detect_linter(rel_path: str) -> Linter | None:
+def detect_linter(rel_path: str) -> str | None:
     suffix = os.path.splitext(rel_path)[1]
     if suffix in JS_LIKE_SUFFIXES:
         return "eslint"
@@ -77,7 +76,7 @@ def detect_linter(rel_path: str) -> Linter | None:
     return None
 
 
-def parse_records(raw: bytes) -> dict[str, set[Source]]:
+def parse_records(raw: bytes) -> dict[str, set[str]]:
     """stdin の raw bytes を {rel_path: {source, ...}} に集約する。
 
     git のパスはバイト列で UTF-8 valid とは限らないが、本 helper は path を
@@ -85,7 +84,7 @@ def parse_records(raw: bytes) -> dict[str, set[Source]]:
     skip すると非 UTF-8 ファイル名を持つ .js/.py が lint をすり抜けるため、
     fail-closed のため呼び出し側に exit 2 を伝播させる (shell 側で deny)。
     """
-    result: dict[str, set[Source]] = {}
+    result: dict[str, set[str]] = {}
     for record in raw.split(b"\x00"):
         if not record:
             continue
@@ -103,14 +102,14 @@ def parse_records(raw: bytes) -> dict[str, set[Source]]:
         source, rel_path = parts
         if source not in VALID_SOURCES or not rel_path:
             continue
-        result.setdefault(rel_path, set()).add(source)  # type: ignore[arg-type]
+        result.setdefault(rel_path, set()).add(source)
     return result
 
 
 def _resolve_root(
     rel_path: str,
-    linter: Linter,
-    cache: dict[tuple[Linter, str], str],
+    linter: str,
+    cache: dict[tuple[str, str], str],
 ) -> str:
     """find-config-root.sh を呼んで root を返す。
 
@@ -138,14 +137,14 @@ def _resolve_root(
     return root
 
 
-def build_plan(records: dict[str, set[Source]]) -> dict[str, list[dict]]:
+def build_plan(records: dict[str, set[str]]) -> dict[str, list[dict]]:
     """集約済みレコードから plan dict を構築する。
 
     groups は ``(linter, root)`` で安定ソート、各 group の items は (file
     アルファベット順, SOURCE_ORDER) の安定ソートで返す。
     """
-    grouped: dict[tuple[Linter, str], list[dict[str, str]]] = {}
-    cache: dict[tuple[Linter, str], str] = {}
+    grouped: dict[tuple[str, str], list[dict[str, str]]] = {}
+    cache: dict[tuple[str, str], str] = {}
 
     for rel_path in sorted(records):
         linter = detect_linter(rel_path)
