@@ -349,6 +349,7 @@ def _classify(command: str) -> int:
     # 取り込まれる)。最初の cwd commit invocation を見つけたら、その commit
     # の引数を見て staging trigger を判定し、結論を返す。
     cwd_add_seen = False
+    saw_cwd_commit = False
     for sub, sub_idx, has_override in invocations:
         if sub in ("add", "stage"):
             if not has_override:
@@ -361,20 +362,24 @@ def _classify(command: str) -> int:
             # skip を要求する (bash 側で exit 3 を受け取って exit 0 で抜ける)。
             return 3
         if _commit_is_non_mutating(toks, sub_idx):
-            # `--dry-run` / `--help` / `-h`: 実 commit は走らない。同 Bash
-            # コマンド内に後続の実 commit (例: `git commit --dry-run &&
-            # git commit -m m`) があるかもしれないので、ここでは終了せず
+            # `--dry-run` / `--help` / `-h`: 実 commit は走らない → skip して
             # 次の invocation の解析を続ける。
             continue
-        # cwd repo に対する commit。同 invocation 内の `-a` / pathspec 等で
-        # 引き起こされる staging を見る。先行 cwd add があれば既に staging
-        # trigger 確定。どちらか true なら HAS_STAGING。
+        # cwd repo に対する実 commit。先行 cwd add や、commit 自体の `-a` /
+        # pathspec / -p などが staging trigger なら HAS_STAGING 確定で即 return。
         if cwd_add_seen or _commit_triggers_staging(toks, sub_idx):
             return 0
+        # plain commit (staged blob のみ)。後続に `git add ... && git commit`
+        # のような staging trigger 列が来るかもしれないので終了せず、commit 後
+        # に index がクリアされる前提で cwd_add_seen を消費する形で続行。
+        saw_cwd_commit = True
+        cwd_add_seen = False
+    # 実 commit が見つかったが staging trigger は無かった → staged blob のみ lint
+    if saw_cwd_commit:
         return 1
-    # コマンド内に実 commit (= 非変更 mode でない git commit) が存在しなかった。
-    # (例: `echo "git commit"` / `xargs git commit` / `git commit --dry-run`
-    # のみ / quoted 文字列のみ)。
+    # 実 commit (非変更 mode でない git commit) が無かった (例:
+    # `echo "git commit"` / `xargs git commit` / quoted 文字列のみ /
+    # `git commit --dry-run` のみ)。
     return 4
 
 
