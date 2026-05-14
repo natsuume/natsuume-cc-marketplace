@@ -62,8 +62,11 @@ COMMIT_VALUE_FLAGS: frozenset[str] = frozenset(
 #   合成して commit
 # - `-p` / `--patch`, `--interactive`: 対話的に hunk を選択して staging
 #   (本 hook の発火後に working tree から index に取り込まれる)
+# - `--pathspec-from-file`: file から pathspec を読み込んで working tree
+#   から commit。`--pathspec-from-file=<path>` の = 形式は別途判定。
 PATHSPEC_MODE_FLAGS: frozenset[str] = frozenset(
-    {"-o", "--only", "-i", "--include", "-p", "--patch", "--interactive"}
+    {"-o", "--only", "-i", "--include", "-p", "--patch", "--interactive",
+     "--pathspec-from-file"}
 )
 
 SEPARATORS: frozenset[str] = frozenset({";", "&&", "||", "|", "&", "(", ")"})
@@ -256,6 +259,8 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
         if u == "--":
             return True
         elif u in PATHSPEC_MODE_FLAGS:
+            return True
+        elif u.startswith("--pathspec-from-file="):
             return True
         elif u == "--all":
             return True
