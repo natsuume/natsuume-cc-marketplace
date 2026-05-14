@@ -167,10 +167,10 @@ auto-lint-check/
 
 ## 必要な実行環境
 
-- `bash`
+- `bash` (4.0+ — block-commit-lint.sh は連想配列を使用。macOS 標準 `/bin/bash` 3.2 では gracefully skip し、警告を stderr に出します。Homebrew の `bash` 4+ を `PATH` に置くことを推奨)
 - `jq`
 - `git`
-- `python3` (block-ignore-lint-comment.sh の差分検出のみ)
+- `python3` (block-ignore-lint-comment.sh の差分検出、および block-commit-lint.sh の commit コマンド解析)
 - 利用したい linter / formatter (`eslint`, `prettier`, `ruff` または `uvx`)
 
 ## 関連情報

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # block-commit-lint.sh
 #
 # PreToolUse / Bash で `git commit` を検出し、commit 対象になるファイルを
@@ -7,8 +7,17 @@
 # 本フックは Bash ツールの **実行前** に発火するため、同一コマンドの `git add`
 # / `commit -a` がまだ走っていない時点で index を見ても lint をすり抜ける。
 # これを避けるため、コマンド文字列を見て `git add` / `git stage` / `commit -a`
-# / `--all` を検出した場合 (HAS_STAGING=1) は staged だけでなく working tree
-# の変更 (modified + untracked) も lint 対象に含め、ソースは working tree を読む。
+# / `--all` / `commit <pathspec>` を検出した場合 (HAS_STAGING=1) は staged
+# だけでなく working tree の変更 (modified + untracked) も lint 対象に含め、
+# ソースは working tree を読む。
+#
+# 必要: bash 4+ (連想配列 / nameref を利用)。macOS 標準 /bin/bash は 3.2 で
+# 動作しないため、版が低い場合は gracefully skip する (lint せず通す)。
+
+if (( BASH_VERSINFO[0] < 4 )); then
+  printf '[auto-lint-check] block-commit-lint requires bash 4+. found %s. skip\n' "$BASH_VERSION" >&2
+  exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
