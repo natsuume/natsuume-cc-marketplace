@@ -58,15 +58,17 @@ COMMAND="${COMMAND//$'\\\n'/ }"
 COMMAND="${COMMAND//$'\n'/;}"
 
 # `lib/parse-commit-command.py` が shlex でシェルトークン化したコマンドを解析し、
-# exit code で以下を返す:
+# exit code で以下を返す (Python が SyntaxError / ImportError で返す 1 と衝突
+# しないよう、正常 return code は 2 以上を使う):
 #   0  HAS_STAGING (working tree も lint 対象に含めるべき)
-#   1  commit はあるが staging trigger なし (staged blob のみ lint)
+#   5  commit はあるが staging trigger なし (staged blob のみ lint)
 #   2  parse failure (安全側で HAS_STAGING=1 に倒す)
 #   3  repo override (`-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` / cd 等で
 #      cwd と異なる repo に commit するため、silent に cwd を lint しないよう
 #      deny)
 #   4  実 commit が走らない (commit subcommand 不在 / `echo "git commit"` の
 #      ような非 command position の git / `--dry-run` / `--help` 等)。skip
+#   その他 (1 を含む): 想定外のエラー。default 分岐で fail-safe (HAS_STAGING=1)
 #
 # parser 呼び出しは `git rev-parse` の check より先に行う: hook 実行時の cwd
 # が repo 外で `cd repo && git commit` のようなコマンドが来た場合、`rev-parse`
@@ -79,7 +81,7 @@ python3 "$SCRIPT_DIR/lib/parse-commit-command.py" "$COMMAND"
 PY_RC=$?
 case "$PY_RC" in
   0|2) HAS_STAGING=1 ;;
-  1) ;;  # commit はあるが staging trigger なし
+  5) ;;  # commit はあるが staging trigger なし (staged blob のみ lint)
   3)
     # `-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` / `cd dir &&` 等で repo
     # override する commit。本フックは cwd repo を見るため、別 repo を指す

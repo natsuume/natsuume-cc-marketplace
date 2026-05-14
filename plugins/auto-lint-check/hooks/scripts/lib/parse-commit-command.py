@@ -11,10 +11,11 @@
 - `git -C ...` / `--git-dir` / `--work-tree` のように commit 対象 repo を
   切り替える global option を伴っているか
 
-判定結果は exit code で返す:
+判定結果は exit code で返す (Python が SyntaxError / ImportError 等で返す 1 と
+衝突しないよう、commit ありを意味する正常 return は 5 を使う):
 
     0  HAS_STAGING (working tree も lint 対象に含めるべき)
-    1  commit はあるが staging trigger なし (staged blob のみ lint で十分)
+    5  commit はあるが staging trigger なし (staged blob のみ lint で十分)
     2  parse failure (呼び出し側で安全側に倒すこと)
     3  repo override (cwd と異なる repo を commit するため、cwd repo を
        silently lint しないよう呼び出し側で skip すべき)
@@ -417,7 +418,7 @@ def _classify(command: str) -> int:
         cwd_add_seen = False
     # 実 commit が見つかったが staging trigger は無かった → staged blob のみ lint
     if saw_cwd_commit:
-        return 1
+        return 5
     # 実 commit (非変更 mode でない git commit) が無かった (例:
     # `echo "git commit"` / `xargs git commit` / quoted 文字列のみ /
     # `git commit --dry-run` のみ)。
