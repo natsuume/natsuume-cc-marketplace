@@ -167,15 +167,31 @@ NON_MUTATING_COMMIT_FLAGS: frozenset[str] = frozenset({"--dry-run", "--help", "-
 
 def _commit_is_non_mutating(toks: list[str], sub_idx: int) -> bool:
     """commit invocation の引数に `--dry-run` / `--help` / `-h` が含まれるか
-    判定する。これらが含まれる場合、実際の commit は走らないため lint も不要。"""
+    判定する。これらが含まれる場合、実際の commit は走らないため lint も不要。
+
+    VALUE_FLAGS の値や `--` 以降の pathspec として `--dry-run` 等が現れる
+    ケース (`git commit -m --dry-run` / `git commit -- --help`) では flag
+    扱いしないよう、_commit_triggers_staging と同じ value-skip / `--` 処理
+    を行う。"""
     n = len(toks)
     j = sub_idx + 1
+    expect_val = False
+    after_dash_dash = False
     while j < n:
         u = toks[j]
         if u in SEPARATORS or _is_redirection_token(u):
             break
-        if u in NON_MUTATING_COMMIT_FLAGS:
+        if after_dash_dash:
+            j += 1
+            continue
+        if expect_val:
+            expect_val = False
+        elif u == "--":
+            after_dash_dash = True
+        elif u in NON_MUTATING_COMMIT_FLAGS:
             return True
+        elif u in COMMIT_VALUE_FLAGS:
+            expect_val = True
         j += 1
     return False
 
