@@ -57,22 +57,21 @@ COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 COMMAND="${COMMAND//$'\\\n'/ }"
 COMMAND="${COMMAND//$'\n'/;}"
 
-# `git diff --cached --name-only` は repo root 相対のパスを返すため、cwd を
-# repo root に切り替えてから以降の処理を行う (sub-directory での commit 時の
-# path 解釈ズレを回避)。
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-[ -n "$REPO_ROOT" ] || exit 0
-cd "$REPO_ROOT" || exit 0
-
 # `lib/parse-commit-command.py` が shlex でシェルトークン化したコマンドを解析し、
 # exit code で以下を返す:
 #   0  HAS_STAGING (working tree も lint 対象に含めるべき)
 #   1  commit はあるが staging trigger なし (staged blob のみ lint)
 #   2  parse failure (安全側で HAS_STAGING=1 に倒す)
-#   3  repo override (`-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` 等で cwd
-#      と異なる repo に commit するため、silent に cwd を lint しないよう skip)
+#   3  repo override (`-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` / cd 等で
+#      cwd と異なる repo に commit するため、silent に cwd を lint しないよう
+#      deny)
 #   4  実 commit が走らない (commit subcommand 不在 / `echo "git commit"` の
 #      ような非 command position の git / `--dry-run` / `--help` 等)。skip
+#
+# parser 呼び出しは `git rev-parse` の check より先に行う: hook 実行時の cwd
+# が repo 外で `cd repo && git commit` のようなコマンドが来た場合、`rev-parse`
+# 失敗で早期 exit 0 すると bypass になる。parser で repo override / sticky cd
+# を fail closed しておけば、cwd が repo か否かに関わらず deny される。
 #
 # 過検出 (commit に含めない予定の編集まで lint) は許容する設計トレードオフ。
 HAS_STAGING=0
@@ -81,17 +80,24 @@ PY_RC=$?
 case "$PY_RC" in
   0|2) HAS_STAGING=1 ;;
   3)
-    # `-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` 等で repo override する
-    # commit。本フックは cwd repo を見るため、別 repo を指す場合は silent
-    # に cwd を lint する経路、`git -C . commit` のような同一 repo を指す
-    # 場合も exit 0 で skip すれば lint をすり抜ける経路になる。
+    # `-C` / `--git-dir` / `--work-tree` / `GIT_DIR=` / `cd dir &&` 等で repo
+    # override する commit。本フックは cwd repo を見るため、別 repo を指す
+    # 場合は silent に cwd を lint する経路、`git -C . commit` のように同一
+    # repo を指す場合も exit 0 で skip すれば lint をすり抜ける経路になる。
     # 静的に同一性を判別できないため fail closed (deny) する。利用者は
     # 対象 repo に `cd` してから別の Bash 呼び出しで commit すれば通る。
-    log_warn "block-commit-lint: repo override (-C / --git-dir / --work-tree / GIT_DIR= 等) を伴う commit はサポート対象外。"
-    emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。"
+    log_warn "block-commit-lint: repo override (-C / --git-dir / --work-tree / GIT_DIR= / cd 等) を伴う commit はサポート対象外。"
+    emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` / \`cd dir &&\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。"
     ;;
   4) exit 0 ;;
 esac
+
+# parser で「実 commit が cwd の repo に対して走る」と判定された場合に、cwd が
+# 実際に git repo かを確認する。repo 外で plain `git commit` は失敗するだけだが、
+# 後段の `git diff --cached` などが noise を出すので silent exit 0 で抜ける。
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+[ -n "$REPO_ROOT" ] || exit 0
+cd "$REPO_ROOT" || exit 0
 
 # Lint 対象ファイルを単一の assoc array で管理する。値は source の集合を
 # `staged` / `working` / `staged working` の形で持つ。dual-membership 時には
