@@ -341,16 +341,20 @@ def _classify(command: str) -> int:
             # skip を要求する (bash 側で exit 3 を受け取って exit 0 で抜ける)。
             return 3
         if _commit_is_non_mutating(toks, sub_idx):
-            # `--dry-run` / `--help` / `-h`: 実 commit は走らないので lint 不要。
-            return 4
+            # `--dry-run` / `--help` / `-h`: 実 commit は走らない。同 Bash
+            # コマンド内に後続の実 commit (例: `git commit --dry-run &&
+            # git commit -m m`) があるかもしれないので、ここでは終了せず
+            # 次の invocation の解析を続ける。
+            continue
         # cwd repo に対する commit。同 invocation 内の `-a` / pathspec 等で
         # 引き起こされる staging を見る。先行 cwd add があれば既に staging
         # trigger 確定。どちらか true なら HAS_STAGING。
         if cwd_add_seen or _commit_triggers_staging(toks, sub_idx):
             return 0
         return 1
-    # コマンド内に command-position の `git commit` が存在しなかった。
-    # (例: `echo "git commit"` / `xargs git commit` / quoted 文字列)。
+    # コマンド内に実 commit (= 非変更 mode でない git commit) が存在しなかった。
+    # (例: `echo "git commit"` / `xargs git commit` / `git commit --dry-run`
+    # のみ / quoted 文字列のみ)。
     return 4
 
 
