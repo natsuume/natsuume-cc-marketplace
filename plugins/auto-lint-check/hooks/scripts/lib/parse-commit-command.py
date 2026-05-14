@@ -283,12 +283,18 @@ def _classify(command: str) -> int:
     at_command_position = True
     while i < n:
         tok = toks[i]
-        if tok in SEPARATORS or tok in SHELL_KEYWORDS:
-            # SEPARATORS と shell keywords どちらの直後も新しい simple command
-            # の開始位置 (= command position) として扱う。`if ... ; then git
-            # commit` の `git`、`time git commit` の `git` を正しく検出する。
+        if tok in SEPARATORS:
             pending_env_override = False
             at_command_position = True
+            i += 1
+            continue
+        if at_command_position and tok in SHELL_KEYWORDS:
+            # shell keywords は bash 構文上 command position に出現した時のみ
+            # keyword (例: `time git commit` の `time`、`if foo; then git ...`
+            # の `if` / `then`)。command position で消費し、次の token を再び
+            # command name として扱うことで `git` を正しく検出する。引数として
+            # 現れた keyword (例: `echo time git commit` の `time`) は通常
+            # トークン扱いになり、誤って command position を立てない。
             i += 1
             continue
         if at_command_position and _is_env_assignment(tok):
