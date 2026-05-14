@@ -78,7 +78,13 @@ def detect_linter(rel_path: str) -> Linter | None:
 
 
 def parse_records(raw: bytes) -> dict[str, set[Source]]:
-    """stdin の raw bytes を {rel_path: {source, ...}} に集約する。"""
+    """stdin の raw bytes を {rel_path: {source, ...}} に集約する。
+
+    git のパスはバイト列で UTF-8 valid とは限らないが、本 helper は path を
+    str として扱い JSON 出力するため UTF-8 デコードが必須。失敗時に silent
+    skip すると非 UTF-8 ファイル名を持つ .js/.py が lint をすり抜けるため、
+    fail-closed のため呼び出し側に exit 2 を伝播させる (shell 側で deny)。
+    """
     result: dict[str, set[Source]] = {}
     for record in raw.split(b"\x00"):
         if not record:
@@ -86,7 +92,11 @@ def parse_records(raw: bytes) -> dict[str, set[Source]]:
         try:
             decoded = record.decode("utf-8")
         except UnicodeDecodeError:
-            continue
+            print(
+                "build-lint-plan: non-UTF-8 path in stdin; cannot route to linter safely",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
         parts = decoded.split("\t", 1)
         if len(parts) != 2:
             continue
