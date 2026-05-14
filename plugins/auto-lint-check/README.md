@@ -74,9 +74,15 @@ Bash 経由で実行されるコマンドが `git commit` を含む場合に発�
 - `FOO=bar git commit ...` のような env-var prefix
 - `git -c user.email=... commit ...` のような global option を挟む形式
 
-**`git add` / `-a` 同時実行時の挙動**:
+**`git add` / `-a` / pathspec 同時実行時の挙動**:
 
-本フックは Bash ツールの **実行前** に発火するため、同一コマンドの `git add` がまだ走っていない時点では index が古いまま見える。これを避けるため、コマンド文字列に `git add` / `git stage` / `git commit -a` / `--all` のいずれかを検出した場合は、staged だけでなく working tree の変更 (modified + untracked) も lint 対象に含め、ソースを working tree から読み込みます。
+本フックは Bash ツールの **実行前** に発火するため、同一コマンドの `git add` や `git commit -a` の自動 stage、`git commit <pathspec>` の working tree 直接 commit は、フック発火時点では index にまだ反映されていません。staged だけを見ると lint をすり抜けるため、コマンド文字列に以下のいずれかを検出した場合は、staged だけでなく working tree の変更 (modified + untracked) も lint 対象に含め、ソースを working tree から読み込みます。
+
+検出パターン:
+
+- `git add ...` / `git stage ...` を同一コマンド内に含む
+- `git commit -a` / `-am` / `--all` (tracked-modified を auto-stage)
+- `git commit <pathspec>` / `git commit -- <pathspec>` (pathspec form: 引数で指定したパスを working tree から commit)
 
 これにより以下のパターンが正しく lint されます:
 
@@ -84,6 +90,10 @@ Bash 経由で実行されるコマンドが `git commit` を含む場合に発�
 - `git add -A && git commit -m ...`
 - `git add . && git commit -m ...`
 - `git commit -am ...`
+- `git commit src/foo.py -m ...`
+- `git commit -- src/foo.py`
+
+pathspec の検出には Python の `shlex` でクォート対応トークン化を行うため、`git commit -m "long message with spaces"` のような引用符付きメッセージは pathspec として誤検出しません。
 
 過検出 (commit に含めない予定の編集まで lint) は許容しています。Claude が commit する状況では作業中ファイルだけが working tree にある運用が一般的で、不要な lint がほとんど発生しないためです。
 

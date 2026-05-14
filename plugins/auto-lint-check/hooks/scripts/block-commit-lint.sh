@@ -56,16 +56,17 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -n "$REPO_ROOT" ] || exit 0
 cd "$REPO_ROOT" || exit 0
 
-# 同一 Bash コマンドで commit の前に `git add` / `git stage` が走るか、commit が
-# `-a` / `-am` / `--all` で working tree を auto-stage する場合、本フックの発火
-# タイミングでは対象ファイルがまだ index に入っていない。staged だけを見ると
-# lint をすり抜けるため、HAS_STAGING=1 のとき working tree の変更 (modified +
-# untracked) も lint 対象に含める。
+# 本フック発火時点では、同一コマンド内の `git add` / `git stage` がまだ走って
+# おらず、`git commit -a` / `--all` の自動 stage や `git commit <pathspec>`
+# (pathspec form: 引数で指定したパスを working tree からそのまま commit) も
+# 未実行。staged だけ見ると lint をすり抜けるため、コマンド文字列からこれら
+# の兆候を検出した場合 (HAS_STAGING=1) は working tree の変更 (modified +
+# untracked) も lint 対象に含め、ソースを working tree から読む。
 #
-# 過検出 (commit に含めない予定の編集まで lint) は許容。Claude が commit する
-# ときは作業中ファイルだけ working tree に置く運用が一般的で、過検出による
-# false positive は少ない。`--amend` (working tree を取り込まない) は `-a` パター
-# ンに引っかからないので影響なし。
+# pathspec 検出には Python の `shlex` でクォート対応トークン化を行う
+# (`-m "long message"` を正しく扱うため)。失敗時は安全側で HAS_STAGING=1。
+#
+# 過検出 (commit に含めない予定の編集まで lint) は許容する設計トレードオフ。
 HAS_STAGING=0
 case "$COMMAND" in
   *"git add"*|*"git stage"*) HAS_STAGING=1 ;;
@@ -73,6 +74,51 @@ esac
 if [[ "$COMMAND" =~ commit[^\;\&\|]*[[:space:]]-a[^[:space:]]*([[:space:]]|;|\&|\||$) ]] \
   || [[ "$COMMAND" =~ commit[^\;\&\|]*[[:space:]]--all([[:space:]]|;|\&|\||$) ]]; then
   HAS_STAGING=1
+fi
+if [ "$HAS_STAGING" -eq 0 ] && command -v python3 >/dev/null 2>&1; then
+  # shlex でトークン化し、`commit` 以降の位置引数 (pathspec) を検出する。
+  # exit 0 → pathspec あり、1 → 無し、それ以外 → 解析失敗。
+  if python3 - "$COMMAND" <<'PY'; then
+import shlex, sys
+try:
+    toks = shlex.split(sys.argv[1], comments=False, posix=True)
+except ValueError:
+    sys.exit(2)
+VALUE_FLAGS = {
+    "-m", "--message", "-F", "--file", "-t", "--template",
+    "-c", "--reedit-message", "-C", "--reuse-message",
+    "-S", "--gpg-sign", "--author", "--date", "--cleanup",
+    "--fixup", "--squash", "--trailer", "-o",
+}
+SEPARATORS = {";", "&&", "||", "|", "&"}
+i = 0
+n = len(toks)
+while i < n:
+    if toks[i] != "commit":
+        i += 1
+        continue
+    j = i + 1
+    expect_val = False
+    while j < n:
+        t = toks[j]
+        if t in SEPARATORS:
+            break
+        if expect_val:
+            expect_val = False
+        elif t == "--":
+            sys.exit(0)
+        elif t in VALUE_FLAGS:
+            expect_val = True
+        elif t.startswith("-"):
+            pass
+        else:
+            sys.exit(0)
+        j += 1
+    i = j
+sys.exit(1)
+PY
+    HAS_STAGING=1
+  fi
 fi
 
 # Lint 対象ファイルを集める。SEEN で重複を排除する。
