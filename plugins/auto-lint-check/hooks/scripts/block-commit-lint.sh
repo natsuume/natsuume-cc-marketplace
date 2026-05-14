@@ -136,7 +136,7 @@ cd "$REPO_ROOT" || exit 0
 # 経由で build-lint-plan.py に渡す。bash の shell variable は NUL を保持
 # できないうえ、3 つの git source (staged / working diff / untracked) を 1 つの
 # pipeline でも concat できないため、tmpfile に追記して 1 入力にまとめる。
-TMP_INPUT=$(mktemp 2>/dev/null)
+TMP_INPUT=$(mktemp "${TMPDIR:-/tmp}/auto-lint-check.XXXXXX" 2>/dev/null)
 if [ -z "$TMP_INPUT" ]; then
   log_warn "block-commit-lint: mktemp failed. cannot build lint plan."
   emit_deny "auto-lint-check の block-commit-lint hook が lint plan 用の一時ファイル作成に失敗しました。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
