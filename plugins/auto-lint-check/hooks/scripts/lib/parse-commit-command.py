@@ -27,6 +27,7 @@ bash の `case` / `=~` ベース検出ではコミットメッセージ内 (`-m 
 
 from __future__ import annotations
 
+import re
 import shlex
 import sys
 
@@ -78,6 +79,26 @@ GIT_GLOBAL_VALUE_FLAGS: frozenset[str] = frozenset(
 # `git ... commit` の前にあると commit 対象が cwd repo と異なる。
 REPO_OVERRIDE_FLAGS: frozenset[str] = frozenset({"-C", "--git-dir", "--work-tree"})
 
+# 環境変数 prefix で repo を切り替える同等の効果がある assignment。
+# `GIT_DIR=/other git commit ...` は `git --git-dir=/other commit ...` と
+# 同義 (commit 対象が cwd repo と異なる)。
+REPO_OVERRIDE_ENV_VARS: frozenset[str] = frozenset(
+    {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"}
+)
+
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _is_env_assignment(tok: str) -> bool:
+    return bool(_ENV_ASSIGN_RE.match(tok))
+
+
+def _is_repo_override_env(tok: str) -> bool:
+    if "=" not in tok:
+        return False
+    key = tok.split("=", 1)[0]
+    return key in REPO_OVERRIDE_ENV_VARS
+
 
 def _short_cluster_has_a(t: str) -> bool:
     """`-am` / `-ma` / `-aS` のような short cluster で `a` を含むものを
@@ -124,6 +145,39 @@ def _find_subcommand_after_git(toks: list[str], start: int) -> tuple[int, str, b
     return None
 
 
+def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
+    """`commit` subcommand 以降の引数を見て、working tree を取り込む形式
+    (-a / --all / -am 系 / -o / --only / -i / --include / `--` / pathspec)
+    が含まれるか判定する。"""
+    n = len(toks)
+    j = sub_idx + 1
+    expect_val = False
+    while j < n:
+        u = toks[j]
+        if u in SEPARATORS:
+            break
+        if expect_val:
+            expect_val = False
+        elif u == "--":
+            return True
+        elif u in PATHSPEC_MODE_FLAGS:
+            return True
+        elif u == "--all":
+            return True
+        elif u in COMMIT_VALUE_FLAGS:
+            expect_val = True
+        elif u.startswith("--"):
+            pass
+        elif u.startswith("-") and _short_cluster_has_a(u):
+            return True
+        elif u.startswith("-"):
+            pass
+        else:
+            return True
+        j += 1
+    return False
+
+
 def _classify(command: str) -> int:
     lex = shlex.shlex(command, posix=True, punctuation_chars=";&|")
     lex.whitespace_split = True
@@ -132,56 +186,65 @@ def _classify(command: str) -> int:
     except ValueError:
         return 2
 
+    # Phase 1: コマンド全体を走査し、各 git invocation の (subcommand, index,
+    # has_repo_override) を抽出する。env override (`GIT_DIR=...` 等) は次の
+    # simple command にのみ effect する POSIX セマンティクスを尊重し、
+    # SEPARATORS や他の command で消費される。
+    invocations: list[tuple[str, int, bool]] = []
     n = len(toks)
     i = 0
+    pending_env_override = False
     while i < n:
-        if toks[i] != "git":
+        tok = toks[i]
+        if tok in SEPARATORS:
+            pending_env_override = False
+            i += 1
+            continue
+        if _is_env_assignment(tok):
+            if _is_repo_override_env(tok):
+                pending_env_override = True
+            i += 1
+            continue
+        if tok != "git":
+            pending_env_override = False
             i += 1
             continue
         result = _find_subcommand_after_git(toks, i)
         if result is None:
+            pending_env_override = False
             i += 1
             continue
         sub_idx, sub, has_override = result
+        if pending_env_override:
+            has_override = True
+        pending_env_override = False
+        invocations.append((sub, sub_idx, has_override))
+        i = sub_idx + 1
+
+    # Phase 2: invocation 列を解析。`add` / `stage` で repo override がないもの
+    # は cwd repo の staging trigger としてフラグ立て (後続の cwd commit で
+    # 取り込まれる)。最初の cwd commit invocation を見つけたら、その commit
+    # の引数を見て staging trigger を判定し、結論を返す。
+    cwd_add_seen = False
+    for sub, sub_idx, has_override in invocations:
         if sub in ("add", "stage"):
-            return 0
+            if not has_override:
+                cwd_add_seen = True
+            continue
         if sub != "commit":
-            i = sub_idx + 1
             continue
         if has_override:
+            # 別 repo に対する commit → cwd repo を silently lint しないよう
+            # skip を要求する (bash 側で exit 3 を受け取って exit 0 で抜ける)。
             return 3
-        # ここで最初の commit invocation を見つけた。判定対象はこの commit
-        # なので、これ以降の token (例: `commit -m ok && git add foo` の `&&`
-        # 以降) は同じ Bash コマンドでも commit が走った後に実行されるため、
-        # この commit の判定には影響しない。flag を見終えたら即 return する。
-        j = sub_idx + 1
-        expect_val = False
-        while j < n:
-            u = toks[j]
-            if u in SEPARATORS:
-                break
-            if expect_val:
-                expect_val = False
-            elif u == "--":
-                return 0
-            elif u in PATHSPEC_MODE_FLAGS:
-                return 0
-            elif u == "--all":
-                return 0
-            elif u in COMMIT_VALUE_FLAGS:
-                expect_val = True
-            elif u.startswith("--"):
-                pass
-            elif u.startswith("-") and _short_cluster_has_a(u):
-                return 0
-            elif u.startswith("-"):
-                pass
-            else:
-                return 0
-            j += 1
+        # cwd repo に対する commit。同 invocation 内の `-a` / pathspec 等で
+        # 引き起こされる staging を見る。先行 cwd add があれば既に staging
+        # trigger 確定。どちらか true なら HAS_STAGING。
+        if cwd_add_seen or _commit_triggers_staging(toks, sub_idx):
+            return 0
         return 1
-    # commit subcommand を一度も見つけなかった (初期 regex が quoted 文字列に
-    # 誤マッチしたケース)。
+    # commit subcommand を一度も見つけなかった (初期 regex が quoted 文字列
+    # 等に誤マッチしたケース)。
     return 4
 
 
