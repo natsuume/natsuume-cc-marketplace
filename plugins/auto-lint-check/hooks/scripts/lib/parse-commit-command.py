@@ -156,8 +156,8 @@ def _find_subcommand_after_git(toks: list[str], start: int) -> tuple[int, str, b
     has_override = False
     while j < n:
         u = toks[j]
-        if _is_command_boundary(u):
-            return None
+        # expect_val を boundary より先に判定: global option value が shell
+        # keyword と一致するケース (`git -c "in" commit`) でも value を消費。
         if expect_val:
             if pending_override:
                 has_override = True
@@ -165,6 +165,8 @@ def _find_subcommand_after_git(toks: list[str], start: int) -> tuple[int, str, b
             expect_val = False
             j += 1
             continue
+        if _is_command_boundary(u):
+            return None
         if u in GIT_GLOBAL_VALUE_FLAGS:
             if u in REPO_OVERRIDE_FLAGS:
                 pending_override = True
@@ -203,14 +205,19 @@ def _commit_is_non_mutating(toks: list[str], sub_idx: int) -> bool:
     after_dash_dash = False
     while j < n:
         u = toks[j]
+        # expect_val を boundary より先に判定: option value が shell keyword
+        # / separator と一致するケース (`-m "in" path.py` 等) でも value を
+        # 正しく消費する。
+        if expect_val:
+            expect_val = False
+            j += 1
+            continue
         if _is_command_boundary(u):
             break
         if after_dash_dash:
             j += 1
             continue
-        if expect_val:
-            expect_val = False
-        elif u == "--":
+        if u == "--":
             after_dash_dash = True
         elif u in NON_MUTATING_COMMIT_FLAGS:
             return True
@@ -229,11 +236,15 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
     expect_val = False
     while j < n:
         u = toks[j]
-        if _is_command_boundary(u):
-            break
+        # expect_val を boundary より先に判定。詳細は _commit_is_non_mutating の
+        # 同パターンのコメント参照。
         if expect_val:
             expect_val = False
-        elif u == "--":
+            j += 1
+            continue
+        if _is_command_boundary(u):
+            break
+        if u == "--":
             return True
         elif u in PATHSPEC_MODE_FLAGS:
             return True
