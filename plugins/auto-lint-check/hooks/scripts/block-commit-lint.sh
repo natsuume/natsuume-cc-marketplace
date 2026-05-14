@@ -13,9 +13,7 @@
 #
 # lint plan の構築 (ファイル → ソース集合のマッピング、(linter, config-root)
 # でのグルーピング) は `lib/build-lint-plan.py` に委譲しており、本スクリプトは
-# git からの入力収集と linter 実行の orchestration だけを担う。これにより
-# bash 4+ 専用機能 (連想配列、`${!arr[@]}`) を使わずに済み、macOS 標準
-# /bin/bash 3.2 でも動作する。
+# git からの入力収集と linter 実行の orchestration だけを担う。
 #
 # 必須ツール (jq, python3) が欠ける、もしくは想定外の状況で lint を実行
 # できない場合は silent skip せず deny に倒す (fail closed)。silently skip
@@ -180,25 +178,21 @@ if [ "$PLAN_RC" -ne 0 ]; then
   emit_deny "auto-lint-check の block-commit-lint hook が lint plan の構築に失敗しました (build-lint-plan.py exit $PLAN_RC)。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
 fi
 
-GROUP_COUNT=$(printf '%s' "$PLAN_JSON" | jq '.groups | length' 2>/dev/null)
-if [ -z "$GROUP_COUNT" ]; then
+# group ごとの meta info (index, linter, label, root) を 1 回の jq で TSV 化して
+# 取り出す。group ごとに jq を再起動するとレイテンシが嵩むため、items だけは
+# group index で参照しながら個別取得する。
+META_TSV=$(printf '%s' "$PLAN_JSON" | jq -r '.groups | to_entries[] | [.key, .value.linter, .value.label, .value.root] | @tsv' 2>/dev/null)
+JQ_RC=$?
+if [ "$JQ_RC" -ne 0 ]; then
   log_warn "block-commit-lint: build-lint-plan.py の出力 (PLAN_JSON) が parse できない。"
   emit_deny "auto-lint-check の block-commit-lint hook が lint plan JSON の parse に失敗しました。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
 fi
-[ "$GROUP_COUNT" -gt 0 ] || exit 0
+[ -n "$META_TSV" ] || exit 0
 
 HAS_ERROR=0
 COMBINED_OUTPUT=""
 
-# 各 (linter, root) group ごとに linter binary を 1 回だけ解決し、配下の
-# items を順に lint する。group / items の順序は build-lint-plan.py 側で
-# 安定ソート済み。jq -j で NUL 区切りの (file, source) ストリームを出力させ、
-# process substitution 経由で `while read -d ''` に流す。
-for ((i = 0; i < GROUP_COUNT; i++)); do
-  LINTER=$(printf '%s' "$PLAN_JSON" | jq -r ".groups[$i].linter")
-  LABEL=$(printf '%s' "$PLAN_JSON" | jq -r ".groups[$i].label")
-  ROOT=$(printf '%s' "$PLAN_JSON" | jq -r ".groups[$i].root")
-
+while IFS=$'\t' read -r IDX LINTER LABEL ROOT; do
   case "$LINTER" in
     eslint) resolve_eslint "$ROOT" || { log_warn "eslint config が $ROOT にあるが eslint バイナリが見つからない。skip"; continue; } ;;
     ruff)   resolve_ruff           || { log_warn "ruff config が $ROOT にあるが ruff バイナリが見つからない。skip";   continue; } ;;
@@ -240,8 +234,8 @@ for ((i = 0; i < GROUP_COUNT; i++)); do
       HAS_ERROR=1
       COMBINED_OUTPUT+=$'--- '"$REL_PATH"$' ('"$LABEL, $SRC_LABEL"$') ---\n'"$LINT_OUT"$'\n\n'
     fi
-  done < <(printf '%s' "$PLAN_JSON" | jq -j --argjson i "$i" '.groups[$i].items[] | "\(.file)\u0000\(.source)\u0000"')
-done
+  done < <(printf '%s' "$PLAN_JSON" | jq -j --argjson i "$IDX" '.groups[$i].items[] | "\(.file)\u0000\(.source)\u0000"')
+done <<< "$META_TSV"
 
 if [ "$HAS_ERROR" -eq 1 ]; then
   REASON=$(printf '%s\n' \
