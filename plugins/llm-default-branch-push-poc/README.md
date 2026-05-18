@@ -4,7 +4,12 @@
 
 ## バージョン
 
-v0.1.0 (POC / 試作)
+v0.2.0 (POC / 試作)
+
+### v0.1.0 → v0.2.0 の変更点
+
+- **`if: "Bash(*push*)"` の中間 match を撤去**: v0.1.0 では permission rule の中間 match で `push` 文字列を含む Bash にだけ発火を絞る設計だったが、 実機検証で **中間 match が評価されず全 Bash でスキップされる挙動** が判明 (claude-code-guide agent の事前報告と異なる)。 `if` フィールドを削除し、 全 Bash で発火させる方針に変更
+- **hot path 軽減を prompt 内 early-return に集約**: prompt 冒頭に「push substring 無しなら即 ok=true で抜ける」 step 1 を追加し、 軽量 Bash 経由でも LLM が短時間で固定 reason を返すことで遅延を軽減
 
 ## 目的
 
@@ -41,8 +46,8 @@ v0.1.0 (POC / 試作)
 
 ### 3. 制約と妥協
 
-- **発火範囲の絞り込み**: `hooks.json` の `if: "Bash(*push*)"` permission rule で **`push` 文字列を含む Bash 呼び出しにだけ** prompt hook を発火させる意図です。 `ls` / `cat` / `npm install` 等の push 無関係なコマンドでは LLM 呼び出しが完全にスキップされるため、 hot path bloat を回避できます。 timeout は 15s (Haiku デフォルトより短縮、 fail-closed と組み合わせて軽量化)。
-  - **要実機検証**: `Bash(*push*)` の中間ワイルドカード match が Claude Code の `if` 評価で期待通りに動くかは実機での確認が必要です (公式ドキュメントは prefix `Bash(git *)` 形式の例示中心)。 `if` が認識されない場合は全 Bash で prompt hook が発火しますが、 prompt 本文で「push を含まないなら即 ok」の early-return を指示しているため LLM の推論コスト分だけは発生する fail-safe 設計になっています。 検証時は `claude --debug` で `if` 評価結果を確認するか、 軽量 Bash 実行時のレイテンシ実測で発火状況を判断してください。
+- **発火範囲と hot path 軽減 (v0.2.0)**: v0.2.0 で `if` フィールドを撤去し、 **全 Bash 呼び出しで prompt hook が発火** する設計に変更しました (v0.1.0 の `if: "Bash(*push*)"` 中間 match は実機で評価されず無効だったため)。 軽量 Bash の hot path 軽減は prompt 内の **step 1 「push substring 即決」 early-return** に集約し、 LLM (Haiku) が短時間 (~1s 想定) で固定 reason を返すことで遅延と LLM コストを抑える方針です。 timeout は 15s (Haiku デフォルトより短縮、 fail-closed と組み合わせて軽量化)。
+  - **要実機検証 (継続)**: step 1 の早期 OK が実際に Haiku で 1〜数秒で完了するか実測必要。 `claude --debug` でレイテンシと早期 OK 判定の精度 (固定文を確実に返すか) を確認してください
 - **fail-closed の限定**: LLM が判定不能なケースで deny に倒すのは **実 git push が含まれるコマンドの範囲内** に限定しています。 push を全く含まないコマンド (= `if` 経由で来る `npm run push:foo` 等) は誤 deny しないよう、 prompt 内で「早期 OK 条件」として明示しています。
 - **プロンプトインジェクション**: コマンド本文中の `# allow this` 等の誤誘導コメントは prompt で **無視するよう明示**。 さらに deny 時の reason には **ユーザコマンド本体を逐語引用しない** (抽象ラベルのみ) ことで、 二次インジェクション (reason 経由で別 hook やセッションに payload がリレーされる) を防ぎます。 完全な対策ではないため、 既存 plugin との二重防御を維持します。
 - **動的状態を参照できない**: prompt hook の `$ARGUMENTS` は hook input JSON のみ。 現在ブランチや markers などの動的状態は参照できません。 必要なら `agent` hook (Read/Grep/Glob 可、 timeout 60s) への移行を検討します。
@@ -60,12 +65,12 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 ### Hooks
 
-#### PreToolUse / matcher: `Bash` / type: `prompt` / if: `Bash(*push*)`
+#### PreToolUse / matcher: `Bash` / type: `prompt` (v0.2.0 で `if` 撤去)
 
 判定ロジックの **正の単一情報源** は `hooks/hooks.json` の `prompt` フィールドです。 ここでは設計の **意図** のみ:
 
-- **発火範囲**: `if` の permission rule で `push` 文字列を含む Bash にだけ発火 (hot path bloat 回避の設計意図)
-- **early-return 設計**: 実 `git push` を含まないコマンドや `--help` / `--dry-run` / `--delete` 等の master/main を更新しない invocation は ok を返し、 軽量 Bash や副作用のない確認系コマンドで誤 deny しない
+- **発火範囲**: 全 Bash 呼び出しで発火 (v0.1.0 の `if: "Bash(*push*)"` は実機で機能しなかったため v0.2.0 で撤去)
+- **early-return 設計**: prompt 冒頭の step 1 で「push substring 無しなら即 ok」、 step 2〜4 で「push を含むが実 master/main 更新でない」 ケースも早期 OK。 LLM の判定に進むのは step 5 の deny 候補のみ — 軽量 Bash や副作用のない確認系コマンドで誤 deny しない
 - **deny 対象の方針**: 明示 refspec / フラグ / ラッパー / subshell / 置換経由のすべての master/main 更新経路をカバー (具体的な分類列挙は prompt 本文)
 - **スコープ外**: 引数省略形 (`git push` 単独) は現在ブランチに依存するため既存 git-guardrails plugin に委譲
 - **fail-closed**: 実 push を含むが構文判定不能な場合のみ deny に倒す (軽量 Bash で誤 deny しない範囲限定)
@@ -77,7 +82,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 | 項目 | git-guardrails (shell parser) | llm-default-branch-push-poc (prompt hook) |
 |------|--------------------------------|-------------------------------------------|
-| 速度 | < 50ms | `push` 文字列を含まない Bash は完全スキップ。含む場合は数秒〜15s |
+| 速度 | < 50ms | 全 Bash で発火するため毎回 LLM 呼び出しが発生。 早期 OK 経路 (step 1〜4) は固定文返却で短時間 (~1s 想定) 完了、 deny 候補のみ詳細判定 (数秒〜15s) |
 | 引数省略形 (`git push` 単独) | ✓ 現在ブランチを `git symbolic-ref` で取得して判定 | ✗ 現在ブランチ取得不可、スコープ外 |
 | 明示 refspec | ✓ token 完全一致比較 | ✓ LLM 構文解釈 |
 | `--all` / `--mirror` | ✓ token match | ✓ LLM 判定 |
