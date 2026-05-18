@@ -1,10 +1,26 @@
 # auto-lint-check プラグイン
 
-ファイル編集時に lint ignore コメントの挿入をブロックし、`git commit` 直前に staged ファイルを linter で検査し、編集後に自動フォーマットを適用するプラグインです。
+ファイル編集時に lint ignore コメントの挿入をブロックし、`git commit` 直前に staged ファイルを linter で検査し、編集後に自動フォーマットを適用し、`git commit` 直後の HEAD を再 lint して non-blocking フィードバックを返すプラグインです。
 
 ## バージョン
 
-v0.2.1
+v0.3.0
+
+### v0.2.1 → v0.3.0 の変更点
+
+- **`git commit` 直後の non-blocking lint フィードバックを追加 (`post-commit-lint.sh`)**
+  - PostToolUse / Bash で `git commit` invocation を検出し、現 HEAD コミットの変更ファイルを ESLint / Ruff に再投入する
+  - lint エラーがあれば `{"decision": "block", "reason": ...}` を返し、Claude のターン context に lint 出力を注入する (tool 自体は実行済みのため "non-blocking" な feedback)
+  - これにより `block-commit-lint.sh` (PreToolUse) を bypass した経路 (プラグイン一時無効化、subagent 経由の commit、対応外の lint rule など) に対しても後追いで気付ける
+  - `git diff-tree HEAD` には `-m` フラグを付け、merge commit (2 parent 以上) でも各 parent との diff が列挙されるようにしている
+  - Bash 全体の exit_code は見ない (compound command `git commit && git push` で push 失敗時に commit lint をすり抜けないため)。代わりに「現在の HEAD を常に再 lint する」セマンティクスで動作する (commit 失敗時は前回 HEAD が再 lint されるが副次効果として許容)
+  - 必須ツール (jq / python3 / git) が欠ける場合は silent skip する (`block-commit-lint.sh` のような fail-closed deny は使えないため)
+- **`lib/build-lint-plan.py` の `VALID_SOURCES` に `head` を追加**
+  - lint plan 構築器を staged / working / head の 3 source 対応に拡張
+  - 既存 hook の挙動は変わらない (post-commit-lint.sh からのみ head source を投入する)
+- **`lib/common.sh` に `prepend_source_label` を共通化**
+  - `block-commit-lint.sh` と `post-commit-lint.sh` で完全同一だった helper 関数を移動 (DRY)
+  - 将来 source を追加する際の修正漏れリスクを削減
 
 ### v0.2.0 → v0.2.1 の変更点
 
@@ -26,13 +42,14 @@ v0.2.1
 
 ## 概要
 
-このプラグインは 3 段階のコード品質ガードを提供します。
+このプラグインは 4 段階のコード品質ガードを提供します。
 
 | タイミング | フック | 役割 |
 |------------|--------|------|
 | 編集直前 | `block-ignore-lint-comment` (PreToolUse / Write\|Edit\|MultiEdit) | ESLint/Prettier/Ruff の ignore コメント挿入を deny |
 | 編集直後 | `code-format` (PostToolUse / Write\|Edit\|MultiEdit) | ESLint `--fix` / Prettier / Ruff で自動整形 |
 | `git commit` 直前 | `block-commit-lint` (PreToolUse / Bash) | staged ファイルに lint エラーがあれば commit を deny |
+| `git commit` 直後 | `post-commit-lint` (PostToolUse / Bash) | HEAD コミットを再 lint し、エラーがあれば non-blocking フィードバックを Claude に返す |
 
 モノレポ構成 (例: `front/`, `server/` 配下にそれぞれ linter 設定がある) でも、対象ファイルから上向きに最寄りの設定ファイルを探索し、その所在ディレクトリを実行 CWD として linter を起動します。
 
@@ -143,6 +160,54 @@ pathspec の検出には Python の `shlex` でクォート対応トークン化
 
 各コマンドは個別に成否を吸収し、失敗しても hook 全体は `exit 0` で終了します。
 
+#### 4. post-commit-lint
+
+**ファイル**: `hooks/scripts/post-commit-lint.sh`
+**イベント**: PostToolUse (matcher: `Bash`)
+
+Bash 経由で `git commit` が実行された **直後** に発火する非ブロッキングなセーフティネットです。`block-commit-lint` (PreToolUse) を何らかの理由で bypass した経路 (例: プラグインを一時的に無効化したまま commit、subagent からの commit、ローカルにない linter rule が remote で適用される ケース など) に対して、commit 後にもう 1 度 lint を回してフィードバックを返します。
+
+**発火条件**:
+
+- `tool_name == "Bash"`
+- コマンド文字列に `git commit` が含まれ、`parse-commit-command.py` が cwd repo に対する実 commit invocation を検出 (`--dry-run` / `--help` / repo override は skip)
+- Bash 全体の `tool_response.exit_code` は **見ない**: `git commit -m msg && git push` のように commit は成功するが後続コマンド (push) が失敗するケースでも、現 HEAD は新 commit になっているため lint 対象とする
+
+**lint 対象**:
+
+- `git diff-tree --no-commit-id --name-only -r -m --root HEAD --diff-filter=ACMR` で取得した現 HEAD コミットの変更ファイル
+- 内容は `git show HEAD:<path>` で blob を取り出して stdin から linter に流す (working tree のレース状態に依存しない)
+- `--root` を付けることで初回 commit (parentless) でも全ファイルが列挙される
+- `-m` を付けることで merge commit (2 parent 以上) でも各 parent との diff が列挙される (これがないと merge commit は空を返す)
+
+**現 HEAD ベースのセマンティクス**:
+
+PostToolUse hook では「Bash 実行前後の HEAD SHA 差分」を知る術がないため、「この Bash 実行で作られた commit」を厳密判定する手段はありません。本 hook は **「現在の HEAD コミットを再 lint する」セマンティクス**で動作します:
+
+- `git commit` 実行で HEAD が動いた場合 → 直前に作られた commit を lint
+- `git commit` が pre-commit reject 等で失敗し HEAD が動かなかった場合 → 前回 commit を再 lint (空振り clean なら無害、dirty なら "前から残っていた lint エラー" を notify する副次効果)
+- `git commit && git reset --hard HEAD~1` のように同一 Bash 内で HEAD を巻き戻した場合 → 巻き戻し後の HEAD を lint (作られた commit ではなく最終状態)
+
+reason 文面は「現在の HEAD コミット」に対する lint であることを明示し、直前 commit との因果を断定しないようになっています。
+
+**出力**:
+
+- lint エラーが 1 件もなければ何も出力せず `exit 0`
+- lint エラーがあれば `{"decision": "block", "reason": "<HEAD SHA + lint 出力>"}` を返す
+  - PostToolUse の `decision: "block"` は tool 自体は既に実行済みのため **rollback はしない**。reason が Claude のターン context に注入され、`git commit --amend` などの修正アクションを促す **non-blocking なフィードバック** として機能する
+
+**fail policy**:
+
+- 必須ツール (jq / python3 / git) が欠ける場合は silent skip (stderr に warning は出す)
+- `block-commit-lint` のような fail-closed deny は PostToolUse では使えないため、本 hook は best-effort feedback として位置付け、検出漏れは `block-commit-lint` 側で fail-closed する設計に依存する
+
+**検出のスコープ外**:
+
+- repo override (`git -C` / `--git-dir` / `--work-tree` / `GIT_DIR=` / `cd dir &&` 等) を伴う commit
+  - cwd repo の HEAD は commit 対象 repo の HEAD と異なる可能性があるため、誤検出を避けて skip
+- `git commit` の `--dry-run` / `--help` (実 commit が無い)
+- HEAD コミットが無い (空 repo) のケース
+
 ### linter バイナリの解決順序
 
 JS/TS 系は以下の順で利用可能なものを採用します。
@@ -178,6 +243,7 @@ auto-lint-check/
 │       ├── block-ignore-lint-comment.sh
 │       ├── block-commit-lint.sh
 │       ├── code-format.sh
+│       ├── post-commit-lint.sh
 │       └── lib/
 │           ├── common.sh
 │           ├── find-config-root.sh
@@ -190,9 +256,9 @@ auto-lint-check/
 ## 必要な実行環境
 
 - `bash` (macOS 標準の `/bin/bash` 3.2 でも動作。lint plan 構築は `lib/build-lint-plan.py` に委譲しており、shell 側は連想配列等の bash 4+ 専用機能を使いません)
-- `jq` (block-commit-lint.sh の input 解析 / deny メッセージ JSON 整形に必須 — 不在時は fail closed で commit を deny します)
+- `jq` (block-commit-lint.sh の input 解析 / deny メッセージ JSON 整形に必須 — 不在時は fail closed で commit を deny します。post-commit-lint.sh では silent skip に倒します)
 - `git`
-- `python3` (block-ignore-lint-comment.sh の差分検出、block-commit-lint.sh の commit コマンド解析および lint plan 構築。不在時は fail closed で commit を deny します)
+- `python3` (block-ignore-lint-comment.sh の差分検出、block-commit-lint.sh / post-commit-lint.sh の commit コマンド解析および lint plan 構築。block-commit-lint では不在時 fail closed で deny、post-commit-lint では silent skip)
 - 利用したい linter / formatter (`eslint`, `prettier`, `ruff` または `uvx`)
 
 ## 関連情報

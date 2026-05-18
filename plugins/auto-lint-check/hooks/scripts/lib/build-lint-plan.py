@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""block-commit-lint.sh から呼び出される lint plan 構築器。
+"""block-commit-lint.sh / post-commit-lint.sh から呼び出される lint plan 構築器。
 
 stdin から NUL 区切りで ``<source>\\t<rel_path>`` 形式のレコードを受け取り、
 拡張子で linter を判定したうえで ``(linter, config-root)`` ごとにグルーピング
@@ -8,10 +8,14 @@ iterate しながら linter binary 解決と実行を行う。
 
 入力フォーマット:
     レコード区切り = NUL (``\\0``)、フィールド区切り = TAB (``\\t``)
-    フィールドは [source, rel_path] の 2 つ。source は ``staged`` または
-    ``working``。同じ rel_path が両方の source で現れた場合は両方を items
-    に残す (dual-membership: shell 側の lint 実行で staged/working を別個
-    に検査する必要があるため)。
+    フィールドは [source, rel_path] の 2 つ。source は ``staged`` /
+    ``working`` / ``head`` のいずれか。同じ rel_path が複数の source で
+    現れた場合は全て items に残す (multi-membership: shell 側の lint
+    実行で source ごとに別個に検査する必要があるため)。
+    - ``staged`` / ``working`` は ``block-commit-lint.sh`` (PreToolUse)
+      で commit 直前の lint に使う
+    - ``head`` は ``post-commit-lint.sh`` (PostToolUse) で commit 直後の
+      HEAD blob を lint するのに使う
 
 出力フォーマット (stdout, JSON):
     {
@@ -22,7 +26,8 @@ iterate しながら linter binary 解決と実行を行う。
           "root":   "/abs/path",   # find-config-root.sh が返したディレクトリ
           "items": [
             {"file": "src/a.ts", "source": "staged"},
-            {"file": "src/a.ts", "source": "working"}
+            {"file": "src/a.ts", "source": "working"},
+            {"file": "src/b.py",  "source": "head"}
           ]
         }
       ]
@@ -58,10 +63,13 @@ LINTER_LABEL: dict[str, str] = {
     "ruff": "Ruff",
 }
 
-VALID_SOURCES: frozenset[str] = frozenset({"staged", "working"})
-# items の出力順を決めるためのスコア。staged → working で固定すると、
-# dual-membership 時の lint 実行順が決定的になり review の noise が減る。
-SOURCE_ORDER: dict[str, int] = {"staged": 0, "working": 1}
+VALID_SOURCES: frozenset[str] = frozenset({"staged", "working", "head"})
+# items の出力順を決めるためのスコア。staged → working → head で固定すると、
+# multi-membership 時の lint 実行順が決定的になり review の noise が減る。
+# 実運用上は (staged + working) または (head 単独) のいずれかしか同時に
+# 現れないが、order を統一しておくことで build-lint-plan.py の出力契約を
+# シンプルに保つ。
+SOURCE_ORDER: dict[str, int] = {"staged": 0, "working": 1, "head": 2}
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 FIND_CONFIG_ROOT = SCRIPT_DIR / "find-config-root.sh"

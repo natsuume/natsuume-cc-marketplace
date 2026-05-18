@@ -152,3 +152,15 @@ emit_deny() {
   exit 0
 }
 
+# git の -z 出力 (NUL 区切りのパス列) を read で受け、source ラベルを前置した
+# NUL 区切り `<source>\t<rel_path>\0` レコードに変換して stdout に書き出す。
+# `build-lint-plan.py` の入力形式と一致する。block-commit-lint.sh と
+# post-commit-lint.sh が同じ実装を持っていたため共通化。
+# Usage: <git -z output> | prepend_source_label <source-name> >> "$TMP_INPUT"
+prepend_source_label() {
+  local source="$1"
+  while IFS= read -r -d '' f; do
+    printf '%s\t%s\0' "$source" "$f"
+  done
+}
+

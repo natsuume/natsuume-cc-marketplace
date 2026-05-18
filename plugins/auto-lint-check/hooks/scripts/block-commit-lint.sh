@@ -143,14 +143,6 @@ if [ -z "$TMP_INPUT" ]; then
 fi
 trap 'rm -f "$TMP_INPUT"' EXIT
 
-# git -z の NUL 区切り出力に source ラベルを前置して TMP_INPUT に追記する。
-prepend_source_label() {
-  local source="$1"
-  while IFS= read -r -d '' f; do
-    printf '%s\t%s\0' "$source" "$f"
-  done
-}
-
 git diff --cached --name-only --diff-filter=ACMR -z 2>/dev/null \
   | prepend_source_label staged >> "$TMP_INPUT"
 
