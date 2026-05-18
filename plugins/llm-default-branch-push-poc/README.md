@@ -41,7 +41,8 @@ v0.1.0 (POC / 試作)
 
 ### 3. 制約と妥協
 
-- **発火範囲の絞り込み**: `hooks.json` の `if: "Bash(*push*)"` permission rule で **`push` 文字列を含む Bash 呼び出しにだけ** prompt hook を発火させます。 `ls` / `cat` / `npm install` 等の push 無関係なコマンドでは LLM 呼び出しが完全にスキップされるため、 hot path bloat を回避できます。 timeout は 15s (Haiku デフォルトより短縮、 fail-closed と組み合わせて軽量化)。
+- **発火範囲の絞り込み**: `hooks.json` の `if: "Bash(*push*)"` permission rule で **`push` 文字列を含む Bash 呼び出しにだけ** prompt hook を発火させる意図です。 `ls` / `cat` / `npm install` 等の push 無関係なコマンドでは LLM 呼び出しが完全にスキップされるため、 hot path bloat を回避できます。 timeout は 15s (Haiku デフォルトより短縮、 fail-closed と組み合わせて軽量化)。
+  - **要実機検証**: `Bash(*push*)` の中間ワイルドカード match が Claude Code の `if` 評価で期待通りに動くかは実機での確認が必要です (公式ドキュメントは prefix `Bash(git *)` 形式の例示中心)。 `if` が認識されない場合は全 Bash で prompt hook が発火しますが、 prompt 本文で「push を含まないなら即 ok」の early-return を指示しているため LLM の推論コスト分だけは発生する fail-safe 設計になっています。 検証時は `claude --debug` で `if` 評価結果を確認するか、 軽量 Bash 実行時のレイテンシ実測で発火状況を判断してください。
 - **fail-closed の限定**: LLM が判定不能なケースで deny に倒すのは **実 git push が含まれるコマンドの範囲内** に限定しています。 push を全く含まないコマンド (= `if` 経由で来る `npm run push:foo` 等) は誤 deny しないよう、 prompt 内で「早期 OK 条件」として明示しています。
 - **プロンプトインジェクション**: コマンド本文中の `# allow this` 等の誤誘導コメントは prompt で **無視するよう明示**。 さらに deny 時の reason には **ユーザコマンド本体を逐語引用しない** (抽象ラベルのみ) ことで、 二次インジェクション (reason 経由で別 hook やセッションに payload がリレーされる) を防ぎます。 完全な対策ではないため、 既存 plugin との二重防御を維持します。
 - **動的状態を参照できない**: prompt hook の `$ARGUMENTS` は hook input JSON のみ。 現在ブランチや markers などの動的状態は参照できません。 必要なら `agent` hook (Read/Grep/Glob 可、 timeout 60s) への移行を検討します。
@@ -61,14 +62,14 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 #### PreToolUse / matcher: `Bash` / type: `prompt` / if: `Bash(*push*)`
 
-詳細な判定ロジックの **正の単一情報源** は `hooks/hooks.json` の `prompt` フィールドです。 ここでは要約のみ:
+判定ロジックの **正の単一情報源** は `hooks/hooks.json` の `prompt` フィールドです。 ここでは設計の **意図** のみ:
 
-- `if` の permission rule で `push` 文字列を含む Bash にだけ発火
-- 実 `git push` 起動を含まないコマンド (`npm run push:foo`, `echo "push origin master"` 等) は早期 OK
-- 明示 refspec / `--all` / `--mirror` / ラッパー / subshell / 置換経由の master/main 更新を deny
-- 引数省略形 (`git push` / `git push origin`) は POC スコープ外で既存 git-guardrails に委譲
-- 不確実時 (実 push を含むが構文判定不能) は fail-closed で deny
-- deny 時の `reason` はユーザコマンド本体を逐語引用せず抽象ラベルのみ
+- **発火範囲**: `if` の permission rule で `push` 文字列を含む Bash にだけ発火 (hot path bloat 回避の設計意図)
+- **early-return 設計**: 実 `git push` を含まないコマンドや `--help` / `--dry-run` / `--delete` 等の master/main を更新しない invocation は ok を返し、 軽量 Bash や副作用のない確認系コマンドで誤 deny しない
+- **deny 対象の方針**: 明示 refspec / フラグ / ラッパー / subshell / 置換経由のすべての master/main 更新経路をカバー (具体的な分類列挙は prompt 本文)
+- **スコープ外**: 引数省略形 (`git push` 単独) は現在ブランチに依存するため既存 git-guardrails plugin に委譲
+- **fail-closed**: 実 push を含むが構文判定不能な場合のみ deny に倒す (軽量 Bash で誤 deny しない範囲限定)
+- **二次インジェクション防止**: deny 時の `reason` はコマンド本体を含めない設計 (抽象化方式の詳細は prompt 本文参照)
 
 **応答形式**: `{"ok": true}` または `{"ok": false, "reason": "..."}`
 
