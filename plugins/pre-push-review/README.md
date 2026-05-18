@@ -6,7 +6,12 @@
 
 ## バージョン
 
-v0.3.0 (前身: `pre-commit-review` v0.4.0)
+v0.4.0 (前身: `pre-commit-review` v0.4.0)
+
+### v0.3.0 → v0.4.0 の変更点
+
+- **`/codex:review` / `/codex:adversarial-review` 指摘修正の前に `/codex:rescue` で方針を壁打ちする規律を deny メッセージに追記**: deny メッセージ (REASON) の手順 4 と ADVERSARIAL_NOTE に、 review からの指摘に対して **いきなり修正実装に入らず、 まず `/codex:rescue --wait` で修正方針を壁打ちし、 approve 後に実装を開始する** 規律を明文化した。 観点は「指摘の根本原因に対する解として妥当か」「場当たり的な対処になっていないか」「全体設計と一貫しているか」の 3 つ。 これにより review ループでの修正が表層的な塗りつぶしに偏るのを抑制し、 設計レベルの一貫性を保つ。 `/codex:rescue` はマーカー対象外で push gate には影響しないため、 何回投げても loop counter には反映されない (rescue は「修正前の方針壁打ち」であって「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)
+- **「/codex:review であって /codex:rescue ではない」の警告文を更新**: 本バージョンから両者を **両方使う** ループに変わるため、 「取り違えに注意」を残しつつ、 用途の対比 (`/codex:review` = レビュー取得 / `/codex:rescue` = 方針壁打ち) を明示する形に書き換え
 
 ### v0.2.0 → v0.3.0 の変更点
 
@@ -124,7 +129,10 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 > **終端の判断 / ループ回数の閾値**: ループ回数による push 強制ブロックは行いません。ただし `/codex:review --wait --scope branch` の完了が `LOOP_THRESHOLD` に達した段階で deny メッセージに `/codex:adversarial-review` の案内が追加され、Claude に「実装方針そのものに無理はないか」を再考する選択肢を提示します。これは強制ではなく **追加の選択肢の提示** です。Claude は自身の判断で、表層的な修正を継続するか、adversarial レビューを取得するか、人間判断を仰ぐかを選びます。
 
-> **`/codex:review` と `/codex:rescue` の混同に注意**: 公式 codex プラグインには `/codex:review` (read-only コードレビュー) と `/codex:rescue` (修正・調査を delegate する subagent) の両方があり、用途が完全に別です。本プラグインが要求するのは前者です。Claude が誤って `/codex:rescue` を選ぶケースが報告されているため、運用時はコマンド名を明示的に確認してください。`/codex:review` (および閾値到達時に促される `/codex:adversarial-review`) は frontmatter で `disable-model-invocation: true` が指定されており本来 Skill tool から呼び出せませんが、姉妹プラグイン [codex-review-customize](../codex-review-customize/) を導入してパッチを適用すると Skill tool 経由でも呼び出し可能になります。
+> **`/codex:review` と `/codex:rescue` の役割分担**: 本プラグインは公式 codex プラグインの 2 つのコマンドを **両方** 使います。 用途を取り違えないこと:
+>
+> - **`/codex:review --wait --scope branch`**: branch 全差分への read-only レビュー取得。 PostToolUse の auto-mark.sh がこの完了でマーカーを書き、 push gate の検証対象になる。 ループ閾値到達時に促される `/codex:adversarial-review --wait --scope branch` も同種 (実装方針への批判的レビュー)。 両者は frontmatter で `disable-model-invocation: true` が指定されており本来 Skill tool から呼び出せないが、 姉妹プラグイン [codex-review-customize](../codex-review-customize/) を導入してパッチを適用すると Skill tool 経由でも呼び出し可能になる。
+> - **`/codex:rescue --wait`**: review からの指摘に対する **修正方針の壁打ち** に使う (v0.4.0 で導入された規律)。 deny メッセージの手順 4 / ADVERSARIAL_NOTE が要求する形で、 「指摘の根本原因に対する解として妥当か」「場当たり的でないか」「全体設計と一貫しているか」を rescue に問い、 approve が出てから実装を開始する。 `/codex:rescue` 自体はマーカー対象外で push gate には影響しない (rescue は「修正前の方針壁打ち」で「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)。 `/codex:rescue` は `disable-model-invocation` が指定されていないため、 codex-review-customize パッチなしでも Skill tool から直接呼び出し可能。
 
 > **security review は subagent 経由で呼ぶ**: 詳細は下記 [Agents](#agents) セクション。
 

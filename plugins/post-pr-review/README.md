@@ -4,7 +4,12 @@ Claude Code 経由で `gh pr create` が成功した直後に、`/codex:adversar
 
 ## バージョン
 
-v0.2.0
+v0.3.0
+
+### v0.2.0 → v0.3.0 の変更点
+
+- **`/codex:adversarial-review` 指摘修正の前に `/codex:rescue` で方針を壁打ちする規律を `additionalContext` に追記**: PR 作成直後の `additionalContext` (nudge 文) に、 adversarial review からの指摘に対して **いきなり修正実装に入らず、 まず `/codex:rescue --wait` で修正方針を壁打ちし、 approve 後に実装を開始する** 規律を明文化した。 観点は「指摘の根本原因に対する解として妥当か」「場当たり的でないか」「全体設計と一貫しているか」の 3 つ。 adversarial review は設計レベルの指摘になりやすく、 場当たり的な修正は新たな歪みを生むため、 事前の方針壁打ちが特に効果的。 sibling プラグイン [pre-push-review](../pre-push-review/) v0.4.0 も `/codex:review` 指摘修正時に同じ規律を要求するため、 リポジトリ全体で「review 指摘 → 方針壁打ち → 実装」の規律が一貫する
+- **`/codex:rescue` の Skill tool 呼び出しに関する補足**: `/codex:rescue` は frontmatter で `disable-model-invocation` が指定されていないため、 codex-review-customize パッチなしでも `Skill(codex:rescue)` で呼び出し可能。 nudge 文にその旨を明示
 
 ## 概要
 
@@ -56,20 +61,30 @@ PR を作成しました: https://github.com/natsuume/.../pull/<n>
   - 影響が大きい指摘 (アーキテクチャレベルの再考が必要等) は人間判断を仰ぐ
   - 表層的な実装細部の指摘は `/codex:review` で別途確認する
 
-`/codex:adversarial-review` は frontmatter で `disable-model-invocation: true` が指定されているため、Skill tool から呼び出すには姉妹プラグイン `codex-review-customize` の `/codex-review-customize:setup` でパッチを適用しておく必要があります。未適用の場合は会話入力としての `/codex:adversarial-review --wait --scope branch` を実行してください。
+⚠ **`/codex:adversarial-review` からの指摘に対する修正は、 いきなり実装に入らず、 まず `/codex:rescue` で方針を壁打ちしてから実装を開始してください**:
+  1. 指摘ごとに修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)
+  2. `/codex:rescue --wait` を Skill tool で呼び出し、 その方針が以下の観点で妥当かを問う:
+       - 指摘の根本原因に対する解として妥当か
+       - 場当たり的な対処になっていないか (= 表層を塗りつぶすだけになっていないか)
+       - 全体設計・既存の方針と一貫しているか
+  3. `/codex:rescue` の応答が **approve (= 方針 OK)** になってから実装を開始する。
+     rescue から異論・代替案・追加考慮事項が出た場合は方針を見直して再度 rescue に投げる
+
+(... 後略。 詳細は `nudge-pr-review.sh` を参照 ...)
 ```
 
 ## ワークフロー (pre-push-review との連携)
 
 ```
 1. Claude が編集 → 任意のタイミングで git commit (pre-push-review は commit を阻害しない)
-2. push 直前に /simplify → /codex:review --wait --scope branch (pre-push-review が強制し、PostToolUse で両者のマーカーが自動作成される)
-3. git push (pre-push-review が両マーカーの整合を検証して許可)
+2. push 直前に /simplify → /codex:review --wait --scope branch → pre-push-review:security-reviewer (pre-push-review が強制し、PostToolUse で 3 マーカーが自動作成される)
+   2a. /codex:review に指摘があれば、 まず /codex:rescue --wait で方針を壁打ちし、 approve 後に修正実装 (pre-push-review v0.4.0 の規律。 rescue 自体はマーカー対象外)
+3. git push (pre-push-review が 3 マーカーの整合を検証して許可)
 4. gh pr create ... (姉妹プラグイン enforce-draft-pr 併用時は --draft が自動付与される)
 5. PostToolUse: nudge-pr-review.sh が PR URL を抽出
 6. 次のアシスタント発話に additionalContext として誘導文が注入される
 7. Claude が /codex:adversarial-review --wait --scope branch を実行 (実装方針・設計選択への challenge)
-8. 大きな方針転換が必要な指摘があれば修正 → 追加 commit → pre-push-review に戻る (push 前ループ)
+8. 指摘があれば、 まず /codex:rescue --wait で方針を壁打ちし、 approve 後に修正実装 → 追加 commit → pre-push-review に戻る (push 前ループ)
 9. (draft 運用の場合のみ) レビュー完了後にユーザーが ready マーク
 ```
 
