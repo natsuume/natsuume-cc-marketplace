@@ -1,5 +1,5 @@
 {
   "name": "pre-push-review",
-  "version": "0.3.0",
-  "description": "git push 前に /simplify → /codex:review --wait --scope branch → pre-push-review:security-reviewer subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実行完了を自動検知してブランチ全差分との同一性を検証することで、未レビューの commit が remote に到達するのを構造的にブロックするプラグイン。pre-commit-review の後継。security review を subagent で self-contained 実行するのは、 標準 /security-review skill を直接呼ぶと主 session の turn が終了し、 subagent 経由で呼んでも nested subagent 制約で機能しないため。中間 commit を許容しつつ「外部公開の境界 (push)」で gate するため、commit 履歴の意味的解像度を保ちながらレビュー強制を維持できる。ループ回数が閾値以上に達した場合は /codex:adversarial-review を促す案内を deny メッセージに追加 (PR 作成後の adversarial レビューは post-pr-review プラグインに委譲)"
+  "version": "0.4.0",
+  "description": "git push 前に /simplify → /codex:review --wait --scope branch → pre-push-review:security-reviewer subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実行完了を自動検知してブランチ全差分との同一性を検証することで、未レビューの commit が remote に到達するのを構造的にブロックするプラグイン。pre-commit-review の後継。security review を subagent で self-contained 実行するのは、 標準 /security-review skill を直接呼ぶと主 session の turn が終了し、 subagent 経由で呼んでも nested subagent 制約で機能しないため。中間 commit を許容しつつ「外部公開の境界 (push)」で gate するため、commit 履歴の意味的解像度を保ちながらレビュー強制を維持できる。ループ回数が閾値以上に達した場合は /codex:adversarial-review を促す案内を deny メッセージに追加 (PR 作成後の adversarial レビューは post-pr-review プラグインに委譲)。v0.4.0 で /codex:review および /codex:adversarial-review からの指摘に対する修正は、 いきなり実装せず /codex:rescue --wait で方針を壁打ちし approve 後に実装する規律を deny メッセージに明文化した"
 }

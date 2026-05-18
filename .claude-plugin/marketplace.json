@@ -31,16 +31,16 @@
     {
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
-      "description": "git push 前に /simplify → /codex:review --wait --scope branch → pre-push-review:security-reviewer subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実行完了を自動検知してブランチ全差分との同一性を検証することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を subagent で self-contained 実行するのは、 標準 /security-review skill を直接呼ぶと主 session の turn が終了し、 subagent 経由で呼んでも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。ループ回数が閾値以上に達した場合は /codex:adversarial-review を促す案内を deny メッセージに追加",
-      "version": "0.3.0",
-      "keywords": ["push", "review", "quality", "codex", "simplify", "security-review", "subagent", "adversarial-review", "branch-diff", "pr-diff"]
+      "description": "git push 前に /simplify → /codex:review --wait --scope branch → pre-push-review:security-reviewer subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実行完了を自動検知してブランチ全差分との同一性を検証することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を subagent で self-contained 実行するのは、 標準 /security-review skill を直接呼ぶと主 session の turn が終了し、 subagent 経由で呼んでも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。ループ回数が閾値以上に達した場合は /codex:adversarial-review を促す案内を deny メッセージに追加。v0.4.0 で /codex:review および /codex:adversarial-review からの指摘に対する修正は、 いきなり実装せず /codex:rescue --wait で方針を壁打ちし approve 後に実装する規律を deny メッセージに明文化",
+      "version": "0.4.0",
+      "keywords": ["push", "review", "quality", "codex", "simplify", "security-review", "subagent", "adversarial-review", "rescue", "branch-diff", "pr-diff"]
     },
     {
       "name": "post-pr-review",
       "source": "./plugins/post-pr-review",
-      "description": "gh pr create 成功直後に /codex:adversarial-review (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン",
-      "version": "0.2.0",
-      "keywords": ["pr", "review", "codex", "adversarial-review", "github"]
+      "description": "gh pr create 成功直後に /codex:adversarial-review (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン。v0.3.0 で adversarial review からの指摘に対する修正は、 いきなり実装せず /codex:rescue --wait で方針を壁打ちし approve 後に実装する規律を additionalContext に明文化",
+      "version": "0.3.0",
+      "keywords": ["pr", "review", "codex", "adversarial-review", "rescue", "github"]
     },
     {
       "name": "update-default-branch",

@@ -668,6 +668,12 @@ if [ "$LOOP_COUNT" -ge "$LOOP_THRESHOLD" ]; then
     設計選択のトレードオフ、暗黙の前提が壊れていないか) を取得する。
   - 大きな方針転換が必要そうなら、ユーザーに状況をエスカレートして判断を仰ぐ。
 
+\`/codex:adversarial-review\` の指摘に対する修正も、 通常の \`/codex:review\` 指摘と同じく
+**いきなり実装せず \`/codex:rescue --wait\` で方針を壁打ちしてから実装する** ルールが適用
+されます (手順 4 参照)。 adversarial review は設計レベルの指摘になりやすく、 場当たり的な
+修正をすると新たな歪みを生むため、 rescue による事前壁打ちで「指摘の根本原因に対する解と
+して妥当か」「全体設計と一貫しているか」を確認してから実装する規律が特に重要です。
+
 \`/codex:adversarial-review\` は本ループのマーカー対象外です。 実行後は通常通り
 \`/simplify\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\`
 subagent (\`Task\` / \`Agent\` tool 経由) を走らせて push へ進んでください。
@@ -699,10 +705,28 @@ target: ${TARGET_CWD}
       設計 (subagent 内では nested subagent が動かないため self-contained 化している)。
       PostToolUse hook が **subagent の完了** (Agent / Task tool の終了) を検知して
       security マーカーを自動更新する)
-  4. レビュー結果に指摘があれば修正し、必要に応じて新規 commit を作成する
-  5. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
-     その場合は手順 1〜3 を最初から再実行する
-  6. 3 つすべてのマーカーが「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
+  4. **いずれかのレビュー (\`/codex:review\` / \`/codex:adversarial-review\` /
+     security-reviewer subagent) からの指摘がある場合は、 修正方針を整理してから実装する**
+     (push gate は security マーカーの書き込みのみを確認し report 内容まで verify しない
+      ため、 security 指摘も含めた **3 レビュー全部** の remediation 義務をここで明文化する):
+     a. 指摘ごとに修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)
+     b. **\`/codex:review\` および \`/codex:adversarial-review\` からの指摘** については、
+        \`/codex:rescue --wait\` を Skill tool で呼び出し、 その方針が以下の観点で妥当か
+        を壁打ちする:
+          - 指摘の根本原因に対する解として妥当か
+          - 場当たり的な対処になっていないか (= 表層を塗りつぶすだけになっていないか)
+          - 全体設計・既存の方針と一貫しているか
+     c. \`/codex:rescue\` の応答が **approve (= 方針 OK)** になってから実装を開始する。
+        rescue から異論・代替案・追加考慮事項が出た場合は方針を見直して再度 rescue に
+        投げる (rescue 自体はマーカー対象外。 何回投げても push gate には影響しない)
+     d. **security-reviewer subagent からの指摘** は通常具体的な脆弱性対処 (input
+        validation 追加 / 秘匿情報の削除 / injection 対策等) になるため、 \`/codex:rescue\`
+        壁打ちは **optional (= 直接修正してよい)**。 ただし設計判断が絡む修正
+        (例: 認証フロー全体の見直し / 権限モデルの再設計) では rescue を活用するのが望ましい
+  5. approve された方針 (または security の直接修正) で実装し、必要に応じて新規 commit を作成する
+  6. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
+     その場合は手順 1〜3 を最初から再実行する (再ループでも手順 4 の壁打ちは適用)
+  7. 3 つすべてのマーカーが「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
 
 ⚠ **security review を直接 \`/security-review\` で呼ばないこと**: 標準 skill の
 prompt は最終応答をマークダウンレポートだけにするよう指示しているため、 主 session の
@@ -724,10 +748,17 @@ turn は通常通り終了し、 親 session は subagent invocation の結果�
   - **\`--wait\` (フォアグラウンド) のみサポート**
   - **\`--scope branch\` 必須**
 
-⚠ 重要: \`/codex:review\` であって \`/codex:rescue\` ではありません。両者は別コマンドです。
+⚠ 重要: 本ループは \`/codex:review\` (レビュー取得) と \`/codex:rescue\` (手順 4 の方針壁打ち)
+の **両方** を使います。 名前が似ているため取り違えに注意してください:
+  - \`/codex:review --wait --scope branch\`: branch 全差分への read-only レビュー取得
+    (PostToolUse がこの完了でマーカーを書く / push gate の対象)
+  - \`/codex:rescue --wait\`: review からの指摘を踏まえた **修正方針の壁打ち**
+    (rescue 自体はマーカー対象外 / push gate には影響しないが、 手順 4 で
+     approve を得てから実装を開始する規律で運用する)
 
 (注: PR 作成後の adversarial レビューは post-pr-review プラグイン経由で
- \`/codex:adversarial-review\` が起動されます。)$ADVERSARIAL_NOTE
+ \`/codex:adversarial-review\` が起動されます。 adversarial review からの指摘に対する修正も
+ 手順 4 と同じく \`/codex:rescue --wait\` で方針を壁打ちしてから実装してください。)$ADVERSARIAL_NOTE
 EOF
 )
 
