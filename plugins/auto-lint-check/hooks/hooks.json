@@ -1,5 +1,5 @@
 {
-  "description": "Edit/Write/MultiEdit 直前の ignore コメント挿入禁止、git commit 直前の staged lint、編集直後の自動フォーマット",
+  "description": "Edit/Write/MultiEdit 直前の ignore コメント挿入禁止、git commit 直前の staged lint、編集直後の自動フォーマット、git commit 直後の non-blocking lint フィードバック",
   "hooks": {
     "PreToolUse": [
       {
@@ -28,6 +28,15 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/code-format.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/post-commit-lint.sh"
           }
         ]
       }
