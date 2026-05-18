@@ -2,16 +2,18 @@
 
 `git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に branch 全差分のセキュリティレビューを実行; 詳細は下記 [Agents](#agents) を参照) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形を品質観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。修正により branch 全差分が変わると **3 つのレビューマーカーが自動的に失効** するため、Claude は 3 つのレビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
 
-ループが一定回数以上続いても収束しない場合、deny メッセージに **`/codex:adversarial-review`** (実装方針・設計選択への批判的レビュー) を促す案内が追加されます。表層レビューだけで収束しないループに対し「採用しているアプローチ自体が妥当か」を問い直す視点を取り入れる動線です。PR 作成直後の adversarial review は姉妹プラグイン [post-pr-review](../post-pr-review/) が誘導します。
-
 ## バージョン
 
-v0.4.0 (前身: `pre-commit-review` v0.4.0)
+v0.5.0 (前身: `pre-commit-review` v0.4.0)
+
+### v0.4.0 → v0.5.0 の変更点
+
+- **`/codex:adversarial-review` 連携を全廃**: 旧版は `/codex:review --wait --scope branch` の連続実行回数を `LOOP_COUNTER` で計測し、 閾値到達時に deny メッセージへ `/codex:adversarial-review --wait --scope branch` 起動を促す案内文を追加していた。 adversarial-review はサイクル時間が非常に長くなる問題があるため、 v0.5.0 で関連機能 (loop counter / 閾値判定 / 案内文 / `lib/loop-counter.sh`) を完全に削除した。 deny メッセージの手順 4 / rescue 壁打ち規律は `/codex:review` 単独で完結する形に整理。 表層レビューだけで収束しない場合の対応は引き続き Claude の自律判断 (人間判断を仰ぐ等) に委ねる
 
 ### v0.3.0 → v0.4.0 の変更点
 
-- **`/codex:review` / `/codex:adversarial-review` 指摘修正の前に `/codex:rescue` で方針を壁打ちする規律を deny メッセージに追記**: deny メッセージ (REASON) の手順 4 と ADVERSARIAL_NOTE に、 review からの指摘に対して **いきなり修正実装に入らず、 まず `/codex:rescue --wait` で修正方針を壁打ちし、 approve 後に実装を開始する** 規律を明文化した。 観点は「指摘の根本原因に対する解として妥当か」「場当たり的な対処になっていないか」「全体設計と一貫しているか」の 3 つ。 これにより review ループでの修正が表層的な塗りつぶしに偏るのを抑制し、 設計レベルの一貫性を保つ。 `/codex:rescue` はマーカー対象外で push gate には影響しないため、 何回投げても loop counter には反映されない (rescue は「修正前の方針壁打ち」であって「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)
-- **手順 4 を 3 レビュー全部に inclusive 化し、 rescue 壁打ち scope は codex 系のみに限定**: push gate は security マーカーの書き込みのみを確認し report 内容まで verify しないため、 「指摘があれば必ず修正する」 remediation 義務は 3 レビュー (`/codex:review` / `/codex:adversarial-review` / security-reviewer subagent) すべてに適用する。 一方 **`/codex:rescue` 壁打ちは `/codex:review` と `/codex:adversarial-review` の指摘に対してのみ必須** で、 security-reviewer の指摘は通常具体的な脆弱性対処 (input validation 追加 / 秘匿情報削除 / injection 対策等) のため壁打ち optional (設計判断が絡む修正のみ rescue 推奨)。 「remediation = 3 レビュー全部 / wall-bouncing = codex 系 2 つだけ」 の非対称な責務分離で、 過剰な制約を避けつつ remediation 漏れを防ぐ
+- **`/codex:review` 指摘修正の前に `/codex:rescue` で方針を壁打ちする規律を deny メッセージに追記**: deny メッセージ (REASON) の手順 4 に、 review からの指摘に対して **いきなり修正実装に入らず、 まず `/codex:rescue --wait` で修正方針を壁打ちし、 approve 後に実装を開始する** 規律を明文化した。 観点は「指摘の根本原因に対する解として妥当か」「場当たり的な対処になっていないか」「全体設計と一貫しているか」の 3 つ。 これにより review ループでの修正が表層的な塗りつぶしに偏るのを抑制し、 設計レベルの一貫性を保つ。 `/codex:rescue` はマーカー対象外で push gate には影響しない (rescue は「修正前の方針壁打ち」であって「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)
+- **手順 4 を 2 レビュー全部に inclusive 化し、 rescue 壁打ち scope は codex review のみに限定**: push gate は security マーカーの書き込みのみを確認し report 内容まで verify しないため、 「指摘があれば必ず修正する」 remediation 義務は 2 レビュー (`/codex:review` / security-reviewer subagent) すべてに適用する。 一方 **`/codex:rescue` 壁打ちは `/codex:review` の指摘に対してのみ必須** で、 security-reviewer の指摘は通常具体的な脆弱性対処 (input validation 追加 / 秘匿情報削除 / injection 対策等) のため壁打ち optional (設計判断が絡む修正のみ rescue 推奨)
 - **「/codex:review であって /codex:rescue ではない」の警告文を更新**: 本バージョンから両者を **両方使う** ループに変わるため、 「取り違えに注意」を残しつつ、 用途の対比 (`/codex:review` = レビュー取得 / `/codex:rescue` = 方針壁打ち) を明示する形に書き換え
 
 ### v0.2.0 → v0.3.0 の変更点
@@ -62,8 +64,6 @@ PR 作成側で gate する設計だと、以下の経路が捕捉できませ�
 
 `PreToolUse` フックで `Bash` ツール実行を監視し、`git push` コマンドを検出した場合、 **3 つのレビューマーカー** (`/simplify` / `/codex:review --wait --scope branch` / `/security-review` (subagent 経由) それぞれの実行完了マーカー) が現在の **branch 全差分 + 未コミット差分** のハッシュと一致しなければ `deny` を返して push を阻止します。マーカーは `PostToolUse` フックが各ツールの実走完了を検知して自動的に書き込みます (PostToolUse は subagent 内の tool use にも発火するため、 security 用 subagent 経由でも `/security-review` の skill 起動が検知されます)。手動でスクリプトを呼び出す必要はありません。
 
-加えて、`/codex:review --wait --scope branch` が完了するたびに **ループカウンタ** が +1 され、閾値以上になると deny メッセージに `/codex:adversarial-review --wait --scope branch` の実行を促す案内が追加されます (push を追加で block する判定は変えず、案内文のみ追加する設計)。閾値の現在値は `block-pre-push.sh` の `LOOP_THRESHOLD` で定義されており、運用経験で調整できます。push が PreToolUse を通過した時点でカウンタはリセットされます (マーカーは明示削除されず、次の編集で hash が変わるまで残ります)。
-
 ## インストール
 
 ```bash
@@ -78,7 +78,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 **ファイル**: `hooks/scripts/block-pre-push.sh`
 
-`git push` を含むコマンドを検出した際、現在のブランチ全差分 + 未コミット差分のハッシュと 3 つのレビューマーカーのハッシュを比較し、すべて一致しなければ `deny` を返します。加えてループカウンタが閾値以上のときは deny メッセージに `/codex:adversarial-review` の案内文を追加します (push の block / 通過判定自体には影響しない)。
+`git push` を含むコマンドを検出した際、現在のブランチ全差分 + 未コミット差分のハッシュと 3 つのレビューマーカーのハッシュを比較し、すべて一致しなければ `deny` を返します。
 
 **動作**:
 
@@ -88,9 +88,9 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 - カレントブランチが default branch (master/main) の場合は本フックでは gate せず、`git-guardrails` の `block-default-branch-push.sh` に委譲 (重複 deny メッセージを避けるため)
 - ブランチ全差分 + 未コミット差分が空 (= base と同一) の場合は gate しない (空 push は通す)
 - **working tree が dirty (staged または unstaged 変更あり) の場合は markers の状態に関わらず deny**: push される committed 部分とレビューされた working tree の乖離を防ぐため、push 前に commit 完了を要求する
-- 3 つすべてのマーカーが一致した場合はそのまま push を許容し、ループカウンタをリセット (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。markers は次の編集で hash が変わったときに自然に失効する)
+- 3 つすべてのマーカーが一致した場合はそのまま push を許容する (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。markers は次の編集で hash が変わったときに自然に失効する)
 - ハッシュは `git diff origin/<base>...HEAD` (PR diff) と `git diff --cached`、`git diff` の連結に対して計算するため、未コミットの edit があると markers のハッシュが変わる仕組み。実際の push gate は dirty-tree 検出で行うが、ハッシュ算式に未コミット差分を含めることで「review 後に edit して push」のような経路もマーカー失効で再 review に倒せる
-- `deny` 時の `permissionDecisionReason` には、各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と次に Claude が行うべき手順、ループ回数 / 閾値が記載される
+- `deny` 時の `permissionDecisionReason` には、各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と次に Claude が行うべき手順が記載される
 
 **残っている deny 制約 (loop discipline 維持に必要な最小防御)**:
 
@@ -128,12 +128,12 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 > **ループの意図**: 修正を加えた瞬間、その修正自体は未レビューになります。`/codex:review` の指摘を修正した結果として `/simplify` の対象 (重複・冗長コメント等) が新規発生する可能性も、`/simplify` の修正により `/codex:review` の新規指摘が出る可能性も、いずれもゼロではないため、修正があれば `/simplify` から再度ループします。プラグインは「マーカーのハッシュ = `git push` 時の branch 全差分 + 未コミット差分」だけを検証するため、ループ回数の push 強制ブロックは行いません。
 
-> **終端の判断 / ループ回数の閾値**: ループ回数による push 強制ブロックは行いません。ただし `/codex:review --wait --scope branch` の完了が `LOOP_THRESHOLD` に達した段階で deny メッセージに `/codex:adversarial-review` の案内が追加され、Claude に「実装方針そのものに無理はないか」を再考する選択肢を提示します。これは強制ではなく **追加の選択肢の提示** です。Claude は自身の判断で、表層的な修正を継続するか、adversarial レビューを取得するか、人間判断を仰ぐかを選びます。
+> **終端の判断**: ループ回数による push 強制ブロックは行いません。表層レビューだけで収束しない場合の対応 (実装方針の見直し / 人間判断のエスカレーション等) は Claude の自律判断に委ねます。
 
 > **`/codex:review` と `/codex:rescue` の役割分担**: 本プラグインは公式 codex プラグインの 2 つのコマンドを **両方** 使います。 用途を取り違えないこと:
 >
-> - **`/codex:review --wait --scope branch`**: branch 全差分への read-only レビュー取得。 PostToolUse の auto-mark.sh がこの完了でマーカーを書き、 push gate の検証対象になる。 ループ閾値到達時に促される `/codex:adversarial-review --wait --scope branch` も同種 (実装方針への批判的レビュー)。 両者は frontmatter で `disable-model-invocation: true` が指定されており本来 Skill tool から呼び出せないが、 姉妹プラグイン [codex-review-customize](../codex-review-customize/) を導入してパッチを適用すると Skill tool 経由でも呼び出し可能になる。
-> - **`/codex:rescue --wait`**: review からの指摘に対する **修正方針の壁打ち** に使う (v0.4.0 で導入された規律)。 deny メッセージの手順 4 / ADVERSARIAL_NOTE が要求する形で、 「指摘の根本原因に対する解として妥当か」「場当たり的でないか」「全体設計と一貫しているか」を rescue に問い、 approve が出てから実装を開始する。 `/codex:rescue` 自体はマーカー対象外で push gate には影響しない (rescue は「修正前の方針壁打ち」で「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)。 `/codex:rescue` は `disable-model-invocation` が指定されていないため、 codex-review-customize パッチなしでも Skill tool から直接呼び出し可能。
+> - **`/codex:review --wait --scope branch`**: branch 全差分への read-only レビュー取得。 PostToolUse の auto-mark.sh がこの完了でマーカーを書き、 push gate の検証対象になる。 frontmatter で `disable-model-invocation: true` が指定されており本来 Skill tool から呼び出せないが、 姉妹プラグイン [codex-review-customize](../codex-review-customize/) を導入してパッチを適用すると Skill tool 経由でも呼び出し可能になる。
+> - **`/codex:rescue --wait`**: review からの指摘に対する **修正方針の壁打ち** に使う (v0.4.0 で導入された規律)。 deny メッセージの手順 4 が要求する形で、 「指摘の根本原因に対する解として妥当か」「場当たり的でないか」「全体設計と一貫しているか」を rescue に問い、 approve が出てから実装を開始する。 `/codex:rescue` 自体はマーカー対象外で push gate には影響しない (rescue は「修正前の方針壁打ち」で「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)。 `/codex:rescue` は `disable-model-invocation` が指定されていないため、 codex-review-customize パッチなしでも Skill tool から直接呼び出し可能。
 
 > **security review は subagent 経由で呼ぶ**: 詳細は下記 [Agents](#agents) セクション。
 
@@ -141,7 +141,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`/simplify` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。`/codex:review --wait --scope branch` の成功完了時にはループカウンタも +1 します (`/simplify` と security-reviewer はカウントしません — Skill PostToolUse は launch 時点で発火するため完了 signal としては不正確で、cooperative にカウントが膨らむ経路になるため、また loop 閾値判定は codex review の繰り返しを軸にした設計のため)。
+`/simplify` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。
 
 hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に本フックが呼ばれます。`Skill` matcher の挙動が公式ドキュメント上完全に明記されていないため、tool 名に依存しない構造にしてあります。フィルタリングはスクリプト側の bash 内蔵正規表現マッチが行うため、対象外 tool は subprocess を立てずに即離脱します。
 
@@ -152,7 +152,7 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 | `/simplify` skill の launch                             | `Skill` | `tool_input.skill == "simplify"`                                                                                                                                                | `<git-dir>/.claude-pre-push-simplified`       | (なし)                  |
 | `pre-push-review:security-reviewer` subagent の完了 (推奨) | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` または `security-reviewer` (name-only 形式も許容) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
 | `/security-review` skill の launch (後方互換)        | `Skill` | `tool_input.skill == "security-review"` (主 session 直接呼び出しのみ。 subagent は tools から Skill を外しているため呼べない) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
-| `/codex:review --wait --scope branch` の Bash 完了      | `Bash`  | コマンドが `^node` で始まる (env-prefix 許容) / `codex-companion.m[jt]s review` を含む / `--scope branch` を含む / `run_in_background == false` / 失敗・中断ではない                | `<git-dir>/.claude-pre-push-codex-reviewed`   | ループカウンタ +1       |
+| `/codex:review --wait --scope branch` の Bash 完了      | `Bash`  | コマンドが `^node` で始まる (env-prefix 許容) / `codex-companion.m[jt]s review` を含む / `--scope branch` を含む / `run_in_background == false` / 失敗・中断ではない                | `<git-dir>/.claude-pre-push-codex-reviewed`   | (なし)                  |
 
 **`/simplify` を launch タイミングで検知する設計上のトレードオフ**:
 
@@ -167,7 +167,7 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 
 **書き込みをスキップする条件**:
 
-- `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない / カウンタも増やさない)
+- `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない)
 - `tool_input.run_in_background` が `true` (background 起動は完了タイミングを捉えられないため)
 - `tool_input.skill` が `simplify` / `security-review` 以外 (namespace 付き skill は別物として扱う)
 - `tool_input.subagent_type` が `pre-push-review:security-reviewer` / `security-reviewer` 以外 (別の subagent 起動はマーカー対象外)
@@ -185,7 +185,6 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 | `.claude-pre-push-simplified` | `/simplify` 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-codex-reviewed` | `/codex:review --wait --scope branch` 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
-| `.claude-pre-push-codex-loop-count` | `/codex:review --wait --scope branch` 連続実行回数 | push 通過時にリセット |
 
 ### Agents
 
@@ -213,6 +212,5 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 ## 関連プラグイン
 
-- [post-pr-review](../post-pr-review/): PR 作成直後の adversarial レビュー誘導
-- [codex-review-customize](../codex-review-customize/): `/codex:review` と `/codex:adversarial-review` を Skill tool から呼べるようにパッチを適用する setup プラグイン
+- [codex-review-customize](../codex-review-customize/): `/codex:review` を Skill tool から呼べるようにパッチを適用する setup プラグイン
 - [git-guardrails](../git-guardrails/): default branch (master/main) への直接書き込みを deny。本プラグインは default branch 上の push を git-guardrails に委譲します

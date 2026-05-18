@@ -2,14 +2,14 @@
 # auto-mark.sh
 # /simplify / /codex:review --wait --scope branch / pre-push-review:security-reviewer
 # subagent / /security-review 標準 skill (主 session 直接呼び出しのみ) の実行完了を
-# PostToolUse で検知し、対応するレビューマーカーとループカウンタを更新する。
+# PostToolUse で検知し、対応するレビューマーカーを更新する。
 #
 # 検知対象:
 #   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー (launch 時点ハッシュ)
 #   - Skill tool で `security-review` skill が完了した瞬間 → security-reviewed マーカー
 #     (launch 時点ハッシュ。 主 session が直接呼んだ場合のみ動く後方互換パス)
 #   - Bash tool で `codex-companion.mjs review --scope branch` が完了した瞬間
-#     → codex-reviewed マーカー + ループカウンタ +1
+#     → codex-reviewed マーカー
 #   - Agent / Task tool で `pre-push-review:security-reviewer` subagent が完了した瞬間
 #     → security-reviewed マーカー (subagent 完了時点ハッシュ。 推奨パス)
 #
@@ -41,10 +41,6 @@
 #     実際にレビュー本体を完了させたタイミングを捉えるため。 launch 時点ではなく
 #     完了時点でマーカーを書くことで、 subagent が途中で失敗した場合に marker が
 #     書かれない (= push gate がそのまま deny) を担保する。
-#   - ループカウンタ: 同一ブランチで `/codex:review --wait --scope branch` が何回
-#     走ったかを数える。block-pre-push.sh が閾値超過時に `/codex:adversarial-review`
-#     を促す案内文を deny メッセージに追加する。表層レビューだけで収束しないループに
-#     気づかせるシグナル用途。
 
 INPUT=$(cat)
 
@@ -84,9 +80,6 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
-
-# ループカウンタを更新するか (Bash 分岐 = codex review --scope branch 完了時のみ true)。
-INCREMENT_LOOP_COUNTER=0
 
 case "$TOOL_NAME" in
   Skill)
@@ -173,7 +166,6 @@ case "$TOOL_NAME" in
       exit 0
     fi
     MARKER_FN=codex_marker_path
-    INCREMENT_LOOP_COUNTER=1
     ;;
   *)
     exit 0
@@ -198,8 +190,6 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/diff-hash.sh
 source "$SCRIPT_DIR/lib/diff-hash.sh"
-# shellcheck source=lib/loop-counter.sh
-source "$SCRIPT_DIR/lib/loop-counter.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
 
@@ -223,12 +213,3 @@ if ! HASH=$(compute_review_hash "$BASE"); then
   exit 0
 fi
 printf '%s' "$HASH" > "$("$MARKER_FN" "$GIT_DIR")"
-
-# /codex:review --wait --scope branch の完了でループカウンタを +1。block-pre-push.sh が
-# 閾値到達時に adversarial review の案内文を deny メッセージに追加する。カウンタは
-# <git-dir> 配下に置かれるためリポジトリ単位で共有される (ブランチ単位ではない)。
-# push 成功時にマーカーと一緒にリセットされるため、push を通せば 0 起算に戻る。
-if [ "$INCREMENT_LOOP_COUNTER" -eq 1 ]; then
-  CURRENT=$(read_loop_count "$GIT_DIR")
-  write_loop_count "$GIT_DIR" "$((CURRENT + 1))"
-fi

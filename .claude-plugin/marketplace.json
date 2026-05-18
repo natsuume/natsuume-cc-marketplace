@@ -31,16 +31,9 @@
     {
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
-      "description": "git push 前に /simplify → /codex:review --wait --scope branch → pre-push-review:security-reviewer subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実行完了を自動検知してブランチ全差分との同一性を検証することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を subagent で self-contained 実行するのは、 標準 /security-review skill を直接呼ぶと主 session の turn が終了し、 subagent 経由で呼んでも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。ループ回数が閾値以上に達した場合は /codex:adversarial-review を促す案内を deny メッセージに追加。v0.4.0 で /codex:review および /codex:adversarial-review からの指摘に対する修正は、 いきなり実装せず /codex:rescue --wait で方針を壁打ちし approve 後に実装する規律を deny メッセージに明文化",
-      "version": "0.4.0",
-      "keywords": ["push", "review", "quality", "codex", "simplify", "security-review", "subagent", "adversarial-review", "rescue", "branch-diff", "pr-diff"]
-    },
-    {
-      "name": "post-pr-review",
-      "source": "./plugins/post-pr-review",
-      "description": "gh pr create 成功直後に /codex:adversarial-review (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン。v0.3.0 で adversarial review からの指摘に対する修正は、 いきなり実装せず /codex:rescue --wait で方針を壁打ちし approve 後に実装する規律を additionalContext に明文化",
-      "version": "0.3.0",
-      "keywords": ["pr", "review", "codex", "adversarial-review", "rescue", "github"]
+      "description": "git push 前に /simplify → /codex:review --wait --scope branch → pre-push-review:security-reviewer subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実行完了を自動検知してブランチ全差分との同一性を検証することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を subagent で self-contained 実行するのは、 標準 /security-review skill を直接呼ぶと主 session の turn が終了し、 subagent 経由で呼んでも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。v0.5.0 で /codex:adversarial-review 関連の loop counter / 閾値誘導を全廃 (サイクル時間が長くなる問題に対応)。/codex:review からの指摘修正は /codex:rescue --wait で方針壁打ち後に実装する規律を deny メッセージに維持",
+      "version": "0.5.0",
+      "keywords": ["push", "review", "quality", "codex", "simplify", "security-review", "subagent", "rescue", "branch-diff", "pr-diff"]
     },
     {
       "name": "update-default-branch",
@@ -59,15 +52,15 @@
     {
       "name": "codex-review-customize",
       "source": "./plugins/codex-review-customize",
-      "description": "公式 codex プラグインの /codex:review および /codex:adversarial-review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン",
-      "version": "0.2.0",
-      "keywords": ["codex", "review", "adversarial-review", "patch", "skill"]
+      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.0 で adversarial-review.md のパッチ対象を削除",
+      "version": "0.3.0",
+      "keywords": ["codex", "review", "patch", "skill"]
     },
     {
       "name": "auto-followthrough",
       "source": "./plugins/auto-followthrough",
       "description": "permission_mode が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始時の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "keywords": ["auto", "automation", "followthrough", "permission-mode", "hook", "userpromptsubmit", "posttoolbatch"]
     }
   ]

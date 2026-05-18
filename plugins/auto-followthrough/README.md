@@ -4,7 +4,11 @@ Claude Code が **auto mode** で動作している間、変更の `commit` → 
 
 ## バージョン
 
-v0.2.1
+v0.2.2
+
+### v0.2.1 → v0.2.2 の変更点
+
+- **マージ前提条件から `/codex:adversarial-review` verdict 要件を削除**: adversarial-review のサイクル時間が長くなる問題に対応し、 連携先プラグイン (`post-pr-review`) と同時に廃止。 マージ前提条件は CI checks / reviewDecision / mergeable / draft 状態の 4 つに整理された
 
 ## 概要
 
@@ -19,7 +23,6 @@ v0.2.1
 - PR が draft ではない (ready for review)
 - リポジトリで required に設定された CI checks が全て成功 (`gh pr checks` で検証)
 - レビューが要求されている場合、必要な承認が揃っている (`gh pr view --json reviewDecision` で検証)
-- post-pr-review が促す `/codex:adversarial-review --wait --scope branch` の verdict が `approve` (もしくは `needs-attention` の場合は severity を問わず**すべての** finding が解消済み / ユーザが明示的に waive 済み)
 - ブランチ保護ルールに違反しない (`mergeable` が `MERGEABLE` かつ `mergeStateStatus` が `CLEAN`)
 
 各 bullet には `gh` CLI で検証する具体的なコマンドを併記してあります。Claude は注入文を見て gate 評価を実行できます (例: `gh pr checks <pr>` で失敗があれば停止)。
@@ -122,7 +125,6 @@ auto-followthrough/
 
 - [git-guardrails](../git-guardrails/) — master への直接 push を禁止する。auto mode 中の暴走を構造的に止める安全網として併用推奨
 - [pre-push-review](../pre-push-review/) — push 前にレビューループを強制。auto で push に進むときも本プラグインの動作と矛盾せず、レビュー手順は引き続き機能する
-- [post-pr-review](../post-pr-review/) — PR 作成直後に adversarial review を促す。auto mode 中も本プラグインの誘導と直交して動作する
 - [update-default-branch](../update-default-branch/) — マージ完了後のデフォルトブランチ最新化を支援する Skill
 
 ## 既知の制約

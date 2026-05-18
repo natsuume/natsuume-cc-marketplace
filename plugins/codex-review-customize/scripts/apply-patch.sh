@@ -4,7 +4,6 @@
 #   - frontmatter から `disable-model-invocation: true` を削除 (Skill tool から呼び出し可能に)
 # 対象:
 #   - commands/review.md          (`/codex:review`)
-#   - commands/adversarial-review.md (`/codex:adversarial-review`)
 # 適用済みかはマーカー (<!-- codex-review-customize: patched -->) で判定し、二重適用を避ける。
 # 復元はマーケットプレイス clone 上での `git checkout commands/<file>.md` か、
 # codex プラグインの再インストールで行う (本スクリプト自身は backup を残さない)。
@@ -17,7 +16,6 @@ PATCH_MARKER="<!-- codex-review-customize: patched -->"
 # 列挙する。新たな codex review 系コマンドが増えたらここに追記する。
 TARGET_FILENAMES=(
   "review.md"
-  "adversarial-review.md"
 )
 
 # 1 ファイルにパッチを当てる。既適用なら no-op。前提を満たさなければ非 0 を返す。
@@ -142,11 +140,11 @@ $CACHE_MSG
 
 次のステップ:
   1. Claude Code で \`/reload-plugins\` を実行し、codex プラグインを cache から再 build させる。
-  2. これ以降、Claude が Skill tool 経由で \`/codex:review\` および \`/codex:adversarial-review\` を呼び出せる (会話入力としての両コマンドは従前通り利用可能)。
+  2. これ以降、Claude が Skill tool 経由で \`/codex:review\` を呼び出せる (会話入力としてのコマンドは従前通り利用可能)。
 
 復元 (パッチ削除) が必要な場合は次のいずれか:
   - codex プラグインを再インストール (marketplace から再 clone)
-  - codex の marketplace clone で \`git checkout commands/review.md commands/adversarial-review.md\`
+  - codex の marketplace clone で \`git checkout commands/review.md\`
 
 codex プラグインが update されると本パッチは消えるため、その後 \`/codex-review-customize:setup\` を再実行してください。
 MSG

@@ -49,7 +49,6 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 ## 関連プラグイン
 
 - [git-guardrails](../git-guardrails/) — デフォルトブランチへの直接 push を禁止する hook + rebase ワークフロー Skill
-- [post-pr-review](../post-pr-review/) — `gh pr create` 直後に `/code-review:code-review` の実行を誘導 (本プラグインで draft 化された PR でも併用可能だが、`/code-review:code-review` は draft PR を skip するため、ready 化してから review する運用になる)
 
 ## ディレクトリ構成
 
