@@ -69,9 +69,9 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 - **deny 対象の方針**: 明示 refspec / フラグ / ラッパー / subshell / 置換経由のすべての master/main 更新経路をカバー (具体的な分類列挙は prompt 本文)
 - **スコープ外**: 引数省略形 (`git push` 単独) は現在ブランチに依存するため既存 git-guardrails plugin に委譲
 - **fail-closed**: 実 push を含むが構文判定不能な場合のみ deny に倒す (軽量 Bash で誤 deny しない範囲限定)
-- **二次インジェクション防止**: deny 時の `reason` はコマンド本体を含めない設計 (抽象化方式の詳細は prompt 本文参照)
+- **二次インジェクション防止**: ok=true / ok=false いずれの reason もコマンド本体を含めない設計 (ok=true は固定文 / ok=false は固定文 + 抽象ラベル。 詳細は prompt 本文参照)
 
-**応答形式**: `{"ok": true}` または `{"ok": false, "reason": "..."}`
+**応答形式**: `{"ok": true, "reason": "..."}` または `{"ok": false, "reason": "..."}` (Claude Code の prompt hook output schema は ok の値に関わらず `reason` フィールドを必須として要求するため、 両ケースで reason を返す必要があります)
 
 ## 既存 git-guardrails plugin との比較
 
