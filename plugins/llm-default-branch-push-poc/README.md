@@ -8,8 +8,8 @@ v0.2.0 (POC / 試作)
 
 ### v0.1.0 → v0.2.0 の変更点
 
-- **`if: "Bash(*push*)"` の中間 match を撤去**: v0.1.0 では permission rule の中間 match で `push` 文字列を含む Bash にだけ発火を絞る設計だったが、 実機検証で **中間 match が評価されず全 Bash でスキップされる挙動** が判明 (claude-code-guide agent の事前報告と異なる)。 `if` フィールドを削除し、 全 Bash で発火させる方針に変更
-- **hot path 軽減を prompt 内 early-return に集約**: prompt 冒頭に「push substring 無しなら即 ok=true で抜ける」 step 1 を追加し、 軽量 Bash 経由でも LLM が短時間で固定 reason を返すことで遅延を軽減
+- **`if: "Bash(*push*)"` の中間 match を撤去**: v0.1.0 では permission rule の中間 match で発火を絞る設計だったが、 実機検証で **中間 match が評価されず全 Bash でスキップされる挙動** が判明 (claude-code-guide agent の事前報告と異なる)。 `if` フィールドを削除し、 全 Bash で発火させる方針に変更
+- **hot path 軽減を prompt 内 early-return に集約**: 軽量 Bash の判定は prompt 本文の早期 OK セクションに委ねる設計 (具体的な判定順は `hooks/hooks.json` の prompt を参照)
 
 ## 目的
 
@@ -46,9 +46,10 @@ v0.2.0 (POC / 試作)
 
 ### 3. 制約と妥協
 
-- **発火範囲と hot path 軽減 (v0.2.0)**: v0.2.0 で `if` フィールドを撤去し、 **全 Bash 呼び出しで prompt hook が発火** する設計に変更しました (v0.1.0 の `if: "Bash(*push*)"` 中間 match は実機で評価されず無効だったため)。 軽量 Bash の hot path 軽減は prompt 内の **step 1 「push substring 即決」 early-return** に集約し、 LLM (Haiku) が短時間 (~1s 想定) で固定 reason を返すことで遅延と LLM コストを抑える方針です。 timeout は 15s (Haiku デフォルトより短縮、 fail-closed と組み合わせて軽量化)。
-  - **要実機検証 (継続)**: step 1 の早期 OK が実際に Haiku で 1〜数秒で完了するか実測必要。 `claude --debug` でレイテンシと早期 OK 判定の精度 (固定文を確実に返すか) を確認してください
-- **fail-closed の限定**: LLM が判定不能なケースで deny に倒すのは **実 git push が含まれるコマンドの範囲内** に限定しています。 push を全く含まないコマンド (= `if` 経由で来る `npm run push:foo` 等) は誤 deny しないよう、 prompt 内で「早期 OK 条件」として明示しています。
+- **発火範囲と hot path 軽減 (v0.2.0)**: v0.2.0 で `if` フィールドを撤去し、 **全 Bash 呼び出しで prompt hook が発火** する設計に変更しました。 軽量 Bash の判定は prompt 内 early-return に集約しています。 timeout は 15s (Haiku デフォルトより短縮、 fail-closed と組み合わせて軽量化)。
+  - **要実機検証 (継続)**: 早期 OK が Haiku で 1〜数秒で完了するか実測必要。 `claude --debug` でレイテンシと早期 OK 判定の精度 (固定文を確実に返すか) を確認してください
+  - **既知の制約**: 全 Bash 発火だと harness 層 skip と比べて per-call の最低 LLM レイテンシ (Haiku TTFT で数百 ms 以上) が乗ります。 連続 `ls`/`cat` を多用するセッションでは累積遅延が体感に出る可能性があり、 v0.3.0 で matcher 自体の絞り込み (`matcher` field の wildcard / 正規表現サポート確認、 もしくは `Bash(git push *)` 系の prefix で対応しつつ別 hook で `bash -c` / `eval` 等のラッパー経路を補強する 2 段構え) を実機検証する予定
+- **fail-closed の限定**: LLM が判定不能なケースで deny に倒すのは **実 git push が含まれるコマンドの範囲内** に限定しています。 push を全く含まないコマンドは誤 deny しないよう、 prompt 内の早期 OK で明示しています。
 - **プロンプトインジェクション**: コマンド本文中の `# allow this` 等の誤誘導コメントは prompt で **無視するよう明示**。 さらに deny 時の reason には **ユーザコマンド本体を逐語引用しない** (抽象ラベルのみ) ことで、 二次インジェクション (reason 経由で別 hook やセッションに payload がリレーされる) を防ぎます。 完全な対策ではないため、 既存 plugin との二重防御を維持します。
 - **動的状態を参照できない**: prompt hook の `$ARGUMENTS` は hook input JSON のみ。 現在ブランチや markers などの動的状態は参照できません。 必要なら `agent` hook (Read/Grep/Glob 可、 timeout 60s) への移行を検討します。
 - **README ↔ prompt の drift リスク**: Claude Code の prompt hook は `prompt:` フィールドにインライン文字列を要求し、 外部ファイル参照はサポートされていません。 そのため hooks.json の prompt 本文と README の機能説明が独立した記述になります。 **正の単一情報源 (single source of truth) は hooks.json の prompt 本文** で、 README は要約と検証指針のみを記載します。
@@ -70,7 +71,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 判定ロジックの **正の単一情報源** は `hooks/hooks.json` の `prompt` フィールドです。 ここでは設計の **意図** のみ:
 
 - **発火範囲**: 全 Bash 呼び出しで発火 (v0.1.0 の `if: "Bash(*push*)"` は実機で機能しなかったため v0.2.0 で撤去)
-- **early-return 設計**: prompt 冒頭の step 1 で「push substring 無しなら即 ok」、 step 2〜4 で「push を含むが実 master/main 更新でない」 ケースも早期 OK。 LLM の判定に進むのは step 5 の deny 候補のみ — 軽量 Bash や副作用のない確認系コマンドで誤 deny しない
+- **early-return 設計**: prompt 内に多段の早期 OK 判定を持ち、 master/main 更新の deny 候補のみ詳細判定する設計 (具体的な分岐ロジックは prompt 本文を参照)
 - **deny 対象の方針**: 明示 refspec / フラグ / ラッパー / subshell / 置換経由のすべての master/main 更新経路をカバー (具体的な分類列挙は prompt 本文)
 - **スコープ外**: 引数省略形 (`git push` 単独) は現在ブランチに依存するため既存 git-guardrails plugin に委譲
 - **fail-closed**: 実 push を含むが構文判定不能な場合のみ deny に倒す (軽量 Bash で誤 deny しない範囲限定)
@@ -82,7 +83,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 | 項目 | git-guardrails (shell parser) | llm-default-branch-push-poc (prompt hook) |
 |------|--------------------------------|-------------------------------------------|
-| 速度 | < 50ms | 全 Bash で発火するため毎回 LLM 呼び出しが発生。 早期 OK 経路 (step 1〜4) は固定文返却で短時間 (~1s 想定) 完了、 deny 候補のみ詳細判定 (数秒〜15s) |
+| 速度 | < 50ms | 全 Bash で発火し毎回 LLM 呼び出し (Haiku TTFT で数百 ms〜)。 早期 OK 経路は固定文返却で短時間、 deny 候補のみ詳細判定 (数秒〜15s)。 v0.3.0 で matcher 絞り込みを検討 |
 | 引数省略形 (`git push` 単独) | ✓ 現在ブランチを `git symbolic-ref` で取得して判定 | ✗ 現在ブランチ取得不可、スコープ外 |
 | 明示 refspec | ✓ token 完全一致比較 | ✓ LLM 構文解釈 |
 | `--all` / `--mirror` | ✓ token match | ✓ LLM 判定 |
