@@ -1,5 +1,5 @@
 {
   "name": "llm-default-branch-push-poc",
-  "version": "0.1.0",
-  "description": "デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用して LLM 判定の精度・遅延を検証する"
+  "version": "0.2.0",
+  "description": "デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用して LLM 判定の精度・遅延を検証する。v0.2.0 で `if` フィールド撤去 (実機で中間 match が機能しなかったため)、 hot path 軽減を prompt 内 early-return に集約"
 }
