@@ -82,9 +82,17 @@ compute_review_hash_in() {
   fi
   local branch_diff
   branch_diff=$(git "${git_prefix[@]}" diff "origin/${base}...HEAD" 2>/dev/null) || return 1
+  # GNU coreutils は `sha256sum`、BSD/macOS は `shasum -a 256` を使う。
+  # どちらも `<hex>  -` 形式で出力するため後段の awk はそのまま動作する。
+  local -a sha_cmd
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha_cmd=(sha256sum)
+  else
+    sha_cmd=(shasum -a 256)
+  fi
   {
     printf '%s' "$branch_diff"
     git "${git_prefix[@]}" diff --cached 2>/dev/null
     git "${git_prefix[@]}" diff 2>/dev/null
-  } | sha256sum | awk '{print $1}'
+  } | "${sha_cmd[@]}" | awk '{print $1}'
 }
