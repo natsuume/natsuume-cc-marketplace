@@ -66,7 +66,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 ### なぜ SessionStart か (vs UserPromptSubmit)
 
-- **`SessionStart`** はセッション開始時に 1 回だけ発火する。コンテキストトークンの消費を最小化できる
+- **`SessionStart`** はセッション開始系イベント (`startup` / `resume` / `clear` / `compact` 等) で発火する。発火頻度はセッション内で限定的なため、コンテキストトークン消費を抑えられる
 - **`UserPromptSubmit`** は毎ターン発火する。長時間セッションで context が圧縮 (compact) されても方針を再注入し続けられる利点があるが、トークンコストは増える
 
 本プラグインは静的な規律 (時間で変わらない汎用ルール) のため `SessionStart` を採用しています。長時間セッションで方針が薄れていると感じた場合は、`hooks/hooks.json` の `SessionStart` を `UserPromptSubmit` に書き換えるか両方に追加することで強化できます。
