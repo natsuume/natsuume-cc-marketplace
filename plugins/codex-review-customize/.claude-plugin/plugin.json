@@ -1,5 +1,5 @@
 {
   "name": "codex-review-customize",
-  "version": "0.2.1",
-  "description": "公式 codex プラグインの /codex:review および /codex:adversarial-review コマンド定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン"
+  "version": "0.3.0",
+  "description": "公式 codex プラグインの /codex:review コマンド定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.0 で adversarial-review.md のパッチ対象を削除 (関連プラグインからの adversarial-review 連携全廃に追随)"
 }

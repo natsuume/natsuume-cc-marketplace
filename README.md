@@ -21,11 +21,10 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [git-guardrails](#git-guardrails) | 0.2.0 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.1.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.1.1 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
-| [pre-push-review](#pre-push-review) | 0.3.0 | `git push` 前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を self-contained subagent で実行するのは、 標準 `/security-review` を直接呼ぶと主 session の turn が終了し、 subagent 経由でも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。ループ回数が閾値以上に達した場合は `/codex:adversarial-review` を促す案内を deny メッセージに追加 |
-| [post-pr-review](#post-pr-review) | 0.2.0 | `gh pr create` 成功直後に `/codex:adversarial-review` (実装方針・設計選択への批判的レビュー) の実行を誘導するプラグイン |
+| [pre-push-review](#pre-push-review) | 0.5.0 | `git push` 前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を self-contained subagent で実行するのは、 標準 `/security-review` を直接呼ぶと主 session の turn が終了し、 subagent 経由でも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
-| [codex-review-customize](#codex-review-customize) | 0.2.0 | 公式 codex プラグインの `/codex:review` および `/codex:adversarial-review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
+| [codex-review-customize](#codex-review-customize) | 0.3.0 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
 
 ---
 
@@ -104,8 +103,6 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 `git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです (`pre-commit-review` の後継)。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review --scope branch` はその後の最終形を branch 全差分で (= PR diff のセマンティクスで) 品質観点でレビューし、 security review は同じ最終形を security 観点でレビューします。 security review を **self-contained subagent** で実行するのは、 標準 skill `/security-review` を主 session から直接呼ぶと skill prompt の終端指示「マークダウンレポートだけで応答せよ」で turn が終了して後続フロー (`git push`) が進まず、 subagent 内から invoke しても標準 skill 本体が nested subagent (Task tool) を要求して Claude Code の制約に阻まれるためです。 subagent は標準 skill を invoke せず、 input validation / authn / crypto / injection / data exposure の各カテゴリを自前の prompt で single-pass review します。修正により branch 全差分 + 未コミット差分が変わると 3 つのマーカーが自動失効するため、Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
 
-`/codex:review --wait --scope branch` の完了が `LOOP_THRESHOLD` に達してもまだ push に至らない場合、deny メッセージに `/codex:adversarial-review` (実装方針・設計選択への批判的レビュー) の実行を促す案内が追加されます。PR 作成後の adversarial レビューは姉妹プラグイン [post-pr-review](#post-pr-review) が担当します。
-
 ### 設計上のメリット
 
 - **commit 履歴の意味的解像度を保てる**: 初期実装 / `/simplify` edits / `/codex:review` 指摘修正をそれぞれ独立 commit として記録できる (`git log` / `blame` / `bisect` の精度が上がる)。`pre-commit-review` ではこれらすべてが 1 commit に圧縮されていた
@@ -119,8 +116,8 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、`/simplify` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の 3 つのマーカーが branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。ループカウンタが閾値以上に達していれば deny メッセージに `/codex:adversarial-review` の案内文を追加。default branch (master/main) 上の push は git-guardrails に委譲して skip |
-| `auto-mark` | PostToolUse (`*` wildcard) | `/simplify` の launch、 `/codex:review --wait --scope branch` の Bash 完了、 `pre-push-review:security-reviewer` subagent の Agent / Task tool 完了を自動検知し、対応するマーカーに branch 全差分 + 未コミット差分のハッシュを書き込む。`/codex:review --wait --scope branch` の成功完了時にはループカウンタも +1 する。`--scope branch` を含まない codex 起動は markers を更新しない (PR diff レビュー保証として不十分なため)。 security マーカーは subagent **完了時** に書く (launch ではない) ことで、 subagent 失敗時に silent-pass しない |
+| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、`/simplify` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の 3 つのマーカーが branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。default branch (master/main) 上の push は git-guardrails に委譲して skip |
+| `auto-mark` | PostToolUse (`*` wildcard) | `/simplify` の launch、 `/codex:review --wait --scope branch` の Bash 完了、 `pre-push-review:security-reviewer` subagent の Agent / Task tool 完了を自動検知し、対応するマーカーに branch 全差分 + 未コミット差分のハッシュを書き込む。`--scope branch` を含まない codex 起動は markers を更新しない (PR diff レビュー保証として不十分なため)。 security マーカーは subagent **完了時** に書く (launch ではない) ことで、 subagent 失敗時に silent-pass しない |
 
 #### Agents
 
@@ -130,29 +127,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ### キーワード
 
-`push` `review` `quality` `codex` `simplify` `security-review` `subagent` `adversarial-review` `branch-diff` `pr-diff`
-
----
-
-## post-pr-review
-
-Claude Code 経由で `gh pr create` が成功した直後に、`/codex:adversarial-review --wait --scope branch` の実行を `additionalContext` で Claude に誘導するプラグインです。`pre-push-review` の push 前ループ (`/codex:review` による表層レビュー) と役割を分け、本プラグインは PR タイミングに **設計レベルの challenge** (実装方針・設計選択・トレードオフ・前提条件への批判的レビュー) を差し込みます。
-
-### 機能
-
-#### Hooks
-
-| Hook 名 | イベント | 説明 |
-|---------|---------|------|
-| `nudge-pr-review` | PostToolUse | `gh pr create` 成功時に PR URL を抽出し、`additionalContext` で `/codex:adversarial-review --wait --scope branch` の実行を促す (強制ではなく誘導) |
-
-### 注意事項
-
-`additionalContext` 経由の誘導なので、Claude が無視することは原理的に可能です。また Web UI など Claude Code 以外で作成された PR には介入しません (これは設計上の意図)。`/codex:adversarial-review` を Skill tool から呼び出すには [codex-review-customize](#codex-review-customize) v0.2.0 以降のパッチを当てておく必要があります。
-
-### キーワード
-
-`pr` `review` `codex` `adversarial-review` `github`
+`push` `review` `quality` `codex` `simplify` `security-review` `subagent` `branch-diff` `pr-diff`
 
 ---
 
@@ -200,9 +175,9 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 ## codex-review-customize
 
-公式 codex プラグインの `/codex:review` (`commands/review.md`) および `/codex:adversarial-review` (`commands/adversarial-review.md`) コマンド定義をローカルでパッチし、frontmatter の `disable-model-invocation: true` を削除して Skill tool からの呼び出しを許可する setup プラグインです。
+公式 codex プラグインの `/codex:review` (`commands/review.md`) コマンド定義をローカルでパッチし、frontmatter の `disable-model-invocation: true` を削除して Skill tool からの呼び出しを許可する setup プラグインです。
 
-スラッシュコマンドは `<plugin名>:<command名>` でプラグイン名空間が確定するため、別プラグインから `/codex:review` / `/codex:adversarial-review` という同名は提供できません。本プラグインはコマンド名を公式の `/codex:...` のまま保持したいユーザー向けに、公式定義のローカルパッチを setup する形を採っています。
+スラッシュコマンドは `<plugin名>:<command名>` でプラグイン名空間が確定するため、別プラグインから `/codex:review` という同名は提供できません。本プラグインはコマンド名を公式の `/codex:...` のまま保持したいユーザー向けに、公式定義のローカルパッチを setup する形を採っています。
 
 ### 機能
 
@@ -210,8 +185,8 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 | コマンド | 説明 |
 |---------|------|
-| `/codex-review-customize:setup` | `apply-patch.sh` を実行し、公式 codex の `commands/review.md` と `commands/adversarial-review.md` の両方をパッチする (idempotent、backup なしで git 管理が backup を兼ねる) |
+| `/codex-review-customize:setup` | `apply-patch.sh` を実行し、公式 codex の `commands/review.md` をパッチする (idempotent、backup なしで git 管理が backup を兼ねる) |
 
 ### キーワード
 
-`codex` `review` `adversarial-review` `patch` `skill`
+`codex` `review` `patch` `skill`

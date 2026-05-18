@@ -116,8 +116,6 @@ source "$SCRIPT_DIR/lib/cmd-parser.sh"
 source "$SCRIPT_DIR/lib/target-resolver.sh"
 # shellcheck source=lib/diff-hash.sh
 source "$SCRIPT_DIR/lib/diff-hash.sh"
-# shellcheck source=lib/loop-counter.sh
-source "$SCRIPT_DIR/lib/loop-counter.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
 
@@ -625,9 +623,6 @@ if [ "$CURRENT_HASH" = "$EMPTY_DIFF_HASH" ]; then
   exit 0
 fi
 
-LOOP_THRESHOLD=3
-LOOP_COUNT=$(read_loop_count "$GIT_DIR")
-
 # 3 つのマーカーが現在の差分と一致 = 「現状の branch 全差分 + 未コミットに対して
 # /simplify と /codex:review --wait --scope branch と /security-review が直近で実走済み」
 # を意味する。 markers は明示削除しない: PreToolUse は push 成功確認できないため、 remote
@@ -637,7 +632,6 @@ if [ -n "$SIMPLIFIED_HASH" ] && [ -n "$CODEX_HASH" ] && [ -n "$SECURITY_HASH" ] 
    && [ "$SIMPLIFIED_HASH" = "$CURRENT_HASH" ] \
    && [ "$CODEX_HASH" = "$CURRENT_HASH" ] \
    && [ "$SECURITY_HASH" = "$CURRENT_HASH" ]; then
-  reset_loop_count "$GIT_DIR"
   exit 0
 fi
 
@@ -655,32 +649,6 @@ SIMPLIFIED_STATUS=$(format_status "$SIMPLIFIED_HASH")
 CODEX_STATUS=$(format_status "$CODEX_HASH")
 SECURITY_STATUS=$(format_status "$SECURITY_HASH")
 
-ADVERSARIAL_NOTE=""
-if [ "$LOOP_COUNT" -ge "$LOOP_THRESHOLD" ]; then
-  ADVERSARIAL_NOTE=$(cat <<EOF
-
-⚠ レビューループが ${LOOP_COUNT} 回に達しています (閾値 ${LOOP_THRESHOLD} 回)。
-\`/codex:review\` の指摘修正だけで収束しない場合、根本的な実装方針・アーキテクチャ設計に
-ミスマッチがある可能性があります。次のいずれかの対応を検討してください:
-
-  - **\`/codex:adversarial-review --wait --scope branch\`** を Skill tool で呼び出し、
-    現在のブランチに対する **批判的レビュー** (採用しているアプローチ自体が妥当か、
-    設計選択のトレードオフ、暗黙の前提が壊れていないか) を取得する。
-  - 大きな方針転換が必要そうなら、ユーザーに状況をエスカレートして判断を仰ぐ。
-
-\`/codex:adversarial-review\` の指摘に対する修正も、 通常の \`/codex:review\` 指摘と同じく
-**いきなり実装せず \`/codex:rescue --wait\` で方針を壁打ちしてから実装する** ルールが適用
-されます (手順 4 参照)。 adversarial review は設計レベルの指摘になりやすく、 場当たり的な
-修正をすると新たな歪みを生むため、 rescue による事前壁打ちで「指摘の根本原因に対する解と
-して妥当か」「全体設計と一貫しているか」を確認してから実装する規律が特に重要です。
-
-\`/codex:adversarial-review\` は本ループのマーカー対象外です。 実行後は通常通り
-\`/simplify\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\`
-subagent (\`Task\` / \`Agent\` tool 経由) を走らせて push へ進んでください。
-EOF
-)
-fi
-
 REASON=$(cat <<EOF
 プッシュをブロックしました。push 前に下記のレビューを実行してください。
 
@@ -691,7 +659,6 @@ target: ${TARGET_CWD}
   /simplify                        : $SIMPLIFIED_STATUS
   /codex:review --scope branch     : $CODEX_STATUS
   security review (subagent 経由)  : $SECURITY_STATUS
-  ループ回数                       : ${LOOP_COUNT} 回 (閾値 ${LOOP_THRESHOLD} 回でアーキテクチャレビュー誘導)
 
 実行手順 (修正が落ち着くまでループ):
   1. /simplify を Skill tool で呼び出す (コード変更を伴うため先に実行)
@@ -705,12 +672,12 @@ target: ${TARGET_CWD}
       設計 (subagent 内では nested subagent が動かないため self-contained 化している)。
       PostToolUse hook が **subagent の完了** (Agent / Task tool の終了) を検知して
       security マーカーを自動更新する)
-  4. **いずれかのレビュー (\`/codex:review\` / \`/codex:adversarial-review\` /
-     security-reviewer subagent) からの指摘がある場合は、 修正方針を整理してから実装する**
+  4. **いずれかのレビュー (\`/codex:review\` / security-reviewer subagent) からの指摘が
+     ある場合は、 修正方針を整理してから実装する**
      (push gate は security マーカーの書き込みのみを確認し report 内容まで verify しない
-      ため、 security 指摘も含めた **3 レビュー全部** の remediation 義務をここで明文化する):
+      ため、 security 指摘も含めた **2 レビュー全部** の remediation 義務をここで明文化する):
      a. 指摘ごとに修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)
-     b. **\`/codex:review\` および \`/codex:adversarial-review\` からの指摘** については、
+     b. **\`/codex:review\` からの指摘** については、
         \`/codex:rescue --wait\` を Skill tool で呼び出し、 その方針が以下の観点で妥当か
         を壁打ちする:
           - 指摘の根本原因に対する解として妥当か
@@ -755,10 +722,6 @@ turn は通常通り終了し、 親 session は subagent invocation の結果�
   - \`/codex:rescue --wait\`: review からの指摘を踏まえた **修正方針の壁打ち**
     (rescue 自体はマーカー対象外 / push gate には影響しないが、 手順 4 で
      approve を得てから実装を開始する規律で運用する)
-
-(注: PR 作成後の adversarial レビューは post-pr-review プラグイン経由で
- \`/codex:adversarial-review\` が起動されます。 adversarial review からの指摘に対する修正も
- 手順 4 と同じく \`/codex:rescue --wait\` で方針を壁打ちしてから実装してください。)$ADVERSARIAL_NOTE
 EOF
 )
 

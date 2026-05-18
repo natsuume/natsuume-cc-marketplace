@@ -67,9 +67,6 @@ Auto mode (permission_mode = "auto") が有効です。以下の方針で**自�
      - PR が draft ではない (ready for review)
      - リポジトリで required に設定されている CI checks が **全て成功** (`gh pr checks` で確認)
      - レビューが要求されている場合、必要な承認が揃っている (`gh pr view --json reviewDecision`)
-     - post-pr-review が促す `/codex:adversarial-review --wait --scope branch` の verdict が
-       `approve` (もしくは verdict が `needs-attention` の場合、severity を問わず **すべての**
-       finding が解消済み、または明示的にユーザが waive している) であること
      - ブランチ保護ルールに違反しない (`mergeable` が `MERGEABLE` かつ `mergeStateStatus` が `CLEAN`)
 - 各ステップは reasonable assumption で前進し、軽微な判断は都度ユーザに聞き返さない
 - ただし以下は引き続き禁止 / 要確認:
@@ -78,7 +75,7 @@ Auto mode (permission_mode = "auto") が有効です。以下の方針で**自�
   - 秘匿情報を含むファイル (.env, credentials.json 等) のコミット
   - マージ前提条件 (上記 3 の bullet 群) を満たさない PR の独断マージ
 - すでに対象が commit / PR / マージ済みの場合、そのステップはスキップして次へ進む
-- このリポジトリの他プラグイン (pre-push-review, post-pr-review 等) が要求するレビュー手順は引き続き従う
+- このリポジトリの他プラグイン (pre-push-review 等) が要求するレビュー手順は引き続き従う
 EOF
 )
 
