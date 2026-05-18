@@ -11,6 +11,7 @@ v0.4.0 (前身: `pre-commit-review` v0.4.0)
 ### v0.3.0 → v0.4.0 の変更点
 
 - **`/codex:review` / `/codex:adversarial-review` 指摘修正の前に `/codex:rescue` で方針を壁打ちする規律を deny メッセージに追記**: deny メッセージ (REASON) の手順 4 と ADVERSARIAL_NOTE に、 review からの指摘に対して **いきなり修正実装に入らず、 まず `/codex:rescue --wait` で修正方針を壁打ちし、 approve 後に実装を開始する** 規律を明文化した。 観点は「指摘の根本原因に対する解として妥当か」「場当たり的な対処になっていないか」「全体設計と一貫しているか」の 3 つ。 これにより review ループでの修正が表層的な塗りつぶしに偏るのを抑制し、 設計レベルの一貫性を保つ。 `/codex:rescue` はマーカー対象外で push gate には影響しないため、 何回投げても loop counter には反映されない (rescue は「修正前の方針壁打ち」であって「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)
+- **手順 4 を 3 レビュー全部に inclusive 化し、 rescue 壁打ち scope は codex 系のみに限定**: push gate は security マーカーの書き込みのみを確認し report 内容まで verify しないため、 「指摘があれば必ず修正する」 remediation 義務は 3 レビュー (`/codex:review` / `/codex:adversarial-review` / security-reviewer subagent) すべてに適用する。 一方 **`/codex:rescue` 壁打ちは `/codex:review` と `/codex:adversarial-review` の指摘に対してのみ必須** で、 security-reviewer の指摘は通常具体的な脆弱性対処 (input validation 追加 / 秘匿情報削除 / injection 対策等) のため壁打ち optional (設計判断が絡む修正のみ rescue 推奨)。 「remediation = 3 レビュー全部 / wall-bouncing = codex 系 2 つだけ」 の非対称な責務分離で、 過剰な制約を避けつつ remediation 漏れを防ぐ
 - **「/codex:review であって /codex:rescue ではない」の警告文を更新**: 本バージョンから両者を **両方使う** ループに変わるため、 「取り違えに注意」を残しつつ、 用途の対比 (`/codex:review` = レビュー取得 / `/codex:rescue` = 方針壁打ち) を明示する形に書き換え
 
 ### v0.2.0 → v0.3.0 の変更点

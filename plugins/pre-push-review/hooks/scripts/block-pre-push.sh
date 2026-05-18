@@ -705,18 +705,25 @@ target: ${TARGET_CWD}
       設計 (subagent 内では nested subagent が動かないため self-contained 化している)。
       PostToolUse hook が **subagent の完了** (Agent / Task tool の終了) を検知して
       security マーカーを自動更新する)
-  4. **/codex:review (および後段で適用される /codex:adversarial-review) からの指摘がある
-     場合は、 いきなり修正実装に入らず、 まず修正方針を \`/codex:rescue\` で壁打ちする**:
+  4. **いずれかのレビュー (\`/codex:review\` / \`/codex:adversarial-review\` /
+     security-reviewer subagent) からの指摘がある場合は、 修正方針を整理してから実装する**
+     (push gate は security マーカーの書き込みのみを確認し report 内容まで verify しない
+      ため、 security 指摘も含めた **3 レビュー全部** の remediation 義務をここで明文化する):
      a. 指摘ごとに修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)
-     b. \`/codex:rescue --wait\` を Skill tool で呼び出し、 その方針が以下の観点で妥当
-        かを問う:
+     b. **\`/codex:review\` および \`/codex:adversarial-review\` からの指摘** については、
+        \`/codex:rescue --wait\` を Skill tool で呼び出し、 その方針が以下の観点で妥当か
+        を壁打ちする:
           - 指摘の根本原因に対する解として妥当か
           - 場当たり的な対処になっていないか (= 表層を塗りつぶすだけになっていないか)
           - 全体設計・既存の方針と一貫しているか
      c. \`/codex:rescue\` の応答が **approve (= 方針 OK)** になってから実装を開始する。
         rescue から異論・代替案・追加考慮事項が出た場合は方針を見直して再度 rescue に
         投げる (rescue 自体はマーカー対象外。 何回投げても push gate には影響しない)
-  5. approve された方針で修正を実装し、必要に応じて新規 commit を作成する
+     d. **security-reviewer subagent からの指摘** は通常具体的な脆弱性対処 (input
+        validation 追加 / 秘匿情報の削除 / injection 対策等) になるため、 \`/codex:rescue\`
+        壁打ちは **optional (= 直接修正してよい)**。 ただし設計判断が絡む修正
+        (例: 認証フロー全体の見直し / 権限モデルの再設計) では rescue を活用するのが望ましい
+  5. approve された方針 (または security の直接修正) で実装し、必要に応じて新規 commit を作成する
   6. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
      その場合は手順 1〜3 を最初から再実行する (再ループでも手順 4 の壁打ちは適用)
   7. 3 つすべてのマーカーが「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
