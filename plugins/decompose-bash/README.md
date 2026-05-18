@@ -45,15 +45,16 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 **動作**:
 
-- セッション開始時に 1 回だけ発火し、Bash コマンドの分解方針を `additionalContext` として注入する
+- `SessionStart` イベント発火時に Bash コマンドの分解方針を `additionalContext` として注入する (`SessionStart` は `startup` 以外に `resume` / `clear` / `compact` などの source でも発火するため、同一セッション内で複数回呼ばれる可能性がある。注入内容は静的なので重複しても害は無いが、毎回コンテキストトークンを再消費する点に留意)
 - 入力 JSON から `hook_event_name` を読み取り、`hookSpecificOutput.hookEventName` に同じ値を設定する (誤った既定値で別 event の文脈に誘導しないため)
 - `jq` が無い環境や `hook_event_name` が取得できない場合は無音で `exit 0` (フェイルセーフ)
 
 **注入内容の要約**:
 
 1. **分解すべきパターン**:
-   - 異なる目的のコマンドを `&&` / `||` / `;` で連結しない
+   - 異なる目的のコマンドを `&&` / `||` / `;` / `&` で連結しない (サブシェル `(...)` / ブレースグループ `{...;}` も同等)
    - コマンド置換 `$(...)` / バッククォートで別コマンドを埋め込まない
+   - ラッパー経由 (`eval` / `bash -c` / `sh -c` / `sudo sh -c`) でコマンドを隠さない
    - `xargs <cmd>` / `find -exec <cmd> {}` も hook 検知の観点では合成と同等として扱う
    - パイプライン `|` は単一論理操作の場合のみ許容
 2. **例外** (連結を許容するケース):
