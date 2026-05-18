@@ -69,6 +69,13 @@
       "description": "SessionStart で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する additionalContext を注入し、&&/||/;/$(...) 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン",
       "version": "0.1.0",
       "keywords": ["bash", "hook", "sessionstart", "decompose", "preToolUse", "guardrail"]
+    },
+    {
+      "name": "llm-default-branch-push-poc",
+      "source": "./plugins/llm-default-branch-push-poc",
+      "description": "デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用し、bash -c / eval / subshell / $(...) 等の shell parser では諦めていた経路を LLM の自然言語解釈でカバーできるかを検証する",
+      "version": "0.1.0",
+      "keywords": ["git", "push", "default-branch-protection", "llm", "prompt-hook", "poc"]
     }
   ]
 }
