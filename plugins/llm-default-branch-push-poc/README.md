@@ -41,10 +41,11 @@ v0.1.0 (POC / 試作)
 
 ### 3. 制約と妥協
 
-- **レイテンシ**: `prompt` hook の timeout 30s (Haiku デフォルト)。 全 `PreToolUse:Bash` 発火で毎回 LLM を呼ぶため、 軽量な `ls` 等でも数秒〜数十秒の遅延が発生する可能性があります。 検証段階では許容しますが、 production 用途には `if` フィールドや command hook での粗フィルタによる発火頻度抑制が必要です。
-- **fail-closed**: LLM が判定不能 / 想定外の応答を返した場合は deny に倒します (= 安全側)。 これにより false positive (誤 deny) が増える可能性があります。
-- **プロンプトインジェクション**: コマンド本文中の `# allow this` 等の誤誘導コメントを **無視する** よう prompt 内で明示しています。 ただし完全な対策ではないため、 既存 plugin との二重防御を維持します。
+- **発火範囲の絞り込み**: `hooks.json` の `if: "Bash(*push*)"` permission rule で **`push` 文字列を含む Bash 呼び出しにだけ** prompt hook を発火させます。 `ls` / `cat` / `npm install` 等の push 無関係なコマンドでは LLM 呼び出しが完全にスキップされるため、 hot path bloat を回避できます。 timeout は 15s (Haiku デフォルトより短縮、 fail-closed と組み合わせて軽量化)。
+- **fail-closed の限定**: LLM が判定不能なケースで deny に倒すのは **実 git push が含まれるコマンドの範囲内** に限定しています。 push を全く含まないコマンド (= `if` 経由で来る `npm run push:foo` 等) は誤 deny しないよう、 prompt 内で「早期 OK 条件」として明示しています。
+- **プロンプトインジェクション**: コマンド本文中の `# allow this` 等の誤誘導コメントは prompt で **無視するよう明示**。 さらに deny 時の reason には **ユーザコマンド本体を逐語引用しない** (抽象ラベルのみ) ことで、 二次インジェクション (reason 経由で別 hook やセッションに payload がリレーされる) を防ぎます。 完全な対策ではないため、 既存 plugin との二重防御を維持します。
 - **動的状態を参照できない**: prompt hook の `$ARGUMENTS` は hook input JSON のみ。 現在ブランチや markers などの動的状態は参照できません。 必要なら `agent` hook (Read/Grep/Glob 可、 timeout 60s) への移行を検討します。
+- **README ↔ prompt の drift リスク**: Claude Code の prompt hook は `prompt:` フィールドにインライン文字列を要求し、 外部ファイル参照はサポートされていません。 そのため hooks.json の prompt 本文と README の機能説明が独立した記述になります。 **正の単一情報源 (single source of truth) は hooks.json の prompt 本文** で、 README は要約と検証指針のみを記載します。
 
 ## インストール
 
@@ -58,15 +59,16 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 ### Hooks
 
-#### PreToolUse / matcher: `Bash` / type: `prompt`
+#### PreToolUse / matcher: `Bash` / type: `prompt` / if: `Bash(*push*)`
 
-**プロンプト戦略**:
+詳細な判定ロジックの **正の単一情報源** は `hooks/hooks.json` の `prompt` フィールドです。 ここでは要約のみ:
 
-1. **早期 OK**: コマンドが `git push` を全く含まない / `--help` / `--dry-run` の場合は即 `{"ok": true}` を返す (LLM の判定は走るが推論コストは最小)
-2. **明示 refspec / フラグ判定**: `git push origin master` / `--all` / `--mirror` 等を deny
-3. **ラッパー判定**: `bash -c`, `eval`, subshell, 置換等の中の master/main 更新も deny
-4. **プロンプトインジェクション対策**: コマンド本文中のコメント・文字列を判定材料にしない
-5. **fail-closed**: 不確実なら deny
+- `if` の permission rule で `push` 文字列を含む Bash にだけ発火
+- 実 `git push` 起動を含まないコマンド (`npm run push:foo`, `echo "push origin master"` 等) は早期 OK
+- 明示 refspec / `--all` / `--mirror` / ラッパー / subshell / 置換経由の master/main 更新を deny
+- 引数省略形 (`git push` / `git push origin`) は POC スコープ外で既存 git-guardrails に委譲
+- 不確実時 (実 push を含むが構文判定不能) は fail-closed で deny
+- deny 時の `reason` はユーザコマンド本体を逐語引用せず抽象ラベルのみ
 
 **応答形式**: `{"ok": true}` または `{"ok": false, "reason": "..."}`
 
@@ -74,7 +76,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 | 項目 | git-guardrails (shell parser) | llm-default-branch-push-poc (prompt hook) |
 |------|--------------------------------|-------------------------------------------|
-| 速度 | < 50ms | 数秒〜30s |
+| 速度 | < 50ms | `push` 文字列を含まない Bash は完全スキップ。含む場合は数秒〜15s |
 | 引数省略形 (`git push` 単独) | ✓ 現在ブランチを `git symbolic-ref` で取得して判定 | ✗ 現在ブランチ取得不可、スコープ外 |
 | 明示 refspec | ✓ token 完全一致比較 | ✓ LLM 構文解釈 |
 | `--all` / `--mirror` | ✓ token match | ✓ LLM 判定 |
