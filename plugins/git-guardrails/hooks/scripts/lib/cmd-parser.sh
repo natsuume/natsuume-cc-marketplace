@@ -186,9 +186,17 @@ skip_env_assignments() {
 # でシェル安全形式にクオートし、 `eval` で呼び出し側変数に代入する。 各要素は printf
 # でクオート済みのため値経由の eval injection はない。 出力先変数名 (`$2`) は呼び出し
 # 側のハードコード文字列に限定する (eval injection 回避)。
+#
+# **呼び出し側変数名衝突に注意**: 本関数内のローカル変数 `_out_var` / `_result` /
+# `_quoted` / `_e` / `seg` / `i` / `len` / `in_squote` / `in_dquote` / `current` / `c` /
+# `nc` と一致する名前を呼び出し側で使うと、 eval 経由の間接代入で値が壊れる。 呼び出し
+# 側は別 prefix (例: `_first_toks`, `PUSH_TOKENS`) を使うこと。
 tokenize_segment() {
   local seg="$1"
   local _out_var="$2"
+  # 出力先変数名が空だと最後の `eval "=(...)"` が syntax error になり、 呼び出し側の
+  # bug を bash 全体の停止に拡大してしまう。 早期 return で contract 違反を可視化する。
+  [ -n "$_out_var" ] || return 1
   local -a _result=()
   local i=0 len=${#seg}
   local in_squote=0 in_dquote=0
