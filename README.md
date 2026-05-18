@@ -25,6 +25,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
 | [codex-review-customize](#codex-review-customize) | 0.3.0 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
+| [decompose-bash](#decompose-bash) | 0.1.0 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
 
 ---
 
@@ -190,3 +191,23 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 ### キーワード
 
 `codex` `review` `patch` `skill`
+
+---
+
+## decompose-bash
+
+`SessionStart` で Bash コマンドを最小粒度に分解して独立した Bash ツール呼び出しとして実行するよう Claude に指示する `additionalContext` を注入するプラグインです。`git add ... && git commit ... && git push` のようなコマンド合成によって `PreToolUse` hook の検知が取りこぼされる事故を防ぎます。
+
+Claude Code の `PreToolUse` hook は Bash ツールの `command` 文字列に対するパターンマッチで判定されるため、`A && B && C` のような合成コマンドは先頭以外の部分が hook 検知を取りこぼす可能性があります。本プラグインは Claude がこの種の合成を避けるよう方針を注入することで、[git-guardrails](#git-guardrails) / [pre-push-review](#pre-push-review) / [auto-lint-check](#auto-lint-check) などの PreToolUse hook の信頼性を補強します。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `inject-decompose-context` | SessionStart | セッション開始時に Bash コマンドの分解方針を `additionalContext` として注入する。`&&` / `\|\|` / `;` / `$(...)` / バッククォート / `xargs` / `find -exec` を分解対象、パイプライン `\|` を単一論理操作の場合のみ許容、`cd $dir && cmd` やトランザクション的合成を例外として明記 |
+
+### キーワード
+
+`bash` `hook` `sessionstart` `decompose` `preToolUse` `guardrail`
