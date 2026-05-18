@@ -139,8 +139,8 @@ unquote_token() {
   printf '%s' "$s"
 }
 
-# skip_env_assignments <toks_array_ref> <idx_var_ref>
-# 引数: tokenize_segment の出力配列の nameref、 現在 index 変数の nameref
+# skip_env_assignments <toks_array_name> <idx_var_name>
+# 引数: tokenize_segment の出力配列の変数名、 現在 index 変数の変数名
 # 動作: idx 位置から `NAME=VALUE` パターンの env-var assignment トークンを skip し、
 #       最初の non-env トークンの位置に idx を進める。 unquote 後の値で判定する。
 #
@@ -149,32 +149,47 @@ unquote_token() {
 # 「実コマンド token を取り出す」ためにこのループを書く必要があり、 同形のループが複数
 # 箇所に重複していた。 構文解析 (= cmd-parser の責務) として 1 箇所に集約する。
 #
-# **nameref 名衝突に注意**: 呼び出し側の変数名が `_toks_ref` / `_idx_ref` / `_t` / `_n` と
-# 一致すると bash の nameref が circular reference エラーになる。 呼び出し側は別 prefix
-# (例: `_first_toks _fi`) を使うこと。
+# **bash 3.2 互換実装**: macOS 標準 bash 3.2.57 には nameref (`local -n`) が存在しない
+# (bash 4.3+)。 そのため `eval` で間接展開・代入する。 引数で受け取る変数名 (`$1`/`$2`)
+# は呼び出し側のハードコード文字列に限定する (現状の呼び出し側は `_first_toks`/`_fi`,
+# `_toks`/`_idx` 等のリテラル)。 ユーザ入力を直接渡す経路ができると eval injection に
+# なるため拡張時は注意。
+#
+# **呼び出し側変数名衝突に注意**: 本関数内のローカル変数 `_toks_name` / `_idx_name` /
+# `_n` / `_idx` / `_t` / `_t_raw` と一致する名前を呼び出し側で使うと、 eval 経由の間接
+# 展開で値が壊れる。 呼び出し側は別 prefix (例: `_first_toks _fi`) を使うこと。
 skip_env_assignments() {
-  local -n _toks_ref="$1"
-  local -n _idx_ref="$2"
-  local _n=${#_toks_ref[@]}
-  while [ "$_idx_ref" -lt "$_n" ]; do
-    local _t
-    _t="$(unquote_token "${_toks_ref[$_idx_ref]}")"
+  local _toks_name="$1"
+  local _idx_name="$2"
+  local _n _idx _t_raw _t
+  eval "_n=\${#${_toks_name}[@]}"
+  eval "_idx=\${${_idx_name}}"
+  while [ "$_idx" -lt "$_n" ]; do
+    eval "_t_raw=\${${_toks_name}[\$_idx]}"
+    _t="$(unquote_token "$_t_raw")"
     if [[ "$_t" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-      _idx_ref=$((_idx_ref+1))
+      _idx=$((_idx+1))
     else
       break
     fi
   done
+  # 数値であることはループ条件で保証されているため、 eval injection はない。
+  eval "${_idx_name}=$_idx"
 }
 
 # tokenize_segment <segment> <output_array_name>
-# 引数: segment 文字列、出力先 nameref 配列
+# 引数: segment 文字列、出力先配列の変数名
 # 動作: segment をトークン (空白区切り) に分割。 quote 内の空白は分割しない。
 #       quote 文字自体はトークンに残す (呼び出し側が unquote_token を使う想定)。
+#
+# bash 3.2 には nameref がないため、 内部でローカル配列に蓄積したあと `printf '%q'`
+# でシェル安全形式にクオートし、 `eval` で呼び出し側変数に代入する。 各要素は printf
+# でクオート済みのため値経由の eval injection はない。 出力先変数名 (`$2`) は呼び出し
+# 側のハードコード文字列に限定する (eval injection 回避)。
 tokenize_segment() {
   local seg="$1"
-  local -n out_arr="$2"
-  out_arr=()
+  local _out_var="$2"
+  local -a _result=()
   local i=0 len=${#seg}
   local in_squote=0 in_dquote=0
   local current=""
@@ -201,7 +216,7 @@ tokenize_segment() {
       in_dquote=1; current+="$c"
     elif [[ "$c" == [[:space:]] ]]; then
       if [ -n "$current" ]; then
-        out_arr+=("$current")
+        _result+=("$current")
         current=""
       fi
     else
@@ -211,5 +226,12 @@ tokenize_segment() {
     i=$((i+1))
   done
 
-  [ -n "$current" ] && out_arr+=("$current")
+  [ -n "$current" ] && _result+=("$current")
+
+  # 呼び出し側配列に書き戻す。 空配列でも `eval "name=()"` で正しく初期化される。
+  local _quoted="" _e
+  for _e in "${_result[@]}"; do
+    _quoted+=" $(printf '%q' "$_e")"
+  done
+  eval "${_out_var}=(${_quoted})"
 }
