@@ -158,23 +158,40 @@ def _is_env_assignment(tok: str) -> bool:
 # (`<<EOF\n$(git commit -am bypass)\nEOF` で実際に commit が走る)、対象から
 # 外したままにする (= 後段の `$(` チェックで fail close される)。
 #
-# 注: 本 regex は bash の厳密な heredoc セマンティクスより許容範囲を広く
-# 取っている (例: 閉じ delimiter 前の任意空白を許容)。over-strip した結果
-# 残る command が valid な commit invocation でなければ parser が exit 4
-# (skip) を返すだけで実害は無いため、許容側に倒している。
+# 重要: 本文の matching は naive な ``.*?`` ではなく **本文中に閉じ delimiter
+# 行が現れないことを negative lookahead で明示** している。これを怠ると
+# ``$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)`` のように複数の閉じ delimiter
+# 候補を持つ入力で、 ``.*?`` の non-greedy が最終的に最後の `EOF` まで拡張
+# されてしまい、bash 的には「heredoc は最初の `EOF` で終了、その後 `rm -rf /`
+# が subshell 内で実行される」入力を hook 側だけ 1 個の heredoc とみなして
+# `''` に置換してしまう bypass 経路ができる。bash の「delimiter 行 (= 行頭
+# から delimiter のみ) の最初の出現で heredoc は終端する」セマンティクスを
+# regex で忠実に表現するため、negative lookahead で「次が closing line
+# (`\n DELIM (line end | `)`))) でないこと」を 1 文字ずつ確認している。
+#
+# 空本文 (``$(cat <<'EOF'\nEOF\n)``) も対応するため、本文部分は optional
+# group にしている。
 _HEREDOC_CAT_RE = re.compile(
-    r"\$\("              # $(
-    r"\s*cat\s+"         # cat (前後 whitespace 許容)
-    r"<<-?"              # << または <<- (indent-strip variant)
-    r"(['\"])"           # 開始 quote (single または double, capture group 1)
-    r"([A-Za-z_]\w*)"    # delimiter 名 (capture group 2)
-    r"\1"                # 終了 quote (group 1 と一致)
-    r"[ \t]*\n"          # opening line の残り (改行で終端)
-    r".*?"               # 本文 (非貪欲)
-    r"\n[ \t]*\2"        # 閉じ delimiter (行頭、<<- 用に leading whitespace 許容)
-    r"[ \t]*\n?"         # closing line の残り
-    r"\s*\)",            # 閉じ ) (前空白許容)
-    re.DOTALL,
+    r"\$\("                                # $(
+    r"\s*cat\s+"                           # cat (前後 whitespace 許容)
+    r"<<-?"                                # << または <<- (indent-strip variant)
+    r"(['\"])"                             # 開始 quote (group 1)
+    r"([A-Za-z_]\w*)"                      # delimiter 名 (group 2)
+    r"\1"                                  # 終了 quote (group 1 と一致)
+    r"[ \t]*\n"                            # opening line 終端
+    r"(?:"                                 # 本文行 (空可)
+    r"  (?:"                               # 本文 1 文字
+    r"    (?![ \t]*\2[ \t]*(?:\n|\)|$))"   # この時点で「行頭が closing delim」ではない
+    r"    (?!\n[ \t]*\2[ \t]*(?:\n|\)|$))" # この時点で「次行が closing delim 行」ではない
+    r"    [\s\S]"                          # 任意 1 文字 (改行含む)
+    r"  )*"
+    r"  \n"                                # 本文は改行で終端 (closing delim を行頭から match させるため)
+    r")?"
+    r"[ \t]*\2[ \t]*"                      # closing delim 行 (leading whitespace は <<- 用に許容)
+    r"\n?"                                 # closing 後の改行 (省略可: 入力末尾の場合)
+    r"[ \t\n]*"                            # `)` までの whitespace
+    r"\)",                                 # 閉じ )
+    re.DOTALL | re.VERBOSE,
 )
 
 
