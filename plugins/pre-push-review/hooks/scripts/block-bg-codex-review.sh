@@ -35,11 +35,14 @@
 
 INPUT=$(cat)
 
-# 粗フィルタ: codex-companion を含まない Bash 呼び出しは即離脱 (jq 起動コストを省く)。
-case "$INPUT" in
-  *codex-companion*) ;;
-  *) exit 0 ;;
-esac
+# 粗フィルタは設けない。 line continuation `\<改行>` で companion path 自体が split された
+# 場合 (例: `codex-compa\<LF>nion.mjs`)、 INPUT 内では JSON escape (`\\\n`) として現れて
+# `*codex-companion*` glob にも `codex-companion` substring 検査にも一致しなくなる。
+# 粗フィルタを通過した後の normalize で連結する設計だと、 「粗フィルタ通過以前」 の段階で
+# bypass が成立してしまう。 厳密検知 (`is_codex_review_invocation`) が security boundary を
+# 担う設計に統一し、 粗フィルタは optimize としても廃止する (jq 2 fork の hot path コストは
+# 全 Bash 呼び出しで走る重さよりも、 background 起動の silent failure を確実に防ぐ価値の方が
+# 高い)。
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
