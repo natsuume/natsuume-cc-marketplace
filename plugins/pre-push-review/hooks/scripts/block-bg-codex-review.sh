@@ -49,14 +49,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/codex-review-detect.sh
 source "$SCRIPT_DIR/lib/codex-review-detect.sh"
 
-# jq 1 回で run_in_background と command を merge 取得 (fork 削減)。 TSV で受けて
-# IFS で split する。 通常の Bash command に tab が含まれることはない前提。
-IFS=$'\t' read -r RUN_IN_BG COMMAND < <(
-  printf '%s' "$INPUT" | jq -r '
-    [(.tool_input.run_in_background // false), (.tool_input.command // "")] | @tsv
-  '
-)
+# command と run_in_background を別々の jq 呼び出しで取得する。 `@tsv` で 1 回 jq に
+# まとめる方法もあるが、 jq の TSV エンコードが LF を `\n` (literal 2 文字) にエスケープ
+# するため、 line continuation `\<改行>` (literal backslash + LF) が hook の normalize 対象
+# として失われる。 line continuation bypass 防止が成立する形に揃えるため、 jq 2 回呼び
+# 出しのまま保つ。
+COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
+
+# 行継続 `\<改行>` を **削除** して隣接 token を連結する (bash 実挙動と一致)。 これを
+# やらないと `--back\<newline>ground` のような書き方で `--background` flag 検知 (および
+# codex review 検知の `review` token) を bypass できる経路が残る。
+COMMAND=$(normalize_line_continuations "$COMMAND")
+
+RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
 
 # codex review 起動でなければ対象外。 検知ロジックは lib/codex-review-detect.sh に集約
 # されているため、 auto-mark.sh と drift しない。

@@ -125,14 +125,16 @@ case "$TOOL_NAME" in
     esac
     ;;
   Bash)
-    # jq 1 回で command と run_in_background を merge 取得 (fork 削減)。 TSV 区切りで
-    # 受けて IFS で split する。 通常の Bash command に tab が含まれることはない前提。
-    IFS=$'\t' read -r RUN_IN_BG COMMAND < <(
-      printf '%s' "$INPUT" | jq -r '
-        [(.tool_input.run_in_background // false), (.tool_input.command // "")] | @tsv
-      '
-    )
+    # command と run_in_background は jq を 2 回呼んで取得する。 `@tsv` で 1 回 jq に
+    # まとめると TSV エンコードで LF が `\n` literal に変換され、 後段の line continuation
+    # 正規化対象 (`\<改行>`) が失われるため、 2 回呼びのまま保つ。
+    COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
     [ -n "$COMMAND" ] || exit 0
+    # 行継続 `\<改行>` を **削除** して隣接 token を連結する (block-bg-codex-review.sh と
+    # 同じ理由 — `\<newline>` を含む形式で `--scope branch` や codex review 検知の `review`
+    # token を bypass される経路を塞ぐ)。
+    COMMAND=$(normalize_line_continuations "$COMMAND")
+    RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
     # codex プラグインの review companion 起動を検出する。 検知ロジックは
     # lib/codex-review-detect.sh に集約しており、 block-bg-codex-review.sh と
     # 同じ関数を共有することで「marker を書く対象」 と 「block する対象」 の
