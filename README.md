@@ -21,7 +21,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [git-guardrails](#git-guardrails) | 0.2.1 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.1.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.1.1 | ファイル編集前に linter チェックを行い、編集後に自動フォーマットを適用するプラグイン |
-| [pre-push-review](#pre-push-review) | 0.5.1 | `git push` 前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を self-contained subagent で実行するのは、 標準 `/security-review` を直接呼ぶと主 session の turn が終了し、 subagent 経由でも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる |
+| [pre-push-review](#pre-push-review) | 0.6.0 | `git push` 前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を self-contained subagent で実行するのは、 標準 `/security-review` を直接呼ぶと主 session の turn が終了し、 subagent 経由でも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる |
 | [update-default-branch](#update-default-branch) | 0.1.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
 | [codex-review-customize](#codex-review-customize) | 0.3.0 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
@@ -118,6 +118,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
 | `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、`/simplify` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の 3 つのマーカーが branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。default branch (master/main) 上の push は git-guardrails に委譲して skip |
+| `block-bg-codex-review` | PreToolUse (`Bash`) | `/codex:review` の background 起動を deny する。 Bash tool の `run_in_background: true` および codex companion の `--background` フラグは PostToolUse 発火時点で review 本体が未完了のため marker が書かれない (silent failure) → 後の push で deny されて review をやり直す羽目になるのを、 起動自体を止めることで防ぐ |
 | `auto-mark` | PostToolUse (`*` wildcard) | `/simplify` の launch、 `/codex:review --wait --scope branch` の Bash 完了、 `pre-push-review:security-reviewer` subagent の Agent / Task tool 完了を自動検知し、対応するマーカーに branch 全差分 + 未コミット差分のハッシュを書き込む。`--scope branch` を含まない codex 起動は markers を更新しない (PR diff レビュー保証として不十分なため)。 security マーカーは subagent **完了時** に書く (launch ではない) ことで、 subagent 失敗時に silent-pass しない |
 
 #### Agents
