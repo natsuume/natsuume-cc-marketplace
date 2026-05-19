@@ -4,7 +4,16 @@
 
 ## バージョン
 
-v0.3.0
+v0.3.1
+
+### v0.3.0 → v0.3.1 の変更点
+
+- **`git commit -m "$(cat <<'EOF' ... EOF)"` パターンの誤検出を解消 (`parse-commit-command.py`)**
+  - Claude Code が複数行コミットメッセージを渡すための標準的な heredoc + command substitution 形式が、parser の「`$(...)` を含むコマンドは fail closed」guard に巻き込まれて常に deny される問題を修正
+  - parser に `_strip_safe_heredocs` 前処理を追加: **quoted delimiter (`<<'DELIM'` / `<<"DELIM"`)** の `$(cat <<...DELIM...)` パターンのみを空文字列リテラル `''` に置換してから既存の `$(...)` / backtick チェックに通す
+  - quoted delimiter の heredoc は bash が本文を verbatim 扱いし substitution を一切行わないため、`cat` の出力結果は事実上の静的文字列で bypass 経路にならない、という安全性に基づくホワイトリスト
+  - **unquoted delimiter (`<<DELIM`)** は本文内で `$(...)` が展開されうるため意図的に対象外 (= 既存の fail-closed deny を維持)。bypass attempt (`heredoc ...) && $(other)` のように heredoc 後ろに追加 substitution を置く形式) も同様に deny される
+  - bash 側 (`block-commit-lint.sh` / `post-commit-lint.sh`) で行っていた `\\<newline>` → space および `\n` → `;` の正規化は parser 内 (`_normalize_command`) に集約。heredoc は real newline に依存するため bash 側で先に潰してはいけないことを契約として明示
 
 ### v0.2.1 → v0.3.0 の変更点
 

@@ -145,6 +145,75 @@ def _is_env_assignment(tok: str) -> bool:
     return bool(_ENV_ASSIGN_RE.match(tok))
 
 
+# `$(cat <<'DELIM' ... DELIM)` または `$(cat <<"DELIM" ... DELIM)` を検出する
+# 正規表現。indent-strip 変種 (`<<-`) にも対応する。
+#
+# bash の heredoc セマンティクスでは、delimiter を quote (`'EOF'` / `"EOF"`)
+# した場合、本文内の `$(...)`, `` `...` ``, `$VAR` 等の expansion は一切行わ
+# れず、`cat` は本文を verbatim に echo する。よって `$(cat <<'EOF' ... EOF)`
+# の substitution 結果は事実上の静的文字列リテラルであり、bypass 経路には
+# ならない。 → parser の fail-closed 対象 (`$(` 検出 → exit 3) から外す。
+#
+# 一方 unquoted delimiter (`<<EOF`) は本文内で expansion が走るため
+# (`<<EOF\n$(git commit -am bypass)\nEOF` で実際に commit が走る)、対象から
+# 外したままにする (= 後段の `$(` チェックで fail close される)。
+#
+# 注: 本 regex は bash の厳密な heredoc セマンティクスより許容範囲を広く
+# 取っている (例: 閉じ delimiter 前の任意空白を許容)。over-strip した結果
+# 残る command が valid な commit invocation でなければ parser が exit 4
+# (skip) を返すだけで実害は無いため、許容側に倒している。
+_HEREDOC_CAT_RE = re.compile(
+    r"\$\("              # $(
+    r"\s*cat\s+"         # cat (前後 whitespace 許容)
+    r"<<-?"              # << または <<- (indent-strip variant)
+    r"(['\"])"           # 開始 quote (single または double, capture group 1)
+    r"([A-Za-z_]\w*)"    # delimiter 名 (capture group 2)
+    r"\1"                # 終了 quote (group 1 と一致)
+    r"[ \t]*\n"          # opening line の残り (改行で終端)
+    r".*?"               # 本文 (非貪欲)
+    r"\n[ \t]*\2"        # 閉じ delimiter (行頭、<<- 用に leading whitespace 許容)
+    r"[ \t]*\n?"         # closing line の残り
+    r"\s*\)",            # 閉じ ) (前空白許容)
+    re.DOTALL,
+)
+
+
+def _strip_safe_heredocs(command: str) -> str:
+    """`$(cat <<'DELIM' ... DELIM)` (quoted delimiter のみ) を空文字列リテラル
+    ``''`` に置換する。
+
+    Claude Code が複数行 commit message を渡すために常用する
+    ``git commit -m "$(cat <<'EOF' ... EOF)"`` パターンを parser の
+    fail-closed (`$(` 検出 → exit 3) から救済するための前処理。詳細な安全性
+    の論拠は ``_HEREDOC_CAT_RE`` の docstring を参照。
+
+    置換結果が ``''`` (空) で十分なのは、parser が ``-m`` の値文字列の内容を
+    一切参照しないため。shlex は ``"''"`` を ``''`` という 2 文字 token として
+    取り込み、 ``_commit_triggers_staging`` 等は flag 識別だけ行う。
+    """
+    return _HEREDOC_CAT_RE.sub("''", command)
+
+
+def _normalize_command(command: str) -> str:
+    """hook script から渡された raw command を shlex tokenize 可能な形に整形する。
+
+    順序が重要 (heredoc は real newline に依存するため最初に処理):
+
+    1. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
+    2. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
+    3. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
+
+    bash 側 (block-commit-lint.sh / post-commit-lint.sh) はこの関数に依存
+    して raw command を渡してくる前提。bash 側で先に改行を ``;`` に潰すと
+    heredoc 構造が壊れて step 1 が機能しなくなるため、両 hook の正規化は
+    本関数に集約してある。
+    """
+    command = _strip_safe_heredocs(command)
+    command = command.replace("\\\n", " ")
+    command = command.replace("\n", ";")
+    return command
+
+
 def _is_repo_override_env(tok: str) -> bool:
     if "=" not in tok:
         return False
@@ -300,11 +369,19 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
 
 
 def _classify(command: str) -> int:
-    # Backtick command substitution は shell が文字列内部で commit を実行する
+    # 1) raw command を tokenize 可能な形に正規化する (heredoc 除去 → 行継続展開
+    # → 改行 → ;)。詳細は _normalize_command の docstring を参照。
+    command = _normalize_command(command)
+
+    # 2) Backtick command substitution は shell が文字列内部で commit を実行する
     # シンタックスだが、shlex は backtick を quote / substitution として扱わ
     # ないため内部の `git commit` が token 列に現れず parser を bypass する。
     # `$(...)` も同様。silent bypass を避けるため、これらの substitution を
     # 含むコマンドは fail closed (exit 3) する。
+    #
+    # `_normalize_command` が `$(cat <<'EOF' ... EOF)` (quoted delimiter) を
+    # 事前に除去しているため、ここに残る `$(...)` / backtick は本当に
+    # 「中で何かが実行されうる」substitution に限られる (= fail close 対象)。
     if "`" in command or "$(" in command:
         return 3
 
