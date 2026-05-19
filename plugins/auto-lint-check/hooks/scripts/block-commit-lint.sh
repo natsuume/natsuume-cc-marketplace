@@ -79,6 +79,7 @@ COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 # の除去まで含めて parser 側で処理する。bash 側で先に改行を ``;`` に置換すると
 # heredoc 構造 (delimiter は行頭にある必要がある) が壊れるため、 raw command を
 # そのまま渡す。
+#
 # exit code で以下を返す (Python が SyntaxError / ImportError で返す 1 と衝突
 # しないよう、正常 return code は 2 以上を使う):
 #   0  HAS_STAGING (working tree も lint 対象に含めるべき)
