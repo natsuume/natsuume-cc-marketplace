@@ -214,17 +214,20 @@ def _strip_safe_heredocs(command: str) -> str:
 def _normalize_command(command: str) -> str:
     """hook script から渡された raw command を shlex tokenize 可能な形に整形する。
 
-    順序が重要 (heredoc は real newline に依存するため最初に処理):
+    順序が重要 (heredoc は real newline に依存するため step 1-2 を先に処理):
 
-    1. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
-    2. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
-    3. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
+    1. CRLF (``\\r\\n``) を LF (``\\n``) に正規化 (Windows / WSL クライアント
+       からの input でも heredoc 検出と shlex tokenize が正しく動くように)
+    2. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
+    3. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
+    4. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
 
     bash 側 (block-commit-lint.sh / post-commit-lint.sh) はこの関数に依存
     して raw command を渡してくる前提。bash 側で先に改行を ``;`` に潰すと
-    heredoc 構造が壊れて step 1 が機能しなくなるため、両 hook の正規化は
+    heredoc 構造が壊れて step 2 が機能しなくなるため、両 hook の正規化は
     本関数に集約してある。
     """
+    command = command.replace("\r\n", "\n")
     command = _strip_safe_heredocs(command)
     command = command.replace("\\\n", " ")
     command = command.replace("\n", ";")
