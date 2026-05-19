@@ -79,6 +79,18 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
+# lib 群を case 分岐前に source。 Bash 分岐内で `is_codex_review_invocation` を呼ぶ
+# ため codex-review-detect.sh は case 分岐より上で読み込む必要がある。 diff-hash.sh
+# / markers.sh は後段の marker 書き込みでのみ使うが、 SCRIPT_DIR を 1 回で済ますため
+# まとめて上に置く。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/codex-review-detect.sh
+source "$SCRIPT_DIR/lib/codex-review-detect.sh"
+# shellcheck source=lib/diff-hash.sh
+source "$SCRIPT_DIR/lib/diff-hash.sh"
+# shellcheck source=lib/markers.sh
+source "$SCRIPT_DIR/lib/markers.sh"
+
 TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
 
 case "$TOOL_NAME" in
@@ -113,25 +125,19 @@ case "$TOOL_NAME" in
     esac
     ;;
   Bash)
-    COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+    # jq 1 回で command と run_in_background を merge 取得 (fork 削減)。 TSV 区切りで
+    # 受けて IFS で split する。 通常の Bash command に tab が含まれることはない前提。
+    IFS=$'\t' read -r RUN_IN_BG COMMAND < <(
+      printf '%s' "$INPUT" | jq -r '
+        [(.tool_input.run_in_background // false), (.tool_input.command // "")] | @tsv
+      '
+    )
     [ -n "$COMMAND" ] || exit 0
-    # codex プラグインの review companion 起動を検出する。
-    # 公式 codex プラグインは `node "<root>/scripts/codex-companion.mjs" review ...`
-    # 形式で起動するため、コマンド先頭が `node` であること **かつ** companion path に
-    # `review` サブコマンドが続いていることを両方要求する。先頭 `node` 制約により、
-    # `echo codex-companion.mjs review` / `grep ... codex-companion.mjs review` のような
-    # 偶発的 substring 一致でマーカーが書かれる経路を防ぐ。
-    #
-    # `node` の前に `FOO=bar BAZ=qux node ...` のような env-prefix が付くケースもあり得る
-    # ため、`NAME=value` 形式の代入トークンを 0 回以上許容する。
-    if ! printf '%s' "$COMMAND" \
-      | grep -qE '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*node([[:space:]]|$)'; then
-      exit 0
-    fi
-    if ! printf '%s' "$COMMAND" \
-      | grep -qE 'codex-companion\.m[jt]s"?[[:space:]]+review([[:space:]]|$)'; then
-      exit 0
-    fi
+    # codex プラグインの review companion 起動を検出する。 検知ロジックは
+    # lib/codex-review-detect.sh に集約しており、 block-bg-codex-review.sh と
+    # 同じ関数を共有することで「marker を書く対象」 と 「block する対象」 の
+    # マッチが drift しない。
+    is_codex_review_invocation "$COMMAND" || exit 0
     # **--scope branch の明示要求**: pre-push-review は PR diff (= 委ねた branch の commit
     # 列) のレビューを保証する目的なので、 --scope working-tree (= staged+unstaged のみ
     # review、committed 部分を見ない) や --scope auto (= dirty 時に working-tree にフォール
@@ -146,9 +152,9 @@ case "$TOOL_NAME" in
       exit 0
     fi
     # `run_in_background: true` 起動は PostToolUse 発火時点で review が完了して
-    # いないため auto-mark の対象外とする。pre-push-review コンテキストでは
-    # `--wait` のみ許容する設計 (block-pre-push.sh 側で deny メッセージに記載)。
-    RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
+    # いないため auto-mark の対象外とする。 こちらは silent skip するだけだが、
+    # PreToolUse の block-bg-codex-review.sh が起動自体を deny するため、 通常は
+    # ここに到達しない (defense-in-depth として残す)。
     if [ "$RUN_IN_BG" = "true" ]; then
       exit 0
     fi
@@ -186,12 +192,6 @@ if [ "$IS_ERROR" = "true" ] || [ "$INTERRUPTED" = "true" ]; then
 fi
 
 GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/diff-hash.sh
-source "$SCRIPT_DIR/lib/diff-hash.sh"
-# shellcheck source=lib/markers.sh
-source "$SCRIPT_DIR/lib/markers.sh"
 
 # default branch が検出できない場合はマーカー更新を skip (block-pre-push.sh も同条件で
 # pass-through するため、整合性が保たれる)。

@@ -45,22 +45,22 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/codex-review-detect.sh
+source "$SCRIPT_DIR/lib/codex-review-detect.sh"
+
+# jq 1 回で run_in_background と command を merge 取得 (fork 削減)。 TSV で受けて
+# IFS で split する。 通常の Bash command に tab が含まれることはない前提。
+IFS=$'\t' read -r RUN_IN_BG COMMAND < <(
+  printf '%s' "$INPUT" | jq -r '
+    [(.tool_input.run_in_background // false), (.tool_input.command // "")] | @tsv
+  '
+)
 [ -n "$COMMAND" ] || exit 0
 
-# auto-mark.sh の codex review 検知ロジックを再利用する。 「marker を書く対象」 と
-# 「block する対象」 のマッチが drift しないよう、 同じ regex を使う。
-#
-# 1. コマンド先頭が `node` (env-prefix 許容) であること
-if ! printf '%s' "$COMMAND" \
-  | grep -qE '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*node([[:space:]]|$)'; then
-  exit 0
-fi
-# 2. companion path に `review` サブコマンドが続くこと
-if ! printf '%s' "$COMMAND" \
-  | grep -qE 'codex-companion\.m[jt]s"?[[:space:]]+review([[:space:]]|$)'; then
-  exit 0
-fi
+# codex review 起動でなければ対象外。 検知ロジックは lib/codex-review-detect.sh に集約
+# されているため、 auto-mark.sh と drift しない。
+is_codex_review_invocation "$COMMAND" || exit 0
 
 deny() {
   jq -n --arg reason "$1" '{
@@ -72,8 +72,7 @@ deny() {
   }'
 }
 
-# 検知 1: Bash tool option `run_in_background: true`
-RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
+# Bash tool option `run_in_background: true` 経路
 if [ "$RUN_IN_BG" = "true" ]; then
   REASON=$(cat <<'EOF'
 プッシュ前レビューをブロックしました。 Bash tool の `run_in_background: true` で `/codex:review` を起動することはできません。
@@ -87,11 +86,11 @@ EOF
   exit 0
 fi
 
-# 検知 2: codex companion の `--background` フラグ
-# `--background` / `--background=...` 形式を match させつつ、 `--backgroundX` 等の suffix bypass を
-# 拒否する (英数字で続く場合は不一致)。
-if printf '%s' "$COMMAND" \
-  | grep -qE -- '--background([^A-Za-z0-9]|$)'; then
+# codex companion `--background` フラグ経路
+# `--background` / `--background=...` 形式を match させつつ、 `--backgroundX` 等の suffix
+# bypass を拒否する (英数字で続く場合は不一致)。
+_CODEX_BG_FLAG_RE='--background([^A-Za-z0-9]|$)'
+if [[ "$COMMAND" =~ $_CODEX_BG_FLAG_RE ]]; then
   REASON=$(cat <<'EOF'
 プッシュ前レビューをブロックしました。 `/codex:review --background` で codex review を起動することはできません。
 
