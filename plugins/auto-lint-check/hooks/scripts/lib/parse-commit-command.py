@@ -244,6 +244,51 @@ _HEREDOC_CAT_RE = re.compile(
 )
 
 
+# 同一コマンド内で `cat` を function として再定義するパターンを検出する。
+#
+# bash では command name は実行時解決されるため、 ``$(cat <<'EOF' ... EOF)`` の
+# `cat` が system cat ではなく command 文字列内で前に定義された function を呼ぶ
+# 可能性がある。 例:
+#
+#     cat() { git add bad.py; }; git commit -m "$(cat <<'EOF'\nmsg\nEOF\n)"
+#
+# この場合、 hook が whitelist で substitution を空置換すると plain commit と
+# 誤判定し、 working tree lint を skip する。 しかし bash が実際に command を
+# 実行すると、 substitution 内で function `cat` が呼ばれて `git add bad.py` で
+# 副作用 (staging) を起こしてから outer commit が実行され、 lint 未通過の
+# bad.py が commit に紛れ込む。
+#
+# 検出対象は bash の典型的な function 定義構文:
+#   - ``cat() { ... }`` (POSIX shell function 定義)
+#   - ``function cat { ... }`` / ``function cat() { ... }`` (bash 拡張)
+#
+# alias (``alias cat=evil``) / PATH manipulation (``PATH=/evil:$PATH``) /
+# sourced script 経由の function inheritance は静的検出できないが、 lint hook
+# の threat model (= 典型的な bug / sloppiness を防ぐ。 adversarial bypass の
+# 完全防御は対象外) では narrow detection で十分。 これらの未対応経路は
+# documented limitation として残す。
+_CAT_FUNCTION_REDEF_RE = re.compile(
+    r"""(?:^|[\s;&|])              # 行頭 or shell separator の直後
+        (?:
+            cat\s*\(\s*\)\s*\{     # cat() { ... }
+            |function\s+cat\b      # function cat { ... } / function cat() { ... }
+        )
+    """,
+    re.VERBOSE,
+)
+
+
+def _has_cat_function_redef(command: str) -> bool:
+    """同一コマンド内で `cat` を function として再定義しているかを判定する。
+
+    True を返した場合、 ``$(cat <<...)`` の `cat` が system cat ではなく
+    定義された function を呼ぶ可能性があるため、 heredoc whitelist の前提
+    (= substitution が静的文字列出力に等価) が崩れる。 呼び出し側は strip を
+    skip し、 後段の ``$(`` fail-closed deny に委ねるべき。
+    """
+    return bool(_CAT_FUNCTION_REDEF_RE.search(command))
+
+
 def _strip_safe_heredocs(command: str) -> str:
     """``-m "$(cat <<'DELIM' ... DELIM)"`` (``-m`` / ``--message`` の value 位置に
     置かれた quoted-delim heredoc substitution) を空文字列リテラル ``""`` に
@@ -274,6 +319,12 @@ def _strip_safe_heredocs(command: str) -> str:
       逆に ``--message=`` と ``""`` が 2 token に分かれ、 後者が path-spec
       として誤検出される)。
     """
+    # cat が function として再定義されている可能性があれば whitelist の前提
+    # (= substitution が静的文字列出力) が崩れる。 strip を skip して既存の
+    # ``$(`` fail-closed deny に委ねる。詳細は ``_has_cat_function_redef`` 参照。
+    if _has_cat_function_redef(command):
+        return command
+
     def _substitute(match: re.Match[str]) -> str:
         flag = match.group(1)
         if flag.endswith("="):
