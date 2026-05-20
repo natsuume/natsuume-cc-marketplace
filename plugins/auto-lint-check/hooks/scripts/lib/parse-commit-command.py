@@ -247,7 +247,7 @@ _HEREDOC_CAT_RE = re.compile(
 def _strip_safe_heredocs(command: str) -> str:
     """``-m "$(cat <<'DELIM' ... DELIM)"`` (``-m`` / ``--message`` の value 位置に
     置かれた quoted-delim heredoc substitution) を空文字列リテラル ``""`` に
-    置換し、 flag prefix (``-m `` 等) は残す。
+    置換し、 flag prefix (``-m `` 等) は形を整えて残す。
 
     Claude Code が複数行 commit message を渡すために常用する
     ``git commit -m "$(cat <<'EOF' ... EOF)"`` パターンを parser の
@@ -255,14 +255,34 @@ def _strip_safe_heredocs(command: str) -> str:
     根拠 (delimiter quoting + surrounding ``"..."`` + ``-m`` value 位置) は
     ``_HEREDOC_CAT_RE`` の docstring を参照。
 
-    置換結果が ``-m ""`` (空 double-quoted string) で十分なのは、 parser が
-    ``-m`` の値文字列の内容を一切参照しないため。 shlex は ``""`` を 1 つの
-    空 token として取り込み、 ``_commit_triggers_staging`` 等は flag 識別だけ
-    行う。 ``\\1""`` で flag prefix を保持することで、 ``_commit_triggers_staging``
-    が ``-m`` を正しく value flag として認識し、 後続の ``""`` を value として
-    消費する。
+    置換結果の形を flag prefix の形式に応じて使い分けるのは、shlex が
+    attached form ``-m""`` を 1 token ``-m`` に潰してしまう (``""`` は空 quote
+    として無視される) ことへの対応:
+
+    - ``-m "$(...)"`` (separator form) / ``-m"$(...)"`` (attached form):
+      どちらも separator form ``<flag> ""`` (space + 空 quote) に正規化して
+      置換する。 shlex は 2 token ``['-m', '']`` として取り込み、
+      ``_commit_triggers_staging`` が ``-m`` を value flag として認識して
+      次 token ``''`` を value として消費する。 attached form をそのまま空
+      置換 (``-m""``) すると shlex token が ``-m`` 1 個になり、 続く path-spec
+      まで value として誤吸収されて HAS_STAGING の検出を取りこぼす経路が
+      生まれる (codex review 4 回目指摘の P2)。
+    - ``--message="$(...)"`` (equals form): ``--message=""`` の attached 形を
+      保つ。 shlex は 1 token ``--message=`` として取り込み、 後段の parser
+      は ``--`` prefix で flag 扱い → expect_val を立てずに skip するため、
+      続く path-spec が flag value として誤吸収されない (= space を挟むと
+      逆に ``--message=`` と ``""`` が 2 token に分かれ、 後者が path-spec
+      として誤検出される)。
     """
-    return _HEREDOC_CAT_RE.sub(r'\1""', command)
+    def _substitute(match: re.Match[str]) -> str:
+        flag = match.group(1)
+        if flag.endswith("="):
+            # equals form: attached を維持
+            return flag + '""'
+        # separator / attached form: space-separated に正規化
+        return flag.rstrip() + ' ""'
+
+    return _HEREDOC_CAT_RE.sub(_substitute, command)
 
 
 def _normalize_command(command: str) -> str:
