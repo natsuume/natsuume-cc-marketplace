@@ -324,12 +324,6 @@ def _strip_safe_heredocs(command: str) -> str:
       逆に ``--message=`` と ``""`` が 2 token に分かれ、 後者が path-spec
       として誤検出される)。
     """
-    # cat が function として再定義されている可能性があれば whitelist の前提
-    # (= substitution が静的文字列出力) が崩れる。 strip を skip して既存の
-    # ``$(`` fail-closed deny に委ねる。詳細は ``_has_cat_function_redef`` 参照。
-    if _has_cat_function_redef(command):
-        return command
-
     def _substitute(match: re.Match[str]) -> str:
         flag = match.group(1)
         if flag.endswith("="):
@@ -338,7 +332,22 @@ def _strip_safe_heredocs(command: str) -> str:
         # separator / attached form: space-separated に正規化
         return flag.rstrip() + ' ""'
 
-    return _HEREDOC_CAT_RE.sub(_substitute, command)
+    # 2-pass approach: まず tentative に strip を行い、 その後の文字列に対して
+    # cat function redef を検査する。 順序がこの逆だと、 heredoc 本文に
+    # ``cat() { ... }`` のような text が含まれた場合 (commit message が
+    # function 定義のシンタックスについて言及している場合等) に raw command
+    # スキャンが本文 text を構文と誤判定して redef 検出を発火させ、 strip が
+    # skip されて legitimate な commit が deny される false-positive 経路が
+    # できる (codex review 6 回目指摘の P3)。 tentative strip 後の文字列は
+    # 「本文 text を除いた構文構造」を表しているため、 残った部分に redef
+    # があれば本物の outer redef 確定、 無ければ body text の偶然マッチに過ぎ
+    # ないと判別できる。
+    stripped = _HEREDOC_CAT_RE.sub(_substitute, command)
+    if _has_cat_function_redef(stripped):
+        # outer に cat redef が残っている → whitelist の前提が崩れるので strip
+        # を revert し、 後段の ``$(`` fail-closed deny に委ねる。
+        return command
+    return stripped
 
 
 def _normalize_command(command: str) -> str:
