@@ -205,35 +205,41 @@ def _is_env_assignment(tok: str) -> bool:
 #
 # 空本文 (``-m "$(cat <<'EOF'\nEOF\n)"``) も対応するため、本文部分は optional
 # group にしている。
+# closing delim の indent 規則は bash 仕様に合わせて分岐:
+# - `<<'DELIM'` (dash なし): closing delim は行頭 (column 0) 必須
+# - `<<-'DELIM'` (dash あり, indent-strip variant): closing delim 前の leading
+#   tab のみ許容 (bash は tab のみ strip、space は strip しない)
+#
+# regex 内では group 2 で dash の有無をキャプチャし、 conditional pattern
+# `(?(2)\\t*|)` で「dash があれば \\t*、 無ければ空」を表現する。これにより
+# 本文に偶然 ` EOF` (空白インデント) の行が含まれた場合に regex が誤って
+# closing 候補と判定して match に失敗 → false-positive deny する経路を塞ぐ
+# (codex review 3 回目指摘の P3 対応)。
 _HEREDOC_CAT_RE = re.compile(
-    r"("                                   # GROUP 1: value flag prefix (captured for re-emission)
-    r"  -m[ \t]*"                          #   `-m ` / `-m`(attached)
+    r"("                                       # GROUP 1: value flag prefix (re-emit 用)
+    r"  -m[ \t]*"                              #   `-m ` / `-m`(attached)
     r"  |"
-    r"  --message[ \t]+"                   #   `--message ` (long form, space)
+    r"  --message[ \t]+"                       #   `--message ` (long form, space)
     r"  |"
-    r"  --message[ \t]*=[ \t]*"            #   `--message=` (long form, equals)
+    r"  --message[ \t]*=[ \t]*"                #   `--message=` (long form, equals)
     r")"
-    r'"[ \t]*'                             # 囲み " の開始 (word splitting 抑制)
-    r"\$\("                                # $(
-    r"\s*cat\s+"                           # cat (前後 whitespace 許容)
-    r"<<-?"                                # << または <<- (indent-strip variant)
-    r"(['\"])"                             # GROUP 2: 開始 quote
-    r"([A-Za-z_]\w*)"                      # GROUP 3: delimiter 名
-    r"\2"                                  # 終了 quote (GROUP 2 と一致)
-    r"[ \t]*\n"                            # opening line 終端
-    r"(?:"                                 # 本文行 (空可)
-    r"  (?:"                               # 本文 1 文字
-    r"    (?![ \t]*\3[ \t]*(?:\n|\)|$))"   # 「行頭が closing delim」ではない
-    r"    (?!\n[ \t]*\3[ \t]*(?:\n|\)|$))" # 「次行が closing delim 行」ではない
-    r"    [\s\S]"                          # 任意 1 文字 (改行含む)
-    r"  )*"
-    r"  \n"                                # 本文は改行で終端 (closing delim を行頭から match させるため)
-    r")?"
-    r"[ \t]*\3[ \t]*"                      # closing delim 行 (leading whitespace は <<- 用に許容)
-    r"\n?"                                 # closing 後の改行 (省略可: 入力末尾の場合)
-    r"[ \t\n]*"                            # `)` までの whitespace
-    r"\)"                                  # 閉じ )
-    r'[ \t]*"',                            # 囲み " の終了
+    r'"[ \t]*'                                 # 囲み " の開始 (word splitting 抑制)
+    r"\$\("                                    # $(
+    r"\s*cat\s+"                               # cat (前後 whitespace 許容)
+    r"<<(-)?"                                  # GROUP 2: dash 有無 ('-' が match なら group participates, 無ければ None)
+    r"(['\"])"                                 # GROUP 3: 開始 quote
+    r"([A-Za-z_]\w*)"                          # GROUP 4: delimiter 名
+    r"\3"                                      # 終了 quote (GROUP 3 と一致)
+    r"[ \t]*\n"                                # opening line 終端
+    r"(?:"                                     # 本文行 (0 行以上)
+    r"  (?!(?(2)\t*|)\4[ \t]*(?:\n|\)|$))"     # この行は closing delim 行ではない (dash なら \\t* 許容、 非 dash は column 0 必須)
+    r"  [^\n]*\n"                              # 1 行 (改行で終端)
+    r")*"
+    r"(?(2)\t*|)\4[ \t]*"                      # closing delim 行 (dash 変種のみ leading tab 許容)
+    r"\n?"                                     # closing 後の改行 (省略可: 入力末尾の場合)
+    r"[ \t\n]*"                                # `)` までの whitespace
+    r"\)"                                      # 閉じ )
+    r'[ \t]*"',                                # 囲み " の終了
     re.DOTALL | re.VERBOSE,
 )
 
