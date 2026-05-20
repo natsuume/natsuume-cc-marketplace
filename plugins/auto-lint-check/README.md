@@ -10,11 +10,12 @@ v0.3.1
 
 - **`git commit -m "$(cat <<'EOF' ... EOF)"` パターンの誤検出を解消 (`parse-commit-command.py`)**
   - Claude Code が複数行コミットメッセージを渡すための標準的な heredoc + command substitution 形式が、parser の「`$(...)` を含むコマンドは fail closed」guard に巻き込まれて常に deny される問題を修正
-  - parser に `_strip_safe_heredocs` 前処理を追加: 以下 **両方** を満たす substitution のみ空文字列リテラル `""` に置換してから既存の `$(...)` / backtick チェックに通す
+  - parser に `_strip_safe_heredocs` 前処理を追加: 以下 **3 条件すべて** を満たす substitution のみ空文字列リテラル `""` に置換してから既存の `$(...)` / backtick チェックに通す
     1. delimiter が quote 済み (`<<'DELIM'` または `<<"DELIM"`) であること: bash が本文を verbatim 扱いし、本文内の expansion が一切行われない (= `cat` の出力結果が事実上の静的文字列になる) ことを保証
-    2. substitution 全体が double-quoted string `"..."` で囲まれていること: bash の word splitting / quoting セマンティクスにより、substitution 結果が **data position に固定** され、command position や argument position に昇格しないことを構文的に保証
-  - 条件 (2) は codex review 指摘で追加した safety: `$(cat <<'EOF'\ngit\nEOF\n) commit -m msg` のように substitution の出力が bash の shell parse に流れ込んで `git commit ...` として実行される形を、 hook 側が文脈無視で `""` に置換すると `"" commit -m msg` という parse 結果になり commit invocation 不在と誤判定して lint hook を素通させる bypass 経路ができるため
-  - **unquoted delimiter (`<<DELIM`)** や、heredoc 後ろに追加 substitution を置く形式、 surrounding `"..."` が無い形式、 複数の閉じ delimiter 候補を持つ payload (`$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)`) はいずれも whitelist にマッチせず、 既存の fail-closed deny で弾かれる
+    2. substitution 全体が double-quoted string `"..."` で囲まれていること: word splitting を抑制し、substitution 結果を 1 つの word に固定
+    3. substitution が `-m` / `--message` / `--message=` の **value 位置** に置かれていること: bash の flag parser が「直後は値」と確定的に扱う位置に substitution があれば、結果が command/subcommand token に昇格する経路は構文的に存在しなくなる
+  - 条件 (2) (3) は codex review 指摘で 2 段階に追加した safety。条件 (1) のみだと `$(cat <<'EOF'\ngit\nEOF\n) commit -m msg` のように substitution の出力が bash の shell parse に流れ込んで `git commit ...` として実行される bypass 経路ができる。条件 (2) で word splitting は抑制できるが、`"$(cat <<'EOF'\ngit\nEOF\n)" commit -m msg` のように quoted substitution の結果が command token になる形は依然 bash で実行されるため、条件 (3) で「flag parser のスコープ内」に位置を限定することで完全に塞いだ
+  - **unquoted delimiter (`<<DELIM`)** や、heredoc 後ろに追加 substitution を置く形式、 surrounding `"..."` が無い形式、 `-m`/`--message` 以外の文脈に置かれた substitution、 複数の閉じ delimiter 候補を持つ payload (`-m "$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)"`) はいずれも whitelist にマッチせず、 既存の fail-closed deny で弾かれる
   - bash 側 (`block-commit-lint.sh` / `post-commit-lint.sh`) で行っていた `\\<newline>` → space および `\n` → `;` の正規化は parser 内 (`_normalize_command`) に集約。heredoc は real newline に依存するため bash 側で先に潰してはいけないことを契約として明示。CRLF (`\r\n`) → LF (`\n`) の正規化も `_normalize_command` 冒頭に組み込み、Windows / WSL クライアント経由で渡された input でも heredoc 検出が正しく動くようにした
 
 ### v0.2.1 → v0.3.0 の変更点

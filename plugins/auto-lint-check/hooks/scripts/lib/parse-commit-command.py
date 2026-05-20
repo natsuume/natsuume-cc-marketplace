@@ -147,7 +147,7 @@ def _is_env_assignment(tok: str) -> bool:
 
 # 安全に除去できる heredoc command substitution を検出する正規表現。
 #
-# === 安全性の二重要件 ===
+# === 安全性の三重要件 ===
 #
 # (1) **delimiter が quote されていること** (`<<'DELIM'` / `<<"DELIM"`)
 #     bash は quoted delimiter の heredoc 本文を verbatim に扱い、本文内の
@@ -159,35 +159,41 @@ def _is_env_assignment(tok: str) -> bool:
 #
 # (2) **substitution 全体が double-quoted string ``"..."`` の中に置かれている
 #     こと** (substitution の前後に `"` を要求する)
-#     これは codex review 指摘の bypass を塞ぐための必須条件。bash の word
-#     splitting と quoting セマンティクスにより、 substitution 結果は**置かれた
-#     位置の構文上の役割を引き継ぐ**:
+#     ``"..."`` は word splitting を抑制し、 substitution 結果を 1 つの word
+#     として扱わせる。これは bypass を塞ぐ最低限の構文条件 (例えば
+#     ``$(cat <<'EOF'\nrm -rf /\nEOF\n) somecmd`` のように word splitting で
+#     複数 token に分裂してから shell に解釈される形を排除する) だが、
+#     これ単独では不十分: ``"$(echo git)" commit -m msg`` のように word
+#     splitting されなくても、 結果の 1 word が command position や subcommand
+#     position に置かれれば bash は ``git commit -m msg`` として実行する。
 #
-#       - ``"$(...)"`` (double-quote 内): 結果は単一の string 値として扱われる
-#         (word splitting されない)。command position にも引数構造にも昇格
-#         しない → **本 hook の whitelist で安全に除去できる**。
-#       - ``$(...)`` (素): 結果が word splitting され、続く位置に応じて
-#         command 名 / 引数 / リダイレクト先などに昇格する。例えば
-#         ``$(cat <<'EOF'\ngit\nEOF\n) commit -m msg`` は bash で
-#         ``git commit -m msg`` として実行されるため、本 hook が文脈無視で
-#         `''` に置換すると ``'' commit -m msg`` という parse 結果になり
-#         「commit invocation なし」と誤判定して lint hook を素通させる
-#         bypass 経路ができる。
-#         同様に ``git $(cat <<'EOF'\ncommit\nEOF\n) -m msg`` も bash 側では
-#         ``git commit -m msg`` だが、 hook 側では ``git '' -m msg`` で commit
-#         subcommand 不在と判定される。
+# (3) **substitution が value-taking flag (`-m` / `--message`) の引数位置に
+#     置かれていること**
+#     codex review 2 回目の指摘で必要性が判明した最終条件。 git commit の
+#     flag parser が「 ``-m`` の直後は値」と確定的に扱う位置に substitution が
+#     あれば、 結果が command/subcommand token に昇格する経路は構文的に
+#     存在しなくなる (flag parser のスコープを抜けて command 構造に流れる
+#     ことが無い)。 Claude Code が複数行 commit message に使う標準形
+#     ``git commit -m "$(cat <<'EOF' ... EOF)"`` はこの形に常に合致する。
+#     ``--message`` 長形 (`--message ` 空白区切り および `--message=` 形式)
+#     も同等に安全。
 #
-#     よって本 regex は substitution の先頭 `$` の直前と閉じ `)` の直後に
-#     ``"`` (whitespace を挟んでも可) を要求し、 substitution 結果が data
-#     position に固定されていることを構文的に保証する。 Claude Code が
-#     複数行 commit message に使う標準形 ``git commit -m "$(cat <<'EOF' ...
-#     EOF)"`` はこの形に常に合致する。
+# === bypass attempt と対応 ===
+#
+# - ``"$(cat <<'EOF'\ngit\nEOF\n)" commit -m msg`` (substitution が command
+#   position): bash は ``git commit -m msg`` を実行。本 regex は ``-m`` /
+#   ``--message`` prefix が無いので match せず → ``$(`` deny。
+# - ``git "$(cat <<'EOF'\ncommit\nEOF\n)" -m msg`` (substitution が
+#   subcommand position): 上と同様、 prefix 不在で deny。
+# - ``"$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)"`` (複数の閉じ delimiter
+#   候補): body matching で内部の閉じ delim 行を negative lookahead が検出
+#   して match に失敗 → deny。 body matching の詳細は次節参照。
 #
 # === 本文 (body) matching に関する詳細 ===
 #
 # 本文の matching は naive な ``.*?`` ではなく **本文中に閉じ delimiter 行が
 # 現れないことを negative lookahead で明示** している。これを怠ると
-# ``"$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)"`` のように複数の閉じ
+# ``-m "$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)"`` のように複数の閉じ
 # delimiter 候補を持つ入力で、 ``.*?`` の non-greedy が最終的に最後の `EOF`
 # まで拡張されてしまい、 bash 的には「heredoc は最初の `EOF` で終了、 その後
 # `rm -rf /` が subshell 内で実行される」入力を hook 側だけ 1 個の heredoc
@@ -197,50 +203,60 @@ def _is_env_assignment(tok: str) -> bool:
 # 「次が closing line (`\n DELIM (line end | `)`))) でないこと」を 1 文字ずつ
 # 確認している。
 #
-# 空本文 (``"$(cat <<'EOF'\nEOF\n)"``) も対応するため、本文部分は optional
+# 空本文 (``-m "$(cat <<'EOF'\nEOF\n)"``) も対応するため、本文部分は optional
 # group にしている。
 _HEREDOC_CAT_RE = re.compile(
-    r'"[ \t]*'                             # 囲み " の開始 (data position 保証)
+    r"("                                   # GROUP 1: value flag prefix (captured for re-emission)
+    r"  -m[ \t]*"                          #   `-m ` / `-m`(attached)
+    r"  |"
+    r"  --message[ \t]+"                   #   `--message ` (long form, space)
+    r"  |"
+    r"  --message[ \t]*=[ \t]*"            #   `--message=` (long form, equals)
+    r")"
+    r'"[ \t]*'                             # 囲み " の開始 (word splitting 抑制)
     r"\$\("                                # $(
     r"\s*cat\s+"                           # cat (前後 whitespace 許容)
     r"<<-?"                                # << または <<- (indent-strip variant)
-    r"(['\"])"                             # 開始 quote (group 1)
-    r"([A-Za-z_]\w*)"                      # delimiter 名 (group 2)
-    r"\1"                                  # 終了 quote (group 1 と一致)
+    r"(['\"])"                             # GROUP 2: 開始 quote
+    r"([A-Za-z_]\w*)"                      # GROUP 3: delimiter 名
+    r"\2"                                  # 終了 quote (GROUP 2 と一致)
     r"[ \t]*\n"                            # opening line 終端
     r"(?:"                                 # 本文行 (空可)
     r"  (?:"                               # 本文 1 文字
-    r"    (?![ \t]*\2[ \t]*(?:\n|\)|$))"   # この時点で「行頭が closing delim」ではない
-    r"    (?!\n[ \t]*\2[ \t]*(?:\n|\)|$))" # この時点で「次行が closing delim 行」ではない
+    r"    (?![ \t]*\3[ \t]*(?:\n|\)|$))"   # 「行頭が closing delim」ではない
+    r"    (?!\n[ \t]*\3[ \t]*(?:\n|\)|$))" # 「次行が closing delim 行」ではない
     r"    [\s\S]"                          # 任意 1 文字 (改行含む)
     r"  )*"
     r"  \n"                                # 本文は改行で終端 (closing delim を行頭から match させるため)
     r")?"
-    r"[ \t]*\2[ \t]*"                      # closing delim 行 (leading whitespace は <<- 用に許容)
+    r"[ \t]*\3[ \t]*"                      # closing delim 行 (leading whitespace は <<- 用に許容)
     r"\n?"                                 # closing 後の改行 (省略可: 入力末尾の場合)
     r"[ \t\n]*"                            # `)` までの whitespace
     r"\)"                                  # 閉じ )
-    r'[ \t]*"',                            # 囲み " の終了 (data position 保証)
+    r'[ \t]*"',                            # 囲み " の終了
     re.DOTALL | re.VERBOSE,
 )
 
 
 def _strip_safe_heredocs(command: str) -> str:
-    """``"$(cat <<'DELIM' ... DELIM)"`` (前後を ``"..."`` で囲んだ quoted-delim
-    heredoc substitution) を空文字列リテラル ``""`` に置換する。
+    """``-m "$(cat <<'DELIM' ... DELIM)"`` (``-m`` / ``--message`` の value 位置に
+    置かれた quoted-delim heredoc substitution) を空文字列リテラル ``""`` に
+    置換し、 flag prefix (``-m `` 等) は残す。
 
     Claude Code が複数行 commit message を渡すために常用する
     ``git commit -m "$(cat <<'EOF' ... EOF)"`` パターンを parser の
-    fail-closed (`$(` 検出 → exit 3) から救済するための前処理。安全性の
-    根拠 (delimiter quoting + surrounding ``"..."``) は ``_HEREDOC_CAT_RE``
-    の docstring を参照。
+    fail-closed (`$(` 検出 → exit 3) から救済するための前処理。 安全性の
+    根拠 (delimiter quoting + surrounding ``"..."`` + ``-m`` value 位置) は
+    ``_HEREDOC_CAT_RE`` の docstring を参照。
 
-    置換結果が ``""`` (空 double-quoted string) で十分なのは、 parser が
+    置換結果が ``-m ""`` (空 double-quoted string) で十分なのは、 parser が
     ``-m`` の値文字列の内容を一切参照しないため。 shlex は ``""`` を 1 つの
     空 token として取り込み、 ``_commit_triggers_staging`` 等は flag 識別だけ
-    行う。
+    行う。 ``\\1""`` で flag prefix を保持することで、 ``_commit_triggers_staging``
+    が ``-m`` を正しく value flag として認識し、 後続の ``""`` を value として
+    消費する。
     """
-    return _HEREDOC_CAT_RE.sub('""', command)
+    return _HEREDOC_CAT_RE.sub(r'\1""', command)
 
 
 def _normalize_command(command: str) -> str:
