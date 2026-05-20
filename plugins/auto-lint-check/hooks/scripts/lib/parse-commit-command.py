@@ -268,14 +268,19 @@ _HEREDOC_CAT_RE = re.compile(
 # 完全防御は対象外) では narrow detection で十分。 これらの未対応経路は
 # documented limitation として残す。
 _CAT_FUNCTION_REDEF_RE = re.compile(
-    r"""(?:^|[\s;&|])              # 行頭 or shell separator の直後
+    r"""(?:^|[\s;&|])                       # 行頭 or shell separator の直後
         (?:
-            cat\s*\(\s*\)\s*\{     # cat() { ... }
-            |function\s+cat\b      # function cat { ... } / function cat() { ... }
+            cat\s*\(\s*\)\s*\{              # cat() { ... }
+            |function\s+cat\s*(?:\(\s*\)\s*)?\{  # function cat { ... } / function cat() { ... }
         )
     """,
     re.VERBOSE,
 )
+# 注: function 形にも明示的に開き ``{`` を要求しているのは、 commit message
+# 本文に "fix function cat regression" のような自然文が含まれるケースで
+# `function\s+cat\b` だけだと false-positive を起こすため。 開き ``{`` まで
+# match 要求することで bash function 定義シンタックスに限定し、 単なる
+# 自然文 (function という単語 + cat という単語) を除外する。
 
 
 def _has_cat_function_redef(command: str) -> bool:
