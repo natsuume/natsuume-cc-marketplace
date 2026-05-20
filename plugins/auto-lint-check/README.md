@@ -10,10 +10,12 @@ v0.3.1
 
 - **`git commit -m "$(cat <<'EOF' ... EOF)"` パターンの誤検出を解消 (`parse-commit-command.py`)**
   - Claude Code が複数行コミットメッセージを渡すための標準的な heredoc + command substitution 形式が、parser の「`$(...)` を含むコマンドは fail closed」guard に巻き込まれて常に deny される問題を修正
-  - parser に `_strip_safe_heredocs` 前処理を追加: **quoted delimiter (`<<'DELIM'` / `<<"DELIM"`)** の `$(cat <<...DELIM...)` パターンのみを空文字列リテラル `''` に置換してから既存の `$(...)` / backtick チェックに通す
-  - quoted delimiter の heredoc は bash が本文を verbatim 扱いし substitution を一切行わないため、`cat` の出力結果は事実上の静的文字列で bypass 経路にならない、という安全性に基づくホワイトリスト
-  - **unquoted delimiter (`<<DELIM`)** は本文内で `$(...)` が展開されうるため意図的に対象外 (= 既存の fail-closed deny を維持)。bypass attempt (`heredoc ...) && $(other)` のように heredoc 後ろに追加 substitution を置く形式) も同様に deny される
-  - bash 側 (`block-commit-lint.sh` / `post-commit-lint.sh`) で行っていた `\\<newline>` → space および `\n` → `;` の正規化は parser 内 (`_normalize_command`) に集約。heredoc は real newline に依存するため bash 側で先に潰してはいけないことを契約として明示
+  - parser に `_strip_safe_heredocs` 前処理を追加: 以下 **両方** を満たす substitution のみ空文字列リテラル `""` に置換してから既存の `$(...)` / backtick チェックに通す
+    1. delimiter が quote 済み (`<<'DELIM'` または `<<"DELIM"`) であること: bash が本文を verbatim 扱いし、本文内の expansion が一切行われない (= `cat` の出力結果が事実上の静的文字列になる) ことを保証
+    2. substitution 全体が double-quoted string `"..."` で囲まれていること: bash の word splitting / quoting セマンティクスにより、substitution 結果が **data position に固定** され、command position や argument position に昇格しないことを構文的に保証
+  - 条件 (2) は codex review 指摘で追加した safety: `$(cat <<'EOF'\ngit\nEOF\n) commit -m msg` のように substitution の出力が bash の shell parse に流れ込んで `git commit ...` として実行される形を、 hook 側が文脈無視で `""` に置換すると `"" commit -m msg` という parse 結果になり commit invocation 不在と誤判定して lint hook を素通させる bypass 経路ができるため
+  - **unquoted delimiter (`<<DELIM`)** や、heredoc 後ろに追加 substitution を置く形式、 surrounding `"..."` が無い形式、 複数の閉じ delimiter 候補を持つ payload (`$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)`) はいずれも whitelist にマッチせず、 既存の fail-closed deny で弾かれる
+  - bash 側 (`block-commit-lint.sh` / `post-commit-lint.sh`) で行っていた `\\<newline>` → space および `\n` → `;` の正規化は parser 内 (`_normalize_command`) に集約。heredoc は real newline に依存するため bash 側で先に潰してはいけないことを契約として明示。CRLF (`\r\n`) → LF (`\n`) の正規化も `_normalize_command` 冒頭に組み込み、Windows / WSL クライアント経由で渡された input でも heredoc 検出が正しく動くようにした
 
 ### v0.2.1 → v0.3.0 の変更点
 
