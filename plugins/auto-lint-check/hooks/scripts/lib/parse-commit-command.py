@@ -145,6 +145,234 @@ def _is_env_assignment(tok: str) -> bool:
     return bool(_ENV_ASSIGN_RE.match(tok))
 
 
+# 安全に除去できる heredoc command substitution を検出する正規表現。
+#
+# === 安全性の三重要件 ===
+#
+# (1) **delimiter が quote されていること** (`<<'DELIM'` / `<<"DELIM"`)
+#     bash は quoted delimiter の heredoc 本文を verbatim に扱い、本文内の
+#     `$(...)`, `` `...` ``, `$VAR` 等の expansion を一切行わない。よって
+#     `cat` が本文を echo した結果は事実上の静的文字列。 unquoted delimiter
+#     (`<<EOF`) は本文で expansion が走るため (`<<EOF\n$(git commit -am bypass)
+#     \nEOF` で実際に commit が走る) 対象から外している (= 後段の `$(` deny に
+#     落ちる)。
+#
+# (2) **substitution 全体が double-quoted string ``"..."`` の中に置かれている
+#     こと** (substitution の前後に `"` を要求する)
+#     ``"..."`` は word splitting を抑制し、 substitution 結果を 1 つの word
+#     として扱わせる。これは bypass を塞ぐ最低限の構文条件 (例えば
+#     ``$(cat <<'EOF'\nrm -rf /\nEOF\n) somecmd`` のように word splitting で
+#     複数 token に分裂してから shell に解釈される形を排除する) だが、
+#     これ単独では不十分: ``"$(echo git)" commit -m msg`` のように word
+#     splitting されなくても、 結果の 1 word が command position や subcommand
+#     position に置かれれば bash は ``git commit -m msg`` として実行する。
+#
+# (3) **substitution が value-taking flag (`-m` / `--message`) の引数位置に
+#     置かれていること**
+#     codex review 2 回目の指摘で必要性が判明した最終条件。 git commit の
+#     flag parser が「 ``-m`` の直後は値」と確定的に扱う位置に substitution が
+#     あれば、 結果が command/subcommand token に昇格する経路は構文的に
+#     存在しなくなる (flag parser のスコープを抜けて command 構造に流れる
+#     ことが無い)。 Claude Code が複数行 commit message に使う標準形
+#     ``git commit -m "$(cat <<'EOF' ... EOF)"`` はこの形に常に合致する。
+#     ``--message`` 長形 (`--message ` 空白区切り および `--message=` 形式)
+#     も同等に安全。
+#
+# === bypass attempt と対応 ===
+#
+# - ``"$(cat <<'EOF'\ngit\nEOF\n)" commit -m msg`` (substitution が command
+#   position): bash は ``git commit -m msg`` を実行。本 regex は ``-m`` /
+#   ``--message`` prefix が無いので match せず → ``$(`` deny。
+# - ``git "$(cat <<'EOF'\ncommit\nEOF\n)" -m msg`` (substitution が
+#   subcommand position): 上と同様、 prefix 不在で deny。
+# - ``"$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)"`` (複数の閉じ delimiter
+#   候補): body matching で内部の閉じ delim 行を negative lookahead が検出
+#   して match に失敗 → deny。 body matching の詳細は次節参照。
+#
+# === 本文 (body) matching に関する詳細 ===
+#
+# 本文の matching は naive な ``.*?`` ではなく **本文中に閉じ delimiter 行が
+# 現れないことを negative lookahead で明示** している。これを怠ると
+# ``-m "$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)"`` のように複数の閉じ
+# delimiter 候補を持つ入力で、 ``.*?`` の non-greedy が最終的に最後の `EOF`
+# まで拡張されてしまい、 bash 的には「heredoc は最初の `EOF` で終了、 その後
+# `rm -rf /` が subshell 内で実行される」入力を hook 側だけ 1 個の heredoc
+# とみなして `""` に置換してしまう bypass 経路ができる。 bash の「delimiter
+# 行 (= 行頭から delimiter のみ) の最初の出現で heredoc は終端する」
+# セマンティクスを regex で忠実に表現するため、 negative lookahead で
+# 「次が closing line (`\n DELIM (line end | `)`))) でないこと」を 1 文字ずつ
+# 確認している。
+#
+# 空本文 (``-m "$(cat <<'EOF'\nEOF\n)"``) も対応するため、本文部分は optional
+# group にしている。
+# closing delim の indent 規則は bash 仕様に合わせて分岐:
+# - `<<'DELIM'` (dash なし): closing delim は行頭 (column 0) 必須
+# - `<<-'DELIM'` (dash あり, indent-strip variant): closing delim 前の leading
+#   tab のみ許容 (bash は tab のみ strip、space は strip しない)
+#
+# regex 内では group 2 で dash の有無をキャプチャし、 conditional pattern
+# `(?(2)\\t*|)` で「dash があれば \\t*、 無ければ空」を表現する。これにより
+# 本文に偶然 ` EOF` (空白インデント) の行が含まれた場合に regex が誤って
+# closing 候補と判定して match に失敗 → false-positive deny する経路を塞ぐ
+# (codex review 3 回目指摘の P3 対応)。
+_HEREDOC_CAT_RE = re.compile(
+    r"("                                       # GROUP 1: value flag prefix (re-emit 用)
+    r"  -m[ \t]*"                              #   `-m ` / `-m`(attached)
+    r"  |"
+    r"  --message[ \t]+"                       #   `--message ` (long form, space)
+    r"  |"
+    r"  --message[ \t]*=[ \t]*"                #   `--message=` (long form, equals)
+    r")"
+    r'"[ \t]*'                                 # 囲み " の開始 (word splitting 抑制)
+    r"\$\("                                    # $(
+    r"\s*cat\s+"                               # cat (前後 whitespace 許容)
+    r"<<(-)?"                                  # GROUP 2: dash 有無 ('-' が match なら group participates, 無ければ None)
+    r"(['\"])"                                 # GROUP 3: 開始 quote
+    r"([A-Za-z_]\w*)"                          # GROUP 4: delimiter 名
+    r"\3"                                      # 終了 quote (GROUP 3 と一致)
+    r"[ \t]*\n"                                # opening line 終端
+    r"(?:"                                     # 本文行 (0 行以上)
+    r"  (?!(?(2)\t*|)\4[ \t]*(?:\n|\)|$))"     # この行は closing delim 行ではない (dash なら \\t* 許容、 非 dash は column 0 必須)
+    r"  [^\n]*\n"                              # 1 行 (改行で終端)
+    r")*"
+    r"(?(2)\t*|)\4[ \t]*"                      # closing delim 行 (dash 変種のみ leading tab 許容)
+    r"\n?"                                     # closing 後の改行 (省略可: 入力末尾の場合)
+    r"[ \t\n]*"                                # `)` までの whitespace
+    r"\)"                                      # 閉じ )
+    r'[ \t]*"',                                # 囲み " の終了
+    re.DOTALL | re.VERBOSE,
+)
+
+
+# 同一コマンド内で `cat` を function として再定義するパターンを検出する。
+#
+# bash では command name は実行時解決されるため、 ``$(cat <<'EOF' ... EOF)`` の
+# `cat` が system cat ではなく command 文字列内で前に定義された function を呼ぶ
+# 可能性がある。 例:
+#
+#     cat() { git add bad.py; }; git commit -m "$(cat <<'EOF'\nmsg\nEOF\n)"
+#
+# この場合、 hook が whitelist で substitution を空置換すると plain commit と
+# 誤判定し、 working tree lint を skip する。 しかし bash が実際に command を
+# 実行すると、 substitution 内で function `cat` が呼ばれて `git add bad.py` で
+# 副作用 (staging) を起こしてから outer commit が実行され、 lint 未通過の
+# bad.py が commit に紛れ込む。
+#
+# 検出対象は bash の典型的な function 定義構文:
+#   - ``cat() { ... }`` (POSIX shell function 定義)
+#   - ``function cat { ... }`` / ``function cat() { ... }`` (bash 拡張)
+#
+# alias (``alias cat=evil``) / PATH manipulation (``PATH=/evil:$PATH``) /
+# sourced script 経由の function inheritance は静的検出できないが、 lint hook
+# の threat model (= 典型的な bug / sloppiness を防ぐ。 adversarial bypass の
+# 完全防御は対象外) では narrow detection で十分。 これらの未対応経路は
+# documented limitation として残す。
+_CAT_FUNCTION_REDEF_RE = re.compile(
+    r"""(?:^|[\s;&|])                       # 行頭 or shell separator の直後
+        (?:
+            cat\s*\(\s*\)\s*\{              # cat() { ... }
+            |function\s+cat\s*(?:\(\s*\)\s*)?\{  # function cat { ... } / function cat() { ... }
+        )
+    """,
+    re.VERBOSE,
+)
+# 注: function 形にも明示的に開き ``{`` を要求しているのは、 commit message
+# 本文に "fix function cat regression" のような自然文が含まれるケースで
+# `function\s+cat\b` だけだと false-positive を起こすため。 開き ``{`` まで
+# match 要求することで bash function 定義シンタックスに限定し、 単なる
+# 自然文 (function という単語 + cat という単語) を除外する。
+
+
+def _has_cat_function_redef(command: str) -> bool:
+    """同一コマンド内で `cat` を function として再定義しているかを判定する。
+
+    True を返した場合、 ``$(cat <<...)`` の `cat` が system cat ではなく
+    定義された function を呼ぶ可能性があるため、 heredoc whitelist の前提
+    (= substitution が静的文字列出力に等価) が崩れる。 呼び出し側は strip を
+    skip し、 後段の ``$(`` fail-closed deny に委ねるべき。
+    """
+    return bool(_CAT_FUNCTION_REDEF_RE.search(command))
+
+
+def _strip_safe_heredocs(command: str) -> str:
+    """``-m "$(cat <<'DELIM' ... DELIM)"`` (``-m`` / ``--message`` の value 位置に
+    置かれた quoted-delim heredoc substitution) を空文字列リテラル ``""`` に
+    置換し、 flag prefix (``-m `` 等) は形を整えて残す。
+
+    Claude Code が複数行 commit message を渡すために常用する
+    ``git commit -m "$(cat <<'EOF' ... EOF)"`` パターンを parser の
+    fail-closed (`$(` 検出 → exit 3) から救済するための前処理。 安全性の
+    根拠 (delimiter quoting + surrounding ``"..."`` + ``-m`` value 位置) は
+    ``_HEREDOC_CAT_RE`` の docstring を参照。
+
+    置換結果の形を flag prefix の形式に応じて使い分けるのは、shlex が
+    attached form ``-m""`` を 1 token ``-m`` に潰してしまう (``""`` は空 quote
+    として無視される) ことへの対応:
+
+    - ``-m "$(...)"`` (separator form) / ``-m"$(...)"`` (attached form):
+      どちらも separator form ``<flag> ""`` (space + 空 quote) に正規化して
+      置換する。 shlex は 2 token ``['-m', '']`` として取り込み、
+      ``_commit_triggers_staging`` が ``-m`` を value flag として認識して
+      次 token ``''`` を value として消費する。 attached form をそのまま空
+      置換 (``-m""``) すると shlex token が ``-m`` 1 個になり、 続く path-spec
+      まで value として誤吸収されて HAS_STAGING の検出を取りこぼす経路が
+      生まれる (codex review 4 回目指摘の P2)。
+    - ``--message="$(...)"`` (equals form): ``--message=""`` の attached 形を
+      保つ。 shlex は 1 token ``--message=`` として取り込み、 後段の parser
+      は ``--`` prefix で flag 扱い → expect_val を立てずに skip するため、
+      続く path-spec が flag value として誤吸収されない (= space を挟むと
+      逆に ``--message=`` と ``""`` が 2 token に分かれ、 後者が path-spec
+      として誤検出される)。
+    """
+    def _substitute(match: re.Match[str]) -> str:
+        flag = match.group(1)
+        if flag.endswith("="):
+            # equals form: attached を維持
+            return flag + '""'
+        # separator / attached form: space-separated に正規化
+        return flag.rstrip() + ' ""'
+
+    # 2-pass approach: まず tentative に strip を行い、 その後の文字列に対して
+    # cat function redef を検査する。 順序がこの逆だと、 heredoc 本文に
+    # ``cat() { ... }`` のような text が含まれた場合 (commit message が
+    # function 定義のシンタックスについて言及している場合等) に raw command
+    # スキャンが本文 text を構文と誤判定して redef 検出を発火させ、 strip が
+    # skip されて legitimate な commit が deny される false-positive 経路が
+    # できる (codex review 6 回目指摘の P3)。 tentative strip 後の文字列は
+    # 「本文 text を除いた構文構造」を表しているため、 残った部分に redef
+    # があれば本物の outer redef 確定、 無ければ body text の偶然マッチに過ぎ
+    # ないと判別できる。
+    stripped = _HEREDOC_CAT_RE.sub(_substitute, command)
+    if _has_cat_function_redef(stripped):
+        # outer に cat redef が残っている → whitelist の前提が崩れるので strip
+        # を revert し、 後段の ``$(`` fail-closed deny に委ねる。
+        return command
+    return stripped
+
+
+def _normalize_command(command: str) -> str:
+    """hook script から渡された raw command を shlex tokenize 可能な形に整形する。
+
+    順序が重要 (heredoc は real newline に依存するため step 1-2 を先に処理):
+
+    1. CRLF (``\\r\\n``) を LF (``\\n``) に正規化 (Windows / WSL クライアント
+       からの input でも heredoc 検出と shlex tokenize が正しく動くように)
+    2. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
+    3. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
+    4. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
+
+    bash 側 (block-commit-lint.sh / post-commit-lint.sh) はこの関数に依存
+    して raw command を渡してくる前提。bash 側で先に改行を ``;`` に潰すと
+    heredoc 構造が壊れて step 2 が機能しなくなるため、両 hook の正規化は
+    本関数に集約してある。
+    """
+    command = command.replace("\r\n", "\n")
+    command = _strip_safe_heredocs(command)
+    command = command.replace("\\\n", " ")
+    command = command.replace("\n", ";")
+    return command
+
+
 def _is_repo_override_env(tok: str) -> bool:
     if "=" not in tok:
         return False
@@ -300,11 +528,19 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
 
 
 def _classify(command: str) -> int:
-    # Backtick command substitution は shell が文字列内部で commit を実行する
+    # 1) raw command を tokenize 可能な形に正規化する (heredoc 除去 → 行継続展開
+    # → 改行 → ;)。詳細は _normalize_command の docstring を参照。
+    command = _normalize_command(command)
+
+    # 2) Backtick command substitution は shell が文字列内部で commit を実行する
     # シンタックスだが、shlex は backtick を quote / substitution として扱わ
     # ないため内部の `git commit` が token 列に現れず parser を bypass する。
     # `$(...)` も同様。silent bypass を避けるため、これらの substitution を
     # 含むコマンドは fail closed (exit 3) する。
+    #
+    # `_normalize_command` が `$(cat <<'EOF' ... EOF)` (quoted delimiter) を
+    # 事前に除去しているため、ここに残る `$(...)` / backtick は本当に
+    # 「中で何かが実行されうる」substitution に限られる (= fail close 対象)。
     if "`" in command or "$(" in command:
         return 3
 

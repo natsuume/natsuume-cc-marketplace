@@ -74,12 +74,12 @@ TOOL_NAME=$(extract_tool_name "$INPUT")
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
 
-# 行継続 `\<改行>` を空白に、real newline を `;` に正規化する。shlex は
-# 行継続を保持しないため、明示的に space 化する。
-COMMAND="${COMMAND//$'\\\n'/ }"
-COMMAND="${COMMAND//$'\n'/;}"
-
 # `lib/parse-commit-command.py` が shlex でシェルトークン化したコマンドを解析し、
+# 行継続展開 / 改行→`;` 変換 / 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`)
+# の除去まで含めて parser 側で処理する。bash 側で先に改行を ``;`` に置換すると
+# heredoc 構造 (delimiter は行頭にある必要がある) が壊れるため、 raw command を
+# そのまま渡す。
+#
 # exit code で以下を返す (Python が SyntaxError / ImportError で返す 1 と衝突
 # しないよう、正常 return code は 2 以上を使う):
 #   0  HAS_STAGING (working tree も lint 対象に含めるべき)

@@ -49,11 +49,10 @@ TOOL_NAME=$(extract_tool_name "$INPUT")
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
 
-# 行継続 / 改行の正規化は block-commit-lint.sh と同じ。
-COMMAND="${COMMAND//$'\\\n'/ }"
-COMMAND="${COMMAND//$'\n'/;}"
-
 # parse-commit-command.py で実 commit invocation の存在を判定する。
+# 行継続展開 / 改行→`;` 変換 / 安全な heredoc 除去は parser 側で行うため、
+# raw command をそのまま渡す。詳細は block-commit-lint.sh の同じ呼び出し
+# 箇所のコメントを参照。
 # post 側では以下の exit code を扱う:
 #   0  HAS_STAGING あり (commit invocation あり) → HEAD を lint
 #   2  parse failure → fail-open で HEAD を lint (空振りしても害なし)
