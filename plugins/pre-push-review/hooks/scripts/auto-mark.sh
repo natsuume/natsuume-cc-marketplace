@@ -56,11 +56,14 @@ INPUT=$(cat)
 # subprocess を立てずに済ませる (Read/Edit/Write 等の対象外 tool 完了でも本 hook が
 # 呼ばれるが、ここで即離脱できればフォーク無しで通り抜けられる)。
 #
-# 4 つの OR ブランチの意図:
+# 3 つの top-level OR ブランチの意図:
 #   - `"skill"[[:space:]]*:[[:space:]]*"(code-review|simplify|security-review)"`: Skill tool で
 #     `code-review` (v2.1.146 以降の新名) / `simplify` (v2.1.145 以下の旧名) / `security-review`
 #     skill が完了したことを検出する粗フィルタ。 完全一致が必要なため末尾の `"` まで含めて
 #     マッチさせ、 namespace 付き skill (`code-review:code-review` 等) は副次マッチしない。
+#     **後段 case 分岐 (skill 名 → marker 関数のマッピング) と同期させること**:
+#     新しい alias 追加時はここと case 文の両方を更新しないと、 PRECHECK_RE で通過するが
+#     case の `*) exit 0 ;;` に落ちる silent skip が発生し marker が永久に書かれない。
 #   - `"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"`: Agent / Task
 #     tool で `pre-push-review:security-reviewer` subagent が完了したことを検出する粗
 #     フィルタ。 namespace 付き形式 (`pre-push-review:security-reviewer`) と name-only
@@ -110,7 +113,9 @@ case "$TOOL_NAME" in
     # ため、Claude は **修正後の state で再度 skill** を呼ぶ必要が生じる (loop 強制)。
     case "$SKILL_NAME" in
       # v2.1.146 で `/simplify` が `/code-review` にリネームされたため両方を受け付ける。
-      # マーカーファイルは v0.7.0 で `.claude-pre-push-code-reviewed` に統一済み。
+      # **PRECHECK_RE (上の skill alternation) と同期させること**: 片方だけ更新すると、
+      # PRECHECK_RE で通過するが case で `*) exit 0 ;;` に落ちる silent skip を作りうる。
+      # マーカーファイル名は `.claude-pre-push-code-reviewed` (v0.7.0 で旧 `.claude-pre-push-simplified` から rename)。
       code-review|simplify) MARKER_FN=code_reviewed_marker_path ;;
       security-review) MARKER_FN=security_marker_path ;;
       *) exit 0 ;;

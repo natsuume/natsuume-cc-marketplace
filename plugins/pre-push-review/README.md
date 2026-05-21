@@ -8,8 +8,8 @@ v0.7.0 (前身: `pre-commit-review` v0.4.0)
 
 ### v0.6.0 → v0.7.0 の変更点
 
-- **Claude Code v2.1.146 で bundled skill `/simplify` が `/code-review` (effort level optional) にリネームされたのに追随**: PostToolUse の検出ロジック (auto-mark.sh の `PRECHECK_RE` および Skill 分岐 case) を `code-review` / `simplify` の両方を受け付ける形に拡張。 v2.1.146 以降のユーザーは新名で、 v2.1.145 以下のユーザーは旧名のままで同じマーカーが書かれる
-- **マーカーファイル名を `.claude-pre-push-simplified` → `.claude-pre-push-code-reviewed` にリネーム**: 関数名 (`simplified_marker_path` → `code_reviewed_marker_path`) と変数名 (`SIMPLIFIED_*` → `CODE_REVIEWED_*`) も同期。 v0.6.0 以前を使っていた環境では旧マーカーが残るが、 新ファイル名とは独立に扱われるため、 v0.7.0 アップグレード後は次回 `/code-review` 実行時に新ファイルが作成される (旧ファイルは無視される / 削除不要)
+- **Claude Code v2.1.146 で bundled skill `/simplify` が `/code-review` にリネームされたのに追随**: PostToolUse の検出ロジック (auto-mark.sh の `PRECHECK_RE` および Skill 分岐 case) を `code-review` / `simplify` の両方を受け付ける形に拡張。 v2.1.146 以降のユーザーは新名で、 v2.1.145 以下のユーザーは旧名のままで同じマーカーが書かれる
+- **マーカーファイル名を `.claude-pre-push-simplified` → `.claude-pre-push-code-reviewed` にリネーム** (内部のシンボル名も整合性のため同期): v0.6.0 以前を使っていた環境では旧マーカーが disk に残るが、 v0.7.0 のコードからは参照されないため無害 (次回 `/code-review` 実行時に新ファイルが作成される。 気になる場合は `rm <git-dir>/.claude-pre-push-simplified` で手動削除可)
 - **deny メッセージ / README / description を新名 `/code-review` に統一**: v2.1.145 以下のユーザー向けに「旧名 `/simplify` 可」の注記を残しつつ、 標準ガイドは新名に切り替え
 
 ### v0.4.0 → v0.5.0 の変更点
@@ -191,6 +191,8 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 | `.claude-pre-push-code-reviewed` | `/code-review` (旧名 `/simplify`) 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-codex-reviewed` | `/codex:review --wait --scope branch` 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
+
+> **v0.7.0 アップグレード時の注意**: v0.6.0 以前で作成された `.claude-pre-push-simplified` ファイルは v0.7.0 以降は参照されず無害です (新コードは `.claude-pre-push-code-reviewed` のみを読み書きします)。 気になる場合は `rm <git-dir>/.claude-pre-push-simplified` で手動削除して構いません。
 
 ### Agents
 

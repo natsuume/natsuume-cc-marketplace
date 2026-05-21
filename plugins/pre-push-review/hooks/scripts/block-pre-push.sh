@@ -661,7 +661,7 @@ target: ${TARGET_CWD}
   security review (subagent 経由)  : $SECURITY_STATUS
 
 実行手順 (修正が落ち着くまでループ):
-  1. /code-review を Skill tool で呼び出す (コード変更を伴うため先に実行。 Claude Code v2.1.145 以下では旧名の \`/simplify\` を使用してください)
+  1. \`/code-review\` を Skill tool で呼び出す (コード変更を伴うため先に実行。 Claude Code v2.1.145 以下では旧名の \`/simplify\` を使用してください)
   2. /codex:review --wait --scope branch を Skill tool で呼び出す
      (--scope branch 必須: branch 全差分 = PR diff のレビューを保証するため)
   3. **\`Task\` / \`Agent\` tool (Claude Code で同じ subagent invocation tool に
