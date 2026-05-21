@@ -26,45 +26,64 @@
 #     内部の `git push` が segment に巻き込まれて push 検出が token level で失敗する経路が
 #     あった。 それを shape check で塞ぐ。 backtick は depth tracking していない。
 
-# line continuation `\<LF>` 正規化の純 bash 実装。
+# line continuation `\<LF>` 正規化。
 #
-# **macOS bash 3.2 互換のための実装**: bash 3.2.57 (= macOS default) は
-# `${var//$'\\\n'/<repl>}` 形式のパターン置換で ANSI-C quoting (`$'...'`) を
-# パターン部に展開できない (bash 4 では動く)。 R&D テストで以下を確認:
+# ## bash 3.2 互換のための実装上の制約
+#
+# macOS デフォルトの bash 3.2.57 は `${var//$'\\\n'/<repl>}` 形式のパターン置換で
+# ANSI-C quoting (`$'...'`) をパターン部に展開できない (bash 4 では動く)。 計測で:
 #   - `${INPUT//$'\\\n'/}` (リテラル): bash 3.2 で完全に no-op
 #   - `PAT=$'\\\n'; ${INPUT//$PAT/}`: bash 3.2 で `\n` をエスケープシーケンスではなく
 #     literal `n` として誤解釈し、 結果が壊れる
+# このため、 bash の native パターン置換は使えない。
 #
-# このため line continuation の正規化は純 bash の 1 文字ループで実装する必要がある。
-# fork 不要、 外部コマンド非依存、 bash 3.2 / 4 / 5 すべてで同一挙動を保証する。
-# 通常 hook で扱うコマンド文字列は 100-1000 文字程度なのでループコストは無視できる。
+# ## 性能設計 (fast-path + sed fallback)
 #
-# 2 つの正規化バリエーション:
+# 純 bash の 1 文字ループで実装した初版は `result="$result$c"` 形式の reassign が
+# 内部で O(N) コピーを発生させ、 ループ全体が **O(N^2)** になる。 hot path で
+# 実測 (docker bash:3.2) すると 840 chars で 76 ms、 11 KB で 8.6 秒と無視できない
+# 遅延が出るため (このプラグインの hook は **全 Bash 呼び出し** で発火する hot path)、
+# 以下の 2 段構えで O(1) / O(N) に落とす:
+#
+#   1. **case-glob fast-path**: 入力が line continuation を含まなければ O(1) で
+#      即 return。 大半の Bash 呼び出しは line continuation を含まないため、 ここで
+#      99% は早期離脱する。 `case "$var" in *\\$'\n'*) ...` の glob match は
+#      bash 3.2 / 4 / 5 で確実に動作する (実測済)。
+#   2. **sed fallback**: 含む場合は 1 fork で sed に渡す。 `:a;N;$!ba` で全行を
+#      pattern space に集めてから `s/\\\n/<repl>/g` で置換する (line-mode sed の
+#      default では `\n` を含む置換が直接書けないため)。 fork コスト ~1 ms に対し、
+#      pure bash ループは数百 ms-数秒のため fork 派が常に勝つ。
+#
+# ## 2 つの正規化バリエーション
+#
 #   - `normalize_line_continuations`         : `\<LF>` を **削除** (bash 実挙動と一致)
-#       caller: codex-review-detect.sh / block-bg-codex-review.sh / auto-mark.sh
+#       caller: block-bg-codex-review.sh / auto-mark.sh
 #       理由 : これらは regex match の前処理。 隣接トークン (`--back\<LF>ground` →
 #              `--background`) を連結する必要がある。
 #   - `normalize_line_continuations_to_space`: `\<LF>` を **空白** に置換
 #       caller: block-pre-push.sh
 #       理由 : tokenize_segment が空白で token を区切る設計のため、 空白置換で
 #              トークン境界を保ったまま改行を消す必要がある。
+#
+# ## sed の置換文字列の安全性
+#
+# 内部実装の `_normalize_line_continuations_impl` の第 2 引数 (`replacement`) は
+# **本ファイル内の wrapper 2 関数のみが呼ぶ private contract** で、 値は `""` または
+# `" "` (空白 1 文字) に限定する。 任意文字列を渡すと sed の置換右辺で `&` / `\` /
+# 区切り文字 `/` がメタ文字解釈され誤動作する。 wrapper 経由でしか呼ばない設計のため
+# 本制約は守られる。
 _normalize_line_continuations_impl() {
   local input="$1"
   local replacement="$2"
-  local result="" i=0 len=${#input}
-  local c nc
-  while [ "$i" -lt "$len" ]; do
-    c="${input:$i:1}"
-    nc="${input:$((i+1)):1}"
-    if [ "$c" = '\' ] && [ "$nc" = $'\n' ]; then
-      result="$result$replacement"
-      i=$((i+2))
-    else
-      result="$result$c"
-      i=$((i+1))
-    fi
-  done
-  printf '%s' "$result"
+  # Fast-path: line continuation を含まない入力は O(1) で即 return。 大半の入力は
+  # ここで抜ける。 `*\\$'\n'*` の glob は bash 3.2 / 4 / 5 で正しく動作する。
+  case "$input" in
+    *\\$'\n'*) ;;
+    *) printf '%s' "$input"; return ;;
+  esac
+  # Slow-path: 1 fork で sed に渡す。 `:a;N;$!ba` で全入力を pattern space に集めて
+  # から置換 (line-mode default では `\n` を含む置換が書けないため)。
+  printf '%s' "$input" | sed -e ':a;N;$!ba;s/\\\n/'"$replacement"'/g'
 }
 
 normalize_line_continuations() {

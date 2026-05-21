@@ -28,14 +28,6 @@ is_codex_review_invocation() {
   return 0
 }
 
-# 行継続 `\<改行>` の正規化関数 `normalize_line_continuations` は cmd-parser.sh に移動した。
-#
-# 移動理由 (v0.7.1):
-# 旧実装は `printf '%s' "${1//$'\\\n'/}"` を使っていたが、 macOS デフォルトの bash 3.2.57 で
-# このパラメータ展開パターンが正しく動かない (bash 3.2 は pattern 部の `$'\\\n'` を ANSI-C
-# quoting として解釈せず literal match してしまい、 `\n` をエスケープシーケンスではなく
-# 文字 `n` として誤解釈する)。 純 bash の 1 文字ループ実装に置き換える必要があり、 同種の
-# 正規化を必要とする block-pre-push.sh と共通化するため cmd-parser.sh に集約した。
-#
-# 本関数の caller (auto-mark.sh / block-bg-codex-review.sh) は cmd-parser.sh を source して
-# `normalize_line_continuations` を使用すること。
+# `normalize_line_continuations` (および空白置換版) は cmd-parser.sh に移動 (v0.8.0)。
+# 移動理由と性能設計の詳細は cmd-parser.sh の `_normalize_line_continuations_impl` の
+# docstring を参照。 caller は cmd-parser.sh を source して使うこと。

@@ -27,8 +27,7 @@
 # 5. 解決した target cwd 上で:
 #    - default branch (master/main) なら git-guardrails に委譲して skip
 #    - branch 全差分 + 未コミット差分のハッシュを計算
-#    - 3 マーカー (.claude-pre-push-code-reviewed / .claude-pre-push-codex-reviewed /
-#      .claude-pre-push-security-reviewed) と一致しなければ deny
+#    - 3 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義) と一致しなければ deny
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
 #    引用符付き引数 / `push.default=matching` 環境での bare push 等は deny
 # 7. dirty-tree (target cwd の) は deny
@@ -43,27 +42,14 @@
 # - default branch (master/main) 上での push は本フックで gate せず、git-guardrails の
 #   block-default-branch-push.sh に委譲する (重複 deny メッセージを避けるため)
 
-# 予期せぬエラー時の診断 handler (ノンブロッキング)。
-#
-# 本 hook は fail-closed 設計で、 markers 不一致 / 解析不能な push / dirty tree などは
-# 明示的に `deny "<reason>"` を返して `exit 0` で抜ける (Claude Code は deny JSON を見て
-# tool を block する)。 これらの「想定された deny」 は exit code 0 なので下記 trap は
-# no-op になる。
-#
-# 一方、 jq の引数バグ / 外部コマンドの突然死 / シェル展開の想定外失敗 / signal などで
-# script が **非ゼロで終了** すると、 Claude Code の hook 仕様によっては fail-closed deny
-# JSON を返せていない可能性がある (= 未レビュー push を gate できない silent failure)。
-# EXIT trap で `$?` を観測し、 非ゼロ終了を検知したら stderr に診断ログを出してユーザに
-# 知らせる。 trap 自身は `exit 0` を返さない (= push 操作の挙動は元の exit code に従う) ため、
-# 本 trap は「診断ログを出すだけ」のノンブロッキング動作になる。
-_pre_push_review_exit_handler() {
-  local exit_code=$?
-  if [ "$exit_code" -ne 0 ]; then
-    printf '[pre-push-review/block-pre-push] 予期せぬエラーで hook が exit %s で終了しました。\n' "$exit_code" >&2
-    printf '[pre-push-review/block-pre-push] 本 hook は fail-closed 設計のため、 通常は markers 不一致を deny JSON で返して exit 0 で抜けますが、 今回は途中で異常終了しています。 push gate が機能していない可能性があるため、 marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' >&2
-  fi
-}
-trap _pre_push_review_exit_handler EXIT
+# 予期せぬエラー時の診断 trap を install (実装は lib/exit-trap.sh)。
+# 本 hook は fail-closed 設計のため、 markers 不一致 / 解析不能な push / dirty tree
+# などは明示的に `deny "<reason>"` を返して `exit 0` で抜ける。 想定外の非ゼロ終了が
+# 発生した場合のみ stderr に診断ログを出してユーザに知らせる (push 動作はノンブロッキング)。
+_PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/exit-trap.sh
+source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
+install_exit_trap "block-pre-push" "本 hook は fail-closed 設計のため、 通常は markers 不一致を deny JSON で返して exit 0 で抜けますが、 今回は途中で異常終了しています。 push gate が機能していない可能性があるため、"
 
 INPUT=$(cat)
 
@@ -82,13 +68,11 @@ if [ -z "$COMMAND" ]; then
   exit 0
 fi
 
-# 行継続 `\<改行>` は実行時にバックスラッシュ+改行が消えて隣接トークンに連結される。
-# 検出ロジックがこれを見落とさないよう、 入力段階で空白に正規化する。
-#
-# `${COMMAND//$'\\\n'/ }` を直接書かないのは macOS bash 3.2.57 互換性のため (詳細は
-# cmd-parser.sh の `_normalize_line_continuations_impl` のコメント参照)。 cmd-parser.sh を
-# source した後に純 bash 実装の `normalize_line_continuations_to_space` を使う。
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 4 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`
+# で即使うため必須。 target-resolver / diff-hash / markers は本処理 (segment 解析以降) で
+# 使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。 `${COMMAND//$'\\\n'/ }`
+# を直接書かない理由は cmd-parser.sh の `_normalize_line_continuations_impl` を参照。
+SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
 # shellcheck source=lib/cmd-parser.sh
 source "$SCRIPT_DIR/lib/cmd-parser.sh"
 # shellcheck source=lib/target-resolver.sh
