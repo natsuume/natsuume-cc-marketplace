@@ -49,10 +49,11 @@
 #      即 return。 大半の Bash 呼び出しは line continuation を含まないため、 ここで
 #      99% は早期離脱する。 `case "$var" in *\\$'\n'*) ...` の glob match は
 #      bash 3.2 / 4 / 5 で確実に動作する (実測済)。
-#   2. **sed fallback**: 含む場合は 1 fork で sed に渡す。 `:a;N;$!ba` で全行を
-#      pattern space に集めてから `s/\\\n/<repl>/g` で置換する (line-mode sed の
-#      default では `\n` を含む置換が直接書けないため)。 fork コスト ~1 ms に対し、
-#      pure bash ループは数百 ms-数秒のため fork 派が常に勝つ。
+#   2. **sed fallback**: 含む場合は 1 fork で sed に渡す。 BSD sed 互換のため `:a` /
+#      `N` / `$!ba` / `s/\\\n/<repl>/g` を **separate `-e`** で渡す (詳細は実装直上の
+#      コメント参照)。 line-mode sed default では `\n` を含む置換が直接書けないため
+#      pattern space 集約が必要。 fork コスト ~1 ms に対し、 pure bash ループは数百
+#      ms-数秒のため fork 派が常に勝つ。
 #
 # ## 2 つの正規化バリエーション
 #
