@@ -44,6 +44,15 @@
 #     完了時点でマーカーを書くことで、 subagent が途中で失敗した場合に marker が
 #     書かれない (= push gate がそのまま deny) を担保する。
 
+# 予期せぬエラー時の診断 trap を install (実装は lib/exit-trap.sh)。
+# 本 hook の通常パスは「対象ツールでない → exit 0」「対象ツールだがエラー / 中断 → exit 0」
+# 「対象ツール完了 → marker 書き込み → exit 0」 のいずれも exit 0 で抜ける silent skip 設計。
+# 想定外の非ゼロ終了が発生した場合のみ stderr に診断ログを出してユーザに知らせる。
+_PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/exit-trap.sh
+source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
+install_exit_trap "auto-mark" "レビュー marker の書き込みが skip された可能性があり、 次の \`git push\` 時に block-pre-push.sh が「marker 未生成」 で deny する経路があります。"
+
 INPUT=$(cat)
 
 # 本 hook は hooks.json で matcher: "*" (wildcard) を指定しており、すべての tool 完了で
@@ -86,11 +95,16 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-# lib 群を case 分岐前に source。 Bash 分岐内で `is_codex_review_invocation` を呼ぶ
-# ため codex-review-detect.sh は case 分岐より上で読み込む必要がある。 diff-hash.sh
-# / markers.sh は後段の marker 書き込みでのみ使うが、 SCRIPT_DIR を 1 回で済ますため
-# まとめて上に置く。
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# lib 群を case 分岐前に source。 Bash 分岐内で `is_codex_review_invocation` /
+# `normalize_line_continuations` を呼ぶため codex-review-detect.sh と cmd-parser.sh は
+# case 分岐より上で読み込む必要がある。 diff-hash.sh / markers.sh は後段の marker 書き
+# 込みでのみ使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。
+#
+# v0.8.0 で `normalize_line_continuations` は cmd-parser.sh に移動 (bash 3.2 互換実装)。
+# codex-review-detect.sh は同関数を提供しなくなったため cmd-parser.sh を直接 source する。
+SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
+# shellcheck source=lib/cmd-parser.sh
+source "$SCRIPT_DIR/lib/cmd-parser.sh"
 # shellcheck source=lib/codex-review-detect.sh
 source "$SCRIPT_DIR/lib/codex-review-detect.sh"
 # shellcheck source=lib/diff-hash.sh
@@ -141,6 +155,9 @@ case "$TOOL_NAME" in
     # 正規化対象 (`\<改行>`) が失われるため、 2 回呼びのまま保つ。
     COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
     [ -n "$COMMAND" ] || exit 0
+    # bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+    # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+    case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
     # 行継続 `\<改行>` を **削除** して隣接 token を連結する (block-bg-codex-review.sh と
     # 同じ理由 — `\<newline>` を含む形式で `--scope branch` や codex review 検知の `review`
     # token を bypass される経路を塞ぐ)。

@@ -28,21 +28,6 @@ is_codex_review_invocation() {
   return 0
 }
 
-# 行継続 `\<改行>` は実行時に bash がバックスラッシュ + 改行を消して隣接トークンに連結
-# する (例: `--back\<newline>ground` は実行時 `--background` となる)。 hook 側の regex は
-# contiguous な token を要求するため、 normalize しないと line continuation で flag 検知を
-# bypass される (例: `--background` が hook に見えず deny を素通りする経路)。
-#
-# **削除 (空文字置換) を行う**: bash の実挙動と一致させるため、 `\<newline>` を **空文字** に
-# 置換して隣接 token を連結する。 block-pre-push.sh は同じ `\<newline>` を **空白** に置換
-# しているが、 そちらは normalize 後に `cmd-parser.sh` で tokenize する設計のためトークン
-# 区切りを残すのが正しい。 本関数の caller (block-bg-codex-review.sh / auto-mark.sh) は
-# normalize 後に **regex match** するため、 bash 実挙動と合わせて連結 (= 削除) する必要が
-# ある。 用途が異なるため、 同じ「行継続正規化」 でも実装が分かれる。
-#
-# 対象は line continuation のみ。 ANSI-C quoting / heredoc / 引用符内改行など bash の他構文は
-# 本関数で正規化しないが、 codex companion の argv 分割で flag 名を隠せる現実的経路は line
-# continuation が主対象のため、 残余リスクは限定的。
-normalize_line_continuations() {
-  printf '%s' "${1//$'\\\n'/}"
-}
+# `normalize_line_continuations` (および空白置換版) は cmd-parser.sh に移動 (v0.8.0)。
+# 移動理由と性能設計の詳細は cmd-parser.sh の `_normalize_line_continuations_impl` の
+# docstring を参照。 caller は cmd-parser.sh を source して使うこと。

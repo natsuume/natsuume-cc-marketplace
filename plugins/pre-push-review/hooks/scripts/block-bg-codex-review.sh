@@ -33,6 +33,14 @@
 # PreToolUse hook semantics)。 関心が異なる (git push gate vs review 起動 gate) ため
 # script は分離する。
 
+# 予期せぬエラー時の診断 trap を install (実装は lib/exit-trap.sh)。
+# 本 hook は「対象でない → exit 0」「background 起動 → deny JSON 出力 → exit 0」 のいずれも
+# exit 0 で抜ける設計。 想定外の非ゼロ終了が発生した場合のみ stderr に診断ログを出す。
+_PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/exit-trap.sh
+source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
+install_exit_trap "block-bg-codex-review" "codex review の background 起動 deny が機能していない可能性があり、 \`--background\` 経由の review が silent failure する経路に戻っているかもしれません。"
+
 INPUT=$(cat)
 
 # 粗フィルタは設けない。 line continuation `\<改行>` で companion path 自体が split された
@@ -48,7 +56,12 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
+# 本 script は L80 付近で `normalize_line_continuations` を直接呼ぶため cmd-parser.sh
+# を source する。 codex-review-detect.sh は同関数を提供しないため (v0.8.0 で
+# cmd-parser.sh に移動) cmd-parser.sh を独立に source する必要がある。
+# shellcheck source=lib/cmd-parser.sh
+source "$SCRIPT_DIR/lib/cmd-parser.sh"
 # shellcheck source=lib/codex-review-detect.sh
 source "$SCRIPT_DIR/lib/codex-review-detect.sh"
 
@@ -59,6 +72,10 @@ source "$SCRIPT_DIR/lib/codex-review-detect.sh"
 # 出しのまま保つ。
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
+
+# bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+# 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
 # 行継続 `\<改行>` を **削除** して隣接 token を連結する (bash 実挙動と一致)。 これを
 # やらないと `--back\<newline>ground` のような書き方で `--background` flag 検知 (および

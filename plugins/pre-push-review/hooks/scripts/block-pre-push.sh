@@ -27,8 +27,7 @@
 # 5. 解決した target cwd 上で:
 #    - default branch (master/main) なら git-guardrails に委譲して skip
 #    - branch 全差分 + 未コミット差分のハッシュを計算
-#    - 3 マーカー (.claude-pre-push-code-reviewed / .claude-pre-push-codex-reviewed /
-#      .claude-pre-push-security-reviewed) と一致しなければ deny
+#    - 3 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義) と一致しなければ deny
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
 #    引用符付き引数 / `push.default=matching` 環境での bare push 等は deny
 # 7. dirty-tree (target cwd の) は deny
@@ -42,6 +41,15 @@
 # - 別端末から実行された `git push` は Claude Code hook の原理的範囲外
 # - default branch (master/main) 上での push は本フックで gate せず、git-guardrails の
 #   block-default-branch-push.sh に委譲する (重複 deny メッセージを避けるため)
+
+# 予期せぬエラー時の診断 trap を install (実装は lib/exit-trap.sh)。
+# 本 hook は fail-closed 設計のため、 markers 不一致 / 解析不能な push / dirty tree
+# などは明示的に `deny "<reason>"` を返して `exit 0` で抜ける。 想定外の非ゼロ終了が
+# 発生した場合のみ stderr に診断ログを出してユーザに知らせる (push 動作はノンブロッキング)。
+_PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/exit-trap.sh
+source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
+install_exit_trap "block-pre-push" "本 hook は fail-closed 設計のため、 通常は markers 不一致を deny JSON で返して exit 0 で抜けますが、 今回は途中で異常終了しています。 push gate が機能していない可能性があるため、"
 
 INPUT=$(cat)
 
@@ -60,9 +68,25 @@ if [ -z "$COMMAND" ]; then
   exit 0
 fi
 
-# 行継続 `\<改行>` は実行時にバックスラッシュ+改行が消えて隣接トークンに連結される。
-# 検出ロジックがこれを見落とさないよう、入力段階で空白に正規化する。
-COMMAND="${COMMAND//$'\\\n'/ }"
+# bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+# 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+
+# 4 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`
+# で即使うため必須。 target-resolver / diff-hash / markers は本処理 (segment 解析以降) で
+# 使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。 `${COMMAND//$'\\\n'/ }`
+# を直接書かない理由は cmd-parser.sh の `_normalize_line_continuations_impl` を参照。
+SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
+# shellcheck source=lib/cmd-parser.sh
+source "$SCRIPT_DIR/lib/cmd-parser.sh"
+# shellcheck source=lib/target-resolver.sh
+source "$SCRIPT_DIR/lib/target-resolver.sh"
+# shellcheck source=lib/diff-hash.sh
+source "$SCRIPT_DIR/lib/diff-hash.sh"
+# shellcheck source=lib/markers.sh
+source "$SCRIPT_DIR/lib/markers.sh"
+
+COMMAND=$(normalize_line_continuations_to_space "$COMMAND")
 
 deny() {
   jq -n --arg reason "$1" '{
@@ -108,16 +132,6 @@ esac
 # `_` `-` `=` `+` `@` `:` で日常的なログファイル名・パス・heredoc terminator を覆う。
 COMMAND=$(printf '%s' "$COMMAND" \
   | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/cmd-parser.sh
-source "$SCRIPT_DIR/lib/cmd-parser.sh"
-# shellcheck source=lib/target-resolver.sh
-source "$SCRIPT_DIR/lib/target-resolver.sh"
-# shellcheck source=lib/diff-hash.sh
-source "$SCRIPT_DIR/lib/diff-hash.sh"
-# shellcheck source=lib/markers.sh
-source "$SCRIPT_DIR/lib/markers.sh"
 
 # segment に分割し、 push を含む segment 数を数える。 quote 内の `git push` 文字列参照
 # (`grep "git push" README` 等) は tokenize で skip されるため、 ここでは「token level
@@ -207,30 +221,36 @@ done
 
 PUSH_SEGMENT=""
 PUSH_SEGMENT_COUNT=0
+# caller の変数名は cmd-parser.sh の `skip_env_assignments` ローカル変数
+# (`_toks_name` / `_idx_name` / `_n` / `_idx` / `_t` / `_t_raw`) と衝突しない prefix を
+# 使う必要がある (bash 3.2 で macOS デフォルト)。 caller で `_idx` / `_n` を使うと
+# `local _idx` / `local _n` 宣言で shadow され、 eval 経由の間接展開が空文字を読み
+# `[: : integer expression expected` 警告を吐く (macOS で確認済)。 ここでは `_pidx`
+# (push idx) / `_pn` (push n) を使う。
 for line in "${SEGMENTS[@]}"; do
   # token level で `git ... push` を確認 (text reference を排除)
   declare -a _toks
   tokenize_segment "$line" _toks
-  _idx=0
-  _n=${#_toks[@]}
-  skip_env_assignments _toks _idx
+  _pidx=0
+  _pn=${#_toks[@]}
+  skip_env_assignments _toks _pidx
   # `git` または path-qualified (`/usr/bin/git`, `./git` 等) を期待
-  if [ "$_idx" -lt "$_n" ]; then
-    _first="$(unquote_token "${_toks[$_idx]}")"
+  if [ "$_pidx" -lt "$_pn" ]; then
+    _first="$(unquote_token "${_toks[$_pidx]}")"
     case "$_first" in
       git|*/git) _is_git=1 ;;
       *) _is_git=0 ;;
     esac
     if [ "$_is_git" -eq 1 ]; then
-      _idx=$((_idx+1))
+      _pidx=$((_pidx+1))
       # global option を walk して subcommand を探す
-      while [ "$_idx" -lt "$_n" ]; do
-        _opt="$(unquote_token "${_toks[$_idx]}")"
+      while [ "$_pidx" -lt "$_pn" ]; do
+        _opt="$(unquote_token "${_toks[$_pidx]}")"
         case "$_opt" in
           -C|--git-dir|--work-tree|-c|--config|--config-env)
-            _idx=$((_idx+2)); continue ;;
-          --git-dir=*|--work-tree=*) _idx=$((_idx+1)); continue ;;
-          -*) _idx=$((_idx+1)); continue ;;
+            _pidx=$((_pidx+2)); continue ;;
+          --git-dir=*|--work-tree=*) _pidx=$((_pidx+1)); continue ;;
+          -*) _pidx=$((_pidx+1)); continue ;;
           push)
             PUSH_SEGMENT_COUNT=$((PUSH_SEGMENT_COUNT+1))
             if [ -z "$PUSH_SEGMENT" ]; then

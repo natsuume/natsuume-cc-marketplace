@@ -26,6 +26,119 @@
 #     内部の `git push` が segment に巻き込まれて push 検出が token level で失敗する経路が
 #     あった。 それを shape check で塞ぐ。 backtick は depth tracking していない。
 
+# line continuation `\<LF>` 正規化。
+#
+# ## bash 3.2 互換のための実装上の制約
+#
+# macOS デフォルトの bash 3.2.57 は `${var//$'\\\n'/<repl>}` 形式のパターン置換で
+# ANSI-C quoting (`$'...'`) をパターン部に展開できない (bash 4 では動く)。 計測で:
+#   - `${INPUT//$'\\\n'/}` (リテラル): bash 3.2 で完全に no-op
+#   - `PAT=$'\\\n'; ${INPUT//$PAT/}`: bash 3.2 で `\n` をエスケープシーケンスではなく
+#     literal `n` として誤解釈し、 結果が壊れる
+# このため、 bash の native パターン置換は使えない。
+#
+# ## 性能設計 (fast-path + sed fallback)
+#
+# 純 bash の 1 文字ループで実装した初版は `result="$result$c"` 形式の reassign が
+# 内部で O(N) コピーを発生させ、 ループ全体が **O(N^2)** になる。 hot path で
+# 実測 (docker bash:3.2) すると 840 chars で 76 ms、 11 KB で 8.6 秒と無視できない
+# 遅延が出るため (このプラグインの hook は **全 Bash 呼び出し** で発火する hot path)、
+# 以下の 2 段構えで O(1) / O(N) に落とす:
+#
+#   1. **case-glob fast-path**: 入力が line continuation を含まなければ O(1) で
+#      即 return。 大半の Bash 呼び出しは line continuation を含まないため、 ここで
+#      99% は早期離脱する。 `case "$var" in *\\$'\n'*) ...` の glob match は
+#      bash 3.2 / 4 / 5 で確実に動作する (実測済)。
+#   2. **sed fallback**: 含む場合は 1 fork で sed に渡す。 BSD sed 互換のため `:a` /
+#      `N` / `$!ba` / `s/\\\n/<repl>/g` を **separate `-e`** で渡す (詳細は実装直上の
+#      コメント参照)。 line-mode sed default では `\n` を含む置換が直接書けないため
+#      pattern space 集約が必要。 fork コスト ~1 ms に対し、 pure bash ループは数百
+#      ms-数秒のため fork 派が常に勝つ。
+#
+# ## 2 つの正規化バリエーション
+#
+#   - `normalize_line_continuations`         : `\<LF>` を **削除** (bash 実挙動と一致)
+#       caller: block-bg-codex-review.sh / auto-mark.sh
+#       理由 : これらは regex match の前処理。 隣接トークン (`--back\<LF>ground` →
+#              `--background`) を連結する必要がある。
+#   - `normalize_line_continuations_to_space`: `\<LF>` を **空白** に置換
+#       caller: block-pre-push.sh
+#       理由 : tokenize_segment が空白で token を区切る設計のため、 空白置換で
+#              トークン境界を保ったまま改行を消す必要がある。
+#
+# ## sed の置換文字列の安全性
+#
+# 内部実装の `_normalize_line_continuations_impl` の第 2 引数 (`replacement`) は
+# **本ファイル内の wrapper 2 関数のみが呼ぶ private contract** で、 値は `""` または
+# `" "` (空白 1 文字) に限定する。 任意文字列を渡すと sed の置換右辺で `&` / `\` /
+# 区切り文字 `/` がメタ文字解釈され誤動作する。 wrapper 経由でしか呼ばない設計のため
+# 本制約は守られる。
+_normalize_line_continuations_impl() {
+  local input="$1"
+  local replacement="$2"
+  # Fast-path: line continuation を含まない入力は O(1) で即 return。 大半の入力は
+  # ここで抜ける。 `*\\$'\n'*` の glob は bash 3.2 / 4 / 5 で正しく動作する。
+  case "$input" in
+    *\\$'\n'*) ;;
+    *) printf '%s' "$input"; return ;;
+  esac
+  # Slow-path: 1 fork で sed に渡す。 `:a` ラベル / `N` で次行 append / `$!ba` で
+  # 末尾以外は :a に branch / `s/\\\n/<repl>/g` で置換、 という 4 コマンドを **各
+  # `-e` で分離** して渡す。 packed `:a;N;$!ba;s/...` 形式は BSD sed (= macOS デフォ
+  # ルト) でラベル定義の `:a` の後の `;` がラベル名の一部として食われ、 line
+  # continuation を含む入力で sed エラーになる。 separate `-e` 形式は GNU sed /
+  # BSD sed / busybox sed すべてで動作する portable な記法。
+  #
+  # **末尾 `\<LF>` への sentinel 補正**: 入力末尾が `\<LF>` で終わる場合 (例:
+  # Claude Code の Bash tool に `git push\<LF>` という command が渡されるケース)、
+  # sed の N コマンドが「次行を読みに行く → EOF → 全体 exit」 する経路があり、
+  # 累積した pattern space が出力されず末尾の `\<LF>` が変換されないまま残る。
+  # 結果として下流の tokenize_segment が `push\` を 1 トークンとして扱い、 push
+  # 検知が外れて gate を bypass する critical regression になる。
+  # 対策: `printf '%s\n'` で入力末尾に sentinel LF を 1 個付加して sed に渡し、
+  # 出力末尾に残る余分な LF を bash の `$(...)` 機構 (trailing LF を 1 つ自動 trim
+  # する仕様) で除去する。 これにより:
+  #   - 末尾 `\<LF>` のケース: `... \<LF><sentinel>` → sed が `<repl><sentinel>`
+  #     に変換 → `$(...)` で sentinel trim → `... <repl>` で正しく置換される
+  #   - 末尾が普通の文字 / LF のケース: sentinel 付加 → そのまま → trim で元入力
+  local result
+  result=$(printf '%s\n' "$input" | sed -e ':a' -e 'N' -e '$!ba' -e "s/\\\\\\n/${replacement}/g")
+  printf '%s' "$result"
+}
+
+normalize_line_continuations() {
+  _normalize_line_continuations_impl "$1" ""
+}
+
+normalize_line_continuations_to_space() {
+  _normalize_line_continuations_impl "$1" " "
+}
+
+# ## 末尾 `\<LF>` 復元の caller 側 inline パターン
+#
+# bash の `$(...)` は POSIX 仕様で **trailing newlines を全部削除** するため、 caller が
+# JSON 値を `COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command')` で取得すると、
+# JSON 内 `"command":"git push\<LF>"` のような末尾 line continuation 付き値が取得時点で
+# `git push\` (末尾 backslash 単独、 LF なし) になり line continuation 情報が失われる。
+# 結果として下流の `normalize_line_continuations*` が「line continuation を含まない」 と
+# fast-path で素通しし、 tokenize 段で `push\` を 1 token として扱って push 検知が外れる
+# security gate bypass になる。
+#
+# 修正は **caller 側 inline** で 1 行追加する形で行う (helper 関数経由だと関数の return も
+# `$()` で取った時点で同じ trailing LF trim が再発するため、 関数化のメリットがない):
+#
+#   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+#   [ -n "$COMMAND" ] || exit 0
+#   # bash の $(...) trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+#   # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+#   case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+#
+# 末尾 literal backslash 単独で終わる入力 (例: bare の `echo foo\` / `git push origin foo\`
+# / Windows-style path `C:\Users\foo\` 等) を line continuation として誤復元するが、
+# その場合も復元後に sed が `\<LF>` を空白/削除に変換するだけで、 下流の tokenize で push
+# 検知の偽陰性は起きない (worst case は argument 末尾の `\` が空白/削除される merge
+# artifact のみで、 tool 名・サブコマンド名の検知には影響しない)。
+
 # split_command <cmd>
 # stdout: 行ごとに segment を出力。 segment 間には `SEP:<separator>` 行を挟む。
 #   例: "cd a && git push" → ["cd a", "SEP:&&", "git push"]
