@@ -11,7 +11,7 @@
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
       "description": "GitHub Flow に準拠した Git ワークフローを構造強制するプラグイン。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
