@@ -9,7 +9,7 @@
 # 計算対象は **ブランチ全差分** (`git diff <base>...HEAD`) + 未コミット差分
 # (`git diff --cached`, `git diff`) の連結:
 #   - ブランチ全差分: push される commit 内容そのもの (PR diff と同じセマンティクス)
-#   - 未コミット差分: /simplify などが残した未コミット edit を push 前に必ず commit させるため。
+#   - 未コミット差分: /code-review などが残した未コミット edit を push 前に必ず commit させるため。
 #     未コミット edit があるとハッシュが変わり markers 失効 → 「commit してから再 review → push」
 #     を強制できる。未コミットのまま push しても push 自体は committed のみ反映するが、
 #     ローカルの未コミット edit は次回 commit 時にレビューを再走させるためにも検出が必要。

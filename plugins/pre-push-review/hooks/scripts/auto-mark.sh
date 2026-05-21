@@ -1,11 +1,13 @@
 #!/bin/bash
 # auto-mark.sh
-# /simplify / /codex:review --wait --scope branch / pre-push-review:security-reviewer
+# /code-review / /codex:review --wait --scope branch / pre-push-review:security-reviewer
 # subagent / /security-review 標準 skill (主 session 直接呼び出しのみ) の実行完了を
 # PostToolUse で検知し、対応するレビューマーカーを更新する。
 #
 # 検知対象:
-#   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー (launch 時点ハッシュ)
+#   - Skill tool で `code-review` skill (旧名 `simplify` も後方互換で受け付ける) が
+#     完了した瞬間 → code-reviewed マーカー (launch 時点ハッシュ)。 Claude Code v2.1.146
+#     で bundled skill `/simplify` が `/code-review` にリネームされたため両方を検知する。
 #   - Skill tool で `security-review` skill が完了した瞬間 → security-reviewed マーカー
 #     (launch 時点ハッシュ。 主 session が直接呼んだ場合のみ動く後方互換パス)
 #   - Bash tool で `codex-companion.mjs review --scope branch` が完了した瞬間
@@ -54,9 +56,14 @@ INPUT=$(cat)
 # subprocess を立てずに済ませる (Read/Edit/Write 等の対象外 tool 完了でも本 hook が
 # 呼ばれるが、ここで即離脱できればフォーク無しで通り抜けられる)。
 #
-# 4 つの OR ブランチの意図:
-#   - `"skill"[[:space:]]*:[[:space:]]*"(simplify|security-review)"`: Skill tool で
-#     `simplify` または `security-review` skill が完了したことを検出する粗フィルタ。
+# 3 つの top-level OR ブランチの意図:
+#   - `"skill"[[:space:]]*:[[:space:]]*"(code-review|simplify|security-review)"`: Skill tool で
+#     `code-review` (v2.1.146 以降の新名) / `simplify` (v2.1.145 以下の旧名) / `security-review`
+#     skill が完了したことを検出する粗フィルタ。 完全一致が必要なため末尾の `"` まで含めて
+#     マッチさせ、 namespace 付き skill (`code-review:code-review` 等) は副次マッチしない。
+#     **後段 case 分岐 (skill 名 → marker 関数のマッピング) と同期させること**:
+#     新しい alias 追加時はここと case 文の両方を更新しないと、 PRECHECK_RE で通過するが
+#     case の `*) exit 0 ;;` に落ちる silent skip が発生し marker が永久に書かれない。
 #   - `"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"`: Agent / Task
 #     tool で `pre-push-review:security-reviewer` subagent が完了したことを検出する粗
 #     フィルタ。 namespace 付き形式 (`pre-push-review:security-reviewer`) と name-only
@@ -66,11 +73,11 @@ INPUT=$(cat)
 #     Bash 分岐側に `^node` + companion path + `review` サブコマンドの厳密な
 #     後段検証があるため、ここは単純 substring で十分 (false positive は後段で弾かれる)。
 #
-# hook payload の JSON 整形 (`"skill":"simplify"` / `"skill": "simplify"` 等) に左右され
-# ないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を弾く) は
-# マーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
+# hook payload の JSON 整形 (`"skill":"code-review"` / `"skill": "code-review"` 等) に
+# 左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を
+# 弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
 # (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
-PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(simplify|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"|codex-companion'
+PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(code-review|simplify|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"|codex-companion'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0
 fi
@@ -105,7 +112,11 @@ case "$TOOL_NAME" in
     # launch 時点と異なる値になり、block-pre-push.sh の比較で marker stale → DENY となる
     # ため、Claude は **修正後の state で再度 skill** を呼ぶ必要が生じる (loop 強制)。
     case "$SKILL_NAME" in
-      simplify) MARKER_FN=simplified_marker_path ;;
+      # v2.1.146 で `/simplify` が `/code-review` にリネームされたため両方を受け付ける。
+      # **PRECHECK_RE (上の skill alternation) と同期させること**: 片方だけ更新すると、
+      # PRECHECK_RE で通過するが case で `*) exit 0 ;;` に落ちる silent skip を作りうる。
+      # マーカーファイル名は `.claude-pre-push-code-reviewed` (v0.7.0 で旧 `.claude-pre-push-simplified` から rename)。
+      code-review|simplify) MARKER_FN=code_reviewed_marker_path ;;
       security-review) MARKER_FN=security_marker_path ;;
       *) exit 0 ;;
     esac
@@ -181,7 +192,7 @@ case "$TOOL_NAME" in
 esac
 
 # ツール実行が失敗 / 中断した場合はレビューが完遂していないためマーカーを更新しない
-# (失敗した review / 失敗した simplify でマーカーを書くと、その後別の tool の成功と
+# (失敗した review / 失敗した code-review でマーカーを書くと、その後別の tool の成功と
 # 組み合わさって push が通ってしまう抜け穴になる)。Skill / Bash 両分岐に共通。
 { read -r IS_ERROR; read -r INTERRUPTED; } < <(
   printf '%s' "$INPUT" | jq -r '
