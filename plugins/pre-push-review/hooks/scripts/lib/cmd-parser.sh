@@ -106,30 +106,38 @@ _normalize_line_continuations_impl() {
   printf '%s' "$result"
 }
 
-# wrapper で「末尾 backslash 単独 (`*\\`) を `\<LF>` に復元」 する処理を入れる理由:
-# caller (block-pre-push.sh / auto-mark.sh / block-bg-codex-review.sh) は jq の出力を
-# `COMMAND=$(printf ... | jq -r ...)` で取得するが、 bash の `$(...)` は **trailing newlines
-# を全部削除** する POSIX 仕様のため、 JSON で `"command":"git push\<LF>"` が渡されても
-# 取得時点で `git push\` (末尾 backslash 単独、 LF なし) になる。 復元しないと normalize
-# 内部が「line continuation を含まない」 と判定して fast-path で素通しし、 下流 tokenize
-# が `push\` を 1 token として扱って push 検知が外れる security gate bypass になる。
-# 末尾 literal backslash 単独は shell 構文として syntax error なので、 復元による誤判定
-# (false positive) は実用上発生しない。
 normalize_line_continuations() {
-  local input="$1"
-  case "$input" in
-    *\\) input="${input}"$'\n' ;;
-  esac
-  _normalize_line_continuations_impl "$input" ""
+  _normalize_line_continuations_impl "$1" ""
 }
 
 normalize_line_continuations_to_space() {
-  local input="$1"
-  case "$input" in
-    *\\) input="${input}"$'\n' ;;
-  esac
-  _normalize_line_continuations_impl "$input" " "
+  _normalize_line_continuations_impl "$1" " "
 }
+
+# ## 末尾 `\<LF>` 復元の caller 側 inline パターン
+#
+# bash の `$(...)` は POSIX 仕様で **trailing newlines を全部削除** するため、 caller が
+# JSON 値を `COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command')` で取得すると、
+# JSON 内 `"command":"git push\<LF>"` のような末尾 line continuation 付き値が取得時点で
+# `git push\` (末尾 backslash 単独、 LF なし) になり line continuation 情報が失われる。
+# 結果として下流の `normalize_line_continuations*` が「line continuation を含まない」 と
+# fast-path で素通しし、 tokenize 段で `push\` を 1 token として扱って push 検知が外れる
+# security gate bypass になる。
+#
+# 修正は **caller 側 inline** で 1 行追加する形で行う (helper 関数経由だと関数の return も
+# `$()` で取った時点で同じ trailing LF trim が再発するため、 関数化のメリットがない):
+#
+#   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+#   [ -n "$COMMAND" ] || exit 0
+#   # bash の $(...) trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+#   # 「末尾 \<LF> 復元」 セクション)。
+#   case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+#
+# 末尾 literal backslash 単独で終わる入力 (例: bare の `echo foo\` / `git push origin foo\`
+# / Windows-style path `C:\Users\foo\` 等) を line continuation として誤復元するが、
+# その場合も復元後に sed が `\<LF>` を空白/削除に変換するだけで、 下流の tokenize で push
+# 検知の偽陰性は起きない (worst case は argument 末尾の `\` が空白/削除される merge
+# artifact のみで、 tool 名・サブコマンド名の検知には影響しない)。
 
 # split_command <cmd>
 # stdout: 行ごとに segment を出力。 segment 間には `SEP:<separator>` 行を挟む。

@@ -73,6 +73,10 @@ source "$SCRIPT_DIR/lib/codex-review-detect.sh"
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
 
+# bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+# 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+
 # 行継続 `\<改行>` を **削除** して隣接 token を連結する (bash 実挙動と一致)。 これを
 # やらないと `--back\<newline>ground` のような書き方で `--background` flag 検知 (および
 # codex review 検知の `review` token) を bypass できる経路が残る。

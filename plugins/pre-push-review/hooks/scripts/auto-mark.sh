@@ -155,6 +155,9 @@ case "$TOOL_NAME" in
     # 正規化対象 (`\<改行>`) が失われるため、 2 回呼びのまま保つ。
     COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
     [ -n "$COMMAND" ] || exit 0
+    # bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+    # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+    case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
     # 行継続 `\<改行>` を **削除** して隣接 token を連結する (block-bg-codex-review.sh と
     # 同じ理由 — `\<newline>` を含む形式で `--scope branch` や codex review 検知の `review`
     # token を bypass される経路を塞ぐ)。
