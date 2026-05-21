@@ -30,16 +30,29 @@ fi
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
 
+# bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は pre-push-review の
+# cmd-parser.sh の「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+# 末尾が `\<LF>` で終わる JSON 値が取得時点で `\` 単独になる経路で security gate
+# (default branch push deny) を bypass されるのを防ぐ。
+case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+
 # 入力の改行を扱う (順序重要):
 #   1. 行継続 `\<改行>` (= バックスラッシュ + real newline) は実行時に両方とも消えて
 #      隣接トークンに連結される。先にこれを空白に置換しないと、`git \<NL>push` のような
 #      入力が次の `;` 置換で `git \;push` に化けて PUSH_INVOCATION_REGEX が不一致になる。
+#      `${COMMAND//$'\\\n'/ }` を直接書かないのは macOS bash 3.2.57 互換性のため (詳細
+#      は cmd-parser.sh の `_normalize_line_continuations_impl` を参照)。
 #   2. 行継続を消した残りの real newline を `;` (コマンド区切り等価) に正規化する。
 #      multi-line command (`echo ok\ngit push origin master`) の 2 行目以降の保護対象
 #      invocation を検出するため。`grep -qE` が改行をパターン中に含められない / bash の
 #      `=~` 境界クラスに改行を直接書くと grep 経路でエラーになる事情を回避する目的でも
 #      ある。改行は bash でもコマンド区切り (`;` 等価) なので置換しても解釈は変わらない。
-COMMAND="${COMMAND//$'\\\n'/ }"
+#      `${COMMAND//$'\n'/;}` (LF のみ) は bash 3.2 で正しく動作する (backslash と
+#      組み合わせた `$'\\\n'` pattern とは別)。
+SCRIPT_DIR_FOR_NORM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/cmd-parser.sh
+source "$SCRIPT_DIR_FOR_NORM/lib/cmd-parser.sh"
+COMMAND=$(normalize_line_continuations_to_space "$COMMAND")
 COMMAND="${COMMAND//$'\n'/;}"
 
 # `git push` で始まる (もしくは連結 prefix 経由で git push を含む) コマンドだけが対象。
@@ -65,7 +78,7 @@ if ! printf '%s' "$COMMAND" | grep -qE "$PUSH_INVOCATION_REGEX"; then
   exit 0
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$SCRIPT_DIR_FOR_NORM"
 # shellcheck source=lib/default-branch.sh
 source "$SCRIPT_DIR/lib/default-branch.sh"
 

@@ -26,10 +26,18 @@ fi
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
 
+# bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は pre-push-review の
+# cmd-parser.sh の「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+
 # 行継続 `\<改行>` を空白に、real newline を `;` に正規化する (詳細は push hook 側の
 # コメント参照)。順序が重要: 行継続を先に処理しないと `gh pr \<NL>create` が `gh pr \;create`
-# に化けて invocation regex を素通りする。
-COMMAND="${COMMAND//$'\\\n'/ }"
+# に化けて invocation regex を素通りする。 macOS bash 3.2 互換性のため `${var//$'\\\n'/...}`
+# は使わず cmd-parser.sh の純 bash + sed fallback 実装に委譲する。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/cmd-parser.sh
+source "$SCRIPT_DIR/lib/cmd-parser.sh"
+COMMAND=$(normalize_line_continuations_to_space "$COMMAND")
 COMMAND="${COMMAND//$'\n'/;}"
 
 # `gh ... pr create` のときだけ拾う。`gh -R owner/repo pr create` のような global option を
@@ -45,7 +53,6 @@ if ! [[ "$COMMAND" =~ $PR_INVOCATION_REGEX ]]; then
   exit 0
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/default-branch.sh
 source "$SCRIPT_DIR/lib/default-branch.sh"
 

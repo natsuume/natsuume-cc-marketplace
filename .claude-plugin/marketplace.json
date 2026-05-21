@@ -11,21 +11,21 @@
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
       "description": "GitHub Flow に準拠した Git ワークフローを構造強制するプラグイン。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
       "name": "enforce-draft-pr",
       "source": "./plugins/enforce-draft-pr",
       "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
       "name": "auto-lint-check",
       "source": "./plugins/auto-lint-check",
       "description": "ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
     },
     {

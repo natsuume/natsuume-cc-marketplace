@@ -49,6 +49,10 @@ TOOL_NAME=$(extract_tool_name "$INPUT")
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
 
+# bash の `$(...)` trailing-LF trim で消えた `\<LF>` を復元してから parser に渡す。
+# 詳細は block-commit-lint.sh の同位置コメントを参照。
+case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+
 # parse-commit-command.py で実 commit invocation の存在を判定する。
 # 行継続展開 / 改行→`;` 変換 / 安全な heredoc 除去は parser 側で行うため、
 # raw command をそのまま渡す。詳細は block-commit-lint.sh の同じ呼び出し
