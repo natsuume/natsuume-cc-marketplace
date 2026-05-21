@@ -79,8 +79,11 @@ case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
 # 行継続 `\<改行>` を **削除** して隣接 token を連結する (bash 実挙動と一致)。 これを
 # やらないと `--back\<newline>ground` のような書き方で `--background` flag 検知 (および
-# codex review 検知の `review` token) を bypass できる経路が残る。
-COMMAND=$(normalize_line_continuations "$COMMAND")
+# codex review 検知の `review` token) を bypass できる経路が残る。 fast-path で line
+# continuation を含まない 99% の入力は `$(...)` fork を回避する。
+case "$COMMAND" in
+  *\\$'\n'*) COMMAND=$(normalize_line_continuations "$COMMAND") ;;
+esac
 
 RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
 

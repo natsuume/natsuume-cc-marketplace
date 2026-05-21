@@ -1,5 +1,5 @@
 {
   "name": "pre-push-review",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "git push 前に /code-review → /codex:review --wait --scope branch → pre-push-review:security-reviewer subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実行完了を自動検知してブランチ全差分との同一性を検証することで、未レビューの commit が remote に到達するのを構造的にブロックするプラグイン。pre-commit-review の後継。security review を subagent で self-contained 実行するのは、 標準 /security-review skill を直接呼ぶと主 session の turn が終了し、 subagent 経由で呼んでも nested subagent 制約で機能しないため。中間 commit を許容しつつ「外部公開の境界 (push)」で gate するため、commit 履歴の意味的解像度を保ちながらレビュー強制を維持できる。v0.5.0 で /codex:adversarial-review 関連の loop counter / 閾値誘導を全廃。/codex:review からの指摘修正は /codex:rescue --wait で方針壁打ち後に実装する規律を deny メッセージに維持。v0.7.0 で Claude Code v2.1.146 の bundled skill リネーム (/simplify → /code-review) に追随し marker file 名を `.claude-pre-push-code-reviewed` に統一。v0.8.0 で macOS デフォルト bash 3.2.57 での 2 つの互換性 bug を修正 (line continuation 正規化を純 bash 実装に / skip_env_assignments 呼び出し側の `_idx` / `_n` 変数衝突解消)、 および 3 つの hook script に EXIT trap を追加して予期せぬ非ゼロ exit (jq クラッシュ / signal / シェル展開失敗等) を stderr にノンブロッキングで報告するようにした"
 }

@@ -160,8 +160,11 @@ case "$TOOL_NAME" in
     case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
     # 行継続 `\<改行>` を **削除** して隣接 token を連結する (block-bg-codex-review.sh と
     # 同じ理由 — `\<newline>` を含む形式で `--scope branch` や codex review 検知の `review`
-    # token を bypass される経路を塞ぐ)。
-    COMMAND=$(normalize_line_continuations "$COMMAND")
+    # token を bypass される経路を塞ぐ)。 fast-path で line continuation を含まない入力は
+    # `$(...)` fork を回避する。
+    case "$COMMAND" in
+      *\\$'\n'*) COMMAND=$(normalize_line_continuations "$COMMAND") ;;
+    esac
     RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
     # codex プラグインの review companion 起動を検出する。 検知ロジックは
     # lib/codex-review-detect.sh に集約しており、 block-bg-codex-review.sh と

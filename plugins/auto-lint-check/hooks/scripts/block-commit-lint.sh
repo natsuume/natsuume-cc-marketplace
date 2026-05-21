@@ -74,6 +74,17 @@ TOOL_NAME=$(extract_tool_name "$INPUT")
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
 
+# bash の `$(...)` は POSIX 仕様で trailing newlines を全部削除するため、 JSON で
+# `"command":"git commit -m msg\<LF>"` のような末尾 line continuation 付き値が
+# 取得時点で `git commit -m msg\` (末尾 backslash 単独、 LF なし) になり、 下流
+# Python parser の `_normalize_command` も `\<LF>` を含まないため line continuation
+# として処理されず、 末尾 `\` がそのまま token に残って commit subcommand 検知が
+# 外れる lint skip bypass になる。 末尾 `\` 単独を `\<LF>` に復元してから parser に
+# 渡すことで、 Python 側の `_normalize_command` が正しく line continuation として
+# 処理できる。 (詳細は pre-push-review の cmd-parser.sh の「末尾 `\<LF>` 復元の
+# caller 側 inline パターン」 セクション参照。)
+case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+
 # `lib/parse-commit-command.py` が shlex でシェルトークン化したコマンドを解析し、
 # 行継続展開 / 改行→`;` 変換 / 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`)
 # の除去まで含めて parser 側で処理する。bash 側で先に改行を ``;`` に置換すると
