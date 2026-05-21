@@ -1,10 +1,16 @@
 # pre-push-review プラグイン
 
-`git push` を実行する前に `/simplify` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に branch 全差分のセキュリティレビューを実行; 詳細は下記 [Agents](#agents) を参照) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形を品質観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。修正により branch 全差分が変わると **3 つのレビューマーカーが自動的に失効** するため、Claude は 3 つのレビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
+`git push` を実行する前に `/code-review` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に branch 全差分のセキュリティレビューを実行; 詳細は下記 [Agents](#agents) を参照) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/code-review` (Claude Code v2.1.146 で旧名 `/simplify` からリネームされた bundled skill) はコード変更を伴うため先に走らせ、`/codex:review` はその後の最終形を品質観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。修正により branch 全差分が変わると **3 つのレビューマーカーが自動的に失効** するため、Claude は 3 つのレビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
 
 ## バージョン
 
-v0.5.0 (前身: `pre-commit-review` v0.4.0)
+v0.7.0 (前身: `pre-commit-review` v0.4.0)
+
+### v0.6.0 → v0.7.0 の変更点
+
+- **Claude Code v2.1.146 で bundled skill `/simplify` が `/code-review` (effort level optional) にリネームされたのに追随**: PostToolUse の検出ロジック (auto-mark.sh の `PRECHECK_RE` および Skill 分岐 case) を `code-review` / `simplify` の両方を受け付ける形に拡張。 v2.1.146 以降のユーザーは新名で、 v2.1.145 以下のユーザーは旧名のままで同じマーカーが書かれる
+- **マーカーファイル名を `.claude-pre-push-simplified` → `.claude-pre-push-code-reviewed` にリネーム**: 関数名 (`simplified_marker_path` → `code_reviewed_marker_path`) と変数名 (`SIMPLIFIED_*` → `CODE_REVIEWED_*`) も同期。 v0.6.0 以前を使っていた環境では旧マーカーが残るが、 新ファイル名とは独立に扱われるため、 v0.7.0 アップグレード後は次回 `/code-review` 実行時に新ファイルが作成される (旧ファイルは無視される / 削除不要)
+- **deny メッセージ / README / description を新名 `/code-review` に統一**: v2.1.145 以下のユーザー向けに「旧名 `/simplify` 可」の注記を残しつつ、 標準ガイドは新名に切り替え
 
 ### v0.4.0 → v0.5.0 の変更点
 
@@ -39,14 +45,14 @@ codex adversarial-review の指摘を踏まえた gate の精緻化:
 pre-commit 境界の課題:
 
 - **commit ごとにループが回る**: N-commit PR では合計 N 回ループが走るため、多 commit PR ほど時間コストが増える
-- **意味的に異なる変更が 1 commit に混入**: 初期実装 / `/simplify` edits / `/codex:review` 指摘修正がすべて同じ commit に圧縮され、`git log` / `git blame` / `git bisect` の解像度が失われる
+- **意味的に異なる変更が 1 commit に混入**: 初期実装 / `/code-review` edits / `/codex:review` 指摘修正がすべて同じ commit に圧縮され、`git log` / `git blame` / `git bisect` の解像度が失われる
 - **中間 commit が残せない**: WIP / 探索 / checkpoint のような目的別 commit が deny によって作成不能
 - **長時間 uncommitted 状態が常態化**: deny → 修正 → deny の繰り返しで数十分単位で未保存。ターミナルクラッシュや誤操作で作業損失リスク
 
 push 境界に移すことで:
 
 - **PR 全差分に対して 1 周のループ**: 1-commit PR では同等、多 commit PR で削減 (実測ベースで 40-48% の review 回数削減見込み)
-- **意味的単位の commit が許容される**: 実装 / simplify / fix が独立 commit として記録できる。bisect / blame / archaeology が効くようになる
+- **意味的単位の commit が許容される**: 実装 / code-review / fix が独立 commit として記録できる。bisect / blame / archaeology が効くようになる
 - **WIP commit が自由に重ねられる**: 中間 checkpoint をいつでも保存可能
 - **未レビューな commit を remote に到達させない**: PR 作成手段 (gh CLI / Web UI / IDE / API) のいずれを使われても **precondition (remote branch の存在) を破壊** することで構造的に gate できる。「pre-PR matcher で `gh pr create` だけを止める」設計だと人間の Web UI 操作で bypass される問題が解消する
 
@@ -62,7 +68,7 @@ PR 作成側で gate する設計だと、以下の経路が捕捉できませ�
 
 ## 概要
 
-`PreToolUse` フックで `Bash` ツール実行を監視し、`git push` コマンドを検出した場合、 **3 つのレビューマーカー** (`/simplify` / `/codex:review --wait --scope branch` / `/security-review` (subagent 経由) それぞれの実行完了マーカー) が現在の **branch 全差分 + 未コミット差分** のハッシュと一致しなければ `deny` を返して push を阻止します。マーカーは `PostToolUse` フックが各ツールの実走完了を検知して自動的に書き込みます (PostToolUse は subagent 内の tool use にも発火するため、 security 用 subagent 経由でも `/security-review` の skill 起動が検知されます)。手動でスクリプトを呼び出す必要はありません。
+`PreToolUse` フックで `Bash` ツール実行を監視し、`git push` コマンドを検出した場合、 **3 つのレビューマーカー** (`/code-review` / `/codex:review --wait --scope branch` / `/security-review` (subagent 経由) それぞれの実行完了マーカー) が現在の **branch 全差分 + 未コミット差分** のハッシュと一致しなければ `deny` を返して push を阻止します。マーカーは `PostToolUse` フックが各ツールの実走完了を検知して自動的に書き込みます (PostToolUse は subagent 内の tool use にも発火するため、 security 用 subagent 経由でも `/security-review` の skill 起動が検知されます)。手動でスクリプトを呼び出す必要はありません。
 
 ## インストール
 
@@ -120,13 +126,13 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 > **target-mismatch の構造的解決**: 本プラグインは独自の bash command parser (`lib/cmd-parser.sh`) と target resolver (`lib/target-resolver.sh`) で `cd dir && git push` / `git -C dir push` / `GIT_DIR=path/.git git push` の **実 push target を決定的に解決** し、 解決した target cwd の `.git` 配下に対して markers / hash 比較を行う。 「hook 検証時の cwd と実 push 時の cwd が乖離」する旧来の問題は、 positive list 設計 (実 target を取り出して直接検証) によって構造的に塞がれている。 解析不能な形式 (subshell `(...)`, brace group `{...}`, `bash -c "..."`, `pushd`/`popd`, `export GIT_DIR=...`, `--work-tree=...`, `time` / `env` 等の未対応 wrapper) は **保守的に deny** する (parser が target を確定できないため)。
 
-> **順序の意図**: `/simplify` はコード変更を適用するため先に走らせ、`/codex:review` はその後の最終形を対象にレビューします。逆順だと codex が simplify によって書き換わる前のコードを見ることになり、レビュー結果が陳腐化します。マーカー方式上は順序を強制していませんが、修正後の差分で 2 マーカーを揃えるためには結局両方を走らせる必要があり、無駄を減らすには `/simplify` を先にする運用が合理的です。
+> **順序の意図**: `/code-review` はコード変更を適用するため先に走らせ、`/codex:review` はその後の最終形を対象にレビューします。逆順だと codex が code-review によって書き換わる前のコードを見ることになり、レビュー結果が陳腐化します。マーカー方式上は順序を強制していませんが、修正後の差分で 2 マーカーを揃えるためには結局両方を走らせる必要があり、無駄を減らすには `/code-review` を先にする運用が合理的です。
 
 > **`--wait` 限定の理由**: `/codex:review --background` だと Bash tool の `run_in_background: true` 起動直後に PostToolUse が発火し、レビューが完了する前に auto-mark.sh が呼ばれます。auto-mark.sh は background 起動を検知してマーカー更新をスキップするため、background 経由ではマーカーが永遠に更新されず push が通りません。pre-push-review の文脈では必ず `--wait` を渡してください。
 
 > **`--scope branch` 限定の理由**: pre-push-review が gate するのは「branch の commit 列 (= PR diff)」の品質保証で、 `--scope working-tree` (staged+unstaged のみレビュー / committed 部分を見ない) や `--scope auto` (dirty 時に working-tree にフォールバック) では PR diff の review 保証として不十分です。auto-mark.sh は `--scope branch` を含む codex 起動のみマーカーを更新します。
 
-> **ループの意図**: 修正を加えた瞬間、その修正自体は未レビューになります。`/codex:review` の指摘を修正した結果として `/simplify` の対象 (重複・冗長コメント等) が新規発生する可能性も、`/simplify` の修正により `/codex:review` の新規指摘が出る可能性も、いずれもゼロではないため、修正があれば `/simplify` から再度ループします。プラグインは「マーカーのハッシュ = `git push` 時の branch 全差分 + 未コミット差分」だけを検証するため、ループ回数の push 強制ブロックは行いません。
+> **ループの意図**: 修正を加えた瞬間、その修正自体は未レビューになります。`/codex:review` の指摘を修正した結果として `/code-review` の対象 (重複・冗長コメント等) が新規発生する可能性も、`/code-review` の修正により `/codex:review` の新規指摘が出る可能性も、いずれもゼロではないため、修正があれば `/code-review` から再度ループします。プラグインは「マーカーのハッシュ = `git push` 時の branch 全差分 + 未コミット差分」だけを検証するため、ループ回数の push 強制ブロックは行いません。
 
 > **終端の判断**: ループ回数による push 強制ブロックは行いません。表層レビューだけで収束しない場合の対応 (実装方針の見直し / 人間判断のエスカレーション等) は Claude の自律判断に委ねます。
 
@@ -141,7 +147,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`/simplify` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。
+`/code-review` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。 v2.1.146 で `/simplify` が `/code-review` にリネームされたため、 検出ロジックは新旧両方の skill 名を受け付けます (v2.1.145 以下のユーザーは旧名のまま運用可能)。
 
 hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に本フックが呼ばれます。`Skill` matcher の挙動が公式ドキュメント上完全に明記されていないため、tool 名に依存しない構造にしてあります。フィルタリングはスクリプト側の bash 内蔵正規表現マッチが行うため、対象外 tool は subprocess を立てずに即離脱します。
 
@@ -149,17 +155,17 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 
 | 検知対象                                                | tool 名 | 判定                                                                                                                                                                            | 書き込むマーカー                              | 副作用                  |
 | ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------- |
-| `/simplify` skill の launch                             | `Skill` | `tool_input.skill == "simplify"`                                                                                                                                                | `<git-dir>/.claude-pre-push-simplified`       | (なし)                  |
+| `/code-review` skill の launch (旧名 `/simplify` も検知) | `Skill` | `tool_input.skill == "code-review"` または `tool_input.skill == "simplify"` (Claude Code v2.1.146 以降は前者、 v2.1.145 以下は後者) | `<git-dir>/.claude-pre-push-code-reviewed`    | (なし)                  |
 | `pre-push-review:security-reviewer` subagent の完了 (推奨) | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` または `security-reviewer` (name-only 形式も許容) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
 | `/security-review` skill の launch (後方互換)        | `Skill` | `tool_input.skill == "security-review"` (主 session 直接呼び出しのみ。 subagent は tools から Skill を外しているため呼べない) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
 | `/codex:review --wait --scope branch` の Bash 完了      | `Bash`  | コマンドが `^node` で始まる (env-prefix 許容) / `codex-companion.m[jt]s review` を含む / `--scope branch` を含む / `run_in_background == false` / 失敗・中断ではない                | `<git-dir>/.claude-pre-push-codex-reviewed`   | (なし)                  |
 
-**`/simplify` を launch タイミングで検知する設計上のトレードオフ**:
+**`/code-review` を launch タイミングで検知する設計上のトレードオフ**:
 
-`Skill` tool の `PostToolUse` は `Launching skill: simplify` を返した瞬間 (= skill body 実行 **前**) に発火します。本プラグインはこの timing でマーカーに **launch 時点の差分ハッシュ** (= simplify が見ることになる state) を書き込みます。
+`Skill` tool の `PostToolUse` は `Launching skill: code-review` を返した瞬間 (= skill body 実行 **前**) に発火します。本プラグインはこの timing でマーカーに **launch 時点の差分ハッシュ** (= code-review が見ることになる state) を書き込みます。
 
-- メリット (loop discipline): simplify body が edits を行えば current hash は launch 時点と異なる値になります。block-pre-push.sh はこの hash と current hash を比較するため、edit 後は marker stale → DENY となり、Claude は **修正後の state で再度 `/simplify` を呼ぶ** 必要が生じます。これにより「修正後の差分は必ず simplify を再走させる」という loop discipline が構造的に強制されます。
-- 既知の限界 (lie attack): Claude が `Skill(simplify)` を呼んでも skill body の meta prompt を実際に実行せず、その後 `/codex:review --wait --scope branch` を呼んで push する経路では、両マーカーが launch 時点の hash で揃ってしまい push が通ってしまいます。これは Claude が instructions を真摯に follow するという信頼を前提とした設計で、構造的には防げません。
+- メリット (loop discipline): code-review body が edits を行えば current hash は launch 時点と異なる値になります。block-pre-push.sh はこの hash と current hash を比較するため、edit 後は marker stale → DENY となり、Claude は **修正後の state で再度 `/code-review` を呼ぶ** 必要が生じます。これにより「修正後の差分は必ず code-review を再走させる」という loop discipline が構造的に強制されます。
+- 既知の限界 (lie attack): Claude が `Skill(code-review)` を呼んでも skill body の meta prompt を実際に実行せず、その後 `/codex:review --wait --scope branch` を呼んで push する経路では、両マーカーが launch 時点の hash で揃ってしまい push が通ってしまいます。これは Claude が instructions を真摯に follow するという信頼を前提とした設計で、構造的には防げません。
 
 **security-reviewer subagent を completion タイミングで検知する理由**:
 
@@ -169,7 +175,7 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 
 - `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない)
 - `tool_input.run_in_background` が `true` (background 起動は完了タイミングを捉えられないため)
-- `tool_input.skill` が `simplify` / `security-review` 以外 (namespace 付き skill は別物として扱う)
+- `tool_input.skill` が `code-review` / `simplify` / `security-review` 以外 (namespace 付き skill `code-review:code-review` 等は別物として扱う)
 - `tool_input.subagent_type` が `pre-push-review:security-reviewer` / `security-reviewer` 以外 (別の subagent 起動はマーカー対象外)
 - Bash codex 起動でコマンドに `--scope branch` が含まれていない (PR diff レビュー保証として不十分)
 - **Bash codex 起動時に working tree が dirty (staged または unstaged 変更あり)** (`/codex:review --scope branch` は committed 部分のみ review するため、dirty 状態で marker を書くと commit 後のハッシュと衝突して未レビュー commit を通す経路ができる。clean なときに review してから marker を書く運用に倒す)
@@ -182,7 +188,7 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 
 | ファイル | 内容 | 寿命 |
 |---|---|---|
-| `.claude-pre-push-simplified` | `/simplify` 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-code-reviewed` | `/code-review` (旧名 `/simplify`) 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-codex-reviewed` | `/codex:review --wait --scope branch` 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 

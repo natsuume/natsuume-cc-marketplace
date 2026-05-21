@@ -88,7 +88,7 @@ Severities:
 - **High**: serious impact under realistic conditions
 - **Medium**: real but constrained impact
 
-Do not include Low / informational findings — they belong in `/simplify` or `/codex:review`, not here.
+Do not include Low / informational findings — they belong in `/code-review` or `/codex:review`, not here.
 
 ## Constraints
 

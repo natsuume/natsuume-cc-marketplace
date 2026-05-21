@@ -1,5 +1,5 @@
 {
-  "description": "git push を未レビューの状態でブロックし、/simplify と /codex:review --wait --scope branch の実行完了を自動検知してレビューマーカーを更新する。 また /codex:review の background 起動 (Bash tool option `run_in_background: true` または codex companion の `--background` フラグ) を PreToolUse で deny することで、 marker が書かれない silent failure を防ぐ",
+  "description": "git push を未レビューの状態でブロックし、/code-review (v2.1.146 で /simplify からリネーム、 後方互換で旧名も検知) と /codex:review --wait --scope branch の実行完了を自動検知してレビューマーカーを更新する。 また /codex:review の background 起動 (Bash tool option `run_in_background: true` または codex companion の `--background` フラグ) を PreToolUse で deny することで、 marker が書かれない silent failure を防ぐ",
   "hooks": {
     "PreToolUse": [
       {
