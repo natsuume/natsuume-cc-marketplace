@@ -69,9 +69,7 @@ if [ -z "$COMMAND" ]; then
 fi
 
 # bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
-# 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。 末尾 backslash 単独
-# (= `\<LF>` の `\<LF>` だけが trim されて `\` のみ残った状態) の入力を line continuation
-# として復元し、 下流の normalize_line_continuations_to_space で空白置換できるようにする。
+# 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
 case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
 # 4 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`

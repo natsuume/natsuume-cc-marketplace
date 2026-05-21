@@ -130,7 +130,7 @@ normalize_line_continuations_to_space() {
 #   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 #   [ -n "$COMMAND" ] || exit 0
 #   # bash の $(...) trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
-#   # 「末尾 \<LF> 復元」 セクション)。
+#   # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
 #   case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 #
 # 末尾 literal backslash 単独で終わる入力 (例: bare の `echo foo\` / `git push origin foo\`
