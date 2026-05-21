@@ -44,6 +44,27 @@
 #     完了時点でマーカーを書くことで、 subagent が途中で失敗した場合に marker が
 #     書かれない (= push gate がそのまま deny) を担保する。
 
+# 予期せぬエラー時の診断 handler (ノンブロッキング)。
+#
+# 本 hook の通常パスは「対象ツールでない → exit 0」「対象ツールだがエラー / 中断 → exit 0」
+# 「対象ツール完了 → marker 書き込み → exit 0」 のいずれも exit 0 で抜ける silent skip 設計。
+# 既存 silent skip では下記 trap は no-op になる (exit code 0)。
+#
+# 一方、 jq の引数バグ / 外部コマンドの突然死 / シェル展開の想定外失敗 / signal などで
+# script が **非ゼロで終了** すると、 marker 書き込みが skip されて Claude / ユーザは hook
+# 不調に気付かないまま loop が空回りする (= 後で `git push` 時に block-pre-push.sh が
+# 「marker 未生成」 で deny し、 「review を完走したのに通らない」 混乱になる) 経路がある。
+# EXIT trap で `$?` を観測し、 非ゼロ終了を stderr に出してユーザに気付かせる。 trap 自身は
+# `exit 0` を返さず元の exit code を保つため、 push 動作はノンブロッキングのまま。
+_pre_push_review_exit_handler() {
+  local exit_code=$?
+  if [ "$exit_code" -ne 0 ]; then
+    printf '[pre-push-review/auto-mark] 予期せぬエラーで hook が exit %s で終了しました。\n' "$exit_code" >&2
+    printf '[pre-push-review/auto-mark] レビュー marker の書き込みが skip された可能性があり、 次の `git push` 時に block-pre-push.sh が「marker 未生成」 で deny する経路があります。 marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' >&2
+  fi
+}
+trap _pre_push_review_exit_handler EXIT
+
 INPUT=$(cat)
 
 # 本 hook は hooks.json で matcher: "*" (wildcard) を指定しており、すべての tool 完了で
@@ -86,11 +107,16 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-# lib 群を case 分岐前に source。 Bash 分岐内で `is_codex_review_invocation` を呼ぶ
-# ため codex-review-detect.sh は case 分岐より上で読み込む必要がある。 diff-hash.sh
-# / markers.sh は後段の marker 書き込みでのみ使うが、 SCRIPT_DIR を 1 回で済ますため
-# まとめて上に置く。
+# lib 群を case 分岐前に source。 Bash 分岐内で `is_codex_review_invocation` /
+# `normalize_line_continuations` を呼ぶため codex-review-detect.sh と cmd-parser.sh は
+# case 分岐より上で読み込む必要がある。 diff-hash.sh / markers.sh は後段の marker 書き
+# 込みでのみ使うが、 SCRIPT_DIR を 1 回で済ますためまとめて上に置く。
+#
+# cmd-parser.sh は v0.7.1 で `normalize_line_continuations` の bash 3.2 互換実装を提供する
+# ようになったため、 codex-review-detect.sh から取り込んだ場合と同じ関数名で使える。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/cmd-parser.sh
+source "$SCRIPT_DIR/lib/cmd-parser.sh"
 # shellcheck source=lib/codex-review-detect.sh
 source "$SCRIPT_DIR/lib/codex-review-detect.sh"
 # shellcheck source=lib/diff-hash.sh

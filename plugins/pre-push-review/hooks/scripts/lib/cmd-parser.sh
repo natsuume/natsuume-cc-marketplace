@@ -26,6 +26,55 @@
 #     内部の `git push` が segment に巻き込まれて push 検出が token level で失敗する経路が
 #     あった。 それを shape check で塞ぐ。 backtick は depth tracking していない。
 
+# line continuation `\<LF>` 正規化の純 bash 実装。
+#
+# **macOS bash 3.2 互換のための実装**: bash 3.2.57 (= macOS default) は
+# `${var//$'\\\n'/<repl>}` 形式のパターン置換で ANSI-C quoting (`$'...'`) を
+# パターン部に展開できない (bash 4 では動く)。 R&D テストで以下を確認:
+#   - `${INPUT//$'\\\n'/}` (リテラル): bash 3.2 で完全に no-op
+#   - `PAT=$'\\\n'; ${INPUT//$PAT/}`: bash 3.2 で `\n` をエスケープシーケンスではなく
+#     literal `n` として誤解釈し、 結果が壊れる
+#
+# このため line continuation の正規化は純 bash の 1 文字ループで実装する必要がある。
+# fork 不要、 外部コマンド非依存、 bash 3.2 / 4 / 5 すべてで同一挙動を保証する。
+# 通常 hook で扱うコマンド文字列は 100-1000 文字程度なのでループコストは無視できる。
+#
+# 2 つの正規化バリエーション:
+#   - `normalize_line_continuations`         : `\<LF>` を **削除** (bash 実挙動と一致)
+#       caller: codex-review-detect.sh / block-bg-codex-review.sh / auto-mark.sh
+#       理由 : これらは regex match の前処理。 隣接トークン (`--back\<LF>ground` →
+#              `--background`) を連結する必要がある。
+#   - `normalize_line_continuations_to_space`: `\<LF>` を **空白** に置換
+#       caller: block-pre-push.sh
+#       理由 : tokenize_segment が空白で token を区切る設計のため、 空白置換で
+#              トークン境界を保ったまま改行を消す必要がある。
+_normalize_line_continuations_impl() {
+  local input="$1"
+  local replacement="$2"
+  local result="" i=0 len=${#input}
+  local c nc
+  while [ "$i" -lt "$len" ]; do
+    c="${input:$i:1}"
+    nc="${input:$((i+1)):1}"
+    if [ "$c" = '\' ] && [ "$nc" = $'\n' ]; then
+      result="$result$replacement"
+      i=$((i+2))
+    else
+      result="$result$c"
+      i=$((i+1))
+    fi
+  done
+  printf '%s' "$result"
+}
+
+normalize_line_continuations() {
+  _normalize_line_continuations_impl "$1" ""
+}
+
+normalize_line_continuations_to_space() {
+  _normalize_line_continuations_impl "$1" " "
+}
+
 # split_command <cmd>
 # stdout: 行ごとに segment を出力。 segment 間には `SEP:<separator>` 行を挟む。
 #   例: "cd a && git push" → ["cd a", "SEP:&&", "git push"]

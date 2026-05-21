@@ -33,6 +33,25 @@
 # PreToolUse hook semantics)。 関心が異なる (git push gate vs review 起動 gate) ため
 # script は分離する。
 
+# 予期せぬエラー時の診断 handler (ノンブロッキング)。
+#
+# 本 hook は「対象でない (= codex review 起動でない) → exit 0」「background 起動 → deny JSON
+# 出力 → exit 0」 のいずれも exit 0 で抜ける設計。 既存パスでは下記 trap は no-op になる。
+#
+# 一方、 jq の引数バグ / 外部コマンドの突然死 / シェル展開の想定外失敗 / signal などで
+# script が **非ゼロで終了** すると、 background 起動の deny を返せていない可能性があり、
+# `--background` で codex review が silent failure する経路に戻ってしまう。 EXIT trap で
+# `$?` を観測し、 非ゼロ終了を stderr に出してユーザに気付かせる。 trap 自身は元の exit code
+# を保つため、 push 動作はノンブロッキングのまま。
+_pre_push_review_exit_handler() {
+  local exit_code=$?
+  if [ "$exit_code" -ne 0 ]; then
+    printf '[pre-push-review/block-bg-codex-review] 予期せぬエラーで hook が exit %s で終了しました。\n' "$exit_code" >&2
+    printf '[pre-push-review/block-bg-codex-review] codex review の background 起動 deny が機能していない可能性があり、 `--background` 経由の review が silent failure する経路に戻っているかもしれません。 marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' >&2
+  fi
+}
+trap _pre_push_review_exit_handler EXIT
+
 INPUT=$(cat)
 
 # 粗フィルタは設けない。 line continuation `\<改行>` で companion path 自体が split された
@@ -49,6 +68,11 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# `normalize_line_continuations` は v0.7.1 で cmd-parser.sh に移動 (macOS bash 3.2 互換
+# 確保のため純 bash 実装に変更)。 codex-review-detect.sh より先に cmd-parser.sh を source
+# する必要がある。
+# shellcheck source=lib/cmd-parser.sh
+source "$SCRIPT_DIR/lib/cmd-parser.sh"
 # shellcheck source=lib/codex-review-detect.sh
 source "$SCRIPT_DIR/lib/codex-review-detect.sh"
 
