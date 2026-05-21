@@ -81,9 +81,13 @@ _normalize_line_continuations_impl() {
     *\\$'\n'*) ;;
     *) printf '%s' "$input"; return ;;
   esac
-  # Slow-path: 1 fork で sed に渡す。 `:a;N;$!ba` で全入力を pattern space に集めて
-  # から置換 (line-mode default では `\n` を含む置換が書けないため)。
-  printf '%s' "$input" | sed -e ':a;N;$!ba;s/\\\n/'"$replacement"'/g'
+  # Slow-path: 1 fork で sed に渡す。 `:a` ラベル / `N` で次行 append / `$!ba` で
+  # 末尾以外は :a に branch / `s/\\\n/<repl>/g` で置換、 という 4 コマンドを **各
+  # `-e` で分離** して渡す。 packed `:a;N;$!ba;s/...` 形式は BSD sed (= macOS デフォ
+  # ルト) でラベル定義の `:a` の後の `;` がラベル名の一部として食われ、 line
+  # continuation を含む入力で sed エラーになる。 separate `-e` 形式は GNU sed /
+  # BSD sed / busybox sed すべてで動作する portable な記法。
+  printf '%s' "$input" | sed -e ':a' -e 'N' -e '$!ba' -e "s/\\\\\\n/${replacement}/g"
 }
 
 normalize_line_continuations() {
