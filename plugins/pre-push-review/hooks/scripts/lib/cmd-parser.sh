@@ -88,15 +88,47 @@ _normalize_line_continuations_impl() {
   # ルト) でラベル定義の `:a` の後の `;` がラベル名の一部として食われ、 line
   # continuation を含む入力で sed エラーになる。 separate `-e` 形式は GNU sed /
   # BSD sed / busybox sed すべてで動作する portable な記法。
-  printf '%s' "$input" | sed -e ':a' -e 'N' -e '$!ba' -e "s/\\\\\\n/${replacement}/g"
+  #
+  # **末尾 `\<LF>` への sentinel 補正**: 入力末尾が `\<LF>` で終わる場合 (例:
+  # Claude Code の Bash tool に `git push\<LF>` という command が渡されるケース)、
+  # sed の N コマンドが「次行を読みに行く → EOF → 全体 exit」 する経路があり、
+  # 累積した pattern space が出力されず末尾の `\<LF>` が変換されないまま残る。
+  # 結果として下流の tokenize_segment が `push\` を 1 トークンとして扱い、 push
+  # 検知が外れて gate を bypass する critical regression になる。
+  # 対策: `printf '%s\n'` で入力末尾に sentinel LF を 1 個付加して sed に渡し、
+  # 出力末尾に残る余分な LF を bash の `$(...)` 機構 (trailing LF を 1 つ自動 trim
+  # する仕様) で除去する。 これにより:
+  #   - 末尾 `\<LF>` のケース: `... \<LF><sentinel>` → sed が `<repl><sentinel>`
+  #     に変換 → `$(...)` で sentinel trim → `... <repl>` で正しく置換される
+  #   - 末尾が普通の文字 / LF のケース: sentinel 付加 → そのまま → trim で元入力
+  local result
+  result=$(printf '%s\n' "$input" | sed -e ':a' -e 'N' -e '$!ba' -e "s/\\\\\\n/${replacement}/g")
+  printf '%s' "$result"
 }
 
+# wrapper で「末尾 backslash 単独 (`*\\`) を `\<LF>` に復元」 する処理を入れる理由:
+# caller (block-pre-push.sh / auto-mark.sh / block-bg-codex-review.sh) は jq の出力を
+# `COMMAND=$(printf ... | jq -r ...)` で取得するが、 bash の `$(...)` は **trailing newlines
+# を全部削除** する POSIX 仕様のため、 JSON で `"command":"git push\<LF>"` が渡されても
+# 取得時点で `git push\` (末尾 backslash 単独、 LF なし) になる。 復元しないと normalize
+# 内部が「line continuation を含まない」 と判定して fast-path で素通しし、 下流 tokenize
+# が `push\` を 1 token として扱って push 検知が外れる security gate bypass になる。
+# 末尾 literal backslash 単独は shell 構文として syntax error なので、 復元による誤判定
+# (false positive) は実用上発生しない。
 normalize_line_continuations() {
-  _normalize_line_continuations_impl "$1" ""
+  local input="$1"
+  case "$input" in
+    *\\) input="${input}"$'\n' ;;
+  esac
+  _normalize_line_continuations_impl "$input" ""
 }
 
 normalize_line_continuations_to_space() {
-  _normalize_line_continuations_impl "$1" " "
+  local input="$1"
+  case "$input" in
+    *\\) input="${input}"$'\n' ;;
+  esac
+  _normalize_line_continuations_impl "$input" " "
 }
 
 # split_command <cmd>
