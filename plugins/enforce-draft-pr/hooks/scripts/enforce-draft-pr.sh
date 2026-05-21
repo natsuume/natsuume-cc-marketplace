@@ -13,12 +13,6 @@ if [ -z "$COMMAND" ]; then
   exit 0
 fi
 
-# bash の `$(...)` trailing-LF trim で消えた `\<LF>` を復元 (= line continuation を
-# 含む `gh pr create\<LF>...` 入力で末尾 `\` が `--draft` 注入後にも残って updatedInput
-# の command が壊れる cosmetic 影響を避ける)。 詳細は pre-push-review の cmd-parser.sh
-# 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション参照。
-case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
-
 # gh pr create コマンドかどうか判定（違えば即座に終了）
 if ! echo "$COMMAND" | grep -qE '^\s*gh\s+pr\s+create'; then
   exit 0

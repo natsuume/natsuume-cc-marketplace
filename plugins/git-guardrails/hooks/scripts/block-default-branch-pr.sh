@@ -37,7 +37,10 @@ case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/cmd-parser.sh
 source "$SCRIPT_DIR/lib/cmd-parser.sh"
-COMMAND=$(normalize_line_continuations_to_space "$COMMAND")
+# fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。
+case "$COMMAND" in
+  *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
+esac
 COMMAND="${COMMAND//$'\n'/;}"
 
 # `gh ... pr create` のときだけ拾う。`gh -R owner/repo pr create` のような global option を

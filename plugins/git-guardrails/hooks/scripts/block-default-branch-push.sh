@@ -49,10 +49,15 @@ case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 #      ある。改行は bash でもコマンド区切り (`;` 等価) なので置換しても解釈は変わらない。
 #      `${COMMAND//$'\n'/;}` (LF のみ) は bash 3.2 で正しく動作する (backslash と
 #      組み合わせた `$'\\\n'` pattern とは別)。
-SCRIPT_DIR_FOR_NORM="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/cmd-parser.sh
-source "$SCRIPT_DIR_FOR_NORM/lib/cmd-parser.sh"
-COMMAND=$(normalize_line_continuations_to_space "$COMMAND")
+source "$SCRIPT_DIR/lib/cmd-parser.sh"
+# fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避
+# する (詳細は cmd-parser.sh の hot-path 設計コメント参照、 実測で bash 3.2 で +637us
+# の fork コストが消える)。
+case "$COMMAND" in
+  *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
+esac
 COMMAND="${COMMAND//$'\n'/;}"
 
 # `git push` で始まる (もしくは連結 prefix 経由で git push を含む) コマンドだけが対象。
@@ -78,7 +83,6 @@ if ! printf '%s' "$COMMAND" | grep -qE "$PUSH_INVOCATION_REGEX"; then
   exit 0
 fi
 
-SCRIPT_DIR="$SCRIPT_DIR_FOR_NORM"
 # shellcheck source=lib/default-branch.sh
 source "$SCRIPT_DIR/lib/default-branch.sh"
 

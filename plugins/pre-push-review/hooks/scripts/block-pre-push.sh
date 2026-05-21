@@ -86,7 +86,13 @@ source "$SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
 
-COMMAND=$(normalize_line_continuations_to_space "$COMMAND")
+# fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。
+# 関数本体 (`_normalize_line_continuations_impl`) にも fast-path がある (= 二重) が、
+# caller 側の case で関数呼び出し自体を回避することで bash 3.2 で +637 us の fork コスト
+# を消す (= hot-path 性能改善)。
+case "$COMMAND" in
+  *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
+esac
 
 deny() {
   jq -n --arg reason "$1" '{
