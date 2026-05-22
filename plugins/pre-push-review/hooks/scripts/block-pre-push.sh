@@ -748,6 +748,25 @@ turn は通常通り終了し、 親 session は subagent invocation の結果�
   - \`/codex:rescue --wait\`: review からの指摘を踏まえた **修正方針の壁打ち**
     (rescue 自体はマーカー対象外 / push gate には影響しないが、 手順 4 で
      approve を得てから実装を開始する規律で運用する)
+
+⚠ \`/codex:rescue\` のハング対策: \`/codex:rescue --wait\` は **しばしばハングする**
+(応答が一向に返ってこない / プロンプトを出したまま固まる) ことが観測されています。
+\`/codex:rescue\` は内部的に \`Agent\` tool 経由で \`codex:codex-rescue\` subagent →
+\`codex-companion.mjs\` (\`Bash\`) を起動するため、 ハングは主 session からは Agent
+呼び出しが return しない形で観測されます (subagent 内部の \`Bash\` shell は主 session の
+\`BashOutput\` / \`KillShell\` からは触れません)。 数分待っても進展がない場合は以下の手順で復旧してください:
+  1. \`Bash\` tool で次のコマンドを実行し、 \`codex-companion.mjs task ...\` プロセス候補を列挙する
+     (\`/codex:review\` 用の \`codex-companion ... review\` や他の codex CLI は除外される):
+     \`ps -eo pid,ppid,lstart,etime,command | grep -E 'codex-companion(\.m[jt]s)?.*[[:space:]]task' | grep -v grep\`
+  2. 表示された候補の中から **現在ハングしている \`/codex:rescue --wait\` 呼び出しと一致する PID**
+     を起動時刻 (lstart) / 経過時間 (etime) / 親プロセス (PPID) / コマンドライン引数で確認する。
+     並行する別セッションの rescue を誤って kill しないよう、 該当 PID が現在のハングと
+     整合するか **確信できない場合は kill しない** (= 主 session を一度終了するか、 担当者に相談する)
+  3. 確信できたら \`kill <pid>\` で終了する
+     (subagent の \`Bash\` 呼び出しがエラーで return し、 主 session の Agent 呼び出しも解除される)
+  4. 同じ入力で \`/codex:rescue --wait\` をやり直す
+ハングのまま無制限に待ち続けるとループ全体が停止するため、 タイムアウト感覚を持って
+判断してください (rescue 自体はマーカー対象外なので、 何回やり直しても push gate には影響しません)。
 EOF
 )
 
