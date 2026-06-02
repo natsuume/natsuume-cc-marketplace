@@ -1,5 +1,5 @@
 {
-  "description": "permission_mode が auto のとき、変更の commit / PR 作成 / マージ完了までの自走コンテキストを注入する。さらに session 開始時に未コミット変更があれば Claude に出所分析と分類確認を要求する",
+  "description": "permission_mode が auto のとき、変更の commit / PR 作成 / マージ完了までの自走コンテキストを注入する。さらに session 開始後の最初のプロンプト時点で未コミット変更があれば Claude に出所分析と分類確認を要求する",
   "hooks": {
     "UserPromptSubmit": [
       {

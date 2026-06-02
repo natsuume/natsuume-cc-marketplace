@@ -60,15 +60,23 @@ if [ -z "$DIRTY" ]; then
   exit 0
 fi
 
+# markdown の inline code (`...`) / コードフェンス (```) 内に埋め込むため、 値に含まれる
+# バックティックを single-quote に中立化してレンダリング崩れを防ぐ (#91; injection は
+# 起きない — unquoted heredoc は変数値内の $(...)/バックティックを再評価せず、 後段の jq が
+# JSON エスケープする。 git porcelain の各行は status 2 文字 + space 始まりなので閉じフェンス化は
+# 通常起きないが、 inline `$CWD` やレンダラ差異への defense-in-depth)。
+DIRTY_SAFE=${DIRTY//\`/\'}
+CWD_SAFE=${CWD//\`/\'}
+
 CONTEXT=$(cat <<EOF
-Auto mode セッション開始時の未コミット変更チェック:
+Auto mode セッション開始後・最初のプロンプト時点での未コミット変更チェック:
 
 **まず以下の未コミット変更が「今回のタスクの対象」か「以前の残骸」かを Claude が一次分析し、独断で commit せず分類結果と推奨アクションをユーザに簡潔に報告して同意を取ること。**
 
-\`$CWD\` の未コミット変更:
+\`$CWD_SAFE\` の未コミット変更:
 
 \`\`\`
-$DIRTY
+$DIRTY_SAFE
 \`\`\`
 
 分析手順:
