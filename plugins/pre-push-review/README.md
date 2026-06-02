@@ -4,7 +4,30 @@
 
 ## バージョン
 
-v0.7.0 (前身: `pre-commit-review` v0.4.0)
+v0.8.4 (前身: `pre-commit-review` v0.4.0)
+
+### v0.8.3 → v0.8.4 の変更点 (#85, #86)
+
+- **block-pre-push.sh のコメント自己矛盾を修正 (#85)**: 「push の後に置く `&` / `|` は許容する」という初期設計の名残コメントが、 実コード (位置を問わず `&` / `|` を deny) と矛盾していた。 コメントを実挙動 (前後を問わず deny、 logging は file redirection か別 Bash 呼び出しで) に合わせて修正
+- **auto-mark.sh の cwd 前提を明文化 (#86)**: 本 hook は dirty 判定 / ハッシュ計算 / marker パスを発火時の cwd で行い、 push gate (block-pre-push.sh) は push target を解決する非対称がある。 これは「review した repo (cwd) を mark し、 別 repo を target-override push すると hash 不一致で deny (= fail-closed)」 という安全な設計であることを設計意図コメントに明記。 未レビュー push を通す bypass ではない
+- いずれもコメントのみの変更 (実行挙動は不変)
+
+### v0.8.2 → v0.8.3 の変更点 (#93)
+
+- **`git push` の分離引数オプションの値 token 誤認を修正**: `-o` / `--push-option` / `--receive-pack` / `--exec` の **値 token** を refspec / remote と誤認し、 正当な push を false-positive で deny する bug を修正
+
+### v0.8.1 → v0.8.2 の変更点 (#48)
+
+- **`/codex:rescue --wait` ハング時の復旧手順を deny メッセージに追加**: rescue が時々ハングする件への対処 (シェル状態確認 → kill → やり直し) を案内文に追記
+
+### v0.8.0 → v0.8.1 の変更点 (#47, cross-plugin)
+
+- **末尾 `\<LF>` (line continuation) による検知 bypass を修正**: bash の `$(...)` が trailing newline を trim する仕様で `"command":"git push\<LF>"` が取得時点で `git push\` に壊れる問題を、 jq 取得直後に復元する処理を 3 hook (auto-mark.sh / block-bg-codex-review.sh / block-pre-push.sh) へ横展開
+
+### v0.7.0 → v0.8.0 の変更点 (#46)
+
+- **macOS デフォルト bash 3.2.57 の互換性 bug 2 件を修正**: line continuation 正規化を `${var//...}` パターン置換から純 bash + sed fallback 実装に置換、 `skip_env_assignments` 呼び出し側の `_idx` / `_n` 変数衝突を解消
+- **3 つの hook script に診断 EXIT trap を追加** (`lib/exit-trap.sh`): 予期せぬ非ゼロ exit (jq クラッシュ / signal / シェル展開失敗等) を stderr にノンブロッキングで報告し、 hook 破損を可視化する
 
 ### v0.6.0 → v0.7.0 の変更点
 

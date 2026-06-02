@@ -43,6 +43,23 @@
 #     実際にレビュー本体を完了させたタイミングを捉えるため。 launch 時点ではなく
 #     完了時点でマーカーを書くことで、 subagent が途中で失敗した場合に marker が
 #     書かれない (= push gate がそのまま deny) を担保する。
+#
+# レビュー対象 repo の前提 (block-pre-push.sh との非対称について):
+#   本 hook は dirty 判定 / base 検出 / branch / ハッシュ計算 / marker パスを **すべて
+#   PostToolUse 発火時の cwd** で行う (= 「いま居る repo を review した」と記録する)。
+#   一方 block-pre-push.sh は `git push` コマンド引数から実 push target を解決し、 その
+#   target cwd でハッシュ・marker パスを決める。 この非対称は意図的かつ安全:
+#     - review は通常メイン session の cwd (= push 対象 repo) で実行されるため、
+#       両者の cwd は一致し marker は正しく照合される。
+#     - もし review を repo A の cwd で行い、 別の repo B を target-override
+#       (`git -C B push` / `cd B && git push`) で push した場合、 marker は A に書かれ
+#       push gate は B のハッシュを要求するため **hash 不一致で deny** に倒れる
+#       (= fail-closed)。 「push する repo をその cwd で review し直す」という正しい挙動を
+#       強制するだけで、 未レビュー push を通す bypass にはならない。
+#   したがって運用前提は「**review は push 対象 repo の cwd で実行する**」。 target-override
+#   push を多用する場合はこの前提に留意する (auto-mark を push 引数依存にしないのは、 本 hook
+#   の発火契機が review 完了であって push コマンドではなく、 解決すべき push target が
+#   存在しないため)。
 
 # 予期せぬエラー時の診断 trap を install (実装は lib/exit-trap.sh)。
 # 本 hook の通常パスは「対象ツールでない → exit 0」「対象ツールだがエラー / 中断 → exit 0」
