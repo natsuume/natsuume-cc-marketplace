@@ -2,7 +2,7 @@
 name: rebase-workflow
 description: rebase を用いてリモートのデフォルトブランチの変更を作業ブランチに取り込む
 user-invocable: true
-when-to-use: |
+when_to_use: |
   ユーザーが以下のようなリクエストをした場合に使用:
   - 「リモートの変更を取り込みたい」
   - 「rebase したい」

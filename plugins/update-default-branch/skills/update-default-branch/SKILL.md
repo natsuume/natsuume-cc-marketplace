@@ -2,7 +2,7 @@
 name: update-default-branch
 description: PR がマージされた報告を受けたあと、デフォルトブランチを最新化し、追跡先が消えた (gone) ローカルブランチを削除する
 user-invocable: true
-when-to-use: |
+when_to_use: |
   ユーザーが以下のような報告/依頼をした場合に使用:
   - 「PR がマージされた」「マージしました」「merge しました」
   - 「PR をマージしたよ」「マージ完了」
