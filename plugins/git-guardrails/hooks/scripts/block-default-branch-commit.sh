@@ -16,6 +16,14 @@
 # detached HEAD (cherry-pick 中・rebase 中など) では通す: ブランチ名が空文字列で
 # is_default_branch は false 判定になるため、自然に exit 0 経路に流れる。
 
+# 予期せぬ非ゼロ終了 (jq クラッシュ / signal / シェル展開失敗等) を stderr に可視化する
+# 診断 trap を最初に install する。jq 呼び出しより前に張ることで jq クラッシュも捕捉できる。
+# trap は exit code を変えないため deny/allow 挙動は不変 (#61; 詳細は lib/exit-trap.sh)。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/exit-trap.sh
+source "$SCRIPT_DIR/lib/exit-trap.sh"
+install_exit_trap "block-default-branch-commit" "デフォルトブランチ上での commit を deny できず default branch 保護が外れた可能性があります。"
+
 INPUT=$(cat)
 
 # 大半の Bash 呼び出しは無関係。jq 起動前に粗フィルタで抜ける。
@@ -39,7 +47,7 @@ case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 # コメント参照)。順序が重要: 行継続を先に処理しないと `git \<NL>commit` が `git \;commit`
 # に化けて invocation regex を素通りする。 macOS bash 3.2 互換性のため `${var//$'\\\n'/...}`
 # は使わず cmd-parser.sh の純 bash + sed fallback 実装に委譲する。
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# (SCRIPT_DIR は冒頭の exit-trap install 時に定義済み。)
 # shellcheck source=lib/cmd-parser.sh
 source "$SCRIPT_DIR/lib/cmd-parser.sh"
 # fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。

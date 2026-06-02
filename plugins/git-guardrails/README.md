@@ -4,13 +4,36 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.2.0
+v0.3.0
 
 ## 概要
 
 「デフォルトブランチ (master/main) への変更は、他ブランチからの **GitHub 上の PR merge** 経由のみで取り込む」という運用を構造的に保証します。ローカル側の write 経路 (commit / push / PR head) を 3 つの PreToolUse フックで多層防御し、cooperative 利用前提で誤操作・横紙破りを deny に倒します。
 
 加えて、rebase によるリモート default branch 取り込みワークフローを Skill として提供します。
+
+### v0.2.4 → v0.3.0 の変更点 (#61, #62, #63, #60)
+
+- **3 hook に診断 EXIT trap を追加 (#61)**: sibling の pre-push-review (`lib/exit-trap.sh`) と同型の `install_exit_trap` を `lib/exit-trap.sh` として導入。hook が予期せず非ゼロで終了 (jq クラッシュ / signal / シェル展開失敗等) した場合に stderr へ通知し、PreToolUse 仕様「その他 exit code で続行」による default branch 保護の無音 fail-open を可視化する。trap は exit code を変えないため deny/allow 挙動は不変
+- **false-positive deny を既知の制約に明記 (#62)**: `git checkout <default> -- <pathspec>` (ファイル復元) と remote 名が `master`/`main` の push が誤って deny される件を文書化 (security gate は保守側に倒す方針のため修正せず明記)
+- **共通 lib テーブル / ディレクトリ構成を実態に合わせ更新 (#63)**: `default-branch.sh` の全関数を列挙し、ベンダリングしている `cmd-parser.sh` と新規 `exit-trap.sh` を追記。cmd-parser.sh は pre-push-review から byte-identical でベンダリングしている旨を明記
+- **README の version 見出し / changelog を実 version に追随 (#60)**: 見出しが v0.2.0 のまま実 version とドリフトしていたため v0.3.0 に更新し、欠落していた v0.2.1〜v0.2.4 の changelog を backfill
+
+### v0.2.3 → v0.2.4 の変更点 (#92)
+
+- rebase-workflow の `SKILL.md` frontmatter の無効なキー `when-to-use` (kebab-case) を有効な `when_to_use` (snake_case) に修正
+
+### v0.2.2 → v0.2.3 の変更点 (#47, cross-plugin)
+
+- **末尾 `\<LF>` (line continuation) による検知 bypass を修正**: bash の `$(...)` が trailing newline を trim する仕様で `"command":"git push origin master\<LF>"` 等が取得時点で壊れ default branch 保護を素通りする経路を、jq 取得直後の復元処理で 3 hook (commit/push/pr) に塞いだ。あわせて line continuation 正規化を macOS bash 3.2 互換実装に統一
+
+### v0.2.1 → v0.2.2 の変更点 (#46)
+
+- 共通 lib `cmd-parser.sh` を pre-push-review v0.8.0 の canonical 実装に sync (byte-identical ベンダリングの同期)
+
+### v0.2.0 → v0.2.1 の変更点 (#42)
+
+- macOS 互換性 fix (cmd-parser.sh canonical) への追随 version bump、およびプラグイン配下を変更したら version を必ず bump するルールを CLAUDE.md に追加
 
 ### v0.1.0 → v0.2.0 の変更点
 
@@ -131,14 +154,21 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 
 ## 共通 lib
 
+3 つの hook (`block-default-branch-{commit,push,pr}.sh`) が source する共有ライブラリ:
+
 | ファイル | 用途 |
 |---|---|
-| `hooks/scripts/lib/default-branch.sh` | デフォルトブランチ名集合 (`master`/`main`) と `current_branch` / `is_default_branch` の判定関数を集約。3 hook が source して使う |
+| `hooks/scripts/lib/default-branch.sh` | デフォルトブランチ名集合 (`master`/`main`) と、`is_default_branch` / `current_branch` / `strip_shell_quotes` / `normalize_refspec_part` / `strip_quoted_text` / `emit_deny` / `has_target_mismatch_prefix` の関数群 + `readonly TARGET_MISMATCH_DENY_REASON` を集約。3 hook が source して使う |
+| `hooks/scripts/lib/cmd-parser.sh` | pre-push-review から **byte-identical でベンダリング** している共有パーサ。git-guardrails の 3 hook が実際に呼ぶのは `normalize_line_continuations_to_space` のみだが、canonical 実装とのドリフト防止のためファイル全体を丸ごとベンダリングしている (ヘッダコメントが pre-push-review を指すのはこのため) |
+| `hooks/scripts/lib/exit-trap.sh` | 予期せぬ非ゼロ終了を stderr に可視化する `install_exit_trap`。3 hook が冒頭で呼ぶ (#61) |
 
 ## 既知の制約 (cooperative 利用前提)
 
 - ブランチ名は `master` と `main` をハードコード対象としています。`develop` 等を保護対象に加えたい場合は `lib/default-branch.sh` の `DEFAULT_BRANCH_NAMES` 配列に追記してください
 - push hook の master/main 検出は push 引数 token を完全一致比較するため、`git push origin origin/master` のように remote-tracking ref を直接引数に書く稀な経路は false negative で通ります (cooperative 利用では発生しにくく、`feature/main` のような working branch 名や `git push ... && git switch main` の連結後段を誤検出しないことを優先)
+- **以下は誤検知 (false-positive deny) として `deny` に倒れます** (#62)。いずれも security gate を「保守側に倒す」方針の結果で、cooperative 利用では実害が小さいため修正せず明記しています。回避するには対象操作を別の方法で行ってください:
+  - `git checkout <default> -- <pathspec>` を **commit/push/PR と連結した** chained コマンド (例: `git checkout main -- file.txt && git commit -m x`): `-- file.txt` は branch を切り替えず特定ファイルを作業ツリーに復元するだけですが、後続 invocation の target-mismatch 前段検査 (`has_target_mismatch_prefix`) が `checkout main` 部分を branch 切替とみなし、その commit/push/PR を deny します (単独の `git checkout main -- file.txt` は commit/push/PR を含まず各 hook の粗フィルタを通らないため deny されません)。回避するには checkout を別の Bash 呼び出しに分けてから commit してください
+  - remote 名が `master` / `main` の push (例: `git push master feature`): `master` という名前の **remote** へ feature を push する操作ですが、push hook は引数 token を remote/refspec の区別なく比較するため、その `master` を default branch token と誤認して deny します
 - `gh pr create` 以外の経路 (Web UI 等での PR 作成) は介入できません。これは設計上の意図です
 
 ## ディレクトリ構成
@@ -154,7 +184,9 @@ git-guardrails/
 │       ├── block-default-branch-push.sh
 │       ├── block-default-branch-pr.sh
 │       └── lib/
-│           └── default-branch.sh
+│           ├── default-branch.sh
+│           ├── cmd-parser.sh    # pre-push-review から byte-identical ベンダリング
+│           └── exit-trap.sh
 ├── skills/
 │   └── rebase-workflow/
 │       └── SKILL.md

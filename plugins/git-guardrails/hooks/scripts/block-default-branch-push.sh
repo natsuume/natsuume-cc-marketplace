@@ -15,6 +15,14 @@
 #   - master/main 以外のブランチからの引数明示 push (例: `git push origin feature`)
 #   - tag や別 ref 名のみへの push
 
+# 予期せぬ非ゼロ終了 (jq クラッシュ / signal / シェル展開失敗等) を stderr に可視化する
+# 診断 trap を最初に install する。jq 呼び出しより前に張ることで jq クラッシュも捕捉できる。
+# trap は exit code を変えないため deny/allow 挙動は不変 (#61; 詳細は lib/exit-trap.sh)。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/exit-trap.sh
+source "$SCRIPT_DIR/lib/exit-trap.sh"
+install_exit_trap "block-default-branch-push" "デフォルトブランチへの直接 push を deny できず default branch 保護が外れた可能性があります。"
+
 INPUT=$(cat)
 
 # 大半の Bash 呼び出しは git push と無関係。jq 起動前に builtin の glob で粗フィルタ。
@@ -49,7 +57,7 @@ case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 #      ある。改行は bash でもコマンド区切り (`;` 等価) なので置換しても解釈は変わらない。
 #      `${COMMAND//$'\n'/;}` (LF のみ) は bash 3.2 で正しく動作する (backslash と
 #      組み合わせた `$'\\\n'` pattern とは別)。
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# (SCRIPT_DIR は冒頭の exit-trap install 時に定義済み。)
 # shellcheck source=lib/cmd-parser.sh
 source "$SCRIPT_DIR/lib/cmd-parser.sh"
 # fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避

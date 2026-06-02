@@ -1,5 +1,5 @@
 {
   "name": "git-guardrails",
-  "version": "0.2.4",
-  "description": "GitHub Flow に準拠した Git ワークフローを構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供"
+  "version": "0.3.0",
+  "description": "GitHub Flow に準拠した Git ワークフローを構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供。v0.3.0 で 3 hook に診断 EXIT trap を追加し予期せぬ非ゼロ終了 (= 保護の無音 fail-open) を stderr に可視化、checkout pathspec / remote 名 master の false-positive deny を既知制約として明記、README の lib テーブル / version 見出しを実態に追随"
 }
