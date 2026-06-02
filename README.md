@@ -31,7 +31,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [codex-review-customize](#codex-review-customize) | 0.3.1 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
 | [decompose-bash](#decompose-bash) | 0.1.1 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
 | [auto-followthrough](#auto-followthrough) | 0.2.3 | `permission_mode` が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始後の最初のプロンプト時点の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン |
-| [llm-default-branch-push-poc](#llm-default-branch-push-poc) | 0.2.0 | デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用し、`bash -c` / `eval` / `$(...)` 等の shell parser では諦めていた経路を LLM の自然言語解釈でカバーできるか検証する |
+| [llm-default-branch-push-poc](#llm-default-branch-push-poc) | 0.2.1 | デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用し、`bash -c` / `eval` / `$(...)` 等の shell parser では諦めていた経路を LLM の自然言語解釈でカバーできるか検証する |
 
 ---
 

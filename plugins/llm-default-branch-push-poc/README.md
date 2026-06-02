@@ -4,7 +4,12 @@
 
 ## バージョン
 
-v0.2.0 (POC / 試作)
+v0.2.1 (POC / 試作)
+
+### v0.2.0 → v0.2.1 の変更点 (#76, #77)
+
+- **handler に `model: haiku` を明示 (#77)**: prompt hook のデフォルトモデルは Haiku だが、 handler に明示指定して README の Haiku 前提とコードを一致させ、 Claude Code 側の既定モデルが将来変わっても判定品質・レイテンシが無言で変化しないようにした
+- **remote 削除許可の構文を対称化 (#76)**: prompt の「DENY しない条件」で、 master/main の remote 削除をフラグ形 (`git push --delete origin master` / `-d`) に加えコロン形 (空 src: `git push origin :master` / `:refs/heads/master`) も明示許可し、 意味的に同一の削除操作を対称に扱う (空 src のコロン形を dst=master ルールで誤 deny しないことを明記)
 
 ### v0.1.0 → v0.2.0 の変更点
 
