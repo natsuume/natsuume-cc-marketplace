@@ -4,6 +4,11 @@
 # subagent / /security-review 標準 skill (主 session 直接呼び出しのみ) の実行完了を
 # PostToolUse で検知し、対応するレビューマーカーを更新する。
 #
+# policy: fail-open (PostToolUse / 正常完了後の marker 書き込み)
+#   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を
+#   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh / block-bg-codex-review.sh
+#   は fail-closed。同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
+#
 # 検知対象:
 #   - Skill tool で `code-review` skill (旧名 `simplify` も後方互換で受け付ける) が
 #     完了した瞬間 → code-reviewed マーカー (launch 時点ハッシュ)。 Claude Code v2.1.146
@@ -81,6 +86,13 @@ INPUT=$(cat)
 # `grep` を呼ぶと hot path 上で毎回 fork が走るため、bash の `[[ =~ ]]` を使って
 # subprocess を立てずに済ませる (Read/Edit/Write 等の対象外 tool 完了でも本 hook が
 # 呼ばれるが、ここで即離脱できればフォーク無しで通り抜けられる)。
+#
+# **コスト注記 (#90)**: matcher "*" で全 tool 完了に発火するため、巨大な tool_response が
+# INPUT に乗ると毎回 INPUT サイズに比例した ERE 評価が走る (fork は無いが in-process コスト)。
+# 現状の規模では無視できるが、もし問題化したら ERE の前に `case "$INPUT" in *'"skill"'*|
+# *'"subagent_type"'*|*codex-companion*) ;; *) exit 0 ;; esac` の substring pre-filter で
+# 大半を弾ける (この 3 substring は下記 PRECHECK_RE の全 match の superset なので false
+# negative を生まない)。早期離脱ロジックを変えるリスクを避け、現状はコスト注記に留める。
 #
 # 3 つの top-level OR ブランチの意図:
 #   - `"skill"[[:space:]]*:[[:space:]]*"(code-review|simplify|security-review)"`: Skill tool で

@@ -2,6 +2,11 @@
 # block-pre-push.sh
 # git push を未レビューの状態でブロックする PreToolUse フック。
 #
+# policy: fail-closed (PreToolUse / push gate)
+#   未レビュー push を通さないため、判定不能・想定外状況は deny に倒す。対照:
+#   PostToolUse 側の auto-mark.sh は fail-open。同じ失敗が Pre=deny / Post=skip という
+#   非対称は意図的 (#90)。
+#
 # ## なぜ push 境界か
 #
 # pre-commit 境界だと:

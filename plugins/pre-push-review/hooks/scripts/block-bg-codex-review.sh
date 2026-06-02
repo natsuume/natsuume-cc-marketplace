@@ -2,6 +2,10 @@
 # block-bg-codex-review.sh
 # `/codex:review` を background で起動しようとする操作を deny する PreToolUse フック。
 #
+# policy: fail-closed (PreToolUse)
+#   background 起動を確実に止めるため、判定対象に該当すれば deny。対照: PostToolUse 側の
+#   auto-mark.sh は fail-open。Pre=deny / Post=skip の非対称は意図的 (#90)。
+#
 # ## なぜ必要か
 #
 # auto-mark.sh は background 起動 (= Bash tool の `run_in_background: true`、 もしくは
