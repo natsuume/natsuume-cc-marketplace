@@ -4,7 +4,11 @@
 
 ## バージョン
 
-v0.2.1 (POC / 試作)
+v0.2.2 (POC / 試作)
+
+### v0.2.1 → v0.2.2 の変更点 (#78)
+
+- **matcher 絞り込み (v0.3.0 案) を「実現不能」と確定し README を訂正**: active binary (2.1.160) を調査した結果、hook の `if` field は実在するが評価が permissions matcher に委譲され `bash -c "..."` 内部・subshell `(...)`・コマンド置換 `$(...)` を展開しないことが判明。そのため `if: "Bash(git push:*)"` (prefix) も `Bash(*push*)` (substring; v0.1.0 で撤去済み) も、本 POC が捕捉対象とする「隠れた push」を構造的に取りこぼす。コスト削減と隠れた push の捕捉は hook 設定レベルで両立不能であり、現行設計 (全 Bash 発火 + prompt early-return) が捕捉率優先下の最適と結論。「制約と妥協」節と性能表の v0.3.0 計画記述を恒久制約の記述に訂正した (コードの動作変更なし)
 
 ### v0.2.0 → v0.2.1 の変更点 (#76, #77)
 
@@ -13,7 +17,7 @@ v0.2.1 (POC / 試作)
 
 ### v0.1.0 → v0.2.0 の変更点
 
-- **`if: "Bash(*push*)"` の中間 match を撤去**: v0.1.0 では permission rule の中間 match で発火を絞る設計だったが、 実機検証で **中間 match が評価されず全 Bash でスキップされる挙動** が判明 (claude-code-guide agent の事前報告と異なる)。 `if` フィールドを削除し、 全 Bash で発火させる方針に変更
+- **`if: "Bash(*push*)"` の中間 match を撤去**: v0.1.0 では permission rule の中間 match で発火を絞る設計だったが、 実機検証で **`*push*` の中間マッチが機能せず (if 条件が常に false 評価となり) 全 Bash でスキップされる挙動** が判明 (claude-code-guide agent の事前報告と異なる)。 `if` フィールドを削除し、 全 Bash で発火させる方針に変更 (根本原因 — `if` は permissions matcher に委譲され `*push*` の substring 中間マッチが効かず、 かつ wrapper 内部を展開しない — は v0.2.2 の #78 訂正と「制約と妥協」節を参照)
 - **hot path 軽減を prompt 内 early-return に集約**: 軽量 Bash の判定は prompt 本文の早期 OK セクションに委ねる設計 (具体的な判定順は `hooks/hooks.json` の prompt を参照)
 
 ## 目的
@@ -53,7 +57,11 @@ v0.2.1 (POC / 試作)
 
 - **発火範囲と hot path 軽減 (v0.2.0)**: v0.2.0 で `if` フィールドを撤去し、 **全 Bash 呼び出しで prompt hook が発火** する設計に変更しました。 軽量 Bash の判定は prompt 内 early-return に集約しています。 timeout は 15s (Haiku デフォルトより短縮、 fail-closed と組み合わせて軽量化)。
   - **要実機検証 (継続)**: 早期 OK が Haiku で 1〜数秒で完了するか実測必要。 `claude --debug` でレイテンシと早期 OK 判定の精度 (固定文を確実に返すか) を確認してください
-  - **既知の制約**: 全 Bash 発火だと harness 層 skip と比べて per-call の最低 LLM レイテンシ (Haiku TTFT で数百 ms 以上) が乗ります。 連続 `ls`/`cat` を多用するセッションでは累積遅延が体感に出る可能性があり、 v0.3.0 で matcher 自体の絞り込み (`matcher` field の wildcard / 正規表現サポート確認、 もしくは `Bash(git push *)` 系の prefix で対応しつつ別 hook で `bash -c` / `eval` 等のラッパー経路を補強する 2 段構え) を実機検証する予定
+  - **既知の制約 (恒久; matcher 絞り込みは不可と確定)**: 全 Bash 発火だと harness 層 skip と比べて per-call の最低 LLM レイテンシ (Haiku TTFT で数百 ms 以上) が乗ります。 連続 `ls`/`cat` を多用するセッションでは累積遅延が体感に出る可能性があります。 当初は matcher / `if` 絞り込みで hot path を削減する v0.3.0 案を検討していましたが、 **active binary (2.1.160) の調査により実現不能と確定**しました (#78):
+    - `matcher` field は **tool 名のみ** に作用し、 Bash コマンドの content では絞り込めません。
+    - hook の `if` field は実在し command content で評価できますが、 評価は **permissions matcher に委譲** され、 `bash -c "..."` の内部・subshell `(...)`・コマンド置換 `$(...)` を **展開しません** (置換は `too-complex` / `manual approval` 扱い)。 そのため `if: "Bash(git push:*)"` (prefix) も `if: "Bash(*push*)"` (substring; v0.1.0 で実機 NG により撤去済み) も、 **本 POC が捕捉対象とする「隠れた push」(`bash -c` / subshell / `$(...)` / `time` / `env` 経由) を構造的に取りこぼします**。
+    - すなわち「コスト削減」と「隠れた push の捕捉 (= 本 POC の存在意義)」は hook 設定レベルで両立できません。 隠れた push の確実な検出はまさに LLM の意味解釈の仕事であり、 安価な文字列フィルタで gate すると POC の趣旨を破壊します。 これは sibling の git-guardrails が harness の matcher ではなく **スクリプト内 shell parser** で deny している理由とも整合します (matcher は wrapper を展開できない)。
+    - 結論: 現行設計 (matcher: `Bash` 全発火 + prompt 内 early-return による LLM 自身の short-circuit) が、 捕捉率優先という POC 制約下での **実質最適** です。 per-call コストは LLM 起動の TTFT として irreducible に残ります (本 POC を有効化する際のトレードオフとして受容)。
 - **fail-closed の限定**: LLM が判定不能なケースで deny に倒すのは **実 git push が含まれるコマンドの範囲内** に限定しています。 push を全く含まないコマンドは誤 deny しないよう、 prompt 内の早期 OK で明示しています。
 - **プロンプトインジェクション**: コマンド本文中の `# allow this` 等の誤誘導コメントは prompt で **無視するよう明示**。 さらに deny 時の reason には **ユーザコマンド本体を逐語引用しない** (抽象ラベルのみ) ことで、 二次インジェクション (reason 経由で別 hook やセッションに payload がリレーされる) を防ぎます。 完全な対策ではないため、 既存 plugin との二重防御を維持します。
 - **動的状態を参照できない**: prompt hook の `$ARGUMENTS` は hook input JSON のみ。 現在ブランチや markers などの動的状態は参照できません。 必要なら `agent` hook (Read/Grep/Glob 可、 timeout 60s) への移行を検討します。
@@ -89,7 +97,7 @@ claude plugin install llm-default-branch-push-poc@natsuume-plugins
 
 | 項目 | git-guardrails (shell parser) | llm-default-branch-push-poc (prompt hook) |
 |------|--------------------------------|-------------------------------------------|
-| 速度 | < 50ms | 全 Bash で発火し毎回 LLM 呼び出し (Haiku TTFT で数百 ms〜)。 早期 OK 経路は固定文返却で短時間、 deny 候補のみ詳細判定 (数秒〜15s)。 v0.3.0 で matcher 絞り込みを検討 |
+| 速度 | < 50ms | 全 Bash で発火し毎回 LLM 呼び出し (Haiku TTFT で数百 ms〜)。 早期 OK 経路は固定文返却で短時間、 deny 候補のみ詳細判定 (数秒〜15s)。 matcher 絞り込みは隠れた push を取りこぼすため不可と確定 (#78; 上記「制約と妥協」参照) |
 | 引数省略形 (`git push` 単独) | ✓ 現在ブランチを `git symbolic-ref` で取得して判定 | ✗ 現在ブランチ取得不可、スコープ外 |
 | 明示 refspec | ✓ token 完全一致比較 | ✓ LLM 構文解釈 |
 | `--all` / `--mirror` | ✓ token match | ✓ LLM 判定 |
