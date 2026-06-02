@@ -4,7 +4,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.1.0
+v0.2.0
 
 ## 表示内容
 
@@ -30,7 +30,9 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 /natsuume-statusline:setup
 ```
 
-このコマンドは `~/.claude/settings.json` の `statusLine.command` をこのプラグインのエントリポイント (`bash <plugin-root>/statusline/entrypoint.sh`) に書き換えます。実行前に既存の `settings.json` 全体をタイムスタンプ付きでバックアップします。
+このコマンドは `~/.claude/settings.json` の `statusLine.command` を書き換えます。実行前に既存の `settings.json` 全体をタイムスタンプ付きでバックアップします。
+
+plugin cache 配下から実行された場合は、`~/.claude/natsuume-statusline-entrypoint.sh` という安定した wrapper を設置し、`statusLine.command` はこの wrapper を指します。wrapper は実行時に最新版の `entrypoint.sh` を解決するため、`/plugin update` 後も**再 setup なしで statusline が追従**します。これは plugin cache が version 固有パス (`~/.claude/plugins/cache/<marketplace>/<plugin>/<VERSION>/...`) に展開され、かつ `statusLine.command` では `${CLAUDE_PLUGIN_ROOT}` 等が展開されない ([Claude Code bug #52079](https://github.com/anthropics/claude-code/issues/52079)) ため、version 固有パスを直接焼き込むと update で旧 dir が消えた際に statusline が無言で壊れる問題を避けるためです。(ローカル clone 等の安定パスから実行された場合は wrapper を介さず entrypoint を直接登録します。)
 
 ## 機能一覧
 
@@ -44,7 +46,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 | ファイル | 用途 |
 |---------|------|
-| `scripts/setup.sh` | settings.json のバックアップ作成と `statusLine` 設定書き換え |
+| `scripts/setup.sh` | settings.json のバックアップ作成、安定 wrapper (`~/.claude/natsuume-statusline-entrypoint.sh`) の設置、`statusLine` 設定書き換え |
 | `statusline/entrypoint.sh` | Claude Code から呼ばれる入口。同階層の `main.sh` に exec で委譲 |
 | `statusline/main.sh` | JSON 入力のパース、各行の組み立て、ターミナル幅へのフィット |
 | `statusline/lib.sh` | カラー定数、進捗バー、可視幅計算、所有 GitHub namespace のキャッシュ |
@@ -60,7 +62,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 cp ~/.claude/settings.natsuume-statusline-backup.<timestamp>.json ~/.claude/settings.json
 ```
 
-`<timestamp>` は setup 実行時のメッセージに表示されます。
+`<timestamp>` は setup 実行時のメッセージに表示されます。setup が設置した安定 wrapper (`~/.claude/natsuume-statusline-entrypoint.sh`) は settings.json を元に戻せば参照されなくなるため、残しておいても無害ですが、不要なら削除して構いません。
 
 ## 必要な実行環境
 
