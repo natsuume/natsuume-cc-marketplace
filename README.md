@@ -18,7 +18,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 
 | プラグイン | バージョン | 説明 |
 |-----------|-----------|------|
-| [git-guardrails](#git-guardrails) | 0.2.4 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
+| [git-guardrails](#git-guardrails) | 0.3.0 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.2.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.4.0 | ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン |
 | [pre-push-review](#pre-push-review) | 0.8.4 | `git push` 前に `/code-review` (Claude Code v2.1.146 で `/simplify` からリネーム) → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を self-contained subagent で実行するのは、 標準 `/security-review` を直接呼ぶと主 session の turn が終了し、 subagent 経由でも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。macOS デフォルト bash 3.2.57 でも動作し、 hook 実装の予期せぬエラーは stderr にノンブロッキングで通知 |

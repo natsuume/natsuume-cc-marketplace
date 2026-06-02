@@ -11,6 +11,14 @@
 # 本フックは head 側 (= 「PR で master の中身を別ブランチに入れる」変な経路) を deny する。
 # base 側の判定は不要 (PR の base がデフォルトブランチなのは正常運用)。
 
+# 予期せぬ非ゼロ終了 (jq クラッシュ / signal / シェル展開失敗等) を stderr に可視化する
+# 診断 trap を最初に install する。jq 呼び出しより前に張ることで jq クラッシュも捕捉できる。
+# trap は exit code を変えないため deny/allow 挙動は不変 (#61; 詳細は lib/exit-trap.sh)。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/exit-trap.sh
+source "$SCRIPT_DIR/lib/exit-trap.sh"
+install_exit_trap "block-default-branch-pr" "master/main を head にする PR 作成を deny できず default branch 保護が外れた可能性があります。"
+
 INPUT=$(cat)
 
 # 大半の Bash 呼び出しは `gh pr create` と無関係。粗フィルタで早期離脱。
@@ -34,7 +42,7 @@ case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 # コメント参照)。順序が重要: 行継続を先に処理しないと `gh pr \<NL>create` が `gh pr \;create`
 # に化けて invocation regex を素通りする。 macOS bash 3.2 互換性のため `${var//$'\\\n'/...}`
 # は使わず cmd-parser.sh の純 bash + sed fallback 実装に委譲する。
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# (SCRIPT_DIR は冒頭の exit-trap install 時に定義済み。)
 # shellcheck source=lib/cmd-parser.sh
 source "$SCRIPT_DIR/lib/cmd-parser.sh"
 # fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。
