@@ -4,7 +4,12 @@ Claude Code が **auto mode** で動作している間、変更の `commit` → 
 
 ## バージョン
 
-v0.2.2
+v0.2.3
+
+### v0.2.2 → v0.2.3 の変更点 (#64, #91)
+
+- **発火イベント表現を実挙動に統一 (#64)**: `check-uncommitted-on-session-start` は実際には `UserPromptSubmit` で発火し (SessionStart イベントは未使用)、session 内で最初に処理されたプロンプトでのみ動く。description / 注入文の「session 開始時」表現を「session 開始後の最初のプロンプト時点」に統一 (ファイル名は hooks.json 参照のため据え置き; 実体は最初の UserPromptSubmit)。あわせて「初回プロンプト時点で clean なら同 session 中に後発生した未コミット変更は検知しない」制約を既知の制約に明記
+- **未コミット一覧のバックティック中立化 (#91)**: 注入文の markdown コードフェンス / inline code に埋め込む `git status` 出力・cwd 内のバックティックを single-quote に置換し、レンダリング崩れを防止 (injection は元々起きない)
 
 ### v0.2.1 → v0.2.2 の変更点
 
@@ -86,6 +91,8 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 - auto モードのセッションで cwd に未コミット変更がある場合、**Claude にその出所分析と分類確認を要求** する `additionalContext` を注入する
 - session ごとに 1 回だけ発火するよう `${TMPDIR:-/tmp}/auto-followthrough-markers/<session_id>.checked` でマーカー管理
 - auto モード以外、git リポジトリ外、`jq` 不在環境ではすべて無音 `exit 0`
+
+> **発火タイミングの注意**: ファイル名は `-on-session-start` ですが、`SessionStart` イベントではなく **`UserPromptSubmit` イベント** で発火します (session 内で最初に処理されたプロンプトでのみ動作)。マーカーは `git status` 実行より前に置かれる (無限ループ回避のための意図的トレードオフ) ため、**最初のプロンプト時点で worktree が clean だと、同 session 中に後から発生した未コミット変更は検知しません**。後続の dirty も拾いたい場合は新しい session を開始してください。
 
 **なぜ独立した hook が必要か**:
 
