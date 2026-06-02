@@ -453,6 +453,15 @@ for tok in "${PUSH_TOKENS[@]}"; do
     --repo=*) SAW_REMOTE=1; continue ;;
     --repo) _SKIP_NEXT=1; SAW_REMOTE=1; continue ;;
   esac
+  # 値を次 token に取る push オプションは、 その値 token を remote / refspec と誤認しないよう
+  # 引数ごと skip する。 `-o` / `--push-option` (push option), `--receive-pack` / `--exec`
+  # (receive-pack path)。 これを欠くと `git push -o ci.skip origin <branch>` の `ci.skip` を
+  # remote、 `origin` を refspec と誤読し、 現在ブランチへの正当な push を false-positive で
+  # deny してしまう。 連結形 (`--push-option=*` / `--receive-pack=*` / `--exec=*` や短縮連結
+  # `-o<val>`) は単一 token なので後段の `-*) continue` が吸収する (値消費は不要)。
+  case "$t" in
+    -o|--push-option|--receive-pack|--exec) _SKIP_NEXT=1; continue ;;
+  esac
   # その他 push のオプションを skip (`-u`, `--force`, `--delete` 等)。
   case "$t" in
     -*) continue ;;
