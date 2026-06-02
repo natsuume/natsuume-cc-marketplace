@@ -131,12 +131,17 @@ owned_github_namespaces() {
     return
   fi
 
-  # 初回または期限切れ時にのみ gh を叩く（数百ms〜数秒のコスト）
+  # 初回または期限切れ時にのみ gh を叩く（数百ms〜数秒のコスト）。
+  # 並行 statusline 実行が同一 cache_file を同時 truncate し、 失敗側の空ファイルを
+  # 別プロセスが読む競合を避けるため、 tmp に書いてから mv でアトミックに差し替える。
+  local tmp
+  tmp=$(mktemp "$cache_dir/.ns.XXXXXX" 2>/dev/null) || tmp="$cache_file.$$.tmp"
   {
     gh api user --jq '.login' 2>/dev/null
     gh api user/orgs --jq '.[].login' 2>/dev/null
-  } > "$cache_file"
-  cat "$cache_file"
+  } > "$tmp"
+  mv -f "$tmp" "$cache_file" 2>/dev/null
+  cat "$cache_file" 2>/dev/null
 }
 
 # owner が「自分のものとみなせる namespace」か判定
@@ -153,21 +158,26 @@ is_owned_namespace() {
 }
 
 # ターミナル幅を取得（取得不能なら 80 を返す）
-# tput → /dev/tty 経由の stty → COLUMNS 環境変数の順にフォールバック
+# COLUMNS（Claude Code v2.1.153+ が渡す実描画幅）→ tput → /dev/tty 経由の stty の順。
+# COLUMNS を最優先にするのは、 tput が terminfo/ioctl 由来の固定値を返して CC の live な
+# 幅より優先されるのを避けるため。 COLUMNS 未設定の旧 CC では tput/stty にフォールバックする。
 terminal_width() {
   local w
+  if [ -n "$COLUMNS" ] && [ "$COLUMNS" -gt 0 ] 2>/dev/null; then
+    printf '%s' "$COLUMNS"
+    return
+  fi
   w=$(tput cols 2>/dev/null)
   if [ -n "$w" ] && [ "$w" -gt 0 ] 2>/dev/null; then
     printf '%s' "$w"
     return
   fi
-  w=$(stty size </dev/tty 2>/dev/null | awk '{print $2}')
+  # `</dev/tty` の open 失敗 (制御端末なし) メッセージも抑制するため、 グループ全体を
+  # 2>/dev/null で包む。 単純コマンドへの `stty ... </dev/tty 2>/dev/null` では入力リダイレクト
+  # の open エラーが 2>/dev/null 適用前に漏れる。
+  w=$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null )
   if [ -n "$w" ] && [ "$w" -gt 0 ] 2>/dev/null; then
     printf '%s' "$w"
-    return
-  fi
-  if [ -n "$COLUMNS" ] && [ "$COLUMNS" -gt 0 ] 2>/dev/null; then
-    printf '%s' "$COLUMNS"
     return
   fi
   printf '80'

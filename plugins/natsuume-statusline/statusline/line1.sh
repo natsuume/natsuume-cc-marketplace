@@ -3,22 +3,32 @@
 
 # パス表示（~/... 形式に短縮）
 render_path() {
-  local cwd="$1"
-  local short="${cwd/#$HOME/\~}"
+  local cwd="$1" short
+  # $HOME を未クォートのグロブパターンとして扱わず、 path 境界 (`$HOME` 完全一致 or `$HOME/`) で
+  # のみ `~` に置換する。 `${cwd/#$HOME/~}` は $HOME 内のグロブ文字や非境界 prefix
+  # (HOME=/home/al, cwd=/home/alice/x) で誤動作しうるため case で安全に判定する。
+  case "$cwd" in
+    "$HOME") short="~" ;;
+    "$HOME"/*) short="~${cwd#"$HOME"}" ;;
+    *) short="$cwd" ;;
+  esac
   printf '%b%s%b' "$BOLD_BLUE" "$short" "$RESET"
 }
 
 # パス表示（リポジトリルート以下に短縮）
 # git 管理下でない場合は通常の render_path にフォールバック
+# 第2引数で取得済み toplevel を受け取れる (未指定なら git で取得; #79: 呼び出し側の再取得を回避)
 render_path_repo_relative() {
   local cwd="$1"
-  local toplevel rel repo_name
-  toplevel=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || {
-    render_path "$cwd"
-    return
-  }
+  local toplevel="${2:-}" rel repo_name
+  if [ -z "$toplevel" ]; then
+    toplevel=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || {
+      render_path "$cwd"
+      return
+    }
+  fi
   repo_name="${toplevel##*/}"
-  rel="${cwd#$toplevel}"
+  rel="${cwd#"$toplevel"}"
   rel="${rel#/}"
   if [ -n "$rel" ]; then
     printf '%b%s/%s%b' "$BOLD_BLUE" "$repo_name" "$rel" "$RESET"
@@ -28,13 +38,14 @@ render_path_repo_relative() {
 }
 
 # GitHubリポジトリ名
+# 第1引数は origin の URL（呼び出し側で取得済み; #79: ここでは git を呼ばない）
 # 第2引数で prefix を上書き可能（フォールバック表示時に "" を渡してプレフィックス省略）
 # owner が自分のアカウント／所属 org の場合は repo 名のみ表示
 render_repository() {
-  local cwd="$1"
+  local url="$1"
   local prefix="${2-repository: }"
-  local url repo owner name
-  url=$(git -C "$cwd" remote get-url origin 2>/dev/null) || return
+  local repo owner name
+  [ -z "$url" ] && return
   repo=$(extract_github_repo "$url")
   [ -z "$repo" ] && return
 
@@ -48,12 +59,11 @@ render_repository() {
 }
 
 # ブランチ名
+# 第1引数はブランチ名（呼び出し側で取得済み; #79: ここでは git を呼ばない）
 # 第2引数で prefix を上書き可能（フォールバック表示時に "" を渡してプレフィックス省略）
 render_branch() {
-  local cwd="$1"
+  local branch="$1"
   local prefix="${2-branch: }"
-  local branch
-  branch=$(git -C "$cwd" branch --show-current 2>/dev/null)
   [ -z "$branch" ] && return
   printf '%s%b%s%b' "$prefix" "$BOLD_MAGENTA" "$branch" "$RESET"
 }
