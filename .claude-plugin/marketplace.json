@@ -73,8 +73,8 @@
     {
       "name": "llm-default-branch-push-poc",
       "source": "./plugins/llm-default-branch-push-poc",
-      "description": "デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用し、bash -c / eval / subshell / $(...) 等の shell parser では諦めていた経路を LLM の自然言語解釈でカバーできるかを検証する",
-      "version": "0.2.0",
+      "description": "デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用し、bash -c / eval / subshell / $(...) 等の shell parser では諦めていた経路を LLM の自然言語解釈でカバーできるかを検証する。v0.2.1 で handler に model: haiku を明示 (#77)、remote 削除許可をフラグ形/コロン形で対称化 (#76)",
+      "version": "0.2.1",
       "keywords": ["git", "push", "default-branch-protection", "llm", "prompt-hook", "poc"]
     }
   ]
