@@ -1,5 +1,5 @@
 {
   "name": "decompose-bash",
-  "version": "0.1.0",
-  "description": "SessionStart で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する additionalContext を注入し、`&&` / `||` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン"
+  "version": "0.1.1",
+  "description": "SessionStart で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する additionalContext を注入し、`&&` / `||` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン。v0.1.1 で不正/空 JSON 入力時に jq の parse error が stderr に漏れるのを抑制"
 }

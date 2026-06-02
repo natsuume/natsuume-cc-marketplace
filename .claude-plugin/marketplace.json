@@ -52,8 +52,8 @@
     {
       "name": "codex-review-customize",
       "source": "./plugins/codex-review-customize",
-      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.0 で adversarial-review.md のパッチ対象を削除",
-      "version": "0.3.0",
+      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.0 で adversarial-review.md のパッチ対象を削除。v0.3.1 で apply-patch.sh の EXIT trap が関数 local temp を参照していた bug を修正 (エラー経路の unbound variable noise / temp 残留を解消)",
+      "version": "0.3.1",
       "keywords": ["codex", "review", "patch", "skill"]
     },
     {
@@ -66,8 +66,8 @@
     {
       "name": "decompose-bash",
       "source": "./plugins/decompose-bash",
-      "description": "SessionStart で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する additionalContext を注入し、&&/||/;/$(...) 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン",
-      "version": "0.1.0",
+      "description": "SessionStart で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する additionalContext を注入し、&&/||/;/$(...) 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン。v0.1.1 で不正/空 JSON 入力時の jq parse error stderr 漏れを抑制",
+      "version": "0.1.1",
       "keywords": ["bash", "hook", "sessionstart", "decompose", "preToolUse", "guardrail"]
     },
     {

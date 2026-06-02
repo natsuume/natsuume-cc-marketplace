@@ -18,6 +18,19 @@ TARGET_FILENAMES=(
   "review.md"
 )
 
+# patch_one が作る一時ファイルの cleanup 対象。trap はプロセスグローバルでレキシカル
+# スコープを持たず、EXIT 発火時 (script 終了時) には関数 local は既にスコープ外なので、
+# 関数 local を参照する EXIT trap は壊れる (set -u 下では unbound variable エラーになり
+# temp も消えない)。確実に存在する script スコープ変数で追跡し、${PATCH_TMP:-} で
+# ガードしたうえで EXIT trap を一度だけ張る。mv 成功後に空へリセットする。
+PATCH_TMP=""
+cleanup_patch_tmp() {
+  if [ -n "${PATCH_TMP:-}" ]; then
+    rm -f "$PATCH_TMP"
+  fi
+}
+trap cleanup_patch_tmp EXIT
+
 # 1 ファイルにパッチを当てる。既適用なら no-op。前提を満たさなければ非 0 を返す。
 # 戻り値: 0 = 適用 or 既適用 / 1 = エラー
 # 副作用: caller が定義している配列 `PATCHED_PATHS` に解決済みパスを append する
@@ -55,29 +68,28 @@ patch_one() {
   # `disable-model-invocation: true` を frontmatter から削除し、末尾に再適用検出用マーカーを追記。
   # 対象ファイルがトークン情報を含む可能性は低いが、temp を world-readable にしないため defense-in-depth で umask を絞る。
   umask 077
-  local TMP
-  TMP=$(mktemp "$TARGET.XXXXXX")
-  # 途中で abort した場合に半端な temp を残さないよう EXIT trap で必ず削除。
-  trap 'rm -f "$TMP"' EXIT
+  # 途中で abort した場合に半端な temp を残さないよう、script スコープの PATCH_TMP に
+  # 記録する (EXIT trap が ${PATCH_TMP:-} を参照して削除する)。
+  PATCH_TMP=$(mktemp "$TARGET.XXXXXX")
 
-  sed '/^disable-model-invocation:[[:space:]]*true[[:space:]]*$/d' "$TARGET" > "$TMP"
+  sed '/^disable-model-invocation:[[:space:]]*true[[:space:]]*$/d' "$TARGET" > "$PATCH_TMP"
 
-  # sed silent no-op を検出する: TMP の frontmatter (先頭 --- から次の --- まで) に
+  # sed silent no-op を検出する: PATCH_TMP の frontmatter (先頭 --- から次の --- まで) に
   # `disable-model-invocation:` で始まる行が残っていれば、上流の表記が変わっており
   # sed パターンが効いていない。マーカーだけ追記して「適用済み」と誤報告する事故を防ぐ。
-  if awk '/^---[[:space:]]*$/{c++; if (c==2) exit} c==1 && /^disable-model-invocation:/' "$TMP" | grep -q .; then
+  if awk '/^---[[:space:]]*$/{c++; if (c==2) exit} c==1 && /^disable-model-invocation:/' "$PATCH_TMP" | grep -q .; then
     echo "[codex-review-customize] $target_filename の frontmatter から disable-model-invocation 行を削除できませんでした (上流の表記変更の可能性)。手動でパッチを書き直してください。" >&2
     return 1
   fi
 
   # 上流が trailing newline なしで終わる場合に、append したセクションが
   # 直前行と連結されないよう補正する。
-  [ -z "$(tail -c1 "$TMP")" ] || printf '\n' >> "$TMP"
+  [ -z "$(tail -c1 "$PATCH_TMP")" ] || printf '\n' >> "$PATCH_TMP"
 
-  printf '\n%s\n' "$PATCH_MARKER" >> "$TMP"
+  printf '\n%s\n' "$PATCH_MARKER" >> "$PATCH_TMP"
 
   # 簡易な健全性チェック: frontmatter の開始 \`---\` が 1 行目にあること。
-  if ! head -n1 "$TMP" | grep -qE '^---[[:space:]]*$'; then
+  if ! head -n1 "$PATCH_TMP" | grep -qE '^---[[:space:]]*$'; then
     echo "[codex-review-customize] $target_filename: 生成された patch の先頭が frontmatter ではありません。原本を変更しません。" >&2
     return 1
   fi
@@ -86,10 +98,12 @@ patch_one() {
   # 他ツールが当該ファイルを読む可能性があるため、無闇に world-readable を外さない。
   local ORIGINAL_MODE
   ORIGINAL_MODE=$(stat -c '%a' "$TARGET" 2>/dev/null || stat -f '%A' "$TARGET" 2>/dev/null || echo 644)
-  chmod "$ORIGINAL_MODE" "$TMP"
+  chmod "$ORIGINAL_MODE" "$PATCH_TMP"
 
-  mv "$TMP" "$TARGET"
-  trap - EXIT
+  # mv で temp は消費済み。PATCH_TMP を空にして EXIT trap が移動後パスを rm しようと
+  # しないようにする (次の対象ファイル処理時に新しい temp で上書きされる)。
+  mv "$PATCH_TMP" "$TARGET"
+  PATCH_TMP=""
 
   echo "[codex-review-customize] パッチ適用: $TARGET" >&2
   PATCHED_PATHS+=("$TARGET")
