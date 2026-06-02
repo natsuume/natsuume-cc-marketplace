@@ -33,16 +33,20 @@ fi
 
 case "$LINTER" in
   eslint)
+    # flat config の TS 変種 (.mts/.cts) も含める (#65)。
     MARKERS=(
-      "eslint.config.js" "eslint.config.mjs" "eslint.config.cjs" "eslint.config.ts"
+      "eslint.config.js" "eslint.config.mjs" "eslint.config.cjs"
+      "eslint.config.ts" "eslint.config.mts" "eslint.config.cts"
       ".eslintrc.js" ".eslintrc.cjs" ".eslintrc.json" ".eslintrc.yml" ".eslintrc.yaml"
     )
     ;;
   prettier)
+    # 新しめの形式 (.json5 / .ts / prettier.config.{ts,mts,cts}) も含める (#65)。
     MARKERS=(
-      ".prettierrc" ".prettierrc.json" ".prettierrc.yml" ".prettierrc.yaml"
-      ".prettierrc.js" ".prettierrc.cjs" ".prettierrc.mjs" ".prettierrc.toml"
+      ".prettierrc" ".prettierrc.json" ".prettierrc.json5" ".prettierrc.yml" ".prettierrc.yaml"
+      ".prettierrc.js" ".prettierrc.cjs" ".prettierrc.mjs" ".prettierrc.ts" ".prettierrc.toml"
       "prettier.config.js" "prettier.config.cjs" "prettier.config.mjs"
+      "prettier.config.ts" "prettier.config.mts" "prettier.config.cts"
     )
     ;;
   ruff)

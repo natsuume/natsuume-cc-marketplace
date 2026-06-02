@@ -4,7 +4,21 @@
 
 ## バージョン
 
-v0.3.3
+v0.4.0
+
+### v0.3.3 → v0.4.0 の変更点
+
+- **config-root 探索の表記と実装を一致させ、モダンな設定形式を追加 (#65)**
+  - `find-config-root.sh` の MARKERS に ESLint flat config の TS 変種 (`eslint.config.{mts,cts}`)、Prettier の新しめの形式 (`.prettierrc.{json5,ts}` / `prettier.config.{ts,mts,cts}`) を追加
+  - README の探索表のグロブ表記 `.prettierrc*` (全 `.prettierrc.*` に対応と誤読される) を実装の固定リストと一致する実列挙に修正。`package.json` の `eslintConfig`/`prettier`、`pyproject.toml` の `[tool.ruff]` も検出する旨を明記
+- **lint 実行ループの stale RC を防止 (#66)**
+  - `block-commit-lint.sh` / `post-commit-lint.sh` の lint 実行 `case` に `*) continue ;;` を追加し、各イテレーション冒頭で `RC=0` を初期化。将来 linter を追加した際に RC が前イテレーションの値を持ち越す経路を塞ぐ (現状は実害なしの防御強化)
+- **fail-open / fail-closed ポリシーを各 hook に明示 (#67)**
+  - `block-ignore-lint-comment.sh` に `policy: fail-open (defense-in-depth)` ラベルと根拠、`block-commit-lint.sh` に `policy: fail-closed` ラベルを追加。両者のポリシー差が意図的であることを明文化
+- **異常終了を可視化する診断 EXIT trap を追加 (#68)**
+  - `common.sh` に `install_auto_lint_exit_trap` を追加 (sibling の pre-push-review `lib/exit-trap.sh` と同型)。hook が非ゼロで異常終了した場合に stderr へ通知し、tmpfile 掃除も同ハンドラに集約
+  - これは「真の fail-closed 化」ではない点を明記: deny は stdout JSON が担い exit code ではないため deny 前の crash は fail-open に倒れ、SIGKILL/OOM では trap 自体走らない。crash 経路は極めて低頻度のため可視化に限定
+- ローカルに残存していた `lib/__pycache__` を掃除 (#69; git 追跡対象外・配布物には元々非混入のため repo の追跡内容は不変)
 
 ### v0.3.2 → v0.3.3 の変更点
 
@@ -248,11 +262,11 @@ Ruff は `uvx ruff` を最優先、次にグローバル PATH の `ruff` を使�
 
 | linter | 設定ファイル / フィールド |
 |--------|------------------------|
-| ESLint | `eslint.config.{js,mjs,cjs,ts}`, `.eslintrc.{js,cjs,json,yml,yaml}`, `package.json` の `eslintConfig` |
-| Prettier | `.prettierrc*`, `prettier.config.{js,cjs,mjs}`, `package.json` の `prettier` |
+| ESLint | `eslint.config.{js,mjs,cjs,ts,mts,cts}`, `.eslintrc.{js,cjs,json,yml,yaml}`, `package.json` の `eslintConfig` |
+| Prettier | `.prettierrc`, `.prettierrc.{json,json5,yml,yaml,js,cjs,mjs,ts,toml}`, `prettier.config.{js,cjs,mjs,ts,mts,cts}`, `package.json` の `prettier` |
 | Ruff | `ruff.toml`, `.ruff.toml`, `pyproject.toml` の `[tool.ruff]` セクション |
 
-`.git` ディレクトリ (またはファイル) に到達したら探索を打ち切ります。
+設定ファイル名は上記の**固定リスト**の存在判定で探索します (グロブではないため、一覧外の拡張子は検出しません)。加えて `package.json` の `eslintConfig` / `prettier` フィールド、`pyproject.toml` の `[tool.ruff]` セクションも config-root として検出します。`.git` ディレクトリ (またはファイル) に到達したら探索を打ち切ります。
 
 ## ディレクトリ構成
 

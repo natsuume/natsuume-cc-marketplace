@@ -164,3 +164,51 @@ prepend_source_label() {
   done
 }
 
+# --- 異常終了の可視化用 EXIT trap -------------------------------------------
+# hook が想定外に「非ゼロ」で終了 (シェル展開の想定外失敗 / 一部の signal 等) した
+# 場合に、ユーザの stderr に「hook が壊れた」ことを通知する。sibling の
+# pre-push-review (lib/exit-trap.sh) と同型の可視化機構。
+#
+# 重要 (fail-closed ではない): block-commit-lint の deny セマンティクスは stdout の
+# JSON が担い exit code ではないため、deny JSON を出す前にプロセスが異常死すると
+# commit は allow される (= fail-open)。さらに SIGKILL / OOM では trap 自体が走らない
+# ため、EXIT trap で「真の fail-closed」は達成できない。本 trap はあくまで「hook が
+# 異常終了したことに気づけるようにする」可視化に限定する (#68)。真に fail-closed 化
+# するには trap 内で『まだ deny を出していなければ安全側 deny を emit する』設計が要る
+# が、SIGKILL/OOM は捕捉不能 + crash 経路は極めて低頻度のため過剰実装と判断している。
+#
+# tmpfile 掃除も同じ EXIT trap に集約する (bash の EXIT trap は 1 つしか持てず、後から
+# trap を上書きすると tmpfile 掃除が消えるため)。掃除対象は AUTO_LINT_CHECK_CLEANUP_FILE
+# に登録する (trap install 後に代入してよい; 空なら掃除しない)。
+AUTO_LINT_CHECK_CLEANUP_FILE=""
+
+# install_auto_lint_exit_trap が eval 経由で trap に焼き込む共通ハンドラ本体。
+_auto_lint_check_exit_handler() {
+  local exit_code=$?
+  local tag="$1"
+  local impact="$2"
+  if [ -n "${AUTO_LINT_CHECK_CLEANUP_FILE:-}" ]; then
+    rm -f "$AUTO_LINT_CHECK_CLEANUP_FILE"
+  fi
+  if [ "$exit_code" -ne 0 ]; then
+    printf '[auto-lint-check/%s] 予期せぬエラーで hook が exit %s で終了しました。\n' \
+      "$tag" "$exit_code" >&2
+    printf '[auto-lint-check/%s] %s marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' \
+      "$tag" "$impact" >&2
+  fi
+}
+
+# install_auto_lint_exit_trap <tag> <impact>
+#   <tag>    : hook を特定する短いラベル (stderr の `[auto-lint-check/<tag>]` に使う)
+#   <impact> : 非ゼロ終了が起きた場合に何が壊れるかの 1 文
+# trap の command 引数は trap 発火時に新規解釈される文字列なので、install 時の引数を
+# `printf '%q'` で安全に quote してから trap command に焼き込む。caller の冒頭 (tmpfile
+# 作成前) で 1 度だけ呼ぶこと。
+install_auto_lint_exit_trap() {
+  local tag_q impact_q
+  tag_q=$(printf '%q' "$1")
+  impact_q=$(printf '%q' "$2")
+  # shellcheck disable=SC2064
+  trap "_auto_lint_check_exit_handler $tag_q $impact_q" EXIT
+}
+
