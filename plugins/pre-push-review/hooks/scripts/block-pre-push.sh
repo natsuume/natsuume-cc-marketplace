@@ -146,11 +146,14 @@ COMMAND=$(printf '%s' "$COMMAND" \
 # 1 push command per Bash invocation を前提にする (= 同一コマンド内に複数 push があると
 # 1 マーカー = 1 push 保証が崩れるため deny)。
 #
-# 加えて、 push の **前** にある単独の `&` (background) や `|` (pipeline) は **並列実行**
-# となり、 markers gate 検証完了後に index / working tree が並行変更される経路になる (例:
+# 加えて、 単独の `&` (background) や `|` (pipeline) は **並列実行** となり、 markers gate
+# 検証完了後に index / working tree / refs が並行変更される経路になる (例:
 # `git commit X & git push` で push 開始後に新規 unreviewed commit が作られて push に
-# 巻き込まれる)。 push の **後** に置く `&` / `|` (例: `git push 2>&1 | tee log`) は後続
-# command が push 動作に影響しないため許容する (race の元にならない)。
+# 巻き込まれる)。 これらは push の前後を **問わず** deny する (下記 SEPARATORS 判定ループ
+# 参照)。 例えば `git push 2>&1 | tee log` も deny されるので、 logging は file
+# redirection (`git push > log.txt 2>&1`) か push 完了後の別 Bash 呼び出しで行う。
+# (downstream を `tee` 等の非 mutating に絞る allowlist は parser の複雑度に見合わないため
+#  採らない。)
 # `&&` / `||` / `;` は逐次実行なので位置に関わらず許容。
 SEGMENTS=()
 SEPARATORS=()
