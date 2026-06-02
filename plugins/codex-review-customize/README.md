@@ -31,7 +31,8 @@ v0.3.0
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=codex-review-customize
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install codex-review-customize@natsuume-plugins
 ```
 
 インストール後、Claude Code 内で実行:

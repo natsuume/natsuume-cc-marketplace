@@ -31,7 +31,8 @@ git add foo.txt && git commit -m "msg" && git push
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=decompose-bash
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install decompose-bash@natsuume-plugins
 ```
 
 ## 機能一覧
@@ -99,5 +100,5 @@ decompose-bash/
 
 ## 関連情報
 
-- [Claude Code Hooks ドキュメント](https://docs.anthropic.com/claude-code/hooks)
+- [Claude Code Hooks ドキュメント](https://code.claude.com/docs/en/hooks)
 - [auto-followthrough](../auto-followthrough/) — auto mode 専用の方針注入プラグイン。本プラグインと同型 (additionalContext 注入) の設計を踏襲している

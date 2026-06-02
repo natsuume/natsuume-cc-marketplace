@@ -20,7 +20,8 @@ v0.1.0
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=update-default-branch
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install update-default-branch@natsuume-plugins
 ```
 
 ## 機能一覧
@@ -78,6 +79,6 @@ update-default-branch/
 
 ## 関連情報
 
-- [Claude Code Skills ドキュメント](https://docs.anthropic.com/claude-code/skills)
+- [Claude Code Skills ドキュメント](https://code.claude.com/docs/en/skills)
 - [git-branch(1) — `--delete` / `-D`](https://git-scm.com/docs/git-branch)
 - [git-fetch(1) — `--prune`](https://git-scm.com/docs/git-fetch)

@@ -56,7 +56,8 @@ v0.3.0
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=git-guardrails
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install git-guardrails@natsuume-plugins
 ```
 
 ## 機能一覧
@@ -207,4 +208,4 @@ git-guardrails/
 ## 関連情報
 
 - [GitHub Flow](https://docs.github.com/ja/get-started/quickstart/github-flow)
-- [Claude Code Hooks ドキュメント](https://docs.anthropic.com/claude-code/hooks)
+- [Claude Code Hooks ドキュメント](https://code.claude.com/docs/en/hooks)

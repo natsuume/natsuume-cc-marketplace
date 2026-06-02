@@ -44,7 +44,8 @@ auto mode でも以下は引き続き禁止 / 要確認である旨を明記し�
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=auto-followthrough
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install auto-followthrough@natsuume-plugins
 ```
 
 ## 機能一覧
@@ -142,4 +143,4 @@ auto-followthrough/
 
 ## 関連情報
 
-- [Claude Code Hooks ドキュメント](https://docs.anthropic.com/claude-code/hooks)
+- [Claude Code Hooks ドキュメント](https://code.claude.com/docs/en/hooks)

@@ -4,15 +4,19 @@ natsuume が作成・公開している Claude Code プラグインのマーケ�
 
 ## インストール方法
 
-```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace
-```
-
-特定のプラグインのみをインストールする場合：
+まずこのマーケットプレイスを追加します（marketplace 名は `natsuume-plugins`）：
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=git-guardrails
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
 ```
+
+次に使いたいプラグインを `<plugin-name>@natsuume-plugins` の形式でインストールします：
+
+```bash
+claude plugin install git-guardrails@natsuume-plugins
+```
+
+> Claude Code セッション内からは `/plugin marketplace add natsuume/natsuume-cc-marketplace` → `/plugin install <plugin-name>@natsuume-plugins` でも同じ操作ができます。
 
 ## プラグイン一覧
 
