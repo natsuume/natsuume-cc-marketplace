@@ -21,6 +21,8 @@ PR がマージされた直後に呼び出されるワークフローです。�
 
 ## 手順
 
+> **実行方法**: 以下の各ステップは処理の説明です。実行時はステップ間で `DEFAULT_BRANCH` / `GONE_BRANCHES` 等のシェル変数を引き継ぐ必要があるため、**末尾の「一連のスクリプト例」を 1 つの Bash 呼び出しで実行**してください。各ステップを個別の Bash 呼び出しに分けると変数が失われ、手順 4・6 が `DEFAULT_BRANCH` 未設定で誤動作します (手順 8 は安全のため変数非依存に再導出します)。
+
 ### 1. 作業ツリーの安全確認
 
 未コミット/未ステージの変更があると後続の `git switch` が失敗するため、まず `git status --short` を実行します。出力が空でない場合はユーザーに stash か commit を促してから次へ進みます (勝手に `stash` や `reset` をしてはいけません)。
@@ -50,7 +52,11 @@ DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@
 
 ```bash
 git remote set-head origin --auto
-DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+if [ -z "$DEFAULT_BRANCH" ]; then
+  echo "origin/HEAD を解決できません。git remote -v と origin の到達性を確認してください。" >&2
+  exit 1
+fi
 ```
 
 ### 4. デフォルトブランチへ切り替えて最新化
@@ -118,17 +124,20 @@ done <<< "$GONE_BRANCHES"
 | 条件 | アクション |
 |-----|-----------|
 | `ORIGINAL_BRANCH` が空 (detached HEAD だった) | ユーザーに次の作業ブランチ名を確認し、`git switch -c <name>` で作成 |
-| `ORIGINAL_BRANCH` が削除済み (`GONE_BRANCHES` に含まれていた) | ユーザーに次の作業ブランチ名を確認し、`git switch -c <name>` で作成 |
+| `ORIGINAL_BRANCH` が手順 7 で削除済み (ローカルに ref が存在しない) | ユーザーに次の作業ブランチ名を確認し、`git switch -c <name>` で作成 |
 | `ORIGINAL_BRANCH` がデフォルトブランチと同じ | (元からデフォルトブランチにいたので) 何もしない。ユーザーに作業ブランチを切るよう促す |
 | それ以外 (元のブランチが残っている) | `git switch "$ORIGINAL_BRANCH"` で復帰 |
+
+この手順は手順 3 / 6 のシェル変数に依存させず**自己完結**させます (各ステップが別々の Bash 呼び出しで実行されても正しく分岐するため)。`DEFAULT_BRANCH` はここで再導出し、「元のブランチが手順 7 で削除されたか」は `GONE_BRANCHES` への参照ではなく **branch ref の実在チェック** (`git show-ref`) で判定します (手順 7 で削除済みなら ref は存在しません)。
 
 ```bash
 GIT_DIR=$(git rev-parse --git-dir)
 STATE_FILE="$GIT_DIR/.update-default-branch-state"
 ORIGINAL_BRANCH=$(cat "$STATE_FILE" 2>/dev/null || true)
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
 
 if [ -z "$ORIGINAL_BRANCH" ] || [ "$ORIGINAL_BRANCH" = "$DEFAULT_BRANCH" ] \
-  || printf '%s\n' "$GONE_BRANCHES" | grep -Fxq -- "$ORIGINAL_BRANCH"; then
+  || ! git show-ref --verify --quiet "refs/heads/$ORIGINAL_BRANCH"; then
   echo "次の作業ブランチをユーザーに確認してから git switch -c <name> で作成してください。" >&2
 else
   git switch "$ORIGINAL_BRANCH"
@@ -157,7 +166,11 @@ git branch --show-current > "$STATE_FILE"
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
 if [ -z "$DEFAULT_BRANCH" ]; then
   git remote set-head origin --auto
-  DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
+  DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+fi
+if [ -z "$DEFAULT_BRANCH" ]; then
+  echo "origin/HEAD を解決できません。git remote -v と origin の到達性を確認してください。" >&2
+  exit 1
 fi
 git switch "$DEFAULT_BRANCH"
 # fast-forward 不可なら以降の削除フェーズに進ませない。
@@ -190,8 +203,9 @@ done <<< "$GONE_BRANCHES"
 
 # 8. 元のブランチへ戻す or ユーザーに新ブランチを促す
 ORIGINAL_BRANCH=$(cat "$STATE_FILE" 2>/dev/null || true)
+# 元のブランチが手順 7 で削除されたかは branch ref の実在で判定する (GONE_BRANCHES に依存しない)。
 if [ -z "$ORIGINAL_BRANCH" ] || [ "$ORIGINAL_BRANCH" = "$DEFAULT_BRANCH" ] \
-  || printf '%s\n' "$GONE_BRANCHES" | grep -Fxq -- "$ORIGINAL_BRANCH"; then
+  || ! git show-ref --verify --quiet "refs/heads/$ORIGINAL_BRANCH"; then
   echo "次の作業ブランチをユーザーに確認してから git switch -c <name> で作成してください。" >&2
 else
   git switch "$ORIGINAL_BRANCH"
@@ -213,3 +227,7 @@ rm -f "$STATE_FILE"
 ### worktree が紐づいているブランチを削除しようとした
 
 `git branch -D` は worktree にチェックアウトされたブランチを削除できません。`git worktree list` で確認し、不要なら `git worktree remove <path>` してから再度削除してください。
+
+### `git switch` がデフォルトブランチへの切り替えに失敗する (worktree 競合)
+
+リンク worktree から実行し、デフォルトブランチ (master/main) が **別の worktree に既にチェックアウト済み** の場合、手順 4 の `git switch "$DEFAULT_BRANCH"` は `fatal: '<branch>' is already used by worktree at ...` で失敗します。git は同一ブランチを複数 worktree で同時にチェックアウトできないためです。`git worktree list` で確認し、デフォルトブランチを保持している worktree 上で最新化するか、別 worktree 運用を見直してください (この Skill は単一 worktree での実行を想定しています)。

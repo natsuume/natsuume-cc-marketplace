@@ -22,7 +22,7 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 | [enforce-draft-pr](#enforce-draft-pr) | 0.2.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
 | [auto-lint-check](#auto-lint-check) | 0.3.2 | ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン |
 | [pre-push-review](#pre-push-review) | 0.8.3 | `git push` 前に `/code-review` (Claude Code v2.1.146 で `/simplify` からリネーム) → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を self-contained subagent で実行するのは、 標準 `/security-review` を直接呼ぶと主 session の turn が終了し、 subagent 経由でも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。macOS デフォルト bash 3.2.57 でも動作し、 hook 実装の予期せぬエラーは stderr にノンブロッキングで通知 |
-| [update-default-branch](#update-default-branch) | 0.1.1 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
+| [update-default-branch](#update-default-branch) | 0.1.2 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
 | [codex-review-customize](#codex-review-customize) | 0.3.0 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
 | [decompose-bash](#decompose-bash) | 0.1.0 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
