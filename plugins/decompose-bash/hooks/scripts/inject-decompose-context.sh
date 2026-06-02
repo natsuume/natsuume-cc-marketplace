@@ -15,8 +15,10 @@ fi
 INPUT=$(cat)
 
 # hook_event_name は入力からそのまま読み取る (既定値を埋めると別 event の
-# 文脈に誘導する恐れがあるため)。
-HOOK_EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // ""')
+# 文脈に誘導する恐れがあるため)。INPUT が不正な JSON / 空の場合 jq は parse error を
+# stderr に吐くため 2>/dev/null で抑制し、HOOK_EVENT 空判定でフォールバックさせる
+# (hook の stderr は利用者に見えるため、解析失敗をノイズとして表に出さない)。
+HOOK_EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null)
 if [ -z "$HOOK_EVENT" ]; then
   exit 0
 fi

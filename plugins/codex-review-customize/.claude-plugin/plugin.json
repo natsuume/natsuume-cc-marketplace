@@ -1,5 +1,5 @@
 {
   "name": "codex-review-customize",
-  "version": "0.3.0",
-  "description": "公式 codex プラグインの /codex:review コマンド定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.0 で adversarial-review.md のパッチ対象を削除 (関連プラグインからの adversarial-review 連携全廃に追随)"
+  "version": "0.3.1",
+  "description": "公式 codex プラグインの /codex:review コマンド定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.0 で adversarial-review.md のパッチ対象を削除 (関連プラグインからの adversarial-review 連携全廃に追随)。v0.3.1 で apply-patch.sh の EXIT trap が関数 local の temp 変数を参照していた bug を修正 (エラー経路で set -u の unbound variable noise と temp 残留を解消)"
 }
