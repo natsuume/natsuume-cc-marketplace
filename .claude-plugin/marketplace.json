@@ -17,8 +17,8 @@
     {
       "name": "enforce-draft-pr",
       "source": "./plugins/enforce-draft-pr",
-      "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)",
-      "version": "0.1.0",
+      "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)。v0.2.0 で検出を cmd-parser.sh ベースのトークン化に刷新し、引数値内 --draft の誤検知 / global option / cd・env prefix チェーン / 行継続 / --draft=true・-d の取りこぼしを解消 (複数行 body は破壊せず温存)",
+      "version": "0.2.0",
       "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
