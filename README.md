@@ -20,12 +20,14 @@ claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugi
 |-----------|-----------|------|
 | [git-guardrails](#git-guardrails) | 0.2.4 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.2.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
-| [auto-lint-check](#auto-lint-check) | 0.3.2 | ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン |
+| [auto-lint-check](#auto-lint-check) | 0.3.3 | ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン |
 | [pre-push-review](#pre-push-review) | 0.8.3 | `git push` 前に `/code-review` (Claude Code v2.1.146 で `/simplify` からリネーム) → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。security review を self-contained subagent で実行するのは、 標準 `/security-review` を直接呼ぶと主 session の turn が終了し、 subagent 経由でも nested subagent 制約で機能しないため。中間 commit を許容しつつ push 境界で gate するため commit 履歴の意味的解像度を保てる。macOS デフォルト bash 3.2.57 でも動作し、 hook 実装の予期せぬエラーは stderr にノンブロッキングで通知 |
 | [update-default-branch](#update-default-branch) | 0.1.2 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.1.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
 | [codex-review-customize](#codex-review-customize) | 0.3.0 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
 | [decompose-bash](#decompose-bash) | 0.1.0 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
+| [auto-followthrough](#auto-followthrough) | 0.2.2 | `permission_mode` が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始時の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン |
+| [llm-default-branch-push-poc](#llm-default-branch-push-poc) | 0.2.0 | デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用し、`bash -c` / `eval` / `$(...)` 等の shell parser では諦めていた経路を LLM の自然言語解釈でカバーできるか検証する |
 
 ---
 
@@ -212,3 +214,42 @@ Claude Code の `PreToolUse` hook は Bash ツールの `command` 文字列に�
 ### キーワード
 
 `bash` `hook` `sessionstart` `decompose` `preToolUse` `guardrail`
+
+---
+
+## auto-followthrough
+
+`permission_mode` が `auto` のときに、変更の commit → PR 作成 → マージ完了までを Claude が確認停止せず自走するための方針コンテキストを注入するプラグインです。さらに session 開始後の最初のプロンプトで未コミット変更があれば、その出所を分析し分類（既存作業の継続か / 別作業の混入か）をユーザーに確認するよう求めます。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `inject-auto-context` | UserPromptSubmit / PostToolBatch | auto mode 時に commit / PR / マージまでの自走方針を `additionalContext` として注入する。毎ターンの再注入 (UserPromptSubmit) と、ツール実行後の継続抑止 (PostToolBatch) の 2 経路で配送する |
+| `check-uncommitted-on-session-start` | UserPromptSubmit (session 内初回のみ) | session 開始後の最初のプロンプト時点で未コミット変更があれば、出所分析と分類確認を Claude に要求する |
+
+### キーワード
+
+`auto` `automation` `followthrough` `permission-mode` `hook` `userpromptsubmit` `posttoolbatch`
+
+---
+
+## llm-default-branch-push-poc
+
+デフォルトブランチ (master/main) への直接 push を、shell parser ではなく **LLM (prompt hook)** で判定する PoC プラグインです。既存の [git-guardrails](#git-guardrails) と並行運用し、`bash -c` / `eval` / subshell / `$(...)` など決定論パーサでは諦めていた経路を、LLM の自然言語解釈でカバーできるかを検証します。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| (prompt hook) | PreToolUse (matcher: `Bash`) | Bash コマンドがデフォルトブランチへの直接 push か否かを LLM prompt で判定し、該当すれば deny する。push と無関係なコマンドは prompt 内 early-return で軽量に通す |
+
+> **PoC につき既知の制約**: 全 Bash 呼び出しで LLM 判定が走るためレイテンシ / コストが発生します。詳細は本プラグインの README を参照してください。
+
+### キーワード
+
+`git` `push` `default-branch-protection` `llm` `prompt-hook` `poc`

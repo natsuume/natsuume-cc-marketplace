@@ -25,7 +25,7 @@
       "name": "auto-lint-check",
       "source": "./plugins/auto-lint-check",
       "description": "ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
     },
     {

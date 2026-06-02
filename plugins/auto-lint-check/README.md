@@ -4,7 +4,17 @@
 
 ## バージョン
 
-v0.3.1
+v0.3.3
+
+### v0.3.2 → v0.3.3 の変更点
+
+- README の `## バージョン` 表記と changelog を実 version に同期 (#47 で 0.3.2 に bump された際に README 更新が漏れていた)。機能変更なし。
+
+### v0.3.1 → v0.3.2 の変更点 (#47)
+
+- **末尾 `\<改行>` (line continuation) による lint skip bypass を修正**
+  - `git commit\<改行>` のように末尾に line continuation が付いた入力では、bash の `$(...)` が trailing newline を削除する仕様により hook 取得時点で `git commit\` へ壊れ、commit subcommand 検知が外れて lint が skip される経路があった (`block-commit-lint.sh` / `post-commit-lint.sh`)
+  - jq 取得直後に末尾 `\<改行>` を復元する inline 処理を追加し、line continuation 正規化を macOS bash 3.2.57 互換の純 bash + sed fallback 実装に統一 (pre-push-review v0.8.0 と同種の横展開)
 
 ### v0.3.0 → v0.3.1 の変更点
 
