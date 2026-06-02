@@ -57,7 +57,8 @@ v0.2.0 (POC / 試作)
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=llm-default-branch-push-poc
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install llm-default-branch-push-poc@natsuume-plugins
 ```
 
 既存の `git-guardrails` プラグインを **無効化せず** に追加導入してください (並行運用が前提)。
@@ -127,5 +128,5 @@ llm-default-branch-push-poc/
 
 ## 関連情報
 
-- [Claude Code Hooks ドキュメント](https://docs.anthropic.com/claude-code/hooks)
+- [Claude Code Hooks ドキュメント](https://code.claude.com/docs/en/hooks)
 - [Claude Code Prompt Hooks リファレンス](https://code.claude.com/docs/en/hooks.md)

@@ -101,7 +101,8 @@ v0.4.0
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=auto-lint-check
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install auto-lint-check@natsuume-plugins
 ```
 
 ## 機能一覧
@@ -303,4 +304,4 @@ auto-lint-check/
 - [ESLint ドキュメント](https://eslint.org/docs/)
 - [Prettier ドキュメント](https://prettier.io/docs/)
 - [Ruff ドキュメント](https://docs.astral.sh/ruff/)
-- [Claude Code Hooks ドキュメント](https://docs.anthropic.com/claude-code/hooks)
+- [Claude Code Hooks ドキュメント](https://code.claude.com/docs/en/hooks)

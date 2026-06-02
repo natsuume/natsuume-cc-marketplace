@@ -26,7 +26,8 @@ git-guardrails プラグインの一部として提供されていましたが�
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=enforce-draft-pr
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install enforce-draft-pr@natsuume-plugins
 ```
 
 ## 機能一覧
@@ -92,5 +93,5 @@ enforce-draft-pr/
 
 ## 関連情報
 
-- [Claude Code Hooks ドキュメント](https://docs.anthropic.com/claude-code/hooks)
+- [Claude Code Hooks ドキュメント](https://code.claude.com/docs/en/hooks)
 - [GitHub CLI - gh pr create](https://cli.github.com/manual/gh_pr_create)

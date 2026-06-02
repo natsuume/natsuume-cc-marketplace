@@ -21,7 +21,8 @@ v0.2.0
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=natsuume-statusline
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install natsuume-statusline@natsuume-plugins
 ```
 
 インストール後、Claude Code 内で次のスラッシュコマンドを実行します。
@@ -78,4 +79,4 @@ cp ~/.claude/settings.natsuume-statusline-backup.<timestamp>.json ~/.claude/sett
 
 ## 関連情報
 
-- [Claude Code Status Line ドキュメント](https://docs.anthropic.com/claude-code/statusline)
+- [Claude Code Status Line ドキュメント](https://code.claude.com/docs/en/statusline)

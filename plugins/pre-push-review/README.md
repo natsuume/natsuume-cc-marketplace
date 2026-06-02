@@ -96,7 +96,8 @@ PR 作成側で gate する設計だと、以下の経路が捕捉できませ�
 ## インストール
 
 ```bash
-claude /install-plugin https://github.com/natsuume/natsuume-cc-marketplace?plugin=pre-push-review
+claude plugin marketplace add natsuume/natsuume-cc-marketplace
+claude plugin install pre-push-review@natsuume-plugins
 ```
 
 ## 機能一覧
