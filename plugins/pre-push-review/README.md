@@ -4,7 +4,13 @@
 
 ## バージョン
 
-v0.8.4 (前身: `pre-commit-review` v0.4.0)
+v0.8.5 (前身: `pre-commit-review` v0.4.0)
+
+### v0.8.4 → v0.8.5 の変更点 (#90)
+
+- **fail-open / fail-closed policy ラベルを 3 hook に付与**: `block-pre-push.sh` / `block-bg-codex-review.sh` (PreToolUse) に `policy: fail-closed`、`auto-mark.sh` (PostToolUse) に `policy: fail-open` のラベルを冒頭に明記。「同じ git / 環境失敗が Pre=deny / Post=skip」という非対称が意図的である旨を統一フォーマットで可視化し、レビュー時に対称性を即判定できるようにした
+- **`auto-mark.sh` の matcher `"*"` のコストを注記**: 全 tool 完了発火で巨大 INPUT に ERE 評価が走る in-process コストと、問題化時の substring pre-filter 案を注記 (現状は早期離脱ロジックを変えるリスクを避け注記に留める)
+- いずれもコメントのみの変更 (実行挙動は不変)。共有 `lib/cmd-parser.sh` の eval 間接代入については、衝突しうる local 変数名・injection 安全性 (`printf '%q'`)・caller prefix 推奨が既に同ファイルに詳細文書化されているため追加変更なし
 
 ### v0.8.3 → v0.8.4 の変更点 (#85, #86)
 
