@@ -1,0 +1,358 @@
+#!/bin/bash
+# cmd-parser.sh
+# Bash command parser for pre-push-review.
+#
+# 設計意図: 従来の regex ベース「危険プレフィクスを deny で列挙」方式は、新しい bypass
+# パターンが見つかるたびに deny を追加する負け戦になっていた。本ライブラリはコマンドを
+# segment 単位に正確に分割 + トークン化することで、後段の resolver が「実 target を決定的に
+# 取り出す」positive list 設計を取れるようにする。
+#
+# 提供する関数:
+#   - split_command  : コマンドを top-level separator (`&&` / `||` / `;` / `|` / `&`) で
+#                      segment 分割する。 quotes / escapes / 括弧の depth を尊重する。
+#   - tokenize_segment : 1 segment をトークン (空白区切り) に分割する。 quotes 内の空白は
+#                      区切らない。
+#   - unquote_token  : トークン両端の quote ペアを 1 段剥がす。
+#
+# limitations (cooperative 利用前提):
+#   - heredoc (`<<EOF ... EOF`) の body 内 quote toggle は素朴に追跡してしまう。 cooperative
+#     利用で問題は出にくい (重要判定は最終的に `bash -n` のような構文チェックでなく resolver
+#     の positive 判定で行うため)。
+#   - **command substitution `$(...)` / process substitution `<(...)` `>(...)` /
+#     backtick `` `...` `` の内部は parser から隠蔽される経路**。 これらの置換内に
+#     `git push` がある形式は block-pre-push.sh の事前 shape チェックで substring 検出して
+#     **保守的に deny** する (内部の cwd / push を本 parser では解析しないため)。 paren-based
+#     置換 `$(` `<(` `>(` は paren_depth に算入されて `;` 区切りが発火しないこともあり、
+#     内部の `git push` が segment に巻き込まれて push 検出が token level で失敗する経路が
+#     あった。 それを shape check で塞ぐ。 backtick は depth tracking していない。
+
+# line continuation `\<LF>` 正規化。
+#
+# ## bash 3.2 互換のための実装上の制約
+#
+# macOS デフォルトの bash 3.2.57 は `${var//$'\\\n'/<repl>}` 形式のパターン置換で
+# ANSI-C quoting (`$'...'`) をパターン部に展開できない (bash 4 では動く)。 計測で:
+#   - `${INPUT//$'\\\n'/}` (リテラル): bash 3.2 で完全に no-op
+#   - `PAT=$'\\\n'; ${INPUT//$PAT/}`: bash 3.2 で `\n` をエスケープシーケンスではなく
+#     literal `n` として誤解釈し、 結果が壊れる
+# このため、 bash の native パターン置換は使えない。
+#
+# ## 性能設計 (fast-path + sed fallback)
+#
+# 純 bash の 1 文字ループで実装した初版は `result="$result$c"` 形式の reassign が
+# 内部で O(N) コピーを発生させ、 ループ全体が **O(N^2)** になる。 hot path で
+# 実測 (docker bash:3.2) すると 840 chars で 76 ms、 11 KB で 8.6 秒と無視できない
+# 遅延が出るため (このプラグインの hook は **全 Bash 呼び出し** で発火する hot path)、
+# 以下の 2 段構えで O(1) / O(N) に落とす:
+#
+#   1. **case-glob fast-path**: 入力が line continuation を含まなければ O(1) で
+#      即 return。 大半の Bash 呼び出しは line continuation を含まないため、 ここで
+#      99% は早期離脱する。 `case "$var" in *\\$'\n'*) ...` の glob match は
+#      bash 3.2 / 4 / 5 で確実に動作する (実測済)。
+#   2. **sed fallback**: 含む場合は 1 fork で sed に渡す。 BSD sed 互換のため `:a` /
+#      `N` / `$!ba` / `s/\\\n/<repl>/g` を **separate `-e`** で渡す (詳細は実装直上の
+#      コメント参照)。 line-mode sed default では `\n` を含む置換が直接書けないため
+#      pattern space 集約が必要。 fork コスト ~1 ms に対し、 pure bash ループは数百
+#      ms-数秒のため fork 派が常に勝つ。
+#
+# ## 2 つの正規化バリエーション
+#
+#   - `normalize_line_continuations`         : `\<LF>` を **削除** (bash 実挙動と一致)
+#       caller: block-bg-codex-review.sh / auto-mark.sh
+#       理由 : これらは regex match の前処理。 隣接トークン (`--back\<LF>ground` →
+#              `--background`) を連結する必要がある。
+#   - `normalize_line_continuations_to_space`: `\<LF>` を **空白** に置換
+#       caller: block-pre-push.sh
+#       理由 : tokenize_segment が空白で token を区切る設計のため、 空白置換で
+#              トークン境界を保ったまま改行を消す必要がある。
+#
+# ## sed の置換文字列の安全性
+#
+# 内部実装の `_normalize_line_continuations_impl` の第 2 引数 (`replacement`) は
+# **本ファイル内の wrapper 2 関数のみが呼ぶ private contract** で、 値は `""` または
+# `" "` (空白 1 文字) に限定する。 任意文字列を渡すと sed の置換右辺で `&` / `\` /
+# 区切り文字 `/` がメタ文字解釈され誤動作する。 wrapper 経由でしか呼ばない設計のため
+# 本制約は守られる。
+_normalize_line_continuations_impl() {
+  local input="$1"
+  local replacement="$2"
+  # Fast-path: line continuation を含まない入力は O(1) で即 return。 大半の入力は
+  # ここで抜ける。 `*\\$'\n'*` の glob は bash 3.2 / 4 / 5 で正しく動作する。
+  case "$input" in
+    *\\$'\n'*) ;;
+    *) printf '%s' "$input"; return ;;
+  esac
+  # Slow-path: 1 fork で sed に渡す。 `:a` ラベル / `N` で次行 append / `$!ba` で
+  # 末尾以外は :a に branch / `s/\\\n/<repl>/g` で置換、 という 4 コマンドを **各
+  # `-e` で分離** して渡す。 packed `:a;N;$!ba;s/...` 形式は BSD sed (= macOS デフォ
+  # ルト) でラベル定義の `:a` の後の `;` がラベル名の一部として食われ、 line
+  # continuation を含む入力で sed エラーになる。 separate `-e` 形式は GNU sed /
+  # BSD sed / busybox sed すべてで動作する portable な記法。
+  #
+  # **末尾 `\<LF>` への sentinel 補正**: 入力末尾が `\<LF>` で終わる場合 (例:
+  # Claude Code の Bash tool に `git push\<LF>` という command が渡されるケース)、
+  # sed の N コマンドが「次行を読みに行く → EOF → 全体 exit」 する経路があり、
+  # 累積した pattern space が出力されず末尾の `\<LF>` が変換されないまま残る。
+  # 結果として下流の tokenize_segment が `push\` を 1 トークンとして扱い、 push
+  # 検知が外れて gate を bypass する critical regression になる。
+  # 対策: `printf '%s\n'` で入力末尾に sentinel LF を 1 個付加して sed に渡し、
+  # 出力末尾に残る余分な LF を bash の `$(...)` 機構 (trailing LF を 1 つ自動 trim
+  # する仕様) で除去する。 これにより:
+  #   - 末尾 `\<LF>` のケース: `... \<LF><sentinel>` → sed が `<repl><sentinel>`
+  #     に変換 → `$(...)` で sentinel trim → `... <repl>` で正しく置換される
+  #   - 末尾が普通の文字 / LF のケース: sentinel 付加 → そのまま → trim で元入力
+  local result
+  result=$(printf '%s\n' "$input" | sed -e ':a' -e 'N' -e '$!ba' -e "s/\\\\\\n/${replacement}/g")
+  printf '%s' "$result"
+}
+
+normalize_line_continuations() {
+  _normalize_line_continuations_impl "$1" ""
+}
+
+normalize_line_continuations_to_space() {
+  _normalize_line_continuations_impl "$1" " "
+}
+
+# ## 末尾 `\<LF>` 復元の caller 側 inline パターン
+#
+# bash の `$(...)` は POSIX 仕様で **trailing newlines を全部削除** するため、 caller が
+# JSON 値を `COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command')` で取得すると、
+# JSON 内 `"command":"git push\<LF>"` のような末尾 line continuation 付き値が取得時点で
+# `git push\` (末尾 backslash 単独、 LF なし) になり line continuation 情報が失われる。
+# 結果として下流の `normalize_line_continuations*` が「line continuation を含まない」 と
+# fast-path で素通しし、 tokenize 段で `push\` を 1 token として扱って push 検知が外れる
+# security gate bypass になる。
+#
+# 修正は **caller 側 inline** で 1 行追加する形で行う (helper 関数経由だと関数の return も
+# `$()` で取った時点で同じ trailing LF trim が再発するため、 関数化のメリットがない):
+#
+#   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+#   [ -n "$COMMAND" ] || exit 0
+#   # bash の $(...) trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+#   # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+#   case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+#
+# 末尾 literal backslash 単独で終わる入力 (例: bare の `echo foo\` / `git push origin foo\`
+# / Windows-style path `C:\Users\foo\` 等) を line continuation として誤復元するが、
+# その場合も復元後に sed が `\<LF>` を空白/削除に変換するだけで、 下流の tokenize で push
+# 検知の偽陰性は起きない (worst case は argument 末尾の `\` が空白/削除される merge
+# artifact のみで、 tool 名・サブコマンド名の検知には影響しない)。
+
+# split_command <cmd>
+# stdout: 行ごとに segment を出力。 segment 間には `SEP:<separator>` 行を挟む。
+#   例: "cd a && git push" → ["cd a", "SEP:&&", "git push"]
+split_command() {
+  local cmd="$1"
+  local i=0 len=${#cmd}
+  local in_squote=0 in_dquote=0
+  local paren_depth=0 brace_depth=0
+  local segment=""
+
+  while [ "$i" -lt "$len" ]; do
+    local c="${cmd:$i:1}"
+
+    if [ "$in_squote" -eq 1 ]; then
+      [ "$c" = "'" ] && in_squote=0
+      segment+="$c"; i=$((i+1)); continue
+    fi
+
+    if [ "$in_dquote" -eq 1 ]; then
+      if [ "$c" = "\\" ]; then
+        # 次の 1 文字を escape として消費
+        local nc="${cmd:$((i+1)):1}"
+        case "$nc" in
+          '$'|'`'|'"'|'\\')
+            segment+="$c$nc"; i=$((i+2)); continue ;;
+        esac
+      fi
+      [ "$c" = '"' ] && in_dquote=0
+      segment+="$c"; i=$((i+1)); continue
+    fi
+
+    case "$c" in
+      "'") in_squote=1; segment+="$c"; i=$((i+1)) ;;
+      '"') in_dquote=1; segment+="$c"; i=$((i+1)) ;;
+      '\\')
+        # quote 外の `\` は次の 1 文字を escape する。両方をそのまま保持。
+        local nc="${cmd:$((i+1)):1}"
+        segment+="$c$nc"
+        i=$((i+2))
+        ;;
+      '(') paren_depth=$((paren_depth+1)); segment+="$c"; i=$((i+1)) ;;
+      ')') paren_depth=$((paren_depth-1)); segment+="$c"; i=$((i+1)) ;;
+      '{') brace_depth=$((brace_depth+1)); segment+="$c"; i=$((i+1)) ;;
+      '}') brace_depth=$((brace_depth-1)); segment+="$c"; i=$((i+1)) ;;
+      ';')
+        if [ "$paren_depth" -eq 0 ] && [ "$brace_depth" -eq 0 ]; then
+          printf '%s\nSEP:;\n' "$segment"
+          segment=""
+        else
+          segment+="$c"
+        fi
+        i=$((i+1))
+        ;;
+      $'\n')
+        # quote 外の生改行は bash でも `;` 等価のコマンド区切り。 これを segment 区切りに
+        # 含めないと、 multi-line command (`echo prep<NL>git push origin x` のような形) が
+        # 単一 segment 扱いになり、 push 検出 (= 「最初の token が git で次が push」) を
+        # 素通りして gate を bypass する。 quote / paren / brace 内の改行は空白に置換して
+        # 1 segment として保持する (heredoc 埋め込みなど)。
+        if [ "$paren_depth" -eq 0 ] && [ "$brace_depth" -eq 0 ]; then
+          printf '%s\nSEP:;\n' "$segment"
+          segment=""
+        else
+          segment+=" "
+        fi
+        i=$((i+1))
+        ;;
+      '&')
+        if [ "$paren_depth" -eq 0 ] && [ "$brace_depth" -eq 0 ]; then
+          local nc="${cmd:$((i+1)):1}"
+          if [ "$nc" = "&" ]; then
+            printf '%s\nSEP:&&\n' "$segment"
+            segment=""; i=$((i+2))
+          else
+            printf '%s\nSEP:&\n' "$segment"
+            segment=""; i=$((i+1))
+          fi
+        else
+          segment+="$c"; i=$((i+1))
+        fi
+        ;;
+      '|')
+        if [ "$paren_depth" -eq 0 ] && [ "$brace_depth" -eq 0 ]; then
+          local nc="${cmd:$((i+1)):1}"
+          if [ "$nc" = "|" ]; then
+            printf '%s\nSEP:||\n' "$segment"
+            segment=""; i=$((i+2))
+          else
+            printf '%s\nSEP:|\n' "$segment"
+            segment=""; i=$((i+1))
+          fi
+        else
+          segment+="$c"; i=$((i+1))
+        fi
+        ;;
+      *) segment+="$c"; i=$((i+1)) ;;
+    esac
+  done
+
+  printf '%s\n' "$segment"
+}
+
+# unquote_token <token>
+# stdout: トークン両端の quote ペアを 1 段剥がした文字列。
+unquote_token() {
+  local s="$1"
+  case "$s" in
+    \"*\") s="${s%\"}"; s="${s#\"}" ;;
+    \'*\') s="${s%\'}"; s="${s#\'}" ;;
+  esac
+  printf '%s' "$s"
+}
+
+# skip_env_assignments <toks_array_name> <idx_var_name>
+# 引数: tokenize_segment の出力配列の変数名、 現在 index 変数の変数名
+# 動作: idx 位置から `NAME=VALUE` パターンの env-var assignment トークンを skip し、
+#       最初の non-env トークンの位置に idx を進める。 unquote 後の値で判定する。
+#
+# 用途: bash の Simple Command (POSIX) は `[var=value ...] cmd args ...` の形式で、
+# env-var assignment が cmd 名の前に並ぶ (`FOO=bar BAZ=qux git push ...` 等)。 各 hook で
+# 「実コマンド token を取り出す」ためにこのループを書く必要があり、 同形のループが複数
+# 箇所に重複していた。 構文解析 (= cmd-parser の責務) として 1 箇所に集約する。
+#
+# **bash 3.2 互換実装**: macOS 標準 bash 3.2.57 には nameref (`local -n`) が存在しない
+# (bash 4.3+)。 そのため `eval` で間接展開・代入する。 引数で受け取る変数名 (`$1`/`$2`)
+# は呼び出し側のハードコード文字列に限定する (現状の呼び出し側は `_first_toks`/`_fi`,
+# `_toks`/`_idx` 等のリテラル)。 ユーザ入力を直接渡す経路ができると eval injection に
+# なるため拡張時は注意。
+#
+# **呼び出し側変数名衝突に注意**: 本関数内のローカル変数 `_toks_name` / `_idx_name` /
+# `_n` / `_idx` / `_t` / `_t_raw` と一致する名前を呼び出し側で使うと、 eval 経由の間接
+# 展開で値が壊れる。 呼び出し側は別 prefix (例: `_first_toks _fi`) を使うこと。
+skip_env_assignments() {
+  local _toks_name="$1"
+  local _idx_name="$2"
+  local _n _idx _t_raw _t
+  eval "_n=\${#${_toks_name}[@]}"
+  eval "_idx=\${${_idx_name}}"
+  while [ "$_idx" -lt "$_n" ]; do
+    eval "_t_raw=\${${_toks_name}[\$_idx]}"
+    _t="$(unquote_token "$_t_raw")"
+    if [[ "$_t" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      _idx=$((_idx+1))
+    else
+      break
+    fi
+  done
+  # 数値であることはループ条件で保証されているため、 eval injection はない。
+  eval "${_idx_name}=$_idx"
+}
+
+# tokenize_segment <segment> <output_array_name>
+# 引数: segment 文字列、出力先配列の変数名
+# 動作: segment をトークン (空白区切り) に分割。 quote 内の空白は分割しない。
+#       quote 文字自体はトークンに残す (呼び出し側が unquote_token を使う想定)。
+#
+# bash 3.2 には nameref がないため、 内部でローカル配列に蓄積したあと `printf '%q'`
+# でシェル安全形式にクオートし、 `eval` で呼び出し側変数に代入する。 各要素は printf
+# でクオート済みのため値経由の eval injection はない。 出力先変数名 (`$2`) は呼び出し
+# 側のハードコード文字列に限定する (eval injection 回避)。
+#
+# **呼び出し側変数名衝突に注意**: 本関数内のローカル変数 `_out_var` / `_result` /
+# `_quoted` / `_e` / `seg` / `i` / `len` / `in_squote` / `in_dquote` / `current` / `c` /
+# `nc` と一致する名前を呼び出し側で使うと、 eval 経由の間接代入で値が壊れる。 呼び出し
+# 側は別 prefix (例: `_first_toks`, `PUSH_TOKENS`) を使うこと。
+tokenize_segment() {
+  local seg="$1"
+  local _out_var="$2"
+  # 出力先変数名が空だと最後の `eval "=(...)"` が syntax error になり、 呼び出し側の
+  # bug を bash 全体の停止に拡大してしまう。 早期 return で contract 違反を可視化する。
+  [ -n "$_out_var" ] || return 1
+  local -a _result=()
+  local i=0 len=${#seg}
+  local in_squote=0 in_dquote=0
+  local current=""
+
+  while [ "$i" -lt "$len" ]; do
+    local c="${seg:$i:1}"
+
+    if [ "$in_squote" -eq 1 ]; then
+      [ "$c" = "'" ] && in_squote=0
+      current+="$c"
+    elif [ "$in_dquote" -eq 1 ]; then
+      if [ "$c" = "\\" ]; then
+        local nc="${seg:$((i+1)):1}"
+        case "$nc" in
+          '$'|'`'|'"'|'\\')
+            current+="$c$nc"; i=$((i+2)); continue ;;
+        esac
+      fi
+      [ "$c" = '"' ] && in_dquote=0
+      current+="$c"
+    elif [ "$c" = "'" ]; then
+      in_squote=1; current+="$c"
+    elif [ "$c" = '"' ]; then
+      in_dquote=1; current+="$c"
+    elif [[ "$c" == [[:space:]] ]]; then
+      if [ -n "$current" ]; then
+        _result+=("$current")
+        current=""
+      fi
+    else
+      current+="$c"
+    fi
+
+    i=$((i+1))
+  done
+
+  [ -n "$current" ] && _result+=("$current")
+
+  # 呼び出し側配列に書き戻す。 空配列でも `eval "name=()"` で正しく初期化される。
+  local _quoted="" _e
+  for _e in "${_result[@]}"; do
+    _quoted+=" $(printf '%q' "$_e")"
+  done
+  eval "${_out_var}=(${_quoted})"
+}
