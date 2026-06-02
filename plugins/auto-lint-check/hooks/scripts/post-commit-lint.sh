@@ -13,12 +13,18 @@
 # 注入し `commit --amend` 等の修正アクションを促す。tool 自体の実行を止め
 # ないため "non-blocking" な feedback として機能する。
 #
+# policy: fail-open (non-blocking)
 # 必須ツール (jq / python3 / git) が欠ける場合は silent skip する (non-blocking
 # なので fail-closed する必要はない。エラーは stderr に log_warn で出す)。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+
+# 異常終了をユーザの stderr に可視化する (sibling と同型; #68)。non-blocking なので
+# crash しても commit 自体は通るが、safety-net lint が走らなかったことに気づけるようにする。
+# tmpfile 掃除もこのハンドラに集約する (後段で AUTO_LINT_CHECK_CLEANUP_FILE に登録)。
+install_auto_lint_exit_trap "post-commit-lint" "block-commit-lint を bypass した経路への safety-net lint が走らない可能性があります。"
 
 if ! command -v jq >/dev/null 2>&1; then
   log_warn "post-commit-lint: jq が見つからないため skip。"
@@ -86,7 +92,8 @@ if [ -z "$TMP_INPUT" ]; then
   log_warn "post-commit-lint: mktemp failed. skip."
   exit 0
 fi
-trap 'rm -f "$TMP_INPUT"' EXIT
+# tmpfile 掃除は install_auto_lint_exit_trap が張った EXIT trap に集約する。
+AUTO_LINT_CHECK_CLEANUP_FILE="$TMP_INPUT"
 
 # 現在の HEAD コミットの変更ファイルを head source として TMP_INPUT に書き出す。
 # --diff-filter=ACMR: Added / Copied / Modified / Renamed のみ (Deleted /
@@ -142,6 +149,8 @@ while IFS=$'\t' read -r IDX LINTER LABEL ROOT; do
     LINT_CONTENT="${CONTENT_PADDED%X}"
     ABS_PATH=$(normalize_path "$REL_PATH") || continue
 
+    # 各イテレーションで RC を初期化し、未知 LINTER で stale RC を流用しないようにする (#66)。
+    RC=0
     case "$LINTER" in
       eslint)
         LINT_OUT=$( (cd "$ROOT" && printf '%s' "$LINT_CONTENT" | "${ESLINT_CMD[@]}" --stdin --stdin-filename "$ABS_PATH") 2>&1 )
@@ -151,6 +160,7 @@ while IFS=$'\t' read -r IDX LINTER LABEL ROOT; do
         LINT_OUT=$( (cd "$ROOT" && printf '%s' "$LINT_CONTENT" | "${RUFF_CMD[@]}" check --stdin-filename "$ABS_PATH" -) 2>&1 )
         RC=$?
         ;;
+      *) continue ;;
     esac
 
     if [ "$RC" -ne 0 ]; then

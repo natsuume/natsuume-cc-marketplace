@@ -15,13 +15,25 @@
 # でのグルーピング) は `lib/build-lint-plan.py` に委譲しており、本スクリプトは
 # git からの入力収集と linter 実行の orchestration だけを担う。
 #
+# policy: fail-closed
 # 必須ツール (jq, python3) が欠ける、もしくは想定外の状況で lint を実行
 # できない場合は silent skip せず deny に倒す (fail closed)。silently skip
 # すると lint が走らないまま commit が通る経路ができてしまうため。
+# (対照: block-ignore-lint-comment.sh は defense-in-depth の一枚で fail-open。
+#  両者のポリシー差は意図的 — #67。)
+# なお到達可能パスは全て deny JSON 出力後 exit 0 だが、deny JSON を出す前の
+# プロセス異常死では commit が allow される fail-open 窓が残る (#68)。これは
+# 下記 install_auto_lint_exit_trap による「可視化」のみで対処し、真の fail-closed
+# 化はしない (SIGKILL/OOM 捕捉不能 + 低頻度のため; common.sh の trap 解説参照)。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$SCRIPT_DIR/lib/common.sh"
+
+# 異常終了 (deny JSON を出す前の crash 等) をユーザの stderr に可視化する。tmpfile 掃除も
+# このハンドラに集約されるため、後段の TMP_INPUT 作成時は AUTO_LINT_CHECK_CLEANUP_FILE に
+# 登録するだけでよい (個別の `trap rm` は張らない)。
+install_auto_lint_exit_trap "block-commit-lint" "lint が走らないまま commit が通る (fail-open) 可能性があります。"
 
 # jq-free な deny エミッタ。jq missing でも fail closed できるよう、
 # emit_deny (jq に依存) より先に静的 heredoc で deny を出力する。
@@ -152,7 +164,9 @@ if [ -z "$TMP_INPUT" ]; then
   log_warn "block-commit-lint: mktemp failed. cannot build lint plan."
   emit_deny "auto-lint-check の block-commit-lint hook が lint plan 用の一時ファイル作成に失敗しました。silently skip すると lint が走らないまま commit が通る経路になるため fail closed (deny) しています。"
 fi
-trap 'rm -f "$TMP_INPUT"' EXIT
+# tmpfile 掃除は install_auto_lint_exit_trap が張った EXIT trap に集約する (個別 trap で
+# 上書きすると診断ハンドラが消えるため、掃除対象を登録するだけにする)。
+AUTO_LINT_CHECK_CLEANUP_FILE="$TMP_INPUT"
 
 git diff --cached --name-only --diff-filter=ACMR -z 2>/dev/null \
   | prepend_source_label staged >> "$TMP_INPUT"
@@ -222,6 +236,9 @@ while IFS=$'\t' read -r IDX LINTER LABEL ROOT; do
     LINT_CONTENT="${CONTENT_PADDED%X}"
     ABS_PATH=$(normalize_path "$REL_PATH") || continue
 
+    # 各イテレーションで RC を初期化し、未知 LINTER (将来 linter 追加時) で RC が代入
+    # されず前イテレーションの値を流用する stale RC を防ぐ (#66)。
+    RC=0
     case "$LINTER" in
       eslint)
         LINT_OUT=$( (cd "$ROOT" && printf '%s' "$LINT_CONTENT" | "${ESLINT_CMD[@]}" --stdin --stdin-filename "$ABS_PATH") 2>&1 )
@@ -231,6 +248,7 @@ while IFS=$'\t' read -r IDX LINTER LABEL ROOT; do
         LINT_OUT=$( (cd "$ROOT" && printf '%s' "$LINT_CONTENT" | "${RUFF_CMD[@]}" check --stdin-filename "$ABS_PATH" -) 2>&1 )
         RC=$?
         ;;
+      *) continue ;;
     esac
 
     if [ "$RC" -ne 0 ]; then

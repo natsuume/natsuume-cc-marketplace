@@ -7,6 +7,17 @@
 # (検出は detect-new-ignores.py で多重集合差分により実装)。
 #
 # 対象は eslint / prettier / ruff の代表的な ignore 構文。
+#
+# policy: fail-open (defense-in-depth)
+# detect-new-ignores.py が「新規 ignore あり (exit 2)」を返したときのみ deny し、
+# それ以外 (exit 0 = 検出なし / exit 1 = 入力不正等) は許可で抜ける。これは
+# block-commit-lint.sh (fail-closed) と意図的に異なる (#67)。理由:
+#   1. jq / python3 不在は下で先に gate するため、残る exit 1 は「stdin が有効 JSON
+#      でない」場合に限られ、stdin は Claude Code 生成 payload なので現実の破損経路は乏しい。
+#   2. python3 クラッシュで誤許可するのは「元々検出できなかった編集」であり新規 bypass を
+#      生まない。
+#   3. 本 hook は ignore バイパス対策の defense-in-depth の一枚で、commit 時に
+#      block-commit-lint.sh が再 lint する二重防御がある。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
