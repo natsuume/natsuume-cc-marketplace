@@ -39,7 +39,7 @@
       "name": "update-default-branch",
       "source": "./plugins/update-default-branch",
       "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "keywords": ["git", "pull", "prune", "branch-cleanup", "merge"]
     },
     {
