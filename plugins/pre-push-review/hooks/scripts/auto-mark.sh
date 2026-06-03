@@ -1,8 +1,9 @@
 #!/bin/bash
 # auto-mark.sh
-# /code-review / /codex:review --wait --scope branch / pre-push-review:security-reviewer
-# subagent / /security-review 標準 skill (主 session 直接呼び出しのみ) の実行完了を
-# PostToolUse で検知し、対応するレビューマーカーを更新する。
+# /simplify / /code-review / /codex:review --wait --scope branch /
+# pre-push-review:security-reviewer subagent / /security-review 標準 skill
+# (主 session 直接呼び出しのみ) の実行完了を PostToolUse で検知し、対応する
+# レビューマーカーを更新する。
 #
 # policy: fail-open (PostToolUse / 正常完了後の marker 書き込み)
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を
@@ -10,9 +11,13 @@
 #   は fail-closed。同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
 #
 # 検知対象:
-#   - Skill tool で `code-review` skill (旧名 `simplify` も後方互換で受け付ける) が
-#     完了した瞬間 → code-reviewed マーカー (launch 時点ハッシュ)。 Claude Code v2.1.146
-#     で bundled skill `/simplify` が `/code-review` にリネームされたため両方を検知する。
+#   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー (launch 時点
+#     ハッシュ)。/simplify は cleanup-only でコードを編集するため、body の edit で launch
+#     時点ハッシュは即 stale 化する (= 編集が無くなるまで再実行を促す loop discipline)。
+#   - Skill tool で `code-review` skill が完了した瞬間 → code-reviewed マーカー (launch
+#     時点ハッシュ)。/code-review は read-only バグ検出なので edit による self-stale は無い。
+#     v1.0.0 で /simplify (編集) と /code-review (read-only) を別マーカーに分離した
+#     (詳細は lib/markers.sh / lib/first-party-review.sh のヘッダ)。
 #   - Skill tool で `security-review` skill が完了した瞬間 → security-reviewed マーカー
 #     (launch 時点ハッシュ。 主 session が直接呼んだ場合のみ動く後方互換パス)
 #   - Bash tool で `codex-companion.mjs review --scope branch` が完了した瞬間
@@ -95,13 +100,14 @@ INPUT=$(cat)
 # negative を生まない)。早期離脱ロジックを変えるリスクを避け、現状はコスト注記に留める。
 #
 # 3 つの top-level OR ブランチの意図:
-#   - `"skill"[[:space:]]*:[[:space:]]*"(code-review|simplify|security-review)"`: Skill tool で
-#     `code-review` (v2.1.146 以降の新名) / `simplify` (v2.1.145 以下の旧名) / `security-review`
+#   - `"skill"[[:space:]]*:[[:space:]]*"(simplify|code-review|security-review)"`: Skill tool で
+#     `simplify` (cleanup・編集) / `code-review` (read-only バグ検出) / `security-review`
 #     skill が完了したことを検出する粗フィルタ。 完全一致が必要なため末尾の `"` まで含めて
 #     マッチさせ、 namespace 付き skill (`code-review:code-review` 等) は副次マッチしない。
 #     **後段 case 分岐 (skill 名 → marker 関数のマッピング) と同期させること**:
-#     新しい alias 追加時はここと case 文の両方を更新しないと、 PRECHECK_RE で通過するが
-#     case の `*) exit 0 ;;` に落ちる silent skip が発生し marker が永久に書かれない。
+#     v1.0.0 で simplify と code-review は別マーカーに書き分ける。新しい skill 名 / alias 追加時
+#     はここと case 文の両方を更新しないと、 PRECHECK_RE で通過するが case の `*) exit 0 ;;` に
+#     落ちる silent skip が発生し marker が永久に書かれない。
 #   - `"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"`: Agent / Task
 #     tool で `pre-push-review:security-reviewer` subagent が完了したことを検出する粗
 #     フィルタ。 namespace 付き形式 (`pre-push-review:security-reviewer`) と name-only
@@ -115,7 +121,7 @@ INPUT=$(cat)
 # 左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を
 # 弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
 # (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
-PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(code-review|simplify|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"|codex-companion'
+PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(simplify|code-review|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"|codex-companion'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0
 fi
@@ -155,11 +161,18 @@ case "$TOOL_NAME" in
     # launch 時点と異なる値になり、block-pre-push.sh の比較で marker stale → DENY となる
     # ため、Claude は **修正後の state で再度 skill** を呼ぶ必要が生じる (loop 強制)。
     case "$SKILL_NAME" in
-      # v2.1.146 で `/simplify` が `/code-review` にリネームされたため両方を受け付ける。
+      # v1.0.0: /simplify と /code-review は別物なので別マーカーに書き分ける (詳細は
+      # lib/markers.sh / lib/first-party-review.sh のヘッダ)。
+      #   - /simplify   = cleanup-only (コードを編集) → simplified マーカー
+      #   - /code-review = read-only バグ検出         → code-reviewed マーカー
       # **PRECHECK_RE (上の skill alternation) と同期させること**: 片方だけ更新すると、
       # PRECHECK_RE で通過するが case で `*) exit 0 ;;` に落ちる silent skip を作りうる。
-      # マーカーファイル名は `.claude-pre-push-code-reviewed` (v0.7.0 で旧 `.claude-pre-push-simplified` から rename)。
-      code-review|simplify) MARKER_FN=code_reviewed_marker_path ;;
+      # 後方互換: v2.1.145 以下の /simplify は当時 cleanup-and-fix (= 編集する) だったので
+      # simplified マーカーへ写すのが意味的に正しい。v2.1.147-153 帯は /simplify が不在で
+      # /code-review (read-only) のみだが、その帯では push gate が fail-open で「第一者 1 本」
+      # に緩むため code-reviewed マーカー単独で gate を満たせる (lib/first-party-review.sh)。
+      simplify) MARKER_FN=simplified_marker_path ;;
+      code-review) MARKER_FN=code_reviewed_marker_path ;;
       security-review) MARKER_FN=security_marker_path ;;
       *) exit 0 ;;
     esac
