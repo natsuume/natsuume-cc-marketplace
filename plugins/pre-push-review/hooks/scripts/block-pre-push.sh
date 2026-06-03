@@ -11,7 +11,7 @@
 #
 # pre-commit 境界だと:
 #   - 1 commit ごとにレビューループが回り、N-commit PR では合計 N 回ループが走る
-#   - /code-review edits や /codex:review 指摘修正が初期実装と同じ commit に混入し、
+#   - /simplify edits や /code-review・/codex:review 指摘修正が初期実装と同じ commit に混入し、
 #     git log / blame / bisect の意味的解像度が失われる
 #   - 中間 commit (WIP / 探索 / checkpoint) を残せない
 #
@@ -32,7 +32,10 @@
 # 5. 解決した target cwd 上で:
 #    - default branch (master/main) なら git-guardrails に委譲して skip
 #    - branch 全差分 + 未コミット差分のハッシュを計算
-#    - 3 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義) と一致しなければ deny
+#    - 4 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義: simplified / code-reviewed /
+#      codex-reviewed / security-reviewed) と一致しなければ deny。 第一者 (simplified +
+#      code-reviewed) は CC>=2.1.154 確認時のみ両方必須、 それ以外は fail-open で 1 本
+#      (lib/first-party-review.sh)。 codex + security は常に必須
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
 #    引用符付き引数 / `push.default=matching` 環境での bare push 等は deny
 # 7. dirty-tree (target cwd の) は deny
@@ -90,6 +93,8 @@ source "$SCRIPT_DIR/lib/target-resolver.sh"
 source "$SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
+# shellcheck source=lib/first-party-review.sh
+source "$SCRIPT_DIR/lib/first-party-review.sh"
 
 # fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。
 # 関数本体 (`_normalize_line_continuations_impl`) にも fast-path がある (= 二重) が、
@@ -605,16 +610,18 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C ${TARGET_CWD} status\` で変更を確認し、commit してから \`/code-review\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\` subagent (\`Task\` / \`Agent\` tool 経由) を再走させて push してください。
+\`git -C ${TARGET_CWD} status\` で変更を確認し、commit してから \`/simplify\` → \`/code-review\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\` subagent (\`Task\` / \`Agent\` tool 経由) を再走させて push してください。
 EOF
 )
   deny "$REASON"
   exit 0
 fi
 
+SIMPLIFIED_MARKER=$(simplified_marker_path "$GIT_DIR")
 CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR")
 CODEX_MARKER=$(codex_marker_path "$GIT_DIR")
 SECURITY_MARKER=$(security_marker_path "$GIT_DIR")
+SIMPLIFIED_HASH=$([ -f "$SIMPLIFIED_MARKER" ] && cat "$SIMPLIFIED_MARKER" 2>/dev/null)
 CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
 CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
 SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
@@ -666,15 +673,35 @@ if [ "$CURRENT_HASH" = "$EMPTY_DIFF_HASH" ]; then
   exit 0
 fi
 
-# 3 つのマーカーが現在の差分と一致 = 「現状の branch 全差分 + 未コミットに対して
-# /code-review と /codex:review --wait --scope branch と /security-review が直近で実走済み」
-# を意味する。 markers は明示削除しない: PreToolUse は push 成功確認できないため、 remote
-# rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる
-# 無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する。
-if [ -n "$CODE_REVIEWED_HASH" ] && [ -n "$CODEX_HASH" ] && [ -n "$SECURITY_HASH" ] \
-   && [ "$CODE_REVIEWED_HASH" = "$CURRENT_HASH" ] \
-   && [ "$CODEX_HASH" = "$CURRENT_HASH" ] \
-   && [ "$SECURITY_HASH" = "$CURRENT_HASH" ]; then
+# マーカーが現在の差分と一致 = 「現状の branch 全差分 + 未コミットに対して該当レビューが
+# 直近で実走済み」を意味する。 markers は明示削除しない: PreToolUse は push 成功確認
+# できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push が
+# レビュー必須になる無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する。
+is_fresh() {
+  [ -n "$1" ] && [ "$1" = "$CURRENT_HASH" ]
+}
+
+# 第一者 (Anthropic) review 要件を決定する (lib/first-party-review.sh)。
+#   - CC >= 2.1.154 を肯定的に確認できた場合のみ「両方必須」に昇格 = /simplify (cleanup・編集)
+#     と /code-review (read-only バグ検出) を **両方** 要求 (案 B defense-in-depth)。
+#   - 旧 version / version 不明 / 検出失敗時はすべて fail-open で「どちらか 1 本で可」に降格。
+#     旧 version 帯では片方の skill が存在せず両方必須にすると永久 deny になるため、緩める
+#     方向にのみ倒す (詳細は lib/first-party-review.sh のヘッダ / MEMORY の SPOF 教訓)。
+# いずれの場合も codex + security + 第一者 (1〜2 本) は必須なので、未レビュー push は通さない。
+if pre_push_review_require_both_first_party; then
+  REQUIRE_BOTH_FP=1
+else
+  REQUIRE_BOTH_FP=0
+fi
+
+FP_OK=0
+if [ "$REQUIRE_BOTH_FP" -eq 1 ]; then
+  if is_fresh "$SIMPLIFIED_HASH" && is_fresh "$CODE_REVIEWED_HASH"; then FP_OK=1; fi
+else
+  if is_fresh "$SIMPLIFIED_HASH" || is_fresh "$CODE_REVIEWED_HASH"; then FP_OK=1; fi
+fi
+
+if [ "$FP_OK" -eq 1 ] && is_fresh "$CODEX_HASH" && is_fresh "$SECURITY_HASH"; then
   exit 0
 fi
 
@@ -688,9 +715,18 @@ format_status() {
     printf '⚠ 失効 (差分が変わったため再実行が必要)'
   fi
 }
+SIMPLIFIED_STATUS=$(format_status "$SIMPLIFIED_HASH")
 CODE_REVIEWED_STATUS=$(format_status "$CODE_REVIEWED_HASH")
 CODEX_STATUS=$(format_status "$CODEX_HASH")
 SECURITY_STATUS=$(format_status "$SECURITY_HASH")
+
+# 第一者 review 要件の表示用ラベル。CC version 検出結果 (REQUIRE_BOTH_FP) に応じて
+# 「両方必須」/「どちらか 1 本で可 (fail-open)」を案内する。
+if [ "$REQUIRE_BOTH_FP" -eq 1 ]; then
+  FP_REQUIREMENT_NOTE='Claude Code v2.1.154+ を検出したため、第一者レビューは /simplify と /code-review の **両方** が「✓ 最新の差分でレビュー済み」である必要があります。'
+else
+  FP_REQUIREMENT_NOTE='Claude Code version を v2.1.154+ と確定できなかったため (旧 version / 検出不能)、第一者レビューは /simplify と /code-review の **どちらか 1 本** が最新であれば通過します (fail-open)。v2.1.154+ 環境では両方を実行してください。'
+fi
 
 REASON=$(cat <<EOF
 プッシュをブロックしました。push 前に下記のレビューを実行してください。
@@ -698,16 +734,34 @@ REASON=$(cat <<EOF
 target: ${TARGET_CWD}
 ブランチ: ${BRANCH} (基準: origin/${BASE})
 
-レビュー状態 (3 つすべて「✓ 最新の差分でレビュー済み」になると push が許可されます):
-  /code-review                     : $CODE_REVIEWED_STATUS
+レビュー状態 (下記の必須レビューがすべて「✓ 最新の差分でレビュー済み」になると push が許可されます):
+  /simplify (cleanup・コード編集)  : $SIMPLIFIED_STATUS
+  /code-review (read-only バグ検出) : $CODE_REVIEWED_STATUS
   /codex:review --scope branch     : $CODEX_STATUS
   security review (subagent 経由)  : $SECURITY_STATUS
 
+第一者 (Anthropic) レビューの要件: ${FP_REQUIREMENT_NOTE}
+(\`/codex:review\` と security review は version に関わらず常に必須です。)
+
+⚠ \`/simplify\` と \`/code-review\` は **別の skill** です (Claude Code v2.1.147 で /code-review が
+read-only バグ検出器に分離され、 v2.1.154 で /simplify が cleanup-only の編集 skill として
+再導入されました):
+  - \`/simplify\`   = reuse / simplification / efficiency / altitude の cleanup を **適用** (コードを編集する)
+  - \`/code-review\` = correctness バグを **検出して報告** (コードは編集しない = read-only)
+
 実行手順 (修正が落ち着くまでループ):
-  1. \`/code-review\` を Skill tool で呼び出す (コード変更を伴うため先に実行。 Claude Code v2.1.145 以下では旧名の \`/simplify\` を使用してください)
-  2. /codex:review --wait --scope branch を Skill tool で呼び出す
-     (--scope branch 必須: branch 全差分 = PR diff のレビューを保証するため)
-  3. **\`Task\` / \`Agent\` tool (Claude Code で同じ subagent invocation tool に
+  1. \`/simplify\` を Skill tool で呼び出す (cleanup を適用 = **コードを編集する** ため最初に実行する)
+     - /simplify が edits を行うと branch 差分が変わり、 自身を含む全マーカーが失効する。
+       **edits が無くなる (= no-op になる) まで /simplify を繰り返す** ことで simplified マーカーが
+       最新差分に揃う。 commit が必要なら commit してから再実行する (dirty tree は push 不可)。
+     - Claude Code v2.1.153 以下で \`/simplify\` が存在しない場合は \`/code-review\` で代替してください
+       (その帯では第一者レビューは fail-open で 1 本に緩みます)。
+  2. \`/code-review\` を Skill tool で呼び出す (read-only の correctness バグ検出。 cleanup 適用後の
+     最終形をバグ観点でレビューする。 指摘があれば手順 5 に従って修正する)
+  3. /codex:review --wait --scope branch を Skill tool で呼び出す
+     (--scope branch 必須: branch 全差分 = PR diff のレビューを保証するため。 OpenAI codex による
+      独立したバグレビューで、 Anthropic の /code-review と engine が異なるため defense-in-depth になる)
+  4. **\`Task\` / \`Agent\` tool (Claude Code で同じ subagent invocation tool に
      付いた 2 つの名前 — どちらでも可) で \`pre-push-review:security-reviewer\`
      subagent を起動する**
      (この subagent は self-contained に branch 全差分の security review を実行し、
@@ -715,10 +769,10 @@ target: ${TARGET_CWD}
       設計 (subagent 内では nested subagent が動かないため self-contained 化している)。
       PostToolUse hook が **subagent の完了** (Agent / Task tool の終了) を検知して
       security マーカーを自動更新する)
-  4. **いずれかのレビュー (\`/codex:review\` / security-reviewer subagent) からの指摘が
-     ある場合は、 修正方針を整理してから実装する**
-     (push gate は security マーカーの書き込みのみを確認し report 内容まで verify しない
-      ため、 security 指摘も含めた **2 レビュー全部** の remediation 義務をここで明文化する):
+  5. **いずれかのレビュー (\`/code-review\` / \`/codex:review\` / security-reviewer subagent) からの
+     指摘がある場合は、 修正方針を整理してから実装する**
+     (push gate は各マーカーの書き込みのみを確認し report 内容まで verify しない
+      ため、 全レビューの remediation 義務をここで明文化する):
      a. 指摘ごとに修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)
      b. **\`/codex:review\` からの指摘** については、
         \`/codex:rescue --wait\` を Skill tool で呼び出し、 その方針が以下の観点で妥当か
@@ -729,14 +783,16 @@ target: ${TARGET_CWD}
      c. \`/codex:rescue\` の応答が **approve (= 方針 OK)** になってから実装を開始する。
         rescue から異論・代替案・追加考慮事項が出た場合は方針を見直して再度 rescue に
         投げる (rescue 自体はマーカー対象外。 何回投げても push gate には影響しない)
-     d. **security-reviewer subagent からの指摘** は通常具体的な脆弱性対処 (input
-        validation 追加 / 秘匿情報の削除 / injection 対策等) になるため、 \`/codex:rescue\`
-        壁打ちは **optional (= 直接修正してよい)**。 ただし設計判断が絡む修正
-        (例: 認証フロー全体の見直し / 権限モデルの再設計) では rescue を活用するのが望ましい
-  5. approve された方針 (または security の直接修正) で実装し、必要に応じて新規 commit を作成する
-  6. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
-     その場合は手順 1〜3 を最初から再実行する (再ループでも手順 4 の壁打ちは適用)
-  7. 3 つすべてのマーカーが「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
+     d. **\`/code-review\` (Anthropic バグ検出) / security-reviewer subagent からの指摘** は
+        通常具体的な対処 (バグ修正 / input validation 追加 / 秘匿情報の削除 / injection 対策等)
+        になるため、 \`/codex:rescue\` 壁打ちは **optional (= 直接修正してよい)**。 ただし設計判断が
+        絡む修正 (例: 認証フロー全体の見直し / 権限モデルの再設計) では rescue を活用するのが望ましい
+  6. approve された方針 (または直接修正) で実装し、必要に応じて新規 commit を作成する
+  7. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
+     その場合は手順 1〜4 を最初から再実行する (再ループでも手順 5 の壁打ちは適用)。
+     特に手順 1 の \`/simplify\` は edits で自己失効するので、 cleanup が安定 (no-op) してから
+     手順 2〜4 の read-only レビューを最終差分に対して走らせると無駄な再ループを減らせる
+  8. 必須マーカーがすべて「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
 
 ⚠ **security review を直接 \`/security-review\` で呼ばないこと**: 標準 skill の
 prompt は最終応答をマークダウンレポートだけにするよう指示しているため、 主 session の
@@ -748,10 +804,11 @@ turn は通常通り終了し、 親 session は subagent invocation の結果�
 場合も、 後方互換として security マーカーは書かれます — ただし turn 終了でループが
 止まるため subagent 経由が推奨です。)
 
-マーカーは PostToolUse hook (auto-mark.sh) が \`/code-review\` (v2.1.145 以下は旧名 \`/simplify\`) /
+マーカーは PostToolUse hook (auto-mark.sh) が \`/simplify\` / \`/code-review\` /
 \`/codex:review --wait --scope branch\` / \`pre-push-review:security-reviewer\` subagent
 完了 (推奨パス) または \`/security-review\` skill launch (後方互換パス) を検知して
-自動的に記録します。マーカーは push 通過時に明示削除されません
+自動的に記録します。\`/simplify\` と \`/code-review\` はそれぞれ別マーカーに記録されます
+(v1.0.0 で分離)。マーカーは push 通過時に明示削除されません
 (次の編集でハッシュが変わると自動的に失効するため)。
 
 \`/codex:review\` の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
