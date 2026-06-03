@@ -31,7 +31,6 @@ claude plugin install git-guardrails@natsuume-plugins
 | [codex-review-customize](#codex-review-customize) | 0.3.1 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
 | [decompose-bash](#decompose-bash) | 0.1.1 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
 | [auto-followthrough](#auto-followthrough) | 0.2.3 | `permission_mode` が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始後の最初のプロンプト時点の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン |
-| [llm-default-branch-push-poc](#llm-default-branch-push-poc) | 0.2.2 | デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用し、`bash -c` / `eval` / `$(...)` 等の shell parser では諦めていた経路を LLM の自然言語解釈でカバーできるか検証する |
 
 ---
 
@@ -237,23 +236,3 @@ Claude Code の `PreToolUse` hook は Bash ツールの `command` 文字列に�
 ### キーワード
 
 `auto` `automation` `followthrough` `permission-mode` `hook` `userpromptsubmit` `posttoolbatch`
-
----
-
-## llm-default-branch-push-poc
-
-デフォルトブランチ (master/main) への直接 push を、shell parser ではなく **LLM (prompt hook)** で判定する PoC プラグインです。既存の [git-guardrails](#git-guardrails) と並行運用し、`bash -c` / `eval` / subshell / `$(...)` など決定論パーサでは諦めていた経路を、LLM の自然言語解釈でカバーできるかを検証します。
-
-### 機能
-
-#### Hooks
-
-| Hook 名 | イベント | 説明 |
-|---------|---------|------|
-| (prompt hook) | PreToolUse (matcher: `Bash`) | Bash コマンドがデフォルトブランチへの直接 push か否かを LLM prompt で判定し、該当すれば deny する。push と無関係なコマンドは prompt 内 early-return で軽量に通す |
-
-> **PoC につき既知の制約**: 全 Bash 呼び出しで LLM 判定が走るためレイテンシ / コストが発生します。詳細は本プラグインの README を参照してください。
-
-### キーワード
-
-`git` `push` `default-branch-protection` `llm` `prompt-hook` `poc`
