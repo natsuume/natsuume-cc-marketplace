@@ -1,5 +1,0 @@
-{
-  "name": "llm-default-branch-push-poc",
-  "version": "0.2.2",
-  "description": "デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用して LLM 判定の精度・遅延を検証する。v0.2.0 で `if` フィールド撤去 (実機で中間 match が機能しなかったため)、 hot path 軽減を prompt 内 early-return に集約。v0.2.1 で handler に `model: haiku` を明示し README の Haiku 前提と一致 (#77)、 prompt の remote 削除許可をフラグ形 (`--delete`) とコロン形 (`:master`) で対称化 (#76)。v0.2.2 で matcher 絞り込み (v0.3.0 案) が active binary 調査により実現不能と確定したため README を訂正 (#78; `if` は permissions matcher 委譲で wrapper/subshell/置換内部を展開せず隠れた push を取りこぼすため、全 Bash 発火 + prompt early-return が捕捉率優先下の最適)"
-}

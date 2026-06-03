@@ -69,13 +69,6 @@
       "description": "SessionStart で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する additionalContext を注入し、&&/||/;/$(...) 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン。v0.1.1 で不正/空 JSON 入力時の jq parse error stderr 漏れを抑制",
       "version": "0.1.1",
       "keywords": ["bash", "hook", "sessionstart", "decompose", "preToolUse", "guardrail"]
-    },
-    {
-      "name": "llm-default-branch-push-poc",
-      "source": "./plugins/llm-default-branch-push-poc",
-      "description": "デフォルトブランチ (master/main) への直接 push を LLM (prompt hook) で判定する POC プラグイン。既存 git-guardrails と並行運用し、bash -c / eval / subshell / $(...) 等の shell parser では諦めていた経路を LLM の自然言語解釈でカバーできるかを検証する。v0.2.1 で handler に model: haiku を明示 (#77)、remote 削除許可をフラグ形/コロン形で対称化 (#76)。v0.2.2 で matcher 絞り込み (v0.3.0 案) が active binary 調査で実現不能と確定したため README を訂正 (#78)",
-      "version": "0.2.2",
-      "keywords": ["git", "push", "default-branch-protection", "llm", "prompt-hook", "poc"]
     }
   ]
 }
