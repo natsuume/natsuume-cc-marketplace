@@ -19,8 +19,10 @@ build_context_segment() {
 
   # "ctx: (P%)" まで。パーセンテージを使用率で色付け（高使用率ほど赤）。
   segment=$(printf 'ctx: %s(%s%%)%b' "$color" "$display_pct" "$RESET")
-  # used/max が揃っていれば "75.1k/1M" を付す（max が数値かつ正のときのみ）
-  if [ -n "$used" ] && [ -n "$max" ] && [ "$max" -gt 0 ] 2>/dev/null; then
+  # used/max を "75.1k/1M" で付す。used が非負整数 かつ max が正整数のときのみ。
+  # （非整数/空/負値は算術比較が失敗 → 2>/dev/null で握り潰し "ctx: (P%)" に縮退。
+  #  Claude Code は整数を渡すが、型が崩れたとき生値を表示せず安全側に倒すため）
+  if [ "$used" -ge 0 ] 2>/dev/null && [ "$max" -gt 0 ] 2>/dev/null; then
     segment+=$(printf ' %s/%s' "$(humanize_tokens "$used")" "$(humanize_tokens "$max")")
   fi
 
