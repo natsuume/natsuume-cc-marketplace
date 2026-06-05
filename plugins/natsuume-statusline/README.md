@@ -1,10 +1,10 @@
 # natsuume-statusline プラグイン
 
-Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 / レートリミット) を提供するプラグインです。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録できます。
+Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグインです。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録できます。
 
 ## バージョン
 
-v0.2.0
+v0.3.0
 
 ## 表示内容
 
@@ -13,9 +13,10 @@ v0.2.0
 1. **1 行目**: カレントパス、GitHub リポジトリ名、ブランチ名、staged/modified 変更量、未コミット件数 (or `clean`)
    - リポジトリの owner が自分または所属 org の場合は `owner/repo` を `repo` に短縮
    - 全体がターミナル幅を超える場合は段階的に prefix → パス短縮の順でフォールバック
-2. **2 行目**: レートリミット (5h / 7d) のパーセンテージ、リセット残時間、プログレスバー
+2. **2 行目**: context 使用量 (`ctx`) と レートリミット (5h / 7d) のパーセンテージ、リセット残時間 (レートリミットのみ)、プログレスバー
+   - context 使用量は `context_window.used_percentage` (取得できない初期/compact 直後は非表示)
    - 80% 以上で赤、60% 以上で黄、それ未満で緑
-   - バー幅はターミナル幅に合わせて 4〜20 文字で動的調整
+   - バー幅はターミナル幅に合わせて 4〜10 文字で動的調整
 3. **3 行目**: 将来拡張用 (現状は空)
 
 ## インストール
@@ -52,7 +53,7 @@ plugin cache 配下から実行された場合は、`~/.claude/natsuume-statusli
 | `statusline/main.sh` | JSON 入力のパース、各行の組み立て、ターミナル幅へのフィット |
 | `statusline/lib.sh` | カラー定数、進捗バー、可視幅計算、所有 GitHub namespace のキャッシュ |
 | `statusline/line1.sh` | 1 行目 (パス / repo / branch / 変更量 / 未コミット) のレンダラ |
-| `statusline/line2.sh` | 2 行目 (レートリミット) のレンダラ |
+| `statusline/line2.sh` | 2 行目 (context 使用量 / レートリミット) のレンダラ |
 | `statusline/line3.sh` | 3 行目 (将来拡張用) |
 
 ## アンインストール / 元に戻す
