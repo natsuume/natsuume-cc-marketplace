@@ -1,5 +1,5 @@
 {
   "name": "natsuume-statusline",
-  "version": "0.2.0",
-  "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / レートリミット) をプラグインとして提供し、/natsuume-statusline:setup で ~/.claude/settings.json に登録するプラグイン"
+  "version": "0.3.0",
+  "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) をプラグインとして提供し、/natsuume-statusline:setup で ~/.claude/settings.json に登録するプラグイン"
 }

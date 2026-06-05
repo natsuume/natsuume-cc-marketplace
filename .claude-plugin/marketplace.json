@@ -45,8 +45,8 @@
     {
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
-      "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / レートリミット) を提供し、/natsuume-statusline:setup で settings.json に登録するプラグイン。v0.2.0 で setup が version 固有 cache パスを焼き込んで plugin update 後に statusline が無言で壊れる問題を修正 (~/.claude 配下に安定 wrapper を設置し実行時に最新版を解決)",
-      "version": "0.2.0",
+      "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供し、/natsuume-statusline:setup で settings.json に登録するプラグイン。v0.3.0 で 2 行目に context 使用量ゲージを追加しプログレスバーを短縮 (最大 10 文字)。v0.2.0 で setup が version 固有 cache パスを焼き込んで plugin update 後に statusline が無言で壊れる問題を修正 (~/.claude 配下に安定 wrapper を設置し実行時に最新版を解決)",
+      "version": "0.3.0",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {

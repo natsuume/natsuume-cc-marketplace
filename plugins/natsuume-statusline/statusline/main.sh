@@ -18,6 +18,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 # キー欠落時に文字列 "null" がパスとして表示されるのを防ぐ。
 eval "$(printf '%s' "$input" | jq -r '
   @sh "cwd=\(.workspace.current_dir // .cwd // "")",
+  @sh "ctx_pct=\(.context_window.used_percentage // "")",
   @sh "rate_5h=\(.rate_limits.five_hour.used_percentage // "")",
   @sh "rate_5h_reset=\(.rate_limits.five_hour.resets_at // "")",
   @sh "rate_7d=\(.rate_limits.seven_day.used_percentage // "")",
@@ -140,8 +141,8 @@ segments+=("${OTHER[@]}")
 # 1行目はターミナル幅に収めて出力（折り返しが発生すると2行目以降の表示が崩れるため）
 fit_segments "$sep" "$TERM_WIDTH" "${segments[@]}"
 
-# --- 2行目: レートリミット ---
-line2_out=$(render_ratelimit "$rate_5h" "$rate_5h_reset" "$rate_7d" "$rate_7d_reset")
+# --- 2行目: context 使用量 + レートリミット ---
+line2_out=$(render_line2 "$ctx_pct" "$rate_5h" "$rate_5h_reset" "$rate_7d" "$rate_7d_reset")
 if [ -n "$line2_out" ]; then
   printf '\n%b' "$line2_out"
 fi
