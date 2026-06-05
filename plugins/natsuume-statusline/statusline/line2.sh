@@ -10,7 +10,9 @@ GAUGE_MAX_BAR_WIDTH=10
 #   $4=バー幅（0 ならバーを描画しない: 残り幅計算用）
 # 出力フォーマット: "5h: 62% (58m) [████░░]" / "ctx: 45% [████░░]"（reset 無し）
 build_gauge_segment() {
-  local label="$1" pct="$2" resets_at="$3" bar_width="${4:-20}"
+  # bar_width は呼び出し元 (render_line2) が常に明示で渡す
+  # （0=非バー計測 / 算出済みバー幅）。省略経路は無いためデフォルトは持たない。
+  local label="$1" pct="$2" resets_at="$3" bar_width="$4"
   local color bar remaining segment display_pct int_pct
 
   # 表示用は format_pct（整数なら小数点なし）、判定用は floor の整数
