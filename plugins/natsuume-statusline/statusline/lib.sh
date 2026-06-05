@@ -97,6 +97,28 @@ int_pct_from_display() {
   printf '%s' "${val%.*}"
 }
 
+# トークン数を人間可読な短縮表記にする
+# 1000未満はそのまま、1000以上は k / 1000000以上は M を付け、小数1桁（末尾 .0 は省略）
+# 例: 512 -> "512", 75100 -> "75.1k", 200000 -> "200k", 1000000 -> "1M", 1500000 -> "1.5M"
+humanize_tokens() {
+  local n="$1"
+  # 値は jq から整数で渡る。空・非整数（異常値）は素通しして壊さない。
+  case "$n" in
+    '' | *[!0-9]*)
+      printf '%s' "$n"
+      return
+      ;;
+  esac
+  awk -v n="$n" 'BEGIN {
+    if (n < 1000)         { printf("%d", n); exit }
+    if (n < 1000000)      { unit = "k"; v = n / 1000 }
+    else                  { unit = "M"; v = n / 1000000 }
+    s = sprintf("%.1f", v)
+    sub(/\.0$/, "", s)
+    printf("%s%s", s, unit)
+  }'
+}
+
 # git remote URLから owner/repo を抽出（GitHub以外は空）
 extract_github_repo() {
   local url="$1"

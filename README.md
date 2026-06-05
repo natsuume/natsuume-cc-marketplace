@@ -27,7 +27,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [auto-lint-check](#auto-lint-check) | 0.4.0 | ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン |
 | [pre-push-review](#pre-push-review) | 1.0.0 | `git push` 前に `/simplify` (cleanup・コード編集) → `/code-review` (read-only バグ検出) → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に security review を実行) のループを強制し、PostToolUse で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。Anthropic (`/code-review`) と OpenAI (`/codex:review`) の独立 2 バグレビュー + cleanup + security の 4 マーカー defense-in-depth。第一者 (`/simplify` + `/code-review`) は Claude Code v2.1.154+ を env から検出したとき両方必須、旧 version / 検出不能時は fail-open で 1 本に緩む (永久 deny を生まない SPOF 回避設計)。security review を self-contained subagent で実行するのは、 標準 `/security-review` を直接呼ぶと主 session の turn が終了し、 subagent 経由でも nested subagent 制約で機能しないため。macOS デフォルト bash 3.2.57 でも動作 |
 | [update-default-branch](#update-default-branch) | 0.1.2 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
-| [natsuume-statusline](#natsuume-statusline) | 0.3.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
+| [natsuume-statusline](#natsuume-statusline) | 0.4.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
 | [codex-review-customize](#codex-review-customize) | 0.3.1 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
 | [decompose-bash](#decompose-bash) | 0.1.1 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
 | [auto-followthrough](#auto-followthrough) | 0.2.3 | `permission_mode` が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始後の最初のプロンプト時点の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン |
@@ -163,7 +163,7 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 ### 表示内容
 
 - **1 行目**: パス、GitHub repo (所有 namespace は `repo` に短縮)、branch、staged/modified、未コミット件数 / `clean`
-- **2 行目**: context 使用量 (`ctx`)、5h / 7d レートリミットのパーセンテージ、リセット残時間 (レートリミットのみ)、プログレスバー (色は使用率で変化、最大 10 文字に短縮)
+- **2 行目**: context 使用量 (`ctx: (45%) 75.1k/1M` の数値表示。使用率・使用/最大トークン数を併記、バー無し)、5h / 7d レートリミット (パーセンテージ・リセット残時間・プログレスバー、色は使用率で変化)
 - **3 行目**: 将来拡張用 (現状は空)
 
 ### 機能
