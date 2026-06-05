@@ -32,7 +32,7 @@ build_context_segment() {
 #   $1=ラベル(5h/7d), $2=使用率%, $3=リセット時刻(epoch秒 or ISO8601),
 #   $4=バー幅（0 ならバーを描画しない: 残り幅計算用）
 # 出力フォーマット: "5h: 62% (58m) [████░░]"
-build_gauge_segment() {
+build_ratelimit_segment() {
   # bar_width は呼び出し元 (render_line2) が常に明示で渡す
   # （0=非バー計測 / 算出済みバー幅）。省略経路は無いためデフォルトは持たない。
   local label="$1" pct="$2" resets_at="$3" bar_width="$4"
@@ -98,7 +98,7 @@ render_line2() {
   local total_nonbar=0 i nonbar
   [ -n "$ctx_seg" ] && total_nonbar=$(visible_length "$ctx_seg")
   for ((i = 0; i < rate_count; i++)); do
-    nonbar=$(build_gauge_segment "${labels[$i]}" "${pcts[$i]}" "${resets[$i]}" 0)
+    nonbar=$(build_ratelimit_segment "${labels[$i]}" "${pcts[$i]}" "${resets[$i]}" 0)
     total_nonbar=$((total_nonbar + $(visible_length "$nonbar")))
   done
 
@@ -118,7 +118,7 @@ render_line2() {
   local parts=()
   [ -n "$ctx_seg" ] && parts+=("$ctx_seg")
   for ((i = 0; i < rate_count; i++)); do
-    parts+=("$(build_gauge_segment "${labels[$i]}" "${pcts[$i]}" "${resets[$i]}" "$bar_width")")
+    parts+=("$(build_ratelimit_segment "${labels[$i]}" "${pcts[$i]}" "${resets[$i]}" "$bar_width")")
   done
 
   fit_segments "$separator" "$term_width" "${parts[@]}"
