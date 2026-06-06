@@ -2,9 +2,12 @@
 # block-bg-codex-wrapper.sh
 # `run-codex-review.sh` wrapper を background で起動しようとする操作を deny する PreToolUse フック。
 #
-# policy: fail-closed (PreToolUse)
-#   background 起動を確実に止めるため、判定対象に該当すれば deny。 対照: PostToolUse 側の
-#   auto-mark.sh は fail-open。
+# policy: fail-open (PreToolUse / defense-in-depth 補助)
+#   本 hook は補助的な regression 防御で、 真の push gate は block-pre-push.sh (= fail-closed)
+#   が担う。 そのため jq 不在等の環境失敗時は silent に exit 0 で抜けて allow に倒す
+#   (= 環境失敗で「合法な wrapper 起動」 が deny される false positive を避ける)。
+#   検知ロジックに該当した場合のみ deny を返す。 真の保証は block-pre-push.sh が
+#   marker hash check で行うため、 本 hook が抜けても未レビュー push は通らない。
 #
 # ## なぜ必要か
 #
