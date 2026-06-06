@@ -769,7 +769,7 @@ read-only バグ検出器に分離され、 v2.1.154 で /simplify が cleanup-o
   2. \`/code-review\` を Skill tool で呼び出す (read-only の correctness バグ検出。 cleanup 適用後の
      最終形をバグ観点でレビューする。 指摘があれば手順 5 に従って修正する)
   3. **\`Bash\` tool で codex review wrapper を起動する**: 次のコマンドを **そのまま** 実行する:
-       \`bash ${CODEX_WRAPPER_PATH}\`
+       \`bash "${CODEX_WRAPPER_PATH}"\`
      (\`/codex:review\` slash command は経由しない。 slash command の review.md は
       AskUserQuestion で「background 起動」 を推奨する prompt 設計のため、 Claude が
       background を選ぶと PreToolUse が deny して 1 サイクル無駄になる経路があった。
@@ -828,12 +828,12 @@ turn は通常通り終了し、 親 session は subagent invocation の結果�
 マーカーは push 通過時に明示削除されません (次の編集でハッシュが変わると自動的に失効するため)。
 
 codex review の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
-  - **wrapper script (\`bash ${CODEX_WRAPPER_PATH}\`) のみサポート**
+  - **wrapper script (\`bash "${CODEX_WRAPPER_PATH}"\`) のみサポート**
   - wrapper が \`--wait --scope branch\` を hardcode するため、 引数指定は不要 (= 受け付けない)
 
 ⚠ 重要: 本ループは **codex review wrapper** (レビュー取得) と \`/codex:rescue\` (手順 5 の方針壁打ち)
 の **両方** を使います。 名前が似ているため取り違えに注意してください:
-  - \`bash ${CODEX_WRAPPER_PATH}\`: branch 全差分への read-only レビュー取得
+  - \`bash "${CODEX_WRAPPER_PATH}"\`: branch 全差分への read-only レビュー取得
     (wrapper が完了時に codex marker を書く / push gate の対象)
   - \`/codex:rescue --wait\`: review からの指摘を踏まえた **修正方針の壁打ち**
     (rescue 自体はマーカー対象外 / push gate には影響しないが、 手順 5 で
