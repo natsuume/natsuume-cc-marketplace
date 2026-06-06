@@ -111,7 +111,9 @@ render_line2() {
   # ※ 段階0（整数化）を段階1（ctx% 削除）より先に試すため、この順序で並べる。
   # ※ 確定後にバー幅で段階2/3（短縮・削除）を吸収する。
   # ※ どのレベルも収まらない場合は最後の "1 0" を採用し、バー縮小/fit_segments で詰める。
-  local round=1 show_pct=0 ctx_seg="" rate_core_total=0 sep_total=0
+  # ループ脱出後に使うのは round と組み立て済みの ctx_seg/rate_core_total/sep_total。
+  # show_pct は ctx_seg に焼き込まれるのでループ内 (lvl_show) でのみ使う。
+  local round="" ctx_seg="" rate_core_total=0 sep_total=0
   local level lvl_round lvl_show cseg rct i nonbar total_segments full_bars total_w
   for level in "0 1" "1 1" "1 0"; do
     lvl_round=${level%% *}
@@ -137,7 +139,7 @@ render_line2() {
     full_bars=$(( rate_count * (GAUGE_MAX_BAR_WIDTH + GAUGE_BAR_DECORATION_WIDTH) ))
     total_w=$(( $(visible_length "$cseg") + rct + (total_segments - 1) * sep_w + full_bars ))
 
-    round="$lvl_round"; show_pct="$lvl_show"
+    round="$lvl_round"
     ctx_seg="$cseg"; rate_core_total="$rct"
     sep_total=$(( (total_segments - 1) * sep_w ))
     # バー最大幅で収まればこのレベルを確定。最後の "1 0" は収まらなくても採用。
