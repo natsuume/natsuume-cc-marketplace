@@ -147,8 +147,16 @@ BASE=$(detect_base_branch) || fail "default branch を検出できませんで�
 # が dirty」 という誤メッセージで fail し、 真因 (= corrupt repo) の診断が困難になる。
 # 対策: 各 git diff の exit code を変数に取り、 1 (dirty) と 128 (error) を別経路で fail
 # させる。
-git diff --quiet 2>/dev/null; _diff_unstaged=$?
-git diff --quiet --cached 2>/dev/null; _diff_staged=$?
+#
+# **set -e との相互作用に注意**: `set -e` 配下では `git diff --quiet; _diff_unstaged=$?` と
+# 直書きすると、 dirty 時の exit 1 で `set -e` がトリガーされて script 全体が即 exit し、
+# `_diff_unstaged=$?` の代入も後段の fail() も実行されない (EXIT trap の 「予期せぬエラー」
+# 経路に倒れて diagnostic が壊れる)。 `|| _diff_x=$?` パターンで `||` 右辺に exit code を
+# 取ることで `set -e` を回避しつつ exit code を捕捉する (codex review v1.1.0 fix で導入)。
+_diff_unstaged=0
+git diff --quiet 2>/dev/null || _diff_unstaged=$?
+_diff_staged=0
+git diff --quiet --cached 2>/dev/null || _diff_staged=$?
 if [ "$_diff_unstaged" -ge 128 ] || [ "$_diff_staged" -ge 128 ]; then
   fail "git diff --quiet が git error (exit >= 128) で失敗しました。 repo が corrupt / GIT_DIR が壊れている / 権限不足の可能性があります。 git status の出力を確認してください。"
 fi
