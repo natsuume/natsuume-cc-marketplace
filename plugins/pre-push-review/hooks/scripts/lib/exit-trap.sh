@@ -32,18 +32,10 @@
 #
 # ## なぜ wrapper (run-codex-review.sh) は本 lib を使わないか
 #
-# 2 hook は通常パスが全て exit 0 (deny は JSON 経由) で、 本 lib の trap は 「真に予期
-# せぬ非ゼロ exit」 のみを diagnostic で通知する暗黙の contract で動いている。 これに
-# 対し wrapper は **想定済みの error パス全てで `fail()` → exit 1** を返す設計 (detached
-# HEAD / not a git repo / BASE 未検出 / dirty tree / companion 不在 / node 失敗 / marker
-# 書き込み失敗)。 install_exit_trap を install すると、 fail() 経由の意図的 exit 1 でも
-# trap が発火して 「予期せぬエラー / marketplace に bug として報告してください」 という
-# 誤誘導メッセージが fail() の human-readable メッセージ直後に出てしまう (= ユーザが
-# 実装 bug を踏んだと誤認する経路)。
-#
-# 代わりに wrapper では MARKER_TMP cleanup 専用の trap だけを直接 install する。 fail()
-# が全 error pattern をカバーする設計のため、 install_exit_trap 的な diagnostic は不要。
-# 詳細は run-codex-review.sh のヘッダ参照。
+# 2 hook は通常パスが全て exit 0 だが、 wrapper は想定済み error パスで `fail()` → exit 1
+# を返すため、 本 lib の trap (= 真に予期せぬ非ゼロ exit のみ通知する暗黙 contract) と
+# semantic が衝突する。 wrapper は自前の cleanup trap を直接 install して fail() で全
+# error pattern をカバーする設計に倒している。 詳細根拠は run-codex-review.sh ヘッダ参照。
 #
 # ## 呼び出し規約
 #
