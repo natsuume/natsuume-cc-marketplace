@@ -75,6 +75,14 @@ case "$COMMAND" in
   *) exit 0 ;;
 esac
 
+# `&` を含む shell redirection (`2>&1` / `&>file` / `<<EOF` 等) を空白に置換する。
+# cmd-parser は `&` を一律 separator として扱うため、 redirection 内の `&` を parallel
+# separator と誤認して false-positive deny を起こす経路を塞ぐ目的 (block-pre-push.sh と
+# 同じ理由・同じ sed パターン)。 特に deny message が案内する
+# `bash run-codex-review.sh > codex.log 2>&1` (= 推奨 logging 形式) を素通させるため必須。
+COMMAND=$(printf '%s' "$COMMAND" \
+  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')
+
 # 2 種類の bg 起動経路を検知する:
 #   (1) Bash tool option `run_in_background: true`
 #   (2) shell-level backgrounding (`bash run-codex-review.sh &`) や pipeline (`bash run-codex-review.sh | tee log`)
