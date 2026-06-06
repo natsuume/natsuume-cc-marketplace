@@ -19,12 +19,15 @@
 #
 # ## 探索順序と semver 解釈
 #
-# 1. **unversioned cache** (`~/.claude/plugins/cache/openai-codex/codex/scripts/codex-companion.mjs`):
+# 1. **versioned cache** (`~/.claude/plugins/cache/openai-codex/codex/<version>/scripts/codex-companion.mjs`):
+#    `claude plugin install` で marketplace 経由導入した場合のレイアウト。 複数 version が
+#    並ぶ可能性があるため semver 降順で最新を選ぶ。 「semver で最新を選ぶ」 原則と整合
+#    させるため、 unversioned より優先する (両 layout が共存する環境で古い unversioned が
+#    新しい versioned を上書きしないよう順序設計)。
+# 2. **unversioned cache** (`~/.claude/plugins/cache/openai-codex/codex/scripts/codex-companion.mjs`):
 #    Claude Code の install 形態によっては version dir を経由せず cache_root 直下に scripts/
 #    が置かれるパターン。 codex プラグインの version が固定された install で観測される。
-# 2. **versioned cache** (`~/.claude/plugins/cache/openai-codex/codex/<version>/scripts/codex-companion.mjs`):
-#    `claude plugin install` で marketplace 経由導入した場合のレイアウト。 複数 version が
-#    並ぶ可能性があるため semver 降順で最新を選ぶ。
+#    versioned cache に何も無い (or companion が欠落) 場合の fallback。
 # 3. **marketplace clone (フォールバック)**: `~/.claude/plugins/marketplaces/openai-codex/
 #    plugins/codex/scripts/codex-companion.mjs`。 marketplace を `claude plugin marketplace
 #    add` で clone した状態 (= unversioned working tree) の path。 ローカル開発ユース
@@ -71,19 +74,18 @@ resolve_codex_companion() {
     # ## 2 つの cache layout を順に探索
     #
     # Claude Code の plugin cache は install 形態によって 2 種類の layout がある:
-    #   1. **unversioned cache** (`<cache_root>/scripts/codex-companion.mjs`): marketplace
+    #   1. **versioned cache** (`<cache_root>/<version>/scripts/codex-companion.mjs`):
+    #      version 別に dir を分ける形態。 複数 version が並びうる (= 最新を semver 降順で選ぶ)。
+    #   2. **unversioned cache** (`<cache_root>/scripts/codex-companion.mjs`): marketplace
     #      経由で導入したが version dir を経由しない形態。 version が固定された install。
-    #   2. **versioned cache** (`<cache_root>/<version>/scripts/codex-companion.mjs`):
-    #      version 別に dir を分ける形態。 複数 version が並びうる。
-    # どちらの layout も実環境で観測されるため、 両方を順に試す (unversioned が先で、
-    # 無ければ versioned 配下を semver 降順で scan)。 codex プラグインの review CLI I/F は
-    # 安定している前提で、 「最初に見つけた companion」 を採用する。
+    # どちらの layout も実環境で観測されるため、 両方を順に試す。
     #
-    # unversioned check (= cache_root 直下の scripts/codex-companion.mjs):
-    if [ -f "$cache_root/scripts/codex-companion.mjs" ]; then
-      found="$cache_root/scripts/codex-companion.mjs"
-    fi
-
+    # **探索順序は versioned 優先**: 両 layout が同一 cache_root に共存する環境 (= 過去の
+    # install で unversioned が残り、 その後 `claude plugin install` で新しい versioned が
+    # 入った等) では、 versioned 側が新しい version を持つ可能性が高いため、 先に versioned
+    # を scan する。 versioned に何も無いか、 companion が見つからない場合のみ unversioned に
+    # fallback する。 「semver で最新を選ぶ」 という基本原則と整合させる設計。
+    #
     # versioned cache: <cache_root>/<version>/scripts/codex-companion.mjs を semver 降順で探索。
     # find は基本 POSIX なので macOS / Linux 双方で動く。 mindepth/maxdepth は GNU 拡張だが
     # macOS の BSD find でも 10.5 以降サポートされているためどちらでも使える。
@@ -95,18 +97,22 @@ resolve_codex_companion() {
     # **1.10 以降の release で BSD sort 環境では古い `1.2.x` 等を選ぶ既知の制約**がある (詳細は
     # 上部 docstring 参照)。 macOS Ventura (13) 以前の旧 BSD sort 環境かつ codex 1.10 release
     # 以降のタイミングで顕在化する。
-    if [ -z "$found" ]; then
-      local sorted
-      sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-        | { sort -V -r 2>/dev/null || sort -r; })
-      local d
-      while IFS= read -r d; do
-        [ -n "$d" ] || continue
-        if [ -f "$d/scripts/codex-companion.mjs" ]; then
-          found="$d/scripts/codex-companion.mjs"
-          break
-        fi
-      done <<< "$sorted"
+    local sorted
+    sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+      | { sort -V -r 2>/dev/null || sort -r; })
+    local d
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      if [ -f "$d/scripts/codex-companion.mjs" ]; then
+        found="$d/scripts/codex-companion.mjs"
+        break
+      fi
+    done <<< "$sorted"
+
+    # unversioned cache fallback (= cache_root 直下の scripts/codex-companion.mjs):
+    # versioned で見つからなかった場合のみここに到達する。
+    if [ -z "$found" ] && [ -f "$cache_root/scripts/codex-companion.mjs" ]; then
+      found="$cache_root/scripts/codex-companion.mjs"
     fi
   fi
 

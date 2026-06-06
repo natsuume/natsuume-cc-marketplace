@@ -194,7 +194,7 @@ if [ "$HASH" = "$EMPTY_DIFF_HASH" ]; then
 fi
 
 # codex companion path 解決
-COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つかりません。 \`claude plugin install codex@openai-codex\` で導入してください (cache 配下に codex-companion.mjs が無い)。"
+COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つかりません。 \`claude plugin install codex@openai-codex\` で導入してください (versioned cache / unversioned cache / marketplace clone のいずれにも codex-companion.mjs が見つかりませんでした。 詳細な探索 path は \`lib/codex-companion-resolver.sh\` のヘッダを参照)。"
 
 # codex review を foreground 実行。 引数は `--wait --scope branch` を hardcode することで、
 # Claude / 呼び出し側からの argument injection で background 起動になる余地を排除する。
