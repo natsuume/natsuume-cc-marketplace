@@ -610,7 +610,7 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C ${TARGET_CWD} status\` で変更を確認し、commit してから \`/simplify\` → \`/code-review\` → codex review (wrapper script 経由 — 下記実行手順 3 参照) → \`pre-push-review:security-reviewer\` subagent (\`Task\` / \`Agent\` tool 経由) を再走させて push してください。
+\`git -C "${TARGET_CWD}" status\` で変更を確認し、commit してから \`/simplify\` → \`/code-review\` → codex review (wrapper script 経由 — 下記実行手順 3 参照) → \`pre-push-review:security-reviewer\` subagent (\`Task\` / \`Agent\` tool 経由) を再走させて push してください。
 EOF
 )
   deny "$REASON"
@@ -636,9 +636,9 @@ if [ -z "$BASE" ]; then
 
 本プラグインは branch 全差分のレビュー検証に default branch (origin/HEAD or origin/master / origin/main) を必要とします。 以下のいずれかを設定してください:
 
-  - \`git -C ${TARGET_CWD} remote set-head origin --auto\` で origin/HEAD を自動設定
-  - \`git -C ${TARGET_CWD} remote set-head origin <branch-name>\` で明示設定 (例: develop)
-  - origin remote が無い場合は \`git -C ${TARGET_CWD} remote add origin <url>\` で追加
+  - \`git -C "${TARGET_CWD}" remote set-head origin --auto\` で origin/HEAD を自動設定
+  - \`git -C "${TARGET_CWD}" remote set-head origin <branch-name>\` で明示設定 (例: develop)
+  - origin remote が無い場合は \`git -C "${TARGET_CWD}" remote add origin <url>\` で追加
 
 設定後に再度 \`git push\` を試してください。
 EOF
@@ -650,7 +650,7 @@ fi
 # branch diff hash 計算。 失敗時 (orphan branch / shallow clone 等) は明示 deny。
 if ! CURRENT_HASH=$(compute_review_hash_in "$TARGET_CWD" "$BASE"); then
   REASON=$(cat <<EOF
-プッシュをブロックしました。ブランチ全差分の計算 (\`git -C ${TARGET_CWD} diff origin/${BASE}...HEAD\`) が失敗しました。
+プッシュをブロックしました。ブランチ全差分の計算 (\`git -C "${TARGET_CWD}" diff origin/${BASE}...HEAD\`) が失敗しました。
 
 考えられる原因:
   - 孤児ブランチ (origin/${BASE} と共通祖先を持たない unrelated history)
@@ -659,8 +659,8 @@ if ! CURRENT_HASH=$(compute_review_hash_in "$TARGET_CWD" "$BASE"); then
 
 対応:
   - 通常の branch (master/main から派生) で作業しているか確認する
-  - shallow clone の場合は \`git -C ${TARGET_CWD} fetch --unshallow\` で履歴を完全に取得する
-  - origin/${BASE} を更新する: \`git -C ${TARGET_CWD} fetch origin ${BASE}\`
+  - shallow clone の場合は \`git -C "${TARGET_CWD}" fetch --unshallow\` で履歴を完全に取得する
+  - origin/${BASE} を更新する: \`git -C "${TARGET_CWD}" fetch origin ${BASE}\`
 EOF
 )
   deny "$REASON"
