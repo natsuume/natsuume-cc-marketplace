@@ -30,9 +30,16 @@
 # **semver 降順** で最新を選ぶ。 `sort -V` (GNU 拡張) が使える環境ではそれを使い、 使えない
 # 環境 (古い macOS の BSD sort 等) では文字列降順 (`sort -r`) にフォールバックする。 実装上は
 # `sort -V -r 2>/dev/null || sort -r` の `||` chain で 1 行に圧縮しており、 probe する必要が
-# ないため簡潔。 文字列降順は `1.10.x` < `1.2.x` (lex 順では `1.2` > `1.10`) という semver
-# 違反を起こすが、 1.x 系の patch / minor 増加で十分実用に耐え、 致命的な誤選択にはならない
-# (どちらの version でも `review` サブコマンドの I/F は安定している前提)。
+# ないため簡潔。
+#
+# **lex 降順 fallback の既知の限界**: `1.10.x` < `1.2.x` (lex 順では `1.2` > `1.10`) という
+# semver 違反を起こす。 codex プラグインが 1.0.x → 1.9.x の patch / minor を続けている間は
+# lex でも正しく最新を選べるが、 **1.10 以降が release された時点で BSD sort 環境では古い
+# `1.2.x` 等を最新と誤判定する**。 codex 1.0.x の review CLI I/F は安定している前提なので
+# 「致命的な誤動作」 にはならないが、 codex 側で互換破壊変更が入った場合は古い companion で
+# 新しい review.md を呼ぼうとして失敗する経路ができる。 macOS Sonoma (14, 2023) 以降の sort
+# は `-V` をサポートするため、 影響範囲は macOS 13 (Ventura) 以前の旧環境に限定される。
+# 1.10 release が現実に迫ったタイミングで、 fallback を「probe → 確定」 形に作り直す TODO。
 #
 # ## 失敗時の挙動
 #
@@ -45,6 +52,14 @@
 # 出力 (stdout): codex-companion.mjs の絶対パス
 # exit code: 0 = 発見、 1 = 未発見
 resolve_codex_companion() {
+  # ${HOME} unset / 空時に cache_root が `/.claude/plugins/cache/openai-codex/codex` という
+  # システム絶対パスに化けると、 root 環境では偶然存在する別ディレクトリを誤検出する経路や、
+  # 「codex プラグインが見つかりません」 メッセージで真因 (HOME 不在) を隠蔽する経路ができる。
+  # 通常運用 (Claude Code セッション内 / ユーザシェル) では HOME は必ずセットされているが、
+  # CI / docker / init script / setuid 起動等で発火しうるため明示的に guard する。
+  if [ -z "${HOME:-}" ]; then
+    return 1
+  fi
   local cache_root="${HOME}/.claude/plugins/cache/openai-codex/codex"
   local marketplace_path="${HOME}/.claude/plugins/marketplaces/openai-codex/plugins/codex/scripts/codex-companion.mjs"
   local found=""
@@ -55,10 +70,11 @@ resolve_codex_companion() {
     #
     # sort は `sort -V -r` (semver 降順、 GNU 拡張) を最初に試し、 BSD sort で `-V` が拒否される
     # 環境では `sort -r` (lex 降順) に fallback する。 stderr を 2>/dev/null で抑止することで
-    # 「probe してから本実行」 の 2 段階を避け、 1 行の `||` chain にまとめている。 lex 降順は
-    # `1.10 < 1.2` という semver 違反を起こすが、 codex プラグインの 1.x 系 patch / minor 増加
-    # に対しては十分実用に耐え、 致命的な誤選択にはならない (どちらの version でも `review`
-    # サブコマンドの I/F は安定している前提)。
+    # 「probe してから本実行」 の 2 段階を避け、 1 行の `||` chain にまとめている。 lex 降順
+    # fallback は codex 1.0.x - 1.9.x の patch / minor を順に並べる範囲では正しく最新を選ぶが、
+    # **1.10 以降の release で BSD sort 環境では古い `1.2.x` 等を選ぶ既知の制約**がある (詳細は
+    # 上部 docstring 参照)。 macOS Ventura (13) 以前の旧 BSD sort 環境かつ codex 1.10 release
+    # 以降のタイミングで顕在化する。
     local sorted
     sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
       | { sort -V -r 2>/dev/null || sort -r; })

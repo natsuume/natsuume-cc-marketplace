@@ -728,11 +728,14 @@ else
   FP_REQUIREMENT_NOTE='Claude Code version を v2.1.154+ と確定できなかったため (旧 version / 検出不能)、第一者レビューは /simplify と /code-review の **どちらか 1 本** が最新であれば通過します (fail-open)。v2.1.154+ 環境では両方を実行してください。'
 fi
 
-# codex review wrapper の絶対パスを deny メッセージに埋め込む。 自身のスクリプト位置から
-# 相対参照で解決することで、 `${CLAUDE_PLUGIN_ROOT}` 環境変数の有無に依存しない
-# (hook 起動時に CLAUDE_PLUGIN_ROOT がセットされる前提はあるが、 fallback として self-relative
-# が常に機能する形にする)。 wrapper script は block-pre-push.sh と同じ
-# `hooks/scripts/` 配下に置く設計。
+# codex review wrapper の絶対パスを deny メッセージに埋め込む。 自身のスクリプト位置
+# (`$_PRE_PUSH_REVIEW_SCRIPT_DIR`、 = hooks/scripts/ ディレクトリ) からの **self-relative
+# 解決のみ** を使う (= `${CLAUDE_PLUGIN_ROOT}` 環境変数には依存しない)。 wrapper script は
+# block-pre-push.sh と同じ `hooks/scripts/` 配下に置く設計のため、 hook 自身の実体 path
+# から決定的に求まる。 これにより:
+#   - hook 起動時の CLAUDE_PLUGIN_ROOT セット有無に挙動が左右されない
+#   - deny メッセージに具体的な絶対パスを埋め込めるため、 Claude / ユーザがコピペで
+#     起動できる (`${CLAUDE_PLUGIN_ROOT}` 形式だと文字列が展開されない / 環境依存)
 CODEX_WRAPPER_PATH="$_PRE_PUSH_REVIEW_SCRIPT_DIR/run-codex-review.sh"
 
 REASON=$(cat <<EOF

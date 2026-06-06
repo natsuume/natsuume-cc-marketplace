@@ -68,6 +68,24 @@
 # 該当箇所のコメント参照)。 wrapper はこの場合、 codex review 自体は実行せず early-exit して
 # Claude に commit を促すエラーメッセージを返す。
 #
+# ## cwd セマンティクス (multi-repo workflow との非対称)
+#
+# wrapper は dirty 判定 / base 検出 / branch / ハッシュ計算 / marker パスを **すべて起動時の
+# cwd** で行う (= 「いま居る repo に対して codex review を実行する」 と記録する)。 auto-mark.sh
+# と同じセマンティクスで、 block-pre-push.sh の target-resolver (`cd subrepo && git push` /
+# `git -C subrepo push` などから push target cwd を解決する) とは非対称。
+#
+# 通常運用 (= session cwd が push 対象 repo と一致) では wrapper と block-pre-push.sh が
+# 同じ cwd を見るため marker は正しく照合される。 一方、 ユーザが multi-repo workflow で
+# session cwd を A、 push target を B (`cd B && git push` 等) にした場合、 Claude が
+# session cwd A のまま wrapper を起動すると wrapper は A の marker を書き、 block-pre-push.sh
+# は B の marker を要求するため **hash 不一致で deny** に倒れる (= fail-closed)。 これは
+# auto-mark.sh と同じ安全性質 (= 「push する repo をその cwd で review し直す」 という正しい
+# 挙動を強制するだけで、 未レビュー push を通す bypass にはならない) で、 セキュリティ上
+# の問題ではない。 ただし運用前提として「**wrapper は push 対象 repo の cwd で実行する**」
+# を守る必要がある (= multi-repo で push target を override する場合は、 wrapper も同じ
+# target_cwd で実行する: 例えば `cd subrepo && bash <plugin>/hooks/scripts/run-codex-review.sh`)。
+#
 # ## hooks/scripts/ 配下に置く理由 (hook ではないのに)
 #
 # 厳密には本 script は `hooks` event に bind されない通常の shell script だが、 既存の lib /
@@ -79,12 +97,21 @@ set -e
 
 _RUN_CODEX_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck source=lib/exit-trap.sh
+source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
 # shellcheck source=lib/diff-hash.sh
 source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
 source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/markers.sh"
 # shellcheck source=lib/codex-companion-resolver.sh
 source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
+
+# 予期せぬエラー時の診断 trap を install。 block-pre-push.sh / auto-mark.sh と同様の
+# pattern で、 fail() を経由しない非ゼロ exit (signal / source 失敗 / 未捕捉のシェル展開
+# エラー等) を stderr に通知する。 v1.0.0 までは 3 hook (block-pre-push / auto-mark /
+# block-bg-codex-review) で共通化していた diagnostic を、 v1.1.0 で wrapper にも対称に
+# install することで silent failure 経路を構造排除する。
+install_exit_trap "run-codex-review" "codex marker の書き込みが skip された可能性があり、 次の \`git push\` 時に block-pre-push.sh が「marker 未生成」 で deny する経路があります。"
 
 # stderr に人間可読のエラーを出して非ゼロ exit する helper。 set -e と組み合わせて使う。
 fail() {
@@ -96,9 +123,16 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || fail "現在の cwd は git re
 
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || fail "detached HEAD では codex review を実行できません。 ブランチを切ってから再実行してください。"
 
+# default branch (master/main) では本プラグインは gate しない設計 (block-pre-push.sh が
+# git-guardrails に委譲して skip する)。 wrapper も同じ前提に従い 「review 不要」 として
+# **exit 0** で抜ける (= fail にしない)。 fail (exit 1) にすると Bash tool 呼び出しが
+# `tool_response.is_error = true` で返るため、 Claude が 「失敗 → 再実行」 ループに乗る経路
+# が生じる。 default branch では正常状態として informational message を stderr に出して
+# 抜けるのが gate 全体の意図 (= 「review 不要」 を正常終了で伝える) と一致する。
 case "$BRANCH" in
   master|main)
-    fail "default branch (master/main) では本プラグインは gate しません。 codex review も実行不要です。"
+    printf '[run-codex-review] default branch (%s) では本プラグインは gate しません。 codex review は実行不要です。\n' "$BRANCH" >&2
+    exit 0
     ;;
 esac
 
@@ -106,7 +140,19 @@ BASE=$(detect_base_branch) || fail "default branch を検出できませんで�
 
 # dirty 検知。 auto-mark.sh の codex 経路と同じく、 dirty 状態で marker を書くと commit 後の
 # 状態と hash 衝突を起こす経路があるため、 codex review 自体を実行せず early-exit する。
-if ! git diff --quiet 2>/dev/null || ! git diff --quiet --cached 2>/dev/null; then
+#
+# `git diff --quiet` の exit code は 0 (差分なし) / 1 (差分あり = dirty) / 128 (git error:
+# corrupt index、 GIT_DIR 不在、 権限不足 等) の 3 系統がある。 これらを区別せずに 「! git
+# diff --quiet」 で truthy 判定すると、 128 (git error) も dirty 扱いされて 「working tree
+# が dirty」 という誤メッセージで fail し、 真因 (= corrupt repo) の診断が困難になる。
+# 対策: 各 git diff の exit code を変数に取り、 1 (dirty) と 128 (error) を別経路で fail
+# させる。
+git diff --quiet 2>/dev/null; _diff_unstaged=$?
+git diff --quiet --cached 2>/dev/null; _diff_staged=$?
+if [ "$_diff_unstaged" -ge 128 ] || [ "$_diff_staged" -ge 128 ]; then
+  fail "git diff --quiet が git error (exit >= 128) で失敗しました。 repo が corrupt / GIT_DIR が壊れている / 権限不足の可能性があります。 git status の出力を確認してください。"
+fi
+if [ "$_diff_unstaged" -ne 0 ] || [ "$_diff_staged" -ne 0 ]; then
   fail "working tree が dirty です (staged または unstaged 変更あり)。 git status で確認 → commit してから再実行してください。 \`/codex:review --scope branch\` は committed 部分のみを review するため、 dirty 状態で marker を書くと commit 後の状態と hash 衝突を起こす経路があります。"
 fi
 
@@ -114,7 +160,11 @@ fi
 # も空 push を通す挙動と整合する。
 HASH=$(compute_review_hash "$BASE") || fail "branch diff hash の計算に失敗しました。"
 if [ "$HASH" = "$EMPTY_DIFF_HASH" ]; then
-  printf '[run-codex-review] branch 全差分が空のため codex review は実行不要です。\n'
+  # 進捗 / 完了メッセージは全て stderr に統一する (caller である Bash tool は stdout を
+  # tool_response.stdout として受け取るため、 codex review の出力 vs wrapper の status を
+  # 分離して扱える設計に倒す)。 v1.1.0 の初版では 1 行のみ stdout に出していたが、
+  # E16 の指摘で他の status (L131, L132, L153) と一致させた。
+  printf '[run-codex-review] branch 全差分が空のため codex review は実行不要です。\n' >&2
   # marker は書かない (空差分時は block-pre-push.sh が gate を skip するため不要)。
   exit 0
 fi
@@ -144,8 +194,21 @@ fi
 # marker を書く: 「codex review が exit 0 で完了した」 という事実だけを根拠に、 verdict
 # (approve / needs-attention) に関わらず書く (ヘッダの 「marker 書き込みポリシー」 参照)。
 # marker path は書き込み先と表示で共有するため変数に保持 (2 回計算回避)。
-MARKER_PATH=$(codex_marker_path "$GIT_DIR")
-printf '%s' "$HASH" > "$MARKER_PATH"
+# 前段の GIT_DIR / BRANCH / BASE / HASH / COMPANION と同じく `|| fail` 経由で人間可読
+# エラーを返す (set -e 単独だと marker path 計算失敗で silent exit する経路を埋める)。
+MARKER_PATH=$(codex_marker_path "$GIT_DIR") || fail "codex marker path の計算に失敗しました。"
+
+# `printf > marker` は truncate+write の 2 段階で atomic ではないため、 SIGKILL や disk
+# full で write 途中で死ぬと marker が空 / 部分書き込み状態で残る。 block-pre-push.sh の
+# hash 比較は fail-closed (= 不一致なら deny) なので security 上の影響は無いが、 「codex
+# review が exit 0 で完了したのに marker が空」 という silent な乖離を防ぐため、 tmp +
+# atomic rename パターンで書き込む。 tmp の prefix は marker と同じディレクトリ (= 通常
+# `<git-dir>` 配下) に置くことで、 mv が同 filesystem 内 rename = atomic になることを
+# 保証する (異 filesystem 跨ぎ rename は cross-device で fallback copy になり atomic
+# 性が崩れる)。
+MARKER_TMP="${MARKER_PATH}.tmp.$$"
+printf '%s' "$HASH" > "$MARKER_TMP" || fail "codex marker の一時ファイル書き込みに失敗しました ($MARKER_TMP)。 disk full / 権限不足等を確認してください。"
+mv "$MARKER_TMP" "$MARKER_PATH" || fail "codex marker の atomic rename に失敗しました ($MARKER_TMP → $MARKER_PATH)。"
 printf '[run-codex-review] codex marker を更新しました: %s\n' "$MARKER_PATH" >&2
 
 exit 0
