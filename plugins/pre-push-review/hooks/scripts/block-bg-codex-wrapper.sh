@@ -40,6 +40,12 @@
 _PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/exit-trap.sh
 source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
+# cmd-parser.sh は line continuation 正規化 (`normalize_line_continuations`) のため source する。
+# substring match の前に `\<LF>` を削除して隣接 token を連結することで、 `bash .../run-codex-revie
+# w.\<LF>sh` のような line continuation 経由の検知 bypass を塞ぐ (= block-pre-push.sh も同じ
+# 防御を行っている)。
+# shellcheck source=lib/cmd-parser.sh
+source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/cmd-parser.sh"
 install_exit_trap "block-bg-codex-wrapper" "run-codex-review wrapper の background 起動 deny が機能していない可能性があり、 wrapper を bg で起動した際に marker が書かれて review 結果未観察のまま push が通る経路に戻っているかもしれません。"
 
 INPUT=$(cat)
@@ -50,6 +56,18 @@ fi
 
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 [ -n "$COMMAND" ] || exit 0
+
+# bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
+# 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
+case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
+
+# 行継続 `\<改行>` を **削除** して隣接 token を連結する (bash 実挙動と一致)。 これを
+# やらないと `bash .../run-codex-revie\<LF>w.sh` のような書き方で substring match
+# (`run-codex-review.sh`) を bypass される経路が残る。 fast-path で line continuation を
+# 含まない 99% の入力は `$(...)` fork を回避する (cmd-parser.sh 関数内に fast-path あり)。
+case "$COMMAND" in
+  *\\$'\n'*) COMMAND=$(normalize_line_continuations "$COMMAND") ;;
+esac
 
 # 粗フィルタ: command 文字列に `run-codex-review.sh` が含まれなければ即抜け (fork なし)。
 case "$COMMAND" in
