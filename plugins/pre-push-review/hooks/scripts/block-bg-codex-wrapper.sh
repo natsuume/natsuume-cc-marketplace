@@ -75,12 +75,50 @@ case "$COMMAND" in
   *) exit 0 ;;
 esac
 
+# 2 種類の bg 起動経路を検知する:
+#   (1) Bash tool option `run_in_background: true`
+#   (2) shell-level backgrounding (`bash run-codex-review.sh &`) や pipeline (`bash run-codex-review.sh | tee log`)
+#       — Bash tool option は false だが shell が wrapper を bg / 並列起動して主 session が
+#       review 結果を観察しない経路。 block-pre-push.sh も同じ理由で単独 `&` / `|` を deny
+#       している (markers gate 検証後の race 経路も同型)。
 RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
-if [ "$RUN_IN_BG" != "true" ]; then
+
+# (2) shell-level backgrounding / pipeline の検知。 cmd-parser の split_command で segment と
+# separator を取り、 run-codex-review.sh を含む segment が `&` (background) または `|` (pipeline)
+# で連結されていれば deny する。 `&&` / `||` / `;` は逐次実行なので race にならず許容。
+SEGMENTS=()
+SEPARATORS=()
+while IFS= read -r line; do
+  if [[ "$line" == SEP:* ]]; then
+    SEPARATORS+=("${line#SEP:}")
+    continue
+  fi
+  SEGMENTS+=("$line")
+done < <(split_command "$COMMAND")
+
+_HAS_WRAPPER=0
+for seg in "${SEGMENTS[@]}"; do
+  case "$seg" in
+    *run-codex-review.sh*) _HAS_WRAPPER=1; break ;;
+  esac
+done
+
+_SHELL_BG=0
+if [ "$_HAS_WRAPPER" -eq 1 ]; then
+  for sep in "${SEPARATORS[@]}"; do
+    case "$sep" in
+      "&"|"|") _SHELL_BG=1; break ;;
+    esac
+  done
+fi
+
+# どちらの経路でもなければ allow。
+if [ "$RUN_IN_BG" != "true" ] && [ "$_SHELL_BG" -eq 0 ]; then
   exit 0
 fi
 
-REASON=$(cat <<'EOF'
+if [ "$RUN_IN_BG" = "true" ]; then
+  REASON=$(cat <<'EOF'
 プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper を `run_in_background: true` で起動することはできません。
 
 理由: wrapper 自身は foreground で codex review を実行して marker を書きますが、 Bash tool の `run_in_background: true` で起動すると **主 Claude session は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しません**。 主 session は marker の存在だけで push gate を通過してしまうため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。
@@ -88,6 +126,16 @@ REASON=$(cat <<'EOF'
 対応: Bash tool 呼び出しから `run_in_background: true` を **外して** (デフォルト false で) 再実行してください。 wrapper は内部で codex companion を `--wait` で foreground 起動するため、 Bash 呼び出し自体が review 完了まで block しますが、 これが本プラグインの想定する正しい使い方です (= review 結果を主 session で観察してから push 判断する)。
 EOF
 )
+else
+  REASON=$(cat <<'EOF'
+プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper を shell-level の `&` (background) や `|` (pipeline) で起動することはできません。
+
+理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動するため、 **主 Claude session は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しない / 途中でしか観察しない** 経路ができます。 主 session は marker の存在だけで push gate を通過してしまうため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。
+
+対応: `&` / `|` を **外して** wrapper を単独実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に主 session が file を読めば review 結果を観察可能)。
+EOF
+)
+fi
 
 jq -n --arg reason "$REASON" '{
   hookSpecificOutput: {
