@@ -97,8 +97,6 @@ set -e
 
 _RUN_CODEX_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# shellcheck source=lib/exit-trap.sh
-source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
 # shellcheck source=lib/diff-hash.sh
 source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
@@ -106,14 +104,32 @@ source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/markers.sh"
 # shellcheck source=lib/codex-companion-resolver.sh
 source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
 
-# 予期せぬエラー時の診断 trap を install。 block-pre-push.sh / auto-mark.sh と同様の
-# pattern で、 fail() を経由しない非ゼロ exit (signal / source 失敗 / 未捕捉のシェル展開
-# エラー等) を stderr に通知する。 v1.0.0 までは 3 hook (block-pre-push / auto-mark /
-# block-bg-codex-review) で共通化していた diagnostic を、 v1.1.0 で wrapper にも対称に
-# install することで silent failure 経路を構造排除する。
-install_exit_trap "run-codex-review" "codex marker の書き込みが skip された可能性があり、 次の \`git push\` 時に block-pre-push.sh が「marker 未生成」 で deny する経路があります。"
+# ## wrapper では `install_exit_trap` (lib/exit-trap.sh) を **使わない** 理由
+#
+# block-pre-push.sh / auto-mark.sh は通常パスが全て exit 0 (deny は JSON 経由) で、
+# `install_exit_trap` の trap は 「真に予期せぬ非ゼロ exit」 のみを diagnostic で
+# 通知する暗黙の contract で動いている。 これに対し本 wrapper は **想定済みの error
+# パス全てで `fail()` → exit 1** を返す設計 (detached HEAD / not a git repo / BASE
+# 未検出 / dirty tree / companion 不在 / node 失敗 / marker 書き込み失敗)。 もし
+# `install_exit_trap` を install すると、 fail() 経由の意図的 exit 1 でも trap が
+# 発火し、「予期せぬエラーで hook が終了しました / marketplace に bug として報告
+# してください」 という誤誘導メッセージが fail() の human-readable メッセージの
+# 直後に出てしまう (= ユーザは実装 bug を踏んだと誤認する経路)。
+#
+# 代わりに、 wrapper では **MARKER_TMP の cleanup trap だけ** を install する。
+# fail() / 正常完了 / 真の予期せぬ exit のいずれでも tmp ファイルを残さない。
+# 真の予期せぬエラー (SIGINT / source 失敗等) の診断は wrapper 自身は行わず、 fail()
+# が全 error pattern をカバーする設計に倒す (= wrapper の責務範囲を「codex review
+# の foreground 実行と marker 書き込み」 に narrow する)。
+MARKER_TMP=""
+# trap の本文はシングルクォート (= 設定時ではなく発火時に評価) で、 trap 発火時点の
+# `$MARKER_TMP` の値を見る。 wrapper 完了時 (mv 成功で MARKER_TMP は既に消費済) や
+# fail() 経由の早期 exit (MARKER_TMP="" のまま or 部分書き込み) いずれでも、 rm が空文字 /
+# 既消失 path に対して no-op (`|| true` で非ゼロ exit を抑止)。
+trap 'rm -f "$MARKER_TMP" 2>/dev/null || true' EXIT
 
 # stderr に人間可読のエラーを出して非ゼロ exit する helper。 set -e と組み合わせて使う。
+# EXIT trap で MARKER_TMP の cleanup が走るため fail() 内では明示削除しない。
 fail() {
   printf '%s\n' "[run-codex-review] $1" >&2
   exit 1
