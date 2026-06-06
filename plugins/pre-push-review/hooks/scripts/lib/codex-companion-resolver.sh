@@ -10,11 +10,12 @@
 #
 # ## なぜ resolver を別 lib に切り出すか
 #
-# - run-codex-review.sh が起動時に path 解決して invoke するが、 block-pre-push.sh の
-#   deny メッセージ生成側でも「companion が見つかるか」 を事前確認したいため、 共通化
-#   しないと検知ロジックが drift する (片方は通るが片方は失敗、 等)
-# - codex プラグインの将来の install 形態変更 (path 構造変更等) に追随する際に
-#   修正箇所を 1 箇所に集約できる
+# 現状 caller は run-codex-review.sh の 1 つのみだが、 path 解決ロジック (versioned cache
+# の semver 降順探索 + marketplace clone へのフォールバック + 環境差吸収) は run-codex-review.sh
+# 本体の review 実行責務とは独立した concern。 named unit として lib に切り出すことで、
+# run-codex-review.sh 本体が「companion を呼んで marker を書く」 という主目的に集中でき
+# 可読性が上がる (= 「現時点で責務が明確に分かれている」 ことが lib 化の根拠であり、 「将来
+# の柔軟性のために」 ではない)。
 #
 # ## 探索順序と semver 解釈
 #
@@ -26,11 +27,12 @@
 #    add` で clone した状態 (= unversioned working tree) の path。 ローカル開発ユース
 #    ケース等で cache が無いことが起きうるため、 セーフティネットとして用意する。
 #
-# **semver 降順** で最新を選ぶ。 `sort -V` (GNU 拡張) が使える環境ではそれを使い、
-# 使えない環境 (古い macOS の BSD sort 等) では文字列降順 (`sort -r`) にフォールバックする。
-# 文字列降順は `1.10.x` < `1.2.x` (lex 順では `1.2` > `1.10`) という semver 違反を起こすが、
-# 1.x 系の patch / minor 増加で十分実用に耐え、 致命的な誤選択にはならない (どちらの version
-# でも `review` サブコマンドの I/F は安定している前提)。
+# **semver 降順** で最新を選ぶ。 `sort -V` (GNU 拡張) が使える環境ではそれを使い、 使えない
+# 環境 (古い macOS の BSD sort 等) では文字列降順 (`sort -r`) にフォールバックする。 実装上は
+# `sort -V -r 2>/dev/null || sort -r` の `||` chain で 1 行に圧縮しており、 probe する必要が
+# ないため簡潔。 文字列降順は `1.10.x` < `1.2.x` (lex 順では `1.2` > `1.10`) という semver
+# 違反を起こすが、 1.x 系の patch / minor 増加で十分実用に耐え、 致命的な誤選択にはならない
+# (どちらの version でも `review` サブコマンドの I/F は安定している前提)。
 #
 # ## 失敗時の挙動
 #
@@ -48,17 +50,18 @@ resolve_codex_companion() {
   local found=""
 
   if [ -d "$cache_root" ]; then
-    # `sort -V` の可用性チェック: 空入力で sort -V を試し、成功すれば semver sort 利用可能。
-    # GNU coreutils なら成功、 古い BSD sort なら `invalid option -- 'V'` で失敗する。
-    local sort_opts="-r"
-    if printf '' | sort -V >/dev/null 2>&1; then
-      sort_opts="-V -r"
-    fi
     # find は基本 POSIX なので macOS / Linux 双方で動く。 mindepth/maxdepth は GNU 拡張だが
-    # macOS の BSD find でも 10.5 以降サポートされているため WSL2/macOS 両対応で使える。
+    # macOS の BSD find でも 10.5 以降サポートされているためどちらでも使える。
+    #
+    # sort は `sort -V -r` (semver 降順、 GNU 拡張) を最初に試し、 BSD sort で `-V` が拒否される
+    # 環境では `sort -r` (lex 降順) に fallback する。 stderr を 2>/dev/null で抑止することで
+    # 「probe してから本実行」 の 2 段階を避け、 1 行の `||` chain にまとめている。 lex 降順は
+    # `1.10 < 1.2` という semver 違反を起こすが、 codex プラグインの 1.x 系 patch / minor 増加
+    # に対しては十分実用に耐え、 致命的な誤選択にはならない (どちらの version でも `review`
+    # サブコマンドの I/F は安定している前提)。
     local sorted
-    # shellcheck disable=SC2086  # $sort_opts は word splitting させたい
-    sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort $sort_opts)
+    sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+      | { sort -V -r 2>/dev/null || sort -r; })
     local d
     while IFS= read -r d; do
       [ -n "$d" ] || continue

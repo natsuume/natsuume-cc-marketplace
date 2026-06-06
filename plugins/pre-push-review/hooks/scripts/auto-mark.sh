@@ -187,7 +187,7 @@ esac
 
 # ツール実行が失敗 / 中断した場合はレビューが完遂していないためマーカーを更新しない
 # (失敗した review / 失敗した code-review でマーカーを書くと、その後別の tool の成功と
-# 組み合わさって push が通ってしまう抜け穴になる)。Skill / Bash 両分岐に共通。
+# 組み合わさって push が通ってしまう抜け穴になる)。Skill / Agent / Task 全分岐に共通。
 { read -r IS_ERROR; read -r INTERRUPTED; } < <(
   printf '%s' "$INPUT" | jq -r '
     (.tool_response.is_error // .tool_response.isError // false),

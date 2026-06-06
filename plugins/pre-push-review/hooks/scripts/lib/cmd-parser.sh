@@ -55,24 +55,28 @@
 #      pattern space 集約が必要。 fork コスト ~1 ms に対し、 pure bash ループは数百
 #      ms-数秒のため fork 派が常に勝つ。
 #
-# ## 2 つの正規化バリエーション
+# ## 正規化バリエーション (v1.1.0 で 1 つに縮退)
 #
-#   - `normalize_line_continuations`         : `\<LF>` を **削除** (bash 実挙動と一致)
-#       caller: block-bg-codex-review.sh / auto-mark.sh
-#       理由 : これらは regex match の前処理。 隣接トークン (`--back\<LF>ground` →
-#              `--background`) を連結する必要がある。
 #   - `normalize_line_continuations_to_space`: `\<LF>` を **空白** に置換
 #       caller: block-pre-push.sh
 #       理由 : tokenize_segment が空白で token を区切る設計のため、 空白置換で
 #              トークン境界を保ったまま改行を消す必要がある。
 #
+# v1.0.0 までは `normalize_line_continuations` (削除バリエーション、 `\<LF>` を削除して
+# 隣接トークンを連結する形) も提供しており、 `block-bg-codex-review.sh` (PreToolUse) と
+# `auto-mark.sh` (PostToolUse / Bash 経路) が caller だった (`--back\<LF>ground` のような
+# 行継続 bypass を防ぐため隣接トークンを連結する必要があった)。 v1.1.0 で codex wrapper
+# 一本化のため両 caller が消失したため、 削除バリエーション (`normalize_line_continuations`)
+# は dead code として削除した。 `_normalize_line_continuations_impl` の wrapper 構造は
+# 将来別バリエーション (= 空白以外の置換) を追加する余地として残している。
+#
 # ## sed の置換文字列の安全性
 #
 # 内部実装の `_normalize_line_continuations_impl` の第 2 引数 (`replacement`) は
-# **本ファイル内の wrapper 2 関数のみが呼ぶ private contract** で、 値は `""` または
-# `" "` (空白 1 文字) に限定する。 任意文字列を渡すと sed の置換右辺で `&` / `\` /
-# 区切り文字 `/` がメタ文字解釈され誤動作する。 wrapper 経由でしか呼ばない設計のため
-# 本制約は守られる。
+# **本ファイル内の wrapper 関数のみが呼ぶ private contract** で、 値は `" "` (空白 1
+# 文字) または将来追加されうる安全な短い文字列に限定する。 任意文字列を渡すと sed の
+# 置換右辺で `&` / `\` / 区切り文字 `/` がメタ文字解釈され誤動作する。 wrapper 経由で
+# しか呼ばない設計のため本制約は守られる。
 _normalize_line_continuations_impl() {
   local input="$1"
   local replacement="$2"
@@ -106,10 +110,6 @@ _normalize_line_continuations_impl() {
   printf '%s' "$result"
 }
 
-normalize_line_continuations() {
-  _normalize_line_continuations_impl "$1" ""
-}
-
 normalize_line_continuations_to_space() {
   _normalize_line_continuations_impl "$1" " "
 }
@@ -120,7 +120,7 @@ normalize_line_continuations_to_space() {
 # JSON 値を `COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command')` で取得すると、
 # JSON 内 `"command":"git push\<LF>"` のような末尾 line continuation 付き値が取得時点で
 # `git push\` (末尾 backslash 単独、 LF なし) になり line continuation 情報が失われる。
-# 結果として下流の `normalize_line_continuations*` が「line continuation を含まない」 と
+# 結果として下流の `normalize_line_continuations_to_space` が「line continuation を含まない」 と
 # fast-path で素通しし、 tokenize 段で `push\` を 1 token として扱って push 検知が外れる
 # security gate bypass になる。
 #

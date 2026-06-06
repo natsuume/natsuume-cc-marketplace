@@ -1,7 +1,10 @@
 #!/bin/bash
 # exit-trap.sh
-# pre-push-review プラグインの 3 つの hook script (block-pre-push.sh / auto-mark.sh /
-# block-bg-codex-review.sh) で共有する EXIT trap セットアップ関数を提供する。
+# pre-push-review プラグインの 2 つの hook script (block-pre-push.sh / auto-mark.sh) で
+# 共有する EXIT trap セットアップ関数を提供する。
+# (v1.1.0 で `block-bg-codex-review.sh` が wrapper 一本化に伴い廃止されたため、 v1.0.0
+# までの「3 hook 共通化」 から caller が 2 つに減少した。 install_exit_trap の構造は
+# 関数化の価値が依然あるため lib として維持。)
 #
 # ## なぜ必要か
 #
@@ -10,21 +13,19 @@
 # 失敗 / signal などで script が **非ゼロで終了** すると、
 #   - block-pre-push: fail-closed 設計の deny JSON を返せていない可能性
 #   - auto-mark: marker 書き込みが skip された可能性
-#   - block-bg-codex-review: background 起動の deny を返せていない可能性
 # という silent failure 経路ができる。 ユーザ / Claude は hook の異常終了を認知できず、
-# 後で push が通らない / 未レビュー commit が混入する / `--background` review が
-# silent skip する、 といった不可解な状況に遭遇する。
+# 後で push が通らない / 未レビュー commit が混入する、 といった不可解な状況に遭遇する。
 #
 # EXIT trap で `$?` を観測し、 非ゼロ終了をユーザの stderr に通知することで、
 # 「hook が壊れた」 ことを能動的に可視化する。 trap は元の exit code を変更しない
 # ため、 push 動作はノンブロッキングのまま (= 既存挙動を変えない)。
 #
-# ## なぜ 3 hook で共通化するか
+# ## なぜ 2 hook で共通化するか
 #
 # 構造 (exit code チェック → 非ゼロなら stderr に 2 行 printf) は完全に同型で、
 # hook ごとに違うのは「タグ名 (hook ファイル名)」 と「壊れた場合の影響説明」 だけ。
 # 共通化することで:
-#   - 関数名衝突 (`_pre_push_review_exit_handler` が 3 ファイルで同名) を回避
+#   - 関数名衝突 (`_pre_push_review_exit_handler` が複数ファイルで同名) を回避
 #   - 将来 trap 仕様変更 (例: structured logging への切り替え) を 1 箇所で完結
 #   - 各 hook では `install_exit_trap "<tag>" "<impact>"` の 1 行で済む
 #

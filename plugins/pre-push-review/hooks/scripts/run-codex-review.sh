@@ -24,6 +24,26 @@
 #      も廃止できる
 # = Claude の自由度を絞ることで「bg 起動による silent failure」 を構造的に排除する。
 #
+# ## なぜ codex-review-customize の review.md patch 拡張ではなく wrapper か
+#
+# 本 marketplace には既に `codex-review-customize` プラグインがあり、 公式 codex プラグインの
+# slash command 定義 (`review.md`) を sed で patch する抽象 (= disable-model-invocation を除去
+# して Skill 経由起動を有効化) を持っている。 同じ抽象の延長で「review.md から AskUserQuestion
+# ブロックを削除する patch を追加 → background 推奨を消す」 という方向もあり得たが、 v1.1.0 は
+# wrapper 方式を選んだ。 理由:
+#   - **PostToolUse detection が原理的に bg 起動を捕捉できない問題は patch では解けない**:
+#     Claude が `/codex:review` Skill expand 後に `Bash({run_in_background: true})` を返す
+#     経路は、 review.md の AskUserQuestion を消したとしても Claude が独自判断で取りうる
+#     (review.md の Background flow 例の方が消えない限り)。 patch を増やせば増やすほど公式
+#     プラグイン定義との drift が広がり、 codex プラグイン側の version 追従コストが増える
+#   - **marker 直書きの構造的価値**: wrapper が自身で marker を書く設計は、 PostToolUse hook
+#     が tool 完了タイミングを観測する仕組みそのものを bypass する。 「foreground/bg 区別」
+#     「tool_response の is_error/interrupted 判定」 「dirty tree タイミングの hash 衝突
+#     対策」 等を hook 層で複雑に重ねる必要がなく、 wrapper の exit code 1 つで成否を判断
+#     できる。 これは patch では到達できない深さの解
+# `codex-review-customize` プラグインは v1.1.0 以降 pre-push-review の観点では不要だが、
+# Skill 経由 `/codex:review` を別用途で使いたいユーザにとっては引き続き有用 (README 参照)。
+#
 # ## marker 書き込みポリシー
 #
 # **codex review が exit 0 で完了したら verdict (approve / needs-attention) に関わらず marker を
@@ -106,25 +126,26 @@ COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つか�
 # Claude / 呼び出し側からの argument injection で background 起動になる余地を排除する。
 # stdout は標準出力にそのまま流す (Claude が Bash tool の tool_response として受け取る形)。
 #
-# `set -e` は ON のまま node が非ゼロ exit すると本 script も非ゼロ exit する。 trap は使わず、
-# 「正常完了 (exit 0) のときだけ marker を書く」 を `exit 0 直前で書く` 設計で表現する。
+# 正常完了 (exit 0) のときだけ marker を書く設計。 失敗時はエラーメッセージを出して
+# marker を書かずに非ゼロ exit する (fail() が exit 1 する)。
 printf '[run-codex-review] codex companion: %s\n' "$COMPANION" >&2
 printf '[run-codex-review] running: node %s review --wait --scope branch\n' "$COMPANION" >&2
 
-# `set -e` を一時的に外し、 node の exit code を捕捉する。 失敗時もエラーメッセージを出して
-# marker を書かずに非ゼロ exit する。
-set +e
-node "$COMPANION" review --wait --scope branch
-NODE_EXIT=$?
-set -e
-
-if [ "$NODE_EXIT" -ne 0 ]; then
-  fail "codex review が失敗しました (exit code: $NODE_EXIT)。 marker は書きません。 上の output を確認して再実行してください。"
+# `if !` で node の成否を直接捕捉する。 set +e / set -e の dance や exit code 変数を使わない:
+# - set -e 配下では `node ...` が非ゼロ exit すると script 全体が即終了するため、 失敗時に
+#   fail() でエラーメッセージを出す機会を失う
+# - `if !` は `set -e` の影響を受けず、 失敗ブランチでカスタムメッセージを出せる
+# - exit code の数値そのものは error 表示で使わない (失敗したという事実だけが本質) ため
+#   $? を変数に保存する必要もない
+if ! node "$COMPANION" review --wait --scope branch; then
+  fail "codex review が失敗しました。 marker は書きません。 上の output を確認して再実行してください。"
 fi
 
 # marker を書く: 「codex review が exit 0 で完了した」 という事実だけを根拠に、 verdict
 # (approve / needs-attention) に関わらず書く (ヘッダの 「marker 書き込みポリシー」 参照)。
-printf '%s' "$HASH" > "$(codex_marker_path "$GIT_DIR")"
-printf '[run-codex-review] codex marker を更新しました: %s\n' "$(codex_marker_path "$GIT_DIR")" >&2
+# marker path は書き込み先と表示で共有するため変数に保持 (2 回計算回避)。
+MARKER_PATH=$(codex_marker_path "$GIT_DIR")
+printf '%s' "$HASH" > "$MARKER_PATH"
+printf '[run-codex-review] codex marker を更新しました: %s\n' "$MARKER_PATH" >&2
 
 exit 0
