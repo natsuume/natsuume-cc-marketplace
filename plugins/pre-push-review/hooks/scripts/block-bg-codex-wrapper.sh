@@ -84,8 +84,12 @@ esac
 RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
 
 # (2) shell-level backgrounding / pipeline の検知。 cmd-parser の split_command で segment と
-# separator を取り、 run-codex-review.sh を含む segment が `&` (background) または `|` (pipeline)
-# で連結されていれば deny する。 `&&` / `||` / `;` は逐次実行なので race にならず許容。
+# separator を取り、 wrapper を含む segment の **隣接** (直前 / 直後) separator が `&`
+# (background) または `|` (pipeline) のときだけ deny する。 SEPARATORS[i-1] が segment[i] の
+# 直前、 SEPARATORS[i] が segment[i] の直後を指す (= split_command が segment と separator を
+# 交互に出力する仕様)。 wrapper と無関係な segment 間の `&` / `|` (例: `bash run-codex-review.sh
+# && echo done | tee log`) は false positive にしない。 `&&` / `||` / `;` は逐次実行なので
+# race にならず許容。
 SEGMENTS=()
 SEPARATORS=()
 while IFS= read -r line; do
@@ -96,21 +100,25 @@ while IFS= read -r line; do
   SEGMENTS+=("$line")
 done < <(split_command "$COMMAND")
 
-_HAS_WRAPPER=0
-for seg in "${SEGMENTS[@]}"; do
-  case "$seg" in
-    *run-codex-review.sh*) _HAS_WRAPPER=1; break ;;
-  esac
-done
-
 _SHELL_BG=0
-if [ "$_HAS_WRAPPER" -eq 1 ]; then
-  for sep in "${SEPARATORS[@]}"; do
-    case "$sep" in
+for i in "${!SEGMENTS[@]}"; do
+  case "${SEGMENTS[$i]}" in
+    *run-codex-review.sh*) ;;
+    *) continue ;;
+  esac
+  # 直前 separator (SEPARATORS[i-1], i==0 なら無し)
+  if [ "$i" -gt 0 ]; then
+    case "${SEPARATORS[$((i-1))]}" in
       "&"|"|") _SHELL_BG=1; break ;;
     esac
-  done
-fi
+  fi
+  # 直後 separator (SEPARATORS[i], 最後の segment なら無し)
+  if [ "$i" -lt "${#SEPARATORS[@]}" ]; then
+    case "${SEPARATORS[$i]}" in
+      "&"|"|") _SHELL_BG=1; break ;;
+    esac
+  fi
+done
 
 # どちらの経路でもなければ allow。
 if [ "$RUN_IN_BG" != "true" ] && [ "$_SHELL_BG" -eq 0 ]; then
