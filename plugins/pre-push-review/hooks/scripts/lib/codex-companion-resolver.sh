@@ -19,10 +19,13 @@
 #
 # ## 探索順序と semver 解釈
 #
-# 1. **cache 配下 (versioned plugin install)**: `~/.claude/plugins/cache/openai-codex/
-#    codex/<version>/scripts/codex-companion.mjs`。 `claude plugin install` で marketplace
-#    から導入した場合のレイアウト。 複数 version が並ぶ可能性があるため最新を選ぶ。
-# 2. **marketplace clone (フォールバック)**: `~/.claude/plugins/marketplaces/openai-codex/
+# 1. **unversioned cache** (`~/.claude/plugins/cache/openai-codex/codex/scripts/codex-companion.mjs`):
+#    Claude Code の install 形態によっては version dir を経由せず cache_root 直下に scripts/
+#    が置かれるパターン。 codex プラグインの version が固定された install で観測される。
+# 2. **versioned cache** (`~/.claude/plugins/cache/openai-codex/codex/<version>/scripts/codex-companion.mjs`):
+#    `claude plugin install` で marketplace 経由導入した場合のレイアウト。 複数 version が
+#    並ぶ可能性があるため semver 降順で最新を選ぶ。
+# 3. **marketplace clone (フォールバック)**: `~/.claude/plugins/marketplaces/openai-codex/
 #    plugins/codex/scripts/codex-companion.mjs`。 marketplace を `claude plugin marketplace
 #    add` で clone した状態 (= unversioned working tree) の path。 ローカル開発ユース
 #    ケース等で cache が無いことが起きうるため、 セーフティネットとして用意する。
@@ -65,6 +68,23 @@ resolve_codex_companion() {
   local found=""
 
   if [ -d "$cache_root" ]; then
+    # ## 2 つの cache layout を順に探索
+    #
+    # Claude Code の plugin cache は install 形態によって 2 種類の layout がある:
+    #   1. **unversioned cache** (`<cache_root>/scripts/codex-companion.mjs`): marketplace
+    #      経由で導入したが version dir を経由しない形態。 version が固定された install。
+    #   2. **versioned cache** (`<cache_root>/<version>/scripts/codex-companion.mjs`):
+    #      version 別に dir を分ける形態。 複数 version が並びうる。
+    # どちらの layout も実環境で観測されるため、 両方を順に試す (unversioned が先で、
+    # 無ければ versioned 配下を semver 降順で scan)。 codex プラグインの review CLI I/F は
+    # 安定している前提で、 「最初に見つけた companion」 を採用する。
+    #
+    # unversioned check (= cache_root 直下の scripts/codex-companion.mjs):
+    if [ -f "$cache_root/scripts/codex-companion.mjs" ]; then
+      found="$cache_root/scripts/codex-companion.mjs"
+    fi
+
+    # versioned cache: <cache_root>/<version>/scripts/codex-companion.mjs を semver 降順で探索。
     # find は基本 POSIX なので macOS / Linux 双方で動く。 mindepth/maxdepth は GNU 拡張だが
     # macOS の BSD find でも 10.5 以降サポートされているためどちらでも使える。
     #
@@ -75,17 +95,19 @@ resolve_codex_companion() {
     # **1.10 以降の release で BSD sort 環境では古い `1.2.x` 等を選ぶ既知の制約**がある (詳細は
     # 上部 docstring 参照)。 macOS Ventura (13) 以前の旧 BSD sort 環境かつ codex 1.10 release
     # 以降のタイミングで顕在化する。
-    local sorted
-    sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-      | { sort -V -r 2>/dev/null || sort -r; })
-    local d
-    while IFS= read -r d; do
-      [ -n "$d" ] || continue
-      if [ -f "$d/scripts/codex-companion.mjs" ]; then
-        found="$d/scripts/codex-companion.mjs"
-        break
-      fi
-    done <<< "$sorted"
+    if [ -z "$found" ]; then
+      local sorted
+      sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+        | { sort -V -r 2>/dev/null || sort -r; })
+      local d
+      while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        if [ -f "$d/scripts/codex-companion.mjs" ]; then
+          found="$d/scripts/codex-companion.mjs"
+          break
+        fi
+      done <<< "$sorted"
+    fi
   fi
 
   if [ -z "$found" ] && [ -f "$marketplace_path" ]; then
