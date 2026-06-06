@@ -5,6 +5,8 @@
 # MIN 未満になる場合はバーを描かず、さらに横幅を節約する（段階的縮小の最終段）。
 GAUGE_MAX_BAR_WIDTH=10
 GAUGE_MIN_BAR_WIDTH=3
+# バー周辺の装飾 " [" + "]" の文字数。build_ratelimit_segment の出力形式と対応。
+GAUGE_BAR_DECORATION_WIDTH=3
 
 # context 使用量セグメントを組み立てる（バー無し・reset 無しの数値表示）
 # 引数: $1=使用率%, $2=使用トークン数, $3=最大コンテキスト長, $4=使用率%を表示するか(1/0)
@@ -73,7 +75,7 @@ build_ratelimit_segment() {
 
 # 2行目を描画する。横幅に収まる最も豊かな表示を選び、収まらなければ段階的に縮小する。
 # 縮小の優先順位（先に削るもの順）:
-#   段階1: ctx の使用率表示 "(P%)" を削除（used/max が残るso情報は保たれる）
+#   段階1: ctx の使用率表示 "(P%)" を削除（used/max が残るので情報は保たれる）
 #   段階2: レートリミットのバー長を短縮（GAUGE_MAX→GAUGE_MIN）
 #   段階3: バーを削除（"label: P% (reset)" のみ）
 # それでも収まらない極端な狭幅は最後に fit_segments が … で切り詰める。
@@ -116,7 +118,7 @@ render_line2() {
   # 段階1: 「ctx% あり + バー最大幅」が横幅に収まるか判定。収まらなければ ctx% を落とす。
   local ctx_seg="$ctx_full" ctx_w=0
   if [ -n "$ctx_full" ]; then
-    local full_bars=$(( rate_count * (GAUGE_MAX_BAR_WIDTH + 3) ))
+    local full_bars=$(( rate_count * (GAUGE_MAX_BAR_WIDTH + GAUGE_BAR_DECORATION_WIDTH) ))
     if [ $(( $(visible_length "$ctx_full") + rate_core_total + sep_total + full_bars )) -gt "$term_width" ]; then
       ctx_seg=$(build_context_segment "$ctx_pct" "$ctx_used" "$ctx_max" 0)
     fi
@@ -126,10 +128,10 @@ render_line2() {
   # 段階2/3: 残り幅をレートリミットのバーへ均等分配する。
   #   GAUGE_MAX_BAR_WIDTH で頭打ち（広いと最大長）、分配結果が縮むと段階2。
   #   GAUGE_MIN_BAR_WIDTH 未満ならバーを描かない（段階3）。
-  # バー周辺の装飾 = " [" + "]" の3文字 / バー。context にバーは無い。
+  # context にバーは無い。レートリミット各バーに装飾幅を確保する。
   local bar_width=0
   if [ "$rate_count" -gt 0 ]; then
-    local available=$(( term_width - ctx_w - rate_core_total - sep_total - rate_count * 3 ))
+    local available=$(( term_width - ctx_w - rate_core_total - sep_total - rate_count * GAUGE_BAR_DECORATION_WIDTH ))
     bar_width=$(( available / rate_count ))
     [ "$bar_width" -gt "$GAUGE_MAX_BAR_WIDTH" ] && bar_width="$GAUGE_MAX_BAR_WIDTH"
     [ "$bar_width" -lt "$GAUGE_MIN_BAR_WIDTH" ] && bar_width=0
