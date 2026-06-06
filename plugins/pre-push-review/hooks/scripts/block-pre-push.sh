@@ -610,7 +610,7 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C ${TARGET_CWD} status\` で変更を確認し、commit してから \`/simplify\` → \`/code-review\` → \`/codex:review --wait --scope branch\` → \`pre-push-review:security-reviewer\` subagent (\`Task\` / \`Agent\` tool 経由) を再走させて push してください。
+\`git -C "${TARGET_CWD}" status\` で変更を確認し、commit してから \`/simplify\` → \`/code-review\` → codex review (wrapper script 経由 — 下記実行手順 3 参照) → \`pre-push-review:security-reviewer\` subagent (\`Task\` / \`Agent\` tool 経由) を再走させて push してください。
 EOF
 )
   deny "$REASON"
@@ -636,9 +636,9 @@ if [ -z "$BASE" ]; then
 
 本プラグインは branch 全差分のレビュー検証に default branch (origin/HEAD or origin/master / origin/main) を必要とします。 以下のいずれかを設定してください:
 
-  - \`git -C ${TARGET_CWD} remote set-head origin --auto\` で origin/HEAD を自動設定
-  - \`git -C ${TARGET_CWD} remote set-head origin <branch-name>\` で明示設定 (例: develop)
-  - origin remote が無い場合は \`git -C ${TARGET_CWD} remote add origin <url>\` で追加
+  - \`git -C "${TARGET_CWD}" remote set-head origin --auto\` で origin/HEAD を自動設定
+  - \`git -C "${TARGET_CWD}" remote set-head origin <branch-name>\` で明示設定 (例: develop)
+  - origin remote が無い場合は \`git -C "${TARGET_CWD}" remote add origin <url>\` で追加
 
 設定後に再度 \`git push\` を試してください。
 EOF
@@ -650,7 +650,7 @@ fi
 # branch diff hash 計算。 失敗時 (orphan branch / shallow clone 等) は明示 deny。
 if ! CURRENT_HASH=$(compute_review_hash_in "$TARGET_CWD" "$BASE"); then
   REASON=$(cat <<EOF
-プッシュをブロックしました。ブランチ全差分の計算 (\`git -C ${TARGET_CWD} diff origin/${BASE}...HEAD\`) が失敗しました。
+プッシュをブロックしました。ブランチ全差分の計算 (\`git -C "${TARGET_CWD}" diff origin/${BASE}...HEAD\`) が失敗しました。
 
 考えられる原因:
   - 孤児ブランチ (origin/${BASE} と共通祖先を持たない unrelated history)
@@ -659,8 +659,8 @@ if ! CURRENT_HASH=$(compute_review_hash_in "$TARGET_CWD" "$BASE"); then
 
 対応:
   - 通常の branch (master/main から派生) で作業しているか確認する
-  - shallow clone の場合は \`git -C ${TARGET_CWD} fetch --unshallow\` で履歴を完全に取得する
-  - origin/${BASE} を更新する: \`git -C ${TARGET_CWD} fetch origin ${BASE}\`
+  - shallow clone の場合は \`git -C "${TARGET_CWD}" fetch --unshallow\` で履歴を完全に取得する
+  - origin/${BASE} を更新する: \`git -C "${TARGET_CWD}" fetch origin ${BASE}\`
 EOF
 )
   deny "$REASON"
@@ -728,6 +728,16 @@ else
   FP_REQUIREMENT_NOTE='Claude Code version を v2.1.154+ と確定できなかったため (旧 version / 検出不能)、第一者レビューは /simplify と /code-review の **どちらか 1 本** が最新であれば通過します (fail-open)。v2.1.154+ 環境では両方を実行してください。'
 fi
 
+# codex review wrapper の絶対パスを deny メッセージに埋め込む。 自身のスクリプト位置
+# (`$_PRE_PUSH_REVIEW_SCRIPT_DIR`、 = hooks/scripts/ ディレクトリ) からの **self-relative
+# 解決のみ** を使う (= `${CLAUDE_PLUGIN_ROOT}` 環境変数には依存しない)。 wrapper script は
+# block-pre-push.sh と同じ `hooks/scripts/` 配下に置く設計のため、 hook 自身の実体 path
+# から決定的に求まる。 これにより:
+#   - hook 起動時の CLAUDE_PLUGIN_ROOT セット有無に挙動が左右されない
+#   - deny メッセージに具体的な絶対パスを埋め込めるため、 Claude / ユーザがコピペで
+#     起動できる (`${CLAUDE_PLUGIN_ROOT}` 形式だと文字列が展開されない / 環境依存)
+CODEX_WRAPPER_PATH="$_PRE_PUSH_REVIEW_SCRIPT_DIR/run-codex-review.sh"
+
 REASON=$(cat <<EOF
 プッシュをブロックしました。push 前に下記のレビューを実行してください。
 
@@ -735,13 +745,13 @@ target: ${TARGET_CWD}
 ブランチ: ${BRANCH} (基準: origin/${BASE})
 
 レビュー状態 (下記の必須レビューがすべて「✓ 最新の差分でレビュー済み」になると push が許可されます):
-  /simplify (cleanup・コード編集)  : $SIMPLIFIED_STATUS
-  /code-review (read-only バグ検出) : $CODE_REVIEWED_STATUS
-  /codex:review --scope branch     : $CODEX_STATUS
-  security review (subagent 経由)  : $SECURITY_STATUS
+  /simplify (cleanup・コード編集)        : $SIMPLIFIED_STATUS
+  /code-review (read-only バグ検出)       : $CODE_REVIEWED_STATUS
+  codex review (wrapper script 経由)     : $CODEX_STATUS
+  security review (subagent 経由)        : $SECURITY_STATUS
 
 第一者 (Anthropic) レビューの要件: ${FP_REQUIREMENT_NOTE}
-(\`/codex:review\` と security review は version に関わらず常に必須です。)
+(codex review (wrapper 経由) と security review は version に関わらず常に必須です。)
 
 ⚠ \`/simplify\` と \`/code-review\` は **別の skill** です (Claude Code v2.1.147 で /code-review が
 read-only バグ検出器に分離され、 v2.1.154 で /simplify が cleanup-only の編集 skill として
@@ -758,9 +768,14 @@ read-only バグ検出器に分離され、 v2.1.154 で /simplify が cleanup-o
        (その帯では第一者レビューは fail-open で 1 本に緩みます)。
   2. \`/code-review\` を Skill tool で呼び出す (read-only の correctness バグ検出。 cleanup 適用後の
      最終形をバグ観点でレビューする。 指摘があれば手順 5 に従って修正する)
-  3. /codex:review --wait --scope branch を Skill tool で呼び出す
-     (--scope branch 必須: branch 全差分 = PR diff のレビューを保証するため。 OpenAI codex による
-      独立したバグレビューで、 Anthropic の /code-review と engine が異なるため defense-in-depth になる)
+  3. **\`Bash\` tool で codex review wrapper を起動する**: 次のコマンドを **そのまま** 実行する:
+       \`bash "${CODEX_WRAPPER_PATH}"\`
+     (\`/codex:review\` slash command は経由しない。 slash command の review.md は
+      AskUserQuestion で「background 起動」 を推奨する prompt 設計のため、 Claude が
+      background を選ぶと PreToolUse が deny して 1 サイクル無駄になる経路があった。
+      wrapper script は内部で \`--wait --scope branch\` を hardcode して foreground 実行を
+      強制し、 完了後に codex marker を直接書き込む。 OpenAI codex による独立したバグ
+      レビューで、 Anthropic の \`/code-review\` と engine が異なるため defense-in-depth になる)
   4. **\`Task\` / \`Agent\` tool (Claude Code で同じ subagent invocation tool に
      付いた 2 つの名前 — どちらでも可) で \`pre-push-review:security-reviewer\`
      subagent を起動する**
@@ -769,12 +784,12 @@ read-only バグ検出器に分離され、 v2.1.154 で /simplify が cleanup-o
       設計 (subagent 内では nested subagent が動かないため self-contained 化している)。
       PostToolUse hook が **subagent の完了** (Agent / Task tool の終了) を検知して
       security マーカーを自動更新する)
-  5. **いずれかのレビュー (\`/code-review\` / \`/codex:review\` / security-reviewer subagent) からの
+  5. **いずれかのレビュー (\`/code-review\` / codex review / security-reviewer subagent) からの
      指摘がある場合は、 修正方針を整理してから実装する**
      (push gate は各マーカーの書き込みのみを確認し report 内容まで verify しない
       ため、 全レビューの remediation 義務をここで明文化する):
      a. 指摘ごとに修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)
-     b. **\`/codex:review\` からの指摘** については、
+     b. **codex review からの指摘** については、
         \`/codex:rescue --wait\` を Skill tool で呼び出し、 その方針が以下の観点で妥当か
         を壁打ちする:
           - 指摘の根本原因に対する解として妥当か
@@ -804,23 +819,24 @@ turn は通常通り終了し、 親 session は subagent invocation の結果�
 場合も、 後方互換として security マーカーは書かれます — ただし turn 終了でループが
 止まるため subagent 経由が推奨です。)
 
-マーカーは PostToolUse hook (auto-mark.sh) が \`/simplify\` / \`/code-review\` /
-\`/codex:review --wait --scope branch\` / \`pre-push-review:security-reviewer\` subagent
-完了 (推奨パス) または \`/security-review\` skill launch (後方互換パス) を検知して
-自動的に記録します。\`/simplify\` と \`/code-review\` はそれぞれ別マーカーに記録されます
-(v1.0.0 で分離)。マーカーは push 通過時に明示削除されません
-(次の編集でハッシュが変わると自動的に失効するため)。
+マーカーの記録経路 (3 種類):
+  - \`/simplify\` / \`/code-review\` / \`/security-review\` skill launch および
+    \`pre-push-review:security-reviewer\` subagent 完了は PostToolUse hook (auto-mark.sh) が
+    検知して自動記録 (\`/simplify\` と \`/code-review\` は v1.0.0 で別マーカーに分離)
+  - codex review は wrapper script (\`run-codex-review.sh\`) 自身が完了時に直接 marker file
+    へ書き込む (v1.1.0 で auto-mark.sh の Bash 経路を廃止し wrapper 一本化した)
+マーカーは push 通過時に明示削除されません (次の編集でハッシュが変わると自動的に失効するため)。
 
-\`/codex:review\` の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
-  - **\`--wait\` (フォアグラウンド) のみサポート**
-  - **\`--scope branch\` 必須**
+codex review の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
+  - **wrapper script (\`bash "${CODEX_WRAPPER_PATH}"\`) のみサポート**
+  - wrapper が \`--wait --scope branch\` を hardcode するため、 引数指定は不要 (= 受け付けない)
 
-⚠ 重要: 本ループは \`/codex:review\` (レビュー取得) と \`/codex:rescue\` (手順 4 の方針壁打ち)
+⚠ 重要: 本ループは **codex review wrapper** (レビュー取得) と \`/codex:rescue\` (手順 5 の方針壁打ち)
 の **両方** を使います。 名前が似ているため取り違えに注意してください:
-  - \`/codex:review --wait --scope branch\`: branch 全差分への read-only レビュー取得
-    (PostToolUse がこの完了でマーカーを書く / push gate の対象)
+  - \`bash "${CODEX_WRAPPER_PATH}"\`: branch 全差分への read-only レビュー取得
+    (wrapper が完了時に codex marker を書く / push gate の対象)
   - \`/codex:rescue --wait\`: review からの指摘を踏まえた **修正方針の壁打ち**
-    (rescue 自体はマーカー対象外 / push gate には影響しないが、 手順 4 で
+    (rescue 自体はマーカー対象外 / push gate には影響しないが、 手順 5 で
      approve を得てから実装を開始する規律で運用する)
 
 ⚠ \`/codex:rescue\` のハング対策: \`/codex:rescue --wait\` は **しばしばハングする**

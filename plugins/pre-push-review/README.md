@@ -1,12 +1,25 @@
 # pre-push-review プラグイン
 
-`git push` を実行する前に `/simplify` → `/code-review` → `/codex:review --wait --scope branch` → `pre-push-review:security-reviewer` subagent (self-contained に branch 全差分のセキュリティレビューを実行; 詳細は下記 [Agents](#agents) を参照) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` (cleanup を**適用** = コードを編集する bundled skill) はコード変更を伴うため先に走らせ、`/code-review` (read-only の correctness バグ検出) / `/codex:review` はその後の最終形をバグ観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。`/simplify` (Anthropic cleanup) → `/code-review` (Anthropic バグ検出) → `/codex:review` (OpenAI バグ検出) → security と、 **Anthropic と OpenAI の独立した 2 つのバグレビュー** + cleanup + security を重ねる defense-in-depth 構成です。修正により branch 全差分が変わると **レビューマーカーが自動的に失効** するため、Claude は各レビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
+`git push` を実行する前に `/simplify` → `/code-review` → codex review (wrapper script `run-codex-review.sh` 経由) → `pre-push-review:security-reviewer` subagent (self-contained に branch 全差分のセキュリティレビューを実行; 詳細は下記 [Agents](#agents) を参照) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。`/simplify` (cleanup を**適用** = コードを編集する bundled skill) はコード変更を伴うため先に走らせ、`/code-review` (read-only の correctness バグ検出) / codex review (OpenAI バグ検出) はその後の最終形をバグ観点でレビューし、 security レビューは同じ最終形を security 観点でレビューします。`/simplify` (Anthropic cleanup) → `/code-review` (Anthropic バグ検出) → codex review (OpenAI バグ検出) → security と、 **Anthropic と OpenAI の独立した 2 つのバグレビュー** + cleanup + security を重ねる defense-in-depth 構成です。修正により branch 全差分が変わると **レビューマーカーが自動的に失効** するため、Claude は各レビューを再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。Claude が「修正不要」と判断した時点で再レビュー後に push に進みます。Claude が「人間判断を仰ぐべき」と判断した場合のみユーザーへエスカレートします。
+
+> **v1.1.0 で codex review の起動方式が変わりました**: `/codex:review` slash command 経由から bash wrapper (`run-codex-review.sh`) 経由に切り替えました。 `/codex:review` の `review.md` (codex プラグイン公式定義) が AskUserQuestion で「review が小さい場合のみ wait 推奨、 それ以外は background 推奨」 と prompt する設計のため、 Claude が bg を選んで Bash tool の `run_in_background: true` で起動すると PostToolUse が marker を書けず silent failure する経路がありました。 wrapper は `--wait --scope branch` を hardcode し、 完了時に自身で codex marker を書き込むため bg 起動の余地が構造的に排除されます。 deny メッセージは wrapper 起動コマンド (`bash <plugin>/hooks/scripts/run-codex-review.sh`) を案内します。
 
 > **`/simplify` と `/code-review` は別 skill です**: Claude Code の bundled skill は履歴上 2 度反転しています。≤v2.1.145 では `/simplify` が cleanup-and-fix (編集)、v2.1.147 で `/code-review` に「リネーム」されましたが実態は read-only バグ検出器への**挙動変更**で `/simplify` は一旦消滅、v2.1.154 で `/simplify` が cleanup-only (編集) skill として再導入され両者が併存しました。本プラグイン v1.0.0 はこの分岐に追随し、`/simplify` (編集) と `/code-review` (read-only) を**別マーカー**として扱います。第一者 (Anthropic) レビューは Claude Code **v2.1.154+** を検出したとき `/simplify` と `/code-review` の**両方**を必須化し、旧 version / 検出不能時は fail-open でどちらか 1 本に緩めます (詳細は下記 [第一者レビューの version 依存](#第一者レビューの-version-依存))。
 
 ## バージョン
 
-v1.0.0 (前身: `pre-commit-review` v0.4.0)
+v1.1.0 (前身: `pre-commit-review` v0.4.0)
+
+### v1.0.0 → v1.1.0 の変更点
+
+- **`/codex:review` slash command 経由から bash wrapper (`run-codex-review.sh`) 経由に切替**: v1.0.0 以前は deny メッセージで `/codex:review --wait --scope branch` を Skill tool で起動するよう案内し、 PostToolUse の auto-mark.sh が `node codex-companion.mjs review --scope branch` の Bash 完了を検知して codex marker を書く設計だった。 しかし `/codex:review` slash command の `review.md` (codex プラグイン公式定義) は AskUserQuestion 分岐で「review が小さい場合のみ wait 推奨、 それ以外は background 推奨」 という方針を Claude に prompt する設計のため、 **Claude が background を選んで Bash tool の `run_in_background: true` で起動 → PostToolUse は launch 完了時点で発火するため marker が書かれない (silent failure) → 後の push で deny されて 1 サイクル無駄になる** ループが頻発した。 v1.1.0 ではこれを構造的に解消するため:
+  - 新規 `hooks/scripts/run-codex-review.sh` wrapper を導入。 内部で codex companion path を解決 (`lib/codex-companion-resolver.sh`) し、 `node <path> review --wait --scope branch` を **hardcode** で foreground 実行する。 Claude / 呼び出し側からの argument injection で background 起動になる余地を排除
+  - wrapper は codex review 完了後に **自身で codex marker file へ書き込む** (PostToolUse hook を経由しない)。 完了したら verdict (approve / needs-attention) に関わらず marker を書く設計 — verdict ベースの判定は companion の output 形式変更に脆く、 また「指摘があれば必ず修正してから push」 の判断は Claude の自律性に委ねる方が運用上自然なため
+  - `block-pre-push.sh` の deny メッセージを更新し、 codex review 起動コマンドとして `bash <plugin>/hooks/scripts/run-codex-review.sh` を案内する。 `/codex:review` slash command 経由の案内は廃止
+  - `auto-mark.sh` の Bash 経路 (codex 検知) を削除。 `lib/cmd-parser.sh` の source も不要になった
+  - `hooks/scripts/block-bg-codex-review.sh` (PreToolUse での `--background` / `run_in_background: true` deny) と `lib/codex-review-detect.sh` を廃止。 wrapper 一本化により Claude が直接 codex companion を Bash で叩く経路がなくなり、 bg 起動を gate する必要がなくなったため
+- **互換性**: 既存の `.claude-pre-push-codex-reviewed` marker file 名は変更なし。 v1.0.0 で wrapper 経由ではなく `/codex:review` 経由でレビュー済みの marker は v1.1.0 でもそのまま有効 (hash が一致する限り)。 新規には wrapper 経由で marker を書く
+- **minor bump にした理由**: marker 形式・hook 構造の互換は維持され、 ユーザに変わるのは「deny メッセージで案内されるコマンド形態」 のみ。 設定変更や marker 移行は不要のため minor。 wrapper 一本化により codex プラグイン未 install 環境では明示エラーで失敗する (v1.0.0 では Skill が動かないため degraded した) 違いはあるが、 これは silent failure を排除する正の改善
 
 ### v0.8.5 → v1.0.0 の変更点
 
@@ -107,7 +120,7 @@ PR 作成側で gate する設計だと、以下の経路が捕捉できませ�
 
 ## 概要
 
-`PreToolUse` フックで `Bash` ツール実行を監視し、`git push` コマンドを検出した場合、 **4 つのレビューマーカー** (`/simplify` (cleanup) / `/code-review` (バグ検出) / `/codex:review --wait --scope branch` / `/security-review` (subagent 経由) それぞれの実行完了マーカー) が現在の **branch 全差分 + 未コミット差分** のハッシュと一致しなければ `deny` を返して push を阻止します。第一者 (`/simplify` + `/code-review`) は Claude Code v2.1.154+ を検出したとき両方必須、 それ以外は fail-open でどちらか 1 本に緩めます ([第一者レビューの version 依存](#第一者レビューの-version-依存))。`/codex:review` と security は version に関わらず常に必須です。マーカーは `PostToolUse` フックが各ツールの実走完了を検知して自動的に書き込みます (PostToolUse は subagent 内の tool use にも発火するため、 security 用 subagent 経由でも `/security-review` の skill 起動が検知されます)。手動でスクリプトを呼び出す必要はありません。
+`PreToolUse` フックで `Bash` ツール実行を監視し、`git push` コマンドを検出した場合、 **4 つのレビューマーカー** (`/simplify` (cleanup) / `/code-review` (バグ検出) / codex review (wrapper script 経由) / `/security-review` (subagent 経由) それぞれの実行完了マーカー) が現在の **branch 全差分 + 未コミット差分** のハッシュと一致しなければ `deny` を返して push を阻止します。第一者 (`/simplify` + `/code-review`) は Claude Code v2.1.154+ を検出したとき両方必須、 それ以外は fail-open でどちらか 1 本に緩めます ([第一者レビューの version 依存](#第一者レビューの-version-依存))。codex review と security は version に関わらず常に必須です。 `/simplify` / `/code-review` / security subagent のマーカーは `PostToolUse` フックが実走完了を自動検知して書き込み (PostToolUse は subagent 内の tool use にも発火するため、 security 用 subagent 経由でも `/security-review` の skill 起動が検知されます)、 codex review のマーカーは wrapper script (`run-codex-review.sh`) が完了時に自身で書き込みます (v1.1.0 で wrapper 一本化)。手動でスクリプトを呼び出す必要はありません。
 
 ## インストール
 
@@ -187,18 +200,16 @@ claude plugin install pre-push-review@natsuume-plugins
 - **version 検出は「両方必須」に昇格する方向にのみ使われます**。検出が成功して v2.1.154+ と確定できたときだけ両方必須に昇格し、それ以外 (旧 version / env 欠落 / 取得失敗) はすべて「1 本で可」に降格します。
 - この非対称が安全性の肝です: 検出が将来壊れても最悪「v2.1.154+ なのに 1 本で通せてしまう (= 第一者レビュー 1 本 + codex + security は依然必須)」に**緩む**だけで、未レビュー push は通らず、存在しない skill を要求して**永久 deny にもなりません**。「外部の可用性に依存する判定は SPOF にしない」という設計方針 (`reference_prompt_hook_model_spof` の教訓) に沿っています。
 
-> **`--wait` 限定の理由**: `/codex:review --background` だと Bash tool の `run_in_background: true` 起動直後に PostToolUse が発火し、レビューが完了する前に auto-mark.sh が呼ばれます。auto-mark.sh は background 起動を検知してマーカー更新をスキップするため、background 経由ではマーカーが永遠に更新されず push が通りません。pre-push-review の文脈では必ず `--wait` を渡してください。
+> **`--wait` / `--scope branch` 限定の理由 (v1.1.0 で wrapper が hardcode)**: pre-push-review が gate するのは「branch の commit 列 (= PR diff)」の品質保証なので、 `--scope branch` が必須です (`--scope working-tree` は staged+unstaged のみで committed 部分を見ない / `--scope auto` は dirty 時に working-tree にフォールバックする)。 また `--background` (Bash tool `run_in_background: true`) だと codex review 本体が別 process で継続中の状態で Bash 呼び出しが完了するため marker が書けず silent failure します。 v1.1.0 で wrapper script (`run-codex-review.sh`) が両者を hardcode するように切り替えたため、 Claude / 呼び出し側から `--wait` / `--scope branch` を **指定する必要はなく**、 指定しても無視されます (= 引数注入で値を変える余地もない)。 v1.0.0 以前で適用されていた「Claude が deny メッセージに従って `/codex:review --wait --scope branch` を Skill tool で呼ぶ」 設計は、 `/codex:review` の `review.md` が AskUserQuestion で background 起動を推奨する prompt 設計のため Claude が bg を選ぶ経路があり、 silent failure → 1 サイクル無駄ループが頻発したため廃止されました。
 
-> **`--scope branch` 限定の理由**: pre-push-review が gate するのは「branch の commit 列 (= PR diff)」の品質保証で、 `--scope working-tree` (staged+unstaged のみレビュー / committed 部分を見ない) や `--scope auto` (dirty 時に working-tree にフォールバック) では PR diff の review 保証として不十分です。auto-mark.sh は `--scope branch` を含む codex 起動のみマーカーを更新します。
-
-> **ループの意図**: 修正を加えた瞬間、その修正自体は未レビューになります。`/codex:review` の指摘を修正した結果として `/code-review` の対象 (重複・冗長コメント等) が新規発生する可能性も、`/code-review` の修正により `/codex:review` の新規指摘が出る可能性も、いずれもゼロではないため、修正があれば `/code-review` から再度ループします。プラグインは「マーカーのハッシュ = `git push` 時の branch 全差分 + 未コミット差分」だけを検証するため、ループ回数の push 強制ブロックは行いません。
+> **ループの意図**: 修正を加えた瞬間、その修正自体は未レビューになります。codex review の指摘を修正した結果として `/code-review` の対象 (重複・冗長コメント等) が新規発生する可能性も、`/code-review` の修正により codex review の新規指摘が出る可能性も、いずれもゼロではないため、修正があれば `/code-review` から再度ループします。プラグインは「マーカーのハッシュ = `git push` 時の branch 全差分 + 未コミット差分」だけを検証するため、ループ回数の push 強制ブロックは行いません。
 
 > **終端の判断**: ループ回数による push 強制ブロックは行いません。表層レビューだけで収束しない場合の対応 (実装方針の見直し / 人間判断のエスカレーション等) は Claude の自律判断に委ねます。
 
-> **`/codex:review` と `/codex:rescue` の役割分担**: 本プラグインは公式 codex プラグインの 2 つのコマンドを **両方** 使います。 用途を取り違えないこと:
+> **codex review と `/codex:rescue` の役割分担 (v1.1.0 で更新)**: 本プラグインは公式 codex プラグインの 2 つの機能を **両方** 使います。 用途を取り違えないこと:
 >
-> - **`/codex:review --wait --scope branch`**: branch 全差分への read-only レビュー取得。 PostToolUse の auto-mark.sh がこの完了でマーカーを書き、 push gate の検証対象になる。 frontmatter で `disable-model-invocation: true` が指定されており本来 Skill tool から呼び出せないが、 姉妹プラグイン [codex-review-customize](../codex-review-customize/) を導入してパッチを適用すると Skill tool 経由でも呼び出し可能になる。
-> - **`/codex:rescue --wait`**: review からの指摘に対する **修正方針の壁打ち** に使う (v0.4.0 で導入された規律)。 deny メッセージの手順 4 が要求する形で、 「指摘の根本原因に対する解として妥当か」「場当たり的でないか」「全体設計と一貫しているか」を rescue に問い、 approve が出てから実装を開始する。 `/codex:rescue` 自体はマーカー対象外で push gate には影響しない (rescue は「修正前の方針壁打ち」で「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)。 `/codex:rescue` は `disable-model-invocation` が指定されていないため、 codex-review-customize パッチなしでも Skill tool から直接呼び出し可能。
+> - **codex review (wrapper `bash <plugin>/hooks/scripts/run-codex-review.sh` 経由)**: branch 全差分への read-only レビュー取得。 wrapper が内部で `--wait --scope branch` を hardcode して `node codex-companion.mjs review` を foreground 起動し、 完了時に自身で codex marker を書く。 push gate の検証対象になる。 v1.0.0 以前は `/codex:review` slash command を Skill tool で呼ぶ方式だったが、 review.md の AskUserQuestion で Claude が bg を選んで silent failure する経路があったため wrapper 一本化に切替 (詳細はバージョン履歴の v1.1.0 セクション参照)。 姉妹プラグイン [codex-review-customize](../codex-review-customize/) は v1.0.0 以前の Skill 経路を有効化するパッチを提供していたが、 v1.1.0 では wrapper 経路を使うため不要 (= 姉妹プラグインは v1.0.0 までで意義消失)。
+> - **`/codex:rescue --wait`**: review からの指摘に対する **修正方針の壁打ち** に使う (v0.4.0 で導入された規律)。 deny メッセージの手順 5 が要求する形で、 「指摘の根本原因に対する解として妥当か」「場当たり的でないか」「全体設計と一貫しているか」を rescue に問い、 approve が出てから実装を開始する。 `/codex:rescue` 自体はマーカー対象外で push gate には影響しない (rescue は「修正前の方針壁打ち」で「最終差分のレビュー」ではないため、 markers / gate と責務を分離する設計)。 `/codex:rescue` は `disable-model-invocation` が指定されていないため、 codex-review-customize パッチなしでも Skill tool から直接呼び出し可能。 codex review (wrapper) と異なり、 rescue は wrapper 化していない (Claude との対話的やり取りが必要なため Skill のままが自然)。
 
 > **security review は subagent 経由で呼ぶ**: 詳細は下記 [Agents](#agents) セクション。
 
@@ -206,7 +217,7 @@ claude plugin install pre-push-review@natsuume-plugins
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`/simplify` / `/code-review` / `/codex:review --wait --scope branch` / `pre-push-review:security-reviewer` subagent の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。 v1.0.0 で `/simplify` (cleanup・編集) と `/code-review` (read-only バグ検出) は別マーカーに書き分けます。
+`/simplify` / `/code-review` / `pre-push-review:security-reviewer` subagent の実行完了を PostToolUse hook で自動検知し、対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」を書き込みます。 v1.0.0 で `/simplify` (cleanup・編集) と `/code-review` (read-only バグ検出) は別マーカーに書き分けます。 v1.1.0 で codex review の検知経路 (Bash 完了) は廃止し、 wrapper script (`run-codex-review.sh`) が直接 marker を書く設計に移行しました (詳細はバージョン履歴の v1.1.0 セクション参照)。
 
 hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に本フックが呼ばれます。`Skill` matcher の挙動が公式ドキュメント上完全に明記されていないため、tool 名に依存しない構造にしてあります。フィルタリングはスクリプト側の bash 内蔵正規表現マッチが行うため、対象外 tool は subprocess を立てずに即離脱します。
 
@@ -218,7 +229,8 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 | `/code-review` skill の launch (read-only バグ検出) | `Skill` | `tool_input.skill == "code-review"` | `<git-dir>/.claude-pre-push-code-reviewed`    | (なし)                  |
 | `pre-push-review:security-reviewer` subagent の完了 (推奨) | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` または `security-reviewer` (name-only 形式も許容) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
 | `/security-review` skill の launch (後方互換)        | `Skill` | `tool_input.skill == "security-review"` (主 session 直接呼び出しのみ。 subagent は tools から Skill を外しているため呼べない) | `<git-dir>/.claude-pre-push-security-reviewed` | (なし)                  |
-| `/codex:review --wait --scope branch` の Bash 完了      | `Bash`  | コマンドが `^node` で始まる (env-prefix 許容) / `codex-companion.m[jt]s review` を含む / `--scope branch` を含む / `run_in_background == false` / 失敗・中断ではない                | `<git-dir>/.claude-pre-push-codex-reviewed`   | (なし)                  |
+
+> v1.0.0 まで存在した「`/codex:review --wait --scope branch` の Bash 完了 → codex-reviewed マーカー」 行は v1.1.0 で削除されました。 codex review の marker は wrapper script (`run-codex-review.sh`) が完了時に直接書き込みます (`<git-dir>/.claude-pre-push-codex-reviewed` への書き込み先は同じ)。 wrapper 一本化への切替背景はバージョン履歴の v1.1.0 セクションを参照。
 
 **skill を launch タイミングで検知する設計上のトレードオフ**:
 
@@ -231,16 +243,15 @@ hooks.json の matcher は `"*"` (wildcard) で、すべての tool 完了時に
 
 subagent は内部で `/security-review` 標準 skill を呼ばずに self-contained でレビューを実行します。 PostToolUse hook が Skill launch ではなく Task 完了で発火するように倒すことで、 subagent が **実際にレビューを完了させた** ことを確認した上でマーカーを書きます。 subagent が途中で失敗した場合 (`tool_response.is_error` / `interrupted`) はマーカーが書かれないため、 push gate がそのまま deny を返してループが続きます (silent-pass しない設計)。
 
-**書き込みをスキップする条件**:
+**書き込みをスキップする条件** (v1.1.0 で codex 関連項目を削除):
 
 - `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない)
-- `tool_input.run_in_background` が `true` (background 起動は完了タイミングを捉えられないため)
 - `tool_input.skill` が `code-review` / `simplify` / `security-review` 以外 (namespace 付き skill `code-review:code-review` 等は別物として扱う)
 - `tool_input.subagent_type` が `pre-push-review:security-reviewer` / `security-reviewer` 以外 (別の subagent 起動はマーカー対象外)
-- Bash codex 起動でコマンドに `--scope branch` が含まれていない (PR diff レビュー保証として不十分)
-- **Bash codex 起動時に working tree が dirty (staged または unstaged 変更あり)** (`/codex:review --scope branch` は committed 部分のみ review するため、dirty 状態で marker を書くと commit 後のハッシュと衝突して未レビュー commit を通す経路ができる。clean なときに review してから marker を書く運用に倒す)
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)
+
+> codex review の write-skip 条件 (dirty tree / 失敗・中断 / branch 検証) は v1.1.0 から wrapper script (`run-codex-review.sh`) 内部で実施されるため、 PostToolUse hook 側からは項目自体が除かれました。 wrapper の判定ロジックは `hooks/scripts/run-codex-review.sh` のヘッダ参照。
 
 ## マーカーファイル
 
@@ -250,7 +261,7 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 |---|---|---|
 | `.claude-pre-push-simplified` | `/simplify` (cleanup・コード編集) 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-code-reviewed` | `/code-review` (read-only バグ検出) 実行時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
-| `.claude-pre-push-codex-reviewed` | `/codex:review --wait --scope branch` 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-codex-reviewed` | codex review (wrapper script `run-codex-review.sh` 経由) 完了時の branch 全差分ハッシュ (v1.0.0 以前は `/codex:review --wait --scope branch` の Bash 完了で auto-mark.sh が書き込んでいたが、v1.1.0 で wrapper script が直接書き込む方式に統一。 書き込み先 path とハッシュ計算式は変更なし) | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 
 > **v1.0.0 アップグレード時の注意**: `.claude-pre-push-code-reviewed` の**意味が変わりました** (旧: `/simplify` または `/code-review` の共用マーカー → 新: `/code-review` (read-only バグ検出) 専用)。`/simplify` (cleanup・編集) は新設の `.claude-pre-push-simplified` に書かれます。v0.8.5 以前で `/code-review` を実行済みなら code-reviewed マーカーはそのまま有効ですが、v1.0.0 では新たに `/simplify` の実行 (および codex / security の再走) が必要です。`/simplify` と `/code-review` の両方が必須化されるのは Claude Code v2.1.154+ のみで、それ未満では fail-open でどちらか 1 本に緩みます ([第一者レビューの version 依存](#第一者レビューの-version-依存))。
@@ -283,5 +294,5 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 ## 関連プラグイン
 
-- [codex-review-customize](../codex-review-customize/): `/codex:review` を Skill tool から呼べるようにパッチを適用する setup プラグイン
+- [codex-review-customize](../codex-review-customize/): `/codex:review` を Skill tool から呼べるようにパッチを適用する setup プラグイン (v1.0.0 までの pre-push-review が Skill 経由の codex review を強制していた時代の補助プラグイン。 **v1.1.0 で pre-push-review が wrapper 経路に切替えたため本プラグインの観点では不要**。 他用途で `/codex:review` を Skill 経由で使いたい場合は引き続き有用)
 - [git-guardrails](../git-guardrails/): default branch (master/main) への直接書き込みを deny。本プラグインは default branch 上の push を git-guardrails に委譲します

@@ -1,16 +1,15 @@
 #!/bin/bash
 # auto-mark.sh
-# /simplify / /code-review / /codex:review --wait --scope branch /
-# pre-push-review:security-reviewer subagent / /security-review 標準 skill
-# (主 session 直接呼び出しのみ) の実行完了を PostToolUse で検知し、対応する
-# レビューマーカーを更新する。
+# /simplify / /code-review / pre-push-review:security-reviewer subagent /
+# /security-review 標準 skill (主 session 直接呼び出しのみ) の実行完了を PostToolUse で
+# 検知し、対応するレビューマーカーを更新する。
 #
 # policy: fail-open (PostToolUse / 正常完了後の marker 書き込み)
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を
-#   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh / block-bg-codex-review.sh
-#   は fail-closed。同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
+#   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh は fail-closed。
+#   同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
 #
-# 検知対象:
+# 検知対象 (v1.1.0 で codex review 経路を廃止):
 #   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー (launch 時点
 #     ハッシュ)。/simplify は cleanup-only でコードを編集するため、body の edit で launch
 #     時点ハッシュは即 stale 化する (= 編集が無くなるまで再実行を促す loop discipline)。
@@ -20,10 +19,15 @@
 #     (詳細は lib/markers.sh / lib/first-party-review.sh のヘッダ)。
 #   - Skill tool で `security-review` skill が完了した瞬間 → security-reviewed マーカー
 #     (launch 時点ハッシュ。 主 session が直接呼んだ場合のみ動く後方互換パス)
-#   - Bash tool で `codex-companion.mjs review --scope branch` が完了した瞬間
-#     → codex-reviewed マーカー
 #   - Agent / Task tool で `pre-push-review:security-reviewer` subagent が完了した瞬間
 #     → security-reviewed マーカー (subagent 完了時点ハッシュ。 推奨パス)
+#
+# **v1.0.0 で持っていた codex review 経路 (Bash tool で codex-companion.mjs review を検知)
+# は v1.1.0 で廃止された**。 codex review は wrapper script (run-codex-review.sh) が自身で
+# marker を書き込む設計に統一したため、 PostToolUse の Bash 検知は不要になった。 wrapper
+# 一本化の背景は run-codex-review.sh のヘッダ参照 (要約: /codex:review slash command の
+# review.md が background 起動を推奨する prompt 設計のため、 Skill 経由だと bg 起動で
+# silent failure する経路があった)。
 #
 # **`/security-review` 標準 skill を残しつつ subagent も併用する理由**:
 #   推奨は subagent 経由。 主 session から直接 `/security-review` を呼ぶと
@@ -39,16 +43,12 @@
 #   構造的に塞いでいる。 subagent は標準 skill を invoke できないため、 直接
 #   呼び出しの検知パスは subagent 経路と衝突しない。
 #
-# /codex:review は **--scope branch のみ受け付ける**。--scope working-tree は
-# committed 部分を review しないため PR diff レビュー保証として不十分、 --scope auto は
-# dirty 時に working-tree にフォールバックするため不確実なので、いずれもマーカー更新を
-# skip する。
-#
 # 設計意図:
 #   - マーカー: 「Claude が手動で mark-reviewed を呼ぶ」方式は修正後の状態を
 #     レビュー済みと偽装できる経路 (= ループが強制されない) を残す。各ツールの
-#     実走を hook が捕捉しハッシュを書き込むことで、3 つすべてが「現在のブランチ全差分」
-#     に対して直近で走ったことを保証する。
+#     実走を hook が捕捉しハッシュを書き込むことで、 すべてが「現在のブランチ全差分」
+#     に対して直近で走ったことを保証する。 codex review だけは wrapper が直接書く
+#     例外設計 (= Claude が wrapper の中身を編集しない限り偽装できない範囲)。
 #   - 「security-reviewer subagent の完了」を Task 終了で検知するのは、 subagent が
 #     実際にレビュー本体を完了させたタイミングを捉えるため。 launch 時点ではなく
 #     完了時点でマーカーを書くことで、 subagent が途中で失敗した場合に marker が
@@ -95,11 +95,11 @@ INPUT=$(cat)
 # **コスト注記 (#90)**: matcher "*" で全 tool 完了に発火するため、巨大な tool_response が
 # INPUT に乗ると毎回 INPUT サイズに比例した ERE 評価が走る (fork は無いが in-process コスト)。
 # 現状の規模では無視できるが、もし問題化したら ERE の前に `case "$INPUT" in *'"skill"'*|
-# *'"subagent_type"'*|*codex-companion*) ;; *) exit 0 ;; esac` の substring pre-filter で
-# 大半を弾ける (この 3 substring は下記 PRECHECK_RE の全 match の superset なので false
-# negative を生まない)。早期離脱ロジックを変えるリスクを避け、現状はコスト注記に留める。
+# *'"subagent_type"'*) ;; *) exit 0 ;; esac` の substring pre-filter で大半を弾ける
+# (この 2 substring は下記 PRECHECK_RE の全 match の superset なので false negative を
+# 生まない)。早期離脱ロジックを変えるリスクを避け、現状はコスト注記に留める。
 #
-# 3 つの top-level OR ブランチの意図:
+# 2 つの top-level OR ブランチの意図 (v1.1.0 で codex-companion 経路を削除):
 #   - `"skill"[[:space:]]*:[[:space:]]*"(simplify|code-review|security-review)"`: Skill tool で
 #     `simplify` (cleanup・編集) / `code-review` (read-only バグ検出) / `security-review`
 #     skill が完了したことを検出する粗フィルタ。 完全一致が必要なため末尾の `"` まで含めて
@@ -113,15 +113,12 @@ INPUT=$(cat)
 #     フィルタ。 namespace 付き形式 (`pre-push-review:security-reviewer`) と name-only
 #     形式 (`security-reviewer`) の両方を許容するため `[^"]*security-reviewer` で末尾
 #     match する。 後段の jq 検証で full match を確認する。
-#   - `codex-companion`: Bash tool での codex review companion 起動の粗検出。
-#     Bash 分岐側に `^node` + companion path + `review` サブコマンドの厳密な
-#     後段検証があるため、ここは単純 substring で十分 (false positive は後段で弾かれる)。
 #
 # hook payload の JSON 整形 (`"skill":"code-review"` / `"skill": "code-review"` 等) に
 # 左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を
 # 弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
 # (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
-PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(simplify|code-review|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"|codex-companion'
+PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(simplify|code-review|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0
 fi
@@ -130,18 +127,10 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-# lib 群を case 分岐前に source。 Bash 分岐内で `is_codex_review_invocation` /
-# `normalize_line_continuations` を呼ぶため codex-review-detect.sh と cmd-parser.sh は
-# case 分岐より上で読み込む必要がある。 diff-hash.sh / markers.sh は後段の marker 書き
-# 込みでのみ使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。
-#
-# v0.8.0 で `normalize_line_continuations` は cmd-parser.sh に移動 (bash 3.2 互換実装)。
-# codex-review-detect.sh は同関数を提供しなくなったため cmd-parser.sh を直接 source する。
+# lib 群を case 分岐前に source。 v1.1.0 で Bash 経路 (codex review 検知) を削除したため、
+# cmd-parser.sh (line continuation 正規化用) と codex-review-detect.sh (codex 起動検知用) は
+# 本 hook では参照しなくなった。 marker 書き込みで diff-hash.sh / markers.sh のみ必要。
 SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
-# shellcheck source=lib/cmd-parser.sh
-source "$SCRIPT_DIR/lib/cmd-parser.sh"
-# shellcheck source=lib/codex-review-detect.sh
-source "$SCRIPT_DIR/lib/codex-review-detect.sh"
 # shellcheck source=lib/diff-hash.sh
 source "$SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
@@ -191,63 +180,6 @@ case "$TOOL_NAME" in
         exit 0 ;;
     esac
     ;;
-  Bash)
-    # command と run_in_background は jq を 2 回呼んで取得する。 `@tsv` で 1 回 jq に
-    # まとめると TSV エンコードで LF が `\n` literal に変換され、 後段の line continuation
-    # 正規化対象 (`\<改行>`) が失われるため、 2 回呼びのまま保つ。
-    COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
-    [ -n "$COMMAND" ] || exit 0
-    # bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は cmd-parser.sh の
-    # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
-    case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
-    # 行継続 `\<改行>` を **削除** して隣接 token を連結する (block-bg-codex-review.sh と
-    # 同じ理由 — `\<newline>` を含む形式で `--scope branch` や codex review 検知の `review`
-    # token を bypass される経路を塞ぐ)。 fast-path で line continuation を含まない入力は
-    # `$(...)` fork を回避する。
-    case "$COMMAND" in
-      *\\$'\n'*) COMMAND=$(normalize_line_continuations "$COMMAND") ;;
-    esac
-    RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false')
-    # codex プラグインの review companion 起動を検出する。 検知ロジックは
-    # lib/codex-review-detect.sh に集約しており、 block-bg-codex-review.sh と
-    # 同じ関数を共有することで「marker を書く対象」 と 「block する対象」 の
-    # マッチが drift しない。
-    is_codex_review_invocation "$COMMAND" || exit 0
-    # **--scope branch の明示要求**: pre-push-review は PR diff (= 委ねた branch の commit
-    # 列) のレビューを保証する目的なので、 --scope working-tree (= staged+unstaged のみ
-    # review、committed 部分を見ない) や --scope auto (= dirty 時に working-tree にフォール
-    # バックする) ではマーカーを更新しない。Claude には deny メッセージで明示的に
-    # `--scope branch` を指示しているため、未指定なら hook 側で markers を黙って更新せず、
-    # 次回 push 試行で再 deny にして loop を継続させる。
-    # `--scope branch` / `--scope=branch` を match させつつ、 `branchX` 等の prefix bypass を
-    # 拒否する (英数字で続く場合は不一致)。 trailing 文字を「英数字以外 / 行末」に取る形だと
-    # 引用符・空白・記号いずれの区切りも自然に許容される。
-    if ! printf '%s' "$COMMAND" \
-      | grep -qE -- '--scope[[:space:]=]+branch([^A-Za-z0-9]|$)'; then
-      exit 0
-    fi
-    # `run_in_background: true` 起動は PostToolUse 発火時点で review が完了して
-    # いないため auto-mark の対象外とする。 こちらは silent skip するだけだが、
-    # PreToolUse の block-bg-codex-review.sh が起動自体を deny するため、 通常は
-    # ここに到達しない (defense-in-depth として残す)。
-    if [ "$RUN_IN_BG" = "true" ]; then
-      exit 0
-    fi
-    # **dirty 状態での codex マーカー書き込みを禁止**: /codex:review --scope branch は
-    # committed 部分のみを review する。 working tree が dirty (staged または unstaged 変更
-    # あり) のときに marker を書くと、ハッシュ式が「committed + uncommitted」を連結する
-    # 都合上、 後で uncommitted を commit した状態のハッシュと一致してしまうケース
-    # (例: 新規ブランチで `git diff --cached` の内容を commit すると `git diff origin/master...HEAD`
-    # と byte-for-byte 同じになる) がある。 つまり「review 時に committed=空、uncommitted=D」
-    # と「commit 後に committed=D、uncommitted=空」が同じハッシュ値になり、未レビューな commit
-    # が markers の整合性チェックを素通りする経路ができる。
-    # 対策: dirty な状態では codex marker を書かない。Claude は commit してから再 review する
-    # 必要があり、その時の marker は committed 部分のみのハッシュになるため上記混同が起きない。
-    if ! git diff --quiet 2>/dev/null || ! git diff --quiet --cached 2>/dev/null; then
-      exit 0
-    fi
-    MARKER_FN=codex_marker_path
-    ;;
   *)
     exit 0
     ;;
@@ -255,7 +187,7 @@ esac
 
 # ツール実行が失敗 / 中断した場合はレビューが完遂していないためマーカーを更新しない
 # (失敗した review / 失敗した code-review でマーカーを書くと、その後別の tool の成功と
-# 組み合わさって push が通ってしまう抜け穴になる)。Skill / Bash 両分岐に共通。
+# 組み合わさって push が通ってしまう抜け穴になる)。Skill / Agent / Task 全分岐に共通。
 { read -r IS_ERROR; read -r INTERRUPTED; } < <(
   printf '%s' "$INPUT" | jq -r '
     (.tool_response.is_error // .tool_response.isError // false),
