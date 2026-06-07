@@ -96,6 +96,17 @@ INPUT=$(cat)
 # 左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を
 # 弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
 # (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
+#
+# **substring pre-filter** (v2.0.1): PRECHECK_RE は ERE 評価で INPUT 全文を走査する hot
+# path コストがある (matcher: "*" で全 tool 完了に発火するため)。 PRECHECK_RE の全 match の
+# superset となる `"skill"` / `"subagent_type"` substring が無いなら ERE を走らせず即抜ける。
+# substring case 評価は ERE よりかなり軽量なので、 PostToolUse 多発時 (slash command で 3
+# 並列発火する v2.0.0+ では 3 倍) のオーバヘッド削減になる。 superset 関係なので false
+# negative は構造的に発生しない。
+case "$INPUT" in
+  *'"skill"'*|*'"subagent_type"'*) ;;
+  *) exit 0 ;;
+esac
 PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(code-review|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0

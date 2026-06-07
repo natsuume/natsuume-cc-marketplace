@@ -17,7 +17,19 @@
 
 ## バージョン
 
-v2.0.0 (前身: `pre-commit-review` v0.4.0)
+v2.0.1 (前身: `pre-commit-review` v0.4.0)
+
+### v2.0.0 → v2.0.1 の変更点 (post-v2 cleanup)
+
+- **README の見出しレベル破綻を修正**: `## マーカーファイル` が `## 機能一覧` セクション (Commands / Hooks / Agents を含む) を途切れさせて `### Agents` を機能一覧外に追い出していたため、 `### マーカーファイル` に降格して機能一覧配下の自然な並び (Commands → Hooks → マーカーファイル → Agents) を回復。
+- **`lib/exit-trap.sh` の docstring を「2 hook 共通化」 → 「3 hook 共通化」 に修正**: v1.1.0 で wrapper 一本化に伴い旧 `block-bg-codex-review.sh` を廃止して 2 hook に減ったと記載していたが、 同時に新設した `block-bg-codex-wrapper.sh` が同 lib を呼び続けているため実態は引き続き 3 hook 共通化。
+- **`auto-mark.sh` に substring pre-filter (`"skill"` / `"subagent_type"`) を ERE 評価前に追加**: PRECHECK_RE の全 match の superset で false negative は構造的に発生しない。 v2.0.0 で slash command 並列発火により PostToolUse コストが 3 倍化したため hot path 削減を実装。
+- **`block-pre-push.sh` の deny メッセージから旧 `/simplify` 移行警告を削除**: v2.0.0 で /simplify が廃止された旨は README に集約。 deny メッセージは `/pre-push-review:review` slash command 案内 + 3 ツール fallback に純化。
+- **`commands/review.md` の順次起動 fallback 節に推奨順序 (Skill → Agent → Bash wrapper) を 1 文追記**: codex wrapper が最長で foreground を hold するため後段に置くと前段 review 結果を主 session が並行確認できる。
+- **キーワード整理**: `marketplace.json` / root README の pre-push-review keywords から `rescue` を削除 (本プラグインは `/codex:rescue` を **利用する側** であって **提供する側** ではないため)。
+- **README badge / changelog の同期 (本 patch の本来の目的)**: 直前の v2.0.0 マージ後の marketplace 全体 audit で複数 plugin の README badge / changelog drift を検出し、 plugin.json / marketplace.json / 各 README の 3 箇所同期を再収束。
+
+> **`v2.0.0` 時の sort -V 関連表記について**: 下記 v2.0.0 changelog で 「`_pre_push_review_semver_desc_sort_dirs` の awk 6 桁 zero-padding fallback」 と書いていますが、 実際の最終実装は POSIX numeric field sort (`sort -t. -k1,1nr -k2,2nr -k3,3nr`) + 純数値 `X.Y.Z` basename フィルタの **単一経路** です (initial commit 後に simplify pass で awk fallback を廃止して 1 本化したため)。 動作上は GNU `sort -V` 非依存で macOS bash 3.2 / BSD sort / busybox いずれでも codex 1.10+ semver を正しく降順処理します。
 
 ### v1.1.0 → v2.0.0 の変更点 (互換破壊あり)
 
@@ -153,7 +165,7 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)
 
-## マーカーファイル
+### マーカーファイル
 
 すべて `<git-dir>` 配下に配置 (リポジトリ単位で共有、 ブランチ単位ではない):
 

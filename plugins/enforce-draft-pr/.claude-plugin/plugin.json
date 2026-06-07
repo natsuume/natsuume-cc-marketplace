@@ -1,5 +1,5 @@
 {
   "name": "enforce-draft-pr",
-  "version": "0.2.0",
-  "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)。v0.2.0 で検出を cmd-parser.sh ベースのトークン化に刷新し、引数値内 --draft の誤検知 / global option / cd・env prefix チェーン / 行継続 / --draft=true・-d の取りこぼしを解消 (複数行 body は破壊せず温存)"
+  "version": "0.2.1",
+  "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)。v0.2.1 で env-skip ループが現コマンド境界を越境して次コマンドの `pr create` まで届き重複 --draft 挿入になる parser bug を修正 (`FOO=bar; gh pr create` のような連結で発火)。v0.2.0 で検出を cmd-parser.sh ベースのトークン化に刷新し、引数値内 --draft の誤検知 / global option / cd・env prefix チェーン / 行継続 / --draft=true・-d の取りこぼしを解消 (複数行 body は破壊せず温存)"
 }

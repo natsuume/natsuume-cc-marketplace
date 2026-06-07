@@ -724,11 +724,6 @@ target: ${TARGET_CWD}
 修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 \`/pre-push-review:review\` を
 実行して再走させ、 全マーカーが ✓ になったら \`git push\` を再試行してください。
 
-⚠ **v2.0.0 で \`/simplify\` は廃止されました**: v1.x で \`/simplify\` を呼んでいたユーザは、
-\`/pre-push-review:review\` 経由で 3 レビューだけを実行してください (cleanup ステップは
-無くなりました)。 \`/simplify\` を直接呼んでも本プラグインのマーカーは書かれず、 さらに
-\`/simplify\` の edits で他マーカーが失効してループに陥ります。
-
 slash command が動かない環境用の手動 fallback (3 ツールを順次または並列で起動。 同じ
 アシスタントメッセージで並列発出するのが理想だが、 順次でも push gate 通過は保証される):
   - Skill tool で skill="code-review" を起動

@@ -4,7 +4,7 @@
 
 ## バージョン
 
-v0.3.0
+v0.3.2
 
 ## 概要
 
@@ -12,9 +12,21 @@ v0.3.0
 
 本プラグインの `/codex-review-customize:setup` を実行すると、`commands/review.md` が atomic にパッチされ `disable-model-invocation: true` 行が削除されます。並行して codex の cache を削除し、次回 `/reload-plugins` で patched 版が読み込まれるようにします。
 
+> **v1.1.0+ の pre-push-review と本プラグインの関係**: pre-push-review は v1.1.0 で codex review を bash wrapper (`run-codex-review.sh`) 経由 foreground 実行に切替え、 v2.0.0 で `/pre-push-review:review` slash command による 3 ツール並列起動の確定的フローに移行しました。 そのため pre-push-review の codex review 経路は本プラグインのパッチ (= `/codex:review` の `disable-model-invocation` 削除) に **依存しません**。 本プラグインは「主 session から ad-hoc に `/codex:review` を Skill tool で呼びたい」 「他用途で Skill 経由 codex review を使いたい」 ユースケース向けの補助という位置づけになります。
+
+### v0.3.1 → v0.3.2 の変更点 (cross-plugin sync)
+
+- **README の version 表記を plugin.json / marketplace.json と再同期**: v0.3.0 → v0.3.1 commit (#35f84d8) で plugin.json / marketplace.json は 0.3.1 に bump したが README 内 version 見出しの更新が漏れていた drift を解消し、 同 commit の v0.3.0 → v0.3.1 changelog エントリを backfill
+- **関連プラグイン (pre-push-review) の説明を v2.0.0 仕様に同期**: 本プラグインのパッチに依存しない経路 (wrapper + slash command) への移行を反映
+- **v0.2.0 changelog 内の `post-pr-review` 言及を historical 注記化**: 当該プラグインは現在マーケットプレイスに存在しない
+
+### v0.3.0 → v0.3.1 の変更点
+
+- **`apply-patch.sh` の EXIT trap が関数 local の temp を参照していた bug を修正**: エラー経路で未バインド変数の noise / temp 残留を解消。 idempotent と atomic な性質は不変
+
 ### v0.2.1 → v0.3.0 の変更点
 
-- **パッチ対象から `commands/adversarial-review.md` を削除**: 関連プラグイン (`post-pr-review` / `pre-push-review` / `auto-followthrough`) で `/codex:adversarial-review` 連携を全廃したため、本プラグインのパッチ対象も `commands/review.md` 1 ファイルに絞った。 サイクル時間が長くなる adversarial-review はサイクルに組み込まない方針
+- **パッチ対象から `commands/adversarial-review.md` を削除**: 関連プラグイン (`pre-push-review` / `auto-followthrough` ほか、 当時存在した `post-pr-review` を含む) で `/codex:adversarial-review` 連携を全廃したため、本プラグインのパッチ対象も `commands/review.md` 1 ファイルに絞った。 サイクル時間が長くなる adversarial-review はサイクルに組み込まない方針
 
 ### v0.2.0 → v0.2.1 の変更点
 
@@ -22,7 +34,7 @@ v0.3.0
 
 ### v0.1.0 → v0.2.0 の変更点
 
-- パッチ対象に **`commands/adversarial-review.md`** (`/codex:adversarial-review`) を追加しました。`pre-push-review` のループ閾値到達時の誘導や `post-pr-review` の PR 作成後レビューが Skill tool 経由で起動できるよう、共通の setup 動線に集約していました (v0.3.0 で削除)。
+- パッチ対象に **`commands/adversarial-review.md`** (`/codex:adversarial-review`) を追加しました。`pre-push-review` の旧版で adversarial-review を Skill 経由で起動できるよう共通 setup 動線に集約していました (`post-pr-review` プラグインは当時存在しましたが現在は削除済み / `/codex:adversarial-review` 連携自体も v0.3.0 で全廃)。
 
 ## なぜ「別プラグインで `/codex:review` を再定義」しないのか
 
@@ -79,4 +91,4 @@ claude plugin install codex-review-customize@natsuume-plugins
 
 ## 関連プラグイン
 
-- [pre-push-review](../pre-push-review/) — `/codex:review --scope branch` を強制呼び出しする運用。本プラグインを併用すると Skill 経由でレビューを取得できる
+- [pre-push-review](../pre-push-review/) — v2.0.0 以降は `/pre-push-review:review` slash command で 3 レビュー (`/code-review` + codex review wrapper + `pre-push-review:security-reviewer` subagent) を並列起動。 codex 経路は bash wrapper (`run-codex-review.sh`) 経由 foreground 起動を hardcode しており、 本プラグインのパッチには **依存しません**。 主 session から ad-hoc に `/codex:review` を Skill 経由で呼びたい場合のみ本プラグインが有用 (v1.0.0 以前は本プラグインのパッチが pre-push-review の動作前提でしたが、 v1.1.0 で wrapper 化されてから依存関係は解消されました)

@@ -4,7 +4,16 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 ## バージョン
 
-v0.1.0
+v0.1.2
+
+### v0.1.1 → v0.1.2 の変更点
+
+- **ルート README の version 表記を本プラグインの最新と同期** (#47b00d6 / #0360f07 / #d0e5225 系の一括フォローアップ): ルート `README.md` の plugin 一覧の version が `0.1.2` に揃った。 本 README 直下の version 見出しが `v0.1.0` のまま残っていた drift を解消。
+- SKILL.md の frontmatter 修正と内部リンク整備 (動作影響なし、 documentation only)。
+
+### v0.1.0 → v0.1.1 の変更点
+
+- **SKILL.md のステップを独立化して堅牢化**: worktree 競合 / detached HEAD / `symbolic-ref` 失敗の各エッジケースをハンドリングし、 失敗時のトラブルシュート手順を専用節に整理。 手順 4 (`git fetch --prune`) と手順 5 (`[gone]` 抽出) を `if` 連結から独立 step に分離して中断時の復旧経路を明確化。
 
 ## 概要
 

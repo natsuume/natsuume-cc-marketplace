@@ -25,7 +25,7 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
 
 - `pre-push-review:security-reviewer` subagent が見つからない → プラグインの install を確認してください (`claude plugin install pre-push-review@natsuume-plugins`)
 - codex review wrapper が「codex プラグインが見つかりません」 で失敗 → 公式 codex プラグインを install (`claude plugin install codex@openai-codex`) してから再実行
-- 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ 3 ツールを順次起動しても push gate の構造的保証は同じ (= 3 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。
+- 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ 3 ツールを順次起動しても push gate の構造的保証は同じ (= 3 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。 順次起動する場合は **Skill (code-review) → Agent (security-reviewer) → Bash (codex wrapper)** の順を推奨します (codex wrapper が最長で foreground を hold するため、 後段に置くと前段の review 結果を主 session が並行確認できる)。
 
 ## レビュー指摘の修正フロー (3 ツール完了後)
 

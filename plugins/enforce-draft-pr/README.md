@@ -4,7 +4,11 @@
 
 ## バージョン
 
-v0.2.0
+v0.2.1
+
+### v0.2.0 → v0.2.1 の変更点
+
+env-skip ループが現コマンド境界を越境して次コマンドの `pr create` まで届き、 同一オフセットに ` --draft` を **2 度** 挿入する parser bug を修正しました。 `FOO=bar; gh pr create ...` のような boundary 含む連結形で発火します (`gh` は重複 `--draft` を寛容に扱うため機能破壊は無いですが parser bug としては明確)。 修正は env-skip ループに「`$k > $t` で `TSTART=1` または `TNL=1` のトークンに到達したら break」 する境界ガードを追加することで、 重複 INS push を構造的に閉じます。 単一コマンド内 env-prefix 動線 (`FOO=bar gh pr create`) の正常系 1 回付与は破壊されません (同一コマンド継続トークンは `TSTART=0 && TNL=0` のためガードが発火せず、 NAME=VALUE skip → `gh` → `pr create` の正規処理が走ります)。
 
 ### v0.1.0 → v0.2.0 の変更点
 
