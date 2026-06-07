@@ -53,9 +53,9 @@
 #     companion の実装詳細で、 将来変わりうる。 文字列 grep ベースの verdict 判定は脆い
 #   - 「review が指摘を出したら必ず修正してから push」 の判断は Claude の自律性に委ねる方
 #     が運用上自然 (security-reviewer subagent も verdict 判定なしで完了時に marker を書く)
-#   - Claude が指摘を無視して push した場合は、 修正に伴う差分変化で他 3 マーカー (simplify /
-#     code-review / security) が失効し、 そちらで loop が回る (本 marker 単独では loop を
-#     強制しないが、 4 マーカー全体としては修正を経由する設計に倒れる)
+#   - Claude が指摘を無視して push した場合は、 修正に伴う差分変化で他 2 マーカー (code-review /
+#     security) が失効し、 そちらで loop が回る (本 marker 単独では loop を強制しないが、 v2.0.0 で
+#     3 マーカー全体としては修正を経由する設計に倒れる)
 #
 # exit 非 0 (codex review 失敗 / 中断) のときは marker を書かない。 失敗した review で marker
 # を書くと未レビュー push が通る経路を作るため。

@@ -10,15 +10,15 @@
 # ## なぜ push 境界か
 #
 # pre-commit 境界だと:
-#   - 1 commit ごとにレビューループが回り、N-commit PR では合計 N 回ループが走る
-#   - /simplify edits や /code-review・/codex:review 指摘修正が初期実装と同じ commit に混入し、
+#   - 1 commit ごとにレビューループが回り、 N-commit PR では合計 N 回ループが走る
+#   - レビュー指摘の修正 commit が初期実装と同じ commit に混入し、
 #     git log / blame / bisect の意味的解像度が失われる
 #   - 中間 commit (WIP / 探索 / checkpoint) を残せない
 #
 # push 境界だと:
 #   - PR 全差分に対して 1 周のループで済む (1-commit PR では同等、多 commit PR で削減)
-#   - 中間 commit を自由に重ねられ、レビュー対応も独立 commit として記録できる
-#   - **未レビューな commit を remote に到達させない** ため、PR 作成手段 (gh CLI / Web UI /
+#   - 中間 commit を自由に重ねられ、 レビュー対応も独立 commit として記録できる
+#   - **未レビューな commit を remote に到達させない** ため、 PR 作成手段 (gh CLI / Web UI /
 #     IDE / API) のいずれを使われても precondition (remote branch の存在) を破壊して
 #     構造的に gate できる (「pre-PR matcher で gh pr create だけを止める」設計だと
 #     人間の Web UI 操作で bypass される)。
@@ -32,10 +32,9 @@
 # 5. 解決した target cwd 上で:
 #    - default branch (master/main) なら git-guardrails に委譲して skip
 #    - branch 全差分 + 未コミット差分のハッシュを計算
-#    - 4 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義: simplified / code-reviewed /
-#      codex-reviewed / security-reviewed) と一致しなければ deny。 第一者 (simplified +
-#      code-reviewed) は CC>=2.1.154 確認時のみ両方必須、 それ以外は fail-open で 1 本
-#      (lib/first-party-review.sh)。 codex + security は常に必須
+#    - 3 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義: code-reviewed / codex-reviewed /
+#      security-reviewed) と一致しなければ deny。 3 マーカーは v2.0.0 から常に全て必須
+#      (v1.x の simplified マーカーと CC version 依存の fail-open 緩和は廃止)。
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
 #    引用符付き引数 / `push.default=matching` 環境での bare push 等は deny
 # 7. dirty-tree (target cwd の) は deny
@@ -93,8 +92,6 @@ source "$SCRIPT_DIR/lib/target-resolver.sh"
 source "$SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
-# shellcheck source=lib/first-party-review.sh
-source "$SCRIPT_DIR/lib/first-party-review.sh"
 
 # fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。
 # 関数本体 (`_normalize_line_continuations_impl`) にも fast-path がある (= 二重) が、
@@ -610,18 +607,16 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C "${TARGET_CWD}" status\` で変更を確認し、commit してから \`/simplify\` → \`/code-review\` → codex review (wrapper script 経由 — 下記実行手順 3 参照) → \`pre-push-review:security-reviewer\` subagent (\`Task\` / \`Agent\` tool 経由) を再走させて push してください。
+\`git -C "${TARGET_CWD}" status\` で変更を確認し、 commit してから \`/pre-push-review:review\` slash command で 3 レビュー (/code-review + codex review + security-reviewer subagent) を再走させて push してください。
 EOF
 )
   deny "$REASON"
   exit 0
 fi
 
-SIMPLIFIED_MARKER=$(simplified_marker_path "$GIT_DIR")
 CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR")
 CODEX_MARKER=$(codex_marker_path "$GIT_DIR")
 SECURITY_MARKER=$(security_marker_path "$GIT_DIR")
-SIMPLIFIED_HASH=$([ -f "$SIMPLIFIED_MARKER" ] && cat "$SIMPLIFIED_MARKER" 2>/dev/null)
 CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
 CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
 SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
@@ -681,27 +676,13 @@ is_fresh() {
   [ -n "$1" ] && [ "$1" = "$CURRENT_HASH" ]
 }
 
-# 第一者 (Anthropic) review 要件を決定する (lib/first-party-review.sh)。
-#   - CC >= 2.1.154 を肯定的に確認できた場合のみ「両方必須」に昇格 = /simplify (cleanup・編集)
-#     と /code-review (read-only バグ検出) を **両方** 要求 (案 B defense-in-depth)。
-#   - 旧 version / version 不明 / 検出失敗時はすべて fail-open で「どちらか 1 本で可」に降格。
-#     旧 version 帯では片方の skill が存在せず両方必須にすると永久 deny になるため、緩める
-#     方向にのみ倒す (詳細は lib/first-party-review.sh のヘッダ / MEMORY の SPOF 教訓)。
-# いずれの場合も codex + security + 第一者 (1〜2 本) は必須なので、未レビュー push は通さない。
-if pre_push_review_require_both_first_party; then
-  REQUIRE_BOTH_FP=1
-else
-  REQUIRE_BOTH_FP=0
-fi
-
-FP_OK=0
-if [ "$REQUIRE_BOTH_FP" -eq 1 ]; then
-  if is_fresh "$SIMPLIFIED_HASH" && is_fresh "$CODE_REVIEWED_HASH"; then FP_OK=1; fi
-else
-  if is_fresh "$SIMPLIFIED_HASH" || is_fresh "$CODE_REVIEWED_HASH"; then FP_OK=1; fi
-fi
-
-if [ "$FP_OK" -eq 1 ] && is_fresh "$CODEX_HASH" && is_fresh "$SECURITY_HASH"; then
+# v2.0.0: 3 マーカー (/code-review + codex + security) を **すべて** 必須化する単純 gate。
+# v1.x の /simplify マーカーと CC version 依存の fail-open 緩和は廃止し、 確定的に 3 本要求
+# する設計に倒した。 simplify は cleanup-only で「コードを編集する」 性質のため、 ループ
+# 内で繰り返し走らせる必要があり「並列起動」 にも乗らない (= 並列実行設計の阻害要因)。
+# v2.0.0 は cleanup ステップを drop して bug 検出 (Anthropic) + bug 検出 (OpenAI codex) +
+# security の 3 軸 defense-in-depth に純化する。
+if is_fresh "$CODE_REVIEWED_HASH" && is_fresh "$CODEX_HASH" && is_fresh "$SECURITY_HASH"; then
   exit 0
 fi
 
@@ -715,18 +696,9 @@ format_status() {
     printf '⚠ 失効 (差分が変わったため再実行が必要)'
   fi
 }
-SIMPLIFIED_STATUS=$(format_status "$SIMPLIFIED_HASH")
 CODE_REVIEWED_STATUS=$(format_status "$CODE_REVIEWED_HASH")
 CODEX_STATUS=$(format_status "$CODEX_HASH")
 SECURITY_STATUS=$(format_status "$SECURITY_HASH")
-
-# 第一者 review 要件の表示用ラベル。CC version 検出結果 (REQUIRE_BOTH_FP) に応じて
-# 「両方必須」/「どちらか 1 本で可 (fail-open)」を案内する。
-if [ "$REQUIRE_BOTH_FP" -eq 1 ]; then
-  FP_REQUIREMENT_NOTE='Claude Code v2.1.154+ を検出したため、第一者レビューは /simplify と /code-review の **両方** が「✓ 最新の差分でレビュー済み」である必要があります。'
-else
-  FP_REQUIREMENT_NOTE='Claude Code version を v2.1.154+ と確定できなかったため (旧 version / 検出不能)、第一者レビューは /simplify と /code-review の **どちらか 1 本** が最新であれば通過します (fail-open)。v2.1.154+ 環境では両方を実行してください。'
-fi
 
 # codex review wrapper の絶対パスを deny メッセージに埋め込む。 自身のスクリプト位置
 # (`$_PRE_PUSH_REVIEW_SCRIPT_DIR`、 = hooks/scripts/ ディレクトリ) からの **self-relative
@@ -739,124 +711,80 @@ fi
 CODEX_WRAPPER_PATH="$_PRE_PUSH_REVIEW_SCRIPT_DIR/run-codex-review.sh"
 
 REASON=$(cat <<EOF
-プッシュをブロックしました。push 前に下記のレビューを実行してください。
+プッシュをブロックしました。 push 前に 3 レビューを実行してください。
 
 target: ${TARGET_CWD}
 ブランチ: ${BRANCH} (基準: origin/${BASE})
 
-レビュー状態 (下記の必須レビューがすべて「✓ 最新の差分でレビュー済み」になると push が許可されます):
-  /simplify (cleanup・コード編集)        : $SIMPLIFIED_STATUS
-  /code-review (read-only バグ検出)       : $CODE_REVIEWED_STATUS
-  codex review (wrapper script 経由)     : $CODEX_STATUS
-  security review (subagent 経由)        : $SECURITY_STATUS
+レビュー状態 (下記 3 つすべてが「✓ 最新の差分でレビュー済み」 になると push が許可されます):
+  /code-review (Anthropic read-only バグ検出)  : $CODE_REVIEWED_STATUS
+  codex review (OpenAI バグ検出 / wrapper 経由) : $CODEX_STATUS
+  security review (subagent 経由)              : $SECURITY_STATUS
 
-第一者 (Anthropic) レビューの要件: ${FP_REQUIREMENT_NOTE}
-(codex review (wrapper 経由) と security review は version に関わらず常に必須です。)
+実行手順:
 
-⚠ \`/simplify\` と \`/code-review\` は **別の skill** です (Claude Code v2.1.147 で /code-review が
-read-only バグ検出器に分離され、 v2.1.154 で /simplify が cleanup-only の編集 skill として
-再導入されました):
-  - \`/simplify\`   = reuse / simplification / efficiency / altitude の cleanup を **適用** (コードを編集する)
-  - \`/code-review\` = correctness バグを **検出して報告** (コードは編集しない = read-only)
+  1. **\`/pre-push-review:review\` slash command を実行する** (推奨経路)
+     このコマンドは 3 レビューを **同じアシスタントメッセージで並列に** 起動する
+     確定的フローです。 Claude が判断する余地は無く、 順序入れ替えも引数も受け付け
+     ません (コマンド本文に固定された 3 tool 並列発出のみが正解)。
 
-実行手順 (修正が落ち着くまでループ):
-  1. \`/simplify\` を Skill tool で呼び出す (cleanup を適用 = **コードを編集する** ため最初に実行する)
-     - /simplify が edits を行うと branch 差分が変わり、 自身を含む全マーカーが失効する。
-       **edits が無くなる (= no-op になる) まで /simplify を繰り返す** ことで simplified マーカーが
-       最新差分に揃う。 commit が必要なら commit してから再実行する (dirty tree は push 不可)。
-     - Claude Code v2.1.153 以下で \`/simplify\` が存在しない場合は \`/code-review\` で代替してください
-       (その帯では第一者レビューは fail-open で 1 本に緩みます)。
-  2. \`/code-review\` を Skill tool で呼び出す (read-only の correctness バグ検出。 cleanup 適用後の
-     最終形をバグ観点でレビューする。 指摘があれば手順 5 に従って修正する)
-  3. **\`Bash\` tool で codex review wrapper を起動する**: 次のコマンドを **そのまま** 実行する:
-       \`bash "${CODEX_WRAPPER_PATH}"\`
-     (\`/codex:review\` slash command は経由しない。 slash command の review.md は
-      AskUserQuestion で「background 起動」 を推奨する prompt 設計のため、 Claude が
-      background を選ぶと PreToolUse が deny して 1 サイクル無駄になる経路があった。
-      wrapper script は内部で \`--wait --scope branch\` を hardcode して foreground 実行を
-      強制し、 完了後に codex marker を直接書き込む。 OpenAI codex による独立したバグ
-      レビューで、 Anthropic の \`/code-review\` と engine が異なるため defense-in-depth になる)
-  4. **\`Task\` / \`Agent\` tool (Claude Code で同じ subagent invocation tool に
-     付いた 2 つの名前 — どちらでも可) で \`pre-push-review:security-reviewer\`
-     subagent を起動する**
-     (この subagent は self-contained に branch 全差分の security review を実行し、
-      結果のマークダウンレポートを返す。 標準 /security-review skill は呼び出さない
-      設計 (subagent 内では nested subagent が動かないため self-contained 化している)。
-      PostToolUse hook が **subagent の完了** (Agent / Task tool の終了) を検知して
-      security マーカーを自動更新する)
-  5. **いずれかのレビュー (\`/code-review\` / codex review / security-reviewer subagent) からの
-     指摘がある場合は、 修正方針を整理してから実装する**
-     (push gate は各マーカーの書き込みのみを確認し report 内容まで verify しない
-      ため、 全レビューの remediation 義務をここで明文化する):
-     a. 指摘ごとに修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)
-     b. **codex review からの指摘** については、
-        \`/codex:rescue --wait\` を Skill tool で呼び出し、 その方針が以下の観点で妥当か
-        を壁打ちする:
-          - 指摘の根本原因に対する解として妥当か
-          - 場当たり的な対処になっていないか (= 表層を塗りつぶすだけになっていないか)
-          - 全体設計・既存の方針と一貫しているか
-     c. \`/codex:rescue\` の応答が **approve (= 方針 OK)** になってから実装を開始する。
-        rescue から異論・代替案・追加考慮事項が出た場合は方針を見直して再度 rescue に
-        投げる (rescue 自体はマーカー対象外。 何回投げても push gate には影響しない)
-     d. **\`/code-review\` (Anthropic バグ検出) / security-reviewer subagent からの指摘** は
-        通常具体的な対処 (バグ修正 / input validation 追加 / 秘匿情報の削除 / injection 対策等)
-        になるため、 \`/codex:rescue\` 壁打ちは **optional (= 直接修正してよい)**。 ただし設計判断が
-        絡む修正 (例: 認証フロー全体の見直し / 権限モデルの再設計) では rescue を活用するのが望ましい
-  6. approve された方針 (または直接修正) で実装し、必要に応じて新規 commit を作成する
-  7. branch 全差分 + 未コミット差分が変わるとマーカーは自動的に失効する。
-     その場合は手順 1〜4 を最初から再実行する (再ループでも手順 5 の壁打ちは適用)。
-     特に手順 1 の \`/simplify\` は edits で自己失効するので、 cleanup が安定 (no-op) してから
-     手順 2〜4 の read-only レビューを最終差分に対して走らせると無駄な再ループを減らせる
-  8. 必須マーカーがすべて「✓ 最新の差分でレビュー済み」になったら \`git push\` を再試行する
+     並列実行のため wall-clock は最遅レビュー 1 本の時間で完了します (順次実行よりも
+     大幅に高速)。
 
-⚠ **security review を直接 \`/security-review\` で呼ばないこと**: 標準 skill の
-prompt は最終応答をマークダウンレポートだけにするよう指示しているため、 主 session の
-Claude が直接呼ぶと turn が終了して push まで進めなくなります。 必ず \`pre-push-review:security-reviewer\`
-subagent を \`Task\` / \`Agent\` tool 経由で呼び出してください。 subagent は標準 skill を
-invoke せず self-contained に同等のセキュリティレビューを実行するため、 subagent の
-turn は通常通り終了し、 親 session は subagent invocation の結果として report を
-受け取って後続フロー (\`git push\`) を継続できます。 (なお主 session 直接呼び出しの
-場合も、 後方互換として security マーカーは書かれます — ただし turn 終了でループが
-止まるため subagent 経由が推奨です。)
+  2. (上記が利用できない / failしたときの fallback) **3 ツールを手動で並列起動**:
+     - Skill tool で \`code-review\` を起動
+     - Agent / Task tool で \`pre-push-review:security-reviewer\` subagent を起動
+     - Bash tool で \`bash "${CODEX_WRAPPER_PATH}"\` を foreground 実行
+       (Bash tool option \`run_in_background\` は **false** のままにする。 wrapper 内部で
+        codex companion を \`--wait --scope branch\` 固定で foreground 起動するため、
+        主 session が review 結果を観察してから push 判断する経路が成立する。
+        \`run_in_background: true\` で起動した場合は別の hook (block-bg-codex-wrapper.sh)
+        が deny する)
 
-マーカーの記録経路 (3 種類):
-  - \`/simplify\` / \`/code-review\` / \`/security-review\` skill launch および
+  3. **レビューからの指摘がある場合は、 修正方針を整理してから実装する**
+     - 指摘ごとに「どの指摘をどう直すか / 代替案 / トレードオフ」 を言語化する
+     - **codex review からの指摘** は \`/codex:rescue --wait\` で方針を壁打ちし、
+       「指摘の根本原因に対する解として妥当か / 場当たり的でないか / 全体設計と
+        一貫しているか」 の 3 観点で approve を得てから実装する
+       (rescue 自体はマーカー対象外。 何回投げても push gate には影響しない)
+     - **\`/code-review\` / security-reviewer subagent からの指摘** は通常具体的な
+       対処 (バグ修正 / input validation / 秘匿情報削除 / injection 対策) なので
+       \`/codex:rescue\` 壁打ちは optional。 ただし設計判断が絡む修正 (認証フロー
+       全体の見直し / 権限モデル再設計 等) では rescue 推奨
+
+  4. **修正後に branch 差分が変わるとマーカーは自動失効** するため、 \`/pre-push-review:review\`
+     を再実行して 3 レビューを再走させる。 全マーカーが「✓ 最新の差分でレビュー済み」 に
+     なったら \`git push\` を再試行する。
+
+⚠ **security review は subagent 経由で呼ぶ**: 標準 \`/security-review\` skill は最終応答を
+マークダウンレポートだけにするよう指示するため、 主 session の Claude が直接呼ぶと turn が
+終了して push まで進めません。 必ず \`pre-push-review:security-reviewer\` subagent を
+\`Task\` / \`Agent\` tool 経由で呼び出してください (slash command \`/pre-push-review:review\`
+はこれを内部で行います)。
+
+⚠ **codex review wrapper は foreground で呼ぶ**: \`/codex:review\` slash command (review.md)
+は AskUserQuestion で background 起動を推奨する prompt 設計のため、 Claude が bg を選ぶと
+PostToolUse が marker を書けず silent failure する経路がありました。 v1.1.0 以降は wrapper
+\`bash "${CODEX_WRAPPER_PATH}"\` のみを使い、 wrapper 内部で codex companion を
+\`--wait --scope branch\` foreground で起動する設計に統一しています。 主 session が review
+結果を観察してから push 判断する経路を構造的に保証します。
+
+⚠ \`/codex:rescue\` のハング対策: \`/codex:rescue --wait\` は **しばしばハングします** (応答が
+一向に返ってこない / プロンプトを出したまま固まる)。 数分待っても進展がない場合は以下で復旧:
+  1. \`ps -eo pid,ppid,lstart,etime,command | grep -E 'codex-companion(\.m[jt]s)?.*[[:space:]]task' | grep -v grep\`
+     で \`codex-companion.mjs task ...\` プロセスを列挙
+  2. 起動時刻 (lstart) / 経過時間 (etime) / 親プロセス (PPID) で **現在ハング中の rescue 呼び出しと
+     一致する PID** を確認 (確信できない場合は kill せず主 session を終了)
+  3. \`kill <pid>\` で終了させ、 同じ入力で \`/codex:rescue --wait\` をやり直す
+rescue 自体はマーカー対象外なので、 何回やり直しても push gate には影響しません。
+
+マーカーの記録経路:
+  - \`/code-review\` / \`/security-review\` skill launch および
     \`pre-push-review:security-reviewer\` subagent 完了は PostToolUse hook (auto-mark.sh) が
-    検知して自動記録 (\`/simplify\` と \`/code-review\` は v1.0.0 で別マーカーに分離)
+    検知して自動記録
   - codex review は wrapper script (\`run-codex-review.sh\`) 自身が完了時に直接 marker file
-    へ書き込む (v1.1.0 で auto-mark.sh の Bash 経路を廃止し wrapper 一本化した)
+    へ書き込む
 マーカーは push 通過時に明示削除されません (次の編集でハッシュが変わると自動的に失効するため)。
-
-codex review の実行方式 (Claude が自律判断し、ユーザーには確認しないこと):
-  - **wrapper script (\`bash "${CODEX_WRAPPER_PATH}"\`) のみサポート**
-  - wrapper が \`--wait --scope branch\` を hardcode するため、 引数指定は不要 (= 受け付けない)
-
-⚠ 重要: 本ループは **codex review wrapper** (レビュー取得) と \`/codex:rescue\` (手順 5 の方針壁打ち)
-の **両方** を使います。 名前が似ているため取り違えに注意してください:
-  - \`bash "${CODEX_WRAPPER_PATH}"\`: branch 全差分への read-only レビュー取得
-    (wrapper が完了時に codex marker を書く / push gate の対象)
-  - \`/codex:rescue --wait\`: review からの指摘を踏まえた **修正方針の壁打ち**
-    (rescue 自体はマーカー対象外 / push gate には影響しないが、 手順 5 で
-     approve を得てから実装を開始する規律で運用する)
-
-⚠ \`/codex:rescue\` のハング対策: \`/codex:rescue --wait\` は **しばしばハングする**
-(応答が一向に返ってこない / プロンプトを出したまま固まる) ことが観測されています。
-\`/codex:rescue\` は内部的に \`Agent\` tool 経由で \`codex:codex-rescue\` subagent →
-\`codex-companion.mjs\` (\`Bash\`) を起動するため、 ハングは主 session からは Agent
-呼び出しが return しない形で観測されます (subagent 内部の \`Bash\` shell は主 session の
-\`BashOutput\` / \`KillShell\` からは触れません)。 数分待っても進展がない場合は以下の手順で復旧してください:
-  1. \`Bash\` tool で次のコマンドを実行し、 \`codex-companion.mjs task ...\` プロセス候補を列挙する
-     (\`/codex:review\` 用の \`codex-companion ... review\` や他の codex CLI は除外される):
-     \`ps -eo pid,ppid,lstart,etime,command | grep -E 'codex-companion(\.m[jt]s)?.*[[:space:]]task' | grep -v grep\`
-  2. 表示された候補の中から **現在ハングしている \`/codex:rescue --wait\` 呼び出しと一致する PID**
-     を起動時刻 (lstart) / 経過時間 (etime) / 親プロセス (PPID) / コマンドライン引数で確認する。
-     並行する別セッションの rescue を誤って kill しないよう、 該当 PID が現在のハングと
-     整合するか **確信できない場合は kill しない** (= 主 session を一度終了するか、 担当者に相談する)
-  3. 確信できたら \`kill <pid>\` で終了する
-     (subagent の \`Bash\` 呼び出しがエラーで return し、 主 session の Agent 呼び出しも解除される)
-  4. 同じ入力で \`/codex:rescue --wait\` をやり直す
-ハングのまま無制限に待ち続けるとループ全体が停止するため、 タイムアウト感覚を持って
-判断してください (rescue 自体はマーカー対象外なので、 何回やり直しても push gate には影響しません)。
 EOF
 )
 

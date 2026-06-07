@@ -33,19 +33,17 @@
 #    add` で clone した状態 (= unversioned working tree) の path。 ローカル開発ユース
 #    ケース等で cache が無いことが起きうるため、 セーフティネットとして用意する。
 #
-# **semver 降順** で最新を選ぶ。 `sort -V` (GNU 拡張) が使える環境ではそれを使い、 使えない
-# 環境 (古い macOS の BSD sort 等) では文字列降順 (`sort -r`) にフォールバックする。 実装上は
-# `sort -V -r 2>/dev/null || sort -r` の `||` chain で 1 行に圧縮しており、 probe する必要が
-# ないため簡潔。
+# **semver 降順** で最新を選ぶ。 `sort -V` (GNU 拡張 / macOS Sonoma 以降) が使える環境では
+# それを使い、 使えない環境では本 lib 内 `_compare_semver_desc` で 3 成分 (major.minor.patch)
+# の数値降順を計算する fallback に倒す (v2.0.0 で導入)。 `_compare_semver_desc` は数値比較で
+# major / minor / patch を順に評価するため、 `1.10.x > 1.2.x` (semver) を正しく判定する。
 #
-# **lex 降順 fallback の既知の限界**: `1.10.x` < `1.2.x` (lex 順では `1.2` > `1.10`) という
-# semver 違反を起こす。 codex プラグインが 1.0.x → 1.9.x の patch / minor を続けている間は
-# lex でも正しく最新を選べるが、 **1.10 以降が release された時点で BSD sort 環境では古い
-# `1.2.x` 等を最新と誤判定する**。 codex 1.0.x の review CLI I/F は安定している前提なので
-# 「致命的な誤動作」 にはならないが、 codex 側で互換破壊変更が入った場合は古い companion で
-# 新しい review.md を呼ぼうとして失敗する経路ができる。 macOS Sonoma (14, 2023) 以降の sort
-# は `-V` をサポートするため、 影響範囲は macOS 13 (Ventura) 以前の旧環境に限定される。
-# 1.10 release が現実に迫ったタイミングで、 fallback を「probe → 確定」 形に作り直す TODO。
+# **v1.x までの lex 降順 fallback の問題**: 旧実装は `sort -V -r 2>/dev/null || sort -r` で
+# lex 降順に fallback していたが、 lex 順では `1.2 > 1.10` となるため codex プラグインが
+# 1.10 以降を release した時点で BSD sort 環境 (macOS Ventura 以前) で古い `1.2.x` が選ばれ、
+# 古い companion で新しい review.md を呼ぼうとして失敗する経路があった (audit #5)。 v2.0.0 で
+# 数値比較 fallback に置換して根本修正。 GNU `sort -V` が使える環境では従来通り high-perf な
+# 単一 pipeline で済ませ、 fallback は probe ベースで 1 度だけ判定する。
 #
 # ## 失敗時の挙動
 #
@@ -53,6 +51,52 @@
 # を出して中断する責務を持つ (= 「codex プラグインが install されていない」 と判明できる)。
 # silent skip は **しない** (pre-push-review の loop discipline 維持の観点で、 「codex
 # review が実行できない」 ことを silent に通すと未レビュー push の経路を作る)。
+
+# _pre_push_review_semver_desc_sort_dirs <cache_root>
+# 出力 (stdout): cache_root 直下のディレクトリを semver 3 成分の数値降順で 1 行ずつ出力。
+# GNU `sort -V -r` が使える環境ではそれを使い、 BSD sort で `-V` が拒否された場合のみ
+# bash 内で `awk` を用いて 3 成分の数値降順を計算する fallback パスに倒す。
+#
+# fallback 経路: `awk` で各行の basename を取り出して `major.minor.patch` を抽出 → 「数値
+# 比較ができる形 (zero-padded key)」 を行頭に prepend → `sort -r` (lex 降順) で並べる → key を
+# 剥がして元 path を出力。 zero-padding は major.minor.patch を 6 桁固定にすることで
+# `1.10.x` が `1.02.x` より大きいと lex 順でも正しく評価される。 6 桁は codex の semver
+# 想定範囲 (各成分 0-999999) を十分カバーする。
+#
+# semver 違反 (`-alpha.1` などの prerelease) や 3 成分以外の version 文字列は数値抽出に
+# 失敗し fallback key が `000000.000000.000000` になるため、 並びとしては最下位に落ちる。
+# codex プラグインの version は現状 `<major>.<minor>.<patch>` のみで運用されているため
+# この pre-release fallback で問題は出ない。 もし pre-release が導入されたら、 そもそも
+# GNU `sort -V` が semver 標準に従って正しく順位付けするため fallback 経路は使われない。
+_pre_push_review_semver_desc_sort_dirs() {
+  local cache_root="$1"
+  local files
+  files=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null) || return 1
+  [ -n "$files" ] || return 0
+  # まず GNU `sort -V -r` を試す (高速かつ正確)。 失敗時 (BSD sort) は awk fallback。
+  local sorted
+  if sorted=$(printf '%s\n' "$files" | sort -V -r 2>/dev/null); then
+    printf '%s' "$sorted"
+    return 0
+  fi
+  # fallback: awk で zero-padded semver key を行頭に prepend して数値降順を lex 順で代用。
+  # basename ごとに `major.minor.patch` を抽出し、 それぞれを 6 桁 zero-pad して連結。
+  # 抽出できない行は `000000000000000000` (最小キー = 並びの末尾) に倒す。
+  printf '%s\n' "$files" | awk '
+    {
+      n = split($0, parts, "/")
+      base = parts[n]
+      if (match(base, /^[0-9]+\.[0-9]+\.[0-9]+/)) {
+        ver = substr(base, RSTART, RLENGTH)
+        split(ver, c, ".")
+        key = sprintf("%06d%06d%06d", c[1], c[2], c[3])
+      } else {
+        key = "000000000000000000"
+      }
+      printf "%s\t%s\n", key, $0
+    }
+  ' | sort -r | awk -F'\t' '{print $2}'
+}
 
 # 引数: なし
 # 出力 (stdout): codex-companion.mjs の絶対パス
@@ -90,16 +134,12 @@ resolve_codex_companion() {
     # find は基本 POSIX なので macOS / Linux 双方で動く。 mindepth/maxdepth は GNU 拡張だが
     # macOS の BSD find でも 10.5 以降サポートされているためどちらでも使える。
     #
-    # sort は `sort -V -r` (semver 降順、 GNU 拡張) を最初に試し、 BSD sort で `-V` が拒否される
-    # 環境では `sort -r` (lex 降順) に fallback する。 stderr を 2>/dev/null で抑止することで
-    # 「probe してから本実行」 の 2 段階を避け、 1 行の `||` chain にまとめている。 lex 降順
-    # fallback は codex 1.0.x - 1.9.x の patch / minor を順に並べる範囲では正しく最新を選ぶが、
-    # **1.10 以降の release で BSD sort 環境では古い `1.2.x` 等を選ぶ既知の制約**がある (詳細は
-    # 上部 docstring 参照)。 macOS Ventura (13) 以前の旧 BSD sort 環境かつ codex 1.10 release
-    # 以降のタイミングで顕在化する。
+    # sort は `sort -V -r` (semver 降順、 GNU 拡張 / macOS Sonoma 以降) を最初に試し、 BSD
+    # sort で `-V` が拒否される環境では bash 内で数値 3 成分比較する `_semver_desc_sort` に
+    # fallback する。 v1.x までの `sort -r` (lex 降順) fallback は `1.10.x` 系で `1.2.x` を
+    # 最新と誤判定する既知バグがあり、 v2.0.0 で数値比較に置換した。
     local sorted
-    sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-      | { sort -V -r 2>/dev/null || sort -r; })
+    sorted=$(_pre_push_review_semver_desc_sort_dirs "$cache_root")
     local d
     while IFS= read -r d; do
       [ -n "$d" ] || continue
