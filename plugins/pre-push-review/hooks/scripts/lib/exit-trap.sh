@@ -1,11 +1,12 @@
 #!/bin/bash
 # exit-trap.sh
-# pre-push-review プラグインの 2 つの hook script (block-pre-push.sh / auto-mark.sh) で
-# 共有する EXIT trap セットアップ関数を提供する。
-# (v1.0.0 までは block-pre-push.sh / auto-mark.sh / block-bg-codex-review.sh の 3 hook
-# 共通化だったが、 v1.1.0 で block-bg-codex-review.sh が wrapper 一本化に伴い廃止され、
-# 現在は 2 hook 共通化。 wrapper (run-codex-review.sh) は本 lib を使わない設計 — 理由は
-# 下記。)
+# pre-push-review プラグインの 3 つの hook script (block-pre-push.sh / auto-mark.sh /
+# block-bg-codex-wrapper.sh) で共有する EXIT trap セットアップ関数を提供する。
+# (v1.0.0 までは block-pre-push.sh / auto-mark.sh / block-bg-codex-review.sh で同じく
+# 3 hook 共通化だったが、 v1.1.0 で codex review を wrapper 一本化したのに伴い旧
+# block-bg-codex-review.sh は廃止、 代わりに wrapper の bg 起動を deny する
+# block-bg-codex-wrapper.sh が同 lib を使う構成になった。 引き続き 3 hook 共通化。
+# wrapper (run-codex-review.sh) は本 lib を使わない設計 — 理由は下記。)
 #
 # ## なぜ必要か
 #
@@ -21,7 +22,7 @@
 # 「hook が壊れた」 ことを能動的に可視化する。 trap は元の exit code を変更しない
 # ため、 push 動作はノンブロッキングのまま (= 既存挙動を変えない)。
 #
-# ## なぜ 2 hook で共通化するか
+# ## なぜ 3 hook で共通化するか
 #
 # 構造 (exit code チェック → 非ゼロなら stderr に 2 行 printf) は完全に同型で、
 # hook ごとに違うのは「タグ名 (hook ファイル名)」 と「壊れた場合の影響説明」 だけ。
@@ -32,7 +33,7 @@
 #
 # ## なぜ wrapper (run-codex-review.sh) は本 lib を使わないか
 #
-# 2 hook は通常パスが全て exit 0 だが、 wrapper は想定済み error パスで `fail()` → exit 1
+# 3 hook は通常パスが全て exit 0 だが、 wrapper は想定済み error パスで `fail()` → exit 1
 # を返すため、 本 lib の trap (= 真に予期せぬ非ゼロ exit のみ通知する暗黙 contract) と
 # semantic が衝突する。 wrapper は自前の cleanup trap を直接 install して fail() で全
 # error pattern をカバーする設計に倒している。 詳細根拠は run-codex-review.sh ヘッダ参照。

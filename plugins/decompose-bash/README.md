@@ -4,7 +4,11 @@
 
 ## バージョン
 
-v0.1.0
+v0.1.1
+
+### v0.1.0 → v0.1.1 の変更点
+
+- **不正 / 空 JSON 入力時の jq parse error stderr 漏れを抑制**: SessionStart hook の input 解析で JSON parse 失敗 (空入力 / malformed) が stderr に漏出していた問題を、 jq 呼び出しに `2>/dev/null` を付与して silent skip するよう修正。 fail-open 設計 (= 解析不能なら additionalContext 注入を skip) の挙動は維持。
 
 ## 概要
 

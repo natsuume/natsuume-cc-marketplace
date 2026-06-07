@@ -153,7 +153,7 @@ subagent は内部で `/security-review` 標準 skill を呼ばずに self-conta
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)
 
-## マーカーファイル
+### マーカーファイル
 
 すべて `<git-dir>` 配下に配置 (リポジトリ単位で共有、 ブランチ単位ではない):
 

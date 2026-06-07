@@ -4,13 +4,17 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.3.0
+v0.3.1
 
 ## 概要
 
 「デフォルトブランチ (master/main) への変更は、他ブランチからの **GitHub 上の PR merge** 経由のみで取り込む」という運用を構造的に保証します。ローカル側の write 経路 (commit / push / PR head) を 3 つの PreToolUse フックで多層防御し、cooperative 利用前提で誤操作・横紙破りを deny に倒します。
 
 加えて、rebase によるリモート default branch 取り込みワークフローを Skill として提供します。
+
+### v0.3.0 → v0.3.1 の変更点 (#114, cross-plugin sync)
+
+- **関連プラグイン pre-push-review の記述を v2.0.0 仕様に同期**: `## 関連プラグイン` の pre-push-review 行が「push 前に `/code-review` (旧名 `/simplify`) → `/codex:review --scope branch` を強制」 という v1.x 以前の旧記述だったため、 v2.0.0 の「`/pre-push-review:review` slash command で 3 レビュー (`/code-review` + codex review wrapper + `pre-push-review:security-reviewer` subagent) を並列起動」 に書き換え。 documentation のみの修正で hook / 動作は不変
 
 ### v0.2.4 → v0.3.0 の変更点 (#61, #62, #63, #60)
 

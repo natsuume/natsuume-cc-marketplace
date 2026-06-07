@@ -10,15 +10,15 @@
     {
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
-      "description": "GitHub Flow に準拠した Git ワークフローを構造強制するプラグイン。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供。v0.3.1 で関連プラグイン pre-push-review の README 記述を v2.0.0 仕様 (/pre-push-review:review slash command による 3 レビュー並列起動) に同期。v0.3.0 で 3 hook に診断 EXIT trap を追加し予期せぬ非ゼロ終了 (保護の無音 fail-open) を可視化、checkout pathspec / remote 名 master の false-positive を既知制約として明記、README を実態に追随",
-      "version": "0.3.1",
+      "description": "GitHub Flow に準拠した Git ワークフローを構造強制するプラグイン。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供。v0.3.2 で README 内 version 見出しの drift (v0.3.0 のまま) を解消し v0.3.0 → v0.3.1 の cross-plugin sync changelog を backfill。v0.3.1 で関連プラグイン pre-push-review の README 記述を v2.0.0 仕様 (/pre-push-review:review slash command による 3 レビュー並列起動) に同期。v0.3.0 で 3 hook に診断 EXIT trap を追加し予期せぬ非ゼロ終了 (保護の無音 fail-open) を可視化、checkout pathspec / remote 名 master の false-positive を既知制約として明記、README を実態に追随",
+      "version": "0.3.2",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
       "name": "enforce-draft-pr",
       "source": "./plugins/enforce-draft-pr",
-      "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)。v0.2.0 で検出を cmd-parser.sh ベースのトークン化に刷新し、引数値内 --draft の誤検知 / global option / cd・env prefix チェーン / 行継続 / --draft=true・-d の取りこぼしを解消 (複数行 body は破壊せず温存)",
-      "version": "0.2.0",
+      "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)。v0.2.1 で env-skip ループが現コマンド境界を越境して次コマンドの `pr create` まで届き重複 --draft 挿入になる parser bug を修正 (`FOO=bar; gh pr create` 形式で発火)。v0.2.0 で検出を cmd-parser.sh ベースのトークン化に刷新し、引数値内 --draft の誤検知 / global option / cd・env prefix チェーン / 行継続 / --draft=true・-d の取りこぼしを解消 (複数行 body は破壊せず温存)",
+      "version": "0.2.1",
       "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
@@ -31,9 +31,9 @@
     {
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
-      "description": "git push 前に /code-review (Anthropic read-only バグ検出) + codex review (OpenAI バグ検出 / bash wrapper `run-codex-review.sh` 経由 foreground 実行) + pre-push-review:security-reviewer subagent (self-contained security review) の 3 レビューを強制し、 PostToolUse / wrapper script で実行完了を自動検知してブランチ全差分との同一性を検証することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。v2.0.0 で /pre-push-review:review slash command を新設し、 3 レビューを **同じアシスタントメッセージで並列に** 起動する確定的フローに切替えた。 これにより Skill での自律判断による順序揺れ / 起動漏れが構造排除され、 wall-clock も最遅レビュー 1 本の時間で完了する (順次より大幅に高速)。 v1.x の /simplify (cleanup-only) マーカーは v2.0.0 で削除。 cleanup-only な性質上「edits が無くなるまでループ」 が必要で並列化に乗らず、 cleanup ステップを drop して bug 検出 + bug 検出 (OpenAI) + security の 3 軸 defense-in-depth に純化した。 また CC version 依存の fail-open 緩和 (lib/first-party-review.sh) も同時に削除し、 3 マーカーは常にすべて必須 (互換破壊のため major bump)。 v1.1.0 から継続する設計: codex review は wrapper 経由 foreground 起動を hardcode し、 wrapper を background (run_in_background: true / shell-level `&` / `|`) で起動する経路は block-bg-codex-wrapper.sh が deny。 security review は subagent 経由で self-contained 実行することで主 session の turn 終了問題と nested subagent 制約を回避。 また v2.0.0 で lib/codex-companion-resolver.sh の sort -V fallback を数値比較ベースに修正し、 BSD sort 環境で codex 1.10+ の release 後に古い `1.2.x` が選ばれる silent failure 経路を排除。",
-      "version": "2.0.0",
-      "keywords": ["push", "review", "quality", "codex", "code-review", "security-review", "subagent", "rescue", "branch-diff", "pr-diff", "parallel"]
+      "description": "git push 前に /code-review (Anthropic read-only バグ検出) + codex review (OpenAI バグ検出 / bash wrapper `run-codex-review.sh` 経由 foreground 実行) + pre-push-review:security-reviewer subagent (self-contained security review) の 3 レビューを強制し、 PostToolUse / wrapper script で実行完了を自動検知してブランチ全差分との同一性を検証することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。v2.0.1 で v2.0.0 のドキュメント drift (README 見出しレベル / lib/exit-trap.sh の 2 hook→3 hook 表記 / keywords) を整理し、 auto-mark.sh に substring pre-filter (\"skill\" / \"subagent_type\") を追加して PostToolUse hot path のオーバヘッドを削減、 block-pre-push.sh deny の旧 /simplify 移行警告を削除 (情報は README に集約)、 commands/review.md に順次起動 fallback の推奨順序を明示。 v2.0.0 で /pre-push-review:review slash command を新設し、 3 レビューを **同じアシスタントメッセージで並列に** 起動する確定的フローに切替えた。 v1.x の /simplify (cleanup-only) マーカーは v2.0.0 で削除し、 cleanup を drop して bug 検出 (Anthropic) + bug 検出 (OpenAI codex) + security の 3 軸 defense-in-depth に純化、 CC version 依存の fail-open 緩和 (lib/first-party-review.sh) も同時に削除して 3 マーカー常時必須化 (互換破壊のため major bump)。 lib/codex-companion-resolver.sh の sort -V fallback を POSIX numeric field sort に置換し BSD sort 環境で codex 1.10+ 後に古い `1.2.x` が選ばれる silent failure 経路を排除。",
+      "version": "2.0.1",
+      "keywords": ["push", "review", "quality", "codex", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
       "name": "update-default-branch",
@@ -52,8 +52,8 @@
     {
       "name": "codex-review-customize",
       "source": "./plugins/codex-review-customize",
-      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.0 で adversarial-review.md のパッチ対象を削除。v0.3.1 で apply-patch.sh の EXIT trap が関数 local temp を参照していた bug を修正 (エラー経路の unbound variable noise / temp 残留を解消)",
-      "version": "0.3.1",
+      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.2 で README の version 表記と関連プラグイン記述を pre-push-review v2.0.0 仕様 (本プラグインのパッチに依存しない wrapper + slash command 経路) に同期、 v0.3.0 → v0.3.1 changelog の backfill と post-pr-review 言及の historical 注記化。v0.3.1 で apply-patch.sh の EXIT trap が関数 local temp を参照していた bug を修正 (エラー経路の unbound variable noise / temp 残留を解消)。v0.3.0 で adversarial-review.md のパッチ対象を削除",
+      "version": "0.3.2",
       "keywords": ["codex", "review", "patch", "skill"]
     },
     {

@@ -183,7 +183,16 @@ analyze_and_rewrite() {
     if [ "${TSTART[$t]}" -eq 1 ]; then
       local k=$t
       # 先頭の env-var assignment (`NAME=VALUE`) を skip。
+      # **境界越境ガード (v0.2.1 fix)**: env-skip ループは現在のコマンド境界 (token $t) 内のみで
+      # 動かす。 $k > $t で次の command-start (`TSTART=1`) または next-line (`TNL=1`) に達したら
+      # break する。 これが無いと `FOO=bar; gh pr create` のような連結で、 `FOO=bar` を skip
+      # した後 boundary を越境して次の `gh` 段の `pr create` まで env-skip 走査が伸び、 同じ
+      # `create` オフセットに **2 度** ` --draft` を挿入する重複付与バグになる。 `gh` は重複
+      # `--draft` を寛容に扱うため機能破壊は無いが parser bug としては明確。
       while [ "$k" -lt "$ntok" ]; do
+        if [ "$k" -gt "$t" ] && { [ "${TSTART[$k]}" -eq 1 ] || [ "${TNL[$k]}" -eq 1 ]; }; then
+          break
+        fi
         v="$(unquote_token "${TVAL[$k]}")"
         if [[ "$v" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then k=$((k+1)); else break; fi
       done

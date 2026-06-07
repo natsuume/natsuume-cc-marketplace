@@ -22,13 +22,13 @@ claude plugin install git-guardrails@natsuume-plugins
 
 | プラグイン | バージョン | 説明 |
 |-----------|-----------|------|
-| [git-guardrails](#git-guardrails) | 0.3.1 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
-| [enforce-draft-pr](#enforce-draft-pr) | 0.2.0 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入) |
+| [git-guardrails](#git-guardrails) | 0.3.2 | GitHub Flow に準拠した Git ワークフロー。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供 |
+| [enforce-draft-pr](#enforce-draft-pr) | 0.2.1 | `gh pr create` に `--draft` を自動付与する PreToolUse フックプラグイン (任意導入)。v0.2.1 で env-skip ループ境界越境による重複 `--draft` 挿入 parser bug を修正 |
 | [auto-lint-check](#auto-lint-check) | 0.4.0 | ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン |
-| [pre-push-review](#pre-push-review) | 2.0.0 | `git push` 前に `/code-review` (Anthropic read-only バグ検出) + codex review (OpenAI バグ検出 / bash wrapper `run-codex-review.sh` 経由 foreground 実行) + `pre-push-review:security-reviewer` subagent (self-contained security review) の 3 レビューを強制し、PostToolUse / wrapper script で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (`pre-commit-review` の後継)。v2.0.0 で `/pre-push-review:review` slash command を新設し、3 レビューを **同じアシスタントメッセージで並列に** 起動する確定的フローに切替えた (Skill での自律判断による順序揺れ / 起動漏れが構造排除され、wall-clock も最遅レビュー 1 本の時間で完了する)。v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除 (cleanup-only な性質上「edits が無くなるまでループ」が必要で並列化に乗らず、cleanup ステップを drop して bug 検出 + bug 検出 (OpenAI) + security の 3 軸 defense-in-depth に純化)。CC version 依存の fail-open 緩和 (`lib/first-party-review.sh`) も同時に削除し、3 マーカーは常にすべて必須 (互換破壊のため major bump)。v1.1.0 から継続する設計: codex review は wrapper 経由 foreground 起動を hardcode し、wrapper を background (`run_in_background: true` / shell-level `&` / `|`) で起動する経路は `block-bg-codex-wrapper.sh` が deny。security review は subagent 経由で self-contained 実行することで主 session の turn 終了問題と nested subagent 制約を回避。v2.0.0 で `lib/codex-companion-resolver.sh` の sort -V fallback を数値比較ベースに修正し、BSD sort 環境で codex 1.10+ release 後に古い `1.2.x` が選ばれる silent failure 経路を排除。macOS デフォルト bash 3.2.57 でも動作 |
+| [pre-push-review](#pre-push-review) | 2.0.1 | `git push` 前に 3 レビュー (`/code-review` Anthropic read-only バグ検出 + codex review OpenAI バグ検出 / bash wrapper foreground 実行 + `pre-push-review:security-reviewer` subagent self-contained security review) を強制し、 PostToolUse / wrapper script で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (`pre-commit-review` の後継)。 `/pre-push-review:review` slash command で 3 レビューを **同じアシスタントメッセージで並列に** 起動する確定的フローを提供し、 Skill での自律判断による順序揺れ / 起動漏れを構造排除して wall-clock を最遅レビュー 1 本の時間に短縮。 v2.0.1 で v2.0.0 のドキュメント drift を整理し、 auto-mark.sh に substring pre-filter を追加して PostToolUse hot path のオーバヘッドを削減。 v2.0.0 で `/simplify` (cleanup-only) マーカーと CC version 依存の fail-open 緩和を削除し 3 マーカー常時必須化 (互換破壊のため major bump)、 `lib/codex-companion-resolver.sh` の sort -V fallback を POSIX numeric field sort に置換し BSD sort 環境で codex 1.10+ 後に古い `1.2.x` が選ばれる silent failure 経路を排除。 macOS デフォルト bash 3.2.57 でも動作 |
 | [update-default-branch](#update-default-branch) | 0.1.2 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.5.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
-| [codex-review-customize](#codex-review-customize) | 0.3.1 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン |
+| [codex-review-customize](#codex-review-customize) | 0.3.2 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン (v1.1.0+ の pre-push-review は本プラグインに依存しなくなったため、 ad-hoc に `/codex:review` を Skill 経由で呼びたいユースケース向け) |
 | [decompose-bash](#decompose-bash) | 0.1.1 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
 | [auto-followthrough](#auto-followthrough) | 0.2.3 | `permission_mode` が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始後の最初のプロンプト時点の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン |
 
@@ -82,7 +82,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## auto-lint-check
 
-ファイル編集前に linter による事前チェックを行い、ignore コメントの挿入をブロックし、編集後に自動でフォーマットを適用するプラグインです。モノレポ構成のサブディレクトリにある linter 設定も自動的に検出します。
+ignore コメント挿入を編集時に禁止し、 `git commit` 直前に staged ファイルを lint し、 編集後に自動フォーマットを適用し、 commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグインです。 モノレポ構成のサブディレクトリにある linter / formatter 設定 (`pyproject.toml [tool.ruff]` / `package.json` の `eslintConfig` / `prettier` 等) も自動的に検出します。
 
 ### 機能
 
@@ -90,14 +90,19 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `auto-lint-check` | PreToolUse | Edit/Write/MultiEdit の編集後予測内容を ESLint / Ruff の stdin に流し、エラーがあれば実行を deny する |
-| `block-ignore-lint-comment` | PreToolUse | `// eslint-disable`, `// prettier-ignore`, `# noqa`, `# ruff: noqa` 等の ignore コメント挿入を deny する |
-| `code-format` | PostToolUse | 編集後に `eslint --fix` / `prettier --write` / `ruff check --fix` / `ruff format` を実行する |
+| `block-ignore-lint-comment` | PreToolUse (Edit/Write/MultiEdit) | ESLint / Prettier / Ruff の suppress コメント (eslint-disable 系、 prettier-ignore 系、 noqa 系、 ruff: noqa 系) の新規挿入を deny する |
+| `code-format` | PostToolUse (Edit/Write/MultiEdit) | 編集直後に `eslint --fix` / `prettier --write` / `ruff check --fix` / `ruff format` を実行する |
+| `block-commit-lint` | PreToolUse (Bash) | `git commit` を検知し、 staged ファイルを `eslint` / `ruff check --stdin-filename` で lint。 違反があれば commit を deny する (repo override 失敗は fail-closed deny) |
+| `post-commit-lint` | PostToolUse (Bash) | commit 直後に HEAD の変更ファイルを再 lint し、 残った警告を non-blocking で stderr に通知 (commit 自体は許容) |
 
 ### 対応 linter / formatter
 
 - JavaScript / TypeScript: ESLint, Prettier
 - Python: Ruff (`check --fix` および `format`)
+
+### 設定検出
+
+`pyproject.toml` の `[tool.ruff]` / `[tool.ruff.lint]`、 `package.json` の `eslintConfig` / `prettier`、 `eslint.config.{js,mjs,cjs,ts,mts,cts}`、 `prettier.config.{js,mjs,cjs,ts,mts,cts}`、 `.prettierrc.{json,json5,yaml,yml,ts}` 等を編集対象ファイルから直近祖先方向に探索して採用します。
 
 ### キーワード
 
