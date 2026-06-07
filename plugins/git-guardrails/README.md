@@ -4,13 +4,18 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.3.1
+v0.3.2
 
 ## 概要
 
 「デフォルトブランチ (master/main) への変更は、他ブランチからの **GitHub 上の PR merge** 経由のみで取り込む」という運用を構造的に保証します。ローカル側の write 経路 (commit / push / PR head) を 3 つの PreToolUse フックで多層防御し、cooperative 利用前提で誤操作・横紙破りを deny に倒します。
 
 加えて、rebase によるリモート default branch 取り込みワークフローを Skill として提供します。
+
+### v0.3.1 → v0.3.2 の変更点 (marketplace audit drift cleanup)
+
+- **README 内 version 見出しを `v0.3.0` → `v0.3.2` に同期** (#114 で `v0.3.1` を name のみ bump して README badge と changelog backfill を漏らした self-introduced drift を解消、 本 PR で再修正)
+- **plugin.json / marketplace.json / root README plugin 表の同期維持**: bump 対象 3 箇所のうち README が drift していた点を marketplace 全体 audit で検出して再収束
 
 ### v0.3.0 → v0.3.1 の変更点 (#114, cross-plugin sync)
 
