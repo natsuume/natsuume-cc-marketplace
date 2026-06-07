@@ -182,20 +182,32 @@ analyze_and_rewrite() {
   while [ "$t" -lt "$ntok" ]; do
     if [ "${TSTART[$t]}" -eq 1 ]; then
       local k=$t
+      local boundary_hit=0
       # 先頭の env-var assignment (`NAME=VALUE`) を skip。
       # **境界越境ガード (v0.2.1 fix)**: env-skip ループは現在のコマンド境界 (token $t) 内のみで
       # 動かす。 $k > $t で次の command-start (`TSTART=1`) または next-line (`TNL=1`) に達したら
-      # break する。 これが無いと `FOO=bar; gh pr create` のような連結で、 `FOO=bar` を skip
-      # した後 boundary を越境して次の `gh` 段の `pr create` まで env-skip 走査が伸び、 同じ
-      # `create` オフセットに **2 度** ` --draft` を挿入する重複付与バグになる。 `gh` は重複
-      # `--draft` を寛容に扱うため機能破壊は無いが parser bug としては明確。
+      # boundary_hit=1 で記録して break する。 これが無いと `FOO=bar; gh pr create` のような
+      # 連結で、 `FOO=bar` を skip した後 boundary を越境して次の `gh` 段の `pr create` まで
+      # env-skip 走査が伸び、 同じ `create` オフセットに **2 度** ` --draft` を挿入する重複付与
+      # バグになる。 `gh` は重複 `--draft` を寛容に扱うため機能破壊は無いが parser bug として
+      # は明確。 **boundary_hit を flag に立てる理由 (v0.2.1 fix #2 — codex review 指摘)**: 単に
+      # break するだけでは `k` は次コマンドの `gh` を指したまま落下し、 後段の `gh|*/gh)`
+      # matcher が走って ` --draft` を 1 回挿入してしまう。 さらに outer while が `t=$((t+1))`
+      # で次イテレーションに進み、 `TSTART[$t]=1` の `gh` で改めて正規処理が走るため、 同じ
+      # オフセットに 2 度 INS が push される。 boundary_hit を立てて outer iteration を直接
+      # skip すれば、 outer の次イテレーション (= t=1 の `gh`) で 1 回だけ正規処理が走る。
       while [ "$k" -lt "$ntok" ]; do
         if [ "$k" -gt "$t" ] && { [ "${TSTART[$k]}" -eq 1 ] || [ "${TNL[$k]}" -eq 1 ]; }; then
+          boundary_hit=1
           break
         fi
         v="$(unquote_token "${TVAL[$k]}")"
         if [[ "$v" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then k=$((k+1)); else break; fi
       done
+      if [ "$boundary_hit" -eq 1 ]; then
+        t=$((t+1))
+        continue
+      fi
       if [ "$k" -lt "$ntok" ]; then
         v="$(unquote_token "${TVAL[$k]}")"
         case "$v" in
