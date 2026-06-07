@@ -33,12 +33,13 @@
 #    add` で clone した状態 (= unversioned working tree) の path。 ローカル開発ユース
 #    ケース等で cache が無いことが起きうるため、 セーフティネットとして用意する。
 #
-# **semver 降順** で最新を選ぶ。 GNU `sort -V` (macOS Sonoma 以降の BSD sort も対応) が使える
-# 環境ではそれを使い、 使えない環境では `_pre_push_review_semver_desc_sort_dirs` の awk
-# fallback (6 桁 zero-padding key で数値順を lex 順としてエンコード) に倒す。 v2.0.0 で導入。
-# v1.x までは `sort -V -r 2>/dev/null || sort -r` で lex 降順に fallback していたが、 lex 順
-# では `1.2 > 1.10` となり codex 1.10+ release 時に BSD sort 環境で古い `1.2.x` が選ばれる
-# silent failure 経路があった (audit #5)。
+# **semver 降順** で最新を選ぶ。 v2.0.0 で `_pre_push_review_semver_desc_sort_dirs` (POSIX
+# numeric field sort `sort -t. -k1,1nr -k2,2nr -k3,3nr` + 純数値 X.Y.Z basename フィルタ) を
+# 単一経路として採用。 v1.x までは `sort -V -r 2>/dev/null || sort -r` で lex 降順に fallback
+# していたが、 lex 順では `1.2 > 1.10` となり codex 1.10+ release 時に BSD sort 環境で古い
+# `1.2.x` が選ばれる silent failure 経路があった (audit #5)。 v2.0.0 では GNU `sort -V` 試行
+# を廃止し POSIX field sort 一本に統一することで、 GNU sort / BSD sort / busybox いずれでも
+# 同じ正しい挙動になる。
 #
 # ## 失敗時の挙動
 #
@@ -66,9 +67,15 @@
 # 挙動になる (= silent install regression を起こさない)。
 _pre_push_review_semver_desc_sort_dirs() {
   local cache_root="$1"
-  # path 全体を sort に渡すと cache_root 内の `.` (例: `/tmp.XYZ/...`) を `-t.` の field
-  # 区切りが食って semver field 評価が崩れる (`sort -t.` は全文字列に対して動くため)。
-  # 安全策として basename のみを sort し、 sort 後に cache_root を再 prepend する。
+  # pipeline:
+  #   1. find: cache_root 直下の dir を列挙 (full path)
+  #   2. awk: basename を抽出し純数値 `X.Y.Z` のみを sort に渡す (= path 内 `.` が `-t.`
+  #      field 区切りを食って semver 評価を壊す経路と、 prerelease / `latest` / `v` 接頭等の
+  #      不定挙動を上流で構造排除する)
+  #   3. sort: POSIX numeric field sort で X.Y.Z を 3 成分降順に並べる
+  #   4. awk: cache_root を prepend して caller が full path を受け取れる形に戻す
+  # 後段 caller (`resolve_codex_companion`) は while ループで最初に発見できた companion を
+  # 採用するため、 ここで 1 行目を最新 version として返すことが contract。
   find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
     | awk -F/ '$NF ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ {print $NF}' \
     | sort -t. -k1,1nr -k2,2nr -k3,3nr \
@@ -111,10 +118,11 @@ resolve_codex_companion() {
     # find は基本 POSIX なので macOS / Linux 双方で動く。 mindepth/maxdepth は GNU 拡張だが
     # macOS の BSD find でも 10.5 以降サポートされているためどちらでも使える。
     #
-    # sort は `sort -V -r` (semver 降順、 GNU 拡張 / macOS Sonoma 以降) を最初に試し、 BSD
-    # sort で `-V` が拒否される環境では `_pre_push_review_semver_desc_sort_dirs` の awk
-    # fallback に倒す。 v1.x までの `sort -r` (lex 降順) fallback は `1.10.x` 系で `1.2.x` を
-    # 最新と誤判定する既知バグがあり、 v2.0.0 で数値比較に置換した。
+    # sort は `_pre_push_review_semver_desc_sort_dirs` 経由で POSIX numeric field sort
+    # (`sort -t. -k1,1nr -k2,2nr -k3,3nr`) を行う。 v1.x までの `sort -V -r 2>/dev/null
+    # || sort -r` chain は GNU sort 非対応環境で lex 順 fallback に倒れ、 codex 1.10+
+    # release 後に古い `1.2.x` を選ぶ既知バグがあったため、 v2.0.0 で POSIX field sort 単一
+    # 経路に統一した (詳細は lib top docstring を参照)。
     local sorted
     sorted=$(_pre_push_review_semver_desc_sort_dirs "$cache_root")
     local d
