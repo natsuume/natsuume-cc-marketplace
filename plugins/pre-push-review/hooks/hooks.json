@@ -1,5 +1,5 @@
 {
-  "description": "git push を未レビューの状態でブロックし、/simplify (cleanup・コード編集) / /code-review (read-only バグ検出) / codex review (wrapper script `run-codex-review.sh` 経由) の実行完了を自動検知してレビューマーカーを更新する。 第一者 (simplify + code-review) は Claude Code v2.1.154+ を検出したとき両方必須、 旧 version / 検出不能時は fail-open でどちらか 1 本に緩める。 codex review は wrapper script が完了時に直接 marker を書き込む設計に統一されており、 v1.0.0 以前の `/codex:review` slash command 経由 (Skill + background 起動による silent failure 経路あり) は廃止された。 wrapper を background (`run_in_background: true`) で起動する経路は `block-bg-codex-wrapper.sh` が deny し、 主 session が review 結果を観察しないまま push gate を通過する regression を防ぐ",
+  "description": "git push を未レビューの状態でブロックし、 /code-review (Anthropic read-only バグ検出) / codex review (OpenAI バグ検出 / wrapper script `run-codex-review.sh` 経由) / pre-push-review:security-reviewer subagent (self-contained security review) の 3 レビューが現在の branch 全差分 + 未コミット差分ハッシュと一致するまで deny を返す。 3 マーカーは常にすべて必須 (v2.0.0 で simplify マーカーと CC version 依存の fail-open 緩和を廃止)。 推奨起動経路は /pre-push-review:review slash command (3 ツールを並列発出する確定的フロー)。 codex review wrapper を background で起動する経路 (Bash tool option `run_in_background: true` / shell-level `&` / `|`) は `block-bg-codex-wrapper.sh` が deny し、 主 session が review 結果を観察しないまま push gate を通過する regression を防ぐ。",
   "hooks": {
     "PreToolUse": [
       {

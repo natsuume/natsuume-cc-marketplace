@@ -33,19 +33,13 @@
 #    add` で clone した状態 (= unversioned working tree) の path。 ローカル開発ユース
 #    ケース等で cache が無いことが起きうるため、 セーフティネットとして用意する。
 #
-# **semver 降順** で最新を選ぶ。 `sort -V` (GNU 拡張) が使える環境ではそれを使い、 使えない
-# 環境 (古い macOS の BSD sort 等) では文字列降順 (`sort -r`) にフォールバックする。 実装上は
-# `sort -V -r 2>/dev/null || sort -r` の `||` chain で 1 行に圧縮しており、 probe する必要が
-# ないため簡潔。
-#
-# **lex 降順 fallback の既知の限界**: `1.10.x` < `1.2.x` (lex 順では `1.2` > `1.10`) という
-# semver 違反を起こす。 codex プラグインが 1.0.x → 1.9.x の patch / minor を続けている間は
-# lex でも正しく最新を選べるが、 **1.10 以降が release された時点で BSD sort 環境では古い
-# `1.2.x` 等を最新と誤判定する**。 codex 1.0.x の review CLI I/F は安定している前提なので
-# 「致命的な誤動作」 にはならないが、 codex 側で互換破壊変更が入った場合は古い companion で
-# 新しい review.md を呼ぼうとして失敗する経路ができる。 macOS Sonoma (14, 2023) 以降の sort
-# は `-V` をサポートするため、 影響範囲は macOS 13 (Ventura) 以前の旧環境に限定される。
-# 1.10 release が現実に迫ったタイミングで、 fallback を「probe → 確定」 形に作り直す TODO。
+# **semver 降順** で最新を選ぶ。 v2.0.0 で `_pre_push_review_semver_desc_sort_dirs` (POSIX
+# numeric field sort `sort -t. -k1,1nr -k2,2nr -k3,3nr` + 純数値 X.Y.Z basename フィルタ) を
+# 単一経路として採用。 v1.x までは `sort -V -r 2>/dev/null || sort -r` で lex 降順に fallback
+# していたが、 lex 順では `1.2 > 1.10` となり codex 1.10+ release 時に BSD sort 環境で古い
+# `1.2.x` が選ばれる silent failure 経路があった (audit #5)。 v2.0.0 では GNU `sort -V` 試行
+# を廃止し POSIX field sort 一本に統一することで、 GNU sort / BSD sort / busybox いずれでも
+# 同じ正しい挙動になる。
 #
 # ## 失敗時の挙動
 #
@@ -53,6 +47,40 @@
 # を出して中断する責務を持つ (= 「codex プラグインが install されていない」 と判明できる)。
 # silent skip は **しない** (pre-push-review の loop discipline 維持の観点で、 「codex
 # review が実行できない」 ことを silent に通すと未レビュー push の経路を作る)。
+
+# _pre_push_review_semver_desc_sort_dirs <cache_root>
+# 出力 (stdout): cache_root 直下のディレクトリを semver 3 成分 (`X.Y.Z`) の数値降順で 1 行
+# ずつ出力。 純数値 `X.Y.Z` 以外 (例: `v1.2.3` / `1.2.3-rc1` / `latest`) は除外する。
+#
+# 実装: POSIX numeric field sort (`sort -t. -k1,1n -k2,2n -k3,3n -r`) で X.Y.Z を数値順に
+# ソートする。 sibling の natsuume-statusline `scripts/setup.sh:134` が同じ pattern を使う
+# 既存の確立されたパターン。 GNU `sort -V` 非依存で macOS bash 3.2 / BSD sort / busybox で
+# 動作する。 v1.x までの `sort -V -r 2>/dev/null || sort -r` chain は GNU sort 非対応環境で
+# lex 順 fallback に倒れ、 codex 1.10+ release 後に古い `1.2.x` を最新と誤判定する silent
+# failure 経路があった (audit #5)。 v2.0.0 で根本修正。
+#
+# 純数値 `X.Y.Z` のみを対象にする理由: prerelease (`-rc1` 等) や任意の suffix (`latest`)
+# を numeric sort に混ぜると不定挙動 (sort key への暗黙 cast / 暗黙 lex fallback) になる
+# ため、 上流でフィルタする方が安全。 codex プラグインは現状 `<major>.<minor>.<patch>` の
+# みで運用しており非数値 dir は cooperative には存在しない前提。 もし将来 prerelease が
+# 導入されても、 stable 系 (X.Y.Z) を確実に選び、 pre-release 系を選ばないという保守的
+# 挙動になる (= silent install regression を起こさない)。
+_pre_push_review_semver_desc_sort_dirs() {
+  local cache_root="$1"
+  # pipeline:
+  #   1. find: cache_root 直下の dir を列挙 (full path)
+  #   2. awk: basename を抽出し純数値 `X.Y.Z` のみを sort に渡す (= path 内 `.` が `-t.`
+  #      field 区切りを食って semver 評価を壊す経路と、 prerelease / `latest` / `v` 接頭等の
+  #      不定挙動を上流で構造排除する)
+  #   3. sort: POSIX numeric field sort で X.Y.Z を 3 成分降順に並べる
+  #   4. awk: cache_root を prepend して caller が full path を受け取れる形に戻す
+  # 後段 caller (`resolve_codex_companion`) は while ループで最初に発見できた companion を
+  # 採用するため、 ここで 1 行目を最新 version として返すことが contract。
+  find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+    | awk -F/ '$NF ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ {print $NF}' \
+    | sort -t. -k1,1nr -k2,2nr -k3,3nr \
+    | awk -v root="$cache_root" '{print root "/" $0}'
+}
 
 # 引数: なし
 # 出力 (stdout): codex-companion.mjs の絶対パス
@@ -90,16 +118,13 @@ resolve_codex_companion() {
     # find は基本 POSIX なので macOS / Linux 双方で動く。 mindepth/maxdepth は GNU 拡張だが
     # macOS の BSD find でも 10.5 以降サポートされているためどちらでも使える。
     #
-    # sort は `sort -V -r` (semver 降順、 GNU 拡張) を最初に試し、 BSD sort で `-V` が拒否される
-    # 環境では `sort -r` (lex 降順) に fallback する。 stderr を 2>/dev/null で抑止することで
-    # 「probe してから本実行」 の 2 段階を避け、 1 行の `||` chain にまとめている。 lex 降順
-    # fallback は codex 1.0.x - 1.9.x の patch / minor を順に並べる範囲では正しく最新を選ぶが、
-    # **1.10 以降の release で BSD sort 環境では古い `1.2.x` 等を選ぶ既知の制約**がある (詳細は
-    # 上部 docstring 参照)。 macOS Ventura (13) 以前の旧 BSD sort 環境かつ codex 1.10 release
-    # 以降のタイミングで顕在化する。
+    # sort は `_pre_push_review_semver_desc_sort_dirs` 経由で POSIX numeric field sort
+    # (`sort -t. -k1,1nr -k2,2nr -k3,3nr`) を行う。 v1.x までの `sort -V -r 2>/dev/null
+    # || sort -r` chain は GNU sort 非対応環境で lex 順 fallback に倒れ、 codex 1.10+
+    # release 後に古い `1.2.x` を選ぶ既知バグがあったため、 v2.0.0 で POSIX field sort 単一
+    # 経路に統一した (詳細は lib top docstring を参照)。
     local sorted
-    sorted=$(find "$cache_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-      | { sort -V -r 2>/dev/null || sort -r; })
+    sorted=$(_pre_push_review_semver_desc_sort_dirs "$cache_root")
     local d
     while IFS= read -r d; do
       [ -n "$d" ] || continue

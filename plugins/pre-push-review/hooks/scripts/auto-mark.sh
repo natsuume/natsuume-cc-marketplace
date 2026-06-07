@@ -1,6 +1,6 @@
 #!/bin/bash
 # auto-mark.sh
-# /simplify / /code-review / pre-push-review:security-reviewer subagent /
+# /code-review skill / pre-push-review:security-reviewer subagent /
 # /security-review 標準 skill (主 session 直接呼び出しのみ) の実行完了を PostToolUse で
 # 検知し、対応するレビューマーカーを更新する。
 #
@@ -9,25 +9,13 @@
 #   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh は fail-closed。
 #   同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
 #
-# 検知対象 (v1.1.0 で codex review 経路を廃止):
-#   - Skill tool で `simplify` skill が完了した瞬間 → simplified マーカー (launch 時点
-#     ハッシュ)。/simplify は cleanup-only でコードを編集するため、body の edit で launch
-#     時点ハッシュは即 stale 化する (= 編集が無くなるまで再実行を促す loop discipline)。
-#   - Skill tool で `code-review` skill が完了した瞬間 → code-reviewed マーカー (launch
-#     時点ハッシュ)。/code-review は read-only バグ検出なので edit による self-stale は無い。
-#     v1.0.0 で /simplify (編集) と /code-review (read-only) を別マーカーに分離した
-#     (詳細は lib/markers.sh / lib/first-party-review.sh のヘッダ)。
-#   - Skill tool で `security-review` skill が完了した瞬間 → security-reviewed マーカー
-#     (launch 時点ハッシュ。 主 session が直接呼んだ場合のみ動く後方互換パス)
-#   - Agent / Task tool で `pre-push-review:security-reviewer` subagent が完了した瞬間
-#     → security-reviewed マーカー (subagent 完了時点ハッシュ。 推奨パス)
+# 検知対象 (3 マーカー構成 / v2.0.0):
+#   - Skill `code-review` 完了 → code-reviewed marker (launch 時点ハッシュ)
+#   - Skill `security-review` 完了 → security-reviewed marker (後方互換パス)
+#   - Agent/Task で `pre-push-review:security-reviewer` 完了 → security-reviewed marker (推奨パス)
 #
-# **v1.0.0 で持っていた codex review 経路 (Bash tool で codex-companion.mjs review を検知)
-# は v1.1.0 で廃止された**。 codex review は wrapper script (run-codex-review.sh) が自身で
-# marker を書き込む設計に統一したため、 PostToolUse の Bash 検知は不要になった。 wrapper
-# 一本化の背景は run-codex-review.sh のヘッダ参照 (要約: /codex:review slash command の
-# review.md が background 起動を推奨する prompt 設計のため、 Skill 経由だと bg 起動で
-# silent failure する経路があった)。
+# codex review は wrapper script (run-codex-review.sh) が自身で marker を書く設計のため
+# 本 hook の対象外。 v1.x 経緯は markers.sh / README 参照。
 #
 # **`/security-review` 標準 skill を残しつつ subagent も併用する理由**:
 #   推奨は subagent 経由。 主 session から直接 `/security-review` を呼ぶと
@@ -99,26 +87,16 @@ INPUT=$(cat)
 # (この 2 substring は下記 PRECHECK_RE の全 match の superset なので false negative を
 # 生まない)。早期離脱ロジックを変えるリスクを避け、現状はコスト注記に留める。
 #
-# 2 つの top-level OR ブランチの意図 (v1.1.0 で codex-companion 経路を削除):
-#   - `"skill"[[:space:]]*:[[:space:]]*"(simplify|code-review|security-review)"`: Skill tool で
-#     `simplify` (cleanup・編集) / `code-review` (read-only バグ検出) / `security-review`
-#     skill が完了したことを検出する粗フィルタ。 完全一致が必要なため末尾の `"` まで含めて
-#     マッチさせ、 namespace 付き skill (`code-review:code-review` 等) は副次マッチしない。
-#     **後段 case 分岐 (skill 名 → marker 関数のマッピング) と同期させること**:
-#     v1.0.0 で simplify と code-review は別マーカーに書き分ける。新しい skill 名 / alias 追加時
-#     はここと case 文の両方を更新しないと、 PRECHECK_RE で通過するが case の `*) exit 0 ;;` に
-#     落ちる silent skip が発生し marker が永久に書かれない。
-#   - `"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"`: Agent / Task
-#     tool で `pre-push-review:security-reviewer` subagent が完了したことを検出する粗
-#     フィルタ。 namespace 付き形式 (`pre-push-review:security-reviewer`) と name-only
-#     形式 (`security-reviewer`) の両方を許容するため `[^"]*security-reviewer` で末尾
-#     match する。 後段の jq 検証で full match を確認する。
+# PRECHECK_RE は 2 系統の粗フィルタを OR で繋ぐ:
+#   - skill 名 (`code-review` / `security-review`) の完全一致
+#   - subagent_type が `security-reviewer` 末尾一致 (namespace 付き / name-only 両方許容)
+# **後段 case 文と必ず同期させること** (片方のみ更新だと silent skip 経路ができる)。
 #
 # hook payload の JSON 整形 (`"skill":"code-review"` / `"skill": "code-review"` 等) に
 # 左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を
 # 弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
 # (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
-PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(simplify|code-review|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"'
+PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(code-review|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0
 fi
@@ -127,9 +105,7 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-# lib 群を case 分岐前に source。 v1.1.0 で Bash 経路 (codex review 検知) を削除したため、
-# cmd-parser.sh (line continuation 正規化用) と codex-review-detect.sh (codex 起動検知用) は
-# 本 hook では参照しなくなった。 marker 書き込みで diff-hash.sh / markers.sh のみ必要。
+# lib 群を case 分岐前に source。 marker 書き込みで diff-hash.sh / markers.sh のみ必要。
 SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
 # shellcheck source=lib/diff-hash.sh
 source "$SCRIPT_DIR/lib/diff-hash.sh"
@@ -141,26 +117,17 @@ TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
 case "$TOOL_NAME" in
   Skill)
     SKILL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_input.skill // empty')
-    # 対応する skill 名 → マーカー関数のマッピング。namespace 付き skill (例:
-    # pr-review-toolkit:code-simplifier) は別物として扱い、本プラグインのマーカーは更新しない。
+    # 対応する skill 名 → マーカー関数のマッピング。 namespace 付き skill (例:
+    # pr-review-toolkit:code-reviewer) は別物として扱い、 本プラグインのマーカーは更新しない。
     #
     # Skill tool の PostToolUse は `Launching skill: <name>` を返した瞬間 (= skill body 実行
-    # **前**) に発火する。この timing でマーカーを書くことで、launch 時点の差分ハッシュ
-    # (= skill body が見た state) を記録する。skill body が edits を起こせば current hash は
-    # launch 時点と異なる値になり、block-pre-push.sh の比較で marker stale → DENY となる
-    # ため、Claude は **修正後の state で再度 skill** を呼ぶ必要が生じる (loop 強制)。
+    # **前**) に発火する。 この timing でマーカーを書くことで、 launch 時点の差分ハッシュ
+    # (= skill body が見た state) を記録する。 修正が後で起こる場合は次の編集で current hash
+    # が launch 時点と異なる値になり、 block-pre-push.sh の比較で marker stale → DENY と
+    # なって再走を強制できる。
     case "$SKILL_NAME" in
-      # v1.0.0: /simplify と /code-review は別物なので別マーカーに書き分ける (詳細は
-      # lib/markers.sh / lib/first-party-review.sh のヘッダ)。
-      #   - /simplify   = cleanup-only (コードを編集) → simplified マーカー
-      #   - /code-review = read-only バグ検出         → code-reviewed マーカー
       # **PRECHECK_RE (上の skill alternation) と同期させること**: 片方だけ更新すると、
       # PRECHECK_RE で通過するが case で `*) exit 0 ;;` に落ちる silent skip を作りうる。
-      # 後方互換: v2.1.145 以下の /simplify は当時 cleanup-and-fix (= 編集する) だったので
-      # simplified マーカーへ写すのが意味的に正しい。v2.1.147-153 帯は /simplify が不在で
-      # /code-review (read-only) のみだが、その帯では push gate が fail-open で「第一者 1 本」
-      # に緩むため code-reviewed マーカー単独で gate を満たせる (lib/first-party-review.sh)。
-      simplify) MARKER_FN=simplified_marker_path ;;
       code-review) MARKER_FN=code_reviewed_marker_path ;;
       security-review) MARKER_FN=security_marker_path ;;
       *) exit 0 ;;
