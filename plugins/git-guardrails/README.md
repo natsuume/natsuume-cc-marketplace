@@ -203,7 +203,7 @@ git-guardrails/
 ## 関連プラグイン
 
 - [enforce-draft-pr](../enforce-draft-pr/) — `gh pr create` 時に `--draft` を自動付与 (任意導入)
-- [pre-push-review](../pre-push-review/) — push 前に `/code-review` (旧名 `/simplify`) → `/codex:review --scope branch` を強制 (本プラグインのブランチ判定とは別軸の防御)
+- [pre-push-review](../pre-push-review/) — push 前に 3 レビュー (`/code-review` + codex review wrapper + `pre-push-review:security-reviewer` subagent) を `/pre-push-review:review` slash command で並列起動して強制 (本プラグインのブランチ判定とは別軸の防御)
 
 ## 関連情報
 

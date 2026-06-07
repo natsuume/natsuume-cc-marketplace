@@ -9,17 +9,13 @@
 #   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh は fail-closed。
 #   同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
 #
-# 検知対象 (v2.0.0: /simplify を削除し 3 マーカー化):
-#   - Skill tool で `code-review` skill が完了した瞬間 → code-reviewed マーカー (launch 時点
-#     ハッシュ)。 /code-review は read-only バグ検出なので edit による self-stale は無いが、
-#     後段で他レビューや手動修正で差分が変われば marker は失効する。
-#   - Skill tool で `security-review` skill が完了した瞬間 → security-reviewed マーカー
-#     (launch 時点ハッシュ。 主 session が直接呼んだ場合のみ動く後方互換パス)
-#   - Agent / Task tool で `pre-push-review:security-reviewer` subagent が完了した瞬間
-#     → security-reviewed マーカー (subagent 完了時点ハッシュ。 推奨パス)
+# 検知対象 (3 マーカー構成 / v2.0.0):
+#   - Skill `code-review` 完了 → code-reviewed marker (launch 時点ハッシュ)
+#   - Skill `security-review` 完了 → security-reviewed marker (後方互換パス)
+#   - Agent/Task で `pre-push-review:security-reviewer` 完了 → security-reviewed marker (推奨パス)
 #
-# codex review は wrapper script (run-codex-review.sh) が自身で marker を書き込む設計に
-# 統一されており、 本 hook の対象外。 詳細は run-codex-review.sh のヘッダ参照。
+# codex review は wrapper script (run-codex-review.sh) が自身で marker を書く設計のため
+# 本 hook の対象外。 v1.x 経緯は markers.sh / README 参照。
 #
 # **`/security-review` 標準 skill を残しつつ subagent も併用する理由**:
 #   推奨は subagent 経由。 主 session から直接 `/security-review` を呼ぶと
@@ -91,19 +87,10 @@ INPUT=$(cat)
 # (この 2 substring は下記 PRECHECK_RE の全 match の superset なので false negative を
 # 生まない)。早期離脱ロジックを変えるリスクを避け、現状はコスト注記に留める。
 #
-# 2 つの top-level OR ブランチの意図 (v2.0.0 で /simplify ブランチを除去):
-#   - `"skill"[[:space:]]*:[[:space:]]*"(code-review|security-review)"`: Skill tool で
-#     `code-review` (read-only バグ検出) / `security-review` (主 session 直接呼び出しの
-#     後方互換) skill が完了したことを検出する粗フィルタ。 完全一致が必要なため末尾の `"`
-#     まで含めてマッチさせ、 namespace 付き skill (`code-review:code-review` 等) は副次
-#     マッチしない。 **後段 case 分岐 (skill 名 → marker 関数のマッピング) と同期させること**:
-#     新しい skill 名 / alias 追加時はここと case 文の両方を更新しないと、 PRECHECK_RE で
-#     通過するが case の `*) exit 0 ;;` に落ちる silent skip が発生し marker が永久に書かれない。
-#   - `"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"`: Agent / Task
-#     tool で `pre-push-review:security-reviewer` subagent が完了したことを検出する粗
-#     フィルタ。 namespace 付き形式 (`pre-push-review:security-reviewer`) と name-only
-#     形式 (`security-reviewer`) の両方を許容するため `[^"]*security-reviewer` で末尾
-#     match する。 後段の jq 検証で full match を確認する。
+# PRECHECK_RE は 2 系統の粗フィルタを OR で繋ぐ:
+#   - skill 名 (`code-review` / `security-review`) の完全一致
+#   - subagent_type が `security-reviewer` 末尾一致 (namespace 付き / name-only 両方許容)
+# **後段 case 文と必ず同期させること** (片方のみ更新だと silent skip 経路ができる)。
 #
 # hook payload の JSON 整形 (`"skill":"code-review"` / `"skill": "code-review"` 等) に
 # 左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を

@@ -33,6 +33,12 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
 
 1. 指摘ごとに修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)。
 2. **codex review からの指摘** は `/codex:rescue --wait` で方針を壁打ちし、 「指摘の根本原因に対する解として妥当か / 場当たり的でないか / 全体設計と一貫しているか」 の 3 観点で approve を得てから実装する (rescue 自体はマーカー対象外)。
+
+   ⚠ **`/codex:rescue --wait` のハング対策**: rescue は **しばしばハングします** (応答が一向に返ってこない / プロンプトを出したまま固まる)。 数分待っても進展がない場合は次の手順で復旧:
+   - `ps -eo pid,ppid,lstart,etime,command | grep -E 'codex-companion(\.m[jt]s)?.*[[:space:]]task' | grep -v grep` で `codex-companion.mjs task ...` プロセスを列挙
+   - 起動時刻 (lstart) / 経過時間 (etime) / 親プロセス (PPID) で **現在ハング中の rescue 呼び出しと一致する PID** を確認 (確信できない場合は kill せず主 session を終了)
+   - `kill <pid>` で終了させ、 同じ入力で `/codex:rescue --wait` をやり直す
+   - rescue 自体はマーカー対象外なので、 何回やり直しても push gate には影響しません。
 3. **`/code-review` / security-reviewer subagent からの指摘** は通常具体的な対処 (バグ修正 / input validation / 秘匿情報削除 / injection 対策) なので `/codex:rescue` 壁打ちは optional。 ただし設計判断が絡む修正では rescue 推奨。
 4. 修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 `/pre-push-review:review` を実行して 3 レビューを再走させる。
 

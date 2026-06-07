@@ -676,12 +676,8 @@ is_fresh() {
   [ -n "$1" ] && [ "$1" = "$CURRENT_HASH" ]
 }
 
-# v2.0.0: 3 マーカー (/code-review + codex + security) を **すべて** 必須化する単純 gate。
-# v1.x の /simplify マーカーと CC version 依存の fail-open 緩和は廃止し、 確定的に 3 本要求
-# する設計に倒した。 simplify は cleanup-only で「コードを編集する」 性質のため、 ループ
-# 内で繰り返し走らせる必要があり「並列起動」 にも乗らない (= 並列実行設計の阻害要因)。
-# v2.0.0 は cleanup ステップを drop して bug 検出 (Anthropic) + bug 検出 (OpenAI codex) +
-# security の 3 軸 defense-in-depth に純化する。
+# 3 マーカーを全必須化する単純 gate (v2.0.0)。 v1.x の simplify / fail-open 緩和の経緯は
+# markers.sh / README 参照。
 if is_fresh "$CODE_REVIEWED_HASH" && is_fresh "$CODEX_HASH" && is_fresh "$SECURITY_HASH"; then
   exit 0
 fi
@@ -721,70 +717,23 @@ target: ${TARGET_CWD}
   codex review (OpenAI バグ検出 / wrapper 経由) : $CODEX_STATUS
   security review (subagent 経由)              : $SECURITY_STATUS
 
-実行手順:
+**\`/pre-push-review:review\` slash command を実行してください**。 このコマンドは 3 レビュー
+(\`/code-review\` skill + \`pre-push-review:security-reviewer\` subagent + codex review wrapper)
+を **同じアシスタントメッセージで並列発出** する確定的フローです (詳細は \`commands/review.md\`)。
 
-  1. **\`/pre-push-review:review\` slash command を実行する** (推奨経路)
-     このコマンドは 3 レビューを **同じアシスタントメッセージで並列に** 起動する
-     確定的フローです。 Claude が判断する余地は無く、 順序入れ替えも引数も受け付け
-     ません (コマンド本文に固定された 3 tool 並列発出のみが正解)。
+修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 \`/pre-push-review:review\` を
+実行して再走させ、 全マーカーが ✓ になったら \`git push\` を再試行してください。
 
-     並列実行のため wall-clock は最遅レビュー 1 本の時間で完了します (順次実行よりも
-     大幅に高速)。
+⚠ **v2.0.0 で \`/simplify\` は廃止されました**: v1.x で \`/simplify\` を呼んでいたユーザは、
+\`/pre-push-review:review\` 経由で 3 レビューだけを実行してください (cleanup ステップは
+無くなりました)。 \`/simplify\` を直接呼んでも本プラグインのマーカーは書かれず、 さらに
+\`/simplify\` の edits で他マーカーが失効してループに陥ります。
 
-  2. (上記が利用できない / failしたときの fallback) **3 ツールを手動で並列起動**:
-     - Skill tool で \`code-review\` を起動
-     - Agent / Task tool で \`pre-push-review:security-reviewer\` subagent を起動
-     - Bash tool で \`bash "${CODEX_WRAPPER_PATH}"\` を foreground 実行
-       (Bash tool option \`run_in_background\` は **false** のままにする。 wrapper 内部で
-        codex companion を \`--wait --scope branch\` 固定で foreground 起動するため、
-        主 session が review 結果を観察してから push 判断する経路が成立する。
-        \`run_in_background: true\` で起動した場合は別の hook (block-bg-codex-wrapper.sh)
-        が deny する)
-
-  3. **レビューからの指摘がある場合は、 修正方針を整理してから実装する**
-     - 指摘ごとに「どの指摘をどう直すか / 代替案 / トレードオフ」 を言語化する
-     - **codex review からの指摘** は \`/codex:rescue --wait\` で方針を壁打ちし、
-       「指摘の根本原因に対する解として妥当か / 場当たり的でないか / 全体設計と
-        一貫しているか」 の 3 観点で approve を得てから実装する
-       (rescue 自体はマーカー対象外。 何回投げても push gate には影響しない)
-     - **\`/code-review\` / security-reviewer subagent からの指摘** は通常具体的な
-       対処 (バグ修正 / input validation / 秘匿情報削除 / injection 対策) なので
-       \`/codex:rescue\` 壁打ちは optional。 ただし設計判断が絡む修正 (認証フロー
-       全体の見直し / 権限モデル再設計 等) では rescue 推奨
-
-  4. **修正後に branch 差分が変わるとマーカーは自動失効** するため、 \`/pre-push-review:review\`
-     を再実行して 3 レビューを再走させる。 全マーカーが「✓ 最新の差分でレビュー済み」 に
-     なったら \`git push\` を再試行する。
-
-⚠ **security review は subagent 経由で呼ぶ**: 標準 \`/security-review\` skill は最終応答を
-マークダウンレポートだけにするよう指示するため、 主 session の Claude が直接呼ぶと turn が
-終了して push まで進めません。 必ず \`pre-push-review:security-reviewer\` subagent を
-\`Task\` / \`Agent\` tool 経由で呼び出してください (slash command \`/pre-push-review:review\`
-はこれを内部で行います)。
-
-⚠ **codex review wrapper は foreground で呼ぶ**: \`/codex:review\` slash command (review.md)
-は AskUserQuestion で background 起動を推奨する prompt 設計のため、 Claude が bg を選ぶと
-PostToolUse が marker を書けず silent failure する経路がありました。 v1.1.0 以降は wrapper
-\`bash "${CODEX_WRAPPER_PATH}"\` のみを使い、 wrapper 内部で codex companion を
-\`--wait --scope branch\` foreground で起動する設計に統一しています。 主 session が review
-結果を観察してから push 判断する経路を構造的に保証します。
-
-⚠ \`/codex:rescue\` のハング対策: \`/codex:rescue --wait\` は **しばしばハングします** (応答が
-一向に返ってこない / プロンプトを出したまま固まる)。 数分待っても進展がない場合は以下で復旧:
-  1. \`ps -eo pid,ppid,lstart,etime,command | grep -E 'codex-companion(\.m[jt]s)?.*[[:space:]]task' | grep -v grep\`
-     で \`codex-companion.mjs task ...\` プロセスを列挙
-  2. 起動時刻 (lstart) / 経過時間 (etime) / 親プロセス (PPID) で **現在ハング中の rescue 呼び出しと
-     一致する PID** を確認 (確信できない場合は kill せず主 session を終了)
-  3. \`kill <pid>\` で終了させ、 同じ入力で \`/codex:rescue --wait\` をやり直す
-rescue 自体はマーカー対象外なので、 何回やり直しても push gate には影響しません。
-
-マーカーの記録経路:
-  - \`/code-review\` / \`/security-review\` skill launch および
-    \`pre-push-review:security-reviewer\` subagent 完了は PostToolUse hook (auto-mark.sh) が
-    検知して自動記録
-  - codex review は wrapper script (\`run-codex-review.sh\`) 自身が完了時に直接 marker file
-    へ書き込む
-マーカーは push 通過時に明示削除されません (次の編集でハッシュが変わると自動的に失効するため)。
+slash command が動かない環境用の手動 fallback (3 ツールを順次または並列で起動。 同じ
+アシスタントメッセージで並列発出するのが理想だが、 順次でも push gate 通過は保証される):
+  - Skill tool で skill="code-review" を起動
+  - Agent / Task tool で subagent_type="pre-push-review:security-reviewer" を起動
+  - Bash tool で次を foreground (run_in_background=false) 実行: bash "${CODEX_WRAPPER_PATH}"
 EOF
 )
 
