@@ -4,7 +4,13 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 ## バージョン
 
-v0.1.2
+v0.2.0
+
+### v0.1.2 → v0.2.0 の変更点
+
+- **実行モデルを「1 手順 = 1 つの素朴な git コマンド」に再設計**: 旧版の「一連のスクリプト例」(複数手順を `$(...)` / `if` / シェル変数で合成した単一 Bash スクリプト) は、同居する他プラグインの PreToolUse hook (auto-lint-check の block-commit-lint 等) に fail-closed で deny され実行不能だった。コマンド置換やメッセージ文字列中の `commit` という単語が、hook の「静的解析できない構文は安全側で deny する」検査に構造的に引っかかるため。新版は各手順を単独の git コマンドとして実行し、手順間の状態 (元ブランチ名・デフォルトブランチ名・削除対象) は Claude が会話コンテキストで保持してリテラル値を埋め込む方式に変更 (decompose-bash プラグインの分解方針とも整合)。
+- **state file (`.git/.update-default-branch-state`) を廃止**: シェル変数が Bash 呼び出し間で消える問題への対処として導入していたが、状態を会話コンテキストで保持する新方式では不要になった。
+- `awk` / `sed` への依存を撤廃 (出力の抽出・整形は Claude が直接行う)。
 
 ### v0.1.1 → v0.1.2 の変更点
 
@@ -49,22 +55,24 @@ claude plugin install update-default-branch@natsuume-plugins
 - 「デフォルトブランチを最新にしたい」
 - 「不要なブランチを削除したい」「マージ済みブランチを片付けたい」
 
-**実行手順**:
+**実行手順** (各手順は単一の git コマンドを 1 回の Bash 呼び出しで実行):
 
 1. `git status --short` で作業ツリーの clean を確認
-2. 現在のブランチ名を `.git/.update-default-branch-state` に保存 (Bash 呼び出しが分かれても引き継げるよう)
+2. `git branch --show-current` で現在のブランチ名を取得し、Claude が会話コンテキストで記憶
 3. `git symbolic-ref refs/remotes/origin/HEAD` でデフォルトブランチを取得 (失敗時は `git remote set-head origin --auto` で再設定)
-4. `git switch <default>` → `git pull --ff-only origin <default>` でデフォルトブランチを最新化 (fast-forward のみ許容)
-5. `git fetch --prune origin` でリモートが消えた ref を整理
-6. `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads` の出力から `[gone]` を検出
-7. `git branch -D <branch>` で削除 (リモートが既に消えている branch なので確認ステップなし)
-8. state file から元のブランチ名を読み戻し、残っていれば `git switch` で復帰、削除済み or detached の場合はユーザーに新ブランチ名を確認。最後に state file を削除
+4. `git switch <default>` でデフォルトブランチへ切り替え
+5. `git pull --ff-only origin <default>` で最新化 (fast-forward のみ許容。失敗時は元のブランチへ復帰して中断)
+6. `git fetch --prune origin` でリモートが消えた ref を整理
+7. `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads` の出力から Claude が `[gone]` を抽出
+8. `git branch -D <branch1> <branch2> ...` で一括削除 (リモートが既に消えている branch なので確認ステップなし)
+9. 手順 2 で記憶した元のブランチへ `git switch` で復帰。削除済み or detached の場合はユーザーに新ブランチ名を確認
 
 ## 設計上の注意
 
+- **他プラグインの hook と共存する「素朴な単一コマンド」設計**: 各手順のコマンド文字列にはコマンド置換 `$(...)` / 連結 (`&&` 等) / シェル変数 / `echo` メッセージを含めません。これらを含む合成スクリプトは、auto-lint-check の block-commit-lint hook (コマンド中に `git` + `commit` の語と `$(...)` が共存すると fail-closed で deny する) 等にブロックされ実行不能になるためです。手順間の状態は Claude が会話コンテキストで保持し、後続コマンドへリテラル値として埋め込みます。
 - **`[gone]` 削除に確認ステップなし**: 追跡先が消えている branch はリモート側で既に削除済み (PR マージ後の自動削除等) で、ローカル削除は安全な後始末でしかないため、確認ステップは挟みません。
 - **`[gone]` ≠ "merged"**: ただし `[gone]` には PR マージ以外の経路 (リモートでの force-delete / リネーム等) も含まれます。`git branch -D` は merge 検査を skip するため、ローカルにのみ存在するコミットを抱えた `[gone]` branch は誤削除されえます。削除前の SHA は `git branch -D` の出力に表示されるので、誤削除に気づいたら `git checkout -b <name> <sha>` で復活できます (約 30 日は `git reflog` でも遡れます)。「未マージなのに `[gone]` になっている」branch を温存したい場合、本 Skill 実行前に別 branch へ退避するか、Skill 自体を実行しないでください。
-- **デフォルトブランチに居着かない**: ユーザーの CLAUDE.md でデフォルトブランチでの作業が禁止されている場合に備え、開始時に元のブランチを `ORIGINAL_BRANCH` として保存し、終了時に状況に応じて復帰させる手順になっています。
+- **デフォルトブランチに居着かない**: ユーザーの CLAUDE.md でデフォルトブランチでの作業が禁止されている場合に備え、開始時に元のブランチ名を Claude が記憶し、終了時に状況に応じて復帰させる手順になっています。
 - **未コミット変更がある場合は中断**: `git status --short` の出力が空でない場合、stash / commit のいずれかをユーザーに依頼してから再実行する設計です。
 
 ## ディレクトリ構成
@@ -83,7 +91,6 @@ update-default-branch/
 
 - `bash`
 - `git`
-- `awk`
 - `origin` リモートが設定されているリポジトリ
 
 ## 関連情報
