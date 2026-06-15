@@ -607,7 +607,7 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C "${TARGET_CWD}" status\` で変更を確認し、 commit してから \`/pre-push-review:review\` slash command で 3 レビュー (/code-review + codex review + security-reviewer subagent) を再走させて push してください。
+\`git -C "${TARGET_CWD}" status\` で変更を確認し、 commit してから \`/pre-push-review:review\` slash command で 3 subagent (code-reviewer + codex-reviewer + security-reviewer) を再走させて push してください。
 EOF
 )
   deny "$REASON"
@@ -696,16 +696,6 @@ CODE_REVIEWED_STATUS=$(format_status "$CODE_REVIEWED_HASH")
 CODEX_STATUS=$(format_status "$CODEX_HASH")
 SECURITY_STATUS=$(format_status "$SECURITY_HASH")
 
-# codex review wrapper の絶対パスを deny メッセージに埋め込む。 自身のスクリプト位置
-# (`$_PRE_PUSH_REVIEW_SCRIPT_DIR`、 = hooks/scripts/ ディレクトリ) からの **self-relative
-# 解決のみ** を使う (= `${CLAUDE_PLUGIN_ROOT}` 環境変数には依存しない)。 wrapper script は
-# block-pre-push.sh と同じ `hooks/scripts/` 配下に置く設計のため、 hook 自身の実体 path
-# から決定的に求まる。 これにより:
-#   - hook 起動時の CLAUDE_PLUGIN_ROOT セット有無に挙動が左右されない
-#   - deny メッセージに具体的な絶対パスを埋め込めるため、 Claude / ユーザがコピペで
-#     起動できる (`${CLAUDE_PLUGIN_ROOT}` 形式だと文字列が展開されない / 環境依存)
-CODEX_WRAPPER_PATH="$_PRE_PUSH_REVIEW_SCRIPT_DIR/run-codex-review.sh"
-
 REASON=$(cat <<EOF
 プッシュをブロックしました。 push 前に 3 レビューを実行してください。
 
@@ -713,22 +703,23 @@ target: ${TARGET_CWD}
 ブランチ: ${BRANCH} (基準: origin/${BASE})
 
 レビュー状態 (下記 3 つすべてが「✓ 最新の差分でレビュー済み」 になると push が許可されます):
-  /code-review (Anthropic read-only バグ検出)  : $CODE_REVIEWED_STATUS
-  codex review (OpenAI バグ検出 / wrapper 経由) : $CODEX_STATUS
-  security review (subagent 経由)              : $SECURITY_STATUS
+  code review (pre-push-review:code-reviewer subagent)        : $CODE_REVIEWED_STATUS
+  codex review (pre-push-review:codex-reviewer subagent 経由) : $CODEX_STATUS
+  security review (pre-push-review:security-reviewer subagent): $SECURITY_STATUS
 
 **\`/pre-push-review:review\` slash command を実行してください**。 このコマンドは 3 レビュー
-(\`/code-review\` skill + \`pre-push-review:security-reviewer\` subagent + codex review wrapper)
-を **同じアシスタントメッセージで並列発出** する確定的フローです (詳細は \`commands/review.md\`)。
+を **同じアシスタントメッセージで並列に** 3 subagent (\`pre-push-review:code-reviewer\` +
+\`pre-push-review:codex-reviewer\` + \`pre-push-review:security-reviewer\`) として起動する
+確定的フローです (詳細は \`commands/review.md\`)。
 
 修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 \`/pre-push-review:review\` を
 実行して再走させ、 全マーカーが ✓ になったら \`git push\` を再試行してください。
 
-slash command が動かない環境用の手動 fallback (3 ツールを順次または並列で起動。 同じ
+slash command が動かない環境用の手動 fallback (3 subagent を順次または並列で起動。 同じ
 アシスタントメッセージで並列発出するのが理想だが、 順次でも push gate 通過は保証される):
-  - Skill tool で skill="code-review" を起動
+  - Agent / Task tool で subagent_type="pre-push-review:code-reviewer" を起動
   - Agent / Task tool で subagent_type="pre-push-review:security-reviewer" を起動
-  - Bash tool で次を foreground (run_in_background=false) 実行: bash "${CODEX_WRAPPER_PATH}"
+  - Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動
 EOF
 )
 

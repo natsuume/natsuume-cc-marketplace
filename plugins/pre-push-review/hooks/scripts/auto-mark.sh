@@ -1,43 +1,43 @@
 #!/bin/bash
 # auto-mark.sh
-# /code-review skill / pre-push-review:security-reviewer subagent /
-# /security-review 標準 skill (主 session 直接呼び出しのみ) の実行完了を PostToolUse で
-# 検知し、対応するレビューマーカーを更新する。
+# pre-push-review:code-reviewer / pre-push-review:security-reviewer subagent の
+# 実行完了を PostToolUse で検知し、対応するレビューマーカーを更新する。
 #
 # policy: fail-open (PostToolUse / 正常完了後の marker 書き込み)
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を
 #   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh は fail-closed。
 #   同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
 #
-# 検知対象 (3 マーカー構成 / v2.0.0):
-#   - Skill `code-review` 完了 → code-reviewed marker (launch 時点ハッシュ)
-#   - Skill `security-review` 完了 → security-reviewed marker (後方互換パス)
-#   - Agent/Task で `pre-push-review:security-reviewer` 完了 → security-reviewed marker (推奨パス)
+# 検知対象 (3 マーカー構成 / v3.0.0):
+#   - Agent/Task で `pre-push-review:code-reviewer` 完了 → code-reviewed marker
+#   - Agent/Task で `pre-push-review:security-reviewer` 完了 → security-reviewed marker
 #
 # codex review は wrapper script (run-codex-review.sh) が自身で marker を書く設計のため
-# 本 hook の対象外。 v1.x 経緯は markers.sh / README 参照。
+# 本 hook の対象外 (codex-reviewer subagent も wrapper を内部で foreground 起動するだけで、
+# subagent 完了タイミングでの marker 書き込みは wrapper に委譲する。 もし subagent 完了で
+# 二重に書くと、 wrapper が non-zero exit したのに subagent が報告だけ返して完了した場合に
+# 「失敗した review なのに marker が書かれる」 silent-pass の経路を作るため、 検知しない
+# 設計に倒している)。
 #
-# **`/security-review` 標準 skill を残しつつ subagent も併用する理由**:
-#   推奨は subagent 経由。 主 session から直接 `/security-review` を呼ぶと
-#   「Your final reply must contain the markdown report and nothing else.」で
-#   turn が終了して後続フロー (`git push`) が止まるため、 block-pre-push.sh の
-#   deny メッセージは subagent 経由を案内している。 ただし「直接呼ばれた場合は
-#   マーカーを書かない」 設計だと、 誤ってまたは旧運用で直接呼んだとき marker が
-#   永久に更新されない user-hostile な経路が残るため、 直接呼び出しも検知して
-#   marker を書く後方互換パスを維持する。
+# **v3.0.0 で Skill 検知を全廃**: v2.x までは `/code-review` / `/security-review` 標準 skill を
+# Skill tool 経由で直接呼ぶケースも検知して marker を書いていた (後方互換 + ユーザの誤起動
+# 救済)。 v3.0.0 で 3 レビューすべてを subagent に統一したため、 Skill 検知は不要になり全廃
+# した。 標準 skill を直接呼んだ場合は subagent 経由を案内する block-pre-push.sh の deny
+# メッセージで誘導される (主 session の Claude が `/code-review` を直接呼ぶと turn が終了して
+# 後続フローが止まるため、 そもそも実用上のパスではない)。
 #
-#   silent-pass のリスク (subagent が標準 skill を invoke → sub-task が動かず失敗
-#   → でも marker は書かれる) は、 subagent の tools から **`Skill` を外す** ことで
-#   構造的に塞いでいる。 subagent は標準 skill を invoke できないため、 直接
-#   呼び出しの検知パスは subagent 経路と衝突しない。
+# **subagent 内 Skill invoke の silent-pass 防止**: 各 subagent (code-reviewer / security-reviewer
+# / codex-reviewer) は tools から `Skill` を外している。 subagent が標準 skill を invoke する
+# ことを構造的に塞いでおり、 「subagent → 標準 skill → sub-task が nested 制約で動かず degraded
+# mode で完了 → でも Agent 完了で marker は書かれる」 経路は発生しない。
 #
 # 設計意図:
-#   - マーカー: 「Claude が手動で mark-reviewed を呼ぶ」方式は修正後の状態を
-#     レビュー済みと偽装できる経路 (= ループが強制されない) を残す。各ツールの
-#     実走を hook が捕捉しハッシュを書き込むことで、 すべてが「現在のブランチ全差分」
+#   - マーカー: 「Claude が手動で mark-reviewed を呼ぶ」 方式は修正後の状態を
+#     レビュー済みと偽装できる経路 (= ループが強制されない) を残す。 各 subagent の
+#     実走完了を hook が捕捉しハッシュを書き込むことで、 すべてが「現在のブランチ全差分」
 #     に対して直近で走ったことを保証する。 codex review だけは wrapper が直接書く
 #     例外設計 (= Claude が wrapper の中身を編集しない限り偽装できない範囲)。
-#   - 「security-reviewer subagent の完了」を Task 終了で検知するのは、 subagent が
+#   - 「subagent の完了」を Task / Agent 終了で検知するのは、 subagent が
 #     実際にレビュー本体を完了させたタイミングを捉えるため。 launch 時点ではなく
 #     完了時点でマーカーを書くことで、 subagent が途中で失敗した場合に marker が
 #     書かれない (= push gate がそのまま deny) を担保する。
@@ -71,8 +71,8 @@ install_exit_trap "auto-mark" "レビュー marker の書き込みが skip さ�
 INPUT=$(cat)
 
 # 本 hook は hooks.json で matcher: "*" (wildcard) を指定しており、すべての tool 完了で
-# 発火する。tool 名に依存させない理由は、Claude Code 公式ドキュメントで Skill matcher の
-# 挙動が tool 名リストに明示されておらず、特定の tool 名 (`Skill` など) を信頼できる
+# 発火する。tool 名に依存させない理由は、Claude Code 公式ドキュメントで Agent/Task matcher の
+# 挙動が tool 名リストに明示されておらず、特定の tool 名 (`Agent` / `Task` など) を信頼できる
 # matcher にできないため。代わりに本スクリプト側で bash 内蔵の正規表現マッチを唯一の
 # ゲートにする。
 #
@@ -82,32 +82,32 @@ INPUT=$(cat)
 #
 # **コスト注記 (#90)**: matcher "*" で全 tool 完了に発火するため、巨大な tool_response が
 # INPUT に乗ると毎回 INPUT サイズに比例した ERE 評価が走る (fork は無いが in-process コスト)。
-# 現状の規模では無視できるが、もし問題化したら ERE の前に `case "$INPUT" in *'"skill"'*|
-# *'"subagent_type"'*) ;; *) exit 0 ;; esac` の substring pre-filter で大半を弾ける
-# (この 2 substring は下記 PRECHECK_RE の全 match の superset なので false negative を
-# 生まない)。早期離脱ロジックを変えるリスクを避け、現状はコスト注記に留める。
+# `case "$INPUT" in *'"subagent_type"'*) ;; *) exit 0 ;; esac` の substring pre-filter で
+# 大半を弾く設計 (この substring は下記 PRECHECK_RE の全 match の superset なので false
+# negative を生まない)。
 #
-# PRECHECK_RE は 2 系統の粗フィルタを OR で繋ぐ:
-#   - skill 名 (`code-review` / `security-review`) の完全一致
-#   - subagent_type が `security-reviewer` 末尾一致 (namespace 付き / name-only 両方許容)
-# **後段 case 文と必ず同期させること** (片方のみ更新だと silent skip 経路ができる)。
+# PRECHECK_RE は subagent_type が `code-reviewer` / `security-reviewer` 末尾一致のみを
+# 粗フィルタする (namespace 付き / name-only 両方許容)。 v2.x までは Skill `code-review` /
+# `security-review` 完了も検知していたが、 v3.0.0 で 3 レビューすべてを subagent 経由に
+# 統一したため Skill 検知は全廃した。 **後段 case 文と必ず同期させること** (片方のみ更新
+# だと silent skip 経路ができる)。
 #
-# hook payload の JSON 整形 (`"skill":"code-review"` / `"skill": "code-review"` 等) に
-# 左右されないよう whitespace を寛容に許容する。false negative (= 本来通すべき payload を
-# 弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
+# hook payload の JSON 整形 (`"subagent_type":"code-reviewer"` / `"subagent_type": "code-reviewer"`
+# 等) に左右されないよう whitespace を寛容に許容する。 false negative (= 本来通すべき payload
+# を弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
 # (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
 #
-# **substring pre-filter** (v2.0.1): PRECHECK_RE は ERE 評価で INPUT 全文を走査する hot
-# path コストがある (matcher: "*" で全 tool 完了に発火するため)。 PRECHECK_RE の全 match の
-# superset となる `"skill"` / `"subagent_type"` substring が無いなら ERE を走らせず即抜ける。
-# substring case 評価は ERE よりかなり軽量なので、 PostToolUse 多発時 (slash command で 3
-# 並列発火する v2.0.0+ では 3 倍) のオーバヘッド削減になる。 superset 関係なので false
-# negative は構造的に発生しない。
+# **substring pre-filter** (v2.0.1 で導入 / v3.0.0 で `"skill"` substring を削除): PRECHECK_RE
+# は ERE 評価で INPUT 全文を走査する hot path コストがある (matcher: "*" で全 tool 完了に発火
+# するため)。 PRECHECK_RE の全 match の superset となる `"subagent_type"` substring が無いなら
+# ERE を走らせず即抜ける。 substring case 評価は ERE よりかなり軽量なので、 PostToolUse 多発時
+# (slash command で 3 並列発火するため 3 倍) のオーバヘッド削減になる。 superset 関係なので
+# false negative は構造的に発生しない。
 case "$INPUT" in
-  *'"skill"'*|*'"subagent_type"'*) ;;
+  *'"subagent_type"'*) ;;
   *) exit 0 ;;
 esac
-PRECHECK_RE='"skill"[[:space:]]*:[[:space:]]*"(code-review|security-review)"|"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*security-reviewer"'
+PRECHECK_RE='"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*(code-reviewer|security-reviewer)"'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0
 fi
@@ -126,32 +126,25 @@ source "$SCRIPT_DIR/lib/markers.sh"
 TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
 
 case "$TOOL_NAME" in
-  Skill)
-    SKILL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_input.skill // empty')
-    # 対応する skill 名 → マーカー関数のマッピング。 namespace 付き skill (例:
-    # pr-review-toolkit:code-reviewer) は別物として扱い、 本プラグインのマーカーは更新しない。
-    #
-    # Skill tool の PostToolUse は `Launching skill: <name>` を返した瞬間 (= skill body 実行
-    # **前**) に発火する。 この timing でマーカーを書くことで、 launch 時点の差分ハッシュ
-    # (= skill body が見た state) を記録する。 修正が後で起こる場合は次の編集で current hash
-    # が launch 時点と異なる値になり、 block-pre-push.sh の比較で marker stale → DENY と
-    # なって再走を強制できる。
-    case "$SKILL_NAME" in
-      # **PRECHECK_RE (上の skill alternation) と同期させること**: 片方だけ更新すると、
-      # PRECHECK_RE で通過するが case で `*) exit 0 ;;` に落ちる silent skip を作りうる。
-      code-review) MARKER_FN=code_reviewed_marker_path ;;
-      security-review) MARKER_FN=security_marker_path ;;
-      *) exit 0 ;;
-    esac
-    ;;
   Agent|Task)
     # Claude Code の Agent tool は内部的に "Agent" / "Task" 2 つの名前で公開されている。
     # PostToolUse の tool_name はそのどちらかが入りうるので両方 match させる。
     SUBAGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // empty')
-    # subagent 名は namespace 付き (`pre-push-review:security-reviewer`) と name-only
-    # (`security-reviewer`) のどちらでも受け付ける。 同名 subagent が別 plugin に存在
+    # subagent 名は namespace 付き (`pre-push-review:code-reviewer`) と name-only
+    # (`code-reviewer`) のどちらでも受け付ける。 同名 subagent が別 plugin に存在
     # して衝突する可能性は低いが、 後者を許容することで運用ミスへの寛容度を上げる。
+    #
+    # **PRECHECK_RE (上の subagent_type alternation) と同期させること**: 片方だけ更新すると、
+    # PRECHECK_RE で通過するが case で `*) exit 0 ;;` に落ちる silent skip を作りうる。
+    #
+    # codex-reviewer subagent はここでは検知しない (= marker を書かない): wrapper script
+    # (run-codex-review.sh) が自身の正常完了 (exit 0) でのみ codex-reviewed marker を atomic
+    # rename で書く設計。 subagent 完了タイミングで二重に書くと、 wrapper が non-zero exit
+    # したのに subagent が報告だけ返して完了した場合に「失敗した review なのに marker が
+    # 書かれる」 silent-pass の経路を作るため、 検知しない。
     case "$SUBAGENT_TYPE" in
+      pre-push-review:code-reviewer|code-reviewer)
+        MARKER_FN=code_reviewed_marker_path ;;
       pre-push-review:security-reviewer|security-reviewer)
         MARKER_FN=security_marker_path ;;
       *)
@@ -164,8 +157,8 @@ case "$TOOL_NAME" in
 esac
 
 # ツール実行が失敗 / 中断した場合はレビューが完遂していないためマーカーを更新しない
-# (失敗した review / 失敗した code-review でマーカーを書くと、その後別の tool の成功と
-# 組み合わさって push が通ってしまう抜け穴になる)。Skill / Agent / Task 全分岐に共通。
+# (失敗した review で marker を書くと、その後別の tool の成功と組み合わさって push が
+# 通ってしまう抜け穴になる)。v3.0.0 では Agent / Task 分岐のみ (Skill 分岐は廃止)。
 { read -r IS_ERROR; read -r INTERRUPTED; } < <(
   printf '%s' "$INPUT" | jq -r '
     (.tool_response.is_error // .tool_response.isError // false),
