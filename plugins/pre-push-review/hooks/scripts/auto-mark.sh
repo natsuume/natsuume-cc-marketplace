@@ -86,15 +86,23 @@ INPUT=$(cat)
 # 大半を弾く設計 (この substring は下記 PRECHECK_RE の全 match の superset なので false
 # negative を生まない)。
 #
-# PRECHECK_RE は subagent_type が `code-reviewer` / `security-reviewer` 末尾一致のみを
-# 粗フィルタする (namespace 付き / name-only 両方許容)。 v2.x までは Skill `code-review` /
-# `security-review` 完了も検知していたが、 v3.0.0 で 3 レビューすべてを subagent 経由に
-# 統一したため Skill 検知は全廃した。 **後段 case 文と必ず同期させること** (片方のみ更新
-# だと silent skip 経路ができる)。
+# PRECHECK_RE は subagent_type が **本プラグインの namespace prefix 付き** `pre-push-review:code-reviewer`
+# / `pre-push-review:security-reviewer` の完全一致のみを粗フィルタする。 v3.0.0 で 3 レビューすべてを
+# subagent 経由に統一したため Skill 検知は全廃した。 **後段 case 文と必ず同期させること** (片方のみ
+# 更新だと silent skip 経路ができる)。
 #
-# hook payload の JSON 整形 (`"subagent_type":"code-reviewer"` / `"subagent_type": "code-reviewer"`
-# 等) に左右されないよう whitespace を寛容に許容する。 false negative (= 本来通すべき payload
-# を弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
+# **v3.0.0 で name-only 受理を廃止**: v2.x までの auto-mark は `code-reviewer` / `security-reviewer`
+# の name-only 形式も受理していた (PRECHECK_RE prefix が `[^"]*` で任意 namespace を吸収していた)。
+# しかし他 plugin (pr-review-toolkit / feature-dev) が同名 `code-reviewer` subagent を提供する場合、
+# ユーザが name-only で別 plugin の subagent を呼ぶと PostToolUse の subagent_type が name-only 文字列
+# で届き、 本 hook が pre-push-review:code-reviewer の marker を誤って書く push gate bypass 経路に
+# なる。 v3.0.0 では namespace prefix `pre-push-review:` を必須として構造的に塞ぐ。 `/pre-push-review:review`
+# slash command と block-pre-push.sh の deny メッセージは v2.x から namespace 付きで案内している
+# ため、 正常運用パスへの影響は無い。
+#
+# hook payload の JSON 整形 (`"subagent_type":"pre-push-review:code-reviewer"` / `"subagent_type": "pre-push-review:code-reviewer"`
+# 等) に左右されないよう whitespace を寛容に許容する。 false negative (= 本来通すべき payload を
+# 弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
 # (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
 #
 # **substring pre-filter** (v2.0.1 で導入 / v3.0.0 で `"skill"` substring を削除): PRECHECK_RE
@@ -107,7 +115,7 @@ case "$INPUT" in
   *'"subagent_type"'*) ;;
   *) exit 0 ;;
 esac
-PRECHECK_RE='"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*(code-reviewer|security-reviewer)"'
+PRECHECK_RE='"subagent_type"[[:space:]]*:[[:space:]]*"pre-push-review:(code|security)-reviewer"'
 if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
   exit 0
 fi
@@ -130,9 +138,9 @@ case "$TOOL_NAME" in
     # Claude Code の Agent tool は内部的に "Agent" / "Task" 2 つの名前で公開されている。
     # PostToolUse の tool_name はそのどちらかが入りうるので両方 match させる。
     SUBAGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // empty')
-    # subagent 名は namespace 付き (`pre-push-review:code-reviewer`) と name-only
-    # (`code-reviewer`) のどちらでも受け付ける。 同名 subagent が別 plugin に存在
-    # して衝突する可能性は低いが、 後者を許容することで運用ミスへの寛容度を上げる。
+    # subagent 名は namespace 付き (`pre-push-review:code-reviewer` / `pre-push-review:security-reviewer`)
+    # のみを受け付ける。 v2.x までの name-only 受理は v3.0.0 で廃止 (他 plugin の同名 subagent
+    # との衝突で push gate bypass する経路を塞ぐため。 詳細は PRECHECK_RE のコメント参照)。
     #
     # **PRECHECK_RE (上の subagent_type alternation) と同期させること**: 片方だけ更新すると、
     # PRECHECK_RE で通過するが case で `*) exit 0 ;;` に落ちる silent skip を作りうる。
@@ -143,9 +151,9 @@ case "$TOOL_NAME" in
     # したのに subagent が報告だけ返して完了した場合に「失敗した review なのに marker が
     # 書かれる」 silent-pass の経路を作るため、 検知しない。
     case "$SUBAGENT_TYPE" in
-      pre-push-review:code-reviewer|code-reviewer)
+      pre-push-review:code-reviewer)
         MARKER_FN=code_reviewed_marker_path ;;
-      pre-push-review:security-reviewer|security-reviewer)
+      pre-push-review:security-reviewer)
         MARKER_FN=security_marker_path ;;
       *)
         exit 0 ;;

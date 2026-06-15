@@ -11,7 +11,7 @@
 > **v3.0.0 で 3 レビューすべてを subagent 経由に統一** (互換破壊あり): v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、 それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しました。 設計のメリット:
 >
 > - **context isolation**: 各レビューの詳細出力 (codex の verdict / findings、 code review の詳細指摘) は subagent context に閉じ込められ、 親 session の context が圧迫されません。 親 session に返るのは markdown report (要約) だけです。
-> - **失敗検知の対称性**: 3 軸とも `tool_response.is_error` / `interrupted` の同じ判定経路で silent-pass を防げます (v2.x までは Skill / Bash / Agent で 3 通りの失敗検知ロジックを抱えていました)。
+> - **起動経路の単一化**: 親 session は 3 軸とも同じ `Agent` / `Task` tool で起動します。 v2.x までは Skill / Bash / Agent の 3 通りの tool で経路がばらけていました。 marker 書き込み経路は 2 軸 (code / security) が auto-mark.sh の Agent 完了検知、 1 軸 (codex) が wrapper の exit 0 内部書き込みで非対称が残りますが (wrapper の dirty 検知と verdict 非依存 atomic rename の防御を維持するため意図的に非対称に倒している)、 親 session 側の起動 API は統一されました。
 > - **`/pre-push-review:review` slash command を 3 subagent 並列発出に書き換え**: deny メッセージとともに案内されます。 wall-clock は最遅レビュー 1 本の時間で完了します。
 
 ## バージョン
@@ -23,7 +23,7 @@ v3.0.0 (前身: `pre-commit-review` v0.4.0)
 - **`agents/code-reviewer.md` を新設**: v2.x の Skill `/code-review` (Anthropic bundled skill / read-only correctness バグ検出) に相当する self-contained subagent。 prompt は標準 skill と独立に管理 (security-reviewer と同じ理由: 主 session から直接 skill を呼ぶと turn が終了、 subagent 内から呼んでも nested subagent 制約で sub-task が動かないため)。 tools は `Bash, Read, Glob, Grep, LS` で `Skill` / `Task` を含まない (= 標準 skill を invoke できない構造的防御)。
 - **`agents/codex-reviewer.md` を新設**: codex review wrapper (`run-codex-review.sh`) を foreground で 1 回起動するだけの最小 subagent。 tools は `Bash` のみで、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。 wrapper が atomic rename で codex-reviewed marker を書く設計は維持。
 - **`commands/review.md` を 3 subagent 並列発出に書き換え**: Skill (`code-review`) + Bash (codex wrapper) + Agent (security-reviewer) の 3 経路混在を、 Agent x 3 (code-reviewer + codex-reviewer + security-reviewer) に統一しました。
-- **`auto-mark.sh` の検知ロジックを Skill → Agent に移行**: PRECHECK\_RE と case 文から Skill `code-review` / `security-review` の検知を全廃。 subagent\_type が `code-reviewer` / `security-reviewer` の末尾一致 (namespace 付き / name-only 両許容) のみを検知します。 substring pre-filter は `"subagent_type"` 単独で十分になりました。 codex-reviewer subagent は auto-mark の検知対象外 (= marker は wrapper が書く設計を維持): subagent が wrapper の non-zero exit を観察してから report を返した場合に、 Agent 完了で marker を書くと「失敗した review なのに marker が書かれる」 silent-pass の経路を作るため。
+- **`auto-mark.sh` の検知ロジックを Skill → Agent に移行 + name-only 受理を廃止**: PRECHECK\_RE と case 文から Skill `code-review` / `security-review` の検知を全廃。 subagent\_type が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` (**namespace prefix 必須**) の完全一致のみを検知します。 v2.x までの name-only (`code-reviewer` / `security-reviewer` 単独) 受理は v3.0.0 で廃止しました。 他 plugin (pr-review-toolkit / feature-dev 等) が同名 `code-reviewer` subagent を提供する環境で、 ユーザが name-only で別 plugin の subagent を呼ぶと PostToolUse の subagent\_type が name-only 文字列で届き本 hook が pre-push-review の marker を誤って書く push gate bypass 経路があったため。 `/pre-push-review:review` slash command と block-pre-push.sh の deny メッセージは v2.x から namespace 付きで案内しているため、 正常運用パスへの影響は無いです。 substring pre-filter は `"subagent_type"` 単独で十分になりました。 codex-reviewer subagent は auto-mark の検知対象外 (= marker は wrapper が書く設計を維持): subagent が wrapper の non-zero exit を観察してから report を返した場合に、 Agent 完了で marker を書くと「失敗した review なのに marker が書かれる」 silent-pass の経路を作るため。
 - **`block-pre-push.sh` の deny メッセージを 3 Agent 案内に書き換え**: Skill (`code-review`) と Bash (codex wrapper) の fallback 起動コマンドを Agent x 3 に置換。 wrapper の絶対パス埋め込み (CODEX_WRAPPER_PATH) も削除しました (subagent 経由で起動するため不要)。
 - **後方互換 / 移行**: 既存の `.claude-pre-push-code-reviewed` / `.claude-pre-push-codex-reviewed` / `.claude-pre-push-security-reviewed` marker file 名と hash 計算式は不変です。 v2.x で実行済みの marker は v3.0.0 でも hash が一致する限り有効。 v2.x ユーザは v3.0.0 アップグレード後の最初の push で「`/pre-push-review:review` を実行してください」 と案内され、 そこから 3 subagent が走ります。
 - **major bump にした理由**: ユーザフロー変更 (Skill / Bash 経路の廃止、 Agent 統一) と auto-mark の検知契約変更 (Skill 検知の全廃) を伴うため major。 marker file 名と hash 計算式は不変なので、 既存 marker は hash 一致時に引き続き有効。
@@ -132,8 +132,8 @@ hooks.json の matcher は `"*"` (wildcard) で、 すべての tool 完了時�
 
 | 検知対象                                                | tool 名 | 判定                                                                                                                                                                            | 書き込むマーカー                              |
 | ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `pre-push-review:code-reviewer` subagent の完了 | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:code-reviewer` または `code-reviewer` (name-only 形式も許容) | `<git-dir>/.claude-pre-push-code-reviewed`    |
-| `pre-push-review:security-reviewer` subagent の完了 | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` または `security-reviewer` (name-only 形式も許容) | `<git-dir>/.claude-pre-push-security-reviewed` |
+| `pre-push-review:code-reviewer` subagent の完了 | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:code-reviewer` (**namespace prefix 必須** / v3.0.0 で name-only 受理を廃止) | `<git-dir>/.claude-pre-push-code-reviewed`    |
+| `pre-push-review:security-reviewer` subagent の完了 | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` (**namespace prefix 必須** / v3.0.0 で name-only 受理を廃止) | `<git-dir>/.claude-pre-push-security-reviewed` |
 
 **subagent を completion タイミングで検知する理由**:
 
@@ -146,7 +146,7 @@ codex-reviewer subagent は wrapper script (`run-codex-review.sh`) を foregroun
 **書き込みをスキップする条件**:
 
 - `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない)
-- `tool_input.subagent_type` が `pre-push-review:code-reviewer` / `code-reviewer` / `pre-push-review:security-reviewer` / `security-reviewer` 以外 (別の subagent 起動はマーカー対象外。 codex-reviewer もここで弾かれる)
+- `tool_input.subagent_type` が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` 以外 (別の subagent 起動 / name-only 形式 / namespace ミスマッチはマーカー対象外。 codex-reviewer もここで弾かれる)
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)
 
