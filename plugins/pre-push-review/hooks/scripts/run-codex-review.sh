@@ -24,13 +24,12 @@
 #      も廃止できる
 # = Claude の自由度を絞ることで「bg 起動による silent failure」 を構造的に排除する。
 #
-# ## なぜ codex-review-customize の review.md patch 拡張ではなく wrapper か
+# ## なぜ slash command 定義の patch 拡張ではなく wrapper か (過去の検討記録)
 #
-# 本 marketplace には既に `codex-review-customize` プラグインがあり、 公式 codex プラグインの
-# slash command 定義 (`review.md`) を sed で patch する抽象 (= disable-model-invocation を除去
-# して Skill 経由起動を有効化) を持っている。 同じ抽象の延長で「review.md から AskUserQuestion
-# ブロックを削除する patch を追加 → background 推奨を消す」 という方向もあり得たが、 v1.1.0 は
-# wrapper 方式を選んだ。 理由:
+# v1.0.0 までは公式 codex プラグインの `/codex:review` slash command 定義 (`review.md`) を
+# sed で patch する補助プラグインを用意し、 Skill 経由起動を有効化する方式を採用していた。
+# 同じ抽象の延長で「review.md から AskUserQuestion ブロックを削除する patch を追加 →
+# background 推奨を消す」 という方向もあり得たが、 v1.1.0 は wrapper 方式に切り替えた。 理由:
 #   - **PostToolUse detection が原理的に bg 起動を捕捉できない問題は patch では解けない**:
 #     Claude が `/codex:review` Skill expand 後に `Bash({run_in_background: true})` を返す
 #     経路は、 review.md の AskUserQuestion を消したとしても Claude が独自判断で取りうる
@@ -41,8 +40,6 @@
 #     「tool_response の is_error/interrupted 判定」 「dirty tree タイミングの hash 衝突
 #     対策」 等を hook 層で複雑に重ねる必要がなく、 wrapper の exit code 1 つで成否を判断
 #     できる。 これは patch では到達できない深さの解
-# `codex-review-customize` プラグインは v1.1.0 以降 pre-push-review の観点では不要だが、
-# Skill 経由 `/codex:review` を別用途で使いたいユーザにとっては引き続き有用 (README 参照)。
 #
 # ## marker 書き込みポリシー
 #

@@ -217,5 +217,4 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 ## 関連プラグイン
 
 - [git-guardrails](../git-guardrails/): default branch (master/main) への直接書き込みを deny。 本プラグインは default branch 上の push を git-guardrails に委譲します
-- [codex-review-customize](../codex-review-customize/): `/codex:review` を Skill tool から呼べるようにパッチを適用する setup プラグイン (v1.0.0 までの pre-push-review が Skill 経由の codex review を強制していた時代の補助プラグイン。 **v1.1.0 以降の pre-push-review は wrapper 経路を使うため本観点では不要**。 他用途で `/codex:review` を Skill 経由で使いたい場合は引き続き有用)
 - [decompose-bash](../decompose-bash/): Bash コマンドを最小粒度に分解する SessionStart 注入。 本プラグインの PreToolUse hook が `&&` / `||` 等の合成で取りこぼされないよう、 Claude に各コマンドを独立 Bash 呼び出しに分けさせる
