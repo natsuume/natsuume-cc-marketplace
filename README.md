@@ -28,7 +28,6 @@ claude plugin install git-guardrails@natsuume-plugins
 | [pre-push-review](#pre-push-review) | 3.0.0 | `git push` 前に 3 subagent (`pre-push-review:code-reviewer` self-contained correctness バグ検出 + `pre-push-review:codex-reviewer` codex review wrapper foreground 起動 + `pre-push-review:security-reviewer` self-contained security review) によるレビューを強制し、 PostToolUse / wrapper script で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (`pre-commit-review` の後継)。 `/pre-push-review:review` slash command で 3 subagent を **同じアシスタントメッセージで並列に** 起動する確定的フローを提供し、 自律判断による順序揺れ / 起動漏れを構造排除して wall-clock を最遅レビュー 1 本の時間に短縮。 v3.0.0 で 3 レビューすべてを subagent 経由に統一 (互換破壊): v2.x の Skill `/code-review` と Bash 直接起動の codex wrapper を `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換し、 context isolation と失敗検知の対称性を獲得 (auto-mark.sh は Skill 検知を全廃して subagent_type のみを検知)。 v2.x までに継続する設計: 3 マーカー常時必須 / wrapper の atomic rename marker / `block-bg-codex-wrapper.sh` の bg 起動 deny / macOS デフォルト bash 3.2.57 動作 |
 | [update-default-branch](#update-default-branch) | 0.2.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。v0.2.0 で実行モデルを「1 手順 = 1 つの素朴な git コマンド」に再設計し、同居プラグインの PreToolUse hook (auto-lint-check 等) に deny されず実行できるようにした |
 | [natsuume-statusline](#natsuume-statusline) | 0.5.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
-| [codex-review-customize](#codex-review-customize) | 0.3.2 | 公式 codex プラグインの `/codex:review` 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン (v1.1.0+ の pre-push-review は本プラグインに依存しなくなり、 v3.0.0 ではさらに codex review を subagent (`pre-push-review:codex-reviewer`) 経由の wrapper foreground 起動に統一したため、 本プラグインは ad-hoc に `/codex:review` を Skill 経由で呼びたいユースケース向け) |
 | [decompose-bash](#decompose-bash) | 0.1.1 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
 | [auto-followthrough](#auto-followthrough) | 0.2.3 | `permission_mode` が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始後の最初のプロンプト時点の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン |
 
@@ -195,26 +194,6 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 ### キーワード
 
 `statusline` `ui` `git` `ratelimit` `github`
-
----
-
-## codex-review-customize
-
-公式 codex プラグインの `/codex:review` (`commands/review.md`) コマンド定義をローカルでパッチし、frontmatter の `disable-model-invocation: true` を削除して Skill tool からの呼び出しを許可する setup プラグインです。
-
-スラッシュコマンドは `<plugin名>:<command名>` でプラグイン名空間が確定するため、別プラグインから `/codex:review` という同名は提供できません。本プラグインはコマンド名を公式の `/codex:...` のまま保持したいユーザー向けに、公式定義のローカルパッチを setup する形を採っています。
-
-### 機能
-
-#### Commands
-
-| コマンド | 説明 |
-|---------|------|
-| `/codex-review-customize:setup` | `apply-patch.sh` を実行し、公式 codex の `commands/review.md` をパッチする (idempotent、backup なしで git 管理が backup を兼ねる) |
-
-### キーワード
-
-`codex` `review` `patch` `skill`
 
 ---
 

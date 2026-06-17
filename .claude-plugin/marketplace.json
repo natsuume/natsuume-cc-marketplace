@@ -50,13 +50,6 @@
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
-      "name": "codex-review-customize",
-      "source": "./plugins/codex-review-customize",
-      "description": "公式 codex プラグインの /codex:review 定義をローカルでパッチし、Skill tool からの呼び出しを許可する setup プラグイン。v0.3.2 で README の version 表記と関連プラグイン記述を pre-push-review v2.0.0 仕様 (本プラグインのパッチに依存しない wrapper + slash command 経路) に同期、 v0.3.0 → v0.3.1 changelog の backfill と post-pr-review 言及の historical 注記化。v0.3.1 で apply-patch.sh の EXIT trap が関数 local temp を参照していた bug を修正 (エラー経路の unbound variable noise / temp 残留を解消)。v0.3.0 で adversarial-review.md のパッチ対象を削除",
-      "version": "0.3.2",
-      "keywords": ["codex", "review", "patch", "skill"]
-    },
-    {
       "name": "auto-followthrough",
       "source": "./plugins/auto-followthrough",
       "description": "permission_mode が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始後の最初のプロンプト時点の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン。v0.2.3 で発火イベント表現を実挙動 (UserPromptSubmit) に統一し初回 clean 時の制約を文書化、未コミット一覧のバックティックを中立化",
