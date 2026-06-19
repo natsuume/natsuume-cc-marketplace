@@ -39,7 +39,7 @@ if ! git -C "$CWD" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 # session ごとに 1 回だけ発火させるためのマーカー
-MARKER_DIR="${TMPDIR:-/tmp}/auto-followthrough-markers"
+MARKER_DIR="${TMPDIR:-/tmp}/agent-discipline-markers"
 MARKER_FILE="$MARKER_DIR/${SESSION_ID}.checked"
 if [ -f "$MARKER_FILE" ]; then
   exit 0
@@ -61,7 +61,7 @@ if [ -z "$DIRTY" ]; then
 fi
 
 # markdown の inline code (`...`) / コードフェンス (```) 内に埋め込むため、 値に含まれる
-# バックティックを single-quote に中立化してレンダリング崩れを防ぐ (#91; injection は
+# バックティックを single-quote に中立化してレンダリング崩れを防ぐ (injection は
 # 起きない — unquoted heredoc は変数値内の $(...)/バックティックを再評価せず、 後段の jq が
 # JSON エスケープする。 git porcelain の各行は status 2 文字 + space 始まりなので閉じフェンス化は
 # 通常起きないが、 inline `$CWD` やレンダラ差異への defense-in-depth)。
@@ -88,7 +88,7 @@ $DIRTY_SAFE
    - **(d) 不明** — ユーザに分類を依頼
 3. 推奨アクションを 1〜数行でユーザに報告し**ユーザの明示的な応答を待つ** (例: 「X は (a) として commit に含めます。進めてよろしいですか?」)。応答を得るまで git add / commit / stash / branch 切り出し / push は行わない
 
-すべてが明らかに (a) かつ小規模な場合でも、**1 行で良いので必ず報告し、ユーザの応答 (例: "ok" / "進めて") を確認してから進む**。auto mode でも本ステップは「report-and-wait」を必ず守ること (誤分類で誰かの未公開作業を push する事故を防ぐため)。auto-followthrough の commit→PR→merge フローは、この分類確定とユーザ応答後に進めること。
+すべてが明らかに (a) かつ小規模な場合でも、**1 行で良いので必ず報告し、ユーザの応答 (例: "ok" / "進めて") を確認してから進む**。auto mode でも本ステップは「report-and-wait」を必ず守ること (誤分類で誰かの未公開作業を push する事故を防ぐため)。agent-discipline の after 系 commit→PR→merge フローは、この分類確定とユーザ応答後に進めること。
 EOF
 )
 

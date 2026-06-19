@@ -1,8 +1,11 @@
 #!/bin/bash
-# inject-auto-context.sh
-# permission_mode == "auto" のとき、変更の commit / PR 作成 / マージ完了まで
-# 一気通貫で進めるよう Claude に指示する additionalContext を注入する。
-# UserPromptSubmit / PostToolBatch から共有で呼び出される。
+# inject-auto.sh
+# permission_mode == "auto" のとき、 during 系 (自律作業中の判断境界) と after 系
+# (変更が一段落した後の commit→push→PR→merge 自走パイプライン) の方針を
+# additionalContext として注入する。 UserPromptSubmit / PostToolBatch から共有で呼ばれる。
+#
+# auto 以外のモード (default / plan / acceptEdits / bypassPermissions) では何もしない。
+# 常時適用ルール (物理層 / before 系 / closing keyword) は inject-always.sh が SessionStart で配送する。
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -19,7 +22,7 @@ INPUT=$(cat)
   '
 )
 
-# auto 以外のモードでは何もしない (default / plan / acceptEdits / bypassPermissions など)
+# auto 以外のモードでは何もしない
 if [ "$PERMISSION_MODE" != "auto" ]; then
   exit 0
 fi
@@ -33,7 +36,7 @@ fi
 # session_id をマーカーファイル名に使うため英数とハイフンのみに sanitize する。
 # (path injection 防止と、ファイル名の素直さを両立)
 SESSION_ID=$(printf '%s' "$RAW_SESSION_ID" | tr -dc 'a-zA-Z0-9-')
-MARKER_DIR="${TMPDIR:-/tmp}/auto-followthrough-markers"
+MARKER_DIR="${TMPDIR:-/tmp}/agent-discipline-markers"
 BATCH_MARKER="$MARKER_DIR/${SESSION_ID}.batch-injected"
 
 # UserPromptSubmit はターン開始の signal なので per-turn dedup マーカーをクリアし、
@@ -58,6 +61,16 @@ esac
 
 CONTEXT=$(cat <<'EOF'
 Auto mode (permission_mode = "auto") が有効です。以下の方針で**自走**してください:
+
+## during 系: 自律作業中の判断境界
+
+- 実装は自走する。 **設計 / 仕様レベルの事項 (= issue 起票時の壁打ちで決まっているはずの内容) を再確認する場面で止まらない**
+- ただし以下の場合は一度止まる:
+  - issue に明記されていない要件を発見した場合 (= 起票時の壁打ちで見落とされた事項)
+  - 既存実装と矛盾する判断が必要で、 後戻りコストが大きい場合
+- 軽微な判断 (変数名 / import 順 / docstring など) は都度ユーザに聞き返さない
+
+## after 系: 変更が一段落した後の自走パイプライン
 
 - ユーザの依頼に対する変更が一段落したら、確認のために停止せず以下まで進める:
   1. 作業ブランチで変更を git commit する (master ブランチで作業中なら作業ブランチを切る)
