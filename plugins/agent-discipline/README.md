@@ -114,7 +114,7 @@ agent-discipline は以下の 2 plugin を吸収統合しています:
 | `decompose-bash` (v0.1.1) | inject-always.sh の「物理層」 セクション | Bash コマンド分解の `additionalContext` 注入 |
 | `auto-followthrough` (v0.2.3) | inject-auto.sh + check-uncommitted-on-session-start.sh | auto mode 時の commit→push→PR→merge 自走 / 未コミット分類チェック |
 
-旧 plugin の hook 構造 (`SessionStart` / `UserPromptSubmit` + `PostToolBatch`) と機能はそのまま維持しています。 マーカー dir のみ `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されているため、 移行直後は旧 marker が孤児として残りますが、 OS の tmpfs/tmp cleanup で自然に消去されます。
+旧 plugin の機能はそのまま維持しています。 v0.1.0 時点では旧 `auto-followthrough` の hook 構造 (`SessionStart` + `UserPromptSubmit` + `PostToolBatch`) も継承していましたが、 v0.1.1 で `PostToolBatch` 経路を撤去 + during 系を `inject-always.sh` 側に移動し、 現在は `SessionStart` + `UserPromptSubmit` の 2 経路構成です (詳細は v0.1.1 changelog 参照)。 マーカー dir は `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されており、 v0.1.1 では `inject-auto.sh` の dedup marker 自体も不要になっているため、 旧 marker は OS の tmpfs/tmp cleanup で自然に消去されます。
 
 旧 2 plugin は本 plugin 導入時に同 PR で削除済みです。
 
@@ -128,8 +128,8 @@ agent-discipline は以下の 2 plugin を吸収統合しています:
 
 ### なぜ常時系と auto 系で hook event を分けるか
 
-- **常時系 (inject-always.sh)**: 物理層 (Bash 分解) と before 系 (設計壁打ち / issue 規約) は permission_mode に依らず常に有用なので `SessionStart` で 1 回注入する。 トークンコストを抑えるため per-turn 再注入はしない
-- **auto 系 (inject-auto.sh)**: during/after は auto mode 時のみ意味があり、 long-running session で薄れると致命的 (= 自走パイプラインが止まる) なので `UserPromptSubmit` + `PostToolBatch` で per-turn 再注入する
+- **常時系 (inject-always.sh)**: 物理層 (Bash 分解) と before 系 (設計壁打ち / issue 規約 / closing keyword) と during 系 (自律作業中の判断境界) は permission_mode に依らず常に有用なので `SessionStart` で 1 回注入する。 トークンコストを抑えるため per-turn 再注入はしない
+- **auto 系 (inject-auto.sh)**: after 系 (commit→push→PR→merge 自走パイプライン) は auto mode 時のみ意味があり、 long-running session で薄れると致命的 (= 自走パイプラインが止まる) なので `UserPromptSubmit` で per-turn 再注入する。 v0.1.0 では `PostToolBatch` でも併送していたが、 once-per-turn dedup を入れて 1 回に絞っていた事実が「`PostToolBatch` なしで `UserPromptSubmit` 単独で足りる」 ことを暗に示していたため、 v0.1.1 で撤去した (per-turn 2 回 inject → 1 回に削減)
 
 ### 強制ではなく誘導
 
