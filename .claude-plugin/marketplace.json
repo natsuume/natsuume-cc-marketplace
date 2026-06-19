@@ -50,18 +50,11 @@
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
-      "name": "auto-followthrough",
-      "source": "./plugins/auto-followthrough",
-      "description": "permission_mode が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始後の最初のプロンプト時点の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン。v0.2.3 で発火イベント表現を実挙動 (UserPromptSubmit) に統一し初回 clean 時の制約を文書化、未コミット一覧のバックティックを中立化",
-      "version": "0.2.3",
-      "keywords": ["auto", "automation", "followthrough", "permission-mode", "hook", "userpromptsubmit", "posttoolbatch"]
-    },
-    {
-      "name": "decompose-bash",
-      "source": "./plugins/decompose-bash",
-      "description": "SessionStart で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する additionalContext を注入し、&&/||/;/$(...) 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン。v0.1.1 で不正/空 JSON 入力時の jq parse error stderr 漏れを抑制",
-      "version": "0.1.1",
-      "keywords": ["bash", "hook", "sessionstart", "decompose", "preToolUse", "guardrail"]
+      "name": "agent-discipline",
+      "source": "./plugins/agent-discipline",
+      "description": "Claude Code の振る舞い規律を統合配送する system prompt plugin。 物理層 (Bash コマンド分解で PreToolUse hook の取りこぼし防止) + before 系 (設計 / 仕様の事前壁打ち、 issue 起票時の AskUserQuestion 詳細化、 並列粒度 + sub-issue + #N 相互参照、 PR closing keyword 規約) + during 系 (実装自走の判断境界) + after 系 (auto mode 時に commit→push→PR→merge まで自走、 マージ前提条件 hard gate、 session 開始後の未コミット変更分類確認) を一括 inject する。 旧 decompose-bash と auto-followthrough の統合 plugin",
+      "version": "0.1.0",
+      "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail"]
     }
   ]
 }

@@ -1,0 +1,5 @@
+{
+  "name": "agent-discipline",
+  "version": "0.1.0",
+  "description": "Claude Code の振る舞い規律を統合配送する system prompt plugin。 物理層 (Bash コマンド分解で PreToolUse hook の取りこぼし防止) + before 系 (設計 / 仕様の事前壁打ち、 issue 起票時の AskUserQuestion 詳細化、 並列粒度 + sub-issue + #N 相互参照、 PR closing keyword 規約) + during 系 (実装自走の判断境界、 issue で確定済みの事項は再確認しない) + after 系 (auto mode 時に commit→push→PR→merge まで自走、 マージ前提条件 hard gate、 session 開始後の未コミット変更分類確認) を一括して inject する。 旧 decompose-bash と auto-followthrough の統合 plugin"
+}

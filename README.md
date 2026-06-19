@@ -28,8 +28,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [pre-push-review](#pre-push-review) | 3.0.0 | `git push` 前に 3 subagent (`pre-push-review:code-reviewer` self-contained correctness バグ検出 + `pre-push-review:codex-reviewer` codex review wrapper foreground 起動 + `pre-push-review:security-reviewer` self-contained security review) によるレビューを強制し、 PostToolUse / wrapper script で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (`pre-commit-review` の後継)。 `/pre-push-review:review` slash command で 3 subagent を **同じアシスタントメッセージで並列に** 起動する確定的フローを提供し、 自律判断による順序揺れ / 起動漏れを構造排除して wall-clock を最遅レビュー 1 本の時間に短縮。 v3.0.0 で 3 レビューすべてを subagent 経由に統一 (互換破壊): v2.x の Skill `/code-review` と Bash 直接起動の codex wrapper を `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換し、 context isolation と失敗検知の対称性を獲得 (auto-mark.sh は Skill 検知を全廃して subagent_type のみを検知)。 v2.x までに継続する設計: 3 マーカー常時必須 / wrapper の atomic rename marker / `block-bg-codex-wrapper.sh` の bg 起動 deny / macOS デフォルト bash 3.2.57 動作 |
 | [update-default-branch](#update-default-branch) | 0.2.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。v0.2.0 で実行モデルを「1 手順 = 1 つの素朴な git コマンド」に再設計し、同居プラグインの PreToolUse hook (auto-lint-check 等) に deny されず実行できるようにした |
 | [natsuume-statusline](#natsuume-statusline) | 0.5.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
-| [decompose-bash](#decompose-bash) | 0.1.1 | `SessionStart` で Bash コマンドを最小粒度に分解して独立 Bash 呼び出しとして実行するよう Claude に指示する `additionalContext` を注入し、`&&` / `\|\|` / `;` / `$(...)` 等のコマンド合成で PreToolUse hook の検知を取りこぼすのを防ぐプラグイン |
-| [auto-followthrough](#auto-followthrough) | 0.2.3 | `permission_mode` が auto のとき、commit / PR 作成 / マージ完了まで自走するコンテキストを注入し、session 開始後の最初のプロンプト時点の未コミット変更については Claude に出所分析と分類確認を要求するプラグイン |
+| [agent-discipline](#agent-discipline) | 0.1.0 | Claude Code の振る舞い規律を統合配送する system prompt plugin。 物理層 (Bash コマンド分解) + before 系 (設計事前壁打ち / issue 詳細化 / sub-issue + #N 相互参照 / PR closing keyword 規約) + during 系 (実装自走) + after 系 (auto mode 時の commit→push→PR→merge 自走 + マージ前提条件 hard gate + 未コミット分類確認) を一括 inject。 旧 `decompose-bash` と `auto-followthrough` の統合 plugin |
 
 ---
 
@@ -197,29 +196,20 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 ---
 
-## decompose-bash
+## agent-discipline
 
-`SessionStart` で Bash コマンドを最小粒度に分解して独立した Bash ツール呼び出しとして実行するよう Claude に指示する `additionalContext` を注入するプラグインです。`git add ... && git commit ... && git push` のようなコマンド合成によって `PreToolUse` hook の検知が取りこぼされる事故を防ぎます。
+Claude Code の振る舞い規律 (= agent としての discipline) を統合配送する system prompt plugin です。 旧 `decompose-bash` と `auto-followthrough` を吸収し、 「物理層 + before / during / after」 の 4 段構成で `additionalContext` を注入します。 個人 marketplace の plugin 数肥大化を抑えるため、 機能ごとに別 plugin に分けず 1 plugin 内に複数のルール群を集約しています。
 
-Claude Code の `PreToolUse` hook は Bash ツールの `command` 文字列に対するパターンマッチで判定されるため、`A && B && C` のような合成コマンドは先頭以外の部分が hook 検知を取りこぼす可能性があります。本プラグインは Claude がこの種の合成を避けるよう方針を注入することで、[git-guardrails](#git-guardrails) / [pre-push-review](#pre-push-review) / [auto-lint-check](#auto-lint-check) などの PreToolUse hook の信頼性を補強します。
+### 配送される 4 レイヤ
 
-### 機能
+| レイヤ | 配送経路 | inject 条件 | 内容 |
+|---|---|---|---|
+| **物理層** | `SessionStart` (`inject-always.sh`) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
+| **before 系** | `SessionStart` (`inject-always.sh`) | 常時 | 設計 / 仕様の事前壁打ち、 issue 起票時の `AskUserQuestion` 詳細化、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
+| **during 系** | `UserPromptSubmit` + `PostToolBatch` (`inject-auto.sh`) | `permission_mode == "auto"` 時のみ | 実装は自走、 設計 / 仕様の再確認では止まらない (= issue 起票時に決まっているはず)。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
+| **after 系** | `UserPromptSubmit` + `PostToolBatch` (`inject-auto.sh`) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
-#### Hooks
-
-| Hook 名 | イベント | 説明 |
-|---------|---------|------|
-| `inject-decompose-context` | SessionStart | セッション開始時に Bash コマンドの分解方針を `additionalContext` として注入する。`&&` / `\|\|` / `;` / `$(...)` / バッククォート / `xargs` / `find -exec` を分解対象、パイプライン `\|` を単一論理操作の場合のみ許容、`cd $dir && cmd` やトランザクション的合成を例外として明記 |
-
-### キーワード
-
-`bash` `hook` `sessionstart` `decompose` `preToolUse` `guardrail`
-
----
-
-## auto-followthrough
-
-`permission_mode` が `auto` のときに、変更の commit → PR 作成 → マージ完了までを Claude が確認停止せず自走するための方針コンテキストを注入するプラグインです。さらに session 開始後の最初のプロンプトで未コミット変更があれば、その出所を分析し分類（既存作業の継続か / 別作業の混入か）をユーザーに確認するよう求めます。
+加えて、 auto mode セッションの `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
 
 ### 機能
 
@@ -227,9 +217,19 @@ Claude Code の `PreToolUse` hook は Bash ツールの `command` 文字列に�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-auto-context` | UserPromptSubmit / PostToolBatch | auto mode 時に commit / PR / マージまでの自走方針を `additionalContext` として注入する。毎ターンの再注入 (UserPromptSubmit) と、ツール実行後の継続抑止 (PostToolBatch) の 2 経路で配送する |
-| `check-uncommitted-on-session-start` | UserPromptSubmit (session 内初回のみ) | session 開始後の最初のプロンプト時点で未コミット変更があれば、出所分析と分類確認を Claude に要求する |
+| `inject-always` | SessionStart | 常時適用ルール (物理層 + before 系 + closing keyword 規約) を `additionalContext` として一括注入する。 内訳: (1) Bash 分解、 (2) 設計 / 仕様事前壁打ち、 (3) issue 詳細化と body 全埋め込み規約、 (4) issue 粒度と sub-issue + `#N` 関係性、 (5) PR closing keyword |
+| `inject-auto` | UserPromptSubmit / PostToolBatch | `permission_mode == "auto"` 時のみ during/after 系 (実装自走の判断境界 + commit→push→PR→merge 自走パイプライン + マージ 4 条件 hard gate + 禁止事項) を注入する。 `PostToolBatch` は `${TMPDIR:-/tmp}/agent-discipline-markers/<session_id>.batch-injected` で once-per-turn 制御 |
+| `check-uncommitted-on-session-start` | UserPromptSubmit (session 内初回のみ) | auto mode セッションで cwd に未コミット変更があれば、 出所分析と 4 分類 (今回タスク関連 / 以前の残骸 / 中間状態 / 不明) を Claude に要求する |
+
+### 統合経緯 (旧 plugin との関係)
+
+| 旧 plugin | 吸収先 | 等価機能 |
+|---|---|---|
+| `decompose-bash` (v0.1.1) | `inject-always.sh` の「物理層」 セクション | Bash コマンド分解の `additionalContext` 注入 |
+| `auto-followthrough` (v0.2.3) | `inject-auto.sh` + `check-uncommitted-on-session-start.sh` | auto mode 時の commit→push→PR→merge 自走 / 未コミット分類チェック |
+
+旧 2 plugin は本 plugin 導入時に同 PR で削除されています。 hook 構造と機能はそのまま維持されており、 マーカー dir のみ `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されています (移行直後の旧 marker は OS の tmpfs cleanup で自然消去)。
 
 ### キーワード
 
-`auto` `automation` `followthrough` `permission-mode` `hook` `userpromptsubmit` `posttoolbatch`
+`system-prompt` `discipline` `auto` `issue-driven` `bash` `decompose` `askuserquestion` `permission-mode` `hook` `guardrail`
