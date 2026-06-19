@@ -4,7 +4,12 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.1.0 (初版)
+v0.1.1
+
+### v0.1.0 → v0.1.1 の変更点
+
+- **during 系を `inject-always.sh` に移動**: 「実装自走の判断境界」 は `permission_mode` 非依存の行動指針なので、 auto 限定の `inject-auto.sh` から SessionStart 配送の `inject-always.sh` に移動。 default / acceptEdits などの mode でも届くようになった
+- **`PostToolBatch` 経路と once-per-turn dedup logic を撤去**: 旧 auto-followthrough 由来の `PostToolBatch` 配送を削除し、 `UserPromptSubmit` 単独に変更。 per-turn 2 回 inject (UserPromptSubmit + PostToolBatch) が 1 回 (UserPromptSubmit のみ) に削減され、 トークン消費が半減 (`inject-auto.sh` 本文 ~1.5k tokens × turn 数の節約)。 once-per-turn dedup logic (`${TMPDIR:-/tmp}/.../batch-injected` marker、 case 分岐、 session_id sanitize) も同時撤去で `inject-auto.sh` が ~25 行短縮
 
 ## 概要
 
@@ -16,8 +21,8 @@ Claude Code に「個人の開発スタイル」 を一括で適用するため�
 |---|---|---|---|
 | **物理層** | `SessionStart` (inject-always.sh) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
 | **before 系** | `SessionStart` (inject-always.sh) | 常時 | 設計 / 仕様の事前壁打ち、 issue 起票時の AskUserQuestion 詳細化、 並列粒度 + sub-issue + #N 相互参照、 PR closing keyword 規約 |
-| **during 系** | `UserPromptSubmit` + `PostToolBatch` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 実装は自走、 設計 / 仕様の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
-| **after 系** | `UserPromptSubmit` + `PostToolBatch` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
+| **during 系** | `SessionStart` (inject-always.sh) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
+| **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、 auto mode セッションで `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
 
@@ -51,31 +56,30 @@ claude plugin install agent-discipline@natsuume-plugins
 3. **issue 起票時の詳細化**: 実装時に判断が発生しないよう `AskUserQuestion` で詳細化。 起票内容は **issue body に全埋め込み** (補助 file には書かない)
 4. **issue の粒度と関係性**: 独立して並列作業できる粒度で起票、 大きい場合は sub-issues 分割。 関係性は (a) sub-issue 親子リンク + (b) `#N` 相互参照 を併用
 5. **PR 作成時の closing keyword**: 完全解決時のみ PR body に `Closes #N` を書く。 部分対応では `Refs #N` / `Part of #N` に切替
+6. **自律作業中の判断境界** (during 系、 v0.1.1 で `inject-auto.sh` から移動): 実装は自走、 設計 / 仕様 (= issue で決まっているはずの内容) は再確認しない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる。 軽微な判断 (変数名 / import 順 / docstring など) は逐一確認しない (`permission_mode == "auto"` 時は reasonable assumption、 それ以外は harness の permission prompt に委ねる)
 
 #### inject-auto
 
 **ファイル**: `hooks/scripts/inject-auto.sh`
-**イベント**: `UserPromptSubmit`, `PostToolBatch`
+**イベント**: `UserPromptSubmit`
 
 **動作**:
 
 - 入力 JSON から `permission_mode` を読み取り、 `"auto"` のときのみ `additionalContext` を出力
 - それ以外 (`default` / `plan` / `acceptEdits` / `bypassPermissions`) では無音 `exit 0`
-- `hook_event_name` を入力からそのまま読み取り `hookSpecificOutput.hookEventName` に同じ値を設定 (UserPromptSubmit / PostToolBatch どちらの呼び出しでも同一スクリプトで処理可能)
-- `PostToolBatch` の once-per-turn 制御: `${TMPDIR:-/tmp}/agent-discipline-markers/<session_id>.batch-injected` をマーカーとして、 同一ターン内の重複注入を防止 (transcript 肥大化と古い文脈の埋没を防ぐ)
+- `hook_event_name` を入力からそのまま読み取り `hookSpecificOutput.hookEventName` に同じ値を設定
 - `jq` 不在 / 不正 JSON 入力ではすべて無音 `exit 0` (フェイルセーフ)
 
-**なぜ 2 つのイベントが必要か**:
+**なぜ `UserPromptSubmit` か (SessionStart ではなく)**:
 
-- `UserPromptSubmit` — 新しいユーザ入力ごとにモードを再確認して方針を再注入する。 ユーザが auto を on/off したタイミングを取り逃がさない
-- `PostToolBatch` — 1 ターンのツール呼び出しが**全て完了した直後**に発火。 ここで再注入することで「編集だけして完了と打ち切る」 のを抑止し、 commit / PR / マージへの遷移を促す
+- `permission_mode` の動的判定が必要。 ユーザは session 中に `/permissions` 等で auto を on/off できるが、 SessionStart は session 開始時の値しか見えない。 `UserPromptSubmit` は毎ターン input に最新の `permission_mode` が乗る
+- after 系の自走方針は long-running session で薄れると致命的 (= 自走パイプラインが停止する) なので、 per-turn 再注入で方針を維持する
 
 **注入内容の要約**:
 
-- **during 系**: 実装は自走。 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) を再確認する場面で止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる
-- **after 系**: 変更が一段落したら commit → push → PR 作成まで自走、 マージは 4 条件 hard gate を満たした場合のみ独断マージ
+- 変更が一段落したら commit → push → PR 作成まで自走、 マージは 4 条件 hard gate を満たした場合のみ独断マージ
   - 4 条件: draft 解除済み / 必須 CI checks 全成功 / 必要な承認あり / `mergeable == MERGEABLE && mergeStateStatus == CLEAN`
-- **禁止 / 要確認**: master への直接 push / 破壊的操作 / 秘匿情報コミット / 4 条件未充足の独断マージ
+- 禁止 / 要確認: master への直接 push / 破壊的操作 / 秘匿情報コミット / 4 条件未充足の独断マージ
 
 #### check-uncommitted-on-session-start
 
@@ -110,7 +114,7 @@ agent-discipline は以下の 2 plugin を吸収統合しています:
 | `decompose-bash` (v0.1.1) | inject-always.sh の「物理層」 セクション | Bash コマンド分解の `additionalContext` 注入 |
 | `auto-followthrough` (v0.2.3) | inject-auto.sh + check-uncommitted-on-session-start.sh | auto mode 時の commit→push→PR→merge 自走 / 未コミット分類チェック |
 
-旧 plugin の hook 構造 (`SessionStart` / `UserPromptSubmit` + `PostToolBatch`) と機能はそのまま維持しています。 マーカー dir のみ `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されているため、 移行直後は旧 marker が孤児として残りますが、 OS の tmpfs/tmp cleanup で自然に消去されます。
+旧 plugin の機能はそのまま維持しています。 v0.1.0 時点では旧 `auto-followthrough` の hook 構造 (`SessionStart` + `UserPromptSubmit` + `PostToolBatch`) も継承していましたが、 v0.1.1 で `PostToolBatch` 経路を撤去 + during 系を `inject-always.sh` 側に移動し、 現在は `SessionStart` + `UserPromptSubmit` の 2 経路構成です (詳細は v0.1.1 changelog 参照)。 マーカー dir は `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されており、 v0.1.1 では `inject-auto.sh` の dedup marker 自体も不要になっているため、 旧 marker は OS の tmpfs/tmp cleanup で自然に消去されます。
 
 旧 2 plugin は本 plugin 導入時に同 PR で削除済みです。
 
@@ -124,8 +128,8 @@ agent-discipline は以下の 2 plugin を吸収統合しています:
 
 ### なぜ常時系と auto 系で hook event を分けるか
 
-- **常時系 (inject-always.sh)**: 物理層 (Bash 分解) と before 系 (設計壁打ち / issue 規約) は permission_mode に依らず常に有用なので `SessionStart` で 1 回注入する。 トークンコストを抑えるため per-turn 再注入はしない
-- **auto 系 (inject-auto.sh)**: during/after は auto mode 時のみ意味があり、 long-running session で薄れると致命的 (= 自走パイプラインが止まる) なので `UserPromptSubmit` + `PostToolBatch` で per-turn 再注入する
+- **常時系 (inject-always.sh)**: 物理層 (Bash 分解) と before 系 (設計壁打ち / issue 規約 / closing keyword) と during 系 (自律作業中の判断境界) は permission_mode に依らず常に有用なので `SessionStart` で 1 回注入する。 トークンコストを抑えるため per-turn 再注入はしない
+- **auto 系 (inject-auto.sh)**: after 系 (commit→push→PR→merge 自走パイプライン) は auto mode 時のみ意味があり、 long-running session で薄れると致命的 (= 自走パイプラインが止まる) なので `UserPromptSubmit` で per-turn 再注入する。 v0.1.0 では `PostToolBatch` でも併送していたが、 once-per-turn dedup を入れて 1 回に絞っていた事実が「`PostToolBatch` なしで `UserPromptSubmit` 単独で足りる」 ことを暗に示していたため、 v0.1.1 で撤去した (per-turn 2 回 inject → 1 回に削減)
 
 ### 強制ではなく誘導
 
@@ -163,7 +167,6 @@ agent-discipline/
 
 - **強制ではなく誘導**: `additionalContext` の追加だけなので Claude が指示を無視することは原理的に可能。 確実に止めたいケースは別途 deny 判定の hook を組む必要がある
 - **`permission_mode` の値が `"auto"` リテラルであること前提**: Claude Code 側の仕様変更で値が変わると inject-auto.sh は無音になる。 その場合は無効化されるだけで誤動作はしない
-- **`PostToolBatch` の入力 schema 依存**: `PostToolBatch` 入力に `permission_mode` が含まれない実装の場合、 こちらは無音になる。 `UserPromptSubmit` 経路は引き続き機能する
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 
 ## 関連情報

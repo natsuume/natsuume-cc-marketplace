@@ -9,8 +9,9 @@
 #   3. before 系: issue 起票時の詳細化と issue body 全埋め込み規約
 #   4. before 系: issue の粒度と関係性 (sub-issue 親子 + #N 相互参照)
 #   5. PR 作成時の closing keyword 規約
+#   6. during 系: 自律作業中の判断境界 (permission_mode 非依存の行動指針)
 #
-# auto mode 限定の方針 (during/after 系) は inject-auto.sh が別途配送する。
+# auto mode 限定の方針 (after 系 = commit→push→PR→merge 自走) は inject-auto.sh が別途配送する。
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -98,6 +99,18 @@ PR が issue を **完全に解決** する場合、 PR body に closing keyword
 - **PR title では reference は作るが close 動作しない**。 必ず PR body に書く
 - **部分対応** (issue 全体ではなく一部のみ解決する PR) では closing keyword を使わず、 `Refs #N` / `Part of #N` と書いて issue は手動 close に残す
 - cross-repo の close は `owner/repo#N` 形式が必要
+
+## 6. 自律作業中の判断境界
+
+実装フェーズに入ったら、 以下の規律で判断する (`permission_mode` に依らず適用):
+
+- **設計 / 仕様レベルの事項 (= issue 起票時の壁打ちで決まっているはずの内容) を再確認しない**。 issue body を信頼して進める
+- 以下の場合は一度止まる:
+  - issue に明記されていない要件を発見した場合 (= 起票時の壁打ちで見落とされた事項) → 追加で `AskUserQuestion` で確認する
+  - 既存実装と矛盾する判断が必要で、 後戻りコストが大きい場合 → ユーザに方針確認する
+- 軽微な判断 (変数名 / import 順 / docstring の有無 / 関数を 1 個か 2 個に分けるかなど局所的内部分割) は逐一確認しない
+  - `permission_mode == "auto"` のときは auto mode の reasonable assumption 規範に従う
+  - それ以外の mode では、 確認が必要な操作 (tool 起動など) は harness が permission prompt として自動的に挟むので、 Claude 側で追加の躊躇は不要
 EOF
 )
 
