@@ -4,7 +4,16 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.3.0
+v0.4.0
+
+### v0.3.0 → v0.4.0 の変更点
+
+- **PreToolUse `type: agent` hook を追加し、 物理層検知を新設**: v0.3.0 で誘導した「issue body / PR 説明 / plan / commit message に推奨マークや独断の決め打ちを書かない」 規律を、 Claude が忘れた・無視した場合の **構造的な catch** として `gh issue|pr create|edit` を intercept する agent hook で補強。 matcher は `Bash`、 prompt 内で `gh (issue|pr) (create|edit)` のみを通過させ、 非該当は即 `{"ok": true}` で early return することで blast radius を narrow に保つ
+- **`--body inline` / `--body-file PATH` 両方に対応**: `type: agent` を選んだ理由は `--body-file` の中身を Read tool で読む必要があるため。 `block-commit-lint` plugin が PR body に `--body-file` 経路を強制している repo policy と整合させた (= prompt hook 単独だと `--body-file` を取りこぼす)
+- **`model` field を `claude-opus-4-7` に pin**: hook が暗黙の default model (= haiku) を使うと、 旧 `llm-default-branch-push-poc` 廃止教訓 (= 全 Bash 発火 prompt hook が haiku ダウン時に全 Bash を PreToolUse error にする非対称 SPOF) の同型問題が再来するため、 メイン session と同じ model に pin して「session が動いている = hook も動くはず」 という対称性を確保した。 narrow scope と model pin の組合せで SPOF 構造を「Claude Code 自体が動かない時のみ」 に閉じている
+- **規範のソース・オブ・トゥルース統一**: agent hook の prompt は inject-always.sh の section 2.1 / 3.1 と同じ禁止カテゴリ (推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み) を semantic 判定対象に列挙。 誘導層と検知層が同じ規範を共有するため、 ルール改訂時の同期コストが minimal
+- **fail-closed 原則**: 違反疑いがあれば block (`{"ok": false, "reason": ...}`)。 Claude は reason を読んで AskUserQuestion でユーザの decision を取り、 確定した 1 案だけを body から残して再試行する。 過剰 block は recovery 可能、 silent pass は構造的に不可逆 (= 後続 session が既決事項として読む) ため、 fail-closed が論理的に正しい
+- **editor 経路 / `--body-file -` (stdin) は判定不能として通過**: hook の visibility 外の経路は通過させ、 system prompt 誘導 (= 「issue body は契約書」 規約) に委ねる。 物理層は誘導層の defense-in-depth として加算するもので、 全 leak 経路を塞ぐ完全保証は誘導層側が担当する非対称設計
 
 ### v0.2.0 → v0.3.0 の変更点
 
@@ -27,14 +36,15 @@ v0.3.0
 
 Claude Code に「個人の開発スタイル」 を一括で適用するための plugin です。 機能ごとに別 plugin に分けず、 1 plugin 内に複数のルール群を集約することで、 個人 marketplace の plugin 数肥大化を抑えます。
 
-注入される規律は次の 5 レイヤに分かれます:
+注入される規律は次の 6 レイヤに分かれます:
 
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
-| **物理層** | `SessionStart` (inject-always.sh) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
+| **物理層 (Bash 分解)** | `SessionStart` (inject-always.sh) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
 | **before 系** | `SessionStart` (inject-always.sh) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
 | **during 系** | `SessionStart` (inject-always.sh) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (inject-always.sh) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文に `branch=<prefix>/issue-<N>-<slug>` を埋め込んで誰の claim か識別可能にする |
+| **検知系 (gh issue/pr body)** (v0.4.0) | `PreToolUse` (hooks.json 内に inline 定義の type: agent hook) | Bash ツール呼び出し時、 `gh (issue\|pr) (create\|edit)` のみ通過し他は即 ok | 誘導層 (before 系 2.1 / 3.1) の禁止表現を Claude が忘れて issue body / PR 説明に書こうとしたら、 agent hook が --body inline / --body-file PATH を semantic 判定し違反時 block。 model はメイン session と同じ claude-opus-4-7 に pin (= SPOF を session 同期化) |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、 auto mode セッションで `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
@@ -95,6 +105,45 @@ claude plugin install agent-discipline@natsuume-plugins
   - 4 条件: draft 解除済み / 必須 CI checks 全成功 / 必要な承認あり / `mergeable == MERGEABLE && mergeStateStatus == CLEAN`
 - 禁止 / 要確認: master への直接 push / 破壊的操作 / 秘匿情報コミット / 4 条件未充足の独断マージ
 
+#### PreToolUse type:agent hook (v0.4.0 新設)
+
+**定義場所**: `hooks/hooks.json` 内に inline 定義 (= 外部スクリプト不要、 prompt 全文を JSON 内に持つ)
+**イベント**: `PreToolUse`
+**matcher**: `Bash`
+**model**: `claude-opus-4-7` (= メイン session と同じに pin)
+**timeout**: 60 秒 (公式 default)
+
+**動作**:
+
+- `Bash` ツール呼び出し時に発火し、 hook input の `tool_input.command` を読む
+- command が `gh (issue|pr) (create|edit)` のいずれにもマッチしなければ即 `{"ok": true}` を返して終了 (= scope 外、 LLM 思考もほぼゼロ)
+- マッチした場合、 prompt 内で body content を抽出する:
+  - `--body 'inline string'` / `--body "inline string"` (heredoc 含む) → inline 文字列を body content とする
+  - `--body-file PATH` → Read tool で PATH のファイル内容を取得 (= `type: agent` を採用した直接の理由)
+  - どちらも無い (= editor 起動経路) / `--body-file -` (stdin) → 判定不能として `{"ok": true}` で通過 (= 誘導層に委ねる)
+- body content に対し、 inject-always.sh セクション 2.1 / 3.1 の禁止カテゴリ (推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み) を semantic 判定
+- 該当なし → `{"ok": true}`、 該当あり → `{"ok": false, "reason": "違反箇所の引用 + カテゴリ名 + 修正方針 (= AskUserQuestion でユーザの decision を取り、 確定 1 案だけを残す)"}` で block
+
+**なぜ `type: agent` か (vs `type: prompt`)**:
+
+- `--body-file PATH` 形式では PATH のファイル内容を読み取らないと判定できない。 `type: prompt` はツール使用不可なので Read できず、 `--body-file` 経路を取りこぼす
+- 一方、 既存の `block-commit-lint` plugin が PR body に `--body-file` 経路を強制している repo policy のため、 prompt hook 単独だと PR 作成経路で必ず取りこぼす穴になる
+- 公式の使い分け規範 ("Use prompt hooks when the hook input data alone is enough to make a decision. Use agent hooks when you need to verify something against the actual state of the codebase.") に照らすと、 `--body-file` で参照されるファイル状態を verify する用途は agent hooks が first choice
+
+**SPOF 緩和の設計**:
+
+- 旧 `llm-default-branch-push-poc` 廃止教訓: 全 Bash 発火 prompt hook が暗黙の default model (haiku) ダウン時に全 Bash を PreToolUse error にする非対称 SPOF があった (memory: `reference_prompt_hook_model_spof.md`)
+- 今回はこれを 2 段で緩和:
+  - **narrow scope**: matcher は `Bash` だが prompt 内で `gh (issue|pr) (create|edit)` 以外は即 ok:true で early return。 blast radius を「issue / PR 操作のみ失敗」 に narrow
+  - **model pin**: `model` field を明示的に `claude-opus-4-7` (= メイン session と同じ) に固定。 「session が動いている = hook も動くはず」 という対称性を確保し、 「Opus は生きているが Haiku は混雑 / 一時障害」 という非対称ダウン経路を構造的に排除
+
+これにより SPOF は「Claude Code 自体が動かない時のみ hook も動かない」 という対称構造に閉じる。 個別 call の transient error (rate limit / network blip) は残るが、 これは Claude Code 通常使用の背景ノイズと同レベル
+
+**fail-closed の原則**:
+
+- 違反疑い検出時は `{"ok": false}` で block を返す。 silent pass は構造的に不可逆 (= 後続 session が既決事項として読む leak が成立) なため、 false positive (= 正当な記述を誤って block) の方が recovery 可能であり、 fail-closed が論理的に正しい
+- block された Claude は reason を読み、 AskUserQuestion でユーザの decision を取り、 確定した 1 案だけを body に残して再試行する
+
 #### check-uncommitted-on-session-start
 
 **ファイル**: `hooks/scripts/check-uncommitted-on-session-start.sh`
@@ -145,9 +194,18 @@ agent-discipline は以下の 2 plugin を吸収統合しています:
 - **常時系 (inject-always.sh)**: 物理層 (Bash 分解) と before 系 (設計壁打ち / issue 規約 / closing keyword) と during 系 (自律作業中の判断境界) は permission_mode に依らず常に有用なので `SessionStart` で 1 回注入する。 トークンコストを抑えるため per-turn 再注入はしない
 - **auto 系 (inject-auto.sh)**: after 系 (commit→push→PR→merge 自走パイプライン) は auto mode 時のみ意味があり、 long-running session で薄れると致命的 (= 自走パイプラインが止まる) なので `UserPromptSubmit` で per-turn 再注入する。 v0.1.0 では `PostToolBatch` でも併送していたが、 once-per-turn dedup を入れて 1 回に絞っていた事実が「`PostToolBatch` なしで `UserPromptSubmit` 単独で足りる」 ことを暗に示していたため、 v0.1.1 で撤去した (per-turn 2 回 inject → 1 回に削減)
 
-### 強制ではなく誘導
+### 誘導層と検知層の defense-in-depth (v0.4.0 で物理層を追加)
 
-`additionalContext` を Claude に渡すだけなので、 Claude が指示を無視することは原理的に可能です。 確実に止めたいケースは別途 PreToolUse の deny hook (例: `git-guardrails`, `pre-push-review`) を組む必要があります。 本 plugin は「Claude が自発的に規律に従う」 確率を上げる **誘導** であり、 強制ではありません。
+v0.3.0 までは `additionalContext` 注入のみで Claude の自発的な遵守を期待する **誘導 (nudge)** だけでした。 v0.4.0 で PreToolUse type:agent hook を追加し、 issue / PR body に関しては「Claude が忘れたら hook が物理的に catch」 する **検知層** を追加しました。 両者は defense-in-depth として階層化されています:
+
+| レイヤ | 機構 | 効き目 | 対象 leak 経路 |
+|---|---|---|---|
+| 誘導層 | SessionStart で additionalContext 注入 | Claude が自発的に self-check する確率を上げる | issue body / PR 説明 / plan / commit message / 実装コード (= 全 leak 経路) |
+| 検知層 (v0.4.0) | PreToolUse type:agent hook で semantic 検証 → `{"ok": false}` で block | `gh issue/pr create/edit` 経路の Claude の物理 intercept (誘導層の取りこぼし防止) | `gh issue create/edit` / `gh pr create/edit` のうち `--body inline` / `--body-file PATH` 形式 |
+
+検知層は対象範囲を限定的にしています (= `gh api` 直接叩き / editor 起動経路 / 実装コード内のコメント等は cover しない)。 これは誘導層 (= Claude の自発遵守) を主、 検知層を補助とする非対称設計です。 全 leak 経路を物理層で塞ぐと regex / semantic 判定の網羅が困難になり false positive / false negative が増えるため、 「Claude 自身に最も書きやすい経路 (`gh issue/pr create/edit`)」 だけを物理 catch する戦略を採っています。
+
+なお、 master への直接 push のように **強い deny で構造的に止めるべきケース** は引き続き別 plugin (例: `git-guardrails`, `pre-push-review`) が担当します。 本 plugin の検知層は推奨マーク等の semantic 判定対象に限定されているため、 deny 系 hook を完全代替するものではありません。
 
 ## ディレクトリ構成
 
@@ -179,7 +237,9 @@ agent-discipline/
 
 ## 既知の制約
 
-- **強制ではなく誘導**: `additionalContext` の追加だけなので Claude が指示を無視することは原理的に可能。 確実に止めたいケースは別途 deny 判定の hook を組む必要がある
+- **誘導層は強制ではない**: `additionalContext` の追加だけなので Claude が指示を無視することは原理的に可能。 v0.4.0 で gh issue/pr 経路のみ検知層 (PreToolUse type:agent hook) を追加したが、 それ以外の leak 経路 (`gh api` 直接叩き / editor 起動経路 / 実装コード内コメント等) は誘導層のみ
+- **検知層の SPOF**: 検知層は LLM 呼び出しに依存するため、 hook の model (`claude-opus-4-7`) が API 不可用な状況では `gh issue/pr create/edit` が PreToolUse error で失敗する。 narrow scope と model pin で「session が動いている時は hook も動く」 対称構造に閉じているが、 個別 call の transient エラー (rate limit / network blip) は残る
+- **検知層の model pin は手動メンテナンス**: Claude Code 自体の session model を upgrade した場合 (例: opus-4-7 → opus-4-8)、 `hooks/hooks.json` の `model` field も手動同期しないと SPOF 構造が再来する (= 古い model のみダウン時に hook だけ落ちる経路が復活)
 - **`permission_mode` の値が `"auto"` リテラルであること前提**: Claude Code 側の仕様変更で値が変わると inject-auto.sh は無音になる。 その場合は無効化されるだけで誤動作はしない
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 
