@@ -28,7 +28,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [pre-push-review](#pre-push-review) | 3.0.0 | `git push` 前に 3 subagent (`pre-push-review:code-reviewer` self-contained correctness バグ検出 + `pre-push-review:codex-reviewer` codex review wrapper foreground 起動 + `pre-push-review:security-reviewer` self-contained security review) によるレビューを強制し、 PostToolUse / wrapper script で実走完了を自動検知してマーカー化することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (`pre-commit-review` の後継)。 `/pre-push-review:review` slash command で 3 subagent を **同じアシスタントメッセージで並列に** 起動する確定的フローを提供し、 自律判断による順序揺れ / 起動漏れを構造排除して wall-clock を最遅レビュー 1 本の時間に短縮。 v3.0.0 で 3 レビューすべてを subagent 経由に統一 (互換破壊): v2.x の Skill `/code-review` と Bash 直接起動の codex wrapper を `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換し、 context isolation と失敗検知の対称性を獲得 (auto-mark.sh は Skill 検知を全廃して subagent_type のみを検知)。 v2.x までに継続する設計: 3 マーカー常時必須 / wrapper の atomic rename marker / `block-bg-codex-wrapper.sh` の bg 起動 deny / macOS デフォルト bash 3.2.57 動作 |
 | [update-default-branch](#update-default-branch) | 0.2.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。v0.2.0 で実行モデルを「1 手順 = 1 つの素朴な git コマンド」に再設計し、同居プラグインの PreToolUse hook (auto-lint-check 等) に deny されず実行できるようにした |
 | [natsuume-statusline](#natsuume-statusline) | 0.5.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
-| [agent-discipline](#agent-discipline) | 0.2.0 | Claude Code の振る舞い規律を統合配送する system prompt plugin。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界 / 排他系 = 連続 issue 解決時の claim comment + branch push 二段排他制御) を 1 回 inject、 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.2.0 で `/goal` 等の並列 session フロー向けに claim comment (先着判定) + branch push (確定的排他) + ラベル削除規律をセクション 7 として追加 (誤着手 / ラベル誤削除事故への構造的対策) |
+| [agent-discipline](#agent-discipline) | 0.3.0 | Claude Code の振る舞い規律を統合配送する system prompt plugin。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界 / 排他系 = 連続 issue 解決時の claim comment + branch push 二段排他制御) を 1 回 inject、 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定化は要承認」 非対称ルールへ強化 (Claude が複数案を勝手に推奨決定して issue body / PR 説明 / plan に固定化する failure mode を、 名指し禁止表現 + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出で塞ぎ、 issue 駆動開発の前提「issue body = ユーザ承認済み契約書」 を明文化) |
 
 ---
 
@@ -200,14 +200,14 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 Claude Code の振る舞い規律 (= agent としての discipline) を統合配送する system prompt plugin です。 旧 `decompose-bash` と `auto-followthrough` を吸収し、 「物理層 + before / during / 排他 / after」 の 5 段構成で `additionalContext` を注入します。 個人 marketplace の plugin 数肥大化を抑えるため、 機能ごとに別 plugin に分けず 1 plugin 内に複数のルール群を集約しています。
 
-v0.2.0 で `/goal` 等の並列 session フロー向けに claim comment (先着判定) + branch push (確定的排他) + ラベル削除規律をセクション 7 として追加しました (誤着手 / ラベル誤削除事故への構造的対策)。 v0.1.1 で during 系を `inject-always.sh` に移動 (= permission_mode 非依存化、 default / acceptEdits などでも届く) し、 PostToolBatch 経路と once-per-turn dedup logic を撤去 (per-turn 2 回 inject → 1 回)。
+v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定化は要承認」 非対称ルールへ強化しました。 Claude が設計レベルで複数案 (A 案 / B 案 / C 案) を検討した結果、 ユーザに `AskUserQuestion` で意思決定を委ねず自分で推奨を選んで issue body / PR 説明 / plan / commit に固定化してしまう failure mode を、 名指し禁止表現 (8 つの自己検知トリガー: 推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 「選択点なし」 即断) + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出で塞ぎます。 規律の checkpoint を「思考の中」 ではなく「成果物への書き出しの瞬間」 に置く非対称構造により、 検討段階での比較・推奨思考自体は禁止せず、 issue 駆動開発の前提「issue body = ユーザ承認済み契約書」 のみを守る形に整理されました。 v0.2.0 で `/goal` 等の並列 session フロー向けに claim comment (先着判定) + branch push (確定的排他) + ラベル削除規律をセクション 7 として追加 (誤着手 / ラベル誤削除事故への構造的対策)。 v0.1.1 で during 系を `inject-always.sh` に移動 (= permission_mode 非依存化、 default / acceptEdits などでも届く) し、 PostToolBatch 経路と once-per-turn dedup logic を撤去 (per-turn 2 回 inject → 1 回)。
 
 ### 配送される 5 レイヤ
 
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
 | **物理層** | `SessionStart` (`inject-always.sh`) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
-| **before 系** | `SessionStart` (`inject-always.sh`) | 常時 | 設計 / 仕様の事前壁打ち、 issue 起票時の `AskUserQuestion` 詳細化、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
+| **before 系** | `SessionStart` (`inject-always.sh`) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー 8 項目 / 名指し禁止表現 (v0.3.0)、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出 + PR / plan / commit にも同規律を適用 (3.1 / 3.2、 v0.3.0)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
 | **during 系** | `SessionStart` (`inject-always.sh`) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様の再確認では止まらない (= issue 起票時に決まっているはず)。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (`inject-always.sh`) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成。 branch 名規約 `<prefix>/issue-<N>-<slug>`。 ラベル削除は PR merge 時かつ `branch=` 値が自分の作業 branch と一致する場合のみ |
 | **after 系** | `UserPromptSubmit` (`inject-auto.sh`) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
@@ -220,7 +220,7 @@ v0.2.0 で `/goal` 等の並列 session フロー向けに claim comment (先着
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-always` | SessionStart | 常時適用ルール (物理層 + before 系 + closing keyword 規約 + during 系 + 排他系) を `additionalContext` として一括注入する。 内訳: (1) Bash 分解、 (2) 設計 / 仕様事前壁打ち、 (3) issue 詳細化と body 全埋め込み規約、 (4) issue 粒度と sub-issue + `#N` 関係性、 (5) PR closing keyword、 (6) 自律作業中の判断境界、 (7) 連続 issue 解決時の claim comment + branch push 排他制御 |
+| `inject-always` | SessionStart | 常時適用ルール (物理層 + before 系 + closing keyword 規約 + during 系 + 排他系) を `additionalContext` として一括注入する。 内訳: (1) Bash 分解、 (2) 設計 / 仕様事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) と自己検知トリガー 8 項目 / 名指し禁止表現 (v0.3.0)、 (3) issue 詳細化と body 全埋め込み規約 + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出 + PR / plan / commit へも同規律適用 (3.1 / 3.2、 v0.3.0)、 (4) issue 粒度と sub-issue + `#N` 関係性、 (5) PR closing keyword、 (6) 自律作業中の判断境界、 (7) 連続 issue 解決時の claim comment + branch push 排他制御 |
 | `inject-auto` | UserPromptSubmit | `permission_mode == "auto"` 時のみ after 系 (commit→push→PR→merge 自走パイプライン + マージ 4 条件 hard gate + 禁止事項) を注入する。 v0.1.1 で旧 `PostToolBatch` 経路と once-per-turn dedup logic を撤去 |
 | `check-uncommitted-on-session-start` | UserPromptSubmit (session 内初回のみ) | auto mode セッションで cwd に未コミット変更があれば、 出所分析と 4 分類 (今回タスク関連 / 以前の残骸 / 中間状態 / 不明) を Claude に要求する |
 

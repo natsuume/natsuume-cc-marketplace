@@ -1,5 +1,5 @@
 {
   "name": "agent-discipline",
-  "version": "0.2.0",
-  "description": "Claude Code の振る舞い規律を統合配送する system prompt plugin。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界 / 排他系 = 連続 issue 解決時の claim comment + branch push 二段排他制御) を 1 回 inject。 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.2.0 で /goal 等の並列 session フロー向けに claim comment (先着判定) + branch push (確定的排他) + ラベル削除規律 + 撤退クリーンアップ手順をセクション 7 として追加"
+  "version": "0.3.0",
+  "description": "Claude Code の振る舞い規律を統合配送する system prompt plugin。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界 / 排他系 = 連続 issue 解決時の claim comment + branch push 二段排他制御) を 1 回 inject。 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定化は要承認」 非対称ルールへ強化: Claude が複数案を勝手に推奨決定して issue body / PR 説明 / plan / commit に固定化する failure mode を、 名指し禁止表現 (「(推奨)」 「望ましい」 「とりあえず」 「(暫定)」 / 比較表で勝者決定 / 粒度差による暗黙推奨 / ユーザ判断の先回り代弁 / 「選択点なし」 即断) と起票直前 + pick up 時の self-check + 過去 session 独断の遡及検出で塞ぐ。 issue 駆動開発の前提「issue body = ユーザ承認済み契約書」 を明文化"
 }

@@ -4,7 +4,15 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.2.0
+v0.3.0
+
+### v0.2.0 → v0.3.0 の変更点
+
+- **セクション 2 / 3 を「思考は自由、 成果物への固定化は要承認」 非対称ルールに強化**: Claude が設計レベルで複数案 (A 案 / B 案 / C 案) を検討した際、 ユーザに `AskUserQuestion` で意思決定を委ねず、 自分で推奨を決めて issue body / PR 説明 / plan / commit message に「**A 案 (推奨)**」 のような形で固定化してしまう failure mode への構造的対策。 issue 駆動開発の前提として **issue body は後続 session の AI agent にとって唯一の信頼ソース** であり、 そこへ独断推奨が混入すると後続 session が「既決事項」 として読み取って実装が走るため、 ユーザの意思決定が完全に skip される
+- 規律の checkpoint を「思考の中」 ではなく **「成果物への書き出しの瞬間」** に置く非対称構造を採用 (= 検討段階での複数案比較や推奨案の思考自体は禁止しない、 成果物へ書き出す前に必ず `AskUserQuestion` を通す)
+- **セクション 2.1 (新規)**: 自己検知トリガー 8 項目を名指しで列挙 — 推奨マーキング (「(推奨)」 「(default)」 「first choice」 「望ましい」 「自然」 「Recommended: ...」) / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち (粒度差) / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 「選択点なし」 即断 (反対案 1 つを仮想して再確認)。 auto mode 中であっても設計選択点は `reasonable call` の対象外と宣言。 提示時の中立列挙 (粒度を揃える + 序列を付けない) も明文化し、 確定済み事項への rationale 記述は禁止対象外と明示
+- **セクション 3.1 (新規)**: 起票直前 / pick up 時の self-check 4 項目 — セクション 2.1 禁止表現の混入チェック、 受入基準への未承認選択埋め込みチェック、 後続 session 視点の既決事項誤読余地チェック、 未決定表現の残置チェック。 **遡及適用** として過去 session が埋め込んだ独断を pick up 時に検出して再確認する規律も追加 (= 独断の世代間継承を断つ)
+- **セクション 3.2 (新規)**: 同じ規律を PR 説明 / plan ファイル / commit message へ明示拡張
 
 ### v0.1.1 → v0.2.0 の変更点
 
@@ -24,7 +32,7 @@ Claude Code に「個人の開発スタイル」 を一括で適用するため�
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
 | **物理層** | `SessionStart` (inject-always.sh) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
-| **before 系** | `SessionStart` (inject-always.sh) | 常時 | 設計 / 仕様の事前壁打ち、 issue 起票時の AskUserQuestion 詳細化、 並列粒度 + sub-issue + #N 相互参照、 PR closing keyword 規約 |
+| **before 系** | `SessionStart` (inject-always.sh) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
 | **during 系** | `SessionStart` (inject-always.sh) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (inject-always.sh) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文に `branch=<prefix>/issue-<N>-<slug>` を埋め込んで誰の claim か識別可能にする |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
@@ -57,8 +65,8 @@ claude plugin install agent-discipline@natsuume-plugins
 **注入内容の要約**:
 
 1. **Bash コマンド分解** (物理層): `&&` / `||` / `;` / `&` / `$(...)` / バッククォート / `eval` / `sh -c` / `xargs` / `find -exec` を分解対象、 パイプライン `|` は単一論理操作のみ許容、 `cd $dir && cmd` やトランザクション的合成は例外
-2. **設計 / 仕様検討の事前明確化**: スコープ / 要件 / 受入基準 / I/O 契約 / 公開命名などの後戻りコストが大きい判断は `AskUserQuestion` で事前に詰める。 軽微な実装判断は対象外
-3. **issue 起票時の詳細化**: 実装時に判断が発生しないよう `AskUserQuestion` で詳細化。 起票内容は **issue body に全埋め込み** (補助 file には書かない)
+2. **設計 / 仕様検討の事前明確化**: スコープ / 要件 / 受入基準 / I/O 契約 / 公開命名などの後戻りコストが大きい判断は `AskUserQuestion` で事前に詰める。 軽微な実装判断は対象外。 **2.1 (v0.3.0 新規)** 「思考は自由、 成果物への固定化は要承認」 非対称ルール: 検討段階での複数案比較・推奨思考は許容するが、 結論を issue body / PR 説明 / plan / commit に書き出す前に必ず `AskUserQuestion` を通す。 8 つの自己検知トリガー (推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 「選択点なし」 即断) と中立列挙の提示規約を明示
+3. **issue 起票時の詳細化**: 実装時に判断が発生しないよう `AskUserQuestion` で詳細化。 起票内容は **issue body に全埋め込み** (補助 file には書かない)。 **3.1 (v0.3.0 新規)** issue body は「ユーザが承認した契約書」 と捉え、 起票直前 / pick up 時の self-check (禁止表現混入 / 受入基準への未承認選択埋め込み / 後続 session 視点の既決事項誤読余地 / 未決定表現の残置) + 遡及適用 (過去 session 独断の検出) で独断 leak を塞ぐ。 **3.2 (v0.3.0 新規)** PR 説明 / plan / commit にも同じ禁止表現規律を拡張
 4. **issue の粒度と関係性**: 独立して並列作業できる粒度で起票、 大きい場合は sub-issues 分割。 関係性は (a) sub-issue 親子リンク + (b) `#N` 相互参照 を併用
 5. **PR 作成時の closing keyword**: 完全解決時のみ PR body に `Closes #N` を書く。 部分対応では `Refs #N` / `Part of #N` に切替
 6. **自律作業中の判断境界** (during 系、 v0.1.1 で `inject-auto.sh` から移動): 実装は自走、 設計 / 仕様 (= issue で決まっているはずの内容) は再確認しない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる。 軽微な判断 (変数名 / import 順 / docstring など) は逐一確認しない (`permission_mode == "auto"` 時は reasonable assumption、 それ以外は harness の permission prompt に委ねる)
