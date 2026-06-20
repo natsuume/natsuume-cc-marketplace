@@ -4,7 +4,11 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.1.1
+v0.2.0
+
+### v0.1.1 → v0.2.0 の変更点
+
+- **セクション 7 (連続 issue 解決時の排他制御) を追加**: `/goal` のように複数 issue を順次解決するフローや、 他 session が並列稼働している場面で発生していた **誤着手** (= 同 issue への重複着手) と **ラベル誤削除** 事故への構造的対策。 `ai:in-progress` ラベル単独だと TOCTOU race と「誰が付けたラベルか不明」 という根本問題があったため、 (a) GitHub comment の serial ID + timestamp による先着判定 (claim comment) と (b) git server-side で確定的に排他される branch push の二段構成で排他制御する。 claim comment 本文に `branch=<prefix>/issue-<N>-<slug>` を埋め込むことで「誰の claim か」 を確定的に識別できるようになり、 他 session の claim / branch / ラベルを誤って削除する事故も構造的に排除される。 branch 名規約は `<prefix>/issue-<N>-<slug>` (例: `feat/issue-12-add-auth`) を採用
 
 ### v0.1.0 → v0.1.1 の変更点
 
@@ -15,13 +19,14 @@ v0.1.1
 
 Claude Code に「個人の開発スタイル」 を一括で適用するための plugin です。 機能ごとに別 plugin に分けず、 1 plugin 内に複数のルール群を集約することで、 個人 marketplace の plugin 数肥大化を抑えます。
 
-注入される規律は次の 4 レイヤに分かれます:
+注入される規律は次の 5 レイヤに分かれます:
 
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
 | **物理層** | `SessionStart` (inject-always.sh) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
 | **before 系** | `SessionStart` (inject-always.sh) | 常時 | 設計 / 仕様の事前壁打ち、 issue 起票時の AskUserQuestion 詳細化、 並列粒度 + sub-issue + #N 相互参照、 PR closing keyword 規約 |
 | **during 系** | `SessionStart` (inject-always.sh) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
+| **排他系** (v0.2.0) | `SessionStart` (inject-always.sh) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文に `branch=<prefix>/issue-<N>-<slug>` を埋め込んで誰の claim か識別可能にする |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、 auto mode セッションで `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
@@ -57,6 +62,7 @@ claude plugin install agent-discipline@natsuume-plugins
 4. **issue の粒度と関係性**: 独立して並列作業できる粒度で起票、 大きい場合は sub-issues 分割。 関係性は (a) sub-issue 親子リンク + (b) `#N` 相互参照 を併用
 5. **PR 作成時の closing keyword**: 完全解決時のみ PR body に `Closes #N` を書く。 部分対応では `Refs #N` / `Part of #N` に切替
 6. **自律作業中の判断境界** (during 系、 v0.1.1 で `inject-auto.sh` から移動): 実装は自走、 設計 / 仕様 (= issue で決まっているはずの内容) は再確認しない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる。 軽微な判断 (変数名 / import 順 / docstring など) は逐一確認しない (`permission_mode == "auto"` 時は reasonable assumption、 それ以外は harness の permission prompt に委ねる)
+7. **連続 issue 解決時の排他制御** (排他系、 v0.2.0 で追加): `/goal` 等の並列 session フロー向け。 (a) `gh issue view` で `ai:in-progress` ラベル / claim comment 早期判定、 (b) claim comment 投稿 (`🔒 ai:claim branch=<prefix>/issue-<N>-<slug> ts=<ISO 8601>`)、 (c) 3 秒待機 + 先着 timestamp 比較で他 session 検知、 (d) 作業 branch 切って空 commit + 即 push で確定的排他、 (e) push 成功時のみ `ai:in-progress` ラベル付与。 ラベル削除規律: PR merge 時のみ、 claim comment の `branch=` 値が自分の作業 branch と一致する場合のみ削除可。 撤退時は claim comment + branch を削除し、 ラベルは残す
 
 #### inject-auto
 

@@ -1,5 +1,5 @@
 {
   "name": "agent-discipline",
-  "version": "0.1.1",
-  "description": "Claude Code の振る舞い規律を統合配送する system prompt plugin。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界) を 1 回 inject。 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.1.1 で during 系を inject-always.sh に移動 (permission_mode 非依存化) + PostToolBatch 経路と once-per-turn dedup logic を撤去 (per-turn 2 回 inject → 1 回に削減)"
+  "version": "0.2.0",
+  "description": "Claude Code の振る舞い規律を統合配送する system prompt plugin。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界 / 排他系 = 連続 issue 解決時の claim comment + branch push 二段排他制御) を 1 回 inject。 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.2.0 で /goal 等の並列 session フロー向けに claim comment (先着判定) + branch push (確定的排他) + ラベル削除規律 + 撤退クリーンアップ手順をセクション 7 として追加"
 }
