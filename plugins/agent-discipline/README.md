@@ -10,6 +10,7 @@ v0.4.0
 
 - **PreToolUse `type: agent` hook を追加し、 物理層検知を新設**: v0.3.0 で誘導した「issue body / PR 説明 / plan / commit message に推奨マークや独断の決め打ちを書かない」 規律を、 Claude が忘れた・無視した場合の **構造的な catch** として `gh issue|pr create|edit` を intercept する agent hook で補強
 - **各 hook に `if: "Bash(gh <cmd>:*)"` filter を付与した 4 entries 構成**: matcher (`Bash`) は tool 単位の粗い filter のため、 そのままだと全 Bash 呼び出しで agent subagent が起動してしまう。 個別 hook の `if` field (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) で `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の 4 つの target command にだけ反応するよう物理 prefilter。 `if` は単一 command pattern しか持てないため 4 entries に分割し、 同じ prompt 本体を共有する。 これにより agent subagent は target command が来た時にしか起動せず、 普通の `ls` / `git status` / `rg` といった大半の Bash 呼び出しには影響ゼロ
+- **prompt 冒頭に defense-in-depth command guard を追加**: codex review P2 指摘 (= 複雑な Bash command で Claude Code の parser が `if` filter を fail-permissive で fall through した場合、 偶発的に matcher を通過した unrelated command が semantic 検証されて誤 block される可能性) への対処として、 各 prompt 冒頭で「command head が当該 hook entry の if filter と一致する literal で始まらなければ即 ok:true」 という二段目の guard を置いた。 第一の narrow scope は依然として `if` field の hook config 段階だが、 prompt 内 guard が defense-in-depth として偽 trigger を catch する
 - **`--body inline` / `--body-file PATH` 両方に対応**: `type: agent` を選んだ理由は `--body-file` の中身を Read tool で読む必要があるため。 `block-commit-lint` plugin が PR body に `--body-file` 経路を強制している repo policy と整合させた (= prompt hook 単独だと `--body-file` を取りこぼす)
 - **`model` field を `claude-opus-4-7` に pin**: hook が暗黙の default model (= haiku) を使うと、 旧 `llm-default-branch-push-poc` 廃止教訓 (= 全 Bash 発火 prompt hook が haiku ダウン時に全 Bash を PreToolUse error にする非対称 SPOF) の同型問題が再来するため、 メイン session と同じ model に pin して「session が動いている = hook も動くはず」 という対称性を確保した。 `if` field による narrow scope と model pin の組合せで SPOF 構造を「Claude Code 自体が動かない時のみ」 に閉じている
 - **規範のソース・オブ・トゥルース統一**: agent hook の prompt は inject-always.sh の section 2.1 / 3.1 と同じ禁止カテゴリ (推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み) を semantic 判定対象に列挙。 誘導層と検知層が同じ規範を共有するため、 ルール改訂時の同期コストが minimal
@@ -118,7 +119,8 @@ claude plugin install agent-discipline@natsuume-plugins
 **動作**:
 
 - 各 hook の `if` field で target command にのみ反応する物理 prefilter を構成。 該当 Bash 呼び出しで初めて agent subagent が起動し、 それ以外の Bash (= `ls` / `git status` / `rg` / `gh issue view` などの非対象) では agent は **起動さえしない** (= LLM 呼び出しゼロ、 latency 影響ゼロ、 SPOF 露出なし)
-- 起動した場合、 prompt 内で body content を抽出する:
+- agent 起動時は **Step 0 で defense-in-depth command guard を実行**: prompt 冒頭で再度 command head を確認し、 当該 hook entry の `if` filter と一致する literal で始まらなければ semantic 検証せず即 `{"ok": true}` で通す。 これは Claude Code が複雑な command (`$(...)` 置換、 env var prefix、 多段 pipeline、 quoting) を parse できず `if` が fail-permissive で fall through した場合の偽 trigger 対策 (codex P2 指摘への対処)
+- Step 0 を通過した場合、 prompt 内で body content を抽出する:
   - `--body 'inline string'` / `--body "inline string"` (heredoc 含む) → inline 文字列を body content とする
   - `--body-file PATH` → Read tool で PATH のファイル内容を取得 (= `type: agent` を採用した直接の理由)
   - どちらも無い (= editor 起動経路) / `--body-file -` (stdin) → 判定不能として `{"ok": true}` で通過 (= 誘導層に委ねる)
@@ -149,7 +151,9 @@ claude plugin install agent-discipline@natsuume-plugins
 
 **設計の変遷** (codex review からの修正):
 
-v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh (issue|pr) (create|edit)` 以外は即 ok:true」 という early return 構成だった。 これは codex review で「prompt 内 early return は agent subagent が **既に起動済み** の状態で起こるため、 全 Bash 呼び出しで Opus subagent が起動してしまい narrow blast radius が成立せず、 ordinary commands (tests / git status / rg 等) の latency / cost / model 可用性依存が増える」 と P1 指摘された (該当指摘の解は「`if` filter または lightweight command prefilter」)。 この指摘を受けて、 hook config 段階で物理 prefilter する `if` field (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) を採用し、 4 entries に分割した現在の設計に変更した
+v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh (issue|pr) (create|edit)` 以外は即 ok:true」 という early return 構成だった。 これは codex review で「prompt 内 early return は agent subagent が **既に起動済み** の状態で起こるため、 全 Bash 呼び出しで Opus subagent が起動してしまい narrow blast radius が成立せず、 ordinary commands (tests / git status / rg 等) の latency / cost / model 可用性依存が増える」 と P1 指摘された (該当指摘の解は「`if` filter または lightweight command prefilter」)。 この指摘を受けて、 hook config 段階で物理 prefilter する `if` field (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) を採用し、 4 entries に分割した現在の設計に変更した。
+
+さらに codex P2 指摘 (= 複雑な Bash command で Claude Code parser が `if` を fail-permissive で fall through した場合に偶発通過した unrelated command が semantic 検証されて誤 block される可能性) への対処として、 各 prompt 冒頭に **defense-in-depth command guard (Step 0)** を追加した。 第一の narrow scope は引き続き `if` field の hook config 段階だが、 prompt 内 guard が二段目として偽 trigger を catch する非対称設計
 
 **fail-closed の原則**:
 
