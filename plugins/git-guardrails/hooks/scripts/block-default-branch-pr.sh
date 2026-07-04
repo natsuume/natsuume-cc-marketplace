@@ -293,14 +293,23 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
     #   -H<branch>         (cluster short, cobra のデフォルト挙動で許容)
     # `create` より後の token だけを走査する (前段の `pr` `create` 自体や `-R` 等の gh
     # 側 global option を head 指定と誤認しないため)。
+    #
+    # flag 形状の判定は **unquote する前の raw token** に対して行う (unquote 後ではない)。
+    # `gh pr create --title "--head=master"` のように `--title` の値として渡された
+    # quoted 文字列は、unquote すると `--head=master` という flag 形状に一致してしまう
+    # (実際には head 指定ではなく単なる title 文字列)。raw token であれば quote 文字
+    # (`"`/`'`) が残ったままなので `--head=*` 等の case にヒットせず、値として素通り
+    # できる (codex review 3 巡目の P2 指摘)。ユーザーが flag 自体を quote する
+    # (`"--head" master` 等) 稀な形は raw 判定では拾えなくなるが、value が flag 形状に
+    # 偶然一致する形の誤 deny を防ぐほうを優先する。
     declare -a _gtoks2
     tokenize_segment "$_seg" _gtoks2
     HEAD_BRANCH=""
     _hk=$((_gcreate_idx+1))
     _hn=${#_gtoks2[@]}
     while [ "$_hk" -lt "$_hn" ]; do
-      _htok="$(unquote_token "${_gtoks2[$_hk]}")"
-      case "$_htok" in
+      _htok_raw="${_gtoks2[$_hk]}"
+      case "$_htok_raw" in
         --head)
           _hk=$((_hk+1))
           if [ "$_hk" -lt "$_hn" ]; then
@@ -316,15 +325,15 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
           break
           ;;
         --head=*)
-          HEAD_BRANCH="${_htok#--head=}"
+          HEAD_BRANCH="${_htok_raw#--head=}"
           break
           ;;
         -H=*)
-          HEAD_BRANCH="${_htok#-H=}"
+          HEAD_BRANCH="${_htok_raw#-H=}"
           break
           ;;
         -H?*)
-          HEAD_BRANCH="${_htok#-H}"
+          HEAD_BRANCH="${_htok_raw#-H}"
           break
           ;;
       esac
