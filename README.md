@@ -29,6 +29,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [update-default-branch](#update-default-branch) | 0.2.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。v0.2.0 で実行モデルを「1 手順 = 1 つの素朴な git コマンド」に再設計し、同居プラグインの PreToolUse hook (auto-lint-check 等) に deny されず実行できるようにした |
 | [natsuume-statusline](#natsuume-statusline) | 0.5.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
 | [agent-discipline](#agent-discipline) | 0.4.0 | Claude Code の振る舞い規律を統合配送する system prompt plugin + gh issue/pr 物理層検知。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界 / 排他系 = 連続 issue 解決時の claim comment + branch push 二段排他制御) を 1 回 inject、 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.4.0 で PreToolUse type:agent hook を追加し、 gh issue\|pr create\|edit の body (--body inline / --body-file PATH 両対応) をセクション 2.1 / 3.1 の禁止表現規範で semantic 検証 → 違反時 block。 各 hook に `if: "Bash(gh <cmd>:*)"` filter を付与した 4 entries 構成で hook config 段階の物理 prefilter を実現 (= 非該当 Bash では agent subagent を起動しない真の narrow scope)。 加えて各 prompt 冒頭に defense-in-depth command guard を追加し、 複雑な command で `if` filter が fail-permissive で fall through した場合の偽 trigger を二段目で catch (= codex P2 指摘への対処)。 model はメイン session と同じ claude-opus-4-7 に pin して旧 llm-default-branch-push-poc 型の非対称 SPOF を構造的に排除 |
+| [fable-discipline](#fable-discipline) | 0.1.0 | Fable (Mythos 級モデル) をメインセッションで使う際の分業規律プラグイン。SessionStart で「Fable は曖昧さの分解・他モデル向け指示書作成・全体設計検討・検収に徹し、実装と具体調査は Sonnet/Opus のサブエージェントへ委任する」誘導層をハイブリッド方式 (model 判定可 = 無条件文 / 欠落 = 自己ゲート文) で注入し、PreToolUse (`Agent\|Task`) で env の fable 強制・fable 明示指定・「model 未指定 + fable セッション継承」の 3 経路を deny する防波堤層 (判定順序はモデル解決順序 env > 明示指定 > 継承と一致) を提供。主防御は `CLAUDE_CODE_SUBAGENT_MODEL` env (明示指定・frontmatter・Workflow 内部 `agent()` より優先されることを実測検証済み) で、hook は env 誤設定・撤去時の defense-in-depth |
 
 ---
 
@@ -240,3 +241,24 @@ v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定�
 ### キーワード
 
 `system-prompt` `discipline` `auto` `issue-driven` `bash` `decompose` `askuserquestion` `permission-mode` `hook` `guardrail`
+
+---
+
+## fable-discipline
+
+Fable (Mythos 級モデル) をメインセッションで使う際の **分業規律** を配送するプラグインです。Fable は高性能ですが、サブエージェントまで Fable で実行されると (特に dynamic workflow で大量スポーンされる場面で) コストが膨張します。「Fable = 司令塔 (曖昧さの分解・他モデル向け指示書作成・全体設計検討・検収)、実作業 = Sonnet/Opus のサブエージェント」という分業を、誘導層 (additionalContext 注入) と防波堤層 (PreToolUse deny) の 2 層で支えます。
+
+サブエージェントのモデル強制の **主防御は本プラグインではなく `CLAUDE_CODE_SUBAGENT_MODEL` 環境変数** です (プラグインは env を設定できないため、利用者が `settings.json` の `env` に設定する)。この env は Agent の model 明示指定・agent 定義 frontmatter・Workflow 内部の `agent()` すべてより優先されることを CC 2.1.201 + Fable メインセッションで実測検証済みで、env が設定されている限り fable 継承は構造的に発生しません。本プラグインの hook は env 設定が外れた場合の defense-in-depth です。詳細な検証結果と既知の制約 (Workflow 内部は hook 捕捉不可 / SessionStart の model フィールド欠落 / セッション途中の `/model` 切替非検知 / fork は誘導層のみ) は [プラグイン README](./plugins/fable-discipline/README.md) を参照してください。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `inject-fable-role` | SessionStart | 分業規律をハイブリッド方式 (stdin の `model` が fable = 無条件文 / 欠落 = 自己ゲート文 / 非 fable = 注入なし) で `additionalContext` 注入。model 判定値を state file に記録し防波堤層と共有。startup / resume / clear / compact の全 source で発火するため compact 後も規律が再注入される |
+| `block-fable-subagent` | PreToolUse (`Agent\|Task`) | 判定順序をモデル解決順序 (env > 明示指定 > 継承) と一致させ、`CLAUDE_CODE_SUBAGENT_MODEL` が fable を指す場合は無条件 deny、`tool_input.model` の fable 明示指定を deny、model 未指定 (`"inherit"` は未指定に正規化) は env が非 fable なら allow、env 不在時は state file のセッションモデルが fable の場合のみ deny。判定不能はすべて fail-open、LLM 評価型 hook は不使用 (モデル可用性 SPOF の回避) |
+
+### キーワード
+
+`fable` `model-cost` `subagent` `delegation` `system-prompt` `hook` `guardrail` `workflow`
