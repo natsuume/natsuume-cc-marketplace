@@ -1,0 +1,26 @@
+{
+  "description": "fable-discipline の 2 経路配送。 SessionStart で Fable セッション向け分業規律 (誘導層) をハイブリッド方式 (stdin の model が fable = 無条件文 / model 欠落 = 自己ゲート文 / 非 fable = 注入なし) で注入し、 併せて session model を state file (${TMPDIR:-/tmp}/fable-discipline-state/model-<session_id>) に記録。 PreToolUse (matcher: Agent|Task) の command hook で (1) tool_input.model の fable 明示指定を無条件 deny、 (2) model 未指定は CLAUDE_CODE_SUBAGENT_MODEL が非 fable なら allow、 env 不在/inherit 時は state file のセッションモデルが fable の場合のみ deny (判定不能はすべて fail-open)。 主防御は CLAUDE_CODE_SUBAGENT_MODEL env (明示指定・frontmatter・Workflow 内部 agent() より優先されることを CC 2.1.201 で実測検証済み) で、 hook は env 撤去時の defense-in-depth。 LLM 評価型 hook は使わない (llm-default-branch-push-poc の SPOF 教訓)。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-fable-role.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-fable-subagent.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

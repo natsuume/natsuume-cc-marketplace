@@ -1,0 +1,5 @@
+{
+  "name": "fable-discipline",
+  "version": "0.1.0",
+  "description": "Fable (Mythos 級モデル) をメインセッションで使う際の分業規律 plugin。誘導層 = SessionStart で「Fable は曖昧さの分解・他モデル向け指示書作成・全体設計検討・検収に徹し、実装と具体調査は Sonnet/Opus のサブエージェントへ self-contained な指示 (実作業者が意思決定不要な粒度) で委任する。数行規模の自明な修正のみ直接編集可、fork は原則禁止」をハイブリッド方式 (stdin の model が fable = 無条件文 / 欠落 = 自己ゲート文 / 非 fable = 注入なし) で注入し、session model を state file に記録。防波堤層 = PreToolUse (Agent|Task) command hook が tool_input.model の fable 明示指定を無条件 deny し、model 未指定 (継承経路) は CLAUDE_CODE_SUBAGENT_MODEL が非 fable なら allow、env 不在時は state file のセッションモデルが fable の場合のみ deny (判定不能はすべて fail-open、LLM 評価は不使用)。主防御は CLAUDE_CODE_SUBAGENT_MODEL env 設定 (Agent の model 明示指定・agent frontmatter・Workflow 内部 agent() すべてより優先されることを CC 2.1.201 で実測検証済み) で、本 plugin はその前提を文書化しつつ env が外れた場合の defense-in-depth を提供する。Workflow 内部の agent() は PreToolUse で捕捉できないため env 側でカバーする (既知の制約)"
+}
