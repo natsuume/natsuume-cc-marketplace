@@ -92,12 +92,133 @@ strip_quoted_text() {
 # セクション参照) には使えない (dquote 領域ごと消えて substitution の中身も消えてしまう
 # ため)。本関数は single quote 領域のみを空白化し、dquote 内容は検出対象として残す。
 #
-# 制約: dquote 内の英文アポストロフィ (`don't` 等) を single quote の開始と誤認し、
-# 実際の single-quote 領域とは異なる範囲を空白化してしまうケースがある。これは検出用
-# コピーのテキストが歪むだけであり (opener-anchored regex は substitution opener
-# 直後の invocation しか拾わないため)、deny/allow の実害経路にはならないことを許容する。
+# **quote 文脈を追跡する純 bash の文字 walk** (cmd-parser.sh の split_command と同じ
+# 規律) で実装する: dquote 内では `'` を single quote の開始として扱わない (bash の実
+# 挙動と一致させるため)。旧実装 (sed の `s/'[^']*'/ /g`) は dquote 文脈を知らない naive
+# regex だったため、`echo "it's $(git push origin master) don't"` のように dquote 内に
+# 英文アポストロフィが 2 個 (たまたま対になる) 現れる入力で、その間 (`$(git push ...)`
+# を含む) を single-quote 領域と誤認して丸ごと空白化してしまい、第 2 パス (opener-
+# anchored 保守的 deny) が bypass される実害があった (security review で実測確認、#F8)。
+#
+# **性能について**: 本関数は raw segment に `$(` / `<(` / `>(` のいずれかを含む場合の
+# みホストから呼ばれる cold path (置換 shape check の第 2 パス専用) であり、大半の
+# Bash 呼び出しは本関数を一度も呼ばない。cmd-parser.sh の
+# `_normalize_line_continuations_impl` が警告する「純 bash の 1 文字ループは
+# `result+=` の O(N) 再割当てで全体 O(N^2) になり hot path (全 Bash 呼び出しで発火) で
+# は致命的」という問題は、呼び出し頻度が低くコマンド長も通常数百〜数千文字に収まる
+# 本関数の cold path では実害が無いため、sed fallback を持たない単純な純 bash 実装で
+# 十分とする。
 strip_squoted_text() {
-  printf '%s' "$1" | sed -E "s/'[^']*'/ /g"
+  local cmd="$1"
+  local i=0 len=${#cmd}
+  local in_squote=0 in_dquote=0
+  local result=""
+
+  while [ "$i" -lt "$len" ]; do
+    local c="${cmd:$i:1}"
+
+    if [ "$in_squote" -eq 1 ]; then
+      # single-quote 領域全体 (開始 `'` から終了 `'` まで) を 1 個の空白に置換する
+      # (strip_quoted_text の sed 版と同じ「マッチ全体を 1 空白に」という契約に揃える)。
+      # 終了 `'` を見つけるまでは何も出力に追加しない。
+      if [ "$c" = "'" ]; then
+        in_squote=0
+        result+=" "
+      fi
+      i=$((i+1)); continue
+    fi
+
+    if [ "$in_dquote" -eq 1 ]; then
+      if [ "$c" = "\\" ]; then
+        local nc="${cmd:$((i+1)):1}"
+        case "$nc" in
+          '$'|'`'|'"'|'\\')
+            result+="$c$nc"; i=$((i+2)); continue ;;
+        esac
+      fi
+      # dquote 内では `'` は特別扱いしない (bash の実挙動どおり)。dquote 内容はすべて
+      # そのまま保持する (これが strip_quoted_text との決定的な違い)。
+      [ "$c" = '"' ] && in_dquote=0
+      result+="$c"
+      i=$((i+1)); continue
+    fi
+
+    case "$c" in
+      "'") in_squote=1; i=$((i+1)) ;;
+      '"') in_dquote=1; result+="$c"; i=$((i+1)) ;;
+      '\\')
+        local nc="${cmd:$((i+1)):1}"
+        result+="$c$nc"
+        i=$((i+2))
+        ;;
+      *) result+="$c"; i=$((i+1)) ;;
+    esac
+  done
+
+  printf '%s' "$result"
+}
+
+# 引数: <segment> (trim 済みで先頭が `(` または `{` である前提)
+# stdout: 先頭の開き文字に対応する閉じ文字 (`)`/`}`) の index (0-based)。見つかれば
+#         標準出力へ index を出力して exit 0、見つからなければ何も出力せず exit 1
+#         (bash 3.2 には nameref が無いため、呼び出し側は
+#         `_idx="$(find_group_close "$seg")"` で受け取り `[ -n "$_idx" ]` で判定する)。
+#
+# グループ unwrap (subshell `(...)` / brace group `{...}` の中身を取り出して再分割する
+# 処理) で、「segment 内の**最後**の `)`/`}` で切る」という文字列ヒューリスティックは
+# `(git push origin master) > $(mktemp)` のような入力で `$(mktemp)` 側の `)` を誤って
+# 選んでしまい、外側 group の中身が `master) > $(mktemp` のように壊れて refspec 比較を
+# 素通りする bypass になっていた (code-reviewer review で実測確認、#F9)。本関数は
+# quote 文脈 (squote/dquote、dquote 内 escape) を追跡しつつ depth (先頭の開き文字を
+# depth 1 として、quote 外の `(`/`{` で depth+1、quote 外の `)`/`}` で depth-1) を数え、
+# depth が 0 に戻った位置 = **先頭の開き文字に対応する閉じ文字** を返す。`(`/`{` を
+# 区別せず同一 depth に積むのは、bash の実際の入れ子でも type を跨いだ深さ管理で
+# 「先頭に対応する閉じ」が一意に定まるため (type 不一致のネストは元より不正な bash
+# 構文であり、cooperative 利用では想定しない単純化)。
+find_group_close() {
+  local seg="$1"
+  local i=1 len=${#seg}
+  local depth=1
+  local in_squote=0 in_dquote=0
+
+  while [ "$i" -lt "$len" ]; do
+    local c="${seg:$i:1}"
+
+    if [ "$in_squote" -eq 1 ]; then
+      [ "$c" = "'" ] && in_squote=0
+      i=$((i+1)); continue
+    fi
+
+    if [ "$in_dquote" -eq 1 ]; then
+      if [ "$c" = "\\" ]; then
+        local nc="${seg:$((i+1)):1}"
+        case "$nc" in
+          '$'|'`'|'"'|'\\') i=$((i+2)); continue ;;
+        esac
+      fi
+      [ "$c" = '"' ] && in_dquote=0
+      i=$((i+1)); continue
+    fi
+
+    case "$c" in
+      "'") in_squote=1; i=$((i+1)) ;;
+      '"') in_dquote=1; i=$((i+1)) ;;
+      '\\') i=$((i+2)) ;;
+      '('|'{') depth=$((depth+1)); i=$((i+1)) ;;
+      ')'|'}')
+        depth=$((depth-1))
+        if [ "$depth" -eq 0 ]; then
+          printf '%s' "$i"
+          return 0
+        fi
+        i=$((i+1))
+        ;;
+      *) i=$((i+1)) ;;
+    esac
+  done
+
+  # 見つからなかった (未終端 group: 不正な入力・記述途中等)。
+  return 1
 }
 
 # 引数: <reason>

@@ -91,6 +91,10 @@ done < <(split_command "$COMMAND")
 # split_command で再分割し、得られた segment 群を worklist の現在位置に順序を保って
 # 置き換える (詳細は block-default-branch-push.sh のコメント参照。commit hook でも同じ
 # アルゴリズムを使う)。
+# 対応する閉じ文字の特定には `find_group_close` (quote 文脈 + depth 追跡、詳細は
+# block-default-branch-push.sh のコメント参照) を使う。「最後の `)`/`}` で切る」という
+# 文字列ヒューリスティックは redirection target 内の置換 (`> $(mktemp)` 等) の `)` を
+# 誤って選んでしまう bug があったため (#F9)、depth 追跡方式に統合した。
 _wi=0
 while [ "$_wi" -lt "${#SEGMENTS[@]}" ]; do
   _wseg="${SEGMENTS[$_wi]}"
@@ -98,37 +102,19 @@ while [ "$_wi" -lt "${#SEGMENTS[@]}" ]; do
   _wtrim="${_wtrim%"${_wtrim##*[![:space:]]}"}"
   case "$_wtrim" in
     '('*|'{'*)
-      _winner="${_wtrim:1}"
-      _winner="${_winner%"${_winner##*[![:space:]]}"}"
-      case "$_winner" in
-        *')'|*'}')
-          _winner="${_winner%?}"
-          _winner="${_winner%"${_winner##*[![:space:]]}"}"
-          case "$_winner" in
-            *';') _winner="${_winner%;}" ;;
-          esac
-          ;;
-        *)
-          # 末尾が閉じ文字でない = group の閉じ直後に redirection 等の suffix が続く形
-          # (`(git commit -m x) >/tmp/out` 等)。詳細は block-default-branch-push.sh の
-          # 同箇所コメント参照 (subshell/brace group 直後の top-level 構文は redirection
-          # のみなので、最後の `)`/`}` 位置で切り捨てても中身の検出は損なわれない)。
-          case "$_winner" in
-            *[\)\}]*)
-              # ブラケット式内でも `}` は `\}` でエスケープする必要がある (詳細は
-              # block-default-branch-push.sh の同箇所コメント参照)。
-              _winner="${_winner%[)\}]*}"
-              _winner="${_winner%"${_winner##*[![:space:]]}"}"
-              case "$_winner" in
-                *';') _winner="${_winner%;}" ;;
-              esac
-              ;;
-            *)
-              _winner="$_wtrim"
-              ;;
-          esac
-          ;;
-      esac
+      _wclose_idx="$(find_group_close "$_wtrim")"
+      if [ -n "$_wclose_idx" ]; then
+        _winner="${_wtrim:1:$((_wclose_idx-1))}"
+        _wsuffix="${_wtrim:$((_wclose_idx+1))}"
+        _winner="${_winner%"${_winner##*[![:space:]]}"}"
+        case "$_winner" in
+          *';') _winner="${_winner%;}" ;;
+        esac
+      else
+        _winner="${_wtrim:1}"
+        _wsuffix=""
+      fi
+
       # 無限ループ防止: 除去操作で文字列長が減らない場合はそのまま 1 segment として
       # 処理を続ける (先頭 1 文字を必ず剥がすため実際には常に減るが、防御的に確認する)。
       if [ "${#_winner}" -lt "${#_wtrim}" ]; then
@@ -139,6 +125,21 @@ while [ "$_wi" -lt "${#SEGMENTS[@]}" ]; do
           esac
           _gwnew+=("$_gwline")
         done < <(split_command "$_winner")
+
+        # 閉じ文字より後の suffix (redirection 等) が空白以外を含む場合、それも
+        # 独立した worklist 要素として中身の segment 群の直後に追加する (詳細は
+        # block-default-branch-push.sh の同箇所コメント参照。#F9)。
+        _wsuffix_trim="${_wsuffix#"${_wsuffix%%[![:space:]]*}"}"
+        _wsuffix_trim="${_wsuffix_trim%"${_wsuffix_trim##*[![:space:]]}"}"
+        if [ -n "$_wsuffix_trim" ]; then
+          while IFS= read -r _gwline; do
+            case "$_gwline" in
+              SEP:*) continue ;;
+            esac
+            _gwnew+=("$_gwline")
+          done < <(split_command "$_wsuffix")
+        fi
+
         _gwnewall=()
         _gwk=0
         while [ "$_gwk" -lt "$_wi" ]; do

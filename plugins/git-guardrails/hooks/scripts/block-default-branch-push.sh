@@ -110,6 +110,12 @@ done < <(split_command "$COMMAND")
 # feature` の 2 segment になることで、後段の scope 判定で `cd` が捕捉される。ネストは
 # この反復で自然に処理される (置換後の先頭 segment が再び `(`/`{` で始まればもう一度
 # unwrap される)。
+#
+# 対応する閉じ文字の特定には `find_group_close` (quote 文脈 + depth 追跡) を使う。
+# 「segment 内の**最後**の `)`/`}` で切る」という文字列ヒューリスティックは
+# `(git push origin master) > $(mktemp)` のような入力で `$(mktemp)` 側の `)` を誤って
+# 選んでしまい、外側 group の中身が壊れて refspec 比較を素通りする bypass になっていた
+# (code-reviewer review で実測確認、#F9)。
 _wi=0
 while [ "$_wi" -lt "${#SEGMENTS[@]}" ]; do
   _wseg="${SEGMENTS[$_wi]}"
@@ -117,47 +123,25 @@ while [ "$_wi" -lt "${#SEGMENTS[@]}" ]; do
   _wtrim="${_wtrim%"${_wtrim##*[![:space:]]}"}"
   case "$_wtrim" in
     '('*|'{'*)
-      _winner="${_wtrim:1}"
-      # 末尾の空白を剥がしたあと `)`/`}` なら剥がし、続けて末尾の空白 + `;` も剥がす
-      # (`{ cmd; }` はブレースグループの文法上 `;` が閉じ `}` の直前に必要なため)。
-      _winner="${_winner%"${_winner##*[![:space:]]}"}"
-      case "$_winner" in
-        *')'|*'}')
-          _winner="${_winner%?}"
-          _winner="${_winner%"${_winner##*[![:space:]]}"}"
-          case "$_winner" in
-            *';') _winner="${_winner%;}" ;;
-          esac
-          ;;
-        *)
-          # 末尾が閉じ文字でない = group の閉じ直後に redirection 等の suffix が続く形
-          # (`(git push origin master) >/tmp/out` / `(cmd) 2>/dev/null` 等)。subshell /
-          # brace group の直後に top-level で来られる構文は redirection のみ (`;`/`&`/`|`
-          # は split_command が既にこの worklist を作る際に top-level separator として
-          # 分割済みなので、ここに残り得るのは redirection だけ)。segment 内の**最後**の
-          # `)`/`}` の位置で切り、それ以降 (redirection suffix) を捨てても group の中身の
-          # 検出は損なわれない。`${_winner%[)\}]*}` は「`)`/`}` のいずれかで始まり以降任意」
-          # にマッチする最短 suffix を末尾から剥がすため、最後の閉じ文字の直前までが残る。
-          # ブラケット式内でも `}` を `\}` でエスケープしないと、bash の `${...}` 展開の
-          # brace-matching パーサがブラケット式の内側であることを認識できず、そこで
-          # 展開が閉じたと誤解してパターンが壊れる (実測確認済み)。
-          case "$_winner" in
-            *[\)\}]*)
-              _winner="${_winner%[)\}]*}"
-              _winner="${_winner%"${_winner##*[![:space:]]}"}"
-              case "$_winner" in
-                *';') _winner="${_winner%;}" ;;
-              esac
-              ;;
-            *)
-              # 閉じ文字が 1 つも無い (不正な入力・記述途中等)。切り出す根拠が無いため
-              # unwrap を諦め、trimmed 全体をそのまま 1 segment として扱う (下の長さ
-              # チェックが働くよう _winner を _wtrim に戻す)。
-              _winner="$_wtrim"
-              ;;
-          esac
-          ;;
-      esac
+      _wclose_idx="$(find_group_close "$_wtrim")"
+      if [ -n "$_wclose_idx" ]; then
+        _winner="${_wtrim:1:$((_wclose_idx-1))}"
+        _wsuffix="${_wtrim:$((_wclose_idx+1))}"
+        # brace group の文法上、閉じ `}` の直前には `;` が必要 (`{ cmd; }`)。中身
+        # からはこの構文上の `;` を剥がす (無くても再分割は正しく動くが、見た目を
+        # 従来と揃えるため)。
+        _winner="${_winner%"${_winner##*[![:space:]]}"}"
+        case "$_winner" in
+          *';') _winner="${_winner%;}" ;;
+        esac
+      else
+        # 閉じ文字が見つからない (不正な入力・記述途中等)。切り出す根拠が無いため
+        # 先頭 1 文字のみ剥がして再分割する (無限ループ防止の長さチェックにより、
+        # これ以上の unwrap は起きない)。
+        _winner="${_wtrim:1}"
+        _wsuffix=""
+      fi
+
       # 無限ループ防止: 除去操作で文字列長が減らない場合はそのまま 1 segment として
       # 処理を続ける (先頭 1 文字を必ず剥がすため実際には常に減るが、防御的に確認する)。
       if [ "${#_winner}" -lt "${#_wtrim}" ]; then
@@ -168,6 +152,23 @@ while [ "$_wi" -lt "${#SEGMENTS[@]}" ]; do
           esac
           _gwnew+=("$_gwline")
         done < <(split_command "$_winner")
+
+        # 閉じ文字より後の suffix (redirection 等) が空白以外を含む場合、それも
+        # 独立した worklist 要素として中身の segment 群の直後に追加する。捨てないの
+        # は `(echo hi) > $(git push origin master)` のように redirection target 内の
+        # 置換に保護対象 invocation が隠れる形を、後段の置換 shape check に到達させる
+        # ため (#F9)。
+        _wsuffix_trim="${_wsuffix#"${_wsuffix%%[![:space:]]*}"}"
+        _wsuffix_trim="${_wsuffix_trim%"${_wsuffix_trim##*[![:space:]]}"}"
+        if [ -n "$_wsuffix_trim" ]; then
+          while IFS= read -r _gwline; do
+            case "$_gwline" in
+              SEP:*) continue ;;
+            esac
+            _gwnew+=("$_gwline")
+          done < <(split_command "$_wsuffix")
+        fi
+
         _gwnewall=()
         _gwk=0
         while [ "$_gwk" -lt "$_wi" ]; do
