@@ -167,14 +167,20 @@ done
 # `gh` と `pr create` の間に任意 token (`-R owner/repo` 等) を許容する既存の意味論を
 # 維持するため、`gh([[:space:]]+[^[:space:];&|]+)*[[:space:]]+pr[[:space:]]+create` の
 # 形をそのまま置換 shape 検出にも使う。
+#
+# `ENV_VAR_PREFIX` (`FOO=bar gh pr create ...` のような env-var prefix を許容する) を
+# push/commit hook と揃えて含める。これが無いと `echo $(FOO=1 gh pr create --head
+# master)` のような env-var prefix 付き invocation が置換 shape check を素通りし、
+# 兄弟 hook (push/commit) との非対称な bypass になる (code-reviewer 4 巡目で実測)。
+ENV_VAR_PREFIX='([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|]*[[:space:]]+)*'
 SUBST_BOUNDARY='[;&|(`]'
-SUBST_PR_INVOCATION_REGEX="${SUBST_BOUNDARY}[[:space:]]*gh([[:space:]]+[^[:space:];&|]+)*[[:space:]]+pr[[:space:]]+create([[:space:]]|\$)"
+SUBST_PR_INVOCATION_REGEX="${SUBST_BOUNDARY}[[:space:]]*${ENV_VAR_PREFIX}gh([[:space:]]+[^[:space:];&|]+)*[[:space:]]+pr[[:space:]]+create([[:space:]]|\$)"
 
 # 第 2 パス: dquote 内で実行される command substitution を opener-anchored に検出する
 # (詳細・設計理由は block-default-branch-push.sh の同箇所コメント参照)。「任意 token」
 # 部分は substitution の閉じ `)` を誤って跨がないよう `)` も除外文字に含める。
 SUBST2_OPENER='(\$\(|<\(|>\()'
-SUBST2_PR_INVOCATION_REGEX="${SUBST2_OPENER}[[:space:]]*gh([[:space:]]+[^[:space:];&|)]+)*[[:space:]]+pr[[:space:]]+create([[:space:]]|\)|\$)"
+SUBST2_PR_INVOCATION_REGEX="${SUBST2_OPENER}[[:space:]]*${ENV_VAR_PREFIX}gh([[:space:]]+[^[:space:];&|)]+)*[[:space:]]+pr[[:space:]]+create([[:space:]]|\)|\$)"
 
 _si=0
 while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
@@ -294,22 +300,40 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
     # `create` より後の token だけを走査する (前段の `pr` `create` 自体や `-R` 等の gh
     # 側 global option を head 指定と誤認しないため)。
     #
-    # flag 形状の判定は **unquote する前の raw token** に対して行う (unquote 後ではない)。
-    # `gh pr create --title "--head=master"` のように `--title` の値として渡された
-    # quoted 文字列は、unquote すると `--head=master` という flag 形状に一致してしまう
-    # (実際には head 指定ではなく単なる title 文字列)。raw token であれば quote 文字
-    # (`"`/`'`) が残ったままなので `--head=*` 等の case にヒットせず、値として素通り
-    # できる (codex review 3 巡目の P2 指摘)。ユーザーが flag 自体を quote する
-    # (`"--head" master` 等) 稀な形は raw 判定では拾えなくなるが、value が flag 形状に
-    # 偶然一致する形の誤 deny を防ぐほうを優先する。
+    # 他の value-bearing option (`--title` 等) の値を先に skip してから flag 形状を
+    # 判定する。判定は unquote 後の値に対して行う (`gh pr create "--head=master"` の
+    # ように flag 自体を quote するのは普通の shell 記法であり、これを見逃すと本物の
+    # head 指定が素通りする regression になる (security-reviewer 4 巡目で実測))。
+    # 一方で unquote 後の値だけを見ると `gh pr create --title "--head=master"` の
+    # ように **他の option の値** が偶然 head flag 形状と一致するケースを誤検出する
+    # (codex review 3 巡目)。この 2 つを両立するため、`gh pr create` の
+    # value-bearing option (`--title`/`--body`/`--body-file`/`--base`/`--assignee`/
+    # `--label`/`--milestone`/`--reviewer`/`--project`/`--template`/`--recover`、
+    # `gh pr create --help` の FLAGS 節で確認した値を取る全 option) を固定リストで
+    # 認識し、それらの token に遭遇したら (flag 名自体が quote されていても
+    # unquote して識別する) 値 token を **形状を問わず無条件に** 1 つ skip する。
+    # それ以外の token だけを head flag 候補として判定する。
+    GH_VALUE_OPT_RE='^(-a|--assignee|-B|--base|-b|--body|-F|--body-file|-l|--label|-m|--milestone|-p|--project|--recover|-r|--reviewer|-T|--template|-t|--title)$'
+    GH_VALUE_OPT_EQ_RE='^(--assignee|--base|--body|--body-file|--label|--milestone|--project|--recover|--reviewer|--template|--title)='
     declare -a _gtoks2
     tokenize_segment "$_seg" _gtoks2
     HEAD_BRANCH=""
     _hk=$((_gcreate_idx+1))
     _hn=${#_gtoks2[@]}
     while [ "$_hk" -lt "$_hn" ]; do
-      _htok_raw="${_gtoks2[$_hk]}"
-      case "$_htok_raw" in
+      _htok="$(unquote_token "${_gtoks2[$_hk]}")"
+      if [[ "$_htok" =~ $GH_VALUE_OPT_RE ]]; then
+        # value-bearing option (別トークン形式): 値 token は形状を問わず skip する。
+        _hk=$((_hk+2))
+        continue
+      fi
+      if [[ "$_htok" =~ $GH_VALUE_OPT_EQ_RE ]]; then
+        # value-bearing option (`=` 付き 1 token 形式): この token 自体が値を含むので
+        # 1 つだけ進める。
+        _hk=$((_hk+1))
+        continue
+      fi
+      case "$_htok" in
         --head)
           _hk=$((_hk+1))
           if [ "$_hk" -lt "$_hn" ]; then
@@ -325,15 +349,15 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
           break
           ;;
         --head=*)
-          HEAD_BRANCH="${_htok_raw#--head=}"
+          HEAD_BRANCH="${_htok#--head=}"
           break
           ;;
         -H=*)
-          HEAD_BRANCH="${_htok_raw#-H=}"
+          HEAD_BRANCH="${_htok#-H=}"
           break
           ;;
         -H?*)
-          HEAD_BRANCH="${_htok_raw#-H}"
+          HEAD_BRANCH="${_htok#-H}"
           break
           ;;
       esac
