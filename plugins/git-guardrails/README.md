@@ -4,13 +4,24 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.3.2
+v0.4.0
 
 ## 概要
 
 「デフォルトブランチ (master/main) への変更は、他ブランチからの **GitHub 上の PR merge** 経由のみで取り込む」という運用を構造的に保証します。ローカル側の write 経路 (commit / push / PR head) を 3 つの PreToolUse フックで多層防御し、cooperative 利用前提で誤操作・横紙破りを deny に倒します。
 
 加えて、rebase によるリモート default branch 取り込みワークフローを Skill として提供します。
+
+### v0.3.2 → v0.4.0 の変更点 (#135, #136, #137)
+
+- **3 hook (push/commit/pr) の検出方式を segment/token ベースに刷新**: v0.3.x までは COMMAND 文字列の改行を無条件に `;` へ正規化してから quote 非対応の regex で invocation を検出していた。この方式は quote 内・heredoc 内の「コマンド例文」(複数行コミットメッセージ中の `git push origin master` 等) を実コマンドと誤認して deny する false-positive を持っていた:
+  - `git commit -m "note: run\ngit push origin master\nto publish"` (改行を含むコミットメッセージ) が push hook に deny される (#135)
+  - heredoc / JSON 文字列内の `gh pr create --head master` という文字列が pr hook に deny される (#136)
+  - 複数行コミットメッセージ本文中の `cd /other && git commit ...` のような例文が commit hook に deny される (#137)
+- 修正は pre-push-review/block-pre-push.sh と同じ `cmd-parser.sh` (`split_command` + `tokenize_segment`) ベースの検出への移植。大まかな流れ: segment 分割 → subshell `(...)` / brace group `{...}` のグループ unwrap → `$(...)` / `<(...)` / `>(...)` / バッククォート内の置換 shape 保守的 deny → token level invocation 検出 (env-var assignment skip → `git`/`gh` 判定 → global option walk) → target-mismatch 判定、という単一パイプラインに統一
+- 共有 lib `cmd-parser.sh` の `split_command` に潜在していたバグを修正: quote (`'...'`/`"..."`) 内の生改行がそのまま segment に残っていたため、呼び出し側の `while IFS= read -r line; do ... done < <(split_command ...)` が segment 内部の改行を次 segment との境界と誤認し、1 segment が複数行に分裂する実害があった (quote 内改行は paren/brace depth 内の改行と同様に空白 1 文字へ正規化して 1 segment のまま保持するよう修正)。pre-push-review / enforce-draft-pr の `cmd-parser.sh` へも byte-identical で sync
+- 新たに **グループ unwrap** (`(cd /other; git push origin feature)` / `{ cd /other; git push origin feature; }` のような subshell / brace group 内の target-mismatch を検出) と **置換 shape の保守的 deny** (`echo $(git push origin master)` / バッククォート版を deny) に対応。旧実装ではこれらは素通りしていた
+- 既知の制約を 5 点追記 (下記「既知の制約」参照): シェルラッパー経由の検出対象外、置換 shape 検出のスコープ、target-mismatch scope 拡大に伴う理論上の誤検知可能性、quote されていない heredoc body 行頭の例文、quote 数が奇数の複数行文字列
 
 ### v0.3.1 → v0.3.2 の変更点 (marketplace audit drift cleanup)
 
@@ -82,7 +93,9 @@ claude plugin install git-guardrails@natsuume-plugins
 **動作**:
 
 - 入力に `commit` 文字列が無ければ即離脱 (粗フィルタ)
-- `git ... commit` パターンで commit 実行を検出 (git の global option `-C` / `-c key=val` を伴う形式も含む)
+- `cmd-parser.sh` の `split_command` で COMMAND を segment に分割し (subshell `(...)` / brace group `{...}` は中身を unwrap して再分割)、各 segment を `tokenize_segment` でトークン化して検出する (quote / heredoc 内のテキストを実コマンドと誤認しない)
+- env-var assignment を skip した先頭 token が `git`/`*/git` で、続く global option (`-C` / `-c key=val` 等) を walk して `commit` サブコマンドに到達する segment のみを commit invocation として検出
+- `$(...)` / `<(...)` / `>(...)` / バッククォート内に `git commit` の形状が隠れている場合は保守的に deny
 - `git symbolic-ref --short HEAD` でカレントブランチを取得
 - master/main なら deny、それ以外なら exit 0
 - detached HEAD (cherry-pick / rebase 中など) はブランチ名が空なので自然に通る
@@ -105,9 +118,11 @@ master ブランチで `git commit -m "fix"` を実行
 
 **動作**:
 
-- `git ... push` パターンで push 実行を検出 (git の global option `-C` / `-c key=val` 等を伴う形式も含む)
+- `cmd-parser.sh` の `split_command` で COMMAND を segment に分割し (subshell `(...)` / brace group `{...}` は中身を unwrap して再分割)、各 segment を `tokenize_segment` でトークン化して検出する (quote / heredoc 内のテキストを実コマンドと誤認しない)
+- env-var assignment を skip した先頭 token が `git`/`*/git` で、続く global option (`-C` / `-c key=val` 等) を walk して `push` サブコマンドに到達する segment のみを push invocation として検出
+- `$(...)` / `<(...)` / `>(...)` / バッククォート内に `git push` の形状が隠れている場合は保守的に deny (例: `echo $(git push origin master)` / `` echo `cd /other; git push origin feature` ``)
 - カレントブランチが master/main の場合: 引数の有無に関わらず deny (引数省略形 `git push` / `git push origin` でも upstream 経由で master を更新するため)
-- それ以外のブランチの場合: 引数の各 token を `+` / `refs/heads/` プレフィックス剥がし後に完全一致比較し、master/main が現れたら deny
+- それ以外のブランチの場合: push サブコマンドより後の各 token を `+` / `refs/heads/` プレフィックス剥がし後に完全一致比較し、master/main が現れたら deny
   - `git push origin master` (明示)
   - `git push origin feat:master` (refspec の右側) / `git push origin master:feat` (refspec の左側)
   - `git push --force-with-lease origin master`
@@ -115,12 +130,15 @@ master ブランチで `git commit -m "fix"` を実行
   - `git push origin "master"` (shell quote 剥がし後に完全一致)
 - **`--all` / `--mirror` も deny**: refspec を明示せず全ローカル branch を push するモードは、master/main が local に存在すれば自動的にそれを更新するため、token 完全一致比較を素通りする bypass になる。default branch 保護のため一律 deny
 - **chained 形式**: `git push origin feature && git push origin master` のように `&&` / `||` / `;` / `&` / `|` で連結された複数の push を含むコマンドは、各 push 呼び出しを独立に検査します。最初の push が APPROVE でも 2 つ目が master を更新するならその時点で deny
+- **グループ unwrap 経由**: `(cd /other; git push origin feature)` / `{ cd /other; git push origin feature; }` のような subshell / brace group は中身を展開してから検査するため、内部の `cd` による target-mismatch も検出される
 
 **通す例**:
 
 - master 以外のブランチからの `git push` (引数なし、master を更新しない)
 - `git push origin feature` (master トークンを含まない)
 - `git push origin feature/main` (working branch 名は完全一致しないので APPROVE)
+- `echo git push origin master` / `grep "git push origin master" README.md` (segment 先頭が `git` ではないテキスト参照は invocation として検出されない)
+- 複数行コミットメッセージ本文中に `git push origin master` という例文を含む `git commit -m "..."` (quote 内改行は 1 segment のまま空白に正規化されるため、本文が独立した invocation として分裂しない)
 
 #### 3. block-default-branch-pr (PreToolUse, matcher: `Bash`)
 
@@ -130,8 +148,10 @@ master ブランチで `git commit -m "fix"` を実行
 
 **動作**:
 
-- `gh ... pr create` パターンで PR 作成を検出 (連結 prefix `cd repo && gh pr create ...` / `xxx ; gh pr create ...` も対象)
-- head 指定の以下 5 形式を抽出して評価し、master/main なら deny:
+- `cmd-parser.sh` の `split_command` で COMMAND を segment に分割し (subshell `(...)` / brace group `{...}` は中身を unwrap して再分割)、各 segment を `tokenize_segment` でトークン化して検出する (quote / heredoc 内のテキストを実コマンドと誤認しない)
+- env-var assignment を skip した先頭 token が `gh`/`*/gh` である segment について、以降の token 列を走査し隣接する 2 token が `pr` `create` である位置を invocation として検出 (`gh` と `pr create` の間に任意 token `-R owner/repo` 等を許容する意味論を維持)
+- `$(...)` / `<(...)` / `>(...)` / バッククォート内に `gh pr create` の形状が隠れている場合は保守的に deny
+- head 指定の以下 5 形式を `create` token より後の token 列から抽出して評価し、master/main なら deny:
   - `--head <branch>` (別トークン long)
   - `--head=<branch>` (`=` 付き long)
   - `-H <branch>` (別トークン short)
@@ -169,7 +189,7 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 | ファイル | 用途 |
 |---|---|
 | `hooks/scripts/lib/default-branch.sh` | デフォルトブランチ名集合 (`master`/`main`) と、`is_default_branch` / `current_branch` / `strip_shell_quotes` / `normalize_refspec_part` / `strip_quoted_text` / `emit_deny` / `has_target_mismatch_prefix` の関数群 + `readonly TARGET_MISMATCH_DENY_REASON` を集約。3 hook が source して使う |
-| `hooks/scripts/lib/cmd-parser.sh` | pre-push-review から **byte-identical でベンダリング** している共有パーサ。git-guardrails の 3 hook が実際に呼ぶのは `normalize_line_continuations_to_space` のみだが、canonical 実装とのドリフト防止のためファイル全体を丸ごとベンダリングしている (ヘッダコメントが pre-push-review を指すのはこのため) |
+| `hooks/scripts/lib/cmd-parser.sh` | pre-push-review から **byte-identical でベンダリング** している共有パーサ。v0.4.0 以降、git-guardrails の 3 hook は `normalize_line_continuations_to_space` に加えて `split_command` / `tokenize_segment` / `skip_env_assignments` / `unquote_token` も実際に使用する (segment/token ベースの invocation 検出のため)。canonical 実装とのドリフト防止のためファイル全体を丸ごとベンダリングしている (ヘッダコメントが pre-push-review を指すのはこのため) |
 | `hooks/scripts/lib/exit-trap.sh` | 予期せぬ非ゼロ終了を stderr に可視化する `install_exit_trap`。3 hook が冒頭で呼ぶ (#61) |
 
 ## 既知の制約 (cooperative 利用前提)
@@ -180,6 +200,12 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
   - `git checkout <default> -- <pathspec>` を **commit/push/PR と連結した** chained コマンド (例: `git checkout main -- file.txt && git commit -m x`): `-- file.txt` は branch を切り替えず特定ファイルを作業ツリーに復元するだけですが、後続 invocation の target-mismatch 前段検査 (`has_target_mismatch_prefix`) が `checkout main` 部分を branch 切替とみなし、その commit/push/PR を deny します (単独の `git checkout main -- file.txt` は commit/push/PR を含まず各 hook の粗フィルタを通らないため deny されません)。回避するには checkout を別の Bash 呼び出しに分けてから commit してください
   - remote 名が `master` / `main` の push (例: `git push master feature`): `master` という名前の **remote** へ feature を push する操作ですが、push hook は引数 token を remote/refspec の区別なく比較するため、その `master` を default branch token と誤認して deny します
 - `gh pr create` 以外の経路 (Web UI 等での PR 作成) は介入できません。これは設計上の意図です
+- **v0.4.0 の segment/token ベース検出に伴う残存制約 5 点**:
+  1. **シェルラッパー経由の invocation は検出対象外**: token level 検出は「env-var assignment を skip した最初の実 token が `git`/`gh` であること」を要求するため、`bash -c "git push origin master"` / `sh -c "..."` / `eval "..."` / `time git push ...` / `env git push ...` のようなラッパー経由の invocation は素通りします (pre-push-review/block-pre-push.sh は明示的にこれらを deny しますが、本プラグインの 3 hook は対象外。cooperative 利用では発生しにくいため許容)
+  2. **置換 shape の保守的 deny は対象コマンド文字列を含む場合のみ発動**: `$(...)` / `<(...)` / `>(...)` / バッククォート内に対象コマンド (`git push` / `git commit` / `gh pr create`) の形状が実際に含まれる場合のみ deny する positive-detection です。`$(cd /other)` のように cwd だけを変える置換自体は本 hook のスコープ外ですが、その後に続く実 invocation は別 segment として通常どおり検出されるため実害はありません
+  3. **target-mismatch のスコープ拡大**: v0.4.0 では「invocation を含む segment 全体」を target-mismatch 判定に渡す設計に変更しました (旧実装は invocation 位置までの prefix のみ)。理論上、invocation 自身の非 quoted 引数が `cd` / `switch` 等のキーワードを偶然含むと誤検知し得ますが、refspec やコミットメッセージにそのような token が現れることは実務上稀です
+  4. **quote されていない heredoc body の行頭例文は依然 false positive になり得ます**: `split_command` は heredoc (`<<DELIM ... DELIM`) を追跡しないため、`cat > doc.md <<'EOF'` で書き出すドキュメント本文のように **quote で囲まれていない** heredoc body の各行は通常の segment として解析されます。body の行頭に `git push origin master` のような保護対象コマンドの例文がそのまま置かれると、token level 検出でも実 invocation と区別できず deny されます。quote 内に包まれた heredoc (リポジトリ規約のコミット形式 `git commit -m "$(cat <<'EOF' ... EOF)"` 等) は v0.4.0 の quote 内改行正規化により 1 segment に保持されるため、この問題は起きません。回避するにはファイル書き出しに Write 系ツールを使うか、例文の行頭にバッククォート等を置いてください (heredoc 追跡の実装は follow-up issue で検討)
+  5. **複数行文字列内の double quote が奇数個の場合の残存ケース**: quote の対応が取れない複数行文字列では、奇数個目の quote 以降のテキストが quote 外と解釈され、そこに含まれる改行が segment 境界に化けます。その位置に保護対象コマンドの行頭例文があると false positive になり得ます (行内で対応が取れた quote では発生しません)
 
 ## ディレクトリ構成
 

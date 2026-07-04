@@ -17,7 +17,11 @@
 # limitations (cooperative 利用前提):
 #   - heredoc (`<<EOF ... EOF`) の body 内 quote toggle は素朴に追跡してしまう。 cooperative
 #     利用で問題は出にくい (重要判定は最終的に `bash -n` のような構文チェックでなく resolver
-#     の positive 判定で行うため)。
+#     の positive 判定で行うため)。 quote (`'...'` / `"..."`) の内側に heredoc 全体が
+#     包まれる形 (例: `git commit -m "$(cat <<'EOF' ... EOF)"`) では、 body 中の生改行は
+#     quote 内改行として下記の通り空白に正規化されるため、 heredoc 由来の複数行本文は 1
+#     segment に保持される (本文中の `git push` のようなコマンド例文が誤って独立 segment
+#     として検出される bypass を防ぐ)。
 #   - **command substitution `$(...)` / process substitution `<(...)` `>(...)` /
 #     backtick `` `...` `` の内部は parser から隠蔽される経路**。 これらの置換内に
 #     `git push` がある形式は block-pre-push.sh の事前 shape チェックで substring 検出して
@@ -25,6 +29,12 @@
 #     置換 `$(` `<(` `>(` は paren_depth に算入されて `;` 区切りが発火しないこともあり、
 #     内部の `git push` が segment に巻き込まれて push 検出が token level で失敗する経路が
 #     あった。 それを shape check で塞ぐ。 backtick は depth tracking していない。
+#   - **quote (`'...'` / `"..."`) 内の生改行は空白 1 文字に正規化して 1 segment のまま保持
+#     する** (paren `(...)` / brace `{...}` depth 内の改行と同じ扱い)。 quote 内の生改行を
+#     そのまま segment に残すと、 呼び出し側 (`while IFS= read -r line; do ... done <
+#     <(split_command ...)`) が `read` で 1 行ずつ segment を消費する際に、 segment 内部の
+#     改行を「次の segment との境界」と誤認して 1 つの segment が複数行に分裂する (=
+#     segment 分割プロトコル `printf '%s\n' "$segment"` の前提を壊す) 実害があった。
 
 # line continuation `\<LF>` 正規化。
 #
@@ -148,13 +158,27 @@ split_command() {
   local in_squote=0 in_dquote=0
   local paren_depth=0 brace_depth=0
   local segment=""
+  # bash 3.2 互換のため `$'\n'` を変数に退避してから比較する (ANSI-C quoting をパターン部で
+  # 直接使えない bash 3.2 の制約は `_normalize_line_continuations_impl` と同種。 ここでは
+  # パターン置換ではなく単純な文字列比較 `[ "$c" = "$nl" ]` なので本来は直書きでも動くが、
+  # ファイル全体の bash 3.2 互換方針に合わせて明示的に変数化する)。
+  local nl=$'\n'
 
   while [ "$i" -lt "$len" ]; do
     local c="${cmd:$i:1}"
 
     if [ "$in_squote" -eq 1 ]; then
       [ "$c" = "'" ] && in_squote=0
-      segment+="$c"; i=$((i+1)); continue
+      # quote 内の生改行 (heredoc 埋め込みなど) は空白 1 文字に正規化して segment に残す。
+      # 生改行のまま残すと、 呼び出し側の `while IFS= read -r line; do ... done <
+      # <(split_command ...)` が segment 内部の改行を次 segment との境界と誤認し、 1
+      # segment が複数行に分裂する (= `printf '%s\n' "$segment"` の出力プロトコルが壊れる)。
+      if [ "$c" = "$nl" ]; then
+        segment+=" "
+      else
+        segment+="$c"
+      fi
+      i=$((i+1)); continue
     fi
 
     if [ "$in_dquote" -eq 1 ]; then
@@ -167,7 +191,13 @@ split_command() {
         esac
       fi
       [ "$c" = '"' ] && in_dquote=0
-      segment+="$c"; i=$((i+1)); continue
+      # squote 分岐と同じ理由で、 quote 内の生改行は空白に正規化する。
+      if [ "$c" = "$nl" ]; then
+        segment+=" "
+      else
+        segment+="$c"
+      fi
+      i=$((i+1)); continue
     fi
 
     case "$c" in
@@ -193,11 +223,13 @@ split_command() {
         i=$((i+1))
         ;;
       $'\n')
-        # quote 外の生改行は bash でも `;` 等価のコマンド区切り。 これを segment 区切りに
-        # 含めないと、 multi-line command (`echo prep<NL>git push origin x` のような形) が
-        # 単一 segment 扱いになり、 push 検出 (= 「最初の token が git で次が push」) を
-        # 素通りして gate を bypass する。 quote / paren / brace 内の改行は空白に置換して
-        # 1 segment として保持する (heredoc 埋め込みなど)。
+        # ここに到達するのは quote 外の生改行のみ (quote 内の生改行は上の in_squote /
+        # in_dquote 分岐で既に消費・空白化されて `continue` 済み)。 quote 外の生改行は
+        # bash でも `;` 等価のコマンド区切り。 これを segment 区切りに含めないと、
+        # multi-line command (`echo prep<NL>git push origin x` のような形) が単一 segment
+        # 扱いになり、 push 検出 (= 「最初の token が git で次が push」) を素通りして gate
+        # を bypass する。 paren / brace depth 内 (かつ quote 外) の改行は空白に置換して 1
+        # segment として保持する (`(foo<NL>bar)` のような形)。
         if [ "$paren_depth" -eq 0 ] && [ "$brace_depth" -eq 0 ]; then
           printf '%s\nSEP:;\n' "$segment"
           segment=""
