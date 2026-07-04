@@ -30,11 +30,21 @@
 #     内部の `git push` が segment に巻き込まれて push 検出が token level で失敗する経路が
 #     あった。 それを shape check で塞ぐ。 backtick は depth tracking していない。
 #   - **quote (`'...'` / `"..."`) 内の生改行は空白 1 文字に正規化して 1 segment のまま保持
-#     する** (paren `(...)` / brace `{...}` depth 内の改行と同じ扱い)。 quote 内の生改行を
-#     そのまま segment に残すと、 呼び出し側 (`while IFS= read -r line; do ... done <
-#     <(split_command ...)`) が `read` で 1 行ずつ segment を消費する際に、 segment 内部の
-#     改行を「次の segment との境界」と誤認して 1 つの segment が複数行に分裂する (=
-#     segment 分割プロトコル `printf '%s\n' "$segment"` の前提を壊す) 実害があった。
+#     する**。 quote 内の生改行をそのまま segment に残すと、 呼び出し側 (`while IFS= read
+#     -r line; do ... done < <(split_command ...)`) が `read` で 1 行ずつ segment を
+#     消費する際に、 segment 内部の改行を「次の segment との境界」と誤認して 1 つの
+#     segment が複数行に分裂する (= segment 分割プロトコル `printf '%s\n' "$segment"` の
+#     前提を壊す) 実害があった。 quote 内は literal データなので空白への正規化で意味が
+#     変わらない。
+#   - **paren `(...)` / brace `{...}` depth 内 (かつ quote 外) の生改行は `;` 1 文字に
+#     正規化して 1 segment のまま保持する**。 quote 内と異なり空白ではなく `;` にするのは、
+#     bash の compound command 内で unquoted な改行が `;` と等価の separator であるという
+#     意味論に合わせるためであると同時に、 呼び出し側のグループ unwrap (subshell / brace
+#     group の中身を剥がして `split_command` で再分割する処理) が再分割時にこの `;` を
+#     real separator として認識できるようにするため。 空白のままだと再分割後も 1 segment
+#     のままになり、 group 内に埋め込まれた 2 つ目以降のコマンド (例:
+#     `(echo prep<NL>git push origin master)` の `git push ...` 部分) が検出から漏れる
+#     bypass になる。
 
 # line continuation `\<LF>` 正規化。
 #
@@ -228,13 +238,20 @@ split_command() {
         # bash でも `;` 等価のコマンド区切り。 これを segment 区切りに含めないと、
         # multi-line command (`echo prep<NL>git push origin x` のような形) が単一 segment
         # 扱いになり、 push 検出 (= 「最初の token が git で次が push」) を素通りして gate
-        # を bypass する。 paren / brace depth 内 (かつ quote 外) の改行は空白に置換して 1
-        # segment として保持する (`(foo<NL>bar)` のような形)。
+        # を bypass する。 paren / brace depth 内 (かつ quote 外) の改行も同じ理由で `;`
+        # に正規化して 1 segment のまま保持する (`(echo prep<NL>git push origin x)` の
+        # ような形)。 空白ではなく `;` にするのは、 bash の compound command 内で
+        # unquoted な改行が `;` と等価の separator であるという意味論に合わせるためで
+        # あると同時に、 呼び出し側のグループ unwrap (subshell / brace group の中身を
+        # 剥がして split_command で再分割する処理) が再分割時にこの `;` を real
+        # separator として認識し、 group 内に埋め込まれた複数コマンドを正しく複数
+        # segment に分割できるようにするため (空白のままだと re-split 後も 1 segment の
+        # ままになり、 group 内の 2 つ目以降のコマンドが検出から漏れる regression になる)。
         if [ "$paren_depth" -eq 0 ] && [ "$brace_depth" -eq 0 ]; then
           printf '%s\nSEP:;\n' "$segment"
           segment=""
         else
-          segment+=" "
+          segment+=";"
         fi
         i=$((i+1))
         ;;

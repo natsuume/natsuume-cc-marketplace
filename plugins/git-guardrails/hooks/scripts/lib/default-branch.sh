@@ -82,6 +82,24 @@ strip_quoted_text() {
   printf '%s' "$1" | sed -E -e 's/"[^"]*"/ /g' -e "s/'[^']*'/ /g"
 }
 
+# 引数: <command-string>
+# 出力: single quote (`'...'`) で囲まれた範囲のみを空白に置換した command 文字列
+# (double quote 内の内容はそのまま残す)
+#
+# `strip_quoted_text` は single/double 両方の quote 領域を除去するため、dquote 内で
+# 実行される command substitution `$(...)` / `<(...)` / `>(...)` を検出する第 2 パス
+# (dquote 内 invocation の opener-anchored 保守的 deny。詳細は各 hook の置換 shape check
+# セクション参照) には使えない (dquote 領域ごと消えて substitution の中身も消えてしまう
+# ため)。本関数は single quote 領域のみを空白化し、dquote 内容は検出対象として残す。
+#
+# 制約: dquote 内の英文アポストロフィ (`don't` 等) を single quote の開始と誤認し、
+# 実際の single-quote 領域とは異なる範囲を空白化してしまうケースがある。これは検出用
+# コピーのテキストが歪むだけであり (opener-anchored regex は substitution opener
+# 直後の invocation しか拾わないため)、deny/allow の実害経路にはならないことを許容する。
+strip_squoted_text() {
+  printf '%s' "$1" | sed -E "s/'[^']*'/ /g"
+}
+
 # 引数: <reason>
 # stdout: PreToolUse deny の jq ペイロード
 # 3 hook で同形だったペイロードを集約して、フィールド名やキー順のドリフトを防ぐ。

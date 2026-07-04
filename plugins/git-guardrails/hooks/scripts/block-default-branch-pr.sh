@@ -105,6 +105,27 @@ while [ "$_wi" -lt "${#SEGMENTS[@]}" ]; do
             *';') _winner="${_winner%;}" ;;
           esac
           ;;
+        *)
+          # 末尾が閉じ文字でない = group の閉じ直後に redirection 等の suffix が続く形
+          # (`(gh pr create --head master) >/tmp/out` 等)。詳細は
+          # block-default-branch-push.sh の同箇所コメント参照 (subshell/brace group
+          # 直後の top-level 構文は redirection のみなので、最後の `)`/`}` 位置で切り
+          # 捨てても中身の検出は損なわれない)。
+          case "$_winner" in
+            *[\)\}]*)
+              # ブラケット式内でも `}` は `\}` でエスケープする必要がある (詳細は
+              # block-default-branch-push.sh の同箇所コメント参照)。
+              _winner="${_winner%[)\}]*}"
+              _winner="${_winner%"${_winner##*[![:space:]]}"}"
+              case "$_winner" in
+                *';') _winner="${_winner%;}" ;;
+              esac
+              ;;
+            *)
+              _winner="$_wtrim"
+              ;;
+          esac
+          ;;
       esac
       # 無限ループ防止: 除去操作で文字列長が減らない場合はそのまま 1 segment として
       # 処理を続ける (先頭 1 文字を必ず剥がすため実際には常に減るが、防御的に確認する)。
@@ -149,6 +170,12 @@ done
 SUBST_BOUNDARY='[;&|(`]'
 SUBST_PR_INVOCATION_REGEX="${SUBST_BOUNDARY}[[:space:]]*gh([[:space:]]+[^[:space:];&|]+)*[[:space:]]+pr[[:space:]]+create([[:space:]]|\$)"
 
+# 第 2 パス: dquote 内で実行される command substitution を opener-anchored に検出する
+# (詳細・設計理由は block-default-branch-push.sh の同箇所コメント参照)。「任意 token」
+# 部分は substitution の閉じ `)` を誤って跨がないよう `)` も除外文字に含める。
+SUBST2_OPENER='(\$\(|<\(|>\()'
+SUBST2_PR_INVOCATION_REGEX="${SUBST2_OPENER}[[:space:]]*gh([[:space:]]+[^[:space:];&|)]+)*[[:space:]]+pr[[:space:]]+create([[:space:]]|\)|\$)"
+
 _si=0
 while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
   _seg="${SEGMENTS[$_si]}"
@@ -162,6 +189,21 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
 これらは内部の cwd や head branch を本 parser から隠蔽する経路で、例えば `echo $(git switch master; gh pr create)` のようなコマンドはデフォルトブランチ保護を素通りする bypass になり得ます。
 
 置換の外で直接 `gh pr create` を実行してください。
+EOF
+)
+        emit_deny "$REASON"
+        exit 0
+      fi
+      ;;
+  esac
+  case "$_seg" in
+    *'$('*|*'<('*|*'>('*)
+      _stripped2="$(strip_squoted_text "$_seg")"
+      if [[ "$_stripped2" =~ $SUBST2_PR_INVOCATION_REGEX ]]; then
+        REASON=$(cat <<'EOF'
+デフォルトブランチ保護フックをブロックしました。ダブルクォート内であっても command substitution `$(...)` / プロセス置換 `<(...)` / `>(...)` は bash によって実行されるため、`echo "$(gh pr create --head master)"` のような形の `gh pr create` を保守的に deny します。
+
+引用符の内側であっても PR 作成は実際に実行されるため、除外することはできません。置換の外で直接 `gh pr create` を実行してください。
 EOF
 )
         emit_deny "$REASON"
@@ -201,14 +243,29 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
         ;;
     esac
   fi
-  unset _gtoks
 
   if [ "$_gcreate_idx" -ge 0 ]; then
-    # 「当該 invocation より前の全 segment + invocation 自体」を target-mismatch の
-    # 検査範囲に取る (post-PR の cd は対象外、invocation 内の `-R`/`-C` 等は対象内)。
+    # target-mismatch scope: 先行 segment (`;` join) + 当該 invocation の「先頭 token
+    # (env assignment 含む) から `create` サブコマンド token までの raw token 列を
+    # 空白 join した invocation prefix」。create より後の引数 (`--head` / `--title` 等)
+    # は scope から除外する (詳細は block-default-branch-push.sh の同箇所コメント参照。
+    # `gh pr create --head feature --title cd` の `cd` が --title の値の場合に誤 deny
+    # しないため)。`gh -R owner/repo pr create` のような global option は invocation
+    # prefix 側に残るため、target-mismatch 検出は引き続き働く。
+    _invprefix=""
+    _pk=0
+    while [ "$_pk" -le "$_gcreate_idx" ]; do
+      if [ -z "$_invprefix" ]; then
+        _invprefix="${_gtoks[$_pk]}"
+      else
+        _invprefix="$_invprefix ${_gtoks[$_pk]}"
+      fi
+      _pk=$((_pk+1))
+    done
+
     _scope=""
     _sj=0
-    while [ "$_sj" -le "$_si" ]; do
+    while [ "$_sj" -lt "$_si" ]; do
       if [ -z "$_scope" ]; then
         _scope="${SEGMENTS[$_sj]}"
       else
@@ -216,7 +273,13 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
       fi
       _sj=$((_sj+1))
     done
+    if [ -z "$_scope" ]; then
+      _scope="$_invprefix"
+    else
+      _scope="$_scope;$_invprefix"
+    fi
     if has_target_mismatch_prefix "$_scope"; then
+      unset _gtoks
       emit_deny "$TARGET_MISMATCH_DENY_REASON"
       exit 0
     fi
@@ -296,6 +359,7 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
     fi
   fi
 
+  unset _gtoks
   _si=$((_si+1))
 done
 

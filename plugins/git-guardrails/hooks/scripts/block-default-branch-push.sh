@@ -129,6 +129,34 @@ while [ "$_wi" -lt "${#SEGMENTS[@]}" ]; do
             *';') _winner="${_winner%;}" ;;
           esac
           ;;
+        *)
+          # 末尾が閉じ文字でない = group の閉じ直後に redirection 等の suffix が続く形
+          # (`(git push origin master) >/tmp/out` / `(cmd) 2>/dev/null` 等)。subshell /
+          # brace group の直後に top-level で来られる構文は redirection のみ (`;`/`&`/`|`
+          # は split_command が既にこの worklist を作る際に top-level separator として
+          # 分割済みなので、ここに残り得るのは redirection だけ)。segment 内の**最後**の
+          # `)`/`}` の位置で切り、それ以降 (redirection suffix) を捨てても group の中身の
+          # 検出は損なわれない。`${_winner%[)\}]*}` は「`)`/`}` のいずれかで始まり以降任意」
+          # にマッチする最短 suffix を末尾から剥がすため、最後の閉じ文字の直前までが残る。
+          # ブラケット式内でも `}` を `\}` でエスケープしないと、bash の `${...}` 展開の
+          # brace-matching パーサがブラケット式の内側であることを認識できず、そこで
+          # 展開が閉じたと誤解してパターンが壊れる (実測確認済み)。
+          case "$_winner" in
+            *[\)\}]*)
+              _winner="${_winner%[)\}]*}"
+              _winner="${_winner%"${_winner##*[![:space:]]}"}"
+              case "$_winner" in
+                *';') _winner="${_winner%;}" ;;
+              esac
+              ;;
+            *)
+              # 閉じ文字が 1 つも無い (不正な入力・記述途中等)。切り出す根拠が無いため
+              # unwrap を諦め、trimmed 全体をそのまま 1 segment として扱う (下の長さ
+              # チェックが働くよう _winner を _wtrim に戻す)。
+              _winner="$_wtrim"
+              ;;
+          esac
+          ;;
       esac
       # 無限ループ防止: 除去操作で文字列長が減らない場合はそのまま 1 segment として
       # 処理を続ける (先頭 1 文字を必ず剥がすため実際には常に減るが、防御的に確認する)。
@@ -178,6 +206,31 @@ ENV_VAR_PREFIX='([A-Za-z_][A-Za-z0-9_]*=[^[:space:];&|]*[[:space:]]+)*'
 SUBST_BOUNDARY='[;&|(`]'
 SUBST_PUSH_INVOCATION_REGEX="${SUBST_BOUNDARY}[[:space:]]*${ENV_VAR_PREFIX}git[[:space:]]+(${OPT}${OPT_ARG}[[:space:]]+)*push([[:space:]]|\$)"
 
+# 第 2 パス: dquote (`"..."`) 内で実行される command substitution `$(...)` / `<(...)` /
+# `>(...)` を検出する。bash は dquote 内でも `$(...)` を実行するため
+# (`echo "$(git push origin master)"` は実際に push を実行する)、これを検出対象外の
+# ままにはできない。一方、上の第 1 パス (`strip_quoted_text` ベース、境界に `;`/`&`/`|`/
+# `(`/backtick を許す) をそのまま dquote 内容にも適用すると、コミットメッセージ規約
+# `git commit -m "$(cat <<'EOF' ... EOF)"` の本文中に含まれるコマンド例文 (`&&` / `;`
+# 直後の例文) まで誤検出して deny してしまう (このプラグインが解消した false-positive
+# クラスの再導入になる)。
+#
+# そこで、左境界を「substitution opener そのもの」(`$(` / `<(` / `>(`) に限定した
+# **opener-anchored** 検出を第 2 パスとして追加する。境界を bare `(` や `;`/`&`/`|` に
+# 広げないのは、opener の直後に invocation が来る形 (`$(git push ...)`) だけを狙い、
+# opener から離れた位置にある「本文中の例文」を誤って拾わないようにするため。
+# バッククォートを opener に含めないのは、このリポジトリのコミットメッセージが
+# markdown code span (`` `git push origin master` `` のような例文をバッククォートで
+# 囲む書き方) を日常的に含むため、backtick を opener にすると house style の
+# コミットメッセージが軒並み deny される事故になるから。dquote 内バッククォート置換
+# (archaic command substitution) は既知制約として残す (README 参照)。
+#
+# 検査対象テキストは `strip_squoted_text` (single quote 領域のみ空白化、dquote 領域は
+# 保持) を通す。single-quote literal (`echo '$(git push origin master)'` のような
+# 実行されない形) を誤検出しないための処理で、dquote 内容は残るのでこちらは検出できる。
+SUBST2_OPENER='(\$\(|<\(|>\()'
+SUBST2_PUSH_INVOCATION_REGEX="${SUBST2_OPENER}[[:space:]]*${ENV_VAR_PREFIX}git[[:space:]]+(${OPT}${OPT_ARG}[[:space:]]+)*push([[:space:]]|\)|\$)"
+
 _si=0
 while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
   _seg="${SEGMENTS[$_si]}"
@@ -191,6 +244,21 @@ while [ "$_si" -lt "${#SEGMENTS[@]}" ]; do
 これらは内部の cwd や `git push` を本 parser から隠蔽する経路で、例えば `echo $(cd /other; git push origin feature)` のようなコマンドはデフォルトブランチ保護を素通りする bypass になり得ます。
 
 置換の外で直接 `git push` を実行してください。
+EOF
+)
+        emit_deny "$REASON"
+        exit 0
+      fi
+      ;;
+  esac
+  case "$_seg" in
+    *'$('*|*'<('*|*'>('*)
+      _stripped2="$(strip_squoted_text "$_seg")"
+      if [[ "$_stripped2" =~ $SUBST2_PUSH_INVOCATION_REGEX ]]; then
+        REASON=$(cat <<'EOF'
+プッシュをブロックしました。ダブルクォート内であっても command substitution `$(...)` / プロセス置換 `<(...)` / `>(...)` は bash によって実行されるため、`echo "$(git push origin master)"` のような形の `git push` を保守的に deny します。
+
+引用符の内側であっても push は実際に実行されるため、除外することはできません。置換の外で直接 `git push` を実行してください。
 EOF
 )
         emit_deny "$REASON"
@@ -271,26 +339,8 @@ fi
 # `normalize_refspec_part` を経由して `+` / `refs/heads/` プレフィックスを剥がしてから
 # 完全一致比較する。
 for _si in "${PUSH_INVOCATION_INDICES[@]}"; do
-  # target-mismatch scope: worklist 上でこの invocation より前に処理した全 segment +
-  # 当該 segment 全体を `;` で join する。「invocation より後の引数も scope に含まれる」
-  # 点は現行と異なるが、引数由来の誤検知は quoted 引数が strip_quoted_text で除去される
-  # ため実質発生しない。
-  _scope=""
-  _sj=0
-  while [ "$_sj" -le "$_si" ]; do
-    if [ -z "$_scope" ]; then
-      _scope="${SEGMENTS[$_sj]}"
-    else
-      _scope="$_scope;${SEGMENTS[$_sj]}"
-    fi
-    _sj=$((_sj+1))
-  done
-  if has_target_mismatch_prefix "$_scope"; then
-    emit_deny "$TARGET_MISMATCH_DENY_REASON"
-    exit 0
-  fi
-
-  # push サブコマンドの位置を再特定し、それより後の全 token を refspec として検査する。
+  # push サブコマンドの位置を再特定する (target-mismatch scope の構築と refspec 検査の
+  # 両方で使う)。
   _seg="${SEGMENTS[$_si]}"
   declare -a _gtoks
   tokenize_segment "$_seg" _gtoks
@@ -304,10 +354,53 @@ for _si in "${PUSH_INVOCATION_INDICES[@]}"; do
       -C|--git-dir|--work-tree|-c|--config|--config-env) _gidx=$((_gidx+2)); continue ;;
       --git-dir=*|--work-tree=*) _gidx=$((_gidx+1)); continue ;;
       -*) _gidx=$((_gidx+1)); continue ;;
-      push) _gidx=$((_gidx+1)); break ;;
+      push) break ;;
       *) break ;;
     esac
   done
+
+  # target-mismatch scope: 先行 segment (`;` join) + 当該 invocation の「先頭 token
+  # (env assignment 含む) から `push` サブコマンド token までの raw token 列を空白 join
+  # した invocation prefix」。push より後の引数 (refspec / `--force-with-lease` 等) は
+  # scope から除外する。target-mismatch は「invocation より前の cwd/branch 切替」を
+  # 検出するためのものであり、invocation 自身の引数 (`git push origin cd` の `cd` が
+  # branch 名の場合など) を含めると、引数の文字列がたまたま `cd` 等のキーワードと一致
+  # したときに誤 deny する。`GIT_DIR=... git -C dir push` のような env prefix / global
+  # option は invocation prefix 側に残るため、target-mismatch 検出は引き続き働く。
+  _invprefix=""
+  _pk=0
+  while [ "$_pk" -le "$_gidx" ] && [ "$_pk" -lt "$_gn" ]; do
+    if [ -z "$_invprefix" ]; then
+      _invprefix="${_gtoks[$_pk]}"
+    else
+      _invprefix="$_invprefix ${_gtoks[$_pk]}"
+    fi
+    _pk=$((_pk+1))
+  done
+
+  _scope=""
+  _sj=0
+  while [ "$_sj" -lt "$_si" ]; do
+    if [ -z "$_scope" ]; then
+      _scope="${SEGMENTS[$_sj]}"
+    else
+      _scope="$_scope;${SEGMENTS[$_sj]}"
+    fi
+    _sj=$((_sj+1))
+  done
+  if [ -z "$_scope" ]; then
+    _scope="$_invprefix"
+  else
+    _scope="$_scope;$_invprefix"
+  fi
+  if has_target_mismatch_prefix "$_scope"; then
+    emit_deny "$TARGET_MISMATCH_DENY_REASON"
+    exit 0
+  fi
+
+  # push サブコマンドより後の全 token を refspec として検査する (`_gidx` は上の walk で
+  # 既に `push` token の位置を指しているので 1 つ進めて開始する)。
+  _gidx=$((_gidx+1))
   while [ "$_gidx" -lt "$_gn" ]; do
     tok=$(strip_shell_quotes "${_gtoks[$_gidx]}")
     case "$tok" in
