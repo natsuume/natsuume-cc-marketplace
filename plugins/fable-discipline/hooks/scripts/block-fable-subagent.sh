@@ -27,6 +27,10 @@
 #   - fork subagent (model 指定を無視して親モデルを継承する型) は deny しない
 #     (誘導層の「原則使用しない」文言のみで運用する設計判断)
 #   - Workflow ツール内部の agent() 呼び出しは PreToolUse では捕捉できない (env 側でカバー)
+#   - セッション途中の /model 切替は検知できない (model を含む hook 入力は SessionStart のみで、
+#     $CLAUDE_MODEL 環境変数も存在しない)。env 不在時は state file が次の SessionStart まで
+#     stale になり、fable への切替は素通り (Step 3b が旧 state で allow)、fable からの切替は
+#     誤 deny になる (deny メッセージの model 明示誘導で自己修復可能)。README の既知の制約参照
 #
 # 主防御はあくまで CLAUDE_CODE_SUBAGENT_MODEL env 設定 (Agent の明示指定・agent frontmatter・
 # Workflow 内部の agent() すべてより優先されることを実測検証済み)。本 hook は env 設定が
