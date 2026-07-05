@@ -83,7 +83,7 @@ Claude Code に「個人の開発スタイル」 を一括で適用するため�
 | **during 系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文に `branch=<prefix>/issue-<N>-<slug>` を埋め込んで誰の claim か識別可能にする |
 | **モデル判定 / one-shot 補正** (v0.5.0 新設) | `SessionStart` (inject-always.sh の fallback chain) + `UserPromptSubmit` (resolve-model-on-prompt.sh) | 常時 (判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し `always-fable.md` / `always-sonnet.md` を出し分ける。 判定不能時は自己ゲート前置き付きで `always-sonnet.md` を暫定注入し、 後続の `UserPromptSubmit` で transcript から確定したら Fable の場合のみ確定版を 1 度だけ再注入する |
-| **検知系 (gh issue/pr body)** (v0.4.0) | `PreToolUse` (hooks.json 内に inline 定義の type: agent hook を 4 entries) | Bash ツール呼び出し時、 各 hook の `if: "Bash(gh <cmd>:*)"` filter で `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` 該当時のみ agent subagent を起動 (非該当 Bash 呼び出しは agent を起動しない) | 誘導層 (before 系 2.1 / 3.1) の禁止表現を Claude が忘れて issue body / PR 説明に書こうとしたら、 agent hook が --body inline / --body-file PATH を semantic 判定し違反時 block。 model はメイン session と同じ claude-opus-4-7 に pin (= SPOF を session 同期化) |
+| **検知系 (gh issue/pr body)** (v0.4.0、Closes 検証 Step は v0.7.0) | `PreToolUse` (hooks.json 内に inline 定義の type: agent hook を 4 entries) | Bash ツール呼び出し時、 各 hook の `if: "Bash(gh <cmd>:*)"` filter で `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` 該当時のみ agent subagent を起動 (非該当 Bash 呼び出しは agent を起動しない) | 誘導層 (before 系 2.1 / 3.1) の禁止表現を Claude が忘れて issue body / PR 説明に書こうとしたら、 agent hook が --body inline / --body-file PATH を semantic 判定し違反時 block。 `gh pr create` entry のみ branch 名から推定される issue の closing keyword 有無も追加検証する (v0.7.0)。 model は実装系メインセッションおよび全 subagent と同系列の claude-sonnet-5 に pin (= SPOF を session 同期化) |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、 auto mode セッションで `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
@@ -180,7 +180,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **イベント**: `PreToolUse`
 **matcher**: `Bash`
 **`if` filter**: `Bash(gh issue create:*)` / `Bash(gh issue edit:*)` / `Bash(gh pr create:*)` / `Bash(gh pr edit:*)` の **4 entries に分割**
-**model**: `claude-opus-4-7` (= メイン session と同じに pin)
+**model**: `claude-sonnet-5` (= 実装系メインセッションおよび全 subagent と同系列に pin。v0.7.0 で `claude-opus-4-7` から変更、詳細は下記「SPOF 緩和の設計」参照)
 **timeout**: 60 秒 (公式 default)
 
 **動作**:
@@ -193,6 +193,21 @@ claude plugin install agent-discipline@natsuume-plugins
   - どちらも無い (= editor 起動経路) / `--body-file -` (stdin) → 判定不能として `{"ok": true}` で通過 (= 誘導層に委ねる)
 - body content に対し、 inject-always.sh セクション 2.1 / 3.1 の禁止カテゴリ (推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み) を semantic 判定
 - 該当なし → `{"ok": true}`、 該当あり → `{"ok": false, "reason": "違反箇所の引用 + カテゴリ名 + 修正方針 (= AskUserQuestion でユーザの decision を取り、 確定 1 案だけを残す)"}` で block
+
+**Closes 検証 Step (`gh pr create` entry のみ、v0.7.0 新設)**:
+
+`gh pr create` entry の prompt にのみ、 上記 Step 2 (禁止カテゴリの semantic 判定) の直後・Step 3 (返り値) の前に追加の判定 Step を挿入する (#151/#153 対応、親 issue #173 決定事項 9)。 他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt はこの Step を持たない。 branch 名からの issue 推定は PR 作成時にのみ意味を持つ判定のため、 4 entries の prompt 完全 duplicate は維持しつつ本 Step だけ 1 entry に閉じる (= entry を増やさず model pin の保守対象も増やさない)。
+
+判定手順:
+
+1. hook input の `cwd` を起点に `<cwd>/.git/HEAD` を Read tool で読む
+2. 内容が `gitdir: <path>` 形式 (worktree) の場合は `<path>/HEAD` をもう 1 段 Read する
+3. HEAD が `ref: refs/heads/<branch>` 形式でない場合 (detached HEAD)、 または上記いずれかの Read に失敗した場合は、 本 Step を判定不能として通過する (fail-open で誘導層の `rule:closing-keyword` に委ねる)
+4. branch 名が `*/issue-<数字>-*` パターンに一致しない場合は本 Step を通過する
+5. 一致する場合、 Step 1 で抽出済みの body content に closing keyword (`Closes` / `Close` / `Closed` / `Fix` / `Fixes` / `Fixed` / `Resolve` / `Resolves` / `Resolved`、 case-insensitive) または部分対応表記 (`Refs` / `Part of`) + issue 参照 (`#<N>` 等) が含まれるかを判定する
+6. 含まれない場合は `{"ok": false, "reason": "branch 名から issue #<N> の作業と推定されるが、 PR body に closing keyword (Closes #<N>) も部分対応表記 (Refs #<N>) も無い。 完全解決なら Closes #<N> を、 部分対応なら Refs #<N> を body に追記して再実行する"}` で block する。 含まれる場合は通過する
+
+editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのまま判定不能として通過する (= body content 自体が取得できないケースを本 Step が追加で救済することはない)。 worktree (gitdir 間接参照) / detached HEAD / branch 名不一致 / keyword あり / keyword なし の 5 ケースについて、 上記手順から期待判定 (通過 4 + block 1) が一意に導ける設計としている。
 
 **なぜ 4 entries に分けて prompt を duplicate しているか**:
 
@@ -212,9 +227,9 @@ claude plugin install agent-discipline@natsuume-plugins
 - 旧 `llm-default-branch-push-poc` 廃止教訓: 全 Bash 発火 prompt hook が暗黙の default model (haiku) ダウン時に全 Bash を PreToolUse error にする非対称 SPOF があった (memory: `reference_prompt_hook_model_spof.md`)
 - 今回はこれを 2 段で緩和:
   - **narrow scope (物理層)**: 個別 hook の `if: "Bash(gh <cmd>:*)"` filter で target command にだけ反応するよう **hook config 段階で** 物理 prefilter。 prompt 内 early return ではなく hook config 段階の filter なので、 非該当 Bash 呼び出しでは agent subagent が **そもそも起動しない**。 結果として LLM 不可用時の影響は「`gh issue/pr create/edit` のみ失敗」 に narrow され、 通常の Bash 呼び出し (= `ls` / `git status` / `rg` 等) は影響ゼロ
-  - **model pin**: `model` field を明示的に `claude-opus-4-7` (= メイン session と同じ) に固定。 「session が動いている = hook も動くはず」 という対称性を確保し、 「Opus は生きているが Haiku は混雑 / 一時障害」 という非対称ダウン経路を構造的に排除
+  - **model pin**: `model` field を明示的に `claude-sonnet-5` に固定 (v0.7.0、#151/#174 V2 実測による変更。 従来は `claude-opus-4-7` に pin していた)。 #174 V2 の実測検証で、 hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず pin 値がそのまま dispatch されることが確認された (= 「env var が優先され pin は env 未設定環境向けの既定として機能する」 という当初の想定は誤りで、 pin は env 設定の有無に関わらず常に有効な確定値)。 sonnet 5 は実装系メインセッション (= Sonnet ベースの Claude Code session) およびこの環境の全 subagent (`CLAUDE_CODE_SUBAGENT_MODEL=sonnet` によりこの環境の Agent tool 経由の Task 委任は実質 sonnet 固定) と同系列のため、 Sonnet がダウンした場合は subagent への委任自体が同時に止まっており hook 単独の新規障害面にはならない (= 「hook だけが落ちて他は動く」 非対称を避ける従来方針を維持)。 ただし **Fable メインセッション時はこの対称性が崩れる** (= メインセッションは Fable で正常動作していても、 hook は Sonnet 側の障害時に落ちうる非対称が残る。 下記「既知の制約」参照)
 
-これにより SPOF は「Claude Code 自体が動かない時のみ hook も動かない」 という対称構造に閉じる。 個別 call の transient error (rate limit / network blip) は残るが、 これは Claude Code 通常使用の背景ノイズと同レベル
+これにより SPOF は「実装系メインセッション (Sonnet) が動いている時は hook も動く」 という対称構造に閉じる (Fable メインセッション時のみ非対称が残存)。 個別 call の transient error (rate limit / network blip) は残るが、 これは Claude Code 通常使用の背景ノイズと同レベル
 
 **設計の変遷** (codex review からの修正):
 
@@ -368,8 +383,11 @@ agent-discipline/
   - **compound command 経路 (`cd dir` prefix)**: `cd repo && gh issue create ...` のような形式は section 1 Bash 分解規律で「cwd 制約の場合の例外」 として allowed だが、 検知層の Step 0 は先頭 literal 一致のみ判定するため bypass される (= 上流の section 1 例外と検知層の strict head check が非対称、 当該 compound 形式は誘導層のみが上流防衛)
   - **PreToolUse の構造的 TOCTOU (`cat ... && gh ... -F body.md` 系)**: heredoc 等で body file を生成する compound (例: `cat > body.md <<'EOF' ... EOF && gh issue create -F body.md`) は PreToolUse hook が Bash 実行 **前** に発火するため、 body file は hook 時点で未生成 → Read tool で取得不能。 仮に検知層が compound を catch しても validate 不能 (TOCTOU 構造)。 そもそも section 1 の「不関連 command の連結」 禁止規律で発生抑制される
   - これらは誘導層 (section 2.1 / 3.1 の禁止表現規範) が上流防衛として catch する想定。 完全に塞ぐには parser-backed command hook (= 別 plugin として再設計) が必要だが、 v0.4.0 の小修正範囲を超えるため意図的に既知制約として残している
-- **検知層の SPOF**: 検知層は LLM 呼び出しに依存するため、 hook の model (`claude-opus-4-7`) が API 不可用な状況では `gh issue/pr create/edit` が PreToolUse error で失敗する。 narrow scope と model pin で「session が動いている時は hook も動く」 対称構造に閉じているが、 個別 call の transient エラー (rate limit / network blip) は残る
-- **検知層の model pin は手動メンテナンス**: Claude Code 自体の session model を upgrade した場合 (例: opus-4-7 → opus-4-8)、 `hooks/hooks.json` の `model` field も手動同期しないと SPOF 構造が再来する (= 古い model のみダウン時に hook だけ落ちる経路が復活)
+- **検知層の SPOF**: 検知層は LLM 呼び出しに依存するため、 hook の model (`claude-sonnet-5`) が API 不可用な状況では `gh issue/pr create/edit` が PreToolUse error で失敗する。 narrow scope と model pin で「実装系メインセッションが動いている時は hook も動く」 対称構造に閉じているが、 個別 call の transient エラー (rate limit / network blip) は残る
+- **model pin は env var の影響を受けない** (#151/#174 V2 実測、v0.7.0): `CLAUDE_CODE_SUBAGENT_MODEL` env var は hooks.json の `type: agent` hook の `model` field を上書きしない。 pin 値は env var の設定有無に関わらず常に dispatch される確定値であり、 「env 未設定環境向けの既定」 ではない。 実測の詳細は #174 のコメント参照
+- **Fable メインセッション時は model pin の対称性が崩れる** (#151、v0.7.0): 検知層の model pin (`claude-sonnet-5`) は実装系メインセッション (Sonnet) およびこの環境の全 subagent と同系列だが、 メインセッションが Fable の場合はこの対称性が成立しない (= メインセッションは Fable で正常動作していても、 hook は Sonnet 側の障害時に落ちうる)。 発生確率は Fable メインセッションでの `gh issue/pr create|edit` 実行頻度に依存するが、 構造的には未解消の非対称として残る
+- **検知層は公式ドキュメント上 experimental な type:agent hook に依存** (#153、v0.7.0): PreToolUse `type: agent` hook は Claude Code 公式ドキュメントで experimental (実験的機能) と位置付けられており、 将来の仕様変更で挙動が変わる、 または廃止される可能性がある。 検知層全体 (4 entries すべて) がこの機能に依存しているため、 仕様変更時は検知層が機能しなくなりうる (= その場合は誘導層のみが防衛する状態に自然縮退する。 fail-open 設計のため縮退時に semantic 誤 block が発生することはない)
+- **検知層の model pin は手動メンテナンス**: Claude Code 自体の session model を upgrade した場合 (例: sonnet-5 → sonnet-6)、 `hooks/hooks.json` の `model` field も手動同期しないと SPOF 構造が再来する (= 古い model のみダウン時に hook だけ落ちる経路が復活)
 - **`permission_mode` の値が `"auto"` リテラルであること前提**: Claude Code 側の仕様変更で値が変わると inject-auto.sh は無音になる。 その場合は無効化されるだけで誤動作はしない
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **`model` フィールド欠落条件は compaction 後が公式未記載** (v0.5.0、#174 V3 実測調査): 公式ドキュメントは `/clear` 後と conversation recovery でセッションが復元された場合の 2 つを model 欠落条件として明記するが、`SessionStart (source=compact)` 時の扱いは明記していない (欠落しない保証も無い)。いずれの場合も fallback chain (transcript 解析 → state file) が source 非依存に欠落を吸収するため、実装上の場合分けは発生しない
