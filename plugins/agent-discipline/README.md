@@ -4,7 +4,12 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.4.0
+v0.4.1
+
+### v0.4.0 → v0.4.1 の変更点
+
+- **注入プロンプトを `hooks/prompts/*.md` に分離**: inject-always.sh / inject-auto.sh / check-uncommitted-on-session-start.sh に heredoc で直接埋め込まれていた注入テキストを `always-rules.md` / `auto-mode.md` / `uncommitted-check.md` として markdown ファイル化し、sh は読み込み・プレースホルダ置換 (`{{CWD}}` / `{{DIRTY}}` の bash リテラル置換)・配送のみを担う構成に変更 (視認性・メンテナンス性のため)。注入内容は変更なし — 3 経路とも編集前後の hook 出力 JSON の diff で byte-identical を検証済み。md が読めない場合は fail-open で注入スキップ
+- **plugin description を人間向けの簡潔な概要に刷新**: plugin.json / marketplace.json の description から変更履歴・実装詳細を除去 (それらは本 README のバージョン節が正)
 
 ### v0.3.0 → v0.4.0 の変更点
 

@@ -4,7 +4,15 @@
 
 ## バージョン
 
-v0.2.1
+v0.2.3
+
+### v0.2.2 → v0.2.3 の変更点
+
+plugin description (plugin.json / marketplace.json) を人間向けの簡潔な概要に刷新しました (変更履歴・実装詳細は本 README のバージョン節へ集約)。hook の動作変更はありません。
+
+### v0.2.1 → v0.2.2 の変更点
+
+共有 lib cmd-parser.sh の split_command のバグを修正しました: quote 内の生改行がそのまま segment に残っていたため、呼び出し側が segment 内部の改行を境界と誤認し得る潜在バグがありました (quote 内改行は空白 1 文字に正規化して 1 segment のまま保持するよう修正)。git-guardrails / pre-push-review の cmd-parser.sh と byte-identical に sync (本プラグインは normalize_line_continuations / unquote_token のみ使用のため挙動は不変)。
 
 ### v0.2.0 → v0.2.1 の変更点
 
