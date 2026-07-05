@@ -59,8 +59,8 @@ issue 駆動開発の詳細手順を progressive disclosure で配送する 2 sk
 agent-discipline v0.5.0 再設計 (親 issue #173) の実装です。
 
 - **常時適用ルールをモデル別 2 ファイルに完全分離**: 単一の `always-rules.md` を廃止し、`always-fable.md` (Fable 向け。各ルールを「意図 + 短い指示 + 境界」に圧縮し、パターン列挙は避ける) と `always-sonnet.md` (Sonnet 向け。`always-rules.md` の後継。適用範囲の明示 + 否定形への具体的代替行動の併記 + 良い例/悪い例 + 禁止表現 8 カテゴリの列挙維持) の 2 ファイルに分離した。両ファイルはルール ID (`bash-decompose` / `design-approval` / `issue-body` / `issue-granularity` / `closing-keyword` / `autonomy-boundary` / `issue-claim` / `ask-user-question` / `tdd-two-phase`) を完全一致させている
-- **モデル判定を決定論的 fallback chain に変更**: `inject-always.sh` が (1) stdin (hook input JSON) の `.model` フィールド → (2) `.transcript_path` の `jq -r 'select(.type=="assistant" and .isSidechain != true) | .message.model // empty' | tail -n 1` による transcript 解析 (最後の main-chain assistant 行 = 最新の観測値) → (3) state file `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` (キャッシュ。transcript が空 / 読めない場合の最後の砦) → (4) 判定不能、の順で判定し、先に確定した段階で打ち切る。transcript を state file より先に置くのは、セッション中の `/model` 切替を跨ぐと state file が stale になりうるため (codex review P2 指摘への対応)。LLM subagent による判定は使わない (決定論的・SPOF なし)。fable / sonnet 以外 (opus / haiku 等) には always-sonnet.md を注入する
-- **判定不能時の自己ゲート + one-shot 補正を追加**: fallback chain がすべて空だった場合、自己ゲート前置き (`preamble-self-gate.md`) + `always-sonnet.md` を注入しつつ state file の代わりに pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を作成する。新設の `resolve-model-on-prompt.sh` (UserPromptSubmit) が pending マーカーの存在を検知し、transcript に main-chain assistant 行が現れた最初のタイミングでモデルを確定。Fable と判明した場合のみ確定版 (`always-fable.md`) を「以後この確定版を優先し自己ゲート付き注入は破棄する」前置きとともに 1 度だけ再注入し、pending マーカーを削除する (sonnet 確定時は自己ゲート時と同内容のため再注入しない)
+- **モデル判定を決定論的 fallback chain に変更**: `inject-always.sh` が (1) stdin (hook input JSON) の `.model` フィールド → (2) `.transcript_path` の `jq -r 'select(.type=="assistant" and .isSidechain != true) | .message.model // empty' | tail -n 1` による transcript 解析 (最後の main-chain assistant 行 = 最新の観測値) → (3) state file `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` (キャッシュ。transcript が空 / 読めない場合の最後の砦) → (4) 判定不能、の順で判定し、先に確定した段階で打ち切る。transcript を state file より先に置くのは、セッション中の `/model` 切替を跨ぐと state file が stale になりうるため (codex review P2 指摘への対応)。LLM subagent による判定は使わない (決定論的・SPOF なし)。fable / sonnet 以外 (opus / haiku 等) には always-sonnet.md を注入する (v0.8.0/v0.9.0 以降はこれに加えて分業規律 discipline-\*.md も同一 additionalContext の末尾に連結配送されるようになった。現行の配送内容は `inject-always.sh` ヘッダの配送マトリクス、および下記「機能一覧」の `inject-always` 節を参照)
+- **判定不能時の自己ゲート + one-shot 補正を追加**: fallback chain がすべて空だった場合、自己ゲート前置き (`preamble-self-gate.md`) + `always-sonnet.md` を注入しつつ state file の代わりに pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を作成する。新設の `resolve-model-on-prompt.sh` (UserPromptSubmit) が pending マーカーの存在を検知し、transcript に main-chain assistant 行が現れた最初のタイミングでモデルを確定。Fable と判明した場合のみ確定版 (`always-fable.md`) を「以後この確定版を優先し自己ゲート付き注入は破棄する」前置きとともに 1 度だけ再注入し、pending マーカーを削除する (sonnet 確定時は自己ゲート時と同内容のため再注入しない) (v0.9.0 で判定不能時の分業規律配送を discipline-sonnet.md に変更し、one-shot 補正の Fable 確定時は分業規律 (discipline-preamble-fable.md + discipline-fable.md) も併せて再注入するようになった)
 - **R6 (AskUserQuestion の必須化) を新設**: ユーザへの質問・確認・判断伺い・すり合わせは自由文で turn を終えず必ず `AskUserQuestion` ツールを発行する規律を両ファイルに追加した
 - **R3c (TDD 2 段階の開発手順) を新設**: 軽微な修正を除き、実装は同一 PR 内で Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める規律を追加した
 - **既知の制約を更新**: `/model` 切替の stale 挙動 (#157 と同型) と、`SessionStart (source=compact)` 時の `model` フィールド欠落有無に関する実測調査結果 (#174 V3) を記載した (下記「既知の制約」参照)
@@ -119,7 +119,7 @@ Claude Code に「個人の開発スタイル」 を一括で適用するため�
 | **before 系** | `SessionStart` (同上) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約、 AskUserQuestion の必須化 (R6、 v0.5.0 新設)、 TDD 2 段階の開発手順 (R3c、 v0.5.0 新設) |
 | **during 系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文に `branch=<prefix>/issue-<N>-<slug>` を埋め込んで誰の claim か識別可能にする |
-| **モデル判定 / one-shot 補正** (v0.5.0 新設) | `SessionStart` (inject-always.sh の fallback chain) + `UserPromptSubmit` (resolve-model-on-prompt.sh) | 常時 (判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し `always-fable.md` / `always-sonnet.md` を出し分ける。 判定不能時は自己ゲート前置き付きで `always-sonnet.md` を暫定注入し、 後続の `UserPromptSubmit` で transcript から確定したら Fable の場合のみ確定版を 1 度だけ再注入する |
+| **モデル判定 / one-shot 補正** (v0.5.0 新設、分業規律の連結配送は v0.8.0/v0.9.0) | `SessionStart` (inject-always.sh の fallback chain) + `UserPromptSubmit` (resolve-model-on-prompt.sh) | 常時 (判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し `always-fable.md` / `always-sonnet.md` を出し分ける。 判定不能時は自己ゲート前置き付きで `always-sonnet.md` を暫定注入し、 後続の `UserPromptSubmit` で transcript から確定したら Fable の場合のみ確定版を 1 度だけ再注入する。 常時ルールと合わせて分業規律 (discipline-\*.md、モデル別) も同一 additionalContext の末尾に連結配送する。 詳細は `inject-always.sh` ヘッダの配送マトリクス参照 |
 | **検知系 (gh issue/pr body)** (v0.4.0、Closes 検証 Step は v0.7.0) | `PreToolUse` (hooks.json 内に inline 定義の type: agent hook を 4 entries) | Bash ツール呼び出し時、 各 hook の `if: "Bash(gh <cmd>:*)"` filter で `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` 該当時のみ agent subagent を起動 (非該当 Bash 呼び出しは agent を起動しない) | 誘導層 (before 系 2.1 / 3.1) の禁止表現を Claude が忘れて issue body / PR 説明に書こうとしたら、 agent hook が --body inline / --body-file PATH を semantic 判定し違反時 block。 `gh pr create` entry のみ branch 名から推定される issue の closing keyword 有無も追加検証する (v0.7.0)。 model は実装系メインセッションおよび全 subagent と同系列の claude-sonnet-5 に pin (= SPOF を session 同期化) |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
@@ -143,13 +143,14 @@ claude plugin install agent-discipline@natsuume-plugins
 
 **動作** (v0.5.0 でモデル別 fallback chain 判定に変更):
 
-- セッションのモデルを決定論的 fallback chain で判定し、`always-fable.md` (Fable 向け) または `always-sonnet.md` (Sonnet / それ以外) を `additionalContext` として注入する
+- セッションのモデルを決定論的 fallback chain で判定し、`always-fable.md` (Fable 向け) または `always-sonnet.md` (Sonnet / それ以外) を `additionalContext` として注入する。 常時ルールと合わせて分業規律 (discipline-\*.md、モデル別) も同一 additionalContext の末尾に連結配送する (v0.8.0/v0.9.0)。 詳細は本スクリプトヘッダの配送マトリクス参照
 - **fallback chain** (先に確定した段階で判定を打ち切る):
   1. stdin (hook input JSON) の `.model` フィールド
   2. transcript 解析: `.transcript_path` に対し `jq -r 'select(.type=="assistant" and .isSidechain != true) | .message.model // empty' | tail -n 1` で最後の main-chain assistant 行のモデル ID を取得 (セッション中の `/model` 切替後も最新の観測値が得られる、state file より常に新鮮な情報源)
   3. state file `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` (同一セッションの過去 SessionStart で確定した値のキャッシュ。transcript が空 (/clear 直後等) / 読めない場合の最後の砦で、`/model` 切替を跨ぐと stale になりうるため transcript より後に置く)
   4. いずれも空 → 判定不能
 - **適用規則**: モデル ID (小文字化) が `fable` を含む → `always-fable.md`。`sonnet` を含む、または非空でそのいずれでもない (opus / haiku 等) → `always-sonnet.md`。判定不能 → `preamble-self-gate.md` + `always-sonnet.md` を注入し、state file の代わりに pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を作成する (後続の `resolve-model-on-prompt.sh` が補正)
+- **分業規律の連結配送** (discipline-\*.md、モデル別。v0.8.0 で fable 分岐、v0.9.0 で残りの分岐に拡張): fable → `discipline-preamble-fable.md` + `discipline-fable.md`。sonnet / その他確定 (opus / haiku 等) → `discipline-sonnet.md` のみ。判定不能 → `discipline-preamble-self-gate.md` + `discipline-sonnet.md`。いずれも常時ルールに続けて additionalContext の末尾に連結し、読めない/空の場合はペイロード単位の fail-open で常時ルールのみ注入する
 - 判定不能以外の 3 分岐では、確定したモデル ID を毎回 state file に書き込む (v0.8.0 で統合前の fable-discipline (`inject-fable-role.sh`) と同じ sanitize 方式)
 - `SessionStart` は `startup` 以外に `resume` / `clear` / `compact` でも発火するため同一セッション内で複数回呼ばれる可能性があるが、注入内容は static なので重複しても害は無い (毎回コンテキストトークンを再消費する点に留意)
 - 入力 JSON から `hook_event_name` を読み取り `hookSpecificOutput.hookEventName` に同じ値を設定 (誤った既定値で別 event の文脈に誘導しないため)
@@ -184,8 +185,8 @@ claude plugin install agent-discipline@natsuume-plugins
 - pending マーカーが存在する場合のみ、`.transcript_path` に対し `inject-always.sh` と同じ transcript 解析コマンドを実行し、最後の main-chain assistant 行のモデル ID を取得する
 - assistant 行がまだ無い (transcript 解析結果が空) 場合は何もせず、pending マーカーを残したまま次回の `UserPromptSubmit` で再試行する
 - assistant 行が見つかりモデルが確定したら、state file への書込 → pending マーカー削除の順で行う (TOCTOU の隙間を作らない、#155 の教訓)
-  - モデル ID が `fable` を含む場合のみ、確定版 (`always-fable.md`) を「以後この確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄する」前置きとともに `additionalContext` で 1 度だけ再注入する
-  - それ以外 (sonnet / opus / haiku 等) は自己ゲート時に `always-sonnet.md` を注入済みと同内容のため再注入しない (pending マーカーの解消と state file 書込のみ行う)
+  - モデル ID が `fable` を含む場合のみ、確定版 (`always-fable.md`) を「以後この確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄する」前置きとともに `additionalContext` で 1 度だけ再注入する。 分業規律 (`discipline-preamble-fable.md` + `discipline-fable.md`) も読めれば同一 additionalContext の末尾に連結して再注入する (v0.9.0、ペイロード単位の fail-open)
+  - それ以外 (sonnet / opus / haiku 等) は自己ゲート時に `always-sonnet.md` と `discipline-sonnet.md` を注入済みと同内容のため再注入しない (pending マーカーの解消と state file 書込のみ行う)
 - `jq` 不在 / 不正 JSON 入力 / `transcript_path` が読めない / `always-fable.md` が読めない場合はすべて無音 `exit 0` (フェイルセーフ)
 
 #### inject-auto
@@ -432,6 +433,7 @@ agent-discipline/
 │   │   ├── discipline-fable.md
 │   │   ├── discipline-preamble-fable.md
 │   │   ├── discipline-preamble-self-gate.md
+│   │   ├── discipline-sonnet.md
 │   │   ├── preamble-self-gate.md
 │   │   └── uncommitted-check.md
 │   └── scripts/
@@ -485,7 +487,7 @@ agent-discipline/
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **`model` フィールド欠落条件は compaction 後が公式未記載** (v0.5.0、#174 V3 実測調査): 公式ドキュメントは `/clear` 後と conversation recovery でセッションが復元された場合の 2 つを model 欠落条件として明記するが、`SessionStart (source=compact)` 時の扱いは明記していない (欠落しない保証も無い)。いずれの場合も fallback chain (transcript 解析 → state file) が source 非依存に欠落を吸収するため、実装上の場合分けは発生しない
 - **セッション途中の `/model` 切替は次の SessionStart まで反映されない** (#157 と同型の制約。v0.8.0 で統合した `block-fable-subagent.sh` も同種の制約を持つ、本セクション内の該当項目を参照): fallback chain の判定は `SessionStart` (startup / resume / clear / compact) でのみ行われるため、`/model` で切替えても注入済みプロンプトは次の SessionStart まで旧モデル向けのまま。次の SessionStart では、`.model` があればその値で、無くても transcript に切替後の main-chain assistant 行があれば transcript 解析 (fallback chain 2 段目) で新モデルが反映される。transcript も空 / 読めない場合に限り state file キャッシュに落ちるため、その経路でのみ旧モデル向け注入が継続しうる
-- **one-shot 補正は判定不能セッションの最初の assistant 応答が生成されるまで暫定適用が続く**: `resolve-model-on-prompt.sh` は pending マーカーが存在し transcript に main-chain assistant 行が現れて初めて確定するため、それまでの `UserPromptSubmit` では自己ゲート付きの `always-sonnet.md` が暫定適用され続ける
+- **one-shot 補正は判定不能セッションの最初の assistant 応答が生成されるまで暫定適用が続く**: `resolve-model-on-prompt.sh` は pending マーカーが存在し transcript に main-chain assistant 行が現れて初めて確定するため、それまでの `UserPromptSubmit` では自己ゲート付きの `always-sonnet.md` (常時ルール) と `discipline-preamble-self-gate.md` + `discipline-sonnet.md` (分業規律、v0.9.0) が暫定適用され続ける
 - **state file / pending マーカーは OS の tmp cleanup による自然消去のみ**: `${TMPDIR:-/tmp}/agent-discipline-state/` 配下に明示的なリトジ (retention) 処理は無く、`check-uncommitted-on-session-start.sh` が使う `agent-discipline-markers/` とは別 namespace を使う
 - **`block-fable-subagent.sh` は agent 定義 frontmatter の `model` を判定できない** (v0.8.0): frontmatter の `model` は `tool_input` に現れないため、env 不在 + model 未指定 + frontmatter が fable を指す構成は本 hook では捕捉不能 (env 側でカバー)。fork subagent (model 指定を無視して親モデルを継承する型) も同様に deny しない (誘導層の「原則使用しない」文言のみで運用する設計判断)
 - **`block-fable-subagent.sh` は Workflow ツール内部の `agent()` 呼び出しを PreToolUse で捕捉できない** (v0.8.0): PreToolUse はメインループのツール呼び出しにのみ発火するため、Workflow スクリプト内部のサブエージェントスポーンは本 hook の対象外 (env 側でカバー)

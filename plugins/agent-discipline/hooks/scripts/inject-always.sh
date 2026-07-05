@@ -32,22 +32,26 @@
 # `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` に書き込む
 # (fable-discipline の inject-fable-role.sh と同じ sanitize 方式)。
 #
-# ## 分業規律の併載 (#193 設計契約)
+# ## 分業規律の併載 (#193 設計契約、#194 で非 Fable 配送に拡張)
 #
 # fable-discipline plugin の統合 (#192 決定事項 2) により、本スクリプトは 1 回のモデル判定で
-# 「常時適用ルール」と「分業規律」の 2 ペイロードを注入する。#193 のスコープでは分業規律の
-# 配送マトリクスを移設前の fable-discipline (inject-fable-role.sh) と機能等価に保つ:
+# 「常時適用ルール」と「分業規律」の 2 ペイロードを注入する。#194 (決定事項 5: 配送対象は
+# 非 Fable モデル全て) 適用後の配送マトリクス (#194 で実装済み):
 #
-#   | モデル判定     | 常時適用ルール                           | 分業規律                                               |
-#   |----------------|------------------------------------------|--------------------------------------------------------|
-#   | fable を含む   | always-fable.md                          | discipline-preamble-fable.md + discipline-fable.md     |
-#   | sonnet を含む  | always-sonnet.md                         | 注入しない (#194 で discipline-sonnet.md を配送)       |
-#   | 非空でその他   | always-sonnet.md                         | 注入しない (同上)                                      |
-#   | 判定不能       | preamble-self-gate.md + always-sonnet.md | discipline-preamble-self-gate.md + discipline-fable.md |
+#   | モデル判定     | 常時適用ルール                           | 分業規律                                                |
+#   |----------------|------------------------------------------|---------------------------------------------------------|
+#   | fable を含む   | always-fable.md                          | discipline-preamble-fable.md + discipline-fable.md      |
+#   | sonnet を含む  | always-sonnet.md                         | discipline-sonnet.md (#194 新設)                        |
+#   | 非空でその他   | always-sonnet.md                         | discipline-sonnet.md (同上)                             |
+#   | 判定不能       | preamble-self-gate.md + always-sonnet.md | discipline-preamble-self-gate.md + discipline-sonnet.md |
 #
 # - 2 ペイロードは 1 つの additionalContext に「常時ルール → 分業規律」の順で連結し、分業規律
-#   ブロックの先頭に見出し「# agent-discipline: 分業規律 (Fable セッション)」を置く
-#   (移設前の見出し「# fable-discipline: Fable セッションの分業規律」の plugin 名表記のみ更新)
+#   ブロックの先頭に model 別の見出しを置く: fable 分岐は「# agent-discipline: 分業規律
+#   (Fable セッション)」、sonnet / その他 / 判定不能分岐は「# agent-discipline: 分業規律 (Sonnet)」
+#   (常時ルールの「(Sonnet)」表記と同じ規則。非 Fable 用の本文が Sonnet 向け書式のため)
+# - 見出しを参照する self-gate (preamble-self-gate.md / discipline-preamble-self-gate.md) の
+#   境界記述は、model 別見出しの導入に伴い「# agent-discipline: 分業規律」で始まる見出し、という
+#   プレフィクス一致で書く (見出し文字列の完全一致参照にすると model 分岐ごとに文言が割れるため)
 # - 分業規律ブロックは additionalContext の末尾に置くこと (制約)。判定不能時の自己ゲート
 #   (discipline-preamble-self-gate.md) は無視の射程を「見出し〜メッセージ末尾」で定義しており、
 #   分業規律より後ろに別ペイロードを追加するとそれも無視射程に入る。後続ペイロードを追加する
@@ -58,6 +62,11 @@
 #   block-fable-subagent.sh も同 state を参照する (fable-discipline-state は廃止)
 # - resolve-model-on-prompt.sh の pending 補正 (判定不能セッションの one-shot 再配送) も
 #   上記マトリクスと同じ組で両ペイロードを配送する
+# - 判定不能セッションの実体が Fable の場合、one-shot 補正までの期間は state file 未作成のため
+#   block-fable-subagent.sh (検知層) が model 未指定継承に対して fail-open する。この期間の
+#   Fable 防御は discipline-preamble-self-gate.md の暫定指示 (モデル確定まで model を非 Fable で
+#   明示せよ) = 誘導層が唯一の防御である (意図的なトレードオフ、codex review P2 / rescue 審査)。
+#   検知層側の補強 (pending マーカー認識による未指定継承の deny) は #200 で実施する
 #
 # ## 出力 JSON 形状
 #
@@ -146,15 +155,15 @@ if [ -z "$MODEL" ]; then
 
 $BODY"
 
-  # 分業規律 (判定不能時): discipline-preamble-self-gate.md + discipline-fable.md。
+  # 分業規律 (判定不能時): discipline-preamble-self-gate.md + discipline-sonnet.md (#194)。
   # fail-open はペイロード単位: どちらか読めない/空なら分業規律ブロックを付けず常時ルールのみ注入する。
   DISCIPLINE_PREAMBLE=$(cat "$PROMPTS_DIR/discipline-preamble-self-gate.md" 2>/dev/null)
-  DISCIPLINE_BODY=$(cat "$PROMPTS_DIR/discipline-fable.md" 2>/dev/null)
+  DISCIPLINE_BODY=$(cat "$PROMPTS_DIR/discipline-sonnet.md" 2>/dev/null)
   if [ -n "$DISCIPLINE_PREAMBLE" ] && [ -n "$DISCIPLINE_BODY" ]; then
     CONTEXT="$CONTEXT
 
 
-# agent-discipline: 分業規律 (Fable セッション)
+# agent-discipline: 分業規律 (Sonnet)
 
 $DISCIPLINE_PREAMBLE
 
@@ -200,9 +209,23 @@ $DISCIPLINE_BODY"
   fi
 else
   # sonnet を含む場合も、非空でそのいずれでもない (opus / haiku 等) 場合も、
-  # 同じく always-sonnet.md を注入する (ユーザ決定事項 6)。分業規律は付けない
-  # (#194 のスコープで discipline-sonnet.md を配送する予定)。
+  # 同じく always-sonnet.md を注入する (ユーザ決定事項 6)。分業規律 (#194 で実装) も併載する。
   CONTEXT=$(cat "$PROMPTS_DIR/always-sonnet.md" 2>/dev/null)
+
+  if [ -n "$CONTEXT" ]; then
+    # 分業規律 (sonnet / その他確定時): discipline-sonnet.md のみ (preamble は付けない、判定不能時と
+    # 異なり自己ゲートが不要なため)。fail-open はペイロード単位: 読めない/空なら分業規律ブロックを
+    # 付けず常時ルールのみ注入する。
+    DISCIPLINE_BODY=$(cat "$PROMPTS_DIR/discipline-sonnet.md" 2>/dev/null)
+    if [ -n "$DISCIPLINE_BODY" ]; then
+      CONTEXT="$CONTEXT
+
+
+# agent-discipline: 分業規律 (Sonnet)
+
+$DISCIPLINE_BODY"
+    fi
+  fi
 fi
 
 if [ -z "$CONTEXT" ]; then
