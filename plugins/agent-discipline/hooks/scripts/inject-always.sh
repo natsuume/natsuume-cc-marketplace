@@ -36,7 +36,7 @@
 #
 # fable-discipline plugin の統合 (#192 決定事項 2) により、本スクリプトは 1 回のモデル判定で
 # 「常時適用ルール」と「分業規律」の 2 ペイロードを注入する。#194 (決定事項 5: 配送対象は
-# 非 Fable モデル全て) 適用後の配送マトリクス (本コメントは Phase A 設計記述、実装は Phase B):
+# 非 Fable モデル全て) 適用後の配送マトリクス (#194 で実装済み):
 #
 #   | モデル判定     | 常時適用ルール                           | 分業規律                                                |
 #   |----------------|------------------------------------------|---------------------------------------------------------|
@@ -150,15 +150,15 @@ if [ -z "$MODEL" ]; then
 
 $BODY"
 
-  # 分業規律 (判定不能時): discipline-preamble-self-gate.md + discipline-fable.md。
+  # 分業規律 (判定不能時): discipline-preamble-self-gate.md + discipline-sonnet.md (#194)。
   # fail-open はペイロード単位: どちらか読めない/空なら分業規律ブロックを付けず常時ルールのみ注入する。
   DISCIPLINE_PREAMBLE=$(cat "$PROMPTS_DIR/discipline-preamble-self-gate.md" 2>/dev/null)
-  DISCIPLINE_BODY=$(cat "$PROMPTS_DIR/discipline-fable.md" 2>/dev/null)
+  DISCIPLINE_BODY=$(cat "$PROMPTS_DIR/discipline-sonnet.md" 2>/dev/null)
   if [ -n "$DISCIPLINE_PREAMBLE" ] && [ -n "$DISCIPLINE_BODY" ]; then
     CONTEXT="$CONTEXT
 
 
-# agent-discipline: 分業規律 (Fable セッション)
+# agent-discipline: 分業規律 (Sonnet)
 
 $DISCIPLINE_PREAMBLE
 
@@ -204,9 +204,23 @@ $DISCIPLINE_BODY"
   fi
 else
   # sonnet を含む場合も、非空でそのいずれでもない (opus / haiku 等) 場合も、
-  # 同じく always-sonnet.md を注入する (ユーザ決定事項 6)。分業規律は付けない
-  # (#194 のスコープで discipline-sonnet.md を配送する予定)。
+  # 同じく always-sonnet.md を注入する (ユーザ決定事項 6)。分業規律 (#194 で実装) も併載する。
   CONTEXT=$(cat "$PROMPTS_DIR/always-sonnet.md" 2>/dev/null)
+
+  if [ -n "$CONTEXT" ]; then
+    # 分業規律 (sonnet / その他確定時): discipline-sonnet.md のみ (preamble は付けない、判定不能時と
+    # 異なり自己ゲートが不要なため)。fail-open はペイロード単位: 読めない/空なら分業規律ブロックを
+    # 付けず常時ルールのみ注入する。
+    DISCIPLINE_BODY=$(cat "$PROMPTS_DIR/discipline-sonnet.md" 2>/dev/null)
+    if [ -n "$DISCIPLINE_BODY" ]; then
+      CONTEXT="$CONTEXT
+
+
+# agent-discipline: 分業規律 (Sonnet)
+
+$DISCIPLINE_BODY"
+    fi
+  fi
 fi
 
 if [ -z "$CONTEXT" ]; then

@@ -33,9 +33,9 @@
 #     1 度だけ注入する。分業規律側 (discipline-preamble-fable.md / discipline-fable.md) の
 #     いずれかが読めない/空の場合は分業規律ブロックを付けず、常時ルール (always-fable.md) のみを
 #     再注入する (fail-open の粒度はペイロード単位)
-#   - それ以外 (sonnet / opus / haiku 等。自己ゲート時に always-sonnet.md を注入済みと同内容) →
-#     再注入しない (出力なしで exit 0。自己ゲート時に注入済みの分業規律は self-gate 文言により
-#     非 Fable セッションでは無視されるため、こちらも再注入不要)
+#   - それ以外 (sonnet / opus / haiku 等。自己ゲート時に always-sonnet.md と discipline-sonnet.md を
+#     注入済みと同内容) → 再注入しない (出力なしで exit 0。自己ゲート時に注入済みの
+#     discipline-sonnet.md は非 Fable セッション向けの確定本文そのものであるため、再注入は不要)
 #   - いずれの場合も: state file
 #     `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` に確定値を書き込んだ後で
 #     pending マーカーを削除する (state file 書込 → pending マーカー削除の順で行い、TOCTOU の
@@ -115,7 +115,7 @@ printf '%s' "$MODEL" > "$STATE_DIR/model-$SAFE_SESSION_ID" 2>/dev/null
 rm -f "$PENDING_FILE" 2>/dev/null
 
 # 確定版が always-sonnet.md の場合 (sonnet を含む、または非空でそのいずれでもない場合)、
-# 自己ゲート時に注入済みと同内容のため再注入しない。
+# 自己ゲート時に always-sonnet.md と discipline-sonnet.md を注入済みと同内容のため再注入しない。
 if ! printf '%s' "$MODEL" | grep -qi 'fable'; then
   exit 0
 fi
