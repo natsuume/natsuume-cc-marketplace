@@ -4,7 +4,11 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.7.2
+v0.7.3
+
+### v0.7.2 → v0.7.3 の変更点
+
+- **Closes 検証の issue 番号採用ルールを一意化** (#188、#184 の遡及 codex レビュー P3 対応): branch 名に `issue-<数字>-` 形式の断片が複数含まれる場合 (例: `feat/issue-12-fix-issue-34-regression`)、hook subagent の解釈次第で N が非決定になる余地があったため、`gh pr create` entry の Step 3 に「最初に出現した断片の数字を N として採用する」ルールを 1 文追記した (branch 名規約 `<prefix>/issue-<N>-<slug>` では prefix 直後の先頭断片が規約上の issue 番号)。判定ロジックの変更ではなく採用ルールの明文化のみ
 
 ### v0.7.1 → v0.7.2 の変更点
 
@@ -238,7 +242,7 @@ claude plugin install agent-discipline@natsuume-plugins
 3. `<cwd>/.git` の Read が「ディレクトリである」ことを理由に失敗する場合 (= worktree ではない通常のリポジトリ): `<cwd>/.git/HEAD` を Read tool で読む
 4. 上記いずれの経路でも HEAD が取得できない場合、 または取得できた内容が `ref: refs/heads/<branch>` 形式でない場合 (detached HEAD 等) は、 本 Step を判定不能として通過する (fail-open で誘導層の `rule:closing-keyword` に委ねる)。 `.git` 自体が存在しない bare リポジトリも本 Step の対象外として同様に通過する
 5. branch 名が `*/issue-<数字>-*` パターンに一致しない場合は本 Step を通過する
-6. 一致する場合、 パターンから issue 番号 `N` を抽出する。 Step 1 で抽出済みの body content に、 以下のいずれかが `N` そのものを参照している場合のみ本 Step を通過する (境界一致で判定する: `#12` は `#123` にマッチしない、 すなわち `#N` の直後が数字でないことを確認する。 先頭ゼロの同一視はしない。 branch 名規約は issue 番号をそのまま埋めるため通常は先頭ゼロが発生しないが、 発生した場合は不一致として block 側に倒す):
+6. 一致する場合、 パターンから issue 番号 `N` を抽出する。 branch 名に `issue-<数字>-` 形式の断片が複数含まれる場合は、 **最初に出現した断片の数字** を `N` として採用する (branch 名規約 `<prefix>/issue-<N>-<slug>` では prefix 直後の先頭断片が規約上の issue 番号。 例: `feat/issue-12-fix-issue-34-regression` では N=12。 v0.7.3 / #188)。 Step 1 で抽出済みの body content に、 以下のいずれかが `N` そのものを参照している場合のみ本 Step を通過する (境界一致で判定する: `#12` は `#123` にマッチしない、 すなわち `#N` の直後が数字でないことを確認する。 先頭ゼロの同一視はしない。 branch 名規約は issue 番号をそのまま埋めるため通常は先頭ゼロが発生しないが、 発生した場合は不一致として block 側に倒す):
    - closing keyword (`Closes` / `Close` / `Closed` / `Fix` / `Fixes` / `Fixed` / `Resolve` / `Resolves` / `Resolved`、 case-insensitive、 colon 許容 = `Closes:` 等も可) + `#N` または `owner/repo#N`
    - 部分対応表記 (`Refs` / `Part of`、 case-insensitive) + `#N` または `owner/repo#N`
 7. 上記いずれにも該当しない場合 (= 他 issue への参照のみが併記されている場合を含む) は `{"ok": false, "reason": "branch 名から issue #<N> の作業と推定されるが、 PR body に issue #<N> を参照する closing keyword (例: Closes #<N>) も部分対応表記 (例: Refs #<N>) も無い。 完全解決なら Closes #<N> を、 部分対応なら Refs #<N> を body に追記して再実行する"}` で block する (reason 内の `<N>` は Step 6 で抽出した実際の issue 番号に置換する)。 該当する場合は Step 4 に進む
