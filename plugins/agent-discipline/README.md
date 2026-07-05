@@ -295,8 +295,8 @@ v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh 
   0. env が fable を指す → `tool_input.model` の値に依らず無条件 deny (env は明示指定より優先されるため)
   1. `tool_input.model` に fable が明示指定されている → deny
   2. `tool_input.model` が非 fable の具体指定 → allow (Step 0 より env は非 fable 確定)
-  3. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら allow (env が継承を非 fable モデルへ上書きするため安全)、env 不在時は `inject-always.sh` が SessionStart で記録した session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`) が fable の場合のみ deny
-- `"inherit"` (case-insensitive) は「未指定」に正規化する。判定不能な場合はすべて fail-open (allow)
+  3. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら allow (env が継承を非 fable モデルへ上書きするため安全)。env 不在時は `inject-always.sh` が SessionStart で記録した session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`) が fable の場合のみ deny。state file が読めず判定不能な場合は、`inject-always.sh` が判定不能分岐で作成する pending マーカー (`${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`) の存在を確認し、**存在すれば deny** (継承先が Fable になりうる判定不能期間のため、#200 で実装)、存在しなければ真の情報ゼロとして従来どおり fail-open (allow)
+- `"inherit"` (case-insensitive) は「未指定」に正規化する。session_id が特定できない場合や、state file・pending マーカーのいずれも無い場合は fail-open (allow)
 - 主防御はあくまで `CLAUDE_CODE_SUBAGENT_MODEL` env 設定。本 hook はその defense-in-depth + deny メッセージによる自己修正誘導が役割
 - 既知の制約 3 点 (agent frontmatter の model 判定不能 / Workflow 内部の `agent()` 捕捉不能 / セッション途中の `/model` 切替検知不能) は下記「既知の制約」セクション参照
 
