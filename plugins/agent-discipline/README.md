@@ -10,7 +10,8 @@ v0.7.0
 
 検知層 (PreToolUse type:agent hook) の拡張です (#177、親 issue #173 決定事項 9、#151/#153 対処)。
 
-- **`gh pr create` entry に Closes 検証 Step を追加**: 既存 Step 2 (禁止カテゴリの semantic 判定) の後、Step 3 (返り値) の前に新設の Step 3 (Closes 検証) を挿入し、旧 Step 3 は Step 4 に繰り下げた。branch 名が `*/issue-<数字>-*` パターンに一致する場合のみ動作し、hook input の `cwd` から `<cwd>/.git/HEAD` を Read (worktree の場合は `gitdir: <path>` 経由で `<path>/HEAD` をもう 1 段 Read) して branch 名を特定、body content に closing keyword (Closes/Close/Closed/Fix/Fixes/Fixed/Resolve/Resolves/Resolved) または部分対応表記 (Refs/Part of) + issue 参照が含まれるかを判定する。含まれない場合のみ block。detached HEAD / Read 失敗 / branch 名不一致は判定不能または非該当として通過 (fail-open)。他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt は Step 構造・内容とも無変更 (Step 0 の command guard、Step 1 の body 抽出仕様、Step 2 の禁止カテゴリ列挙、fail-closed 原則は 4 entries で byte 単位一致を維持)
+- **`gh pr create` entry に Closes 検証 Step を追加**: 既存 Step 2 (禁止カテゴリの semantic 判定) の後、Step 3 (返り値) の前に新設の Step 3 (Closes 検証) を挿入し、旧 Step 3 は Step 4 に繰り下げた。branch 名が `*/issue-<数字>-*` パターンに一致する場合のみ動作し、hook input の `cwd` から issue 番号 `N` を推定した上で、body content に closing keyword (Closes/Close/Closed/Fix/Fixes/Fixed/Resolve/Resolves/Resolved、colon 許容) + `#N`/`owner/repo#N`、または部分対応表記 (Refs/Part of) + `#N`/`owner/repo#N` の形で **抽出した N そのもの** への参照が含まれるかを判定する (境界一致、先頭ゼロ同一視なし)。含まれない場合のみ block。detached HEAD / Read 失敗 / branch 名不一致 / bare リポジトリは判定不能または非該当として通過 (fail-open)。他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt は Step 構造・内容とも無変更 (Step 0 の command guard、Step 1 の body 抽出仕様、Step 2 の禁止カテゴリ列挙、fail-closed 原則は 4 entries で byte 単位一致を維持)
+- **codex review P2 指摘 2 件を実装完了後に修正** (#177): (1) HEAD 取得順序のバグ — 当初実装は `<cwd>/.git/HEAD` を先に Read していたため、`.git` 自体が `gitdir:` ファイルである linked worktree では常に fail-open に落ちていた。`<cwd>/.git` を先に Read し、`gitdir:` 形式ならその内容 (相対パスの場合は `.git` ファイルの所在ディレクトリ = `cwd` 基準で解決) から `HEAD` を辿り、`.git` が「ディレクトリである」ため Read が失敗する場合のみ通常リポジトリとして `<cwd>/.git/HEAD` を読む順序に修正した。bare リポジトリ (`.git` 自体が無い) は本 Step の対象外として通過する旨も明記した。(2) issue 番号の同一性未検証 — 当初実装は branch 名から推定した issue 番号を無視し、body 中の任意の closing keyword + 任意の issue 参照があれば通過していた。抽出した issue 番号 `N` そのものへの参照 (`#N` または `owner/repo#N`、境界一致、先頭ゼロ同一視なし) を要求するよう修正し、他 issue への参照のみが併記されているケースを block 側に倒した
 - **4 entries すべての model pin を `claude-opus-4-7` → `claude-sonnet-5` に更新** (#151): #174 V2 の実測検証で、hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず pin 値がそのまま dispatch されることが確認された (= env var 優先という当初想定は誤りで、pin は常に有効)。sonnet 5 は実装系メインセッションおよびこの環境の全 subagent と同系列のため、Sonnet ダウン時は subagent 委任も同時に停止しており hook 単独の新規障害面にはならない。ただし Fable メインセッション時はこの対称性が崩れる非対称が残ることを既知の制約に明記した
 - **#153 対応**: 検知層が公式ドキュメント上 experimental とされる `type: agent` hook に依存しており、仕様変更時は動作しなくなる可能性がある旨を既知の制約に追記した
 - **hooks.json の description を新挙動に合わせて更新**: `gh pr create` のみ closing keyword 検証も行う旨を追加
@@ -207,18 +208,21 @@ claude plugin install agent-discipline@natsuume-plugins
 
 **Closes 検証 Step (`gh pr create` entry のみ、v0.7.0 新設)**:
 
-`gh pr create` entry の prompt にのみ、 上記 Step 2 (禁止カテゴリの semantic 判定) の直後・Step 3 (返り値) の前に追加の判定 Step を挿入する (#151/#153 対応、親 issue #173 決定事項 9)。 他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt はこの Step を持たない。 branch 名からの issue 推定は PR 作成時にのみ意味を持つ判定のため、 4 entries の prompt 完全 duplicate は維持しつつ本 Step だけ 1 entry に閉じる (= entry を増やさず model pin の保守対象も増やさない)。
+`gh pr create` entry の prompt にのみ、 上記 Step 2 (禁止カテゴリの semantic 判定) の直後・Step 3 (返り値、 v0.7.0 で Step 4 に繰り下げ) の前に追加の判定 Step 3 を挿入する (#151/#153 対応、親 issue #173 決定事項 9)。 他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt はこの Step を持たない。 branch 名からの issue 推定は PR 作成時にのみ意味を持つ判定のため、 4 entries の prompt 完全 duplicate は維持しつつ本 Step だけ 1 entry に閉じる (= entry を増やさず model pin の保守対象も増やさない)。
 
-判定手順:
+判定手順 (codex review P2 指摘 2 件を反映した最終形):
 
-1. hook input の `cwd` を起点に `<cwd>/.git/HEAD` を Read tool で読む
-2. 内容が `gitdir: <path>` 形式 (worktree) の場合は `<path>/HEAD` をもう 1 段 Read する
-3. HEAD が `ref: refs/heads/<branch>` 形式でない場合 (detached HEAD)、 または上記いずれかの Read に失敗した場合は、 本 Step を判定不能として通過する (fail-open で誘導層の `rule:closing-keyword` に委ねる)
-4. branch 名が `*/issue-<数字>-*` パターンに一致しない場合は本 Step を通過する
-5. 一致する場合、 Step 1 で抽出済みの body content に closing keyword (`Closes` / `Close` / `Closed` / `Fix` / `Fixes` / `Fixed` / `Resolve` / `Resolves` / `Resolved`、 case-insensitive) または部分対応表記 (`Refs` / `Part of`) + issue 参照 (`#<N>` 等) が含まれるかを判定する
-6. 含まれない場合は `{"ok": false, "reason": "branch 名から issue #<N> の作業と推定されるが、 PR body に closing keyword (Closes #<N>) も部分対応表記 (Refs #<N>) も無い。 完全解決なら Closes #<N> を、 部分対応なら Refs #<N> を body に追記して再実行する"}` で block する。 含まれる場合は通過する
+1. まず `<cwd>/.git` を Read tool で読む
+2. 読み取れた内容が `gitdir: <path>` 形式 (worktree) の場合: `<path>` が相対パスであれば、 `.git` ファイルの所在ディレクトリ (= `cwd` そのもの) を基準に解決したうえで、 解決後の `<path>/HEAD` を Read tool で読む (linked worktree では `.git` 自体が `gitdir:` ファイルであり `<cwd>/.git/HEAD` を先に読む実装は常に fail-open するバグだったため、 `.git` を先に読んでから分岐する順序に修正した)
+3. `<cwd>/.git` の Read が「ディレクトリである」ことを理由に失敗する場合 (= worktree ではない通常のリポジトリ): `<cwd>/.git/HEAD` を Read tool で読む
+4. 上記いずれの経路でも HEAD が取得できない場合、 または取得できた内容が `ref: refs/heads/<branch>` 形式でない場合 (detached HEAD 等) は、 本 Step を判定不能として通過する (fail-open で誘導層の `rule:closing-keyword` に委ねる)。 `.git` 自体が存在しない bare リポジトリも本 Step の対象外として同様に通過する
+5. branch 名が `*/issue-<数字>-*` パターンに一致しない場合は本 Step を通過する
+6. 一致する場合、 パターンから issue 番号 `N` を抽出する。 Step 1 で抽出済みの body content に、 以下のいずれかが `N` そのものを参照している場合のみ本 Step を通過する (境界一致で判定する: `#12` は `#123` にマッチしない、 すなわち `#N` の直後が数字でないことを確認する。 先頭ゼロの同一視はしない。 branch 名規約は issue 番号をそのまま埋めるため通常は先頭ゼロが発生しないが、 発生した場合は不一致として block 側に倒す):
+   - closing keyword (`Closes` / `Close` / `Closed` / `Fix` / `Fixes` / `Fixed` / `Resolve` / `Resolves` / `Resolved`、 case-insensitive、 colon 許容 = `Closes:` 等も可) + `#N` または `owner/repo#N`
+   - 部分対応表記 (`Refs` / `Part of`、 case-insensitive) + `#N` または `owner/repo#N`
+7. 上記いずれにも該当しない場合 (= 他 issue への参照のみが併記されている場合を含む) は `{"ok": false, "reason": "branch 名から issue #<N> の作業と推定されるが、 PR body に issue #<N> を参照する closing keyword (例: Closes #<N>) も部分対応表記 (例: Refs #<N>) も無い。 完全解決なら Closes #<N> を、 部分対応なら Refs #<N> を body に追記して再実行する"}` で block する (reason 内の `<N>` は Step 6 で抽出した実際の issue 番号に置換する)。 該当する場合は Step 4 に進む
 
-editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのまま判定不能として通過する (= body content 自体が取得できないケースを本 Step が追加で救済することはない)。 worktree (gitdir 間接参照) / detached HEAD / branch 名不一致 / keyword あり / keyword なし の 5 ケースについて、 上記手順から期待判定 (通過 4 + block 1) が一意に導ける設計としている。
+editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのまま判定不能として通過する (= body content 自体が取得できないケースを本 Step が追加で救済することはない)。 worktree (相対 `gitdir:` の解決を含む) / detached HEAD / bare リポジトリ (対象外で通過) / branch 名不一致 / issue 番号一致の keyword あり / 番号不一致または keyword なし の各ケースについて、 上記手順から期待判定 (通過多数 + block は「番号一致の keyword が body に無い」場合のみ) が一意に導ける設計としている。
 
 **なぜ 4 entries に分けて prompt を duplicate しているか**:
 
