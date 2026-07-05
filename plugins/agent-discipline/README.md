@@ -4,7 +4,18 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.6.0
+v0.7.0
+
+### v0.6.0 → v0.7.0 の変更点
+
+検知層 (PreToolUse type:agent hook) の拡張です (#177、親 issue #173 決定事項 9、#151/#153 対処)。
+
+- **`gh pr create` entry に Closes 検証 Step を追加**: 既存 Step 2 (禁止カテゴリの semantic 判定) の後、Step 3 (返り値) の前に新設の Step 3 (Closes 検証) を挿入し、旧 Step 3 は Step 4 に繰り下げた。branch 名が `*/issue-<数字>-*` パターンに一致する場合のみ動作し、hook input の `cwd` から `<cwd>/.git/HEAD` を Read (worktree の場合は `gitdir: <path>` 経由で `<path>/HEAD` をもう 1 段 Read) して branch 名を特定、body content に closing keyword (Closes/Close/Closed/Fix/Fixes/Fixed/Resolve/Resolves/Resolved) または部分対応表記 (Refs/Part of) + issue 参照が含まれるかを判定する。含まれない場合のみ block。detached HEAD / Read 失敗 / branch 名不一致は判定不能または非該当として通過 (fail-open)。他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt は Step 構造・内容とも無変更 (Step 0 の command guard、Step 1 の body 抽出仕様、Step 2 の禁止カテゴリ列挙、fail-closed 原則は 4 entries で byte 単位一致を維持)
+- **4 entries すべての model pin を `claude-opus-4-7` → `claude-sonnet-5` に更新** (#151): #174 V2 の実測検証で、hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず pin 値がそのまま dispatch されることが確認された (= env var 優先という当初想定は誤りで、pin は常に有効)。sonnet 5 は実装系メインセッションおよびこの環境の全 subagent と同系列のため、Sonnet ダウン時は subagent 委任も同時に停止しており hook 単独の新規障害面にはならない。ただし Fable メインセッション時はこの対称性が崩れる非対称が残ることを既知の制約に明記した
+- **#153 対応**: 検知層が公式ドキュメント上 experimental とされる `type: agent` hook に依存しており、仕様変更時は動作しなくなる可能性がある旨を既知の制約に追記した
+- **hooks.json の description を新挙動に合わせて更新**: `gh pr create` のみ closing keyword 検証も行う旨を追加
+- **開発フロー**: テスト不能な成果物 (hooks.json 内 prompt + README) への TDD 2 段階適用例として、Phase A = 設計記述 commit (判定契約を README に先行記載) → Phase B = hooks.json 実装、の 2 commit 構成を採用した
+- **version bump**: `0.6.0` → `0.7.0` (minor)。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.5.0 → v0.6.0 の変更点
 
