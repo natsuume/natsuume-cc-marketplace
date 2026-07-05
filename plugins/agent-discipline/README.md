@@ -4,7 +4,18 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.7.1
+v0.7.2
+
+### v0.7.1 → v0.7.2 の変更点
+
+`lint-prompt-sync.sh` の検出カバレッジの穴 3 件を修正する実装です (#185 #186 #187、親 issue #184)。v0.7.1 で新設した lint に対する遡及 codex レビューで発見された、いずれも「実装バグではなく検出範囲の構造的な盲点」という共通の性質を持つ P2/P3 指摘です。
+
+- **チェック 2 の前提検証を追加 (#186)**: チェック 2 は `hooks.json` の `type: agent` entry が「4 個存在し、各 `prompt` が非空である」ことを暗黙の前提にしており、前提が崩れた場合に fail ではなく pass 側に倒れていた (5 個目の entry が追加されても比較対象外のまま素通り、4 entries すべての `prompt` が欠落しても空同士の一致で pass)。抽出・正規化・比較より前に、entry 数がスクリプト内定数 `EXPECTED_AGENT_ENTRIES` (= 4) と一致すること、および各 entry の `.prompt` が非空文字列であることを検証し、いずれか不成立なら fail (exit 1) する前提検証を追加した
+- **チェック 3 (新設) を追加 (#185)**: チェック 2 の正規化 (`norm_b`) は `gh pr create` entry 固有の Step 3 (Closes 検証) ブロックを共通ブロック比較の対象外とするため丸ごと除去する。そのため Step 3 の判定手順がどのように破損しても、開始・終了の見出しパターンさえ残っていれば除去は成功し共通ブロック比較は pass してしまう (false pass)。これを埋めるため、除去される前の raw prompt から Step 3 ブロックを独立に抽出し、スクリプト内定数の必須キーワードリスト (`` `<cwd>/.git` ``、`gitdir:`、`ref: refs/heads/`、`issue-<数字>`、`closing keyword`、`境界一致`、`fail-open で誘導層の`、の 7 要素。判定手順のうち .git の Read / worktree 解決 / HEAD 形式判定 / issue 番号抽出 / closing keyword 群 / 境界一致 / fail-open 通過規則をそれぞれ代表する現物の Step 3 本文からの引用) をすべて含むかを検証するチェック 3 を新設した。判定ロジックの意味的な等価性までは検証しない構造スモークチェックであり、期待構造のソース・オブ・トゥルースは README 等の外部文書ではなくスクリプト内定数とした (#185 の合意事項)
+- **除去系 (`norm_b` / `norm_c`) の実在検証を追加 (#187)**: `norm_c` (PR 系 2 entries が持つ判定原則追加文の除去) は除去対象の実在を検証せず、誤って削除されていても除去処理が何もしないまま素通りし regression を検出できなかった。除去 (`norm_b_pr_create_only` / `norm_c_pr_only` の呼び出し) より前に、それぞれの除去対象が実在することを検証し、実在しなければ fail するよう統一した (`norm_b` は Step 3 ブロックの抽出結果が非空であること、`norm_c` は PR 系 2 entries それぞれに判定原則追加文が実在することを検証する)
+- **TDD 2 段階の開発フロー**: Phase A (ヘッダ契約のみを更新する設計記述 commit、実装本体は無変更) → Phase B (本 PR、実装本体 + 受入検証 4 件の意図的破壊テストで fail 挙動を確認) の 2 commit 構成を採用した
+- **受入検証**: (i) 現行リポジトリ状態で全 3 チェックが pass すること、(ii) `hooks.json` の `gh pr create` entry の Step 3 内キーワード 1 つ (`境界一致`) を一時改変するとチェック 3 が fail し、かつチェック 2 は pass し続けること (#185 の false pass 再現)、(iii) `hooks.json` に 5 個目のダミー `type: agent` entry を一時追加すると前提検証が fail すること (#186 の再現)、(iv) `gh pr edit` entry から PR 固有の判定原則追加文を一時削除すると `norm_c` の実在検証が fail すること (#187 の再現) を、dash / bash 双方で実行して確認した (確認後はいずれも revert 済み)
+- **version bump**: `0.7.1` → `0.7.2` (patch)。lint スクリプトの実装本体を変更したため。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.7.0 → v0.7.1 の変更点
 
@@ -321,22 +332,23 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 
 ### CI (lint)
 
-モデル別 2 プロンプトファイルと `hooks.json` の 4 entries は内容を手で同期する必要があるため、うっかり片方だけ更新して drift する事故を CI で検出します (v0.7.1 新設、#178)。
+モデル別 2 プロンプトファイルと `hooks.json` の 4 entries は内容を手で同期する必要があるため、うっかり片方だけ更新して drift する事故を CI で検出します (v0.7.1 新設、#178。v0.7.2 で検出カバレッジの穴 3 件を修正、#184 配下の #185 #186 #187)。
 
 #### lint-prompt-sync.sh
 
 **ファイル**: `scripts/lint-prompt-sync.sh` (plugin 直下、`hooks/` 配下ではない)
 **呼び出し元**: `.github/workflows/agent-discipline-prompt-lint.yml`
 
-**動作**:
+**動作** (v0.7.2 で 2 チェック構成から 3 チェック構成に拡張):
 
 - **チェック 1 (ルール ID 一致)**: `hooks/prompts/always-fable.md` と `hooks/prompts/always-sonnet.md` から `<!-- rule:<id> -->` コメントの ID 集合を抽出し、順序に依らず完全一致するか検証する。片方にのみ存在する ID があれば diff 形式で報告して fail する。ルール本文の表現差 (意味的ドリフト) は検出対象外とし、PR レビューでの目視確認に委ねる
-- **チェック 2 (hooks.json 4 entries 共通ブロック一致)**: `hooks/hooks.json` の 4 つの `type: agent` entry (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) の `prompt` から、entry 固有部分を除いた「共通ブロック」が一致するか検証する。entry 固有部分として除去する対象は 3 種類:
+- **チェック 2 (hooks.json 4 entries 共通ブロック一致)**: 抽出・正規化・比較より前に **前提検証** (v0.7.2 新設、#186) を行う — `hooks/hooks.json` の `type: agent` entry 数がスクリプト内定数 `EXPECTED_AGENT_ENTRIES` (= 4) と一致すること、および各 entry の `.prompt` が非空文字列であることを検証し、いずれか不成立なら fail する (entry 数の増減や prompt 欠落という前提崩壊時に、空同士の一致などで pass 側へ倒れることを防ぐ)。前提検証を通過した後、4 つの `type: agent` entry (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) の `prompt` から、entry 固有部分を除いた「共通ブロック」が一致するか検証する。entry 固有部分として除去する対象は 3 種類:
   1. 対象コマンド名の記載箇所 (`if` フィールドから機械導出した `gh <cmd>` をプレースホルダに置換)
-  2. `gh pr create` のみが持つ Closes 検証 Step (Step 3) と、それに伴う「返り値」Step の番号繰り下がり (Step 4 → Step 3 相当への読み替え)
-  3. `gh pr create` / `gh pr edit` が共有する PR 固有の判定原則追加文 (「PR body で commit/discussion 経由でユーザ承認が明示されている文脈は禁止対象外」)
+  2. `gh pr create` のみが持つ Closes 検証 Step (Step 3) と、それに伴う「返り値」Step の番号繰り下がり (Step 4 → Step 3 相当への読み替え)。**除去 (v0.7.2、#187)** より前に、除去対象の Step 3 ブロックが実在することを検証し、実在しなければ fail する
+  3. `gh pr create` / `gh pr edit` が共有する PR 固有の判定原則追加文 (「PR body で commit/discussion 経由でユーザ承認が明示されている文脈は禁止対象外」)。**除去 (v0.7.2、#187)** より前に、除去対象の文言が PR 系 2 entries それぞれに実在することを検証し、実在しなければ fail する
   正規化後の 4 entries が byte-identical でなければ diff 形式で乖離箇所を報告して fail する
-- **引数**: なし。**実行位置**: リポジトリルートを前提とする (それ以外や前提ファイル欠如は fail-closed で exit 1)。**依存**: `jq` (CI・ローカルとも前提。不在時は明確なエラーメッセージで exit 1)。**exit code**: 両チェック pass で 0、いずれか fail または実行時エラーで 1
+- **チェック 3 (gh pr create Step 3 ブロック構造チェック、v0.7.2 新設、#185)**: チェック 2 の `norm_b` は `gh pr create` entry 固有の Step 3 (Closes 検証) ブロックを共通ブロック比較の対象外とするため丸ごと除去する。そのため Step 3 の判定手順がどのように破損しても、開始・終了の見出しパターンさえ残っていれば除去は成功し共通ブロック比較 (チェック 2) は pass してしまう (false pass)。これを埋めるため、除去される前の raw prompt から Step 3 ブロックを独立に抽出し、スクリプト内定数の必須キーワードリスト (`` `<cwd>/.git` ``、`gitdir:`、`ref: refs/heads/`、`issue-<数字>`、`closing keyword`、`境界一致`、`fail-open で誘導層の`、の 7 要素) をすべて含むかを検証する。期待構造のソース・オブ・トゥルースは README 等の外部文書ではなくスクリプト内定数とし (#185 の合意事項)、判定ロジックの意味的な等価性までは検証しない構造スモークチェックである旨を明記している (欠落があれば diff ではなく欠落キーワードの一覧を報告して fail する)
+- **引数**: なし。**実行位置**: リポジトリルートを前提とする (それ以外や前提ファイル欠如は fail-closed で exit 1)。**依存**: `jq` (CI・ローカルとも前提。不在時は明確なエラーメッセージで exit 1)。**exit code**: 全チェック (1〜3) pass で 0、いずれか fail または実行時エラーで 1
 - POSIX sh (`#!/bin/sh`) で記述しており `dash` でも動作する。ローカルでリポジトリルートから直接実行できる (`./plugins/agent-discipline/scripts/lint-prompt-sync.sh`)
 
 #### agent-discipline-prompt-lint (workflow)

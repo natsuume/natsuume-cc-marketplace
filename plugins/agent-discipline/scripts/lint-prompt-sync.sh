@@ -175,6 +175,9 @@ FABLE_MD="plugins/agent-discipline/hooks/prompts/always-fable.md"
 SONNET_MD="plugins/agent-discipline/hooks/prompts/always-sonnet.md"
 HOOKS_JSON="plugins/agent-discipline/hooks/hooks.json"
 
+# チェック 2 前提検証 (#186) で使う、 期待される type:agent entry 数。
+EXPECTED_AGENT_ENTRIES=4
+
 overall_fail=0
 
 # --- pre-flight: リポジトリルートから実行されているか / jq が使えるか ---
@@ -230,6 +233,28 @@ fi
 echo ""
 echo "== check 2: hooks.json 4 type:agent entries common block =="
 
+# --- 前提検証 (#186): type:agent entry 数と prompt 非空を、抽出・正規化・比較より前に検証する ---
+agent_entry_count=$(jq '[.hooks.PreToolUse[0].hooks[] | select(.type == "agent")] | length' "$HOOKS_JSON")
+if [ "$agent_entry_count" -ne "$EXPECTED_AGENT_ENTRIES" ]; then
+  echo "ERROR: hooks.json の type:agent entry 数が ${EXPECTED_AGENT_ENTRIES} と一致しません (実際: ${agent_entry_count})。entry の追加・削除が無いか確認してください。" >&2
+  exit 1
+fi
+
+empty_prompt_ifs=$(jq -r '
+  [
+    .hooks.PreToolUse[0].hooks[]
+    | select(.type == "agent")
+    | select((.prompt | type) != "string" or (.prompt | length) == 0)
+    | .if
+  ] | join(", ")
+' "$HOOKS_JSON")
+if [ -n "$empty_prompt_ifs" ]; then
+  echo "ERROR: hooks.json の type:agent entry のうち prompt が空または文字列以外の entry があります: ${empty_prompt_ifs}" >&2
+  exit 1
+fi
+
+echo "OK: 前提検証 (type:agent entry 数 = ${EXPECTED_AGENT_ENTRIES}、全 entry の prompt が非空文字列)"
+
 extract_prompt() {
   # $1 = if フィールドの値 (例: "Bash(gh issue create:*)")
   jq -r --arg iff "$1" '
@@ -256,6 +281,26 @@ for name in raw_issue_create raw_issue_edit raw_pr_create raw_pr_edit; do
   fi
 done
 
+# --- 除去系の実在検証 (#187、 #185 のチェック 3 と対象ブロックを共有) ---
+#     norm_b (Closes 検証 Step の除去) が対象とするブロックそのものを、 除去 (norm_b_pr_create_only
+#     の呼び出し) より前に抽出し、 実在を確認する。 このブロックはチェック 3 の入力としても
+#     再利用する (#185 のチェック 3 の対象ブロックと同一であるため)。
+sed -n '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!p}' "$WORKDIR/raw_pr_create.txt" > "$WORKDIR/step3_block.txt"
+if [ ! -s "$WORKDIR/step3_block.txt" ]; then
+  echo "ERROR: gh pr create entry の prompt から '## Step 3: Closes 検証' ブロックが抽出できませんでした (norm_b の除去対象が実在しません)。見出しの変更または削除の可能性があります。" >&2
+  exit 1
+fi
+
+#     norm_c (PR 固有の判定原則追加文の除去) が対象とする文言も、 除去 (norm_c_pr_only の
+#     呼び出し) より前に PR 系 2 entries それぞれへの実在を確認する。
+PR_JUDGMENT_ADDITION='。 PR body で commit/discussion 経由でユーザ承認が明示されている文脈 (= 「ユーザの decision により A を採用」 等の明示宣言) は禁止対象外'
+for name in raw_pr_create raw_pr_edit; do
+  if ! grep -qF -- "$PR_JUDGMENT_ADDITION" "$WORKDIR/$name.txt"; then
+    echo "ERROR: $name の prompt に PR 固有の判定原則追加文 (norm_c の除去対象) が見つかりません。文言の変更または削除の可能性があります。" >&2
+    exit 1
+  fi
+done
+
 # (a) 対象コマンド名の記載箇所の除去: "gh <cmd>" というリテラルをプレースホルダに置換する。
 #     冒頭段落の `if: "Bash(gh <cmd>:*)"` 参照、 Step 0 内の 3 箇所 (literal 判定 /
 #     cd 複合例 / cat 複合例) をまとめて吸収できる (いずれも文字列 "gh <cmd>" を含むため)。
@@ -267,6 +312,8 @@ norm_a() {
 # (b) gh pr create のみが持つ Closes 検証 Step (Step 3) の除去。
 #     除去後に Step 4 (返り値) を Step 3 に読み替え、 Step 番号参照の文言も他 3 entries と
 #     揃える (Closes Step 追加に伴う不可避な繰り下がりであり、 意図的なドリフトではないため)。
+#     除去対象の実在検証は上記 (raw 抽出直後の step3_block.txt 抽出 + 非空チェック) で
+#     完了済みのため、 ここでは除去のみを行う (#187)。
 norm_b_pr_create_only() {
   sed -e '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!d}' \
     -e 's/^## Step 4: 返り値/## Step 3: 返り値/' \
@@ -275,8 +322,10 @@ norm_b_pr_create_only() {
 }
 
 # (c) gh pr create / gh pr edit の両方が持つ PR 固有の判定原則追加文の除去。
+#     除去対象の実在検証は上記 (raw 抽出直後の PR_JUDGMENT_ADDITION チェック) で完了済みのため、
+#     ここでは同じ変数を使って除去のみを行う (実在検証と除去対象の文言をここで乖離させない)。
 norm_c_pr_only() {
-  sed 's#。 PR body で commit/discussion 経由でユーザ承認が明示されている文脈 (= 「ユーザの decision により A を採用」 等の明示宣言) は禁止対象外##'
+  sed "s#${PR_JUDGMENT_ADDITION}##"
 }
 
 norm_a "issue create" < "$WORKDIR/raw_issue_create.txt" > "$WORKDIR/norm_issue_create.txt"
@@ -298,6 +347,45 @@ if [ "$check2_fail" -eq 0 ]; then
   echo "OK: hooks.json 4 entries の共通ブロックが一致しました"
 else
   overall_fail=1
+fi
+
+# ============================================================================
+# チェック 3: gh pr create entry の Step 3 (Closes 検証) ブロック構造チェック
+# ============================================================================
+
+echo ""
+echo "== check 3: gh pr create Step 3 (Closes 検証) block structure =="
+
+# 期待構造のソース・オブ・トゥルース (#185): Step 3 の判定手順のうち 7 要素を代表する
+# 文字列のリスト。 README 等の外部文書は参照しない。 このスモークチェックは Step 3 ブロックが
+# これらの文字列を含むかどうかのみを見る (判定ロジックの意味的な等価性は検証しない)。
+cat > "$WORKDIR/step3_required_keywords.txt" <<'KEYWORDS_EOF'
+<cwd>/.git
+gitdir:
+ref: refs/heads/
+issue-<数字>
+closing keyword
+境界一致
+fail-open で誘導層の
+KEYWORDS_EOF
+
+check3_fail=0
+missing_keywords=""
+while IFS= read -r kw; do
+  [ -z "$kw" ] && continue
+  if ! grep -qF -- "$kw" "$WORKDIR/step3_block.txt"; then
+    missing_keywords="${missing_keywords}  - ${kw}
+"
+    check3_fail=1
+  fi
+done < "$WORKDIR/step3_required_keywords.txt"
+
+if [ "$check3_fail" -ne 0 ]; then
+  echo "FAIL: gh pr create の Step 3 ブロックに以下の必須キーワードが含まれていません (構造スモークチェックであり意味的等価性の検証ではない):" >&2
+  printf '%s' "$missing_keywords" >&2
+  overall_fail=1
+else
+  echo "OK: gh pr create の Step 3 ブロックが必須キーワードをすべて含んでいます"
 fi
 
 # ============================================================================
