@@ -25,11 +25,17 @@
 # - pending マーカーあり + transcript にまだ main-chain assistant 行が無い (上記コマンドの
 #   結果が空) → 何もしない (pending マーカーは残したまま exit 0。次回 UserPromptSubmit で再試行)
 # - pending マーカーあり + assistant 行あり → モデルを確定し:
-#   - モデル ID (小文字化) が `fable` を含む → 確定版 (hooks/prompts/always-fable.md) を
-#     「以後この確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄する」という前置きと
-#     ともに additionalContext で 1 度だけ注入する
+#   - モデル ID (小文字化) が `fable` を含む → 確定版 (hooks/prompts/always-fable.md +
+#     分業規律ブロック = 見出し「# agent-discipline: 分業規律 (Fable セッション)」+
+#     hooks/prompts/discipline-preamble-fable.md + hooks/prompts/discipline-fable.md、
+#     #193 でモデル別常時ルールと同じ 1 回のモデル判定に統合) を、「以後この確定版を優先し、
+#     セッション冒頭の自己ゲート付き注入は破棄する」という前置きとともに additionalContext で
+#     1 度だけ注入する。分業規律側 (discipline-preamble-fable.md / discipline-fable.md) の
+#     いずれかが読めない/空の場合は分業規律ブロックを付けず、常時ルール (always-fable.md) のみを
+#     再注入する (fail-open の粒度はペイロード単位)
 #   - それ以外 (sonnet / opus / haiku 等。自己ゲート時に always-sonnet.md を注入済みと同内容) →
-#     再注入しない (出力なしで exit 0)
+#     再注入しない (出力なしで exit 0。自己ゲート時に注入済みの分業規律は self-gate 文言により
+#     非 Fable セッションでは無視されるため、こちらも再注入不要)
 #   - いずれの場合も: state file
 #     `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` に確定値を書き込んだ後で
 #     pending マーカーを削除する (state file 書込 → pending マーカー削除の順で行い、TOCTOU の
@@ -40,7 +46,7 @@
 #   {
 #     "hookSpecificOutput": {
 #       "hookEventName": "<入力の hook_event_name をそのまま echo>",
-#       "additionalContext": "<前置き + always-fable.md 本文>"
+#       "additionalContext": "<前置き + always-fable.md 本文 + (読めれば) 分業規律ブロック>"
 #     }
 #   }
 #
@@ -52,7 +58,10 @@
 # - jq 不在
 # - stdin が不正 JSON / hook_event_name が空
 # - transcript_path が読めない
-# - always-fable.md が読めない (空文字列を含む)
+# - always-fable.md が読めない (空文字列を含む) → 再注入自体を行わず exit 0
+# - discipline-preamble-fable.md / discipline-fable.md のいずれかが読めない (空文字列を含む) →
+#   分業規律ブロックのみ付けず、常時ルール (always-fable.md) のみを再注入する
+#   (ペイロード単位の fail-open)
 # - state file / pending マーカーの読み書き失敗
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -117,11 +126,26 @@ if [ -z "$BODY" ]; then
   exit 0
 fi
 
-PREFIX="(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの常時適用ルールを暫定注入していた。会話の進行によりこのセッションのモデルが Fable であると確定したため、以後は本メッセージ以下の確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄すること。"
+PREFIX="(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの常時適用ルールと分業規律を暫定注入していた。会話の進行によりこのセッションのモデルが Fable であると確定したため、以後は本メッセージ以下の確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄すること。"
 
 CONTEXT="$PREFIX
 
 $BODY"
+
+# 分業規律 (fable 確定時の再注入): discipline-preamble-fable.md + discipline-fable.md。
+# fail-open はペイロード単位: どちらか読めない/空なら分業規律ブロックを付けず常時ルールのみ再注入する。
+DISCIPLINE_PREAMBLE=$(cat "$PROMPTS_DIR/discipline-preamble-fable.md" 2>/dev/null)
+DISCIPLINE_BODY=$(cat "$PROMPTS_DIR/discipline-fable.md" 2>/dev/null)
+if [ -n "$DISCIPLINE_PREAMBLE" ] && [ -n "$DISCIPLINE_BODY" ]; then
+  CONTEXT="$CONTEXT
+
+
+# agent-discipline: 分業規律 (Fable セッション)
+
+$DISCIPLINE_PREAMBLE
+
+$DISCIPLINE_BODY"
+fi
 
 jq -n --arg evt "$HOOK_EVENT" --arg ctx "$CONTEXT" '{
   hookSpecificOutput: {
