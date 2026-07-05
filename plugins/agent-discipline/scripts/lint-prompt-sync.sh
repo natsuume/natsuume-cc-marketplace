@@ -234,7 +234,30 @@ echo ""
 echo "== check 2: hooks.json 4 type:agent entries common block =="
 
 # --- 前提検証 (#186): type:agent entry 数と prompt 非空を、抽出・正規化・比較より前に検証する ---
+#     jq が非 0 で終了した場合 (.hooks.PreToolUse 欠落など)、 $(...) はその exit status を
+#     引き継ぐ (代入のみの simple command の $? は最後に実行した command substitution の
+#     exit status になる、 POSIX 規定) ため、 ここで明示的に検査する。 検査を怠ると jq 失敗時に
+#     変数が空文字列のまま後続の `-ne` / `-n` 比較に渡り、 `[ "" -ne 4 ]` が
+#     "integer expression expected" で失敗して if 自体が偽扱いになり、 前提検証が
+#     silent に skip されて偽の "OK" が出力される (fail-closed 契約違反)。
+check_jq_status() {
+  # $1 = 直前の jq 呼び出しの exit status、 $2 = エラーメッセージに含める処理名
+  if [ "$1" -ne 0 ]; then
+    echo "ERROR: hooks.json の構造解析に失敗しました (${2}、jq exit status: $1)。.hooks.PreToolUse の構造が想定と異なる可能性があります。" >&2
+    exit 1
+  fi
+}
+
 agent_entry_count=$(jq '[.hooks.PreToolUse[0].hooks[] | select(.type == "agent")] | length' "$HOOKS_JSON")
+check_jq_status "$?" "type:agent entry 数の取得"
+
+case "$agent_entry_count" in
+  ''|*[!0-9]*)
+    echo "ERROR: jq の出力 (${agent_entry_count}) が type:agent entry 数として数値ではありません。hooks.json の構造解析に失敗した可能性があります。" >&2
+    exit 1
+    ;;
+esac
+
 if [ "$agent_entry_count" -ne "$EXPECTED_AGENT_ENTRIES" ]; then
   echo "ERROR: hooks.json の type:agent entry 数が ${EXPECTED_AGENT_ENTRIES} と一致しません (実際: ${agent_entry_count})。entry の追加・削除が無いか確認してください。" >&2
   exit 1
@@ -248,6 +271,8 @@ empty_prompt_ifs=$(jq -r '
     | .if
   ] | join(", ")
 ' "$HOOKS_JSON")
+check_jq_status "$?" "prompt 非空チェック"
+
 if [ -n "$empty_prompt_ifs" ]; then
   echo "ERROR: hooks.json の type:agent entry のうち prompt が空または文字列以外の entry があります: ${empty_prompt_ifs}" >&2
   exit 1
