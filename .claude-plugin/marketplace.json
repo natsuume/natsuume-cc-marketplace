@@ -55,6 +55,13 @@
       "description": "Claude Code の作業規律を配送するプラグイン。SessionStart で常時適用ルール (Bash コマンド分解、設計判断のユーザ事前確認、issue 起票の詳細化、連続 issue 解決時の排他制御など) を注入し、auto mode では commit→push→PR→merge の自走方針を配送する。gh issue/pr の body に紛れ込む未承認の推奨表現も PreToolUse で検知して block する。Fable セッション向け分業規律の併載とサブエージェント Fable 実行防止 hook も v0.8.0 で統合。",
       "version": "0.8.0",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
+    },
+    {
+      "name": "ui-discipline",
+      "source": "./plugins/ui-discipline",
+      "description": "UI (フロントエンド) 実装時の規律を配送するプラグイン。SessionStart で 10 ルール (層別の component 共通化基準、composition 実装様式、実装前の既存探索、表示/非表示・disabled の決定表、レイアウト安定、design token 経由のスタイル指定、アクセシビリティ基本則、非同期状態の網羅、フォントサイズ・ビューポート頑健性、視覚方向の明示的選択) を常時注入し、対応するコード例・チェックリストを ui-patterns skill として提供する。UI を持つプロジェクトでのみ enable して使う。",
+      "version": "0.1.0",
+      "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     }
   ]
 }

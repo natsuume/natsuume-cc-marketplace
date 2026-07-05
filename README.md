@@ -29,6 +29,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [update-default-branch](#update-default-branch) | 0.2.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。v0.2.0 で実行モデルを「1 手順 = 1 つの素朴な git コマンド」に再設計し、同居プラグインの PreToolUse hook (auto-lint-check 等) に deny されず実行できるようにした |
 | [natsuume-statusline](#natsuume-statusline) | 0.5.0 | Claude Code の `statusLine` 表示を提供し、`/natsuume-statusline:setup` で `settings.json` に登録するプラグイン |
 | [agent-discipline](#agent-discipline) | 0.8.0 | Claude Code の振る舞い規律を統合配送する system prompt plugin + gh issue/pr 物理層検知。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界 / 排他系 = 連続 issue 解決時の claim comment + branch push 二段排他制御) を 1 回 inject、 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.4.0 で PreToolUse type:agent hook を追加し、 gh issue\|pr create\|edit の body (--body inline / --body-file PATH 両対応) をセクション 2.1 / 3.1 の禁止表現規範で semantic 検証 → 違反時 block。 各 hook に `if: "Bash(gh <cmd>:*)"` filter を付与した 4 entries 構成で hook config 段階の物理 prefilter を実現 (= 非該当 Bash では agent subagent を起動しない真の narrow scope)。 加えて各 prompt 冒頭に defense-in-depth command guard を追加し、 複雑な command で `if` filter が fail-permissive で fall through した場合の偽 trigger を二段目で catch (= codex P2 指摘への対処)。 model は実装系メインセッションおよび全 subagent と同系列の claude-sonnet-5 に pin して旧 llm-default-branch-push-poc 型の非対称 SPOF を構造的に排除。 v0.7.1 でモデル別 2 プロンプトファイルと hooks.json 4 entries の同期ドリフトを検出する構造 lint (`lint-prompt-sync.sh` + `agent-discipline-prompt-lint.yml` CI) を追加。 v0.7.2 で lint の検出カバレッジの穴 3 件 (前提検証欠如 / Step 3 ブロック内容の未検証 / 除去対象の実在性未検証) を修正。 v0.7.3 で Closes 検証の issue 番号採用ルール (複数 `issue-<数字>-` 断片は先頭を採用) を一意化。 v0.7.4 で always-sonnet.md を公式 Sonnet 5 prompting guide 準拠で精緻化 (末尾 steering の両面較正 + 進捗報告グラウンディング追記 / 仮想反対案の具体条件化 / rule 8 の質問頻度非変更の明確化 / AskUserQuestion 提示を推奨可に統一) + hooks.json 4 prompts の規範参照先を inject-always.sh → hooks/prompts/always-sonnet.md に修正。 v0.8.0 で fable-discipline を統合 — モデル別分業規律を常時ルールと同一 hook で併載し、 block-fable-subagent.sh (PreToolUse Agent\|Task) を移設、 model 判定基盤 (4 段 fallback + state file + self-gate + one-shot 補正) を 1 実装に一本化 |
+| [ui-discipline](#ui-discipline) | 0.1.0 | UI (フロントエンド) 実装時の規律を配送するプラグイン。SessionStart で 10 ルール (層別の component 共通化基準、composition 実装様式、実装前の既存探索、表示/非表示・disabled の決定表、レイアウト安定、design token 経由のスタイル指定、アクセシビリティ基本則、非同期状態の網羅、フォントサイズ・ビューポート頑健性、視覚方向の明示的選択) を常時注入し、対応するコード例・チェックリストを ui-patterns skill として提供する。UI を持つプロジェクトでのみ enable して使う |
 
 ---
 
@@ -246,3 +247,29 @@ v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定�
 - `fable-discipline` は v0.8.0 で `agent-discipline` に統合され、本リポジトリから削除されました。モデル別分業規律の配送 (`inject-always.sh` / `resolve-model-on-prompt.sh`) とサブエージェントの Fable 実行防止 (`block-fable-subagent.sh`、PreToolUse `Agent|Task`) は `agent-discipline` の hook として提供されます。
 - `fable-discipline` を install 済みの利用者は、当該 plugin を uninstall したうえで `agent-discipline` を update してください。
 - 旧 state dir (`${TMPDIR:-/tmp}/fable-discipline-state`) は本統合後は参照されなくなり、OS の tmpfs cleanup により自然消去されます (手動削除は不要)。
+
+---
+
+## ui-discipline
+
+UI (フロントエンド) 実装時の規律を配送するプラグインです。UI を持つプロジェクトでのみ enable して使います。共通化すべきか / 表示・非表示をどう決めるか / レイアウトが崩れないか、といった UI 実装で繰り返し発生する判断基準を 10 ルールとして常時配送し、判断のぶれによる重複 component や CLS (Cumulative Layout Shift)、a11y 欠落を防ぎます。
+
+常時注入層 (`SessionStart`) が 10 ルールのコンパクト版 (意図 + 短い指示 + 境界) を配送し、ui-patterns skill が対応する具体的なコード例・チェックリストを提供する 2 層構成です。UI 実装規律は UI を持つプロジェクトでのみ意味を持つため agent-discipline には統合せず、plugin の enable 単位をそのまま適用範囲の単位とする独立 plugin としています。10 ルールはモデルに依存しない UI 実装上の判断基準であるため、モデル別の prompt 分岐は持ちません。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `inject-ui-rules` | SessionStart | `hooks/prompts/ui-rules.md` の全文を `additionalContext` として常時注入する。モデル判定・permission_mode 判定等の条件分岐は持たない |
+
+#### Skills
+
+| スキル名 | コマンド | 説明 |
+|---------|---------|------|
+| ui-patterns | `/ui-patterns` | 常時注入される 10 ルールに対応する具体的なコード例・チェックリストを提供する |
+
+### キーワード
+
+`ui` `frontend` `accessibility` `design-tokens` `layout-shift` `component` `system-prompt` `hook` `skill`
