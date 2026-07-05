@@ -4,7 +4,11 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.4.1
+v0.4.2
+
+### v0.4.1 → v0.4.2 の変更点
+
+- **hooks.json の description を簡潔な概要に刷新**: description は設定ファイルの用途説明であり、変更履歴・設計経緯は本 README のバージョン節へ集約する方針に統一 (hook 動作の変更なし)
 
 ### v0.4.0 → v0.4.1 の変更点
 

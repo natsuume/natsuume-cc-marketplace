@@ -32,7 +32,7 @@
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。3 レビューを subagent として並列起動する /pre-push-review:review コマンドを提供し、レビュー済みマーカーとブランチ全差分の同一性検証によって、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "3.0.2",
+      "version": "3.0.3",
       "keywords": ["push", "review", "quality", "codex", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
@@ -53,14 +53,14 @@
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "Claude Code の作業規律を配送するプラグイン。SessionStart で常時適用ルール (Bash コマンド分解、設計判断のユーザ事前確認、issue 起票の詳細化、連続 issue 解決時の排他制御など) を注入し、auto mode では commit→push→PR→merge の自走方針を配送する。gh issue/pr の body に紛れ込む未承認の推奨表現も PreToolUse で検知して block する。",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
       "name": "fable-discipline",
       "source": "./plugins/fable-discipline",
       "description": "Fable (Mythos 級モデル) をメインセッションで使う際の分業規律プラグイン。「Fable = 司令塔、実作業 = Sonnet/Opus サブエージェント」の役割分担と委任プロトコルを SessionStart で注入し (誘導層)、サブエージェントが Fable で実行される経路を PreToolUse で deny する (防波堤層)。主防御は CLAUDE_CODE_SUBAGENT_MODEL 環境変数で、本プラグインはその defense-in-depth を担う。",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "keywords": ["fable", "model-cost", "subagent", "delegation", "system-prompt", "hook", "guardrail", "workflow"]
     }
   ]

@@ -4,6 +4,7 @@ Fable (Mythos 級モデル) をメインセッションで使う際の **分業�
 
 ## バージョン
 
+- **v0.3.2**: hooks.json の description を簡潔な概要に刷新 (変更履歴・設計経緯は本 README へ集約する方針に統一。hook 動作の変更なし)
 - **v0.3.1**: 注入プロンプトを `hooks/prompts/*.md` (preamble-fable.md / preamble-self-gate.md / discipline-body.md) に分離し、inject-fable-role.sh は判定・組み立て・配送のみを担う構成に変更 (視認性・メンテナンス性のため。注入内容は変更なし — 編集前後の hook 出力 JSON の diff で byte-identical を検証済み。md が読めない場合は fail-open で注入スキップ)。あわせて plugin description (plugin.json / marketplace.json) を人間向けの簡潔な概要に刷新 (変更履歴・実装詳細は本 README が正)
 - **v0.3.0**: 誘導層と deny メッセージを Fable 5 / Sonnet 5 の公式プロンプトガイドに整合。誘導層に追加: 並列・非同期委任 (完了を待たず作業継続、介入条件はセクション 4 の発動条件に統一)、fresh-context verifier による検収の一次検証、SendMessage による同一エージェント継続 (Workflow `agent()` は対象外)、effort の難度別明示 (機械的 = low / 検証・判定 = high 以上。Agent ツールに effort が無い場合の代替文言付き)、self-contained 要件への目的・背景 (判断を委ねる根拠にしない限定付き)、literal 解釈を踏まえた一括修正の適用範囲明示、調査・レビュー系委任の coverage-first (自己フィルタ禁止 + confidence/severity 付き全件報告)、エスカレーション返却への根拠添付と受領時の grounding (申告を鵜呑みにしない)。統一: Haiku 許容を誘導層・防波堤層で一致 (機械的作業限定)。deny メッセージ変更: B-1 (env=fable) を報告 + 修正依頼型に (ユーザのグローバル設定を独断で書き換えない)、B-3 (継承 deny) に env 未設定の明示と主防御提案を追加、自己ゲート文の適用スコープ (本注入メッセージ全文) を明確化
 - **v0.2.0**: 誘導層に「委任指示の必須要素 (3 面 + 安全弁)」(セクション 3) と「エスカレーションフロー」(セクション 4) を追加 (#138)。`/model` 切替 + env 不在時に防波堤層が双方向に破れる既知の制約を README と script ヘッダコメントに明文化 (#157。公式 hooks リファレンスの調査により、SessionStart 以外の hook 入力に model フィールドは無く state 更新頻度の向上は公式手段では実現不能と確認したため文書化対応)
