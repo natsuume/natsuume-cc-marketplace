@@ -1,5 +1,5 @@
 {
   "name": "pre-push-review",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。3 レビューを subagent として並列起動する /pre-push-review:review コマンドを提供し、レビュー済みマーカーとブランチ全差分の同一性検証によって、未レビューの commit が remote に到達するのを構造的にブロックする。"
 }

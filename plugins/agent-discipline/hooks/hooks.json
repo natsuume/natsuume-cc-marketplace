@@ -1,5 +1,5 @@
 {
-  "description": "agent-discipline の system prompt 群と物理層検知を 3 経路で配送する。 SessionStart で常時適用ルール (物理層 + before 系 + closing keyword + during 系 + 排他系) を 1 回注入。 UserPromptSubmit では auto mode 限定の after 系 (commit→push→PR→merge 自走) を per-turn 注入し、 同時に session 初回限定で未コミット変更分類チェックも走らせる。 v0.4.0 で PreToolUse type:agent hook を追加し、 `gh issue|pr create|edit` の body content を semantic に検証する物理層を新設。 inline / --body-file 双方に対応するため Read tool を使う agent type を採用、 model はメイン session と揃えて (claude-opus-4-7) 旧 llm-default-branch-push-poc 型の非対称 SPOF (= session は生きているが hook 用の haiku のみ落ちて全 Bash が PreToolUse error になる経路) を構造的に排除。 個別 hook に `if: \"Bash(gh <cmd>:*)\"` filter を付けて 4 つの target command (gh issue create / edit / pr create / edit) ごとに entry を分け、 if 不一致なら agent subagent を起動しない真の narrow scope を確保 (= 全 Bash で agent 起動する設計だと codex review 指摘 P1 のとおり narrow blast radius が成立しないため)。 v0.1.1 で during 系を inject-always 側に移動 + PostToolBatch 経路撤去 (per-turn 2 回 inject → 1 回)",
+  "description": "agent-discipline の配送経路: SessionStart で常時適用ルールを注入 (inject-always.sh)、UserPromptSubmit で auto mode 限定の自走方針注入 (inject-auto.sh) と session 初回の未コミット変更チェック (check-uncommitted-on-session-start.sh)、PreToolUse (Bash) で gh issue/pr create|edit の body を禁止表現規範で semantic 検証する agent hook (4 entries)。設計判断・経緯の詳細は plugin README を参照。",
   "hooks": {
     "SessionStart": [
       {
