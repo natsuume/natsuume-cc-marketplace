@@ -32,6 +32,29 @@
 # `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` に書き込む
 # (fable-discipline の inject-fable-role.sh と同じ sanitize 方式)。
 #
+# ## 分業規律の併載 (#193 設計契約。本コメントは Phase A の設計記述、実装は Phase B)
+#
+# fable-discipline plugin の統合 (#192 決定事項 2) により、本スクリプトは 1 回のモデル判定で
+# 「常時適用ルール」と「分業規律」の 2 ペイロードを注入する。#193 のスコープでは分業規律の
+# 配送マトリクスを移設前の fable-discipline (inject-fable-role.sh) と機能等価に保つ:
+#
+#   | モデル判定     | 常時適用ルール                           | 分業規律                                               |
+#   |----------------|------------------------------------------|--------------------------------------------------------|
+#   | fable を含む   | always-fable.md                          | discipline-preamble-fable.md + discipline-fable.md     |
+#   | sonnet を含む  | always-sonnet.md                         | 注入しない (#194 で discipline-sonnet.md を配送)       |
+#   | 非空でその他   | always-sonnet.md                         | 注入しない (同上)                                      |
+#   | 判定不能       | preamble-self-gate.md + always-sonnet.md | discipline-preamble-self-gate.md + discipline-fable.md |
+#
+# - 2 ペイロードは 1 つの additionalContext に「常時ルール → 分業規律」の順で連結し、分業規律
+#   ブロックの先頭に見出し「# agent-discipline: 分業規律 (Fable セッション)」を置く
+#   (移設前の見出し「# fable-discipline: Fable セッションの分業規律」の plugin 名表記のみ更新)
+# - 分業規律側のみ読めない場合は常時ルールのみ注入する (fail-open の粒度はペイロード単位。
+#   常時ルールが読めない場合は従来どおり無音終了)
+# - state file は agent-discipline-state/model-<session_id> に一本化し、移設される
+#   block-fable-subagent.sh も同 state を参照する (fable-discipline-state は廃止)
+# - resolve-model-on-prompt.sh の pending 補正 (判定不能セッションの one-shot 再配送) も
+#   上記マトリクスと同じ組で両ペイロードを配送する
+#
 # ## 出力 JSON 形状
 #
 #   {
