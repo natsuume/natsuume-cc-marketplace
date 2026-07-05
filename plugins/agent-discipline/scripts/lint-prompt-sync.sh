@@ -207,6 +207,8 @@ set -u
 FABLE_MD="plugins/agent-discipline/hooks/prompts/always-fable.md"
 SONNET_MD="plugins/agent-discipline/hooks/prompts/always-sonnet.md"
 HOOKS_JSON="plugins/agent-discipline/hooks/hooks.json"
+DISCIPLINE_FABLE_MD="plugins/agent-discipline/hooks/prompts/discipline-fable.md"
+DISCIPLINE_SONNET_MD="plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
 
 # チェック 2 前提検証 (#186) で使う、 期待される type:agent entry 数。
 EXPECTED_AGENT_ENTRIES=4
@@ -214,7 +216,7 @@ EXPECTED_AGENT_ENTRIES=4
 overall_fail=0
 
 # --- pre-flight: リポジトリルートから実行されているか / jq が使えるか ---
-for f in "$FABLE_MD" "$SONNET_MD" "$HOOKS_JSON"; do
+for f in "$FABLE_MD" "$SONNET_MD" "$HOOKS_JSON" "$DISCIPLINE_FABLE_MD" "$DISCIPLINE_SONNET_MD"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: $f が見つかりません。リポジトリルートから実行してください。" >&2
     exit 1
@@ -444,6 +446,30 @@ if [ "$check3_fail" -ne 0 ]; then
   overall_fail=1
 else
   echo "OK: gh pr create の Step 3 ブロックが必須キーワードをすべて含んでいます"
+fi
+
+# ============================================================================
+# チェック 4: 分業規律 2 ファイルの rule ID セット一致 (discipline-fable.md <-> discipline-sonnet.md)
+# ============================================================================
+
+echo ""
+echo "== check 4: discipline rule ID set (discipline-fable.md <-> discipline-sonnet.md) =="
+
+extract_rule_ids "$DISCIPLINE_FABLE_MD" > "$WORKDIR/ids_discipline_fable.txt"
+extract_rule_ids "$DISCIPLINE_SONNET_MD" > "$WORKDIR/ids_discipline_sonnet.txt"
+
+if [ ! -s "$WORKDIR/ids_discipline_fable.txt" ] || [ ! -s "$WORKDIR/ids_discipline_sonnet.txt" ]; then
+  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($DISCIPLINE_FABLE_MD / $DISCIPLINE_SONNET_MD)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
+  exit 1
+fi
+
+if diff -u "$WORKDIR/ids_discipline_fable.txt" "$WORKDIR/ids_discipline_sonnet.txt" > "$WORKDIR/ids_discipline_diff.txt" 2>&1; then
+  discipline_id_count=$(wc -l < "$WORKDIR/ids_discipline_fable.txt" | tr -d ' ')
+  echo "OK: discipline rule ID sets match (${discipline_id_count} IDs)"
+else
+  echo "FAIL: discipline rule ID sets differ between $DISCIPLINE_FABLE_MD and $DISCIPLINE_SONNET_MD" >&2
+  cat "$WORKDIR/ids_discipline_diff.txt" >&2
+  overall_fail=1
 fi
 
 # ============================================================================

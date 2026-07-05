@@ -16,6 +16,9 @@ on:
       - "plugins/agent-discipline/hooks/prompts/always-sonnet.md"
       # type:agent 4 entries を持つ hook 設定 (チェック 2 の対象)
       - "plugins/agent-discipline/hooks/hooks.json"
+      # ルール ID コメントを持つ分業規律モデル別プロンプトファイル (チェック 4 の対象)
+      - "plugins/agent-discipline/hooks/prompts/discipline-fable.md"
+      - "plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
       # lint スクリプト自身と本 workflow 自身 (契約変更時も CI が追従することを保証する)
       - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
       - ".github/workflows/agent-discipline-prompt-lint.yml"
@@ -25,6 +28,8 @@ on:
       - "plugins/agent-discipline/hooks/prompts/always-fable.md"
       - "plugins/agent-discipline/hooks/prompts/always-sonnet.md"
       - "plugins/agent-discipline/hooks/hooks.json"
+      - "plugins/agent-discipline/hooks/prompts/discipline-fable.md"
+      - "plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
       - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
       - ".github/workflows/agent-discipline-prompt-lint.yml"
 
