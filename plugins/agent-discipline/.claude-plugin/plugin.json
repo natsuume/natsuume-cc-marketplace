@@ -1,5 +1,5 @@
 {
   "name": "agent-discipline",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Claude Code の作業規律を配送するプラグイン。SessionStart で常時適用ルール (Bash コマンド分解、設計判断のユーザ事前確認、issue 起票の詳細化、連続 issue 解決時の排他制御など) を注入し、auto mode では commit→push→PR→merge の自走方針を配送する。gh issue/pr の body に紛れ込む未承認の推奨表現も PreToolUse で検知して block する。"
 }
