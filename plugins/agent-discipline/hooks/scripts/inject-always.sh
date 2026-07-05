@@ -48,6 +48,10 @@
 # - 2 ペイロードは 1 つの additionalContext に「常時ルール → 分業規律」の順で連結し、分業規律
 #   ブロックの先頭に見出し「# agent-discipline: 分業規律 (Fable セッション)」を置く
 #   (移設前の見出し「# fable-discipline: Fable セッションの分業規律」の plugin 名表記のみ更新)
+# - 分業規律ブロックは additionalContext の末尾に置くこと (制約)。判定不能時の自己ゲート
+#   (discipline-preamble-self-gate.md) は無視の射程を「見出し〜メッセージ末尾」で定義しており、
+#   分業規律より後ろに別ペイロードを追加するとそれも無視射程に入る。後続ペイロードを追加する
+#   場合は self-gate の境界定義ごと更新すること (codex rescue 指摘の将来懸念への予防)
 # - 分業規律側のみ読めない場合は常時ルールのみ注入する (fail-open の粒度はペイロード単位。
 #   常時ルールが読めない場合は従来どおり無音終了)
 # - state file は agent-discipline-state/model-<session_id> に一本化し、移設される
