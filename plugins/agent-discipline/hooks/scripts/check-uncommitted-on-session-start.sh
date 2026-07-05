@@ -69,18 +69,32 @@ DIRTY_SAFE=${DIRTY//\`/\'}
 CWD_SAFE=${CWD//\`/\'}
 
 # 注入本文のテンプレートは hooks/prompts/uncommitted-check.md に定義する (プロンプトを
-# sh に直接埋め込むと視認性・メンテナンス性が下がるため分離)。 {{CWD}} / {{DIRTY}} の
-# プレースホルダを bash のリテラル置換で埋める (sed と異なり置換文字列内の特殊文字に安全)。
-# テンプレートが読めない場合は fail-open で無音終了する (マーカーは設置済みだが、 対象は
-# 静的ファイルなので同 session 内の再試行に意味は無い)。
+# sh に直接埋め込むと視認性・メンテナンス性が下がるため分離)。
+# {{CWD}} / {{DIRTY}} の穴埋めは ${var//pat/repl} を使わず、 プレースホルダ位置で
+# テンプレートを 3 分割してから連結する。 bash 5.2+ の patsub_replacement (既定 on) は
+# 置換文字列中の unquoted & をマッチ文字列へ展開するため、 & を含む path / status 行が
+# 「a&b」→「a{{CWD}}b」 のように壊れる (codex review P2)。 分割・連結は全 bash で完全に
+# リテラル扱いで、 分割をすべて元テンプレートに対して行うため置換値が再走査されることも
+# 無い (値に {{...}} が含まれても安全)。 bash 3.2 (macOS) 互換。
+# テンプレートが読めない、 またはプレースホルダが「{{CWD}} → {{DIRTY}} の順に各 1 回」 の
+# 形状でない場合は fail-open で無音終了する (マーカーは設置済みだが、 対象は静的ファイル
+# なので同 session 内の再試行に意味は無い)。
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
 TEMPLATE=$(cat "$PROMPTS_DIR/uncommitted-check.md" 2>/dev/null)
-if [ -z "$TEMPLATE" ]; then
-  exit 0
-fi
+case $TEMPLATE in
+  *'{{CWD}}'*'{{DIRTY}}'*) ;;
+  *) exit 0 ;;
+esac
 
-CONTEXT=${TEMPLATE//'{{CWD}}'/$CWD_SAFE}
-CONTEXT=${CONTEXT//'{{DIRTY}}'/$DIRTY_SAFE}
+T1=${TEMPLATE%%'{{CWD}}'*}
+REST=${TEMPLATE#*'{{CWD}}'}
+T2=${REST%%'{{DIRTY}}'*}
+T3=${REST#*'{{DIRTY}}'}
+case "$T1$T2$T3" in
+  *'{{CWD}}'* | *'{{DIRTY}}'*) exit 0 ;;
+esac
+
+CONTEXT="$T1$CWD_SAFE$T2$DIRTY_SAFE$T3"
 
 jq -n --arg ctx "$CONTEXT" '{
   hookSpecificOutput: {
