@@ -4,7 +4,17 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.7.0
+v0.7.1
+
+### v0.7.0 → v0.7.1 の変更点
+
+モデル別 2 プロンプトファイル (`always-fable.md` / `always-sonnet.md`) と `hooks.json` の 4 type:agent entries の同期ドリフトを検出する構造 lint CI の新設です (#178、親 issue #173)。敵対的レビューで「ドリフト防止を担保する lint は現状存在しない」と指摘された箇所への対処。
+
+- **`plugins/agent-discipline/scripts/lint-prompt-sync.sh` を新設**: 2 つの構造チェックを行う POSIX sh スクリプト。チェック 1 は `always-fable.md` / `always-sonnet.md` から `<!-- rule:<id> -->` の ID 集合を抽出し完全一致を検証する (意味的ドリフト = ルール本文の表現差は対象外とし PR レビューに委ねる)。チェック 2 は `hooks.json` の 4 entries (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) の prompt から entry 固有部分 (対象コマンド名の記載箇所、`gh pr create` のみが持つ Closes 検証 Step とそれに伴う Step 番号の繰り下がり、`gh pr create` / `gh pr edit` が共有する PR 固有の判定原則追加文) を jq + sed で正規化・除去したうえで共通ブロックの byte-identical 一致を検証する。両チェックとも fail 時は diff 形式で乖離箇所を報告する
+- **`.github/workflows/agent-discipline-prompt-lint.yml` を新設**: `always-fable.md` / `always-sonnet.md` / `hooks.json` / lint スクリプト自身 / 本 workflow 自身のいずれかが変更された `push` (master) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `lint-prompt-sync.sh` を実行する。ubuntu-latest には jq が標準搭載されているため追加セットアップ step は無い
+- **TDD 2 段階の開発フロー**: Phase A (契約を全文コメントとして書いた no-op 骨格の設計記述 commit) → Phase B (本 PR、実装本体 + 受入基準 3 件の意図的破壊テストで fail 挙動を確認) の 2 commit 構成を採用した
+- **受入基準の検証**: (1) 現行リポジトリ状態で両チェックが pass すること、(2) `always-fable.md` からルール ID を 1 つ一時削除するとチェック 1 が fail すること、(3) `hooks.json` の共通ブロック 1 箇所 (`gh issue edit` entry の禁止カテゴリ列挙内の一語) を一時改変するとチェック 2 が fail することを、いずれも実行して確認した (確認後は revert 済み)
+- **version bump**: `0.7.0` → `0.7.1` (patch)。lint スクリプトを plugin 配下 (`scripts/`) に追加したため。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.6.0 → v0.7.0 の変更点
 
@@ -309,6 +319,32 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 - 「issue の実装を始める」
 - 「issue を pick up する」
 
+### CI (lint)
+
+モデル別 2 プロンプトファイルと `hooks.json` の 4 entries は内容を手で同期する必要があるため、うっかり片方だけ更新して drift する事故を CI で検出します (v0.7.1 新設、#178)。
+
+#### lint-prompt-sync.sh
+
+**ファイル**: `scripts/lint-prompt-sync.sh` (plugin 直下、`hooks/` 配下ではない)
+**呼び出し元**: `.github/workflows/agent-discipline-prompt-lint.yml`
+
+**動作**:
+
+- **チェック 1 (ルール ID 一致)**: `hooks/prompts/always-fable.md` と `hooks/prompts/always-sonnet.md` から `<!-- rule:<id> -->` コメントの ID 集合を抽出し、順序に依らず完全一致するか検証する。片方にのみ存在する ID があれば diff 形式で報告して fail する。ルール本文の表現差 (意味的ドリフト) は検出対象外とし、PR レビューでの目視確認に委ねる
+- **チェック 2 (hooks.json 4 entries 共通ブロック一致)**: `hooks/hooks.json` の 4 つの `type: agent` entry (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) の `prompt` から、entry 固有部分を除いた「共通ブロック」が一致するか検証する。entry 固有部分として除去する対象は 3 種類:
+  1. 対象コマンド名の記載箇所 (`if` フィールドから機械導出した `gh <cmd>` をプレースホルダに置換)
+  2. `gh pr create` のみが持つ Closes 検証 Step (Step 3) と、それに伴う「返り値」Step の番号繰り下がり (Step 4 → Step 3 相当への読み替え)
+  3. `gh pr create` / `gh pr edit` が共有する PR 固有の判定原則追加文 (「PR body で commit/discussion 経由でユーザ承認が明示されている文脈は禁止対象外」)
+  正規化後の 4 entries が byte-identical でなければ diff 形式で乖離箇所を報告して fail する
+- **引数**: なし。**実行位置**: リポジトリルートを前提とする (それ以外や前提ファイル欠如は fail-closed で exit 1)。**依存**: `jq` (CI・ローカルとも前提。不在時は明確なエラーメッセージで exit 1)。**exit code**: 両チェック pass で 0、いずれか fail または実行時エラーで 1
+- POSIX sh (`#!/bin/sh`) で記述しており `dash` でも動作する。ローカルでリポジトリルートから直接実行できる (`./plugins/agent-discipline/scripts/lint-prompt-sync.sh`)
+
+#### agent-discipline-prompt-lint (workflow)
+
+**ファイル**: `.github/workflows/agent-discipline-prompt-lint.yml`
+
+`always-fable.md` / `always-sonnet.md` / `hooks.json` / lint スクリプト自身 / 本 workflow 自身のいずれかが変更された `push` (master 向け) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `actions/checkout@v4` の後に `lint-prompt-sync.sh` を実行する。ubuntu-latest には `jq` が標準搭載されているため追加のセットアップ step は無い。
+
 ## 旧 plugin との関係 (移行ガイド)
 
 agent-discipline は以下の 2 plugin を吸収統合しています:
@@ -372,13 +408,18 @@ agent-discipline/
 │   │   └── SKILL.md
 │   └── issue-start/
 │       └── SKILL.md
+├── scripts/
+│   └── lint-prompt-sync.sh
 └── README.md
 ```
+
+`.github/workflows/agent-discipline-prompt-lint.yml` (リポジトリ直下、plugin 配布に含まれない CI 専用 workflow) が `scripts/lint-prompt-sync.sh` を呼び出します。
 
 ## 必要な実行環境
 
 - `bash`
 - `jq`
+- POSIX `sh` (`lint-prompt-sync.sh` の実行、CI (`ubuntu-latest`) およびローカル)
 - `git` (check-uncommitted-on-session-start.sh のみ)
 
 ## 関連プラグイン

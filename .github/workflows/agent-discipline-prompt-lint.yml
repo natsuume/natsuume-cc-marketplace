@@ -5,8 +5,8 @@ name: agent-discipline-prompt-lint
 # 検証する構造 lint CI (#178)。 チェック内容の詳細契約はスクリプト本体のヘッダコメントを参照:
 #   plugins/agent-discipline/scripts/lint-prompt-sync.sh
 #
-# 現時点 (Phase A: 設計記述 commit) ではスクリプト本体は no-op (exit 0) のため、 本 workflow は
-# 常に成功する。 実装本体は Phase B で追加する。
+# ubuntu-latest には jq が標準搭載されているため、 スクリプトが依存する jq の追加
+# セットアップ step は不要 (jq 不在時はスクリプト自身が明確なエラーで exit 1 する)。
 
 on:
   pull_request:
