@@ -1,0 +1,42 @@
+name: agent-discipline-prompt-lint
+
+# agent-discipline plugin のモデル別 2 プロンプトファイル (always-fable.md / always-sonnet.md)
+# と hooks.json の 4 type:agent entries (gh issue/pr create/edit) が同期ドリフトしていないかを
+# 検証する構造 lint CI (#178)。 チェック内容の詳細契約はスクリプト本体のヘッダコメントを参照:
+#   plugins/agent-discipline/scripts/lint-prompt-sync.sh
+#
+# ubuntu-latest には jq が標準搭載されているため、 スクリプトが依存する jq の追加
+# セットアップ step は不要 (jq 不在時はスクリプト自身が明確なエラーで exit 1 する)。
+
+on:
+  pull_request:
+    paths:
+      # ルール ID コメントを持つモデル別プロンプトファイル (チェック 1 の対象)
+      - "plugins/agent-discipline/hooks/prompts/always-fable.md"
+      - "plugins/agent-discipline/hooks/prompts/always-sonnet.md"
+      # type:agent 4 entries を持つ hook 設定 (チェック 2 の対象)
+      - "plugins/agent-discipline/hooks/hooks.json"
+      # lint スクリプト自身と本 workflow 自身 (契約変更時も CI が追従することを保証する)
+      - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
+      - ".github/workflows/agent-discipline-prompt-lint.yml"
+  push:
+    branches: [master]
+    paths:
+      - "plugins/agent-discipline/hooks/prompts/always-fable.md"
+      - "plugins/agent-discipline/hooks/prompts/always-sonnet.md"
+      - "plugins/agent-discipline/hooks/hooks.json"
+      - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
+      - ".github/workflows/agent-discipline-prompt-lint.yml"
+
+jobs:
+  prompt-sync:
+    name: agent-discipline prompt sync lint (rule ID set + hooks.json common block)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # lint-prompt-sync.sh は引数を取らず、 リポジトリルートからの相対パスで
+      # always-fable.md / always-sonnet.md / hooks.json を参照する契約のため、
+      # working-directory を指定せずリポジトリルートのまま実行する。
+      - name: Run lint-prompt-sync.sh (rule ID set + hooks.json common block sync check)
+        run: ./plugins/agent-discipline/scripts/lint-prompt-sync.sh
