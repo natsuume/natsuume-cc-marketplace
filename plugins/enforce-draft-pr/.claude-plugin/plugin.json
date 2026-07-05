@@ -1,5 +1,5 @@
 {
   "name": "enforce-draft-pr",
-  "version": "0.2.2",
-  "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)。v0.2.2 で共有 lib cmd-parser.sh の split_command のバグを修正: quote 内の生改行がそのまま segment に残っていたため、呼び出し側が segment 内部の改行を境界と誤認し得る潜在バグがあった (quote 内改行は空白 1 文字に正規化して 1 segment のまま保持するよう修正)。git-guardrails / pre-push-review の cmd-parser.sh と byte-identical に sync (本プラグインは normalize_line_continuations / unquote_token のみ使用のため挙動は不変)。v0.2.1 で env-skip ループが現コマンド境界を越境して次コマンドの `pr create` まで届き重複 --draft 挿入になる parser bug を修正 (`FOO=bar; gh pr create` のような連結で発火)。v0.2.0 で検出を cmd-parser.sh ベースのトークン化に刷新し、引数値内 --draft の誤検知 / global option / cd・env prefix チェーン / 行継続 / --draft=true・-d の取りこぼしを解消 (複数行 body は破壊せず温存)"
+  "version": "0.2.3",
+  "description": "gh pr create に --draft を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft で作成させ、レビューを経て ready 化する運用を支える。"
 }

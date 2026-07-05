@@ -62,35 +62,39 @@ fi
 
 # markdown の inline code (`...`) / コードフェンス (```) 内に埋め込むため、 値に含まれる
 # バックティックを single-quote に中立化してレンダリング崩れを防ぐ (injection は
-# 起きない — unquoted heredoc は変数値内の $(...)/バックティックを再評価せず、 後段の jq が
-# JSON エスケープする。 git porcelain の各行は status 2 文字 + space 始まりなので閉じフェンス化は
-# 通常起きないが、 inline `$CWD` やレンダラ差異への defense-in-depth)。
+# 起きない — bash のパラメータ展開置換は置換文字列内の $(...)/バックティックを再評価せず、
+# 後段の jq が JSON エスケープする。 git porcelain の各行は status 2 文字 + space 始まりなので
+# 閉じフェンス化は通常起きないが、 inline `$CWD` やレンダラ差異への defense-in-depth)。
 DIRTY_SAFE=${DIRTY//\`/\'}
 CWD_SAFE=${CWD//\`/\'}
 
-CONTEXT=$(cat <<EOF
-Auto mode セッション開始後・最初のプロンプト時点での未コミット変更チェック:
+# 注入本文のテンプレートは hooks/prompts/uncommitted-check.md に定義する (プロンプトを
+# sh に直接埋め込むと視認性・メンテナンス性が下がるため分離)。
+# {{CWD}} / {{DIRTY}} の穴埋めは ${var//pat/repl} を使わず、 プレースホルダ位置で
+# テンプレートを 3 分割してから連結する。 bash 5.2+ の patsub_replacement (既定 on) は
+# 置換文字列中の unquoted & をマッチ文字列へ展開するため、 & を含む path / status 行が
+# 「a&b」→「a{{CWD}}b」 のように壊れる (codex review P2)。 分割・連結は全 bash で完全に
+# リテラル扱いで、 分割をすべて元テンプレートに対して行うため置換値が再走査されることも
+# 無い (値に {{...}} が含まれても安全)。 bash 3.2 (macOS) 互換。
+# テンプレートが読めない、 またはプレースホルダが「{{CWD}} → {{DIRTY}} の順に各 1 回」 の
+# 形状でない場合は fail-open で無音終了する (マーカーは設置済みだが、 対象は静的ファイル
+# なので同 session 内の再試行に意味は無い)。
+PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
+TEMPLATE=$(cat "$PROMPTS_DIR/uncommitted-check.md" 2>/dev/null)
+case $TEMPLATE in
+  *'{{CWD}}'*'{{DIRTY}}'*) ;;
+  *) exit 0 ;;
+esac
 
-**まず以下の未コミット変更が「今回のタスクの対象」か「以前の残骸」かを Claude が一次分析し、独断で commit せず分類結果と推奨アクションをユーザに簡潔に報告して同意を取ること。**
+T1=${TEMPLATE%%'{{CWD}}'*}
+REST=${TEMPLATE#*'{{CWD}}'}
+T2=${REST%%'{{DIRTY}}'*}
+T3=${REST#*'{{DIRTY}}'}
+case "$T1$T2$T3" in
+  *'{{CWD}}'* | *'{{DIRTY}}'*) exit 0 ;;
+esac
 
-\`$CWD_SAFE\` の未コミット変更:
-
-\`\`\`
-$DIRTY_SAFE
-\`\`\`
-
-分析手順:
-1. \`git diff\` / \`git diff --staged\` / \`git log -5 --oneline\` を見て出所を推定
-2. 各ファイルを以下のいずれかに分類:
-   - **(a) 今回のタスクに関連** — 作業継続として stage / commit
-   - **(b) 以前のタスクの残骸** — 別ブランチ / 別コミット / 削除
-   - **(c) 中間状態** — \`git stash\` で退避
-   - **(d) 不明** — ユーザに分類を依頼
-3. 推奨アクションを 1〜数行でユーザに報告し**ユーザの明示的な応答を待つ** (例: 「X は (a) として commit に含めます。進めてよろしいですか?」)。応答を得るまで git add / commit / stash / branch 切り出し / push は行わない
-
-すべてが明らかに (a) かつ小規模な場合でも、**1 行で良いので必ず報告し、ユーザの応答 (例: "ok" / "進めて") を確認してから進む**。auto mode でも本ステップは「report-and-wait」を必ず守ること (誤分類で誰かの未公開作業を push する事故を防ぐため)。agent-discipline の after 系 commit→PR→merge フローは、この分類確定とユーザ応答後に進めること。
-EOF
-)
+CONTEXT="$T1$CWD_SAFE$T2$DIRTY_SAFE$T3"
 
 jq -n --arg ctx "$CONTEXT" '{
   hookSpecificOutput: {

@@ -10,29 +10,29 @@
     {
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
-      "description": "GitHub Flow に準拠した Git ワークフローを構造強制するプラグイン。デフォルトブランチへの直接書き込み経路 (commit / push / PR head) をすべて deny し、変更は GitHub 上の PR merge 経由のみで取り込む。rebase ワークフロー Skill も提供。v0.4.0 で 3 hook (push/commit/pr) の検出方式を、改行を無条件に `;` へ正規化してから quote 非対応の regex で invocation を検出する方式から、pre-push-review と同じ cmd-parser.sh (split_command + tokenize_segment) ベースの segment/token 検出へ移行 (#135, #136, #137)。quote 内・heredoc 内の「コマンド例文」を実コマンドと誤認して deny する false-positive を解消し、共有 lib cmd-parser.sh の quote 内改行バグも修正して pre-push-review / enforce-draft-pr へ sync。v0.3.2 で README 内 version 見出しの drift (v0.3.0 のまま) を解消し v0.3.0 → v0.3.1 の cross-plugin sync changelog を backfill。v0.3.1 で関連プラグイン pre-push-review の README 記述を v2.0.0 仕様 (/pre-push-review:review slash command による 3 レビュー並列起動) に同期。v0.3.0 で 3 hook に診断 EXIT trap を追加し予期せぬ非ゼロ終了 (保護の無音 fail-open) を可視化、checkout pathspec / remote 名 master の false-positive を既知制約として明記、README を実態に追随",
-      "version": "0.4.0",
+      "description": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / PR head 指定) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。リモートのデフォルトブランチ変更を作業ブランチへ取り込む rebase ワークフローの Skill も同梱。",
+      "version": "0.4.1",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
       "name": "enforce-draft-pr",
       "source": "./plugins/enforce-draft-pr",
-      "description": "gh pr create に --draft を自動付与する PreToolUse フックプラグイン (任意導入)。v0.2.2 で共有 lib cmd-parser.sh の split_command のバグ (quote 内改行が segment に生のまま残る) を修正し、git-guardrails / pre-push-review の cmd-parser.sh と byte-identical に sync (本プラグインは normalize_line_continuations / unquote_token のみ使用のため挙動は不変)。v0.2.1 で env-skip ループが現コマンド境界を越境して次コマンドの `pr create` まで届き重複 --draft 挿入になる parser bug を修正 (`FOO=bar; gh pr create` 形式で発火)。v0.2.0 で検出を cmd-parser.sh ベースのトークン化に刷新し、引数値内 --draft の誤検知 / global option / cd・env prefix チェーン / 行継続 / --draft=true・-d の取りこぼしを解消 (複数行 body は破壊せず温存)",
-      "version": "0.2.2",
+      "description": "gh pr create に --draft を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft で作成させ、レビューを経て ready 化する運用を支える。",
+      "version": "0.2.3",
       "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
       "name": "auto-lint-check",
       "source": "./plugins/auto-lint-check",
-      "description": "ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン。v0.4.0 で config-root 探索に ESLint/Prettier のモダン変種 (eslint.config.{mts,cts} / prettier.config.{ts,mts,cts} / .prettierrc.{json5,ts}) を追加し README の表記と一致させ、lint ループの stale RC を初期化で防ぎ、fail-open/fail-closed ポリシーを各 hook に明示し、異常終了を可視化する診断 EXIT trap を追加",
+      "description": "ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン",
       "version": "0.4.0",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
     },
     {
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
-      "description": "git push 前に pre-push-review:code-reviewer subagent (self-contained correctness バグ検出) + pre-push-review:codex-reviewer subagent (codex review wrapper `run-codex-review.sh` を foreground 起動して output を report として返す) + pre-push-review:security-reviewer subagent (self-contained security review) の 3 subagent によるレビューを強制し、 PostToolUse / wrapper script で実行完了を自動検知してブランチ全差分との同一性を検証することで未レビューな commit が remote に到達するのを構造的にブロックするプラグイン (pre-commit-review の後継)。 v3.0.1 で共有 lib cmd-parser.sh の split_command のバグ (quote 内改行が segment に生のまま残り、呼び出し側の read ループが偽の segment 分割を起こし得る) を修正し、git-guardrails / enforce-draft-pr の cmd-parser.sh へも byte-identical で sync (本プラグインの hook 挙動は不変)。 v3.0.0 で 3 レビューすべてを subagent 経由に統一 (互換破壊のため major bump): v2.x の Skill `/code-review` は `pre-push-review:code-reviewer` subagent に、 v2.x の Bash 直接起動の codex review wrapper は `pre-push-review:codex-reviewer` subagent に置換した。 設計のメリットは context isolation (各レビューの詳細出力が subagent context に閉じ込められ親 session の context を圧迫しない) と起動経路の単一化 (3 軸とも Agent / Task tool)。 marker 書き込み経路は 2 軸 (code / security) が Agent 完了検知、 1 軸 (codex) が wrapper 内部書き込みで非対称が残るが (wrapper の dirty 検知と verdict 非依存 atomic rename の防御を維持するため意図的)、 親 session 側の起動 API は統一された。 auto-mark.sh は v3.0.0 で (a) Skill 検知を全廃し subagent_type のみを検知する形に簡略化、 (b) name-only (`code-reviewer` / `security-reviewer` 単独) 受理を廃止し namespace prefix `pre-push-review:` 必須にした (他 plugin の同名 subagent との衝突で push gate を bypass する経路を構造的に塞ぐため)。 codex-reviewer subagent は wrapper を内部起動するだけで marker は wrapper 自身が atomic rename で書く設計を維持 (silent-pass 防止)。 既存 marker file 名と hash 計算式は不変なので v2.x marker は v3.0.0 でも hash 一致時に有効。 v2.0.0 から継続する `/pre-push-review:review` slash command は 3 subagent を **同じアシスタントメッセージで並列に** 起動する確定的フローで、 wall-clock は最遅レビュー 1 本の時間で完了する。 v1.x の /simplify (cleanup-only) マーカーは v2.0.0 で削除し bug 検出 + bug 検出 (OpenAI codex) + security の 3 軸 defense-in-depth に純化、 CC version 依存の fail-open 緩和も同時に削除して 3 マーカー常時必須化。",
-      "version": "3.0.1",
+      "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。3 レビューを subagent として並列起動する /pre-push-review:review コマンドを提供し、レビュー済みマーカーとブランチ全差分の同一性検証によって、未レビューの commit が remote に到達するのを構造的にブロックする。",
+      "version": "3.0.2",
       "keywords": ["push", "review", "quality", "codex", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
@@ -45,22 +45,22 @@
     {
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
-      "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供し、/natsuume-statusline:setup で settings.json に登録するプラグイン。v0.5.0 で 2 行目を横幅に合わせ段階的に簡略化 (使用率の四捨五入整数化→ctx% 削除→バー短縮→バー削除) し、切り詰める前に情報を保ったまま縮退。v0.4.0 で context 表示をバーから数値 (例: ctx: (45%) 75.1k/1M) に変更。v0.2.0 で setup が version 固有 cache パスを焼き込んで plugin update 後に statusline が無言で壊れる問題を修正 (~/.claude 配下に安定 wrapper を設置し実行時に最新版を解決)",
+      "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) をプラグインとして提供し、/natsuume-statusline:setup で ~/.claude/settings.json に登録するプラグイン",
       "version": "0.5.0",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
-      "description": "Claude Code の振る舞い規律を統合配送する system prompt plugin + gh issue/pr 物理層検知。 SessionStart で常時適用ルール (物理層 = Bash コマンド分解 / before 系 = 設計事前壁打ち + issue 詳細化 + sub-issue + #N 相互参照 + PR closing keyword 規約 / during 系 = 自律作業中の判断境界 / 排他系 = 連続 issue 解決時の claim comment + branch push 二段排他制御) を 1 回 inject。 auto mode 時のみ UserPromptSubmit で after 系 (commit→push→PR→merge 自走 + マージ前提条件 hard gate) を per-turn inject。 v0.4.0 で PreToolUse type:agent hook を追加し、 gh issue|pr create|edit の body content (--body inline / --body-file PATH 両対応) をセクション 2.1 / 3.1 の禁止表現規範で semantic 検証 → 違反時 block。 model はメイン session と同じ claude-opus-4-7 に pin し、 旧 llm-default-branch-push-poc 型の非対称 SPOF (session 生存中に hook 用 haiku のみ落ちる経路) を構造的に排除。 各 hook に `if: \"Bash(gh <cmd>:*)\"` filter を付与した 4 entries (gh issue create / edit / pr create / edit) 構成で、 非該当 Bash 呼び出しでは agent subagent を起動しない真の narrow scope を確保 (= prompt 内 early return では subagent は起動済みのため narrow scope が成立しないという codex review P1 指摘への対処)。 加えて各 prompt 冒頭に defense-in-depth command guard (Step 0) を置き、 複雑な command で `if` が fail-permissive で fall through した場合の偽 trigger を二段目で catch (= codex P2 指摘への対処)。 v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定化は要承認」 非対称ルールへ強化",
-      "version": "0.4.0",
+      "description": "Claude Code の作業規律を配送するプラグイン。SessionStart で常時適用ルール (Bash コマンド分解、設計判断のユーザ事前確認、issue 起票の詳細化、連続 issue 解決時の排他制御など) を注入し、auto mode では commit→push→PR→merge の自走方針を配送する。gh issue/pr の body に紛れ込む未承認の推奨表現も PreToolUse で検知して block する。",
+      "version": "0.4.1",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
       "name": "fable-discipline",
       "source": "./plugins/fable-discipline",
-      "description": "v0.3.0 で誘導層と deny メッセージを Fable 5 / Sonnet 5 公式プロンプトガイドに整合: 並列・非同期委任 (完了を待たず作業継続、介入条件はエスカレーション発動条件に統一)、fresh-context verifier による検収の一次検証、SendMessage による同一エージェント継続 (Workflow agent() は対象外の注記付き)、effort の難度別明示 (機械的=low / 検証・判定=high 以上、Agent ツールに effort が無い場合の代替文言)、self-contained 要件への目的・背景の追加 (判断を委ねる根拠にしない限定付き)、literal 解釈を踏まえた一括修正の適用範囲明示と調査・レビュー系委任の coverage-first (自己フィルタ禁止・confidence/severity 付き全件報告)、エスカレーション返却への根拠添付と受領時の grounding (申告を鵜呑みにしない)、Haiku 許容の誘導層・防波堤層間の統一、B-1 deny の報告+依頼型化 (env の独断書き換え禁止)。Fable (Mythos 級モデル) をメインセッションで使う際の分業規律 plugin。誘導層 = SessionStart で「Fable は曖昧さの分解・他モデル向け指示書作成・全体設計検討・検収に徹し、実装と具体調査は Sonnet/Opus (機械的作業は Haiku 可) のサブエージェントへ self-contained な指示 (実作業者が意思決定不要な粒度) で委任する。数行規模の自明な修正のみ直接編集可 (迷えば委任側)、fork は原則禁止」をハイブリッド方式 (stdin の model が fable = 無条件文 / 欠落 = 自己ゲート文 / 非 fable = 注入なし) で注入し、session model を state file に記録。防波堤層 = PreToolUse (Agent|Task) command hook。判定順序をモデル解決順序 (env > 明示指定 > 継承) と一致させ、CLAUDE_CODE_SUBAGENT_MODEL が fable を指す場合は model の値に依らず無条件 deny、fable 明示指定を deny、model 未指定 (\"inherit\" は trim + case-insensitive で未指定に正規化) は env が非 fable なら allow、env 不在時は state file のセッションモデルが fable の場合のみ deny (判定不能はすべて fail-open、LLM 評価は不使用。agent frontmatter の model は tool_input に現れず判定不能 = env 側でカバーする既知の制約)。主防御は CLAUDE_CODE_SUBAGENT_MODEL env 設定 (Agent の model 明示指定・agent frontmatter・Workflow 内部 agent() すべてより優先されることを CC 2.1.201 で実測検証済み) で、本 plugin はその前提を文書化しつつ env が外れた場合の defense-in-depth を提供する。Workflow 内部の agent() は PreToolUse で捕捉できないため env 側でカバーする (既知の制約)。セッション途中の /model 切替は検知できず、env 不在時は防波堤層が双方向 (fable 素通り / 誤 deny) に破れる (v0.2.0 で明文化した既知の制約、詳細は README)",
-      "version": "0.3.0",
+      "description": "Fable (Mythos 級モデル) をメインセッションで使う際の分業規律プラグイン。「Fable = 司令塔、実作業 = Sonnet/Opus サブエージェント」の役割分担と委任プロトコルを SessionStart で注入し (誘導層)、サブエージェントが Fable で実行される経路を PreToolUse で deny する (防波堤層)。主防御は CLAUDE_CODE_SUBAGENT_MODEL 環境変数で、本プラグインはその defense-in-depth を担う。",
+      "version": "0.3.1",
       "keywords": ["fable", "model-cost", "subagent", "delegation", "system-prompt", "hook", "guardrail", "workflow"]
     }
   ]

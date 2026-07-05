@@ -16,7 +16,15 @@
 
 ## バージョン
 
-v3.0.0 (前身: `pre-commit-review` v0.4.0)
+v3.0.2 (前身: `pre-commit-review` v0.4.0)
+
+### v3.0.1 → v3.0.2 の変更点
+
+plugin description (plugin.json / marketplace.json) を人間向けの簡潔な概要に刷新しました (変更履歴・実装詳細は本 README のバージョン節へ集約)。hook の動作変更はありません。
+
+### v3.0.0 → v3.0.1 の変更点
+
+共有 lib cmd-parser.sh の split_command のバグを修正しました: quote (`'...'`/`"..."`) 内の生改行がそのまま segment に残っていたため、呼び出し側の `while IFS= read -r line; do ... done < <(split_command ...)` が segment 内部の改行を次 segment との境界と誤認し、1 segment が複数行に分裂する潜在バグがありました (quote 内改行は空白 1 文字に正規化して 1 segment のまま保持するよう修正)。git-guardrails / enforce-draft-pr の cmd-parser.sh へも byte-identical で sync。挙動修正のみで本プラグインの hook の deny/allow 判定ロジックは不変です。
 
 ### v2.0.1 → v3.0.0 の変更点 (互換破壊あり)
 
