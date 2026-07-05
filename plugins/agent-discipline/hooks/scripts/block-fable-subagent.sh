@@ -14,7 +14,7 @@
 #      a. env が非空 → allow (env が継承を非 fable モデルへ上書きするため安全)
 #      b. env 不在: inject-always.sh が SessionStart で記録した session model state が
 #         fable の場合のみ deny
-#      c. env 不在 + state 不明 (#200 設計契約、実装は Phase B): pending マーカー
+#      c. env 不在 + state 不明 (#200 で実装済み): pending マーカー
 #         `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` が存在する場合は
 #         deny する。判定不能セッションの実体が Fable のとき、未指定継承は継承先が Fable に
 #         なり、この時点では state も未確定のため他の防御が効かない (PR #199 codex P2)。
@@ -119,6 +119,13 @@ fi
 
 STATE_FILE="${TMPDIR:-/tmp}/agent-discipline-state/model-$SAFE_SESSION_ID"
 if [ ! -r "$STATE_FILE" ]; then
+  # 3c/3d (#200 で実装済み): state 不明。pending マーカーが存在する場合、このセッションは
+  # モデル判定不能期間中であり、実体が Fable なら未指定継承の継承先が Fable になる
+  # (PR #199 codex P2)。pending マーカーも無い真の情報ゼロの場合のみ従来どおり fail-open。
+  PENDING_MARKER="${TMPDIR:-/tmp}/agent-discipline-state/pending-model-$SAFE_SESSION_ID"
+  if [ -e "$PENDING_MARKER" ]; then
+    deny "agent-discipline: このセッションはモデル判定不能期間 (pending) のため、model 未指定 (継承) のサブエージェント起動を一時的に deny しています。継承先が Fable になる可能性があり、この期間は state が未確定で検知できません。model に非 Fable モデル (例: sonnet) を明示して再実行するか、会話を 1 turn 進めて one-shot 補正でモデルが確定するのを待ってから再実行してください。"
+  fi
   exit 0
 fi
 
