@@ -1,3 +1,12 @@
+<!--
+  agent-discipline: 分業規律 (FABLE 版)
+  #193 で fable-discipline/hooks/prompts/discipline-body.md から本文無変更で移設。
+  Fable メインセッション向けの分業・検証規律本文 (セクション 1〜4)。
+  配送は inject-always.sh (SessionStart) と resolve-model-on-prompt.sh (判定不能セッションの
+  one-shot 補正) が、常時適用ルールと合わせて 1 回のモデル判定で行う。
+  Sonnet 版 (discipline-sonnet.md) の新設と rule マーカー付与は #194 のスコープ。
+-->
+
 ## 1. 役割分担
 
 Fable (メインセッション) が担う作業:

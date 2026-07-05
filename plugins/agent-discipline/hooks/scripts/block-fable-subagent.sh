@@ -12,7 +12,7 @@
 #   2. tool_input.model が非 fable の具体指定 → allow (Step 0 より env は非 fable 確定)
 #   3. tool_input.model 未指定 (= 継承経路):
 #      a. env が非空 → allow (env が継承を非 fable モデルへ上書きするため安全)
-#      b. env 不在: inject-fable-role.sh が SessionStart で記録した session model state が
+#      b. env 不在: inject-always.sh が SessionStart で記録した session model state が
 #         fable の場合のみ deny。state 不明なら allow (fail-open)
 #
 # 正規化ポリシー:
@@ -84,12 +84,12 @@ fi
 
 # 0. env が fable を強制していれば、モデル解決の最上位で fable が確定するため無条件 deny
 if [ -n "$ENV_SUB" ] && printf '%s' "$ENV_SUB" | grep -qi 'fable'; then
-  deny "fable-discipline: CLAUDE_CODE_SUBAGENT_MODEL が fable を指しており、model の明示指定より優先されて全サブエージェントが Fable で実行されます。この env はセッションを超える設定のため独断で書き換えず、この状態をユーザに報告して、settings.json 等の env 設定を sonnet / opus へ修正するよう依頼してください。"
+  deny "agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL が fable を指しており、model の明示指定より優先されて全サブエージェントが Fable で実行されます。この env はセッションを超える設定のため独断で書き換えず、この状態をユーザに報告して、settings.json 等の env 設定を sonnet / opus へ修正するよう依頼してください。"
 fi
 
 # 1. fable の明示指定は deny
 if printf '%s' "$TOOL_MODEL" | grep -qi 'fable'; then
-  deny "fable-discipline: サブエージェントに Fable を指定しないでください。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。CLAUDE_CODE_SUBAGENT_MODEL が設定された環境では、ここで指定した値もどのみち env 値に上書きされ、意図したモデルでは実行されません。"
+  deny "agent-discipline: サブエージェントに Fable を指定しないでください。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。CLAUDE_CODE_SUBAGENT_MODEL が設定された環境では、ここで指定した値もどのみち env 値に上書きされ、意図したモデルでは実行されません。"
 fi
 
 # 2. 非 fable の具体指定は allow (Step 0 より env は非 fable 確定なので上書きされても安全)
@@ -108,14 +108,14 @@ if [ -z "$SAFE_SESSION_ID" ]; then
   exit 0
 fi
 
-STATE_FILE="${TMPDIR:-/tmp}/fable-discipline-state/model-$SAFE_SESSION_ID"
+STATE_FILE="${TMPDIR:-/tmp}/agent-discipline-state/model-$SAFE_SESSION_ID"
 if [ ! -r "$STATE_FILE" ]; then
   exit 0
 fi
 
 SESSION_MODEL=$(cat "$STATE_FILE" 2>/dev/null)
 if printf '%s' "$SESSION_MODEL" | grep -qi 'fable'; then
-  deny "fable-discipline: model 未指定のサブエージェントはメインセッション (Fable) のモデルを継承します。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。この deny が出た時点で CLAUDE_CODE_SUBAGENT_MODEL は未設定 (または inherit) のため、主防御である env の設定 (sonnet 等) をユーザに提案するのも有効です。"
+  deny "agent-discipline: model 未指定のサブエージェントはメインセッション (Fable) のモデルを継承します。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。この deny が出た時点で CLAUDE_CODE_SUBAGENT_MODEL は未設定 (または inherit) のため、主防御である env の設定 (sonnet 等) をユーザに提案するのも有効です。"
 fi
 
 exit 0

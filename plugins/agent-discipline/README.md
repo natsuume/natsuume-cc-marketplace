@@ -150,7 +150,7 @@ claude plugin install agent-discipline@natsuume-plugins
   3. state file `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` (同一セッションの過去 SessionStart で確定した値のキャッシュ。transcript が空 (/clear 直後等) / 読めない場合の最後の砦で、`/model` 切替を跨ぐと stale になりうるため transcript より後に置く)
   4. いずれも空 → 判定不能
 - **適用規則**: モデル ID (小文字化) が `fable` を含む → `always-fable.md`。`sonnet` を含む、または非空でそのいずれでもない (opus / haiku 等) → `always-sonnet.md`。判定不能 → `preamble-self-gate.md` + `always-sonnet.md` を注入し、state file の代わりに pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を作成する (後続の `resolve-model-on-prompt.sh` が補正)
-- 判定不能以外の 3 分岐では、確定したモデル ID を毎回 state file に書き込む (fable-discipline の `inject-fable-role.sh` と同じ sanitize 方式)
+- 判定不能以外の 3 分岐では、確定したモデル ID を毎回 state file に書き込む (v0.8.0 で統合前の fable-discipline (`inject-fable-role.sh`) と同じ sanitize 方式)
 - `SessionStart` は `startup` 以外に `resume` / `clear` / `compact` でも発火するため同一セッション内で複数回呼ばれる可能性があるが、注入内容は static なので重複しても害は無い (毎回コンテキストトークンを再消費する点に留意)
 - 入力 JSON から `hook_event_name` を読み取り `hookSpecificOutput.hookEventName` に同じ値を設定 (誤った既定値で別 event の文脈に誘導しないため)
 - `jq` 不在 / 不正 JSON 入力 / 注入対象の prompts/\*.md が読めない場合はすべて無音 `exit 0` (フェイルセーフ)
@@ -282,6 +282,23 @@ v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh 
 - 違反疑い検出時は `{"ok": false}` で block を返す。 silent pass は構造的に不可逆 (= 後続 session が既決事項として読む leak が成立) なため、 false positive (= 正当な記述を誤って block) の方が recovery 可能であり、 fail-closed が論理的に正しい
 - block された Claude は reason を読み、 AskUserQuestion でユーザの decision を取り、 確定した 1 案だけを body に残して再試行する
 
+#### block-fable-subagent (v0.8.0 新設)
+
+**ファイル**: `hooks/scripts/block-fable-subagent.sh`
+**イベント**: `PreToolUse`
+**matcher**: `Agent|Task`
+
+**動作** (v0.8.0 で fable-discipline から移設。判定ロジック・deny/allow の判定順序は無変更。`STATE_DIR` のみ `${TMPDIR:-/tmp}/agent-discipline-state` に一本化し、`inject-always.sh` が書く session model state と共有する):
+
+- サブエージェントが Fable で実行される経路を deny する防波堤。判定順序は Claude Code のモデル解決順序 (`CLAUDE_CODE_SUBAGENT_MODEL` env > `tool_input.model` 明示指定 > agent frontmatter > メインセッション継承) と一致させ、すべて deterministic な文字列判定で行う (LLM 評価は使わない)
+  0. env が fable を指す → `tool_input.model` の値に依らず無条件 deny (env は明示指定より優先されるため)
+  1. `tool_input.model` に fable が明示指定されている → deny
+  2. `tool_input.model` が非 fable の具体指定 → allow (Step 0 より env は非 fable 確定)
+  3. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら allow (env が継承を非 fable モデルへ上書きするため安全)、env 不在時は `inject-always.sh` が SessionStart で記録した session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`) が fable の場合のみ deny
+- `"inherit"` (case-insensitive) は「未指定」に正規化する。判定不能な場合はすべて fail-open (allow)
+- 主防御はあくまで `CLAUDE_CODE_SUBAGENT_MODEL` env 設定。本 hook はその defense-in-depth + deny メッセージによる自己修正誘導が役割
+- 既知の制約 3 点 (agent frontmatter の model 判定不能 / Workflow 内部の `agent()` 捕捉不能 / セッション途中の `/model` 切替検知不能) は下記「既知の制約」セクション参照
+
 #### check-uncommitted-on-session-start
 
 **ファイル**: `hooks/scripts/check-uncommitted-on-session-start.sh`
@@ -412,9 +429,13 @@ agent-discipline/
 │   │   ├── always-fable.md
 │   │   ├── always-sonnet.md
 │   │   ├── auto-mode.md
+│   │   ├── discipline-fable.md
+│   │   ├── discipline-preamble-fable.md
+│   │   ├── discipline-preamble-self-gate.md
 │   │   ├── preamble-self-gate.md
 │   │   └── uncommitted-check.md
 │   └── scripts/
+│       ├── block-fable-subagent.sh
 │       ├── inject-always.sh
 │       ├── inject-auto.sh
 │       ├── resolve-model-on-prompt.sh
@@ -463,9 +484,12 @@ agent-discipline/
 - **`permission_mode` の値が `"auto"` リテラルであること前提**: Claude Code 側の仕様変更で値が変わると inject-auto.sh は無音になる。 その場合は無効化されるだけで誤動作はしない
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **`model` フィールド欠落条件は compaction 後が公式未記載** (v0.5.0、#174 V3 実測調査): 公式ドキュメントは `/clear` 後と conversation recovery でセッションが復元された場合の 2 つを model 欠落条件として明記するが、`SessionStart (source=compact)` 時の扱いは明記していない (欠落しない保証も無い)。いずれの場合も fallback chain (transcript 解析 → state file) が source 非依存に欠落を吸収するため、実装上の場合分けは発生しない
-- **セッション途中の `/model` 切替は次の SessionStart まで反映されない** (#157 と同型の制約。fable-discipline の同種制約も参照): fallback chain の判定は `SessionStart` (startup / resume / clear / compact) でのみ行われるため、`/model` で切替えても注入済みプロンプトは次の SessionStart まで旧モデル向けのまま。次の SessionStart では、`.model` があればその値で、無くても transcript に切替後の main-chain assistant 行があれば transcript 解析 (fallback chain 2 段目) で新モデルが反映される。transcript も空 / 読めない場合に限り state file キャッシュに落ちるため、その経路でのみ旧モデル向け注入が継続しうる
+- **セッション途中の `/model` 切替は次の SessionStart まで反映されない** (#157 と同型の制約。v0.8.0 で統合した `block-fable-subagent.sh` も同種の制約を持つ、本セクション内の該当項目を参照): fallback chain の判定は `SessionStart` (startup / resume / clear / compact) でのみ行われるため、`/model` で切替えても注入済みプロンプトは次の SessionStart まで旧モデル向けのまま。次の SessionStart では、`.model` があればその値で、無くても transcript に切替後の main-chain assistant 行があれば transcript 解析 (fallback chain 2 段目) で新モデルが反映される。transcript も空 / 読めない場合に限り state file キャッシュに落ちるため、その経路でのみ旧モデル向け注入が継続しうる
 - **one-shot 補正は判定不能セッションの最初の assistant 応答が生成されるまで暫定適用が続く**: `resolve-model-on-prompt.sh` は pending マーカーが存在し transcript に main-chain assistant 行が現れて初めて確定するため、それまでの `UserPromptSubmit` では自己ゲート付きの `always-sonnet.md` が暫定適用され続ける
 - **state file / pending マーカーは OS の tmp cleanup による自然消去のみ**: `${TMPDIR:-/tmp}/agent-discipline-state/` 配下に明示的なリトジ (retention) 処理は無く、`check-uncommitted-on-session-start.sh` が使う `agent-discipline-markers/` とは別 namespace を使う
+- **`block-fable-subagent.sh` は agent 定義 frontmatter の `model` を判定できない** (v0.8.0): frontmatter の `model` は `tool_input` に現れないため、env 不在 + model 未指定 + frontmatter が fable を指す構成は本 hook では捕捉不能 (env 側でカバー)。fork subagent (model 指定を無視して親モデルを継承する型) も同様に deny しない (誘導層の「原則使用しない」文言のみで運用する設計判断)
+- **`block-fable-subagent.sh` は Workflow ツール内部の `agent()` 呼び出しを PreToolUse で捕捉できない** (v0.8.0): PreToolUse はメインループのツール呼び出しにのみ発火するため、Workflow スクリプト内部のサブエージェントスポーンは本 hook の対象外 (env 側でカバー)
+- **`block-fable-subagent.sh` はセッション途中の `/model` 切替を検知できない** (v0.8.0): model を含む hook 入力は `SessionStart` のみで、`$CLAUDE_MODEL` 環境変数も存在しない。env 不在時は state file が次の `SessionStart` まで stale になり、fable への切替は素通り (旧 state で allow)、fable からの切替は誤 deny になる (deny メッセージの model 明示誘導で自己修復可能)
 
 ## 関連情報
 

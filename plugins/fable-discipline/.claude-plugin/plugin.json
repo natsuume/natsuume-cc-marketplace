@@ -1,5 +1,0 @@
-{
-  "name": "fable-discipline",
-  "version": "0.3.2",
-  "description": "Fable (Mythos 級モデル) をメインセッションで使う際の分業規律プラグイン。「Fable = 司令塔、実作業 = Sonnet/Opus サブエージェント」の役割分担と委任プロトコルを SessionStart で注入し (誘導層)、サブエージェントが Fable で実行される経路を PreToolUse で deny する (防波堤層)。主防御は CLAUDE_CODE_SUBAGENT_MODEL 環境変数で、本プラグインはその defense-in-depth を担う。"
-}
