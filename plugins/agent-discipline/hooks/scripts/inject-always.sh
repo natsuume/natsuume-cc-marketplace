@@ -62,6 +62,11 @@
 #   block-fable-subagent.sh も同 state を参照する (fable-discipline-state は廃止)
 # - resolve-model-on-prompt.sh の pending 補正 (判定不能セッションの one-shot 再配送) も
 #   上記マトリクスと同じ組で両ペイロードを配送する
+# - 判定不能セッションの実体が Fable の場合、one-shot 補正までの期間は state file 未作成のため
+#   block-fable-subagent.sh (検知層) が model 未指定継承に対して fail-open する。この期間の
+#   Fable 防御は discipline-preamble-self-gate.md の暫定指示 (モデル確定まで model を非 Fable で
+#   明示せよ) = 誘導層が唯一の防御である (意図的なトレードオフ、codex review P2 / rescue 審査)。
+#   検知層側の補強 (pending マーカー認識による未指定継承の deny) は #200 で実施する
 #
 # ## 出力 JSON 形状
 #
