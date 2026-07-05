@@ -32,22 +32,26 @@
 # `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` に書き込む
 # (fable-discipline の inject-fable-role.sh と同じ sanitize 方式)。
 #
-# ## 分業規律の併載 (#193 設計契約)
+# ## 分業規律の併載 (#193 設計契約、#194 で非 Fable 配送に拡張)
 #
 # fable-discipline plugin の統合 (#192 決定事項 2) により、本スクリプトは 1 回のモデル判定で
-# 「常時適用ルール」と「分業規律」の 2 ペイロードを注入する。#193 のスコープでは分業規律の
-# 配送マトリクスを移設前の fable-discipline (inject-fable-role.sh) と機能等価に保つ:
+# 「常時適用ルール」と「分業規律」の 2 ペイロードを注入する。#194 (決定事項 5: 配送対象は
+# 非 Fable モデル全て) 適用後の配送マトリクス (本コメントは Phase A 設計記述、実装は Phase B):
 #
-#   | モデル判定     | 常時適用ルール                           | 分業規律                                               |
-#   |----------------|------------------------------------------|--------------------------------------------------------|
-#   | fable を含む   | always-fable.md                          | discipline-preamble-fable.md + discipline-fable.md     |
-#   | sonnet を含む  | always-sonnet.md                         | 注入しない (#194 で discipline-sonnet.md を配送)       |
-#   | 非空でその他   | always-sonnet.md                         | 注入しない (同上)                                      |
-#   | 判定不能       | preamble-self-gate.md + always-sonnet.md | discipline-preamble-self-gate.md + discipline-fable.md |
+#   | モデル判定     | 常時適用ルール                           | 分業規律                                                |
+#   |----------------|------------------------------------------|---------------------------------------------------------|
+#   | fable を含む   | always-fable.md                          | discipline-preamble-fable.md + discipline-fable.md      |
+#   | sonnet を含む  | always-sonnet.md                         | discipline-sonnet.md (#194 新設)                        |
+#   | 非空でその他   | always-sonnet.md                         | discipline-sonnet.md (同上)                             |
+#   | 判定不能       | preamble-self-gate.md + always-sonnet.md | discipline-preamble-self-gate.md + discipline-sonnet.md |
 #
 # - 2 ペイロードは 1 つの additionalContext に「常時ルール → 分業規律」の順で連結し、分業規律
-#   ブロックの先頭に見出し「# agent-discipline: 分業規律 (Fable セッション)」を置く
-#   (移設前の見出し「# fable-discipline: Fable セッションの分業規律」の plugin 名表記のみ更新)
+#   ブロックの先頭に model 別の見出しを置く: fable 分岐は「# agent-discipline: 分業規律
+#   (Fable セッション)」、sonnet / その他 / 判定不能分岐は「# agent-discipline: 分業規律 (Sonnet)」
+#   (常時ルールの「(Sonnet)」表記と同じ規則。非 Fable 用の本文が Sonnet 向け書式のため)
+# - 見出しを参照する self-gate (preamble-self-gate.md / discipline-preamble-self-gate.md) の
+#   境界記述は、model 別見出しの導入に伴い「# agent-discipline: 分業規律」で始まる見出し、という
+#   プレフィクス一致で書く (見出し文字列の完全一致参照にすると model 分岐ごとに文言が割れるため)
 # - 分業規律ブロックは additionalContext の末尾に置くこと (制約)。判定不能時の自己ゲート
 #   (discipline-preamble-self-gate.md) は無視の射程を「見出し〜メッセージ末尾」で定義しており、
 #   分業規律より後ろに別ペイロードを追加するとそれも無視射程に入る。後続ペイロードを追加する
