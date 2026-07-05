@@ -166,6 +166,39 @@
 #      同型の運用方針)。
 #
 # ============================================================================
+# チェック 4 (新設, #195): 分業規律 2 ファイルの rule ID セット一致
+# ============================================================================
+#
+# 対象ファイル:
+#   - plugins/agent-discipline/hooks/prompts/discipline-fable.md
+#   - plugins/agent-discipline/hooks/prompts/discipline-sonnet.md
+#
+# 背景:
+#   #194 で分業規律がモデル別 2 ファイル化された (rule ID: role-split / delegation-rules /
+#   delegation-instruction / escalation)。常時ルール 2 ファイルにはチェック 1 があるが
+#   分業規律には同期検証が無く、PR #191 のレビューで「rule マーカー外・lint 対象外の
+#   ドリフトは手動レビューでしか発見できない」ことが実証されている (Fable 版のみに存在した
+#   進捗報告グラウンディング文の欠落を手動レビューで発見した事例) ため、同型の構造 lint を
+#   分業規律 2 ファイルにも掛ける。
+#
+# 契約:
+#   1. チェック 1 と同じ抽出方式 (extract_rule_ids) で両ファイルの `<!-- rule:<id> -->`
+#      ID 集合を抽出し、順序に依らない集合として比較する。
+#   2. 集合が完全一致すれば pass。一致しない場合は fail し、片方にのみ存在する ID
+#      (差集合) を両方向とも列挙してエラーメッセージに含める。
+#   3. 対象 2 ファイルは pre-flight の存在チェック対象に加え、見つからなければ fail-closed
+#      (exit 1) とする。マーカーが 1 件も抽出できない場合も fail (チェック 1 と同方針)。
+#   4. 既存チェック 1〜3 の挙動には影響しない (共有するのは extract_rule_ids と WORKDIR のみ)。
+#
+# CI 発火 (ユーザ decision 2026-07-06、issue #195):
+#   .github/workflows/agent-discipline-prompt-lint.yml の paths filter に対象 2 ファイルを
+#   追加し、discipline ファイルの変更でも本 lint が発火するようにする (paths 以外の workflow
+#   構造は変更しない)。
+#
+# スコープ外 (チェック 1 と同じ方針): ID セットが一致した上でのルール本文の表現差分
+# (意味的ドリフト) は自動検出せず、PR レビュー担当者が目視で確認する運用とする。
+#
+# ============================================================================
 # 実装本体
 # ============================================================================
 
@@ -174,6 +207,8 @@ set -u
 FABLE_MD="plugins/agent-discipline/hooks/prompts/always-fable.md"
 SONNET_MD="plugins/agent-discipline/hooks/prompts/always-sonnet.md"
 HOOKS_JSON="plugins/agent-discipline/hooks/hooks.json"
+DISCIPLINE_FABLE_MD="plugins/agent-discipline/hooks/prompts/discipline-fable.md"
+DISCIPLINE_SONNET_MD="plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
 
 # チェック 2 前提検証 (#186) で使う、 期待される type:agent entry 数。
 EXPECTED_AGENT_ENTRIES=4
@@ -181,7 +216,7 @@ EXPECTED_AGENT_ENTRIES=4
 overall_fail=0
 
 # --- pre-flight: リポジトリルートから実行されているか / jq が使えるか ---
-for f in "$FABLE_MD" "$SONNET_MD" "$HOOKS_JSON"; do
+for f in "$FABLE_MD" "$SONNET_MD" "$HOOKS_JSON" "$DISCIPLINE_FABLE_MD" "$DISCIPLINE_SONNET_MD"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: $f が見つかりません。リポジトリルートから実行してください。" >&2
     exit 1
@@ -411,6 +446,30 @@ if [ "$check3_fail" -ne 0 ]; then
   overall_fail=1
 else
   echo "OK: gh pr create の Step 3 ブロックが必須キーワードをすべて含んでいます"
+fi
+
+# ============================================================================
+# チェック 4: 分業規律 2 ファイルの rule ID セット一致 (discipline-fable.md <-> discipline-sonnet.md)
+# ============================================================================
+
+echo ""
+echo "== check 4: discipline rule ID set (discipline-fable.md <-> discipline-sonnet.md) =="
+
+extract_rule_ids "$DISCIPLINE_FABLE_MD" > "$WORKDIR/ids_discipline_fable.txt"
+extract_rule_ids "$DISCIPLINE_SONNET_MD" > "$WORKDIR/ids_discipline_sonnet.txt"
+
+if [ ! -s "$WORKDIR/ids_discipline_fable.txt" ] || [ ! -s "$WORKDIR/ids_discipline_sonnet.txt" ]; then
+  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($DISCIPLINE_FABLE_MD / $DISCIPLINE_SONNET_MD)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
+  exit 1
+fi
+
+if diff -u "$WORKDIR/ids_discipline_fable.txt" "$WORKDIR/ids_discipline_sonnet.txt" > "$WORKDIR/ids_discipline_diff.txt" 2>&1; then
+  discipline_id_count=$(wc -l < "$WORKDIR/ids_discipline_fable.txt" | tr -d ' ')
+  echo "OK: discipline rule ID sets match (${discipline_id_count} IDs)"
+else
+  echo "FAIL: discipline rule ID sets differ between $DISCIPLINE_FABLE_MD and $DISCIPLINE_SONNET_MD" >&2
+  cat "$WORKDIR/ids_discipline_diff.txt" >&2
+  overall_fail=1
 fi
 
 # ============================================================================
