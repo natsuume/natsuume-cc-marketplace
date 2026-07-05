@@ -1,0 +1,5 @@
+{
+  "name": "ui-discipline",
+  "version": "0.1.0",
+  "description": "UI (フロントエンド) 実装時の規律を配送するプラグイン。SessionStart で 9 ルール (層別の component 共通化基準、composition 実装様式、実装前の既存探索、表示/非表示・disabled の決定表、レイアウト安定、design token 経由のスタイル指定、アクセシビリティ基本則、非同期状態の網羅、フォントサイズ・ビューポート頑健性) を常時注入し、対応するコード例・チェックリストを ui-patterns skill として提供する。UI を持つプロジェクトでのみ enable して使う。"
+}
