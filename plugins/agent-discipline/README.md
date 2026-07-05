@@ -4,7 +4,18 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.5.0
+v0.6.0
+
+### v0.5.0 → v0.6.0 の変更点
+
+issue 駆動開発の詳細手順を progressive disclosure で配送する 2 skill (#176、親 issue #173 決定事項 2/3/8/9/10) の実装です。
+
+- **`issue-plan` skill (起票・分解) を新設**: frontmatter の description / when_to_use には起票・分解側のトリガー語彙のみを持たせた (「issue を起票する」「issue に分解する」「sub-issue を作る」)。本文は起票前の壁打ち (`rule:design-approval` / `rule:issue-body` 参照) / body template (背景・受入基準・I/O 契約・制約・想定ファイル・関連 issue の 6 セクション、補助ファイル禁止) / 分割基準 / 関係設定コマンド (gh v2.94+ ネイティブの `--parent` / `--add-sub-issue` / `--add-blocked-by` を第一経路、内部数値 ID を要する旧版 fallback を併記) / `#N` 相互参照と issue types 不使用の理由 / 親 issue の close 規約、の 6 章構成
+- **`issue-start` skill (着手・実装開始) を新設**: frontmatter の description / when_to_use には着手側のトリガー語彙のみを持たせた (「issue に着手する」「issue の実装を始める」「issue を pick up する」)。issue-plan と動詞が重複しない排他的な語彙構成にしている。本文は pick-up 分岐 (`gh issue view` / `git ls-remote` / `gh pr list` で既存の作業状態を確認) / 排他制御の参照 (`rule:issue-claim` の手順本体は複製しない) / 軽微判定 (第 1 段の軽微側列挙 → 非該当の場合のみ第 2 段の性質判定、の 2 段構え) / TDD 2 段階の具体コマンド手順 (テスト不能な成果物での設計記述 commit 例外を含む) / closing keyword、の 5 章構成
+- **両 skill とも常時注入ルールの手順本体を複製しない設計を徹底**: `rule:issue-claim` の排他制御手順や `rule:closing-keyword` の書式規約など、安全機構や既存規約の本体は「参照する」記述に留め、skill 側は分岐判定・コマンド例・progressive disclosure の詳細のみを担当する
+- **`always-fable.md` / `always-sonnet.md` の `rule:issue-granularity` と `rule:tdd-two-phase` に skill へのポインタを追加** (親 issue #173 決定事項 2、中間案): Fable 版は 1 行の短い参照文、Sonnet 版は「詳細手順への参照」として適用場面を明示する文で書き分けた。両ファイルのルール ID セット・並び順は変更していない
+- **開発フロー**: TDD 2 段階のうちテスト不能な成果物 (markdown skill) への適用例として、Phase A = 設計記述 commit (frontmatter + 章構成 + 各章の内容契約コメントのみ) → Phase B = 本文実装、の 2 commit 構成を採用した (実測検証 #174 の V1 結果により pre-push-review 側の変更は本 PR のスコープに含まれない)
+- **version bump**: `0.5.0` → `0.6.0` (minor)。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.4.2 → v0.5.0 の変更点
 
@@ -240,6 +251,34 @@ v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh 
 
 これにより auto mode の本来の趣旨「Claude に最大限委任する」 を維持しつつ、 意図しない変更を巻き込むリスクを抑えます。
 
+### Skills
+
+常時注入ルール (before 系 / 排他系) が「原則」を配送するのに対し、Skills は issue 駆動開発の具体的な手順・コマンド例を progressive disclosure で配送します (v0.6.0 新設、#176)。2 skill の description / when_to_use は排他的なトリガー語彙で構成されており、同じ動詞を共有しません。
+
+#### /issue-plan
+
+**ファイル**: `skills/issue-plan/SKILL.md`
+
+issue の起票・分解フェーズの手順をガイドします: 起票前の壁打ち、body template (背景 / 受入基準 / I/O 契約 / 制約 / 想定ファイル / 関連 issue の 6 セクション)、分割基準、関係設定コマンド (gh v2.94+ ネイティブ経路 + 旧版 fallback)、`#N` 相互参照と issue types 不使用の理由、親 issue の close 規約。
+
+**使用シーン**:
+
+- 「issue を起票する」
+- 「issue に分解する」
+- 「sub-issue を作る」
+
+#### /issue-start
+
+**ファイル**: `skills/issue-start/SKILL.md`
+
+issue の着手・実装開始フェーズの手順をガイドします: pick-up 分岐 (既存の branch / PR 状態確認)、排他制御 (`rule:issue-claim` への参照)、軽微判定 (2 段構え)、TDD 2 段階の具体コマンド手順、closing keyword。
+
+**使用シーン**:
+
+- 「issue に着手する」
+- 「issue の実装を始める」
+- 「issue を pick up する」
+
 ## 旧 plugin との関係 (移行ガイド)
 
 agent-discipline は以下の 2 plugin を吸収統合しています:
@@ -298,6 +337,11 @@ agent-discipline/
 │       ├── inject-auto.sh
 │       ├── resolve-model-on-prompt.sh
 │       └── check-uncommitted-on-session-start.sh
+├── skills/
+│   ├── issue-plan/
+│   │   └── SKILL.md
+│   └── issue-start/
+│       └── SKILL.md
 └── README.md
 ```
 

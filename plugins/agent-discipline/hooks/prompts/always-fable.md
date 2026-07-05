@@ -38,6 +38,8 @@ issue body は後続 session の AI agent にとって唯一の信頼ソース�
 
 1 issue は独立して並列作業できる粒度で起票し、1 PR で閉じられないほど大きい場合は sub-issues に分割する。issue 間の関係性は sub-issue 親子リンクと本文中の `#N` 相互参照を併用する。
 
+詳細手順 (body template、分割基準の具体例、sub-issue 関係設定コマンド等) は `issue-plan` skill を参照。
+
 <!-- rule:closing-keyword -->
 ## 5. PR 作成時の closing keyword
 
@@ -88,6 +90,8 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 軽微な修正を除き、実装は同一 PR 内で 2 段階の commit に分けて進める: Phase A (テストがある場合は失敗するテスト + 設計骨格) → push して pre-push-review のレビューを通過させ draft PR を作る → Phase B (実装本体) → push → PR を ready 化する。
 
 **境界**: sh スクリプトや markdown のようにテストハーネスを持たない成果物では、Phase A のテストを「設計記述 commit」(ファイル構成・I/O 契約・ルール ID 一覧などを docs コメントとして含む骨格) に置き換える。
+
+着手手順の詳細 (pick-up 分岐・軽微判定・2 段階の具体手順) は `issue-start` skill を参照。
 
 ---
 
