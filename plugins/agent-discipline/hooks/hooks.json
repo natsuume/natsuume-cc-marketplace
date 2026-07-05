@@ -1,5 +1,5 @@
 {
-  "description": "agent-discipline の配送経路: SessionStart で常時適用ルールを注入 (inject-always.sh)、UserPromptSubmit で auto mode 限定の自走方針注入 (inject-auto.sh) と session 初回の未コミット変更チェック (check-uncommitted-on-session-start.sh)、PreToolUse (Bash) で gh issue/pr create|edit の body を禁止表現規範で semantic 検証する agent hook (4 entries)。設計判断・経緯の詳細は plugin README を参照。",
+  "description": "agent-discipline の配送経路: SessionStart でモデル別 (Fable/Sonnet) の常時適用ルールを注入 (inject-always.sh)、UserPromptSubmit で判定不能セッションの one-shot モデル補正 (resolve-model-on-prompt.sh) と auto mode 限定の自走方針注入 (inject-auto.sh) と session 初回の未コミット変更チェック (check-uncommitted-on-session-start.sh)、PreToolUse (Bash) で gh issue/pr create|edit の body を禁止表現規範で semantic 検証する agent hook (4 entries)。設計判断・経緯の詳細は plugin README を参照。",
   "hooks": {
     "SessionStart": [
       {
@@ -14,6 +14,10 @@
     "UserPromptSubmit": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/resolve-model-on-prompt.sh"
+          },
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-auto.sh"
