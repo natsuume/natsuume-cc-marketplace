@@ -98,6 +98,7 @@ issue を起票する場合、**実装時に判断や疑問点が発生しない
 - 起票内容は **issue body に全埋め込み** する。補助 file (`.claude/issues/N.md` 等) には書かない
   - 目標: `gh issue view <N>` 1 発で、別 session の Claude が完全 self-contained に実装着手できる
   - 推奨 template: 背景 / 受入基準 / I/O 契約 / 制約 / 想定 file / 関連 issue
+- 詳細化には **境界・異常系での挙動の決定** を含める (列挙・確定の手順は `issue-plan` skill を参照)
 - 起票後に issue を pick up した時点で不足が判明した場合は、追加質問してから実装に入る (= 起票時の壁打ちが不完全だった場合のリカバリ)
 
 ### 3.1 起票直前 / pick up 時の self-check

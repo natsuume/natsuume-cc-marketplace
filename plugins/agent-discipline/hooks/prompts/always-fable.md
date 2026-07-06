@@ -29,7 +29,7 @@
 <!-- rule:issue-body -->
 ## 3. issue 起票時の詳細化
 
-issue body は後続 session の AI agent にとって唯一の信頼ソースであり、「ユーザが承認した契約書」である。実装時に判断や疑問が生じないよう、起票前 / 起票時に `AskUserQuestion` で詳細化し、確定した内容だけを issue body に全埋め込みする (補助 file には書かない)。
+issue body は後続 session の AI agent にとって唯一の信頼ソースであり、「ユーザが承認した契約書」である。実装時に判断や疑問が生じないよう、起票前 / 起票時に `AskUserQuestion` で詳細化し、確定した内容だけを issue body に全埋め込みする (補助 file には書かない)。詳細化には境界・異常系での挙動の決定を含める (列挙・確定の手順は `issue-plan` skill を参照)。
 
 **境界**: 同じ規律は PR 説明・plan ファイル・commit message にも及ぶ。起票後に pick up した時点で不足や過去の未確認選択肢を見つけた場合は、追加確認してから実装に入る。
 
