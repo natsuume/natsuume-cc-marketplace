@@ -21,6 +21,6 @@
 - 数字は算用数字（漢数字は使わない）。英数字は半角
 - 「※」は使わない。注記・補足は「なお、」「ただし、」で地の文に統合する
 
-## skill への案内
+## 詳細ルールへの案内
 
-執筆作業（outline / draft / review）では `/natsuume-writing:outline`・`/natsuume-writing:draft`・`/natsuume-writing:review` と、詳細ルール全文である `rules/writing-rules.md` を参照してください。
+ここにあるのは要点のみです。執筆作業（章立て・たたき台作成・推敲・レビュー）では、この plugin 配下の `rules/writing-rules.md`（共通コア全文 + 書籍/ブログの媒体プロファイル）を読み込んで従ってください。執筆支援 skill（outline / draft / review）は今後のバージョンで追加予定であり、現時点では存在しません（存在しないコマンドを提案・実行しないでください）。
