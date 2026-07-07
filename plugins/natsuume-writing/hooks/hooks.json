@@ -1,0 +1,6 @@
+{
+  "description": "natsuume-writing の配送経路: SessionStart で執筆ルールのコア要点 (rules/core-summary.md) を additionalContext として常時注入する (inject-core.sh)。条件分岐なし。詳細ルール (rules/writing-rules.md) は skill 実行時に参照する 2 層構成 (issue #207)。",
+  "hooks": {
+    "SessionStart": [ { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-core.sh" } ] } ]
+  }
+}

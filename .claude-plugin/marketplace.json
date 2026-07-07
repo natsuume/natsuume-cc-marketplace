@@ -62,6 +62,13 @@
       "description": "UI (フロントエンド) 実装時の規律を配送するプラグイン。SessionStart で 10 ルール (層別の component 共通化基準、composition 実装様式、実装前の既存探索、表示/非表示・disabled の決定表、レイアウト安定、design token 経由のスタイル指定、アクセシビリティ基本則、非同期状態の網羅、フォントサイズ・ビューポート頑健性、視覚方向の明示的選択) を常時注入し、対応するコード例・チェックリストを ui-patterns skill として提供する。UI を持つプロジェクトでのみ enable して使う。",
       "version": "0.1.0",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
+    },
+    {
+      "name": "natsuume-writing",
+      "source": "./plugins/natsuume-writing",
+      "description": "テックブログ・技術書執筆を支援するプラグイン。natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) を配置し、SessionStart でコア要点を常時注入する。outline / draft / review skill は今後追加予定 (#208 / #209 / #210)。執筆プロジェクトでのみ enable して使う。",
+      "version": "0.1.0",
+      "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook"]
     }
   ]
 }
