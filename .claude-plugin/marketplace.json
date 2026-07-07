@@ -66,9 +66,9 @@
     {
       "name": "natsuume-writing",
       "source": "./plugins/natsuume-writing",
-      "description": "テックブログ・技術書執筆を支援するプラグイン。natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) を配置し、SessionStart でコア要点を常時注入する。outline / draft / review skill は今後追加予定 (#208 / #209 / #210)。執筆プロジェクトでのみ enable して使う。",
-      "version": "0.1.0",
-      "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook"]
+      "description": "テックブログ・技術書執筆を支援するプラグイン。natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) を配置し、SessionStart でコア要点を常時注入する。outline skill (章立ての壁打ち + インファイルスケルトン書き込み) を提供。draft / review skill は今後追加予定 (#209 / #210)。執筆プロジェクトでのみ enable して使う。",
+      "version": "0.2.0",
+      "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook", "skill"]
     }
   ]
 }
