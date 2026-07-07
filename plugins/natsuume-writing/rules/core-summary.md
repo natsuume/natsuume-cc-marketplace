@@ -23,4 +23,4 @@
 
 ## 詳細ルールへの案内
 
-ここにあるのは要点のみです。執筆作業（章立て・たたき台作成・推敲・レビュー）では、この plugin 配下の `rules/writing-rules.md`（共通コア全文 + 書籍/ブログの媒体プロファイル）を読み込んで従ってください。章立ての壁打ちは `/natsuume-writing:outline` を、スケルトンからのたたき台生成は `/natsuume-writing:draft` を使用してください。review skill は今後のバージョンで追加予定であり、現時点では存在しません（存在しないコマンドを提案・実行しないでください）。
+ここにあるのは要点のみです。執筆作業（章立て・たたき台作成・推敲・レビュー）では、この plugin 配下の `rules/writing-rules.md`（共通コア全文 + 書籍/ブログの媒体プロファイル）を読み込んで従ってください。章立ての壁打ちは `/natsuume-writing:outline` を、スケルトンからのたたき台生成は `/natsuume-writing:draft` を、原稿のレビューは `/natsuume-writing:review` を使用してください。
