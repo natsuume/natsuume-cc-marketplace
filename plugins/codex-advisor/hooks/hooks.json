@@ -1,0 +1,15 @@
+{
+  "description": "codex-advisor の配送経路: SessionStart で Codex への相談規律 (hooks/prompts/advisor-rules.md) を additionalContext として常時注入する (inject-advisor-rules.sh)。モデル判定・permission_mode 判定等の条件分岐は持たず、常に同一内容を注入する。設計判断の詳細は issue #219 と plugin README を参照。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
