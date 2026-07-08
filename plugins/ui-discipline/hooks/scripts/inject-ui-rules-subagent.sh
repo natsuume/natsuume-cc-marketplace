@@ -25,5 +25,35 @@
 #   - SubagentStart hook は Claude Code 2.0.43 以降で発火する。それ未満では本スクリプトは
 #     呼ばれず、SessionStart 注入のみ有効
 
-# (Phase B で実装: 上記契約に従い、前置き注記 + ui-rules.md を連結して JSON 出力する)
-exit 0
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
+# prompt ファイルは hooks/scripts/../prompts/ に配置されている
+# (inject-ui-rules.sh と同じパス解決方式)。
+PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
+
+PREAMBLE=$(cat "$PROMPTS_DIR/ui-rules-subagent-preamble.md" 2>/dev/null)
+RULES=$(cat "$PROMPTS_DIR/ui-rules.md" 2>/dev/null)
+
+# どちらかが読めない・空なら全体を注入しない (ヘッダの部分注入禁止の契約)。
+if [ -z "$PREAMBLE" ] || [ -z "$RULES" ]; then
+  exit 0
+fi
+
+# ui-patterns skill の SKILL.md 絶対パスを script 自身の位置から解決する。
+# hooks/scripts/ から見て ../../skills/ui-patterns/SKILL.md。
+SKILL_DIR=$(cd "$(dirname "$0")/../../skills/ui-patterns" 2>/dev/null && pwd)
+
+if [ -z "$SKILL_DIR" ] || [ ! -f "$SKILL_DIR/SKILL.md" ]; then
+  exit 0
+fi
+
+# プレースホルダ置換・前置き注記と本体の連結・JSON 出力を jq 1 回で行う。
+# jq が万一失敗しても header の「exit 常に 0」契約を守る (fail-open)。
+jq -n --arg pre "$PREAMBLE" --arg rules "$RULES" --arg skill "$SKILL_DIR/SKILL.md" '{
+  hookSpecificOutput: {
+    hookEventName: "SubagentStart",
+    additionalContext: (($pre | gsub("\\{\\{UI_PATTERNS_SKILL_PATH\\}\\}"; $skill)) + "\n\n" + $rules)
+  }
+}' || exit 0

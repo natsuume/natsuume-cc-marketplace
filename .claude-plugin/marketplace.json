@@ -59,8 +59,8 @@
     {
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
-      "description": "UI (フロントエンド) 実装時の規律を配送するプラグイン。SessionStart で 10 ルール (層別の component 共通化基準、composition 実装様式、実装前の既存探索、表示/非表示・disabled の決定表、レイアウト安定、design token 経由のスタイル指定、アクセシビリティ基本則、非同期状態の網羅、フォントサイズ・ビューポート頑健性、視覚方向の明示的選択) を常時注入し、対応するコード例・チェックリストを ui-patterns skill として提供する。UI を持つプロジェクトでのみ enable して使う。",
-      "version": "0.1.0",
+      "description": "UI (フロントエンド) 実装時の規律を配送するプラグイン。SessionStart で 10 ルール (層別の component 共通化基準、composition 実装様式、実装前の既存探索、表示/非表示・disabled の決定表、レイアウト安定、design token 経由のスタイル指定、アクセシビリティ基本則、非同期状態の網羅、フォントサイズ・ビューポート頑健性、視覚方向の明示的選択) を常時注入し、SubagentStart で同一ルールに subagent 向け前置き注記 (AskUserQuestion 不在に伴うエスカレーション読み替え) を連結して全 subagent にも注入する。対応するコード例・チェックリストは ui-patterns skill として提供する。UI を持つプロジェクトでのみ enable して使う。",
+      "version": "0.2.0",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     },
     {
