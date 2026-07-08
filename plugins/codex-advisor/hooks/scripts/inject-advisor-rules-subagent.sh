@@ -7,8 +7,13 @@
 #   exit   : 常に 0 (テンプレート・wrapper 欠落時は注入をスキップして exit 0。fail-open でセッションを壊さない)
 #
 # 制約 (issue #219):
-#   - Linux (WSL2) / macOS (BSD sed/awk, bash 3.2 環境の /bin/sh) の両方で動作すること
+#   - Linux (WSL2) / macOS (bash 3.2 環境の /bin/sh) の両方で動作すること
 #   - agent_type による条件分岐を持たない (常に同一内容を注入する)
+#
+# テンプレートの {{WRAPPER_PATH_SH}} は jq の gsub + @sh で shell-quote 済み絶対パスへ
+# 置換する。sed を使わないのは、パスに sed の置換メタ文字 (& / \ / デリミタ) が含まれる
+# install 環境で置換が壊れるため。@sh により $ / バッククォート / 空白 / literal ' を含む
+# パスも安全な単一 shell word として本文に埋め込まれる (codex review P3 指摘への対処)。
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -43,18 +48,12 @@ if [ ! -f "$WRAPPER" ]; then
   exit 0
 fi
 
-# テンプレート中の {{WRAPPER_PATH}} (複数出現しうる) を解決済み絶対パスへ置換する。
-# sed のデリミタ (/) はパス自体に含まれるため衝突する。区切り文字に "|" を使うことで回避する
-# (WRAPPER_PATH に "|" が含まれることは無い前提。POSIX sh + BSD/GNU 両方の sed で動く書き方)。
-CONTEXT=$(printf '%s\n' "$TEMPLATE" | sed "s|{{WRAPPER_PATH}}|$WRAPPER|g")
-
-if [ -z "$CONTEXT" ]; then
-  exit 0
-fi
-
-jq -n --arg ctx "$CONTEXT" '{
+# プレースホルダ置換と JSON 出力を jq 1 回で行う。--arg で渡した値は gsub の置換値
+# として literal に扱われるため、パス中のメタ文字で置換が壊れない (ヘッダコメント参照)。
+# jq が万一失敗しても header の「exit 常に 0」契約を守る (fail-open)。
+jq -n --arg tpl "$TEMPLATE" --arg wrapper "$WRAPPER" '{
   hookSpecificOutput: {
     hookEventName: "SubagentStart",
-    additionalContext: $ctx
+    additionalContext: ($tpl | gsub("\\{\\{WRAPPER_PATH_SH\\}\\}"; ($wrapper | @sh)))
   }
-}'
+}' || exit 0

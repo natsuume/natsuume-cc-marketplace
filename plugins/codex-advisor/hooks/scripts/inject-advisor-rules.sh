@@ -27,9 +27,10 @@ if [ -z "$CONTEXT" ]; then
   exit 0
 fi
 
+# jq が万一失敗しても header の「exit 常に 0」契約を守る (fail-open)。
 jq -n --arg ctx "$CONTEXT" '{
   hookSpecificOutput: {
     hookEventName: "SessionStart",
     additionalContext: $ctx
   }
-}'
+}' || exit 0

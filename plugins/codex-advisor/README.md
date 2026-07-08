@@ -9,7 +9,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 | 構成要素 | 役割 |
 |---|---|
 | SessionStart hook (`inject-advisor-rules`) | メインセッション向けの相談規律 3 ルール (下記) を `additionalContext` として常時注入する。公式ドキュメントは「tool 定義だけでは advisor は呼ばれない、システムプロンプト側の明示誘導が必須」と明言しており、この注入がそれに相当する |
-| SubagentStart hook (`inject-advisor-rules-subagent`) | subagent 向けの簡約版規律 (許可・タイミング・実行方法・フラットな扱い・失敗時) を全 subagent 起動時に注入する。wrapper の絶対パスは注入時に解決して埋め込む (subagent の Bash 環境では `${CLAUDE_PLUGIN_ROOT}` が空になりうるため)。Claude Code 2.0.43 以降で有効 |
+| SubagentStart hook (`inject-advisor-rules-subagent`) | subagent 向けの簡約版規律 (許可・タイミング・実行方法・フラットな扱い・失敗時) を全 subagent 起動時に注入する。wrapper の絶対パスは注入時に解決し、jq の `@sh` で shell-quote して埋め込む (subagent の Bash 環境では `${CLAUDE_PLUGIN_ROOT}` が空になりうるため。quote はパスにメタ文字を含む install 環境への防御)。Claude Code 2.0.43 以降で有効 |
 | `/codex-advisor:consult` skill | 相談プロンプトの組み立て方 (self-contained な XML ブロック構成) と wrapper の起動手順を定義する。ユーザによる明示起動も可能 |
 | `scripts/run-codex-advisor.sh` | 公式 codex plugin の companion (`codex-companion.mjs task`) を foreground で 1 回起動する wrapper。`--effort xhigh` 固定・`--write` なし (read-only sandbox 固定)。stdout = Codex の助言、stderr = wrapper 状態 |
 
@@ -43,6 +43,7 @@ subagent も同じ wrapper で相談できる。ただし **SubagentStart の注
 - [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) — companion script の提供元
 - Codex CLI (`npm install -g @openai/codex`) と認証 (`codex login`)。状態診断は `/codex:setup`
 - Node.js
+- jq (hook の注入 JSON 生成に使用。不在時は注入をスキップする fail-open)
 - Linux (WSL2 含む) / macOS
 - subagent への配送 (SubagentStart hook) は Claude Code 2.0.43 以降。それ未満ではメインセッション向け機能のみ有効
 

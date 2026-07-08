@@ -1,7 +1,7 @@
 <!--
   codex-advisor: subagent 向け相談規律 (issue #219)
   配送は SubagentStart hook (inject-advisor-rules-subagent.sh) が全 subagent に行う。
-  本文中の wrapper パスは injector が注入時に絶対パスへ置換する。
+  本文中の wrapper パスは injector が注入時に shell-quote 済み絶対パスへ置換する。
 -->
 
 # codex-advisor: Codex への相談 (subagent)
@@ -13,7 +13,7 @@ OpenAI Codex を助言役 (advisor) として利用できる。Codex は read-on
 - **実行**: 相談プロンプト (タスク・証拠・質問 1 つを self-contained に書く) を stdin で渡し、foreground で実行する (`run_in_background` 禁止。Bash の timeout は 600000 を指定):
 
   ```bash
-  bash "{{WRAPPER_PATH}}" <<'EOF'
+  bash {{WRAPPER_PATH_SH}} <<'EOF'
   (相談内容)
   EOF
   ```
