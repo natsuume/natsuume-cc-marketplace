@@ -4,7 +4,20 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.7.3
+v0.12.0
+
+(注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.11.0 → v0.12.0 の変更点
+
+暫定ルール (temporary rules) の分離配送機構の新設です (PR #218)。AskUserQuestion の preview 機能に「表示内容がスクロールできず、一定行数以上が『hidden XX lines』で隠される」問題があるため、問題修正までの暫定対応として preview 不使用ルールを配送します。恒久規律 (always-\*.md / discipline-\*.md) への追記ではなく独立配送にしたのは「いつでも外せること」が第一要件のためです (ユーザ decision 2026-07-08: temporary ディレクトリ汎用機構を採用、preview は行数に依らず全面不使用)。
+
+- **`hooks/scripts/inject-temporary.sh` を新設**: SessionStart で `hooks/prompts/temporary/*.md` をファイル名の辞書順 (`LC_ALL=C`) に連結し 1 つの additionalContext として注入する。モデル判定・permission_mode 判定は行わない (暫定ルールは全セッション共通)。fail-open 条件は jq 不在 / stdin 不正 / hook_event_name 空 / temporary ディレクトリ不在 / md 0 件 / 連結結果が空 (いずれも無音終了)
+- **`hooks/prompts/temporary/askuserquestion-preview-workaround.md` を新設**: AskUserQuestion で選択肢の `preview` フィールドを使わず (行数に依らず全面不使用)、比較に必要な内容 (コード案・mockup・設定例・diff 等) は AskUserQuestion 発行前のテキスト応答で説明してから preview 無しで質問する暫定ルール本文
+- **撤去手順**: Claude Code 側で preview のスクロール問題が修正されたら、`temporary/` 配下の md を削除するだけで注入が消える (スクリプトと hooks.json entry は残っても no-op)。完全撤去する場合のみ entry・スクリプト・temporary ディレクトリも削除する。いずれの場合も version bump は必要
+- **hooks.json**: SessionStart に inject-temporary.sh の entry を追加 (inject-always.sh の後ろ)。別 hook entry = 別メッセージとして注入されるため、inject-always.sh 側の self-gate 射程 (「見出し〜メッセージ末尾」) には影響しない。`lint-prompt-sync.sh` にも無影響 (チェック 2 の前提検証は PreToolUse の type:agent entry 数のみを数える)
+- **TDD 2 段階**: Phase A (設計契約 `docs/temporary-rules-phase-a.md` + no-op 骨格の設計記述 commit) → Phase B (実装本体。設計契約ファイルは削除) の 2 commit 構成
+- **version bump**: `0.11.0` → `0.12.0` (minor)。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.7.2 → v0.7.3 の変更点
 
