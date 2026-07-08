@@ -320,7 +320,7 @@ Codex は read-only sandbox でリポジトリを自分で読んで裏取りし�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-advisor-rules` | SessionStart | 相談規律 3 ルール (`rule:advisor-timing` いつ相談するか / `rule:advisor-weight` 助言の重み付けと reconcile call / `rule:advisor-boundary` ユーザ専権・レビュー用途除外・不通時継続) を `additionalContext` として常時注入する |
+| `inject-advisor-rules` | SessionStart | 相談規律 3 ルール (`rule:advisor-timing` いつ相談するか / `rule:advisor-weight` 助言のフラットな扱いと reconcile call / `rule:advisor-boundary` ユーザ専権・レビュー用途除外・不通時継続) を `additionalContext` として常時注入する |
 
 #### Skills
 
