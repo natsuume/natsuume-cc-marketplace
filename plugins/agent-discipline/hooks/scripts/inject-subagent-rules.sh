@@ -23,5 +23,26 @@
 #   - SubagentStart hook は Claude Code 2.0.43 以降で発火する。それ未満では本スクリプトは
 #     呼ばれず、メインセッション向けの SessionStart / UserPromptSubmit 配送のみ有効
 
-# (Phase B で実装: 上記契約に従い、subagent-rules.md 全文を JSON 出力する)
-exit 0
+if ! command -v jq >/dev/null 2>&1; then
+  exit 0
+fi
+
+# prompt ファイルは hooks/scripts/../prompts/ に配置されている
+# (inject-always.sh と同じパス解決方式)。
+PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
+
+# 注入本文を読み込む。読めない・空の場合は fail-open で無音終了する
+# (inject-always.sh と同じ方針。壊れた・欠けた注入で誤誘導するより注入しない方が安全)。
+CONTEXT=$(cat "$PROMPTS_DIR/subagent-rules.md" 2>/dev/null)
+
+if [ -z "$CONTEXT" ]; then
+  exit 0
+fi
+
+# jq が万一失敗しても header の「exit 常に 0」契約を守る (fail-open)。
+jq -n --arg ctx "$CONTEXT" '{
+  hookSpecificOutput: {
+    hookEventName: "SubagentStart",
+    additionalContext: $ctx
+  }
+}' || exit 0
