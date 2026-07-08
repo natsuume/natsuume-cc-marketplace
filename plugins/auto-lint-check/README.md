@@ -4,7 +4,11 @@
 
 ## バージョン
 
-v0.4.0
+v0.4.1
+
+### v0.4.0 → v0.4.1 の変更点
+
+plugin description (plugin.json / marketplace.json / リポジトリ README の一覧テーブル) を 1〜2 文に短縮しました。hook の動作変更はありません。
 
 ### v0.3.3 → v0.4.0 の変更点
 

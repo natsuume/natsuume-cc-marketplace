@@ -4,7 +4,11 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.4.1
+v0.4.2
+
+### v0.4.1 → v0.4.2 の変更点
+
+plugin description (plugin.json / marketplace.json / リポジトリ README の一覧テーブル) を 1〜2 文に短縮しました。あわせて PR deny の記述を実挙動 (master/main を head とする PR 作成のみ deny) に合わせて正確化。hook の動作変更はありません。
 
 ### v0.4.0 → v0.4.1 の変更点
 

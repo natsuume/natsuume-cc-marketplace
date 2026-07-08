@@ -4,7 +4,11 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 ## バージョン
 
-v0.2.0
+v0.2.1
+
+### v0.2.0 → v0.2.1 の変更点
+
+plugin description (plugin.json / marketplace.json / リポジトリ README の一覧テーブル) を 1〜2 文に短縮し、plugin.json と marketplace.json 間の文面ドリフトを統一しました。機能変更はありません。
 
 ### v0.1.2 → v0.2.0 の変更点
 
