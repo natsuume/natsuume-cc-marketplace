@@ -1,0 +1,5 @@
+{
+  "name": "codex-advisor",
+  "version": "0.1.0",
+  "description": "Anthropic の Advisor パターン (advisor tool) を Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。SessionStart hook で相談タイミングの規律を常時注入し、Claude が戦略的な岐路 (実質作業前・完了宣言前・行き詰まり・方針転換) で Codex に read-only 相談して plan / course-correction を受け取る。相談は /codex-advisor:consult skill 経由でも明示起動できる。"
+}
