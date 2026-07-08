@@ -11,7 +11,7 @@ when_to_use: |
 
 # /codex-advisor:consult — Codex への相談
 
-OpenAI Codex に相談プロンプトを渡し、助言テキストを受け取る。Codex は read-only sandbox で動作し、リポジトリを自分で読んで主張を裏取りできるが、ファイル変更・コマンドによる状態変更は行わない (助言のみ)。reasoning effort は xhigh 固定 (wrapper 内にハードコード)、モデルは Codex 側の既定に委ねる。
+OpenAI Codex に相談プロンプトを渡し、助言テキストを受け取る。Codex は read-only sandbox で動作し、リポジトリを自分で読んで主張を裏取りできるが、ファイル変更・コマンドによる状態変更は行わない (助言のみ)。reasoning effort とモデルは wrapper 側で固定されており、呼び出し時に指定するものはない。
 
 ## 1. 相談プロンプトの組み立て
 
@@ -65,7 +65,7 @@ WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-
 EOF
 ```
 
-(この version 選択は BSD sort 環境で `sort -V` が使えないための portable semver 降順パターン。`$(...)` はパス解決であり background 起動ではない)
+(このコマンドの `sort` 部分を `sort -V` に置き換えない — macOS の BSD sort では動かない。`$(...)` はパス解決であり background 起動ではない)
 
 ## 3. 助言の扱い
 

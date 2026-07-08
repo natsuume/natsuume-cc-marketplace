@@ -1,15 +1,12 @@
 <!--
-  codex-advisor: 相談タイミング規律 (issue #219)
-  Anthropic Advisor tool (https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool)
-  の公式推奨プロンプト (timing block / advice block) の移植。
+  codex-advisor: 相談規律 (issue #219)
   各ルールは「意図 (なぜ) + 指示 + 境界」で記述する (agent-discipline / ui-discipline と同形式)。
-  公式実測で強い executor への hard rule 追加は過剰呼び出しを招くため、hard rule は採用しない。
   配送は SessionStart hook (inject-advisor-rules.sh) が常時行う。
 -->
 
 # codex-advisor: Codex への相談規律
 
-このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順 (相談プロンプトの組み立て方と wrapper の起動方法) は `/codex-advisor:consult` skill が定義する。以下は「いつ相談するか」「助言をどう扱うか」の規律である。
+このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は「いつ相談するか」「助言をどう扱うか」の規律である。
 
 <!-- rule:advisor-timing -->
 ## 1. いつ相談するか
@@ -30,7 +27,7 @@
 <!-- rule:advisor-weight -->
 ## 2. 助言の扱い
 
-**なぜ**: 本家 API 版はより高知能な advisor を前提に助言を重く扱わせるが、この plugin の呼び出し元は advisor と同等以上のモデル (Fable 等) でもありうる。advisor の価値は知能差ではなく、別モデル系統からの独立した第二視点にある。盲従すれば自分が集めた一次証拠と推論を捨てることになり、軽視すれば相談のコストが無駄になる。
+**なぜ**: advisor の価値は知能差ではなく、別モデル系統からの独立した第二視点にある (呼び出し元が advisor と同等以上のモデルのこともある)。盲従すれば自分が集めた一次証拠と推論を捨てることになり、軽視すれば相談のコストが無駄になる。
 
 **指示**: 助言はフラットに扱う — 独立した同僚のセカンドオピニオンとして、自分の証拠・推論と同じ土俵で突き合わせて採否を判断する。従う義務はないが、黙って無視もしない: 採否とその理由を明示する。self-test が通ったことだけを根拠に助言を棄却しない — そのテストが助言の指摘する観点を検査していない可能性がある。
 
