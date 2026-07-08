@@ -4,17 +4,18 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## バージョン
 
-v0.1.0
+v0.2.0
 
 ## 概要
 
 UI 実装は「共通化すべきか」「表示/非表示をどう決めるか」「レイアウトが崩れないか」といった判断が実装のたびに発生し、判断がぶれると重複 component の乱立や CLS (Cumulative Layout Shift)、a11y 欠落として表面化します。本プラグインはこれらの判断基準を 10 ルールとして常時配送し、判断のぶれを構造的に抑えます。
 
-配送は次の 2 層構成です:
+配送は次の 3 層構成です:
 
 | 層 | 配送経路 | 内容 |
 |---|---|---|
-| 常時注入層 | `SessionStart` (`inject-ui-rules.sh`) | `hooks/prompts/ui-rules.md` の 10 ルール (コンパクト版: 意図 + 短い指示 + 境界) を `additionalContext` として毎セッション注入 |
+| 常時注入層 (メインセッション) | `SessionStart` (`inject-ui-rules.sh`) | `hooks/prompts/ui-rules.md` の 10 ルール (コンパクト版: 意図 + 短い指示 + 境界) を `additionalContext` として毎セッション注入 |
+| 常時注入層 (subagent) | `SubagentStart` (`inject-ui-rules-subagent.sh`) | 同一の `ui-rules.md` に subagent 向け前置き注記 (`ui-rules-subagent-preamble.md`) を連結して全 subagent 起動時に注入 (Claude Code 2.0.43+) |
 | ui-patterns skill | `skills/ui-patterns/SKILL.md` (user-invocable) | 10 ルールそれぞれに対応する具体的なコード例・チェックリストを提供 |
 
 常時注入層はルールの「意図・指示・境界」のみを圧縮して伝え、コード例やチェックリストの詳細実装パターンは ui-patterns skill 側が担当することで、常時消費されるトークン量を抑えています。
@@ -50,6 +51,7 @@ claude plugin install ui-discipline@natsuume-plugins
 | Hook 名 | イベント | 説明 |
 |---|---|---|
 | `inject-ui-rules` | SessionStart | `hooks/prompts/ui-rules.md` の全文を `additionalContext` として常時注入する。モデル判定・permission_mode 判定等の条件分岐は持たない (常に同一内容を注入する) |
+| `inject-ui-rules-subagent` | SubagentStart | 同一の `ui-rules.md` に subagent 向け前置き注記 (`ui-rules-subagent-preamble.md`) を連結して全 subagent 起動時に注入する。agent_type による条件分岐は持たない。注記中の ui-patterns SKILL.md への参照は注入時に絶対パスへ解決する (subagent 環境では `${CLAUDE_PLUGIN_ROOT}` が空になりうるため)。Claude Code 2.0.43 以降で有効 |
 
 ### Skills
 
@@ -67,9 +69,19 @@ UI 実装規律は UI を持つプロジェクトでのみ意味を持ち、バ�
 
 agent-discipline の `inject-always.sh` はセッションのモデル (Fable / Sonnet) に応じて注入内容を書き分けますが、これは「意図の圧縮度」というモデル特性に依存する分岐です。ui-discipline の 10 ルールはコンポーネント層別の共通化基準や表示/非表示の決定表など、モデルに依存しない UI 実装上の判断基準そのものであるため、モデル別の書き分けを持たず常に同一内容を注入します。
 
+### なぜ SubagentStart でも注入するか
+
+agent-discipline の分業規律では、明確化された仕様に基づく実装は subagent へ委任するのが既定です。つまり UI 実装の実作業者は多くの場合 subagent であり、SessionStart 注入だけでは規律が実装しないメインセッションにしか届きません。SubagentStart 注入により、実作業者に規律が構造的に届きます (委任指示への埋め込みというメインセッション側の遵守に依存しない配送)。
+
+### なぜ subagent 専用テンプレートを複製しないか
+
+codex-advisor の SubagentStart 注入は subagent 専用テンプレートを新設しましたが、あちらは許可規律や wrapper 実行方法などメインセッション版と実質的に別内容だったためです。ui-discipline の 10 ルールはモデル・実行主体に依存しない判断基準そのもので、subagent との差分は「AskUserQuestion が使えない」ことに起因する読み替え (rule:visual-direction のエスカレーション化) のみです。全文コピーは 2 ファイル間の rule 同期という保守コストと silent drift を生むため、単一ソース (`ui-rules.md`) + 前置き注記 (`ui-rules-subagent-preamble.md`) の連結方式を採っています。
+
+前置き注記・本体・ui-patterns SKILL.md のいずれかが欠けた場合は全体を注入しません。読み替え規則を欠いたまま rule:visual-direction を subagent に配送すると、subagent には実行不能な「ユーザの選択を得る」指示が残るためです (部分注入の禁止)。
+
 ### なぜ inject script が fail-open か
 
-`inject-ui-rules.sh` は prompt ファイル (`hooks/prompts/ui-rules.md`) が読めない場合、何も出力せず exit 0 で終了します。規律の注入は Claude の自発的な遵守を促す誘導層であり、強制力を持つ deny 系の hook とは性質が異なります。誘導層の欠落によってセッション自体を壊す (エラーで停止させる) 価値は無いため、fail-open を採用しています。
+`inject-ui-rules.sh` / `inject-ui-rules-subagent.sh` は prompt ファイルが読めない場合、何も出力せず exit 0 で終了します。規律の注入は Claude の自発的な遵守を促す誘導層であり、強制力を持つ deny 系の hook とは性質が異なります。誘導層の欠落によってセッション自体を壊す (エラーで停止させる) 価値は無いため、fail-open を採用しています。
 
 ## ディレクトリ構成
 
@@ -80,9 +92,11 @@ ui-discipline/
 ├── hooks/
 │   ├── hooks.json
 │   ├── prompts/
-│   │   └── ui-rules.md
+│   │   ├── ui-rules.md
+│   │   └── ui-rules-subagent-preamble.md
 │   └── scripts/
-│       └── inject-ui-rules.sh
+│       ├── inject-ui-rules.sh
+│       └── inject-ui-rules-subagent.sh
 ├── skills/
 │   └── ui-patterns/
 │       └── SKILL.md

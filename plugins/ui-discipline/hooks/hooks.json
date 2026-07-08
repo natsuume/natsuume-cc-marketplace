@@ -1,5 +1,5 @@
 {
-  "description": "ui-discipline の配送経路: SessionStart で UI 実装規律 (hooks/prompts/ui-rules.md) を additionalContext として常時注入する (inject-ui-rules.sh)。モデル判定・permission_mode 判定等の条件分岐は持たず、常に同一内容を注入する (issue #197 の制約)。設計判断の詳細は plugin README を参照。",
+  "description": "ui-discipline の配送経路: SessionStart で UI 実装規律 (hooks/prompts/ui-rules.md) を additionalContext として常時注入する (inject-ui-rules.sh)。モデル判定・permission_mode 判定等の条件分岐は持たず、常に同一内容を注入する (issue #197 の制約)。SubagentStart では同一の ui-rules.md に subagent 向け前置き注記 (AskUserQuestion 不在に伴う rule:visual-direction のエスカレーション読み替え等、hooks/prompts/ui-rules-subagent-preamble.md) を連結して全 subagent に注入する (inject-ui-rules-subagent.sh、Claude Code 2.0.43+)。設計判断の詳細は plugin README を参照。",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,16 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-ui-rules.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-ui-rules-subagent.sh"
           }
         ]
       }
