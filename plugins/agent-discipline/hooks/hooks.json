@@ -1,5 +1,5 @@
 {
-  "description": "agent-discipline の配送経路: SessionStart でモデル別 (Fable/Sonnet) の常時適用ルールを注入し、モデル別分業規律の併載 (Fable 判定時は discipline-fable.md 系、非 Fable 確定時と判定不能時は discipline-sonnet.md 系を連結) も行う (inject-always.sh)、UserPromptSubmit で判定不能セッションの one-shot モデル補正 (resolve-model-on-prompt.sh) と auto mode 限定の自走方針注入 (inject-auto.sh) と session 初回の未コミット変更チェック (check-uncommitted-on-session-start.sh)、PreToolUse (Bash) で gh issue/pr create|edit の body を禁止表現規範で semantic 検証し、gh pr create のみ branch 名から推定される issue の closing keyword 有無も検証する agent hook (4 entries)、PreToolUse (Agent|Task) で block-fable-subagent.sh (サブエージェントの Fable 実行経路 deny、判定不能は fail-open) を実行。設計判断・経緯の詳細は plugin README を参照。",
+  "description": "agent-discipline の配送経路: SessionStart でモデル別 (Fable/Sonnet) の常時適用ルールを注入し、モデル別分業規律の併載 (Fable 判定時は discipline-fable.md 系、非 Fable 確定時と判定不能時は discipline-sonnet.md 系を連結) も行う (inject-always.sh)。加えて暫定ルール (hooks/prompts/temporary/*.md — 問題修正までの一時規律、md 削除で撤去可能) を独立 hook で連結注入する (inject-temporary.sh)。UserPromptSubmit で判定不能セッションの one-shot モデル補正 (resolve-model-on-prompt.sh) と auto mode 限定の自走方針注入 (inject-auto.sh) と session 初回の未コミット変更チェック (check-uncommitted-on-session-start.sh)、PreToolUse (Bash) で gh issue/pr create|edit の body を禁止表現規範で semantic 検証し、gh pr create のみ branch 名から推定される issue の closing keyword 有無も検証する agent hook (4 entries)、PreToolUse (Agent|Task) で block-fable-subagent.sh (サブエージェントの Fable 実行経路 deny、判定不能は fail-open) を実行。設計判断・経緯の詳細は plugin README を参照。",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,10 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-always.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-temporary.sh"
           }
         ]
       }

@@ -36,7 +36,7 @@
 # - hooks/prompts/temporary/ ディレクトリ不在
 # - temporary/*.md が 0 件、または連結結果が空
 #
-# 設計経緯: docs/temporary-rules-phase-a.md (Phase A 設計契約、Phase B で削除) を参照。
+# 設計経緯: PR #218 を参照。
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -44,5 +44,43 @@ fi
 
 INPUT=$(cat)
 
-# Phase A (設計記述 commit) の no-op 骨格。実装本体は Phase B で追加する。
-exit 0
+# hook_event_name のみ取得する (モデル判定は行わない — 暫定ルールは全セッション共通)。
+# 不正 JSON 時の jq の parse error は inject-always.sh と同じ理由で抑制する。
+HOOK_EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null)
+if [ -z "$HOOK_EVENT" ]; then
+  exit 0
+fi
+
+PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
+TEMPORARY_DIR="$PROMPTS_DIR/temporary"
+if [ ! -d "$TEMPORARY_DIR" ]; then
+  exit 0
+fi
+
+# glob 展開順をロケール非依存のバイト順に固定する (連結順の決定論性)。
+export LC_ALL=C
+
+CONTEXT=""
+for f in "$TEMPORARY_DIR"/*.md; do
+  [ -f "$f" ] || continue
+  BODY=$(cat "$f" 2>/dev/null)
+  [ -n "$BODY" ] || continue
+  if [ -n "$CONTEXT" ]; then
+    CONTEXT="$CONTEXT
+
+$BODY"
+  else
+    CONTEXT="$BODY"
+  fi
+done
+
+if [ -z "$CONTEXT" ]; then
+  exit 0
+fi
+
+jq -n --arg evt "$HOOK_EVENT" --arg ctx "$CONTEXT" '{
+  hookSpecificOutput: {
+    hookEventName: $evt,
+    additionalContext: $ctx
+  }
+}'
