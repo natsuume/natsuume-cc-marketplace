@@ -199,6 +199,41 @@
 # (意味的ドリフト) は自動検出せず、PR レビュー担当者が目視で確認する運用とする。
 #
 # ============================================================================
+# チェック 5 (新設, #221): subagent-rules.md の rule ID サブセット検査
+# ============================================================================
+#
+# 対象ファイル:
+#   - plugins/agent-discipline/hooks/prompts/subagent-rules.md
+#
+# 背景:
+#   #221 で subagent 向け常時適用ルール (SubagentStart 注入) が新設された。subagent-rules.md
+#   は常時適用ルールの「サブセット + subagent 固有ブロック」で構成されるため、チェック 1/4 の
+#   ような完全一致検査は適用できない。代わりに「rule: プレフィクスのマーカー ID が
+#   always-sonnet.md の ID セットに含まれること」を検証し、always 側での rule ID の改名・削除に
+#   subagent 版が追従し損ねるドリフト (存在しない rule への参照) を CI で検知する。
+#
+# 契約:
+#   1. チェック 1 と同じ抽出方式 (extract_rule_ids) で subagent-rules.md の rule ID 集合を
+#      抽出する。subagent 固有ブロックのマーカー (subagent-rule: プレフィクス) は
+#      extract_rule_ids のパターンにマッチしないため、自然に検査対象外となる。
+#   2. 抽出できた ID が 1 件も無い場合は fail (チェック 1/4 と同方針。マーカー形式の変更や
+#      共有ルールの全削除という前提崩壊時に silent pass しない)。
+#   3. 抽出した各 ID が always-sonnet.md の ID 集合 (チェック 1 で抽出済みの ids_sonnet.txt)
+#      に含まれていれば pass。含まれない ID があれば fail し、その ID を列挙して
+#      エラーメッセージに含める (方向は subagent -> sonnet の片方向のみ。sonnet 側にのみ
+#      存在する ID は「subagent に配送しない」という意図的な選択であり、検査しない)。
+#   4. 対象ファイルは pre-flight の存在チェック対象に加え、見つからなければ fail-closed
+#      (exit 1) とする。
+#   5. 既存チェック 1〜4 の挙動には影響しない (共有するのは extract_rule_ids と WORKDIR、
+#      チェック 1 の ids_sonnet.txt のみ)。
+#
+# CI 発火 (#221): .github/workflows/agent-discipline-prompt-lint.yml の paths filter に
+# subagent-rules.md を追加する (paths 以外の workflow 構造は変更しない)。
+#
+# スコープ外 (チェック 1 と同じ方針): ID が一致した上でのルール本文の表現差分 (意味的
+# ドリフト) は自動検出せず、PR レビュー担当者が目視で確認する運用とする。
+#
+# ============================================================================
 # 実装本体
 # ============================================================================
 
@@ -209,6 +244,7 @@ SONNET_MD="plugins/agent-discipline/hooks/prompts/always-sonnet.md"
 HOOKS_JSON="plugins/agent-discipline/hooks/hooks.json"
 DISCIPLINE_FABLE_MD="plugins/agent-discipline/hooks/prompts/discipline-fable.md"
 DISCIPLINE_SONNET_MD="plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
+SUBAGENT_MD="plugins/agent-discipline/hooks/prompts/subagent-rules.md"
 
 # チェック 2 前提検証 (#186) で使う、 期待される type:agent entry 数。
 EXPECTED_AGENT_ENTRIES=4
@@ -216,7 +252,7 @@ EXPECTED_AGENT_ENTRIES=4
 overall_fail=0
 
 # --- pre-flight: リポジトリルートから実行されているか / jq が使えるか ---
-for f in "$FABLE_MD" "$SONNET_MD" "$HOOKS_JSON" "$DISCIPLINE_FABLE_MD" "$DISCIPLINE_SONNET_MD"; do
+for f in "$FABLE_MD" "$SONNET_MD" "$HOOKS_JSON" "$DISCIPLINE_FABLE_MD" "$DISCIPLINE_SONNET_MD" "$SUBAGENT_MD"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: $f が見つかりません。リポジトリルートから実行してください。" >&2
     exit 1
@@ -470,6 +506,34 @@ else
   echo "FAIL: discipline rule ID sets differ between $DISCIPLINE_FABLE_MD and $DISCIPLINE_SONNET_MD" >&2
   cat "$WORKDIR/ids_discipline_diff.txt" >&2
   overall_fail=1
+fi
+
+# ============================================================================
+# チェック 5: subagent-rules.md の rule ID サブセット検査 (subagent-rules.md ⊆ always-sonnet.md)
+# ============================================================================
+
+echo ""
+echo "== check 5: subagent rule ID subset (subagent-rules.md ⊆ always-sonnet.md) =="
+
+extract_rule_ids "$SUBAGENT_MD" > "$WORKDIR/ids_subagent.txt"
+
+if [ ! -s "$WORKDIR/ids_subagent.txt" ]; then
+  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($SUBAGENT_MD)。マーカー形式の変更、または共有ルールの全削除の可能性があります。" >&2
+  exit 1
+fi
+
+# always-sonnet.md の ID 集合 (チェック 1 で抽出済みの ids_sonnet.txt) に対する片方向の
+# 包含検査。comm -23 (sorted 前提) で「subagent 側にのみ存在する ID」を取り出す。
+# extract_rule_ids は sort 済みの出力を返すため、そのまま comm に渡せる。
+comm -23 "$WORKDIR/ids_subagent.txt" "$WORKDIR/ids_sonnet.txt" > "$WORKDIR/ids_subagent_orphan.txt"
+
+if [ -s "$WORKDIR/ids_subagent_orphan.txt" ]; then
+  echo "FAIL: $SUBAGENT_MD に、$SONNET_MD に存在しない rule ID が含まれています (always 側での改名・削除への追従漏れ、または typo):" >&2
+  sed 's/^/  - /' "$WORKDIR/ids_subagent_orphan.txt" >&2
+  overall_fail=1
+else
+  subagent_id_count=$(wc -l < "$WORKDIR/ids_subagent.txt" | tr -d ' ')
+  echo "OK: subagent rule IDs (${subagent_id_count} IDs) はすべて always-sonnet.md に存在します"
 fi
 
 # ============================================================================

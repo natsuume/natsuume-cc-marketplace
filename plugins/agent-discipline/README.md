@@ -4,9 +4,19 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.12.0
+v0.13.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.12.0 → v0.13.0 の変更点
+
+subagent 向け常時適用ルールの SubagentStart 注入の新設です (issue #221)。subagent の Bash 呼び出しもメインセッションと同じ PreToolUse hook のパターンマッチを通るため、bash-decompose 等の安全側規律は委任指示 (メインセッション側の遵守) に依存しない構造的な配送が必要でした。抜粋範囲・配送方式・モデル判定・lint の 4 論点は着手時の壁打ちでユーザ確定 (2026-07-08、詳細は issue #221 の「確定した設計」節)。
+
+- **`hooks/prompts/subagent-rules.md` を新設**: 注入テンプレート。常時適用ルールのうち subagent にも適用される bash-decompose (always-sonnet.md と同一の rule ID マーカーを維持) + subagent 固有の 3 ブロック (報告の事実性 / default-deny / エスカレーション定型。subagent-rule: プレフィクスの固有マーカー) で構成
+- **`hooks/scripts/inject-subagent-rules.sh` を新設**: SubagentStart で subagent-rules.md 全文を additionalContext として注入する。モデル判定 (subagent は Fable になり得ず hook input のモデル情報にも保証がない)・agent_type 分岐 (codex-advisor / ui-discipline と同方針) を持たない静的全文注入。fail-open は jq 不在 / ファイル欠落 / 空ファイル (いずれも無音終了)。SubagentStart hook は Claude Code 2.0.43+ で発火
+- **`lint-prompt-sync.sh` にチェック 5 を追加**: subagent-rules.md の rule: プレフィクスのマーカー ID が always-sonnet.md の ID セットに含まれること (サブセット検査、片方向) を検証。always 側での rule ID の改名・削除への追従漏れを CI で検知する。subagent-rule: プレフィクスの固有マーカーは検査対象外。workflow の paths filter にも subagent-rules.md を追加
+- **TDD 2 段階**: Phase A (テンプレート全文 + injector 骨格 + hooks.json 登録 + lint チェック 5 の契約記述) → Phase B (injector / lint 実装本体 + README + version bump) の 2 commit 構成 (#185-187 と同じ Phase 分割方式)
+- **version bump**: `0.12.0` → `0.13.0` (minor)。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.11.0 → v0.12.0 の変更点
 
@@ -148,6 +158,17 @@ claude plugin install agent-discipline@natsuume-plugins
 ## 機能一覧
 
 ### Hooks
+
+#### inject-subagent-rules
+
+**ファイル**: `hooks/scripts/inject-subagent-rules.sh`
+**イベント**: `SubagentStart` (Claude Code 2.0.43+)
+
+**動作** (v0.13.0 新設、issue #221):
+
+- 全 subagent の起動時に `hooks/prompts/subagent-rules.md` 全文を `additionalContext` として注入する。モデル判定・agent_type 分岐を持たない静的全文注入
+- 注入内容は 4 規律: bash-decompose (always-sonnet.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点)
+- `jq` 不在 / prompt ファイル欠落・空の場合は無音 `exit 0` (フェイルセーフ)。subagent-rules.md の rule ID 整合は `lint-prompt-sync.sh` チェック 5 (サブセット検査) が CI で担保する
 
 #### inject-always
 
