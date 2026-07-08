@@ -16,7 +16,11 @@
 
 ## バージョン
 
-v3.0.3 (前身: `pre-commit-review` v0.4.0)
+v3.0.4 (前身: `pre-commit-review` v0.4.0)
+
+### v3.0.3 → v3.0.4 の変更点
+
+plugin description (plugin.json / marketplace.json / リポジトリ README の一覧テーブル) を 1〜2 文に短縮しました。hook の動作変更はありません。
 
 ### v3.0.2 → v3.0.3 の変更点
 

@@ -10,8 +10,8 @@
     {
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
-      "description": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / PR head 指定) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。リモートのデフォルトブランチ変更を作業ブランチへ取り込む rebase ワークフローの Skill も同梱。",
-      "version": "0.4.1",
+      "description": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。",
+      "version": "0.4.2",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
@@ -24,57 +24,57 @@
     {
       "name": "auto-lint-check",
       "source": "./plugins/auto-lint-check",
-      "description": "ignore コメント挿入を編集時に禁止し、git commit 直前に staged ファイルを lint し、編集後に自動フォーマットを適用し、commit 直後に HEAD を再 lint して non-blocking フィードバックを返すプラグイン",
-      "version": "0.4.0",
+      "description": "編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する。",
+      "version": "0.4.1",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
     },
     {
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
-      "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。3 レビューを subagent として並列起動する /pre-push-review:review コマンドを提供し、レビュー済みマーカーとブランチ全差分の同一性検証によって、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "3.0.3",
+      "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーとブランチ全差分の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
+      "version": "3.0.4",
       "keywords": ["push", "review", "quality", "codex", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
       "name": "update-default-branch",
       "source": "./plugins/update-default-branch",
-      "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン",
-      "version": "0.2.0",
+      "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。",
+      "version": "0.2.1",
       "keywords": ["git", "pull", "prune", "branch-cleanup", "merge"]
     },
     {
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
-      "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) をプラグインとして提供し、/natsuume-statusline:setup で ~/.claude/settings.json に登録するプラグイン",
-      "version": "0.5.0",
+      "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。/natsuume-statusline:setup で ~/.claude/settings.json に登録する。",
+      "version": "0.5.1",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
-      "description": "Claude Code の作業規律を配送するプラグイン。SessionStart で常時適用ルール (Bash コマンド分解、設計判断のユーザ事前確認、issue 起票の詳細化、連続 issue 解決時の排他制御など) を注入し、auto mode では commit→push→PR→merge の自走方針を配送する。gh issue/pr の body に紛れ込む未承認の推奨表現も PreToolUse で検知して block する。Fable セッション向け分業規律の併載とサブエージェント Fable 実行防止 hook も v0.8.0 で統合。v0.13.0 で SubagentStart による subagent 向け常時適用ルール (Bash コマンド分解・報告の事実性・default-deny・エスカレーション定型) の注入を追加。",
-      "version": "0.13.0",
+      "description": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。",
+      "version": "0.13.1",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
-      "description": "UI (フロントエンド) 実装時の規律を配送するプラグイン。SessionStart で 10 ルール (層別の component 共通化基準、composition 実装様式、実装前の既存探索、表示/非表示・disabled の決定表、レイアウト安定、design token 経由のスタイル指定、アクセシビリティ基本則、非同期状態の網羅、フォントサイズ・ビューポート頑健性、視覚方向の明示的選択) を常時注入し、SubagentStart で同一ルールに subagent 向け前置き注記 (AskUserQuestion 不在に伴うエスカレーション読み替え) を連結して全 subagent にも注入する。対応するコード例・チェックリストは ui-patterns skill として提供する。UI を持つプロジェクトでのみ enable して使う。",
-      "version": "0.2.0",
+      "description": "UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う。",
+      "version": "0.2.1",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     },
     {
       "name": "natsuume-writing",
       "source": "./plugins/natsuume-writing",
-      "description": "テックブログ・技術書執筆を支援するプラグイン。natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) を配置し、SessionStart でコア要点を常時注入する。outline skill (章立ての壁打ち + インファイルスケルトン書き込み)、draft skill (スケルトンからのたたき台一括生成 + 未検証事項の TODO 明示)、review skill (文体・構成・技術的正確さ・表記の 4 観点レビュー) を提供。執筆プロジェクトでのみ enable して使う。",
-      "version": "0.4.1",
+      "description": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。",
+      "version": "0.4.2",
       "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook", "skill"]
     },
     {
       "name": "codex-advisor",
       "source": "./plugins/codex-advisor",
-      "description": "Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。SessionStart で相談タイミングの規律 (実質作業前・完了宣言前・行き詰まり・方針転換時に相談、助言のフラットな扱い (独立した第二視点) と reconcile call、設計判断はユーザ専権) を、SubagentStart で subagent 向け簡約版 (委任指示の明示許可がある場合のみ相談可) を常時注入し、/codex-advisor:consult skill で Codex に read-only 相談して plan / course-correction の助言を受け取る。相談は公式 codex plugin の companion (task --effort xhigh) を foreground 起動する wrapper 経由で行う。要 openai-codex plugin + Codex CLI。",
-      "version": "0.1.0",
+      "description": "Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミングと助言の扱いの規律を hook で常時注入し、/codex-advisor:consult skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI)。",
+      "version": "0.1.1",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     }
   ]
