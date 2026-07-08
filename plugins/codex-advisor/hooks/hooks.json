@@ -1,5 +1,5 @@
 {
-  "description": "codex-advisor の配送経路: SessionStart で Codex への相談規律 (hooks/prompts/advisor-rules.md) を additionalContext として常時注入する (inject-advisor-rules.sh)。モデル判定・permission_mode 判定等の条件分岐は持たず、常に同一内容を注入する。設計判断の詳細は issue #219 と plugin README を参照。",
+  "description": "codex-advisor の配送経路: SessionStart でメインセッション向け相談規律 (hooks/prompts/advisor-rules.md) を、SubagentStart (Claude Code 2.0.43+) で subagent 向け簡約版 (hooks/prompts/advisor-rules-subagent.md、wrapper 絶対パスを注入時に解決して埋め込む) を、それぞれ additionalContext として常時注入する。モデル判定・permission_mode 判定・agent_type matcher 等の条件分岐は持たず、常に同一内容を注入する。設計判断の詳細は issue #219 と plugin README を参照。",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,16 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules-subagent.sh"
           }
         ]
       }

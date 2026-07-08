@@ -73,7 +73,7 @@
     {
       "name": "codex-advisor",
       "source": "./plugins/codex-advisor",
-      "description": "Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。SessionStart で相談タイミングの規律 (実質作業前・完了宣言前・行き詰まり・方針転換時に相談、助言のフラットな扱い (独立した第二視点) と reconcile call、設計判断はユーザ専権) を常時注入し、/codex-advisor:consult skill で Codex に read-only 相談して plan / course-correction の助言を受け取る。相談は公式 codex plugin の companion (task --effort xhigh) を foreground 起動する wrapper 経由で行う。要 openai-codex plugin + Codex CLI。",
+      "description": "Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。SessionStart で相談タイミングの規律 (実質作業前・完了宣言前・行き詰まり・方針転換時に相談、助言のフラットな扱い (独立した第二視点) と reconcile call、設計判断はユーザ専権) を、SubagentStart で subagent 向け簡約版 (委任指示の明示許可がある場合のみ相談可) を常時注入し、/codex-advisor:consult skill で Codex に read-only 相談して plan / course-correction の助言を受け取る。相談は公式 codex plugin の companion (task --effort xhigh) を foreground 起動する wrapper 経由で行う。要 openai-codex plugin + Codex CLI。",
       "version": "0.1.0",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     }

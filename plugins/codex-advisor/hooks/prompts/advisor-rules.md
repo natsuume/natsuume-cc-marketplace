@@ -44,4 +44,5 @@
 
 - 設計 / 仕様レベルの決定はユーザの専権事項である。助言はユーザに提示する推奨案を練るための判断材料として使い、`AskUserQuestion` によるユーザ確認の代替にしない
 - コードレビュー用途には使わない (pre-push-review の codex review が担当する)
+- subagent に相談させてよい場合は、委任指示に codex-advisor の使用許可を明示する (相談は課金を伴う外部呼び出しのため、許可の無い subagent は相談しない)
 - advisor が不通のとき (openai-codex plugin 未 install・codex CLI 未認証・タイムアウト) は、相談なしで作業を続行してよい。ただしその旨を作業報告に含める
