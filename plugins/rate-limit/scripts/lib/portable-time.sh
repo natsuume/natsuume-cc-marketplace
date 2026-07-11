@@ -16,5 +16,31 @@
 # 呼び出し側の注意: 入力が不正な場合に握り潰さず非ゼロ exit を返すこと
 # (fetch-rate-limit.sh はこれを「キャッシュ stale」判定に使う)。
 
-echo "[rate-limit] not implemented (issue #225 Phase B)" >&2
-return 1 2>/dev/null || exit 1
+now_epoch() {
+  date +%s
+}
+
+now_iso() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+# epoch_to_iso <epoch>
+# GNU date は `-d @N`、BSD/macOS date には `-d` が無く `-r N` を使う。
+# 両方試して、成功した方の出力を採用する (失敗した側の stderr は捨てる)。
+epoch_to_iso() {
+  local epoch="$1"
+  [ -n "$epoch" ] || return 1
+  date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
+# iso_to_epoch <iso>
+# 自前生成の固定フォーマット (%Y-%m-%dT%H:%M:%SZ) のみ対応すればよい。
+# GNU date は `-d "$iso"` で直接パースできる。BSD/macOS date は `-j -f` で
+# 入力フォーマットを明示する必要がある。
+iso_to_epoch() {
+  local iso="$1"
+  [ -n "$iso" ] || return 1
+  date -u -d "$iso" +%s 2>/dev/null \
+    || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$iso" +%s 2>/dev/null
+}

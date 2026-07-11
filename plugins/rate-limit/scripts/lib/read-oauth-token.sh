@@ -19,5 +19,40 @@
 # セキュリティ契約: 冒頭で set +x (xtrace 継承対策)。token を echo デバッグしない。
 # 呼び出し側は token を curl 引数に直接置かず --config (stdin) で渡す (ps 露出防止)。
 
-echo "[rate-limit] not implemented (issue #225 Phase B)" >&2
-return 1 2>/dev/null || exit 1
+set +x
+
+read_oauth_token() {
+  local creds_file token newline_count
+
+  creds_file="$HOME/.claude/.credentials.json"
+  token=""
+
+  # 経路1: ~/.claude/.credentials.json (jq が無いと読めないが、呼び出し元の
+  # fetch-rate-limit.sh は jq 不在を先頭で弾く契約なのでここでは静かに次へフォールバックする)
+  if [ -f "$creds_file" ] && command -v jq >/dev/null 2>&1; then
+    token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+  fi
+
+  # 経路2: macOS Keychain (Darwin のみ。サービス名は実機未検証、README に明記)
+  if [ -z "$token" ] && [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command -v security >/dev/null 2>&1; then
+    token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+  fi
+
+  if [ -z "$token" ]; then
+    echo "[rate-limit] OAuth token を取得できません (~/.claude/.credentials.json が無いか token が空、macOS Keychain も未検出)。サブスクリプション認証環境でのみ経路②が利用可能です。" >&2
+    return 1
+  fi
+
+  # token 形式検証 (curl --config への injection 防止): 改行を含まない 1 行、
+  # かつ引用符・空白を含まないこと。
+  newline_count=$(printf '%s' "$token" | wc -l | tr -d ' ')
+  if [ "$newline_count" != "0" ] \
+    || printf '%s' "$token" | grep -q "[[:space:]]" \
+    || printf '%s' "$token" | grep -q "'" \
+    || printf '%s' "$token" | grep -q '"'; then
+    echo "[rate-limit] OAuth token の形式が不正です (改行・引用符・空白を含んでいます)。" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$token"
+}

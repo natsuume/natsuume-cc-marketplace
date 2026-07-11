@@ -14,6 +14,7 @@
 #
 # rate limit はアカウント単位のグローバル値のため、セッション別・プロジェクト別に
 # 分割しない。ディレクトリ・ファイルは所有者のみ読み書き可 (umask 077) で作成する。
+# (作成自体は書き手の statusline/cache-write-wrapper.sh の責務。本ファイルはパス定義のみ)
 
-echo "[rate-limit] not implemented (issue #225 Phase B)" >&2
-return 1 2>/dev/null || exit 1
+RATE_LIMIT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-rate-limit"
+RATE_LIMIT_CACHE_FILE="$RATE_LIMIT_CACHE_DIR/rate_limits.json"
