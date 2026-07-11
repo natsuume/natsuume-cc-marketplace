@@ -10,6 +10,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # JSON入力を一括パース
 input=$(cat)
 
+# cache の updated_at は stdin 受領時刻を使うため、描画前のこの時点で採時する。
+received_at=$(date +%s 2>/dev/null)
+
 # jq が無い環境では JSON を解析できないため空出力で終了する (jq は README で必須依存と明記)。
 command -v jq >/dev/null 2>&1 || exit 0
 
@@ -159,4 +162,4 @@ fi
 # --- context cache dump: session-handoff plugin (#228) 向け producer ---
 # 全表示出力の後に実行する (表示への不干渉。stdout/stderr は一切出さず fail-open)。
 source "$SCRIPT_DIR/context-cache-dump.sh"
-dump_context_cache "$session_id" "$ctx_pct" "$ctx_used" "$ctx_max"
+dump_context_cache "$session_id" "$ctx_pct" "$ctx_used" "$ctx_max" "$received_at"

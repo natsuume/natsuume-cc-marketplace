@@ -24,9 +24,10 @@ v0.6.0
 
 表示処理とは別に、statusline は stdin JSON の `context_window` データを per-session の一時 cache ファイルへ書き出します。これは session-handoff plugin (#228) が読む plugin 間契約の producer 側であり、issue #227 で追加されました。
 
-- **出力先**: `${TMPDIR:-/tmp}/natsuume-context-cache/<sanitized_session_id>.json` (`sanitized_session_id` は `session_id` を `A-Za-z0-9._-` のみに制限した値)
-- **スキーマ**: `updated_at` (書き込み時の epoch 秒)、`session_id` (サニタイズ前)、`used_percentage`、`total_input_tokens`、`context_window_size`
+- **出力先**: `${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<sanitized_session_id>.json` (`uid` は `id -u`、`sanitized_session_id` は `session_id` を `A-Za-z0-9._-` のみに制限した値)
+- **スキーマ**: `updated_at` (stdin 受領時刻の epoch 秒)、`session_id` (サニタイズ前)、`used_percentage`、`total_input_tokens`、`context_window_size`
 - **fail-open**: `session_id` 欠落/サニタイズ後空、`used_percentage` が数値でない (context_window 欠落/null を含む)、`jq` 不在、ディレクトリ作成・書き込み失敗、いずれの場合も無音でスキップし、statusline の表示には一切影響しません。`total_input_tokens` / `context_window_size` が検証に通らない場合はそのキーのみ省略して書き込みます
+- **並行書き込みの直列化**: per-session の mkdir lock で直列化し、より新しい `updated_at` を持つ既存 cache は古いデータで上書きしません (monotonic)。lock 競合時は書き込みをスキップします
 
 ## インストール
 

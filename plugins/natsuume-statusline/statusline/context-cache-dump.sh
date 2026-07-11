@@ -5,24 +5,36 @@
 #       ファイルへ書き出す。表示ロジックとは無関係な副作用であり、失敗しても
 #       statusline の表示には一切影響させない (fail-open)。
 #
-# 出力先: ${TMPDIR:-/tmp}/natsuume-context-cache/<sanitized_session_id>.json
+# 出力先: ${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<sanitized_session_id>.json
+#   uid = id -u (per-user 分離。他ユーザの共有 /tmp 経由の symlink/tampering を避ける)
 #   sanitized_session_id = printf '%s' "$session_id" | tr -cd 'A-Za-z0-9._-'
 #
 # 出力スキーマ (jq -n で生成):
-#   updated_at            : date +%s の値 (number)
+#   updated_at            : main.sh が stdin 受領直後に採時した epoch 秒 (number)
 #   session_id            : サニタイズ前の session_id (string)
 #   used_percentage       : 使用率 (number)
 #   total_input_tokens    : 使用トークン数 (number、検証に通らない場合はキー省略)
 #   context_window_size   : 最大コンテキスト長 (number、検証に通らない場合はキー省略)
 #
+# 直列化: per-session mkdir lock ($cache_dir/.lock-<sanitized>、mkdir は POSIX で atomic)。
+# lock 取得に失敗した場合 (他プロセスが書き込み中) は待たずに書き込みをスキップする
+# (non-blocking skip。より新しい描画が並行して書いている想定)。10 秒以上古い lock は
+# 前回プロセスの異常終了とみなし stale とみなして破棄してから再取得を試みる。
+#
+# monotonic guard: 既存 cache の updated_at が新しい updated_at 以下の場合のみ上書きする
+# (古いデータで新しい cache を後勝ちに壊さないため)。同値は last-writer-wins で書き込む。
+#
+# 安全対策: cache ディレクトリが symlink、または実行ユーザの所有でない場合は書き込まない。
+#
 # fail-open 方針: session_id 欠落/サニタイズ後空、used_percentage 欠落/非数値、
-# jq 不在、mkdir/mktemp/mv 失敗 — いずれも無音でスキップし、stdout/stderr には
-# 何も出力せず常に return 0 とする。呼び出し元 (main.sh) はこの関数呼び出し前に
-# 全表示出力を終えていること (表示への不干渉)。
+# received_at 非数値、uid 取得不可、jq 不在、mkdir/chmod/lock/mktemp/mv 失敗
+# — いずれも無音でスキップし、stdout/stderr には何も出力せず常に return 0 とする。
+# 呼び出し元 (main.sh) はこの関数呼び出し前に全表示出力を終えていること (表示への不干渉)。
 
-# 引数: $1=session_id (raw), $2=used_percentage, $3=total_input_tokens, $4=context_window_size
+# 引数: $1=session_id (raw), $2=used_percentage, $3=total_input_tokens,
+#       $4=context_window_size, $5=received_at (main.sh が stdin 受領直後に採時した epoch 秒)
 dump_context_cache() {
-  local session_id="$1" used_percentage="$2" total_input_tokens="$3" context_window_size="$4"
+  local session_id="$1" used_percentage="$2" total_input_tokens="$3" context_window_size="$4" received_at="$5"
 
   # main.sh 冒頭で jq 存在チェック済みだが、この関数単体で呼ばれる将来変更に備え二重に防御する。
   command -v jq >/dev/null 2>&1 || return 0
@@ -35,8 +47,15 @@ dump_context_cache() {
   # used_percentage が数値でなければ書き込まない (context_window null/欠落を含む)。既存 cache は残す。
   [[ "$used_percentage" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 0
 
-  local updated_at
-  updated_at=$(date +%s) || return 0
+  # received_at (updated_at に使う値) が数値でなければ採時失敗とみなし書き込まない。
+  [[ "$received_at" =~ ^[0-9]+$ ]] || return 0
+
+  # per-user にキャッシュディレクトリを分離する。uid が取得できない環境では書き込まない。
+  local uid
+  uid=$(id -u 2>/dev/null)
+  [[ "$uid" =~ ^[0-9]+$ ]] || return 0
+
+  local updated_at="$received_at"
 
   # total_input_tokens / context_window_size は検証に通らない場合キーごと省略する
   # (jq_args / jq_filter を対で組み立てる)。
@@ -57,15 +76,48 @@ dump_context_cache() {
   cache_json=$(jq "${jq_args[@]}" "$jq_filter" 2>/dev/null) || return 0
   [ -z "$cache_json" ] && return 0
 
-  local cache_dir="${TMPDIR:-/tmp}/natsuume-context-cache"
+  local cache_dir="${TMPDIR:-/tmp}/natsuume-context-cache-$uid"
   local cache_file="$cache_dir/$sanitized.json"
+  local lock_dir="$cache_dir/.lock-$sanitized"
 
-  # atomic write: サブシェル内で umask 077 → cache ディレクトリ内に mktemp → 書き込み → mv -f
+  # atomic write: サブシェル内で umask 077 → symlink/所有者チェック → per-session lock
+  # 取得 → monotonic guard → mktemp → 書き込み → mv -f
   # (呼び出し元プロセスの umask を変更しないためサブシェルに閉じる)。
   # mktemp を cache_dir 配下に作るのは、異なる FS 間コピーを避けて mv を atomic rename にするため。
   (
     umask 077
     mkdir -p "$cache_dir" 2>/dev/null || exit 1
+
+    # 他ユーザによる symlink 差し込み対策: cache_dir 自体が symlink なら書き込まない。
+    [ -L "$cache_dir" ] && exit 1
+
+    # 非所有ディレクトリ対策: 実行ユーザの所有でなければ書き込まない。
+    [ -O "$cache_dir" ] || exit 1
+
+    chmod 700 "$cache_dir" 2>/dev/null || exit 1
+
+    # stale lock 破棄: mtime が現在時刻 (received_at で代用) より 10 秒以上古ければ
+    # 前回プロセスの異常終了とみなし破棄する (失敗しても続行、best-effort)。
+    if [ -d "$lock_dir" ]; then
+      lock_mtime=$(stat -c %Y "$lock_dir" 2>/dev/null || stat -f %m "$lock_dir" 2>/dev/null)
+      if [[ "$lock_mtime" =~ ^[0-9]+$ ]] && [ $((received_at - lock_mtime)) -ge 10 ]; then
+        rmdir "$lock_dir" 2>/dev/null
+      fi
+    fi
+
+    # lock 取得 (mkdir は POSIX で atomic)。失敗 = 他プロセスが書き込み中 = より新しい
+    # 描画が書いているとみなし、待たずにスキップする (non-blocking skip)。
+    mkdir "$lock_dir" 2>/dev/null || exit 1
+    trap 'rmdir "$lock_dir" 2>/dev/null' EXIT
+
+    # monotonic guard: 既存 cache の updated_at が新しい updated_at より大きければ
+    # 古いデータで新しい cache を上書きしない (同値は last-writer-wins で書き込み続行)。
+    if [ -f "$cache_file" ]; then
+      existing_updated_at=$(jq -r '.updated_at // 0' "$cache_file" 2>/dev/null)
+      [[ "$existing_updated_at" =~ ^[0-9]+$ ]] || existing_updated_at=0
+      [ "$existing_updated_at" -gt "$updated_at" ] && exit 0
+    fi
+
     tmp=$(mktemp "$cache_dir/.ctx.XXXXXX" 2>/dev/null) || exit 1
     printf '%s\n' "$cache_json" > "$tmp" 2>/dev/null || { rm -f "$tmp"; exit 1; }
     mv -f "$tmp" "$cache_file" 2>/dev/null || { rm -f "$tmp"; exit 1; }
