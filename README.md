@@ -33,6 +33,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [natsuume-writing](#natsuume-writing) | 0.4.2 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
 | [codex-advisor](#codex-advisor) | 0.1.1 | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミングと助言の扱いの規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.1.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
+| [session-handoff](#session-handoff) | 0.1.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 
 ---
 
@@ -370,3 +371,42 @@ Claude (エージェント自身) が、セッション内でサブスクリプ�
 ### キーワード
 
 `rate-limit` `usage-limit` `statusline` `oauth` `skill`
+
+---
+
+## session-handoff
+
+context 使用率が閾値 (既定 60%) を超えたら handoff ドキュメントの作成を Claude に促し、次のセッション (`/clear` または起動直後) にその内容を自動注入するプラグインです。長時間セッションが context 圧縮や `/clear` を挟んでも、直前までの背景・進行中の作業・残作業を新セッションへ引き継げるようにします。
+
+検知 (`detect-context-threshold`, PostToolUse) と注入 (`inject-pending-handoff`, SessionStart) の 2 hook で構成されます。検知は 1 セッション 1 回のみ通知し (marker は「通知発行済み」の意味で「handoff 保存済み」ではありません)、注入は rename の atomic 性で **at-most-once** を保証します (24 時間を超えた pending は注入せず、30 日を超えたファイルは削除します)。
+
+検知 hook が読む context 使用率は自プラグインでは取得できず、natsuume-statusline (v0.6.0+) が書き出すキャッシュ (`${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<session_id>.json`) に依存します。natsuume-statusline を使わない場合は、`/session-handoff:setup` で cache 専用の安定 launcher を登録できます。setup skill は既存の statusline 設定を分類し (natsuume-statusline 導入済み / 自 launcher 導入済み / 他 statusline / 未設定)、他の statusline を包む前には 1 段の連鎖検査 (自 launcher への平文参照、または `INNER_COMMAND_B64` 等の既知形式 base64 代入行を decode した中身への参照を検出) を行って二重ラップ・循環を防ぎます。連鎖検査をすり抜けた循環構成に対しては、launcher 自身が実行時の env 再帰ガードで無限再帰を切断します (rate-limit と同型の launcher パターン)。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `detect-context-threshold` | PostToolUse (`*`) | context 使用率が閾値を超えたことを検知し、handoff 作成指示を注入する (1 セッション 1 回) |
+| `inject-pending-handoff` | SessionStart (`clear\|startup`) | 直近 24 時間以内の未消費 handoff があれば自動注入する (at-most-once) |
+
+#### Skills
+
+| スキル名 | コマンド | 説明 |
+|---------|---------|------|
+| setup | `/session-handoff:setup` | context 使用率キャッシュの producer (natsuume-statusline または安定 launcher) を構成する |
+
+### 環境変数
+
+| 変数 | 意味 | 既定値 |
+|---|---|---|
+| `SESSION_HANDOFF_THRESHOLD` | 検知 hook が使う context 使用率の閾値 (1〜99 の整数) | `60` |
+
+### スコープ外
+
+Stop hook による handoff 作成の強制、transcript のパースによる使用率算出、同一セッション内の再警告は行いません。
+
+### キーワード
+
+`session-handoff` `context-window` `handoff` `session-start` `statusline` `cache` `hook` `skill`
