@@ -29,7 +29,10 @@ codex review の 5 指摘 (安定 launcher・lossless 保存・dir 先行作成�
 - Linux (WSL2) / macOS 両対応。stat が必要な箇所は `stat -c ... || stat -f ...` の 2 段 fallback (natsuume-statusline/lib.sh と同方式)
 - `sanitized_session_id` = `tr -cd 'A-Za-z0-9._-'` (空になったら無音終了)
 - 読み取る cache の契約 (producer 側 #227、実装済み): `${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<sanitized_session_id>.json`、必須フィールドは `used_percentage` のみ
-- plugin 内部の状態パス: `${TMPDIR:-/tmp}/session-handoff-<uid>/markers/<sanitized_session_id>.notified` (`<uid>` = `id -u`)
+- plugin 内部の状態パス: `${TMPDIR:-/tmp}/session-handoff-<uid>/markers/<sanitized_session_id>.notified` (`<uid>` = `id -u`)。
+  marker は**ディレクトリ**であり、作成は `mkdir` による atomic claim で行う (並列 PostToolUse が同時に
+  marker 不在を観測しても、`mkdir` の成功者 1 プロセスだけが通知を発行できる。touch はファイル既存でも
+  成功するため排他にならない)
 - 状態ルート `${TMPDIR:-/tmp}/session-handoff-<uid>/` の作成時は #227 producer と同一の防御を適用する:
   subshell 内 `umask 077` → `mkdir -p` → symlink 拒否 (`-L`) → 所有確認 (`-O`) → `chmod 700`、失敗はすべて無音 skip
 
@@ -49,8 +52,13 @@ stdin: hook input JSON (`session_id` / `agent_id` / `cwd` / `hook_event_name` �
 8. 閾値: `SESSION_HANDOFF_THRESHOLD` を検証 (`^[0-9]+$` かつ 1〜99)。不正・未設定は 60
 9. float 比較は awk (`used_percentage >= threshold` が偽 → exit)
 10. handoff ディレクトリを準備: `<git-dir 絶対パス>/session-handoff/` を `mkdir -p` し、同ディレクトリに一時ファイルの作成→削除 probe で書き込み可能性を実確認する (`[ -w ]` では NFS 等で偽陽性になるため)。失敗 → marker を作らず exit (次のツール実行で再検知される)
-11. 保存パスを組み立て (`pending-<sanitized_session_id>-<epoch 秒>.md`)、`handoff-instruction.md` を読んで `__HANDOFF_PATH__` を置換 (bash の `${var//}`。sed 不使用) し、出力 JSON の組み立てまで成功させる
-12. すべて準備できてから marker を touch し (状態ルートは共通契約の防御手順で作成)、additionalContext を出力する
+11. 保存パスを組み立て (`pending-<sanitized_session_id>-<epoch 秒>.md`)、`handoff-instruction.md` を読んで `__HANDOFF_PATH__` を置換し、出力 JSON の組み立てまで成功させる。置換は bash 5.2 の
+    `patsub_replacement` (置換文字列中の `&` 展開) を避けるため `${var//}` を使わず、プレースホルダが
+    **ちょうど 1 個**存在することを先に検証したうえで `prefix=${template%%__HANDOFF_PATH__*}` /
+    `suffix=${template#*__HANDOFF_PATH__}` に分割して `"$prefix$path$suffix"` と連結する。
+    プレースホルダが不在・複数の場合 (テンプレート破損) は marker を作らず無音終了する
+12. すべて準備できてから marker を `mkdir` で atomic claim し (状態ルートは共通契約の防御手順で作成。
+    mkdir 失敗 = 並列 hook が先行 = 無音 exit)、additionalContext を出力する
 
 marker の意味は「通知を発行済み」であり「handoff が保存済み」ではない (Claude の Write 失敗までは再通知しない。
 この割り切りは README に記載する)。
@@ -91,9 +99,10 @@ stdin: hook input JSON (`source` / `cwd` / `hook_event_name` を使用)。
 
 1. 現セッションの cache ファイル存在 → 構成済みと報告して終了
 2. `~/.claude/settings.json` の statusLine.command が natsuume-statusline (0.6.0+) → 構成済み報告。cache 未生成なら plugin update 案内
-3. 他 statusline 設定済み → wrapper 化の変更を提示し AskUserQuestion で確認後、設置を実行
-4. statusline 未設定 → AskUserQuestion で「natsuume-statusline を導入」or「cache-only launcher を登録」を選択させ実行
-5. いずれの書き換えも実行前に現在の設定値を報告する
+3. statusLine.command が**自 launcher** (`session-handoff-statusline-launcher.sh`) を指す → 構成済みとして扱う (「他の statusline」と誤分類して再ラップしない — 自己再帰と元 command 喪失の防止)。launcher の再生成が必要な場合は、既存 launcher 内の固定形式の代入行 (例: `WRAPPED_COMMAND_B64='...'`) から base64 inner command を一意に抽出して引き継ぐ。抽出・検証に失敗した場合は launcher と settings.json のいずれも変更せず setup を終了する
+4. 他 statusline 設定済み → wrapper 化の変更を提示し AskUserQuestion で確認後、設置を実行
+5. statusline 未設定 → AskUserQuestion で「natsuume-statusline を導入」or「cache-only launcher を登録」を選択させ実行
+6. いずれの書き換えも実行前に現在の設定値を報告する
 
 設置の設計 (codex review P1 2 件への対応):
 
@@ -117,7 +126,9 @@ stdin: hook input JSON (`source` / `cwd` / `hook_event_name` を使用)。
 | cache 不在 / 破損 / used_percentage 欠落 | 検知しない (producer 未構成は setup skill で解消する導線) |
 | `SESSION_HANDOFF_THRESHOLD` 不正値 | 60 に fallback |
 | handoff ディレクトリを作成・書き込みできない | marker を作らず終了 (次ツール実行で再検知) |
-| marker touch 失敗 | 注入しない |
+| handoff-instruction.md のプレースホルダが不在・複数 | marker を作らず通知しない (テンプレート破損) |
+| marker の mkdir claim 失敗 (並列 hook の先行) | 通知しない (1 セッション 1 回を排他的に保証) |
+| setup 再実行時に statusLine.command が自 launcher | 再ラップしない。inner command の抽出・検証失敗時は launcher / settings.json とも変更しない |
 | SessionStart source=resume / compact | 注入しない |
 | 24h 超の pending | 注入しない (30 日超で削除) |
 | 24h 以内の pending 複数 | rename-first claim の勝者が最新 1 件を注入、残りはパス列挙 |
