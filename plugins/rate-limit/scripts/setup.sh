@@ -203,11 +203,15 @@ if [ "$ALREADY_WRAPPED" -eq 0 ]; then
   SETTINGS_TMP=$(mktemp "$SETTINGS.XXXXXX")
   trap 'rm -f "$SETTINGS_TMP"' EXIT
 
+  # 既存 statusLine の type / command 以外のキー (padding 等) は保持し、
+  # 本プラグインが所有する type と command だけを上書きする。statusLine が
+  # オブジェクト以外の非 null 値の場合は jq の加算が失敗して中断する
+  # (壊れた設定を黙って上書きしない方針と同じ)。
   jq --arg cmd "$NEW_COMMAND" '
-    .statusLine = {
+    .statusLine = ((.statusLine // {}) + {
       "type": "command",
       "command": $cmd
-    }
+    })
   ' "$SETTINGS" > "$SETTINGS_TMP"
 
   # 念のため出力 JSON が valid か再検証してから差し替える。

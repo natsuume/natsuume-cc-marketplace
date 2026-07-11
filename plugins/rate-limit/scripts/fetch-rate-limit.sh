@@ -18,7 +18,8 @@
 #     User-Agent: claude-code/<claude --version から抽出した X.Y.Z>
 #   - version 抽出不能・claude CLI 不在 → 経路②を試行せず失敗扱い (429 バケット回避)
 #   - curl --max-time 10、リトライなし (実行 1 回につき呼び出し最大 1 回)、-L 禁止、
-#     接続先 https://api.anthropic.com 固定、token は --config - (stdin) 渡し
+#     接続先 https://api.anthropic.com 固定、token は --config - (stdin) 渡し、
+#     --disable を先頭引数に置き既定 ~/.curlrc を読まない (redirect/trace 等の継承遮断)
 #   - レスポンスの期待フィールド欠落・値域外 → 不正値を黙って返さず経路②失敗として扱う
 #
 # 出力 (stdout、公開契約):
@@ -84,7 +85,14 @@ normalize_window_values() {
     # epoch 秒 → ISO 8601 UTC に変換する
     resets_iso=$(epoch_to_iso "$resets_at") || { printf 'null'; return 0; }
   else
-    # ISO 文字列はそのままパススルー
+    # ISO 8601 の構文形状を検証する (タイムゾーン必須。月・日等の暦としての
+    # 妥当性までは見ない)。schema 変更で真偽値やオブジェクトの文字列化が
+    # 来ても valid 扱いにせず、window ごと null に落とす。
+    if ! printf '%s' "$resets_at" \
+      | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|z|[+-][0-9]{2}:?[0-9]{2})$'; then
+      printf 'null'
+      return 0
+    fi
     resets_iso="$resets_at"
   fi
   [ -n "$resets_iso" ] || { printf 'null'; return 0; }
@@ -97,8 +105,10 @@ normalize_window_values() {
 
 extract_cache_window() {
   local field="$1" pct resets_at
-  pct=$(jq -r --arg f "$field" '.rate_limits[$f].used_percentage // empty' "$RATE_LIMIT_CACHE_FILE" 2>/dev/null)
-  resets_at=$(jq -r --arg f "$field" '.rate_limits[$f].resets_at // empty' "$RATE_LIMIT_CACHE_FILE" 2>/dev/null)
+  # jq -r は真偽値・オブジェクトも文字列化してしまうため、文字列化する前に
+  # JSON 型で絞る (used_percentage は number、resets_at は string または number)。
+  pct=$(jq -r --arg f "$field" '(.rate_limits[$f].used_percentage | select(type == "number")) // empty' "$RATE_LIMIT_CACHE_FILE" 2>/dev/null)
+  resets_at=$(jq -r --arg f "$field" '(.rate_limits[$f].resets_at | select(type == "string" or type == "number")) // empty' "$RATE_LIMIT_CACHE_FILE" 2>/dev/null)
   normalize_window_values "$pct" "$resets_at"
 }
 
@@ -153,8 +163,9 @@ try_cache() {
 
 extract_oauth_window() {
   local field="$1" resp_file="$2" pct resets_at
-  pct=$(jq -r --arg f "$field" '.[$f].utilization // empty' "$resp_file" 2>/dev/null)
-  resets_at=$(jq -r --arg f "$field" '.[$f].resets_at // empty' "$resp_file" 2>/dev/null)
+  # extract_cache_window と同様、文字列化する前に JSON 型で絞る。
+  pct=$(jq -r --arg f "$field" '(.[$f].utilization | select(type == "number")) // empty' "$resp_file" 2>/dev/null)
+  resets_at=$(jq -r --arg f "$field" '(.[$f].resets_at | select(type == "string" or type == "number")) // empty' "$resp_file" 2>/dev/null)
   normalize_window_values "$pct" "$resets_at"
 }
 
@@ -181,7 +192,7 @@ request_oauth_usage() {
       printf 'header = "anthropic-beta: oauth-2025-04-20"\n'
       printf 'header = "User-Agent: claude-code/%s"\n' "$version"
       printf 'url = "https://api.anthropic.com/api/oauth/usage"\n'
-    } | curl --config - --max-time 10 --silent --output "$resp_file" --write-out '%{http_code}' 2>/dev/null
+    } | curl --disable --config - --max-time 10 --silent --output "$resp_file" --write-out '%{http_code}' 2>/dev/null
   )
   curl_exit=$?
 
