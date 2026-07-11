@@ -88,6 +88,27 @@ if ! [[ "$USED_PERCENTAGE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   exit 0
 fi
 
+# 7.5. cache が古すぎる場合は producer 停止中 (statusline 未稼働・構成解除等) とみなし
+# 検知しない。古い高値による誤通知 (marker の恒久消費を伴う) と古い低値による検知抑止の
+# 両方を防ぐ。鮮度は契約の updated_at (producer の stdin 受領時刻) を優先し、欠落時は
+# ファイル mtime に fallback する。閾値 600 秒は「アクティブなセッションでは statusline が
+# 継続的に再描画される」前提のもと、長時間ツール実行中の更新停止を許容する幅として選んだ。
+CACHE_MAX_AGE_SECONDS=600
+CACHE_TS=$(jq -r '.updated_at // empty' "$CACHE_FILE" 2>/dev/null)
+if ! [[ "$CACHE_TS" =~ ^[0-9]+$ ]]; then
+  CACHE_TS=$(stat -c %Y "$CACHE_FILE" 2>/dev/null || stat -f %m "$CACHE_FILE" 2>/dev/null)
+fi
+if ! [[ "$CACHE_TS" =~ ^[0-9]+$ ]]; then
+  exit 0
+fi
+NOW=$(date +%s 2>/dev/null)
+if ! [[ "$NOW" =~ ^[0-9]+$ ]]; then
+  exit 0
+fi
+if [ $((NOW - CACHE_TS)) -gt "$CACHE_MAX_AGE_SECONDS" ]; then
+  exit 0
+fi
+
 # 8. 閾値は 1-99 の整数のみ受け付ける。不正値・未設定は 60 に fallback する。
 THRESHOLD="${SESSION_HANDOFF_THRESHOLD:-}"
 if ! [[ "$THRESHOLD" =~ ^[0-9]+$ ]] || [ "$THRESHOLD" -lt 1 ] || [ "$THRESHOLD" -gt 99 ]; then

@@ -379,8 +379,16 @@ LAUNCHER_BODY
 }
 
 cmd_inspect() {
+  # 壊れた settings.json (存在するのに jq parse 失敗) を「未設定 (none)」と誤分類すると、
+  # setup skill が新規インストールの選択肢を提示してしまう。文書化済みの失敗契約
+  # (壊れている場合は変更せず非 0 終了して報告) に従い、ここで明示的に中断する。
+  if [ -s "$SETTINGS" ] && ! jq empty "$SETTINGS" >/dev/null 2>&1; then
+    echo "[session-handoff] $SETTINGS が壊れています (jq parse 失敗)。inspect を中断します。手動で修復してから再実行してください。" >&2
+    exit 1
+  fi
+
   local settings_exists="false" statusline_configured="false" command_str=""
-  if [ -s "$SETTINGS" ] && jq empty "$SETTINGS" >/dev/null 2>&1; then
+  if [ -s "$SETTINGS" ]; then
     settings_exists="true"
     command_str=$(jq -r '.statusLine.command // empty' "$SETTINGS" 2>/dev/null)
     [ -n "$command_str" ] && statusline_configured="true"
