@@ -60,6 +60,16 @@ Keychain からの token 読み出し (`security find-generic-password`) はコ�
 | stderr に 429 の旨 | 経路② がレート制限に達した。リトライはしない設計のため、時間を置いて再実行する |
 | stderr に認証切れの旨 (401/403) | OAuth token が失効している。再ログインが必要 |
 
+### plugin アンインストール後の launcher の挙動
+
+`/rate-limit:setup` 実行後に本 plugin をアンインストールしても、launcher
+(`~/.claude/rate-limit-statusline-launcher.sh`) と `statusLine.command` の設定は残ります。
+この状態でも launcher は元の statusline コマンドへ直接委譲し続けるため、既存の statusline
+表示は壊れません (キャッシュの更新だけが止まります)。設定を完全に元へ戻すには、setup 時に
+作成されたバックアップ (`~/.claude/settings.rate-limit-backup.*.json`) から `settings.json`
+を復元するか、`statusLine.command` を手動で元のコマンドに書き戻して launcher を削除して
+ください。
+
 ## 機能一覧
 
 ### Skills

@@ -205,6 +205,18 @@ INNER_COMMAND=$(printf '%s' "$INNER_COMMAND_B64" | base64 -d 2>/dev/null && prin
   || { echo "[rate-limit] launcher: INNER_COMMAND_B64 のデコードに失敗しました。/rate-limit:setup を再実行してください。" >&2; exit 1; }
 INNER_COMMAND=${INNER_COMMAND%x}
 
+# plugin のアンインストール等で wrapper が完全に消えている (全 version dir も
+# fallback も不在) 場合、既存 statusline を巻き添えで壊さない: 付加機能である
+# キャッシュ書き出しだけを諦め、内側コマンドへ直接委譲する (stdin は exec を
+# 通じてそのまま内側コマンドへ渡る)。内側未設定なら空出力で正常終了する
+# (wrapper 経由時の「内側未指定」と同じ挙動)。
+if [ ! -f "$WRAPPER" ]; then
+  if [ -n "$INNER_COMMAND" ]; then
+    exec bash -c "$INNER_COMMAND"
+  fi
+  exit 0
+fi
+
 if [ -n "$INNER_COMMAND" ]; then
   exec bash "$WRAPPER" "$INNER_COMMAND"
 else
