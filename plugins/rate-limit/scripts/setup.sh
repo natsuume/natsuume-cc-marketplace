@@ -11,8 +11,9 @@
 #   3. launcher を atomic 設置 (umask 077、同一ディレクトリ mktemp + mv)。launcher には
 #      (a) version dir の親から active version の cache-write-wrapper.sh を解決するロジック
 #          (natsuume-statusline wrapper の mtime + semver tie-break 方式を移植。自己完結 sh)
-#      (b) 既存 statusLine.command 文字列を single-quote エスケープで verbatim に埋め込み、
-#          wrapper の第 1 引数として渡す
+#      (b) 既存 statusLine.command 文字列を base64 (1 行) で損失なく埋め込み、
+#          launcher が実行時にデコードして wrapper の第 1 引数として渡す
+#          (改行を含むコマンドでも再実行時の 1 行抽出が壊れない形式)
 #   4. statusLine を { "type": "command", "command": "bash '<launcher パス>'" } に atomic 更新
 #      (更新前後で jq validate)
 #
@@ -93,21 +94,29 @@ if [ "$EXISTING_COMMAND" = "$NEW_COMMAND" ]; then
   ALREADY_WRAPPED=1
 fi
 
-# launcher に埋め込む「内側コマンド」の行を決定する。
-#   - 初回セットアップ (ALREADY_WRAPPED=0): 今読み取った EXISTING_COMMAND を埋め込む
+# launcher に埋め込む「内側コマンド」は base64 の 1 行 (INNER_COMMAND_B64) で保持する。
+# 生文字列の single-quote 埋め込みだと、内側コマンドが改行を含む場合に複数行の代入と
+# なり、再実行時の 1 行抽出で引用符未終端の launcher を生成してしまう。base64 は
+# 改行・引用符を含まない 1 行になるため抽出が構造的に安全で、verbatim 性 (改行含む
+# 損失なし保持) は encoding を介して維持される。
+#   - 初回セットアップ (ALREADY_WRAPPED=0): settings.json から直接 encode する。
+#     shell 変数 (EXISTING_COMMAND) を経由すると command substitution が末尾改行を
+#     落とすため、jq -j (raw 出力・改行付与なし) からのパイプで encode する。
+#     GNU base64 の 76 桁折返しは tr で除去する (-w0 は GNU 専用のため使わない)
 #   - 再実行 (ALREADY_WRAPPED=1): settings.json 側にはもう元の内側コマンドが残っていない
-#     (launcher 自身を指しているため)。既存 launcher ファイルに埋め込み済みの
-#     `INNER_COMMAND=...` 行をそのまま (デコードせず) 引き継いで再生成する。
+#     (launcher 自身を指しているため)。既存 launcher ファイルの `INNER_COMMAND_B64=...`
+#     行をそのまま (デコードせず) 引き継いで再生成する
 if [ "$ALREADY_WRAPPED" -eq 1 ]; then
-  INNER_LINE=""
+  INNER_B64_LINE=""
   if [ -f "$LAUNCHER" ]; then
-    INNER_LINE=$(grep -m1 '^INNER_COMMAND=' "$LAUNCHER" 2>/dev/null || true)
+    INNER_B64_LINE=$(grep -m1 '^INNER_COMMAND_B64=' "$LAUNCHER" 2>/dev/null || true)
   fi
-  if [ -z "$INNER_LINE" ]; then
-    INNER_LINE="INNER_COMMAND=''"
+  if [ -z "$INNER_B64_LINE" ]; then
+    INNER_B64_LINE="INNER_COMMAND_B64=''"
   fi
 else
-  INNER_LINE="INNER_COMMAND='$(single_quote "$EXISTING_COMMAND")'"
+  inner_b64=$(jq -j '(.statusLine.command | select(type == "string")) // empty' "$SETTINGS" | base64 | tr -d '\n')
+  INNER_B64_LINE="INNER_COMMAND_B64='$inner_b64'"
 fi
 
 # --- (1) launcher を settings 更新より先に atomic 設置する。---
@@ -128,11 +137,12 @@ trap 'rm -f "$LAUNCHER_TMP"' EXIT
   printf '# settings.json はこの安定パスを指し、本 launcher が実行時に現在 active な version の\n'
   printf '# cache-write-wrapper.sh を解決することで plugin update に追従する (cache パスは\n'
   printf '# version 固有: issue #51 / Claude Code bug #52079 と同じ問題への対処)。\n'
-  printf '# INNER_COMMAND には setup 実行時点の既存 statusLine.command を verbatim で保持し、\n'
-  printf '# wrapper の第 1 引数として渡すことで元の statusline 表示を壊さずに包む。\n'
+  printf '# INNER_COMMAND_B64 には setup 実行時点の既存 statusLine.command を base64 (1 行) で\n'
+  printf '# 損失なく保持し、デコードして wrapper の第 1 引数として渡すことで元の statusline\n'
+  printf '# 表示を壊さずに包む。\n'
   printf "VERSIONS_DIR='%s'\n" "$vq_versions"
   printf "FALLBACK_WRAPPER='%s'\n" "$vq_fallback"
-  printf '%s\n' "$INNER_LINE"
+  printf '%s\n' "$INNER_B64_LINE"
   cat <<'LAUNCHER_BODY'
 
 # version dir の親 (VERSIONS_DIR) は plugin update を跨いで安定。そこから「現在 active な
@@ -182,6 +192,18 @@ WRAPPER=$(resolve_wrapper)
 if [ -z "$WRAPPER" ] || [ ! -f "$WRAPPER" ]; then
   WRAPPER="$FALLBACK_WRAPPER"
 fi
+
+# INNER_COMMAND_B64 をデコードして内側コマンドを復元する。
+# - GNU (base64 -d) と BSD/macOS (base64 -D) は別々の試行として実行する
+#   (1 本のパイプで || 連結すると先の試行が stdin を消費し、後の試行に同じ入力が
+#   渡る保証が無いため、試行ごとに printf で入力を再供給する)
+# - command substitution は末尾改行を除去するため、番兵 'x' を付けて受けてから外す
+#   (末尾改行を含む内側コマンドも verbatim に復元する)
+# - 両方失敗した場合は、保存値の破損で既存 statusline を黙って消さないよう非ゼロ終了する
+INNER_COMMAND=$(printf '%s' "$INNER_COMMAND_B64" | base64 -d 2>/dev/null && printf 'x') \
+  || INNER_COMMAND=$(printf '%s' "$INNER_COMMAND_B64" | base64 -D 2>/dev/null && printf 'x') \
+  || { echo "[rate-limit] launcher: INNER_COMMAND_B64 のデコードに失敗しました。/rate-limit:setup を再実行してください。" >&2; exit 1; }
+INNER_COMMAND=${INNER_COMMAND%x}
 
 if [ -n "$INNER_COMMAND" ]; then
   exec bash "$WRAPPER" "$INNER_COMMAND"

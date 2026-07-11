@@ -22,7 +22,7 @@
 set +x
 
 read_oauth_token() {
-  local creds_file token newline_count
+  local creds_file token newline_count keychain_payload
 
   creds_file="$HOME/.claude/.credentials.json"
   token=""
@@ -33,9 +33,22 @@ read_oauth_token() {
     token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
   fi
 
-  # 経路2: macOS Keychain (Darwin のみ。サービス名は実機未検証、README に明記)
+  # 経路2: macOS Keychain (Darwin のみ。サービス名は実機未検証、README に明記)。
+  # Keychain の password は credentials JSON オブジェクトそのもの (ファイル経路と同形式)。
+  # JSON として parse できる場合はファイル経路と同じ schema (claudeAiOauth.accessToken が
+  # string) を要求し、欠落・型不正は取得失敗とする ({} や true 等の「引用符も空白も
+  # 含まない不正 JSON」を生 token として通さない)。parse 不能な場合のみ、生 token
+  # 形式で保存されている可能性に備えて payload 自体を候補にする。
   if [ -z "$token" ] && [ "$(uname -s 2>/dev/null)" = "Darwin" ] && command -v security >/dev/null 2>&1; then
-    token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+    keychain_payload=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+    if [ -n "$keychain_payload" ]; then
+      if printf '%s' "$keychain_payload" | jq empty >/dev/null 2>&1; then
+        token=$(printf '%s' "$keychain_payload" \
+          | jq -r '(.claudeAiOauth.accessToken | select(type == "string")) // empty' 2>/dev/null)
+      else
+        token="$keychain_payload"
+      fi
+    fi
   fi
 
   if [ -z "$token" ]; then
