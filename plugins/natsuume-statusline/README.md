@@ -4,7 +4,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.5.1
+v0.6.0
 
 ## 表示内容
 
@@ -19,6 +19,14 @@ v0.5.1
    - 使用率の色: 80% 以上で赤、60% 以上で黄、それ未満で緑
    - **横幅に合わせた段階的縮小**: 全内容が収まらない場合、`…` で切り詰める前に情報を保ったまま段階的に簡略化する。優先順位は ⓪ 使用率の小数を四捨五入して整数表示にする (`(45.2%)`→`(45%)`, `62.5%`→`63%`) → ① ctx の使用率 `(P%)` を削除 (使用/最大トークンが残るので情報は保たれる) → ② レートリミットのバー長を短縮 (最大 10 → 最小 3 文字) → ③ バーを削除 (`5h: 62% (58m)` のみ)。横幅に収まる最も豊かな表示を自動選択する。トークン数が取れず `(P%)` が唯一の情報のときは ① をスキップ
 3. **3 行目**: 将来拡張用 (現状は空)
+
+## Context cache dump (session-handoff plugin 連携)
+
+表示処理とは別に、statusline は stdin JSON の `context_window` データを per-session の一時 cache ファイルへ書き出します。これは session-handoff plugin (#228) が読む plugin 間契約の producer 側であり、issue #227 で追加されました。
+
+- **出力先**: `${TMPDIR:-/tmp}/natsuume-context-cache/<sanitized_session_id>.json` (`sanitized_session_id` は `session_id` を `A-Za-z0-9._-` のみに制限した値)
+- **スキーマ**: `updated_at` (書き込み時の epoch 秒)、`session_id` (サニタイズ前)、`used_percentage`、`total_input_tokens`、`context_window_size`
+- **fail-open**: `session_id` 欠落/サニタイズ後空、`used_percentage` が数値でない (context_window 欠落/null を含む)、`jq` 不在、ディレクトリ作成・書き込み失敗、いずれの場合も無音でスキップし、statusline の表示には一切影響しません。`total_input_tokens` / `context_window_size` が検証に通らない場合はそのキーのみ省略して書き込みます
 
 ## インストール
 
@@ -56,6 +64,7 @@ plugin cache 配下から実行された場合は、`~/.claude/natsuume-statusli
 | `statusline/line1.sh` | 1 行目 (パス / repo / branch / 変更量 / 未コミット) のレンダラ |
 | `statusline/line2.sh` | 2 行目 (context 使用量 / レートリミット) のレンダラ |
 | `statusline/line3.sh` | 3 行目 (将来拡張用) |
+| `statusline/context-cache-dump.sh` | context cache dump (session-handoff plugin 連携) の `dump_context_cache` 関数 |
 
 ## アンインストール / 元に戻す
 

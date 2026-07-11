@@ -18,6 +18,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 # キー欠落時に文字列 "null" がパスとして表示されるのを防ぐ。
 eval "$(printf '%s' "$input" | jq -r '
   @sh "cwd=\(.workspace.current_dir // .cwd // "")",
+  @sh "session_id=\(.session_id // "")",
   @sh "ctx_pct=\(.context_window.used_percentage // "")",
   @sh "ctx_used=\(.context_window.total_input_tokens // "")",
   @sh "ctx_max=\(.context_window.context_window_size // "")",
@@ -154,3 +155,8 @@ line3_out=$(render_line3)
 if [ -n "$line3_out" ]; then
   printf '\n%b' "$line3_out"
 fi
+
+# --- context cache dump: session-handoff plugin (#228) 向け producer ---
+# 全表示出力の後に実行する (表示への不干渉。stdout/stderr は一切出さず fail-open)。
+source "$SCRIPT_DIR/context-cache-dump.sh"
+dump_context_cache "$session_id" "$ctx_pct" "$ctx_used" "$ctx_max"
