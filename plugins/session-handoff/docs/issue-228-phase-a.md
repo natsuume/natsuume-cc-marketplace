@@ -32,7 +32,9 @@ codex review の 5 指摘 (安定 launcher・lossless 保存・dir 先行作成�
 - plugin 内部の状態パス: `${TMPDIR:-/tmp}/session-handoff-<uid>/markers/<sanitized_session_id>.notified` (`<uid>` = `id -u`)。
   marker は**ディレクトリ**であり、作成は `mkdir` による atomic claim で行う (並列 PostToolUse が同時に
   marker 不在を観測しても、`mkdir` の成功者 1 プロセスだけが通知を発行できる。touch はファイル既存でも
-  成功するため排他にならない)
+  成功するため排他にならない)。**親ディレクトリ `markers/` までは防御シーケンス内の `mkdir -p` で事前に
+  作成・検証しておき、leaf の claim だけを非再帰 `mkdir` で行う** (クリーンインストール時に非再帰 mkdir が
+  ENOENT で失敗し通知が無音停止するのを防ぐ)
 - 状態ルート `${TMPDIR:-/tmp}/session-handoff-<uid>/` の作成時は #227 producer と同一の防御を適用する:
   subshell 内 `umask 077` → `mkdir -p` → symlink 拒否 (`-L`) → 所有確認 (`-O`) → `chmod 700`、失敗はすべて無音 skip
 
@@ -47,7 +49,9 @@ stdin: hook input JSON (`session_id` / `agent_id` / `cwd` / `hook_event_name` �
 3. `session_id` 欠落 / サニタイズ後空 → exit
 4. uid 取得不能 → exit
 5. marker 存在 → exit (1 セッション 1 回)
-6. `git -C "$cwd" rev-parse --git-dir` 解決不能 → exit (非 git)
+6. `git -C "$cwd" rev-parse --absolute-git-dir` 解決不能 → exit (非 git)。`--git-dir` は
+   リポジトリルートで相対パス `.git` を返し、絶対パス前提の後続手順 (保存パスの案内・注入側の走査) と
+   矛盾するため使わない
 7. cache 読み取り: 不在 / JSON 破損 / `used_percentage` 非数値 (`^[0-9]+(\.[0-9]+)?$`) → exit
 8. 閾値: `SESSION_HANDOFF_THRESHOLD` を検証 (`^[0-9]+$` かつ 1〜99)。不正・未設定は 60
 9. float 比較は awk (`used_percentage >= threshold` が偽 → exit)
@@ -60,8 +64,9 @@ stdin: hook input JSON (`session_id` / `agent_id` / `cwd` / `hook_event_name` �
     **ちょうど 1 個**存在することを先に検証したうえで `prefix=${template%%__HANDOFF_PATH__*}` /
     `suffix=${template#*__HANDOFF_PATH__}` に分割して `"$prefix$path$suffix"` と連結する。
     プレースホルダが不在・複数の場合 (テンプレート破損) は marker を作らず無音終了する
-12. すべて準備できてから marker を `mkdir` で atomic claim し (状態ルートは共通契約の防御手順で作成。
-    mkdir 失敗 = 並列 hook が先行 = 無音 exit)、additionalContext を出力する
+12. すべて準備できてから marker を claim する: 状態ルートと `markers/` 親ディレクトリを共通契約の
+    防御手順 (`mkdir -p` 込み) で作成・検証したうえで、leaf の marker を非再帰 `mkdir` で atomic claim
+    する (mkdir 失敗 = 並列 hook が先行 = 無音 exit)。claim 成功後に additionalContext を出力する
 
 marker の意味は「通知を発行済み」であり「handoff が保存済み」ではない (Claude の Write 失敗までは再通知しない。
 この割り切りは README に記載する)。
@@ -72,7 +77,7 @@ stdin: hook input JSON (`source` / `cwd` / `hook_event_name` を使用)。
 
 1. jq 不在 → exit
 2. `source` が `clear` / `startup` 以外 → exit (hooks.json の matcher と二重防御)
-3. git dir 解決不能 → exit
+3. git dir 解決不能 → exit (`rev-parse --absolute-git-dir` を使う。検知側と同じ理由)
 4. 走査前に `<git-dir>/session-handoff/` を検証: symlink 拒否 (`-L`) → `-d` → 所有確認 (`-O`)。失敗 → 無音 exit
 5. `pending-*.md` を走査し、mtime (stat 2 段 fallback) を取得。**各候補ファイルは `-L` (symlink なら skip) →
    `-f` → `-O` を確認してから** stat・削除・読み取り・rename の対象にする (検査失敗はその候補を skip)
