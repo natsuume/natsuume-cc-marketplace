@@ -17,12 +17,14 @@
 #   context_window_size   : 最大コンテキスト長 (number、検証に通らない場合はキー省略)
 #
 # 直列化: per-session mkdir lock ($cache_dir/.lock-<sanitized>、mkdir は POSIX で atomic)。
-# lock 取得に失敗した場合 (他プロセスが書き込み中) は待たずに書き込みをスキップする
-# (non-blocking skip。より新しい描画が並行して書いている想定)。10 秒以上古い lock は
-# 前回プロセスの異常終了とみなし stale とみなして破棄してから再取得を試みる。
+# lock 保持区間は compare+mktemp+mv の数十 ms のみなので、競合時は 0.1 秒間隔で最大 2 回
+# 再試行してから諦める (通常経路に sleep は入らない。競合時のみ最大 ~200ms プロセス終了が
+# 遅れる)。10 秒以上古い lock は前回プロセスの異常終了とみなし破棄してから再取得を試みる。
 #
-# monotonic guard: 既存 cache の updated_at が新しい updated_at 以下の場合のみ上書きする
-# (古いデータで新しい cache を後勝ちに壊さないため)。同値は last-writer-wins で書き込む。
+# monotonic guard: 保証するのは「cache の updated_at (秒値) が減少しない」ことのみ。
+# 同一秒内は last-writer-wins で、ペイロードの実時間順序までは保証しない (最大 1 描画間隔
+# ぶん古いサンプルが残りうるが、より後の秒に採時された次の書き込みで自己回復する)。
+# consumer は advisory 用途 (session-handoff の閾値検知) を前提とする。
 #
 # 安全対策: cache ディレクトリが symlink、または実行ユーザの所有でない場合は書き込まない。
 #
@@ -105,9 +107,18 @@ dump_context_cache() {
       fi
     fi
 
-    # lock 取得 (mkdir は POSIX で atomic)。失敗 = 他プロセスが書き込み中 = より新しい
-    # 描画が書いているとみなし、待たずにスキップする (non-blocking skip)。
-    mkdir "$lock_dir" 2>/dev/null || exit 1
+    # lock 取得 (mkdir は POSIX で atomic)。lock 保持者が自分より新しい描画とは限らない
+    # (描画は lock 取得前に完了している) ため、競合時は即諦めず 0.1 秒間隔で最大 2 回
+    # 再試行する。保持区間は数十 ms なので通常は初回の再試行で取得できる。
+    acquired=0
+    for attempt in 1 2 3; do
+      if mkdir "$lock_dir" 2>/dev/null; then
+        acquired=1
+        break
+      fi
+      [ "$attempt" -lt 3 ] && sleep 0.1
+    done
+    [ "$acquired" -eq 1 ] || exit 1
     trap 'rmdir "$lock_dir" 2>/dev/null' EXIT
 
     # monotonic guard: 既存 cache の updated_at が新しい updated_at より大きければ

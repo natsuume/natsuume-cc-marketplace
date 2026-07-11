@@ -27,7 +27,7 @@ v0.6.0
 - **出力先**: `${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<sanitized_session_id>.json` (`uid` は `id -u`、`sanitized_session_id` は `session_id` を `A-Za-z0-9._-` のみに制限した値)
 - **スキーマ**: `updated_at` (stdin 受領時刻の epoch 秒)、`session_id` (サニタイズ前)、`used_percentage`、`total_input_tokens`、`context_window_size`
 - **fail-open**: `session_id` 欠落/サニタイズ後空、`used_percentage` が数値でない (context_window 欠落/null を含む)、`jq` 不在、ディレクトリ作成・書き込み失敗、いずれの場合も無音でスキップし、statusline の表示には一切影響しません。`total_input_tokens` / `context_window_size` が検証に通らない場合はそのキーのみ省略して書き込みます
-- **並行書き込みの直列化**: per-session の mkdir lock で直列化し、より新しい `updated_at` を持つ既存 cache は古いデータで上書きしません (monotonic)。lock 競合時は書き込みをスキップします
+- **並行書き込みの直列化**: per-session の mkdir lock で直列化します (競合時は 0.1 秒間隔で最大 2 回再試行してから諦める)。monotonic guard が保証するのは「cache の `updated_at` (秒値) が減少しない」ことのみで、同一秒内は last-writer-wins です。並行描画時には最大 1 描画間隔ぶん古いサンプルが残ることがありますが、より後の秒の次の書き込みで自己回復します。consumer は advisory 用途 (閾値検知) を前提とし、この一時的退行を許容する契約です
 
 ## インストール
 
