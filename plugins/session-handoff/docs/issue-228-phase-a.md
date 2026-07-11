@@ -51,7 +51,10 @@ stdin: hook input JSON (`session_id` / `agent_id` / `cwd` / `hook_event_name` �
 7. cache 読み取り: 不在 / JSON 破損 / `used_percentage` 非数値 (`^[0-9]+(\.[0-9]+)?$`) → exit
 8. 閾値: `SESSION_HANDOFF_THRESHOLD` を検証 (`^[0-9]+$` かつ 1〜99)。不正・未設定は 60
 9. float 比較は awk (`used_percentage >= threshold` が偽 → exit)
-10. handoff ディレクトリを準備: `<git-dir 絶対パス>/session-handoff/` を `mkdir -p` し、同ディレクトリに一時ファイルの作成→削除 probe で書き込み可能性を実確認する (`[ -w ]` では NFS 等で偽陽性になるため)。失敗 → marker を作らず exit (次のツール実行で再検知される)
+10. handoff ディレクトリを準備: `<git-dir 絶対パス>/session-handoff/` に対し state root と同一の一体シーケンス
+    (`umask 077` → `mkdir -p` → symlink 拒否 `-L` → `-d` → 所有確認 `-O` → `chmod 700`) を適用したうえで、
+    同ディレクトリに一時ファイルの作成→削除 probe で書き込み可能性を実確認する (`[ -w ]` では NFS 等で
+    偽陽性になるため)。いずれかの失敗 → marker を作らず exit (次のツール実行で再検知される)
 11. 保存パスを組み立て (`pending-<sanitized_session_id>-<epoch 秒>.md`)、`handoff-instruction.md` を読んで `__HANDOFF_PATH__` を置換し、出力 JSON の組み立てまで成功させる。置換は bash 5.2 の
     `patsub_replacement` (置換文字列中の `&` 展開) を避けるため `${var//}` を使わず、プレースホルダが
     **ちょうど 1 個**存在することを先に検証したうえで `prefix=${template%%__HANDOFF_PATH__*}` /
@@ -70,16 +73,18 @@ stdin: hook input JSON (`source` / `cwd` / `hook_event_name` を使用)。
 1. jq 不在 → exit
 2. `source` が `clear` / `startup` 以外 → exit (hooks.json の matcher と二重防御)
 3. git dir 解決不能 → exit
-4. `<git-dir>/session-handoff/` の `pending-*.md` を走査し、mtime (stat 2 段 fallback) を取得
+4. 走査前に `<git-dir>/session-handoff/` を検証: symlink 拒否 (`-L`) → `-d` → 所有確認 (`-O`)。失敗 → 無音 exit
+5. `pending-*.md` を走査し、mtime (stat 2 段 fallback) を取得。**各候補ファイルは `-L` (symlink なら skip) →
+   `-f` → `-O` を確認してから** stat・削除・読み取り・rename の対象にする (検査失敗はその候補を skip)
    - mtime が 30 日超の `pending-*.md` / `consumed-*.md` は削除 (best-effort)
    - mtime が 24 時間以内の pending を新しい順に候補とする
-5. 候補なし → 無音 exit
-6. **rename-first claim**: 最新候補を `pending-` → `consumed-` prefix へ同一ディレクトリ内 `mv` する。
+6. 候補なし → 無音 exit
+7. **rename-first claim**: 最新候補を `pending-` → `consumed-` prefix へ同一ディレクトリ内 `mv` する。
    mv 失敗 (= 並行セッションが先に claim) → 次の候補で再試行、候補が尽きたら無音 exit。
    mv の atomic 性により同じ handoff を 2 セッションが注入することは起きない (**at-most-once**:
    claim 後・出力前にプロセスが死ぬと注入は失われる。この割り切りは README に記載する)
-7. claim した consumed ファイルを読み、`inject-preamble.md` + handoff 全文 + (他に 24h 以内 pending があればそのパス列挙) を連結して additionalContext として出力する
-8. 読み取り・JSON 組み立てに失敗した場合は、出力前に限り best-effort で `consumed-` → `pending-` に戻してから無音 exit する
+8. claim した consumed ファイルを読み、`inject-preamble.md` + handoff 全文 + (他に 24h 以内 pending があればそのパス列挙) を連結して additionalContext として出力する
+9. 読み取り・JSON 組み立てに失敗した場合は、出力前に限り best-effort で `consumed-` → `pending-` に戻してから無音 exit する
 
 ## prompts
 
@@ -100,7 +105,7 @@ stdin: hook input JSON (`source` / `cwd` / `hook_event_name` を使用)。
 1. 現セッションの cache ファイル存在 → 構成済みと報告して終了
 2. `~/.claude/settings.json` の statusLine.command が natsuume-statusline (0.6.0+) → 構成済み報告。cache 未生成なら plugin update 案内
 3. statusLine.command が**自 launcher** (`session-handoff-statusline-launcher.sh`) を指す → 構成済みとして扱う (「他の statusline」と誤分類して再ラップしない — 自己再帰と元 command 喪失の防止)。launcher の再生成が必要な場合は、既存 launcher 内の固定形式の代入行 (例: `WRAPPED_COMMAND_B64='...'`) から base64 inner command を一意に抽出して引き継ぐ。抽出・検証に失敗した場合は launcher と settings.json のいずれも変更せず setup を終了する
-4. 他 statusline 設定済み → wrapper 化の変更を提示し AskUserQuestion で確認後、設置を実行
+4. 他 statusline 設定済み → **連鎖検査を 1 段行う**: command が読み取り可能なスクリプトファイルを指す場合、(a) 平文での自 launcher ファイル名参照、(b) 既知形式の inner command 代入行 (rate-limit launcher の `INNER_COMMAND_B64='...'` 等) を一意抽出し `base64 -d` (GNU)、失敗時 `base64 -D` (macOS) で decode した中の自 launcher 参照、のいずれかを検出したら「既にラップ済み (構成済み)」として再ラップせず、連鎖の存在をユーザに報告する。代入行はあるが解析・decode に失敗し、かつ自 launcher が既に存在する場合は、循環リスクありとして launcher / settings.json とも変更せず曖昧な連鎖をユーザに報告する。検出なしの場合のみ wrapper 化の変更を提示し AskUserQuestion で確認後、設置を実行
 5. statusline 未設定 → AskUserQuestion で「natsuume-statusline を導入」or「cache-only launcher を登録」を選択させ実行
 6. いずれの書き換えも実行前に現在の設定値を報告する
 
@@ -116,6 +121,10 @@ stdin: hook input JSON (`source` / `cwd` / `hook_event_name` を使用)。
 - 元 command が無い場合 (cache-only 登録) は dump のみ行い、表示は何も出力しない
 - 設置順序: launcher を atomic write (mktemp + mv、実行権付与) で設置 → 設置成功を確認してから settings.json を
   書き換える。launcher の dump 部が壊れても元 statusline への委譲は維持される構造にする (dump 失敗で表示を殺さない)
+- **実行時の再帰ガード** (連鎖検査の検出漏れに対する安全網であり代替ではない): launcher 冒頭で固有名の環境変数
+  (例: `NATSUUME_SESSION_HANDOFF_LAUNCHER_ACTIVE`) が固定 sentinel 値に設定済みかを確認し、設定済みなら
+  何も出力せず exit 0 (循環の構造的切断。循環構成が残っている間は表示が空になるが、無限再帰・ハングは起きない)。
+  未設定なら inner command の起動時に限り export して委譲する
 
 ## 境界・異常系 (受入基準の実装対応)
 
@@ -129,6 +138,9 @@ stdin: hook input JSON (`source` / `cwd` / `hook_event_name` を使用)。
 | handoff-instruction.md のプレースホルダが不在・複数 | marker を作らず通知しない (テンプレート破損) |
 | marker の mkdir claim 失敗 (並列 hook の先行) | 通知しない (1 セッション 1 回を排他的に保証) |
 | setup 再実行時に statusLine.command が自 launcher | 再ラップしない。inner command の抽出・検証失敗時は launcher / settings.json とも変更しない |
+| 他 plugin の launcher が自 launcher をラップ済み (連鎖) | 1 段の連鎖検査 (平文参照 + 既知形式 base64 代入行の decode) で検出したら再ラップせず報告。解析不能 + 自 launcher 既存なら何も変更せず報告 |
+| 連鎖検査をすり抜けた循環構成での statusline 実行 | 実行時の env 再帰ガードで無限再帰を切断 (表示は空になるがハングしない) |
+| handoff ディレクトリ / 候補ファイルが symlink・非所有 | 削除・読み取り・rename の対象にしない (無音 skip) |
 | SessionStart source=resume / compact | 注入しない |
 | 24h 超の pending | 注入しない (30 日超で削除) |
 | 24h 以内の pending 複数 | rename-first claim の勝者が最新 1 件を注入、残りはパス列挙 |
