@@ -1,0 +1,50 @@
+---
+name: status
+description: Claude Code のサブスクリプション usage limit (5 時間セッション枠・週次枠の使用率と reset 時刻) を取得する。rate limit / 残量 / usage limit を確認したいときに使う
+user-invocable: true
+when_to_use: |
+  ユーザーが以下のようなリクエストをした場合に使用:
+  - 「rate limit を確認して」「残量を教えて」
+  - 「usage limit はどれくらい残ってる」「使用率を見せて」
+  - 「5 時間枠 / 週次枠の残りを知りたい」
+---
+
+# /rate-limit:status — サブスク usage limit の取得
+
+`scripts/fetch-rate-limit.sh` を実行し、出力された JSON をユーザに報告する。
+
+## 1. 実行
+
+Bash ツールで以下を **foreground で 1 回**実行する。リトライはしない (非公式 endpoint への呼び出しをスクリプト内部で 1 回に制限しているため)。
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/fetch-rate-limit.sh"
+```
+
+## 2. 出力 JSON の読み方
+
+exit 0 のとき、stdout に次の JSON が返る。
+
+| フィールド | 意味 |
+|---|---|
+| `source` | データの取得経路。`"statusline-cache"` または `"oauth-endpoint"` (下記参照) |
+| `fetched_at` | データ取得時刻 (ISO 8601 UTC)。`source` が `"statusline-cache"` のときはキャッシュ書き込み時刻 |
+| `cache_age_seconds` | `source` が `"statusline-cache"` のときのみ出現。キャッシュ書き込みからの経過秒 |
+| `five_hour` | 5 時間セッション枠。`{ "used_percentage": <0-100>, "resets_at": "<ISO 8601 UTC>" }`、取得できなければ `null` |
+| `seven_day` | 週次枠。`five_hour` と同じ形式、または `null` |
+| `extras` | `source` が `"oauth-endpoint"` のときのみ出現しうる任意フィールド (endpoint 固有の追加情報) |
+
+`source` の値でデータの由来・信頼性が異なる:
+
+- `"statusline-cache"`: Claude Code の statusLine に渡される公式データのスナップショット。`cache_age_seconds` がそのデータの鮮度 (何秒前の値か) を示す
+- `"oauth-endpoint"`: 非公式 API を呼び出した瞬間の値。都度取得のため鮮度の概念はないが、公式にドキュメント化された経路ではない
+
+`used_percentage` は 0〜100 の数値、`resets_at` は ISO 8601 UTC 形式の時刻。
+
+ユーザへは、取得できた `five_hour` / `seven_day` の `used_percentage` と `resets_at`、および `source` (データの由来) をそのまま報告する。
+
+## 3. 失敗時 (exit 1)
+
+stderr に経路ごとの失敗理由が列挙される。その内容をそのままユーザに報告する。
+
+キャッシュ経路 (`statusline-cache`) が一度も成功しない環境では、`/rate-limit:setup` の実行を案内する。

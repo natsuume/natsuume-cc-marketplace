@@ -32,6 +32,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [ui-discipline](#ui-discipline) | 0.2.1 | UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う |
 | [natsuume-writing](#natsuume-writing) | 0.4.2 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
 | [codex-advisor](#codex-advisor) | 0.1.1 | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミングと助言の扱いの規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
+| [rate-limit](#rate-limit) | 0.1.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 
 ---
 
@@ -335,3 +336,37 @@ Codex は read-only sandbox でリポジトリを自分で読んで裏取りし�
 ### キーワード
 
 `codex` `advisor` `second-opinion` `system-prompt` `hook` `skill` `openai`
+
+---
+
+## rate-limit
+
+Claude (エージェント自身) が、セッション内でサブスクリプションの usage limit (5 時間セッション枠・週次枠の使用率と reset 時刻) をユーザ操作なしで取得できる `/rate-limit:status` Skill を提供するプラグインです。
+
+取得経路は①→②の順でフォールバックします。① は Claude Code の statusLine に渡される公式データ (`rate_limits` フィールド) を wrapper がキャッシュに保存したもので、60 秒以内ならこちらを優先します。② は `GET https://api.anthropic.com/api/oauth/usage` (OAuth token 認証) を都度呼び出す経路で、① が古い・存在しない場合のみ使われます。② は **非公式・undocumented** な API で、関連 issue (anthropics/claude-code#31021, #31637) は Anthropic 自身により invalid / not planned としてクローズされており、予告なく動作しなくなる可能性があります。
+
+`/rate-limit:setup` を実行すると、statusline の出力を横取りしてキャッシュへ書き出す安定 launcher (`~/.claude/rate-limit-statusline-launcher.sh`) を設置し、既存の `statusLine.command` (natsuume-statusline 等) をこの launcher で包みます (既存 statusline の表示は変化しません)。**setup は必須ではなく**、未 setup でも経路② 単独で `/rate-limit:status` は動作します。
+
+経路② は `~/.claude/.credentials.json` (macOS では Keychain) の OAuth access token を読み取りますが、送信先は `https://api.anthropic.com` のみに固定しており、token をログ・stderr・プロセス一覧・一時ファイルに露出させない実装です。macOS の Keychain 分岐は開発環境 (Linux/WSL2) では実機未検証です。
+
+### 機能
+
+#### Skills
+
+| スキル名 | コマンド | 説明 |
+|---------|---------|------|
+| status | `/rate-limit:status` | `scripts/fetch-rate-limit.sh` を実行し、5h/週次の使用率と reset 時刻を報告する |
+
+#### Commands
+
+| コマンド | 説明 |
+|---------|------|
+| `/rate-limit:setup` | statusline キャッシュ連携 (安定 launcher) を `~/.claude/settings.json` に登録する |
+
+### 依存
+
+`jq` (必須)、`curl` と `claude` CLI (経路② のみ)
+
+### キーワード
+
+`rate-limit` `usage-limit` `statusline` `oauth` `skill`

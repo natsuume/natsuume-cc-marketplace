@@ -76,6 +76,13 @@
       "description": "Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミングと助言の扱いの規律を hook で常時注入し、/codex-advisor:consult skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI)。",
       "version": "0.1.1",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
+    },
+    {
+      "name": "rate-limit",
+      "source": "./plugins/rate-limit",
+      "description": "Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する /rate-limit:status Skill を提供するプラグイン。/rate-limit:setup で statusline キャッシュ連携を登録する。",
+      "version": "0.1.0",
+      "keywords": ["rate-limit", "usage-limit", "statusline", "oauth", "skill"]
     }
   ]
 }
