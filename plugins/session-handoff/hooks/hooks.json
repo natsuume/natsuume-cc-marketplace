@@ -1,0 +1,27 @@
+{
+  "description": "session-handoff の配送経路: PostToolUse (matcher \"*\") で毎ツール実行後に context 使用率キャッシュ (natsuume-statusline producer 由来) を参照し、閾値超過を検知したら handoff ドキュメント作成を指示する additionalContext を 1 セッション 1 回だけ注入する (detect-context-threshold.sh)。SessionStart (matcher \"clear|startup\") で /clear・再起動直後の新セッションに、直前セッションが書き残した pending handoff を自動注入する (inject-pending-handoff.sh、at-most-once)。producer 未構成時や非 git プロジェクトでは両 hook とも無音で何もしない。詳細な判定順序・契約は plugin README を参照。",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-context-threshold.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "clear|startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-pending-handoff.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
