@@ -31,17 +31,35 @@ issue 番号 + タイトル slug から決定的に導出されるため、並�
 - 判定基準を「`branch=` 値が自分の作業 branch と一致するか」から「`session=` 値が自分の
   セッション ID と一致するか」に変更する
 - 削除対象の comment-id 特定 (先着競合での撤退時・撤退クリーンアップ時) も `session=` 値で行う
+  (数値 comment id は契約 3 の REST GET 結果の `id` フィールドから得る)
 - `session=` キーが無い claim comment (旧形式) は自分のものと確認できないため、削除判定上は
   他セッションの claim として扱う (= 削除しない)。既存の「他 session の claim / branch / ラベルは
   絶対に削除しない」規律の判定基準を差し替えるのみで、規律自体は変更しない
 
 ## 契約 3: 先着判定の明文化
 
-- 先着比較は GitHub が server-side で付与する `createdAt` を用いる (`ts=` 自己申告値は判定に
-  使わない)
+- comment 一覧の再取得は REST GET で全ページ取得する:
+
+  ```
+  gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'
+  ```
+
+  - 取得経路を旧手順の `gh issue view <N> --json comments` から変更する理由: 同コマンドの
+    `comments[].id` は GraphQL node ID (`IC_...`) であり、数値 id 比較に使えない。REST response は
+    数値 `id`・`created_at`・`body` を 1 呼び出しで返す
+  - `{owner}` / `{repo}` placeholder は gh が current repository から解決する
+  - endpoint は既定 30 件/ページのため `--paginate` + `per_page=100` で全ページを候補集合にする
+    (id 昇順のため、bare GET では直近の自分の claim が第 1 ページに含まれない可能性がある)
+  - 着手手順 step 1 の早期判定 (`gh issue view <N> --json labels,comments`) は id 比較に使わない
+    ため変更しない
+- 先着比較は REST response の server-side `created_at` を用いる (`ts=` 自己申告値は判定に使わない)
+- claim comment (body が `🔒 ai:claim ` で始まる comment) のうち `(created_at, 数値 id)` の
+  辞書順が最小のものを先着とする。数値 `id` は REST response の `id` フィールド (server 採番で
+  単調増加) であり、GraphQL node ID / REST `node_id` は使わない
 - 自分の claim の識別は契約 2 のとおり `session=` 一致で行う
-- `createdAt` が同時刻の場合は comment の数値 id (server 採番で単調増加) が小さい方を先着とする
-- tie-break でも決着しないケースの最終確定は従来どおり branch push の成否 (変更なし)
+- REST GET の失敗 (非ゼロ終了・ページ取得不能) や、取得結果に自分の claim が存在しない場合は
+  「競合なし」と扱わず、branch push に進まず停止してユーザに報告する (fail-closed)
+- comment 経路で検知できない競合の最終確定は従来どおり branch push の成否 (変更なし)
 
 ## 契約 4: wip commit へのセッション ID 埋込
 
@@ -72,6 +90,8 @@ git commit --allow-empty -m "wip: claim issue #<N> session=<セッションID>"
 - always-fable.md / always-sonnet.md の rule ID セットが変わらないこと
   (`plugins/agent-discipline/scripts/lint-prompt-sync.sh` が pass すること)
 - 両ファイルの rule:issue-claim が契約 1〜4 を漏れなく含み、判定基準の記述が矛盾しないこと
+- 両ファイルの rule:issue-claim が `--paginate`・REST `created_at`・数値 `id`・取得失敗時の
+  fail-closed を含むこと (codex review P2 の再発防止)
 - version 3 箇所 (plugin.json / marketplace.json / リポジトリ README) が `0.14.0` で一致すること
 
 ## スコープ外 (今回のユーザ decision で不採用)
