@@ -184,7 +184,7 @@ PR が issue を **完全に解決** する場合、PR body に closing keyword 
 
 GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-progress` ラベル単独運用では TOCTOU race が残る (= 「ラベル確認 → ラベル付与」の間に他 session が割り込む)。そこで以下 2 つの確定的な排他基盤を併用する:
 
-- **claim comment**: GitHub comment の serial ID + timestamp で先着判定 (= 早期 detection)
+- **claim comment**: GitHub が server-side で付与する created_at + 数値 comment id で先着判定 (= 早期 detection)
 - **branch push**: git server-side で同名 branch は 1 つしか存在できず、並列 push の片方は確定的に fail する (= 最終確定)
 
 ### 着手手順
@@ -197,27 +197,37 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 2. **claim comment を投稿** (排他基盤 1: comment 先着判定):
    ```
-   gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> ts=<UTC ISO 8601>"
+   gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> session=<セッションID> ts=<UTC ISO 8601>"
    ```
    - branch 名は次ステップで使う予定の名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)
    - branch 名規約: `<prefix>/issue-<N>-<slug>` (`<prefix>` = `feat` / `fix` / `chore` / `docs` / `refactor` 等、`<slug>` = issue タイトルから kebab-case で抽出した短縮形)
    - 例: `feat/issue-12-add-auth`, `fix/issue-25-null-deref`
+   - `<セッションID>` は環境変数 `CLAUDE_CODE_SESSION_ID` の値 (Claude Code がセッション毎に付与する UUID)。未設定の場合のみ `uuidgen` で生成した値を代用し、同一セッション中は同じ値を使い続ける
+   - `session=` は「自分の claim か」の判定キー。branch 名は issue 番号 + タイトル slug から決定的に導出され他 session と同名になりうるため、`branch=` / `ts=` (自己申告) / comment author (同一 GitHub アカウント) では自他判別できない
 
 3. **3 秒待機**: 他 session の claim comment が到着する余裕を確保 (`sleep 3`)
 
-4. **comment 再取得 + 先着判定**: `gh issue view <N> --json comments` で comment 一覧を再取得
-   - 自分の claim より **timestamp が古い別 session の claim comment** が存在 → **競合発生**。自分の claim comment を削除して撤退:
+4. **comment 再取得 + 先着判定**: REST GET で comment 一覧を全ページ再取得:
+   ```
+   gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'
+   ```
+   - REST GET を使う理由: レスポンスが数値 `id`・`created_at`・`body` を 1 呼び出しで返す (`gh issue view <N> --json comments` の `id` は GraphQL node ID (`IC_...`) のため数値比較に使えない)。`{owner}` / `{repo}` placeholder は gh が current repository から解決する。一覧は id 昇順・既定 30 件/ページのため、`--paginate` + `per_page=100` で全ページを取得する (直近の自分の claim が第 1 ページに含まれない可能性がある)
+   - 自分の claim は body の `session=` 値が自分のセッション ID と一致する comment として識別する
+   - 先着判定: claim comment (body が `🔒 ai:claim ` で始まる comment) のうち **`(created_at, 数値 id)` の辞書順最小** を先着とする。`created_at` は server-side 付与値であり、`ts=` 自己申告値は判定に使わない
+   - 先着が自分でない → **競合発生**。自分の claim comment を削除して撤退:
      ```
      gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>
      ```
-   - 存在しなければ次のステップへ
+   - REST GET の失敗 (非ゼロ終了・ページ取得不能)、または取得結果に自分の claim が存在しない場合は「競合なし」と扱わず、branch push に進まず停止してユーザに報告する (fail-closed)
+   - 先着が自分なら次のステップへ
 
 5. **作業 branch 作成 + 即 push** (排他基盤 2: branch 名 uniqueness の確定判定):
    ```
    git switch -c <prefix>/issue-<N>-<slug>
-   git commit --allow-empty -m "wip: claim issue #<N>"
+   git commit --allow-empty -m "wip: claim issue #<N> session=<セッションID>"
    git push -u origin <prefix>/issue-<N>-<slug>
    ```
+   - commit message にセッション ID を埋め込む理由: 同一メッセージ・同一親・同一秒の空 commit は OID が一致し、後発の push が "already up to date" として成功扱いになる経路が理論上残る。ID 埋込で OID 衝突を構造的に排除する
    - push **失敗** (= 同名 branch 既存) → 他 session が先着していた (claim comment 経路では検知できなかったケース)。自分の claim comment を削除 + ローカル branch を削除して撤退
    - push **成功** → **独占権確定**
 
@@ -232,9 +242,9 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
   - ラベルを残す理由: 「中断したが復帰予定」の状態が人間に見える + 後続 session が `ai:in-progress` を見て撤退 → 二重着手の保険として機能
   - 古い stale なラベルは人間が判定して手動削除する運用に委ねる
 - **他 session の claim comment / branch / ラベルは絶対に削除しない**
-- 「自分の claim か」の判定基準: claim comment 本文の `branch=` 値が **自分が今いる作業 branch と一致するか**
+- 「自分の claim か」の判定基準: claim comment 本文の `session=` 値が **自分のセッション ID と一致するか**
   - 一致 → 自分の claim、削除可
-  - 不一致 → 他 session の claim、削除禁止
+  - 不一致、または `session=` キーが無い (旧形式) → 他 session の claim として扱い、削除禁止 (旧形式は自分のものと確認できないため)
 
 ### 撤退時のクリーンアップ手順
 
@@ -247,7 +257,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 ### よくある誤操作 (= 過去事例) と回避
 
 - **誤着手**: 「ラベル確認 → ラベル付与」だけで判定したため race condition で同 issue に複数 session が着手 → step 2-5 の二段排他で防ぐ
-- **ラベル誤削除**: 「ラベル単独だと誰が付けたか不明」でつい削除 → claim comment の `branch=` 値で持ち主を識別、自分のものでなければ触らない
+- **ラベル誤削除**: 「ラベル単独だと誰が付けたか不明」でつい削除 → claim comment の `session=` 値で持ち主を識別、自分のものでなければ触らない
 - **撤退時の clean-up 忘れ**: claim comment が残ったまま次の issue へ進む → ゴーストの claim が後続 session の撤退判定を誤らせる → step 1-3 を必ずセットで実行
 
 <!-- rule:ask-user-question -->

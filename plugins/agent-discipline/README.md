@@ -4,9 +4,19 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.13.1
+v0.14.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.13.1 → v0.14.0 の変更点
+
+`rule:issue-claim` の claim comment にセッション ID を追加しました (always-fable.md / always-sonnet.md の両方)。
+
+- **claim comment 形式**: `🔒 ai:claim branch=<...> session=<セッションID> ts=<...>`。セッション ID は環境変数 `CLAUDE_CODE_SESSION_ID` から取得し、未設定時のみ `uuidgen` で生成した値を代用する。branch 名は issue 番号 + タイトル slug から決定的に導出されるため、並列 session が同一 branch 名を提案すると `branch=` / `ts=` (自己申告) / comment author (同一アカウント) のいずれでも自他判別できない問題への対応
+- **自他判別の基準変更**: 「自分の claim か」を `branch=` 一致から `session=` 一致に変更。`session=` キーの無い旧形式 claim は自分のものと確認できないため他 session 扱い (削除禁止)
+- **先着判定の明文化**: comment 再取得を REST GET (`gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'`) に変更し、`(created_at, 数値 id)` の辞書順最小を先着とする (`gh issue view --json comments` の `id` は GraphQL node ID のため数値比較に使えない)。取得失敗・自 claim 不在時は fail-closed (branch push に進まず停止・報告)
+- **wip commit へのセッション ID 埋込**: 空 commit の同一 OID 化により後発 push が "already up to date" で成功扱いになる経路を構造排除
+- **version bump**: `0.13.1` → `0.14.0` (minor)。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.13.0 → v0.13.1 の変更点
 
@@ -202,7 +212,7 @@ claude plugin install agent-discipline@natsuume-plugins
 4. **issue の粒度と関係性** (`rule:issue-granularity`): 独立して並列作業できる粒度で起票、大きい場合は sub-issues 分割。関係性は (a) sub-issue 親子リンク + (b) `#N` 相互参照を併用
 5. **PR 作成時の closing keyword** (`rule:closing-keyword`): 完全解決時のみ PR body に `Closes #N` を書く。closing keyword は default branch 向け PR でのみ機能する。部分対応では `Refs #N` / `Part of #N` に切替
 6. **自律作業中の判断境界** (`rule:autonomy-boundary`): 実装は自走、設計 / 仕様 (= issue で決まっているはずの内容) は再確認しない。ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる
-7. **連続 issue 解決時の排他制御** (`rule:issue-claim`): `/goal` 等の並列 session フロー向け。(a) `gh issue view` で `ai:in-progress` ラベル / claim comment 早期判定、(b) claim comment 投稿、(c) 3 秒待機 + 先着 timestamp 比較で他 session 検知、(d) 作業 branch 切って空 commit + 即 push で確定的排他、(e) push 成功時のみラベル付与。安全機構のため両ファイルとも手順を省略せず全文記載する
+7. **連続 issue 解決時の排他制御** (`rule:issue-claim`): `/goal` 等の並列 session フロー向け。(a) `gh issue view` で `ai:in-progress` ラベル / claim comment 早期判定、(b) claim comment 投稿 (`session=<セッションID>` で自他判別)、(c) 3 秒待機 + REST issue comments の全ページ再取得 + `(created_at, 数値 id)` の辞書順比較による先着判定、(d) 作業 branch 切ってセッション ID 入りの空 commit + 即 push で確定的排他、(e) push 成功時のみラベル付与。安全機構のため両ファイルとも手順を省略せず全文記載する
 8. **AskUserQuestion の必須化** (`rule:ask-user-question`、v0.5.0 新設・R6): ユーザへの質問・確認・判断伺い・すり合わせは自由文で turn を終えず必ず `AskUserQuestion` を発行する
 9. **TDD 2 段階の開発手順** (`rule:tdd-two-phase`、v0.5.0 新設・R3c): 軽微な修正を除き、実装は Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める
 
