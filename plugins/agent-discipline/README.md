@@ -16,6 +16,7 @@ v0.14.0
 - **自他判別の基準変更**: 「自分の claim か」を `branch=` 一致から `session=` 一致に変更。`session=` キーの無い旧形式 claim は自分のものと確認できないため他 session 扱い (削除禁止)
 - **先着判定の明文化**: comment 再取得を REST GET (`gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'`) に変更し、`(created_at, 数値 id)` の辞書順最小を先着とする (`gh issue view --json comments` の `id` は GraphQL node ID のため数値比較に使えない)。取得失敗・自 claim 不在時は fail-closed (branch push に進まず停止・報告)
 - **wip commit へのセッション ID 埋込**: 空 commit の同一 OID 化により後発 push が "already up to date" で成功扱いになる経路を、異なる session 間で構造排除 (session ID を共有する同一会話の並列 resume は保証対象外)
+- **完了時クリーンアップの位置づけ**: merge により issue が close された後のラベル・claim comment 削除は必須ではないことを明記 (issue の open/close 状態が完了管理の一次情報。別 session が Phase B から引き継いで merge した場合は `session=` 不一致で削除できないが残置してよい。行う場合は自分の claim に限りラベルと claim comment を一組で削除)
 - **version bump**: `0.13.1` → `0.14.0` (minor)。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.13.0 → v0.13.1 の変更点

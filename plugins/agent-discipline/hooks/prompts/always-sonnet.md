@@ -237,8 +237,9 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 ### ラベル削除規律 (誤削除事故防止)
 
-- `ai:in-progress` ラベルは **対応する PR が merge された時のみ削除する** (= issue 完了時)
-- 着手中断 / 撤退時はラベルを残し、claim comment と branch のみ削除する
+- 対応 PR の merge により issue が close された後の**完了時クリーンアップ** (`ai:in-progress` ラベルと claim comment の削除) は**必須ではない** — issue の open/close 状態を完了管理の一次情報とする (別 session が Phase B から正規に引き継いで merge した場合、引き継ぎ session は `session=` 不一致で削除できないが、残置してよい)
+- 完了時クリーンアップを行う場合は、claim comment の `session=` 値が自分のセッション ID と一致する場合に限り、ラベルと claim comment を**一組として**削除する (片方だけ削除しない)
+- 着手中断 / 撤退時は完了時クリーンアップとは別に、ラベルを残し、自分の claim comment と branch のみ削除する
   - ラベルを残す理由: 「中断したが復帰予定」の状態が人間に見える + 後続 session が `ai:in-progress` を見て撤退 → 二重着手の保険として機能
   - 古い stale なラベルは人間が判定して手動削除する運用に委ねる
 - **他 session の claim comment / branch / ラベルは絶対に削除しない**
