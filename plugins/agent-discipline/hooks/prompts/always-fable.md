@@ -64,16 +64,16 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 ### 着手手順
 
 1. **早期判定**: `gh issue view <N> --json labels,comments` を確認し、`ai:in-progress` ラベル付与済みまたは未削除の claim comment があれば撤退する
-2. **claim comment を投稿**: `gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> ts=<UTC ISO 8601>"` (branch 名規約: `<prefix>/issue-<N>-<slug>`、例: `feat/issue-12-add-auth`)
+2. **claim comment を投稿**: `gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> session=<セッションID> ts=<UTC ISO 8601>"` (branch 名規約: `<prefix>/issue-<N>-<slug>`、例: `feat/issue-12-add-auth`)。`<セッションID>` は環境変数 `CLAUDE_CODE_SESSION_ID` の値を使い、未設定の場合のみ `uuidgen` で生成した値を同一セッション中使い続ける。branch 名は決定的に導出され他 session と同名になりうるため、自他判別は `branch=` ではなく `session=` で行う
 3. **3 秒待機**: 他 session の claim comment が到着する余裕を確保する
-4. **comment 再取得 + 先着判定**: 自分の claim より古い timestamp の別 session claim comment があれば競合発生。自分の claim comment を削除して撤退する (`gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>`)
-5. **作業 branch 作成 + 即 push**: `git switch -c <branch>` → `git commit --allow-empty -m "wip: claim issue #<N>"` → `git push -u origin <branch>`。push 失敗 (同名 branch 既存) なら撤退、成功なら独占権確定
+4. **comment 再取得 + 先着判定**: `gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'` で comment 一覧を全ページ再取得する (この REST GET は数値 `id`・`created_at`・`body` を返す。`gh issue view --json comments` の `id` は GraphQL node ID のため数値比較に使えない)。自分の claim は body の `session=` 値の一致で識別し、claim comment のうち `(created_at, 数値 id)` の辞書順最小が自分でなければ競合発生 — 自分の claim comment を削除して撤退する (`gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>`)。`ts=` 自己申告値は判定に使わない。取得失敗や自分の claim が見つからない場合は「競合なし」と扱わず、branch push に進まず停止してユーザに報告する (fail-closed)
+5. **作業 branch 作成 + 即 push**: `git switch -c <branch>` → `git commit --allow-empty -m "wip: claim issue #<N> session=<セッションID>"` → `git push -u origin <branch>`。push 失敗 (同名 branch 既存) なら撤退、成功なら独占権確定。commit message への session 埋込は、同一内容の空 commit が同一 OID になり後発 push が already up to date で成功扱いになる経路を異なる session 間で塞ぐ (session ID を共有する同一会話の並列 resume は保証対象外)
 6. **ラベル付与**: `gh issue edit <N> --add-label ai:in-progress` (人間向けの補助的な目印)
 7. 通常の implementation フローへ移行する (draft PR 作成 → 実装 → after 系の commit→push→PR→merge 自走)
 
 ### ラベル削除規律
 
-`ai:in-progress` ラベルは対応する PR が merge された時のみ削除する。着手中断 / 撤退時はラベルを残し、claim comment と branch のみ削除する。claim comment 本文の `branch=` 値が自分の作業 branch と一致するかで「自分の claim か」を判定し、他 session の claim / branch / ラベルは絶対に削除しない。
+対応 PR の merge により issue が close された後の完了時クリーンアップ (`ai:in-progress` ラベルと claim comment の削除) は必須ではない — issue の open/close 状態を完了管理の一次情報とする。行う場合は claim comment の `session=` 値が自分のセッション ID と一致する場合に限り、ラベルと claim comment を一組として削除する (片方だけ削除しない)。着手中断 / 撤退時はこれとは別に、ラベルを残して自分の claim comment と branch のみ削除する。`session=` キーの無い旧形式 claim は自分のものと確認できないため他 session 扱いとし、他 session の claim / branch / ラベルは絶対に削除しない。
 
 ### 撤退時のクリーンアップ手順
 
