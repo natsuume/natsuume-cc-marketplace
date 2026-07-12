@@ -22,6 +22,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 eval "$(printf '%s' "$input" | jq -r '
   @sh "cwd=\(.workspace.current_dir // .cwd // "")",
   @sh "session_id=\(.session_id // "")",
+  @sh "model_name=\(.model.display_name // "")",
   @sh "ctx_pct=\(.context_window.used_percentage // "")",
   @sh "ctx_used=\(.context_window.total_input_tokens // "")",
   @sh "ctx_max=\(.context_window.context_window_size // "")",
@@ -31,11 +32,25 @@ eval "$(printf '%s' "$input" | jq -r '
   @sh "rate_7d_reset=\(.rate_limits.seven_day.resets_at // "")"
 ')"
 
+# rate_limits.model_scoped[]（モデル別週次枠。Claude Code バイナリに schema は存在するが
+# issue #231 時点の実 stdin には未出現の公式経路）を TSV で別途抽出する。
+# 複数行になりうるため上の eval ブロック（1 スカラー値ずつの @sh）とは別呼び出しにする。
+# utilization は 0-100 スケールと推定する (five_hour.used_percentage と同スケールという
+# 想定。公式ドキュメント未確認・バイナリの文字列解析からの推定である点に注意)。
+model_scoped_tsv=$(printf '%s' "$input" | jq -r '
+  .rate_limits.model_scoped // [] | .[]
+  | select((.display_name|type=="string") and (.display_name|length>0) and (.utilization|type=="number"))
+  | [.display_name, (.utilization|tostring), (.resets_at // "")]
+  | @tsv
+' 2>/dev/null)
+
 # 共通関数・各行のコンポーネントを読み込み
 source "$SCRIPT_DIR/lib.sh"
+source "$SCRIPT_DIR/gauges.sh"
 source "$SCRIPT_DIR/line1.sh"
 source "$SCRIPT_DIR/line2.sh"
 source "$SCRIPT_DIR/line3.sh"
+source "$SCRIPT_DIR/weekly-scoped-limits.sh"
 
 # ターミナル幅を一度だけ取得し、各行の組み立てで共有する
 TERM_WIDTH=$(terminal_width)
@@ -147,19 +162,38 @@ segments+=("${OTHER[@]}")
 # 1行目はターミナル幅に収めて出力（折り返しが発生すると2行目以降の表示が崩れるため）
 fit_segments "$sep" "$TERM_WIDTH" "${segments[@]}"
 
-# --- 2行目: context 使用量 + レートリミット ---
-line2_out=$(render_line2 "$ctx_pct" "$ctx_used" "$ctx_max" "$rate_5h" "$rate_5h_reset" "$rate_7d" "$rate_7d_reset")
+# --- 2行目: モデル名 + context 使用量 + レートリミット (5h) ---
+# 行内容は構築時点で ANSI 色が実バイト化済みのため %s で出力する。%b を使うと
+# 信頼境界外の自由テキスト (model.display_name 等) 中のリテラルなバックスラッシュ列
+# (\n, \033 等) が実制御バイトへ解釈され、行注入・端末エスケープ注入が可能になる
+# (生の制御バイトは各レンダラの tr -d が除去する。2 段の防御は役割が異なる)。
+line2_out=$(render_line2 "$model_name" "$ctx_pct" "$ctx_used" "$ctx_max" "$rate_5h" "$rate_5h_reset")
 if [ -n "$line2_out" ]; then
-  printf '\n%b' "$line2_out"
+  printf '\n%s' "$line2_out"
 fi
 
-# --- 3行目: 将来拡張用 ---
-line3_out=$(render_line3)
+# --- 3行目: 週次 (7d) レートリミット + モデル別週次枠 ---
+# データ優先順位 (weekly-scoped-limits.sh の契約): stdin の model_scoped（公式経路）が
+# 非空ならそれを使い、空なら weekly-scoped-limits.sh の cache（OAuth usage API 由来）を読む。
+scoped_tsv="$model_scoped_tsv"
+[ -z "$scoped_tsv" ] && scoped_tsv=$(read_weekly_scoped_entries)
+# 2 行目と同じ理由で %s で出力する (scoped display_name は信頼境界外の自由テキスト)。
+line3_out=$(render_line3 "$rate_7d" "$rate_7d_reset" "$scoped_tsv")
 if [ -n "$line3_out" ]; then
-  printf '\n%b' "$line3_out"
+  printf '\n%s' "$line3_out"
 fi
 
 # --- context cache dump: session-handoff plugin (#228) 向け producer ---
 # 全表示出力の後に実行する (表示への不干渉。stdout/stderr は一切出さず fail-open)。
 source "$SCRIPT_DIR/context-cache-dump.sh"
 dump_context_cache "$session_id" "$ctx_pct" "$ctx_used" "$ctx_max" "$received_at"
+
+# --- モデル別週次枠 (OAuth usage API) の background fetch kick ---
+# stdin に公式経路の model_scoped が来ていれば cache 経路は不要なので起動しない。
+# 表示への不干渉のため全出力 (dump_context_cache 含む) の後にのみ呼ぶ。
+# if の条件が偽だったときの終了ステータスを script の exit code に漏らさないよう、
+# 末尾で明示的に 0 を返す。
+if [ -z "$model_scoped_tsv" ]; then
+  kick_weekly_scoped_refresh
+fi
+exit 0
