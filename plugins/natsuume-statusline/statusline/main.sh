@@ -163,9 +163,13 @@ segments+=("${OTHER[@]}")
 fit_segments "$sep" "$TERM_WIDTH" "${segments[@]}"
 
 # --- 2行目: モデル名 + context 使用量 + レートリミット (5h) ---
+# 行内容は構築時点で ANSI 色が実バイト化済みのため %s で出力する。%b を使うと
+# 信頼境界外の自由テキスト (model.display_name 等) 中のリテラルなバックスラッシュ列
+# (\n, \033 等) が実制御バイトへ解釈され、行注入・端末エスケープ注入が可能になる
+# (生の制御バイトは各レンダラの tr -d が除去する。2 段の防御は役割が異なる)。
 line2_out=$(render_line2 "$model_name" "$ctx_pct" "$ctx_used" "$ctx_max" "$rate_5h" "$rate_5h_reset")
 if [ -n "$line2_out" ]; then
-  printf '\n%b' "$line2_out"
+  printf '\n%s' "$line2_out"
 fi
 
 # --- 3行目: 週次 (7d) レートリミット + モデル別週次枠 ---
@@ -173,9 +177,10 @@ fi
 # 非空ならそれを使い、空なら weekly-scoped-limits.sh の cache（OAuth usage API 由来）を読む。
 scoped_tsv="$model_scoped_tsv"
 [ -z "$scoped_tsv" ] && scoped_tsv=$(read_weekly_scoped_entries)
+# 2 行目と同じ理由で %s で出力する (scoped display_name は信頼境界外の自由テキスト)。
 line3_out=$(render_line3 "$rate_7d" "$rate_7d_reset" "$scoped_tsv")
 if [ -n "$line3_out" ]; then
-  printf '\n%b' "$line3_out"
+  printf '\n%s' "$line3_out"
 fi
 
 # --- context cache dump: session-handoff plugin (#228) 向け producer ---
