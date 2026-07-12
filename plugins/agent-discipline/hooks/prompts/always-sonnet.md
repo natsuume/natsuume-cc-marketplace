@@ -227,7 +227,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
    git commit --allow-empty -m "wip: claim issue #<N> session=<セッションID>"
    git push -u origin <prefix>/issue-<N>-<slug>
    ```
-   - commit message にセッション ID を埋め込む理由: 同一メッセージ・同一親・同一秒の空 commit は OID が一致し、後発の push が "already up to date" として成功扱いになる経路が理論上残る。ID 埋込で OID 衝突を構造的に排除する
+   - commit message にセッション ID を埋め込む理由: 同一メッセージ・同一親・同一秒の空 commit は OID が一致し、後発の push が "already up to date" として成功扱いになる経路が理論上残る。ID 埋込で異なる session 間の OID 衝突を構造的に排除する (同一会話を `--fork-session` 無しで並列 resume した worker 同士は session ID を共有するため、この保証の対象外)
    - push **失敗** (= 同名 branch 既存) → 他 session が先着していた (claim comment 経路では検知できなかったケース)。自分の claim comment を削除 + ローカル branch を削除して撤退
    - push **成功** → **独占権確定**
 
