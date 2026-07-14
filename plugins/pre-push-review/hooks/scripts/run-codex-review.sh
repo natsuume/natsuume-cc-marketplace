@@ -177,18 +177,19 @@ if [ "$_diff_unstaged" -ne 0 ] || [ "$_diff_staged" -ne 0 ]; then
   fail "working tree が dirty です (staged または unstaged 変更あり)。 git status で確認 → commit してから再実行してください。 \`/codex:review --scope branch\` は committed 部分のみを review するため、 dirty 状態で marker を書くと commit 後の状態と hash 衝突を起こす経路があります。"
 fi
 
-# branch 全差分が空 (= base と同一) なら review 対象がなく実行不要。 これは block-pre-push.sh
-# も空 push を通す挙動と整合する。
-HASH=$(compute_review_hash "$BASE") || fail "branch diff hash の計算に失敗しました。"
-if [ "$HASH" = "$EMPTY_DIFF_HASH" ]; then
+# 空 push (レビュー対象となる変更が無い) なら review 実行不要。 これは block-pre-push.sh
+# も同条件で markers gate を skip する挙動と整合する (判定条件・fail-closed 方針・正当性は
+# lib/diff-hash.sh ヘッダの「空 push 判定」セクションを参照)。
+if is_empty_push "$BASE"; then
   # 進捗 / 完了メッセージは全て stderr に統一する (caller である Bash tool は stdout を
   # tool_response.stdout として受け取るため、 codex review の出力 vs wrapper の status を
   # 分離して扱える設計に倒す)。 v1.1.0 の初版では 1 行のみ stdout に出していたが、
   # E16 の指摘で他の status (L131, L132, L153) と一致させた。
-  printf '[run-codex-review] branch 全差分が空のため codex review は実行不要です。\n' >&2
-  # marker は書かない (空差分時は block-pre-push.sh が gate を skip するため不要)。
+  printf '[run-codex-review] レビュー対象となる変更が無い (空 push) ため codex review は実行不要です。\n' >&2
+  # marker は書かない (空 push 時は block-pre-push.sh が gate を skip するため不要)。
   exit 0
 fi
+HASH=$(compute_review_hash "$BASE") || fail "branch diff hash の計算に失敗しました。"
 
 # codex companion path 解決
 COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つかりません。 \`claude plugin install codex@openai-codex\` で導入してください (versioned cache / unversioned cache / marketplace clone のいずれにも codex-companion.mjs が見つかりませんでした。 詳細な探索 path は \`lib/codex-companion-resolver.sh\` のヘッダを参照)。"

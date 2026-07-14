@@ -6,7 +6,7 @@
 - **`pre-push-review:codex-reviewer` subagent** (codex review wrapper `run-codex-review.sh` を foreground 起動して output を report として返す / 詳細は [Agents](#agents))
 - **`pre-push-review:security-reviewer` subagent** (self-contained security review / 詳細は [Agents](#agents))
 
-の 3 軸構成で、 **Anthropic と OpenAI の独立した 2 つのバグレビュー** に security review を重ねた defense-in-depth です。 修正により branch 全差分 + 未コミット差分が変わると 3 マーカーは自動失効し、 Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
+の 3 軸構成で、 **Anthropic と OpenAI の独立した 2 つのバグレビュー** に security review を重ねた defense-in-depth です。 修正や commit 列の変更 (add→revert / amend / rebase 含む) により hash が変わると 3 マーカーは自動失効し、 Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
 
 > **v3.0.0 で 3 レビューすべてを subagent 経由に統一** (互換破壊あり): v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、 それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しました。 設計のメリット:
 >
@@ -16,7 +16,13 @@
 
 ## バージョン
 
-v3.0.4 (前身: `pre-commit-review` v0.4.0)
+v3.0.5 (前身: `pre-commit-review` v0.4.0)
+
+### v3.0.4 → v3.0.5 の変更点 (#126)
+
+- マーカー hash の入力に HEAD / merge-base の commit OID 束縛行を追加しました。add→revert で net diff がレビュー時点の値に戻っても、commit 列が変わっていればマーカーが失効します (それまでは未レビューの commit A + revert B が既存マーカーで push できました)。diff は `--no-ext-diff --no-textconv` 付きで取得し、staged / unstaged diff の取得失敗も hash 計算全体の失敗として fail-closed に伝播します
+- 空 push の早期 skip 判定を「hash == 空入力の sha256」から tree OID / plumbing ベースの判定関数 `is_empty_push` / `is_empty_push_in` (lib/diff-hash.sh) に分離・厳格化しました。全 commit が empty commit (tree 変更なし、merge 非含有) の鎖のみ skip し、「commit A + A の revert」だけを積んだ fresh branch がマーカー検証なしで push できた同根の穴を塞ぎます。空 commit のみの push (issue claim 手順等) は従来どおりレビュー無しで通ります
+- 計算式変更に伴い、既存マーカーは更新後最初の push で一度失効します (再レビュー 1 回で回復)
 
 ### v3.0.3 → v3.0.4 の変更点
 
@@ -85,7 +91,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 
 **ファイル**: `hooks/scripts/block-pre-push.sh`
 
-`git push` を含むコマンドを検出した際、 現在のブランチ全差分 + 未コミット差分のハッシュと **3 つのレビューマーカー** (code-reviewer / codex-reviewer / security-reviewer subagent 起因) のハッシュを比較し、 3 マーカーがすべて一致しなければ `deny` を返します。 3 マーカーは v2.0.0 から常にすべて必須 (CC version 依存の fail-open 緩和は廃止)。
+`git push` を含むコマンドを検出した際、 commit 列 (HEAD / merge-base の OID) + ブランチ全差分 + 未コミット差分のハッシュと **3 つのレビューマーカー** (code-reviewer / codex-reviewer / security-reviewer subagent 起因) のハッシュを比較し、 3 マーカーがすべて一致しなければ `deny` を返します。 3 マーカーは v2.0.0 から常にすべて必須 (CC version 依存の fail-open 緩和は廃止)。
 
 **動作**:
 
@@ -93,10 +99,10 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 - 単独実行 (`git push`) と複合コマンド (`xxx && git push ...`, `cd dir && git push ...`) の双方を検出
 - `git -C dir push` や `git --git-dir=... push`、 `GIT_DIR=... git push` のような target-override 形式も許容 (cooperative 利用前提)
 - カレントブランチが default branch (master/main) の場合は本フックでは gate せず、 `git-guardrails` の `block-default-branch-push.sh` に委譲 (重複 deny メッセージを避けるため)
-- ブランチ全差分 + 未コミット差分が空 (= base と同一) の場合は gate しない (空 push は通す)
+- merge-base と HEAD の tree が一致し、 merge commit を含まず、 範囲内の全 commit の tree が HEAD tree と一致し、 かつ index / worktree が clean な場合は gate しない (空 push は通す。 tree OID ベースの判定)
 - **working tree が dirty (staged または unstaged 変更あり) の場合は markers の状態に関わらず deny**: push される committed 部分とレビューされた working tree の乖離を防ぐため、 push 前に commit 完了を要求する
 - 3 マーカーがすべて一致した場合はそのまま push を許容する (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する)
-- ハッシュは `git diff origin/<base>...HEAD` (PR diff) と `git diff --cached`、 `git diff` の連結に対して計算するため、 未コミットの edit があると markers のハッシュが変わる仕組み。 実際の push gate は dirty-tree 検出で行うが、 ハッシュ算式に未コミット差分を含めることで「review 後に edit して push」 のような経路もマーカー失効で再 review に倒せる
+- ハッシュは `head <HEAD の commit OID>` 行 + `mbase <merge-base の commit OID>` 行 + `git diff <merge-base> HEAD` + `git diff --cached` + `git diff` (diff 3 種はいずれも `--no-ext-diff --no-textconv` 付き) を連結した入力に対する sha256 として計算する。 HEAD の commit OID をハッシュ入力に束縛したことで、 レビュー後に commit A を積んでから revert して戻す (net diff は review 時と同一でも commit 列は変わっている) 操作でもマーカーが自動失効するようになった (issue #126 の修正: 従来は branch 全差分 + 未コミット差分のみで計算していたため、 net diff が戻ると失効しているべきマーカーが復活してしまっていた)。 未コミットの edit があると `git diff --cached` / `git diff` の内容が変わりハッシュも変わる点は従来どおりで、 markers が失効し commit + 再 review を強制できる
 - `deny` 時の `permissionDecisionReason` には、 各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と `/pre-push-review:review` slash command の案内が記載される
 
 **残っている deny 制約 (loop discipline 維持に必要な最小防御)**:
@@ -140,7 +146,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` subagent の **実行完了** を PostToolUse hook で自動検知し、 対応するマーカーファイルに「現在の branch 全差分 + 未コミット差分のハッシュ」 を書き込みます。 v3.0.0 で Skill `/code-review` / `/security-review` の検知は全廃しました (Skill 経路を廃止し subagent 経由に統一)。 codex review の marker は wrapper script (`run-codex-review.sh`) が完了時に直接書き込む設計で本 hook では扱いません (codex-reviewer subagent も検知対象外。 理由は後述)。
+`pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` subagent の **実行完了** を PostToolUse hook で自動検知し、 対応するマーカーファイルに「commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュ」 を書き込みます。 v3.0.0 で Skill `/code-review` / `/security-review` の検知は全廃しました (Skill 経路を廃止し subagent 経由に統一)。 codex review の marker は wrapper script (`run-codex-review.sh`) が完了時に直接書き込む設計で本 hook では扱いません (codex-reviewer subagent も検知対象外。 理由は後述)。
 
 hooks.json の matcher は `"*"` (wildcard) で、 すべての tool 完了時に本フックが呼ばれます。 フィルタリングはスクリプト側の bash 内蔵正規表現マッチが行うため、 対象外 tool は subprocess を立てずに即離脱します。
 
@@ -172,9 +178,9 @@ codex-reviewer subagent は wrapper script (`run-codex-review.sh`) を foregroun
 
 | ファイル | 内容 | 寿命 |
 |---|---|---|
-| `.claude-pre-push-code-reviewed` | `pre-push-review:code-reviewer` subagent 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
-| `.claude-pre-push-codex-reviewed` | codex review (wrapper script `run-codex-review.sh` 経由 / `pre-push-review:codex-reviewer` subagent が内部起動) 完了時の branch 全差分ハッシュ。 wrapper script 自身が書き込む | 次の編集で hash が変わると失効 (明示削除しない) |
-| `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の branch 全差分ハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-code-reviewed` | `pre-push-review:code-reviewer` subagent 完了時の commit 列 + branch 全差分のハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-codex-reviewed` | codex review (wrapper script `run-codex-review.sh` 経由 / `pre-push-review:codex-reviewer` subagent が内部起動) 完了時の commit 列 + branch 全差分のハッシュ。 wrapper script 自身が書き込む | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の commit 列 + branch 全差分のハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 
 > **v2.x → v3.0.0 アップグレード時の注意**: v2.x で実行済みの 3 マーカー (code-reviewed / codex-reviewed / security-reviewed) は v3.0.0 でも hash が一致する限り有効です。 marker file 名と hash 計算式は不変なので追加の cleanup は不要です。
 

@@ -31,8 +31,8 @@
     {
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
-      "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーとブランチ全差分の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "3.0.4",
+      "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
+      "version": "3.0.5",
       "keywords": ["push", "review", "quality", "codex", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
