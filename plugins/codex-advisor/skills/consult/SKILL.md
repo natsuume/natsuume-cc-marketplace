@@ -61,10 +61,10 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-advisor.sh" < "/absolute/path/to/p
 - `${CLAUDE_PLUGIN_ROOT}` が空、または該当パスが存在しない場合は、plugin cache から最新版を解決して同じ stdin リダイレクトで実行する (置換であって再試行ではない):
 
 ```bash
-WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-advisor.sh' -type f 2>/dev/null | awk -F'codex-advisor/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-) && [ -n "$WRAPPER" ] && bash "$WRAPPER" < "/absolute/path/to/prompt.md"
+WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-advisor.sh' -type f 2>/dev/null | awk -F'codex-advisor/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-); if [ -n "$WRAPPER" ]; then bash "$WRAPPER" < "/absolute/path/to/prompt.md"; else echo "[consult] run-codex-advisor.sh が plugin cache に見つかりません" >&2; false; fi
 ```
 
-(このコマンドの `sort` 部分を `sort -V` に置き換えない — macOS の BSD sort では動かない。`$(...)` はパス解決であり background 起動ではない)
+(このコマンドの `sort` 部分を `sort -V` に置き換えない — macOS の BSD sort では動かない。wrapper 不在を無言の exit 1 にせず stderr へ明示するため if/else 形にしている。`$(...)` はパス解決であり background 起動ではない)
 
 ## 3. 助言の扱い
 
@@ -73,8 +73,10 @@ WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-
 
 ## 4. 失敗時
 
-| wrapper の報告 | 対処 |
+| 失敗の内容 | 対処 |
 |---|---|
+| プロンプトファイルの Write が hook に deny される / 失敗する | Bash によるファイル生成 (`echo` / `printf` / heredoc) に退避しない (プロンプト本文が command 文字列に載るため)。deny 理由を解消できるなら内容を調整して Write を再試行し、できなければ相談なしで作業を続行してその旨をユーザ報告に含める |
+| wrapper が plugin cache にも見つからない | codex-advisor plugin の install 状態を確認する。解消できなければ相談なしで作業を続行し、その旨をユーザ報告に含める |
 | codex companion が見つからない | `claude plugin install codex@openai-codex` を案内する |
 | codex CLI 未インストール / 未認証 | `/codex:setup` の実行を案内する |
 | Node.js 不在 | Node.js のインストールが必要である旨を報告する |
