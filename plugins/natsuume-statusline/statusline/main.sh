@@ -23,6 +23,7 @@ eval "$(printf '%s' "$input" | jq -r '
   @sh "cwd=\(.workspace.current_dir // .cwd // "")",
   @sh "session_id=\(.session_id // "")",
   @sh "model_name=\(.model.display_name // "")",
+  @sh "effort_level=\(.effort.level // "")",
   @sh "ctx_pct=\(.context_window.used_percentage // "")",
   @sh "ctx_used=\(.context_window.total_input_tokens // "")",
   @sh "ctx_max=\(.context_window.context_window_size // "")",
@@ -162,12 +163,12 @@ segments+=("${OTHER[@]}")
 # 1行目はターミナル幅に収めて出力（折り返しが発生すると2行目以降の表示が崩れるため）
 fit_segments "$sep" "$TERM_WIDTH" "${segments[@]}"
 
-# --- 2行目: モデル名 + context 使用量 + レートリミット (5h) ---
+# --- 2行目: モデル名 (effort) + context 使用量 + レートリミット (5h) ---
 # 行内容は構築時点で ANSI 色が実バイト化済みのため %s で出力する。%b を使うと
 # 信頼境界外の自由テキスト (model.display_name 等) 中のリテラルなバックスラッシュ列
 # (\n, \033 等) が実制御バイトへ解釈され、行注入・端末エスケープ注入が可能になる
 # (生の制御バイトは各レンダラの tr -d が除去する。2 段の防御は役割が異なる)。
-line2_out=$(render_line2 "$model_name" "$ctx_pct" "$ctx_used" "$ctx_max" "$rate_5h" "$rate_5h_reset")
+line2_out=$(render_line2 "$model_name" "$effort_level" "$ctx_pct" "$ctx_used" "$ctx_max" "$rate_5h" "$rate_5h_reset")
 if [ -n "$line2_out" ]; then
   printf '\n%s' "$line2_out"
 fi

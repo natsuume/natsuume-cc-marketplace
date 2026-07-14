@@ -27,7 +27,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [auto-lint-check](#auto-lint-check) | 0.4.1 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
 | [pre-push-review](#pre-push-review) | 3.0.4 | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーとブランチ全差分の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
 | [update-default-branch](#update-default-branch) | 0.2.1 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
-| [natsuume-statusline](#natsuume-statusline) | 0.7.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
+| [natsuume-statusline](#natsuume-statusline) | 0.8.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.14.0 | Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する |
 | [ui-discipline](#ui-discipline) | 0.2.1 | UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う |
 | [natsuume-writing](#natsuume-writing) | 0.4.2 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
@@ -184,8 +184,8 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 ### 表示内容
 
 - **1 行目**: パス、GitHub repo (所有 namespace は `repo` に短縮)、branch、staged/modified、未コミット件数 / `clean`
-- **2 行目**: context 使用量 (`ctx: (45%) 75.1k/1M` の数値表示。使用率・使用/最大トークン数を併記、バー無し)、5h / 7d レートリミット (パーセンテージ・リセット残時間・プログレスバー、色は使用率で変化)。横幅に収まらない場合は ⓪ 使用率の四捨五入整数化 → ① ctx% 削除 → ② バー短縮 → ③ バー削除 の順で段階的に簡略化し、情報を保ったまま縮退
-- **3 行目**: 将来拡張用 (現状は空)
+- **2 行目**: モデル名 + reasoning effort (`Fable 5 (high)` 形式。effort 非対応モデル・古い Claude Code では effort が stdin に来ないためモデル名のみ)、context 使用量 (`ctx: (45%) 75.1k/1M` の数値表示。使用率・使用/最大トークン数を併記、バー無し)、5h レートリミット (パーセンテージ・リセット残時間・プログレスバー、色は使用率で変化)。横幅に収まらない場合は ⓪ 使用率の四捨五入整数化 → ① ctx% 削除 → ② バー短縮 → ③ バー削除 の順で段階的に簡略化し、情報を保ったまま縮退
+- **3 行目**: 7d レートリミット + モデル別週次枠 (`7d(Fable)` 等。stdin の公式経路 `rate_limits.model_scoped` があればそれを、無ければ OAuth usage API 由来のキャッシュを使用)。縮退の挙動は 2 行目と同じ
 
 ### 機能
 

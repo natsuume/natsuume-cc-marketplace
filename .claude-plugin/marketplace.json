@@ -46,7 +46,7 @@
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
       "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。/natsuume-statusline:setup で ~/.claude/settings.json に登録する。",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
