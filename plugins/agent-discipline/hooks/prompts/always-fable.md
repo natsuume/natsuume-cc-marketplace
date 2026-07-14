@@ -1,9 +1,10 @@
 <!--
   agent-discipline: 常時適用ルール (FABLE 版、#175)
   各ルールは「意図 (なぜ) + 短い指示 + 境界 (いつ例外か)」で記述し、パターン列挙は避ける
-  (具体列挙は検知層 hook (PreToolUse type:agent) と always-sonnet.md が保持する)。
+  (具体列挙は検知層 hook (PreToolUse type:agent) と always-sonnet-{1,2,3}.md が保持する)。
   rule:issue-claim のみ安全機構のため手順本体を省略せず全文記載する。
-  ルール ID セットは always-sonnet.md と完全一致させること (受入基準)。
+  ルール ID セットは always-sonnet-{1,2,3}.md の和集合と完全一致させること (受入基準、issue #236
+  で always-sonnet.md が 3 part に分割されたため母集合を和集合化。lint-prompt-sync.sh チェック 1)。
 -->
 
 # agent-discipline: 常時適用ルール (Fable)

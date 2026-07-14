@@ -1,8 +1,10 @@
 name: agent-discipline-prompt-lint
 
-# agent-discipline plugin のモデル別 2 プロンプトファイル (always-fable.md / always-sonnet.md)
-# と hooks.json の 4 type:agent entries (gh issue/pr create/edit) が同期ドリフトしていないかを
-# 検証する構造 lint CI (#178)。 チェック内容の詳細契約はスクリプト本体のヘッダコメントを参照:
+# agent-discipline plugin のモデル別プロンプトファイル (always-fable.md /
+# always-sonnet-1.md / always-sonnet-2.md / always-sonnet-3.md、issue #236 で
+# always-sonnet.md から 3 part に分割) と hooks.json の 4 type:agent entries
+# (gh issue/pr create/edit) が同期ドリフトしていないかを検証する構造 lint CI (#178)。
+# チェック内容の詳細契約はスクリプト本体のヘッダコメントを参照:
 #   plugins/agent-discipline/scripts/lint-prompt-sync.sh
 #
 # ubuntu-latest には jq が標準搭載されているため、 スクリプトが依存する jq の追加
@@ -13,7 +15,9 @@ on:
     paths:
       # ルール ID コメントを持つモデル別プロンプトファイル (チェック 1 の対象)
       - "plugins/agent-discipline/hooks/prompts/always-fable.md"
-      - "plugins/agent-discipline/hooks/prompts/always-sonnet.md"
+      - "plugins/agent-discipline/hooks/prompts/always-sonnet-1.md"
+      - "plugins/agent-discipline/hooks/prompts/always-sonnet-2.md"
+      - "plugins/agent-discipline/hooks/prompts/always-sonnet-3.md"
       # type:agent 4 entries を持つ hook 設定 (チェック 2 の対象)
       - "plugins/agent-discipline/hooks/hooks.json"
       # ルール ID コメントを持つ分業規律モデル別プロンプトファイル (チェック 4 の対象)
@@ -28,7 +32,9 @@ on:
     branches: [master]
     paths:
       - "plugins/agent-discipline/hooks/prompts/always-fable.md"
-      - "plugins/agent-discipline/hooks/prompts/always-sonnet.md"
+      - "plugins/agent-discipline/hooks/prompts/always-sonnet-1.md"
+      - "plugins/agent-discipline/hooks/prompts/always-sonnet-2.md"
+      - "plugins/agent-discipline/hooks/prompts/always-sonnet-3.md"
       - "plugins/agent-discipline/hooks/hooks.json"
       - "plugins/agent-discipline/hooks/prompts/discipline-fable.md"
       - "plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
@@ -44,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # lint-prompt-sync.sh は引数を取らず、 リポジトリルートからの相対パスで
-      # always-fable.md / always-sonnet.md / hooks.json を参照する契約のため、
+      # always-fable.md / always-sonnet-{1,2,3}.md / hooks.json を参照する契約のため、
       # working-directory を指定せずリポジトリルートのまま実行する。
       - name: Run lint-prompt-sync.sh (rule ID set + hooks.json common block sync check)
         run: ./plugins/agent-discipline/scripts/lint-prompt-sync.sh

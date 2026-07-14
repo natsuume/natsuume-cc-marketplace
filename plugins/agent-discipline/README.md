@@ -4,9 +4,26 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.14.0
+v0.15.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.14.0 → v0.15.0 の変更点
+
+注入ペイロードの分割です (issue #236)。SessionStart / UserPromptSubmit の各 additionalContext 要素の文字数が Claude Code の inline 配送閾値 (約 9〜10K 文字/要素) を超え、全セッションで 2KB プレビューのみの persisted-output に劣化していた問題を、「1 要素 8,000 文字以下」への分割で解消しました。ルール本文の削減は行わず、分割のみで達成しています。
+
+- **`always-sonnet.md` を rule 境界で 3 分割**: `always-sonnet-1.md` (intro + rule 1〜2) / `always-sonnet-2.md` (rule 3〜6) / `always-sonnet-3.md` (rule 7〜9 + footer) を新設し、`always-sonnet.md` は削除しました。rule 本文と `<!-- rule:<id> -->` マーカーは一字一句無変更で移設し、各 part 冒頭にヘッダコメント (分割経緯) と `part n/3` 表記、1〜2 文の説明のみを追加しています
+- **`hooks/prompts/delivery-note.md` を新設** (≈400 字以下): SessionStart の part 1 要素の先頭に付く短い前置き。常時ルール・分業規律が複数メッセージに分割配送されること、残りは最初のユーザプロンプト処理時に届くこと、本セッションの context に見当たらない場合 (context 圧縮直後の自動継続中など) は prompts ディレクトリの該当ファイルを Read して自己修復することを伝える。`inject-always.sh` が実行時に prompts ディレクトリの絶対パスを 1 行付加する
+- **`hooks/prompts/part-self-gate.md` を新設** (≈200 字): モデル判定不能時に `always-sonnet-2.md` / `always-sonnet-3.md` の直前に付く自己ゲート。part 番号非依存の文言にしている
+- **`preamble-self-gate.md` / `discipline-preamble-self-gate.md` を書き換え**: 分割後は要素の到着順序が保証されないため、自己ゲートの射程を「後続見出し〜メッセージ末尾」という位置依存の記述から「本メッセージ (要素) 単体」に閉じるよう再定義した。`discipline-preamble-self-gate.md` には Fable 確定時の分業規律補正が別要素として最大 1 プロンプト遅延で届く旨も明記した
+- **`inject-always.sh` を改修**: SessionStart では part 1 (delivery-note + 分岐別本文) のみを注入するよう縮小した。state file の書込を同一ディレクトリ内 temp file → `mv` の atomic 書込にし、書込の成否を確認する (成功時のみ pending マーカーを削除、失敗時は pending マーカー作成にフォールバックして判定不能セマンティクスへ縮退)。UserPromptSubmit 側の配送済みマーカー (`delivered-rules-{2,3}-<sid>` / `delivered-discipline-<sid>`) を SessionStart のたびに無条件で削除する。additionalContext の組み立て後に文字数を計測し、8,000 字を超える場合は実パス行 → delivery-note 全体の順で段階的に縮退する 8K ガードを追加した (self-gate 前置き + ルール本文はいかなる場合も落とさない)
+- **`inject-rules-part.sh` を新設** (UserPromptSubmit、引数 `2` / `3`): `always-sonnet-2.md` / `always-sonnet-3.md` を at-most-once で個別要素として配送する。マーカー不在時は pending 優先・state 次点の優先規則で分岐し、pending マーカー書込は本文と JSON 生成成功後に行う
+- **`inject-discipline.sh` を新設** (UserPromptSubmit): 分業規律 (discipline-\*.md、モデル別) を独立要素として配送する。マーカーは 3 状態 (無し / `sonnet-gate` / `final`) を持ち、判定不能時は自己ゲート付きで配送して `sonnet-gate` に、モデル確定後は補正または no-op で `final` に遷移する
+- **`resolve-model-on-prompt.sh` を改修**: 再注入ペイロードから分業規律ブロックを外し、prefix + `always-fable.md` のみを配送するようにした (分業規律の Fable 補正は `inject-discipline.sh` が別要素で担う)。state file の書込を atomic 化し、書込に失敗した場合は pending マーカーを削除せず注入も行わず無音 exit するようにした (stale state を残したまま pending を消すことを防ぐ)
+- **`hooks.json`**: UserPromptSubmit に `inject-rules-part.sh 2` / `inject-rules-part.sh 3` / `inject-discipline.sh` の 3 entries を追加し、description を新配送経路の説明に更新した。4 つの type:agent prompt 内の「hooks/prompts/always-sonnet.md セクション 2.1 / 3.1」参照を「hooks/prompts/always-sonnet-1.md セクション 2.1 / always-sonnet-2.md セクション 3.1」に更新した (4 entries 一律更新のため共通ブロックの byte 一致は維持)
+- **`lint-prompt-sync.sh`**: チェック 1/5 の「sonnet 側 ID 集合」を 3 part ファイルの和集合として抽出するよう変更し、part 間で rule ID が重複しないことを検証するペアワイズ検査を追加した。pre-flight の存在チェック対象も 3 part ファイルに差し替えた
+- **CI**: `.github/workflows/agent-discipline-prompt-lint.yml` の paths filter を `always-sonnet.md` から 3 part ファイルに差し替えた
+- **version bump**: `0.14.0` → `0.15.0` (minor)。`plugin.json` / `marketplace.json` / リポジトリ README の 3 箇所を同期
 
 ### v0.13.1 → v0.14.0 の変更点
 
@@ -153,11 +170,11 @@ Claude Code に「個人の開発スタイル」 を一括で適用するため�
 
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
-| **物理層 (Bash 分解)** | `SessionStart` (inject-always.sh、モデル別に `always-fable.md` / `always-sonnet.md` を配送) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
+| **物理層 (Bash 分解)** | `SessionStart` (inject-always.sh、モデル別に `always-fable.md` / `always-sonnet-1.md` の part 1 を配送) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
 | **before 系** | `SessionStart` (同上) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約、 AskUserQuestion の必須化 (R6、 v0.5.0 新設)、 TDD 2 段階の開発手順 (R3c、 v0.5.0 新設) |
 | **during 系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` の無い旧形式 claim は他 session 扱いで削除禁止、 v0.14.0) |
-| **モデル判定 / one-shot 補正** (v0.5.0 新設、分業規律の連結配送は v0.8.0/v0.9.0) | `SessionStart` (inject-always.sh の fallback chain) + `UserPromptSubmit` (resolve-model-on-prompt.sh) | 常時 (判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し `always-fable.md` / `always-sonnet.md` を出し分ける。 判定不能時は自己ゲート前置き付きで `always-sonnet.md` を暫定注入し、 後続の `UserPromptSubmit` で transcript から確定したら Fable の場合のみ確定版を 1 度だけ再注入する。 常時ルールと合わせて分業規律 (discipline-\*.md、モデル別) も同一 additionalContext の末尾に連結配送する。 詳細は `inject-always.sh` ヘッダの配送マトリクス参照 |
+| **モデル判定 / 分割配送** (v0.5.0 新設、分業規律の連結配送は v0.8.0/v0.9.0、issue #236 (v0.15.0) で要素分割に再設計) | `SessionStart` (inject-always.sh の fallback chain、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh / resolve-model-on-prompt.sh) | 常時 (各要素は at-most-once、判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し `always-fable.md` / `always-sonnet-1.md` を出し分けて SessionStart で part 1 のみ注入する。残りの part (`always-sonnet-2.md` / `always-sonnet-3.md`) と分業規律 (discipline-\*.md、モデル別) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (8K 閾値超過を避けるための分割、詳細は `inject-always.sh` ヘッダの配送マトリクス参照)。判定不能時は自己ゲート付きで暫定配送し、後続の `UserPromptSubmit` で transcript から確定したら常時ルール確定版 (resolve-model-on-prompt.sh) と分業規律確定版 (inject-discipline.sh) をそれぞれ 1 度だけ再注入する |
 | **検知系 (gh issue/pr body)** (v0.4.0、Closes 検証 Step は v0.7.0) | `PreToolUse` (hooks.json 内に inline 定義の type: agent hook を 4 entries) | Bash ツール呼び出し時、 各 hook の `if: "Bash(gh <cmd>:*)"` filter で `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` 該当時のみ agent subagent を起動 (非該当 Bash 呼び出しは agent を起動しない) | 誘導層 (before 系 2.1 / 3.1) の禁止表現を Claude が忘れて issue body / PR 説明に書こうとしたら、 agent hook が --body inline / --body-file PATH を semantic 判定し違反時 block。 `gh pr create` entry のみ branch 名から推定される issue の closing keyword 有無も追加検証する (v0.7.0)。 model は実装系メインセッションおよび全 subagent と同系列の claude-sonnet-5 に pin (= SPOF を session 同期化) |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
@@ -182,7 +199,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **動作** (v0.13.0 新設、issue #221):
 
 - 全 subagent の起動時に `hooks/prompts/subagent-rules.md` 全文を `additionalContext` として注入する。モデル判定・agent_type 分岐を持たない静的全文注入
-- 注入内容は 4 規律: bash-decompose (always-sonnet.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点)
+- 注入内容は 4 規律: bash-decompose (always-sonnet-1.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点)
 - `jq` 不在 / prompt ファイル欠落・空の場合は無音 `exit 0` (フェイルセーフ)。subagent-rules.md の rule ID 整合は `lint-prompt-sync.sh` チェック 5 (サブセット検査) が CI で担保する
 
 #### inject-always
@@ -190,22 +207,23 @@ claude plugin install agent-discipline@natsuume-plugins
 **ファイル**: `hooks/scripts/inject-always.sh`
 **イベント**: `SessionStart`
 
-**動作** (v0.5.0 でモデル別 fallback chain 判定に変更):
+**動作** (v0.5.0 でモデル別 fallback chain 判定に変更、issue #236 (v0.15.0) で part 1 のみの注入に縮小):
 
-- セッションのモデルを決定論的 fallback chain で判定し、`always-fable.md` (Fable 向け) または `always-sonnet.md` (Sonnet / それ以外) を `additionalContext` として注入する。 常時ルールと合わせて分業規律 (discipline-\*.md、モデル別) も同一 additionalContext の末尾に連結配送する (v0.8.0/v0.9.0)。 詳細は本スクリプトヘッダの配送マトリクス参照
-- **fallback chain** (先に確定した段階で判定を打ち切る):
+- セッションのモデルを決定論的 fallback chain で判定し、`delivery-note.md` (+ 実行時に解決した prompts ディレクトリの絶対パス 1 行) に続けて、`always-fable.md` (Fable 向け) または `always-sonnet-1.md` (Sonnet / それ以外、常時ルールの part 1/3) を `additionalContext` として注入する。残りの part (`always-sonnet-2.md` / `always-sonnet-3.md`) と分業規律 (discipline-\*.md) は本スクリプトの責務外で、UserPromptSubmit の `inject-rules-part.sh` / `inject-discipline.sh` が個別要素として配送する。詳細は本スクリプトヘッダの配送マトリクス参照
+- **fallback chain** (先に確定した段階で判定を打ち切る、本スクリプトのみが実行する):
   1. stdin (hook input JSON) の `.model` フィールド
   2. transcript 解析: `.transcript_path` に対し `jq -r 'select(.type=="assistant" and .isSidechain != true) | .message.model // empty' | tail -n 1` で最後の main-chain assistant 行のモデル ID を取得 (セッション中の `/model` 切替後も最新の観測値が得られる、state file より常に新鮮な情報源)
   3. state file `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` (同一セッションの過去 SessionStart で確定した値のキャッシュ。transcript が空 (/clear 直後等) / 読めない場合の最後の砦で、`/model` 切替を跨ぐと stale になりうるため transcript より後に置く)
   4. いずれも空 → 判定不能
-- **適用規則**: モデル ID (小文字化) が `fable` を含む → `always-fable.md`。`sonnet` を含む、または非空でそのいずれでもない (opus / haiku 等) → `always-sonnet.md`。判定不能 → `preamble-self-gate.md` + `always-sonnet.md` を注入し、state file の代わりに pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を作成する (後続の `resolve-model-on-prompt.sh` が補正)
-- **分業規律の連結配送** (discipline-\*.md、モデル別。v0.8.0 で fable 分岐、v0.9.0 で残りの分岐に拡張): fable → `discipline-preamble-fable.md` + `discipline-fable.md`。sonnet / その他確定 (opus / haiku 等) → `discipline-sonnet.md` のみ。判定不能 → `discipline-preamble-self-gate.md` + `discipline-sonnet.md`。いずれも常時ルールに続けて additionalContext の末尾に連結し、読めない/空の場合はペイロード単位の fail-open で常時ルールのみ注入する
-- 判定不能以外の 3 分岐では、確定したモデル ID を毎回 state file に書き込む (v0.8.0 で統合前の fable-discipline (`inject-fable-role.sh`) と同じ sanitize 方式)
+- **適用規則**: モデル ID (小文字化) が `fable` を含む → `always-fable.md`。`sonnet` を含む、または非空でそのいずれでもない (opus / haiku 等) → `always-sonnet-1.md`。判定不能 → `preamble-self-gate.md` + `always-sonnet-1.md` を注入し、state file の代わりに pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を作成する (後続の `resolve-model-on-prompt.sh` / `inject-rules-part.sh` / `inject-discipline.sh` が判定不能セマンティクスで扱う)
+- **state file の atomic 書込と成否確認** (v0.15.0 で追加): state file は同一ディレクトリ内 temp file → `mv` で atomic に書き込み、成否を確認する。モデルが確定したのに書込に失敗した場合は pending マーカー作成にフォールバックし、判定不能セマンティクス (自己ゲート付き配送 + `resolve-model-on-prompt.sh` の one-shot 補正) に縮退する。pending の作成にも失敗した場合は state 変更なしで注入のみ継続する (既知の制約参照)。state 書込が成功した場合のみ、過去の判定不能 SessionStart が残した pending マーカーを削除する
+- **配送済みマーカーのリセット** (v0.15.0 で追加): UserPromptSubmit 側の配送済みマーカー (`delivered-rules-2-<sid>` / `delivered-rules-3-<sid>` / `delivered-discipline-<sid>`) を SessionStart のたびに無条件で削除する (`resume` / `clear` / `compact` でも全要素を再配送するセマンティクスを維持するため)
+- **8K ガード** (v0.15.0 で追加): additionalContext を組み立てた後の全文文字数を計測し、8,000 字を超える場合は (i) 実パス行を落として再計測 → (ii) それでも超える場合は delivery-note 全体を落として再計測、の順で段階的に縮退する。self-gate 前置き (`preamble-self-gate.md`) とルール本文 (`always-fable.md` / `always-sonnet-1.md`) はいかなる場合も落とさない
 - `SessionStart` は `startup` 以外に `resume` / `clear` / `compact` でも発火するため同一セッション内で複数回呼ばれる可能性があるが、注入内容は static なので重複しても害は無い (毎回コンテキストトークンを再消費する点に留意)
 - 入力 JSON から `hook_event_name` を読み取り `hookSpecificOutput.hookEventName` に同じ値を設定 (誤った既定値で別 event の文脈に誘導しないため)
-- `jq` 不在 / 不正 JSON 入力 / 注入対象の prompts/\*.md が読めない場合はすべて無音 `exit 0` (フェイルセーフ)
+- `jq` 不在 / 不正 JSON 入力 / 注入対象の part 1 本文 (`always-fable.md` / `always-sonnet-1.md` / `preamble-self-gate.md`) が読めない場合はすべて無音 `exit 0` (フェイルセーフ)。`delivery-note.md` が読めない場合は delivery-note 無しで part 1 本文のみ注入する (ペイロード単位の fail-open)
 
-**注入内容の要約** (両ファイル共通のルール ID、詳細な書き分けは「モデル別 2 ファイルの書き分け」参照):
+**注入内容の要約** (`always-fable.md` と `always-sonnet-{1,2,3}.md` の和集合で共通のルール ID、詳細な書き分けは「モデル別ファイルの書き分け」参照。part 1 = ルール 1〜2、part 2 = ルール 3〜6、part 3 = ルール 7〜9):
 
 1. **Bash コマンド分解** (物理層、`rule:bash-decompose`): `&&` / `||` / `;` / `&` / `$(...)` / バッククォート / `eval` / `sh -c` / `xargs` / `find -exec` を分解対象、パイプライン `|` は単一論理操作のみ許容、`cd $dir && cmd` やトランザクション的合成は例外
 2. **設計 / 仕様検討の事前明確化** (`rule:design-approval`): スコープ / 要件 / 受入基準 / I/O 契約 / 公開命名などの後戻りコストが大きい判断は `AskUserQuestion` で事前に詰める。軽微な実装判断は対象外。「思考は自由、成果物への固定化は要承認」非対称ルール: 検討段階での複数案比較・推奨思考は許容するが、結論を issue body / PR 説明 / plan / commit に書き出す前に必ず `AskUserQuestion` を通す
@@ -217,26 +235,65 @@ claude plugin install agent-discipline@natsuume-plugins
 8. **AskUserQuestion の必須化** (`rule:ask-user-question`、v0.5.0 新設・R6): ユーザへの質問・確認・判断伺い・すり合わせは自由文で turn を終えず必ず `AskUserQuestion` を発行する
 9. **TDD 2 段階の開発手順** (`rule:tdd-two-phase`、v0.5.0 新設・R3c): 軽微な修正を除き、実装は Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める
 
-**モデル別 2 ファイルの書き分け**:
+**モデル別ファイルの書き分け**:
 
 - `always-fable.md`: 各ルールを「意図 (なぜ) + 短い指示 + 境界 (いつ例外か)」で記述しパターン列挙を避ける。禁止表現 8 カテゴリは意図短文に圧縮する。進捗・完了報告はこのセッションのツール結果で裏付けられた事実のみを書く旨を含める
-- `always-sonnet.md`: 各ルールに適用範囲を明示し、否定形の指示には具体的な代替行動を併記する。ルールごとに良い例 / 悪い例を最小 1 セット添える。禁止表現 8 カテゴリは列挙を維持する。末尾に「単純な作業では深い思考を要さない」の steering 文を置く
-- `rule:issue-claim` (連続 issue 解決時の排他制御) のみ、安全機構のため両ファイルとも手順本体を省略せず完全記載する
+- `always-sonnet-1.md` / `always-sonnet-2.md` / `always-sonnet-3.md`: 各ルールに適用範囲を明示し、否定形の指示には具体的な代替行動を併記する。ルールごとに良い例 / 悪い例を最小 1 セット添える。禁止表現 8 カテゴリは列挙を維持する。part 3/3 (`always-sonnet-3.md`) の末尾に「単純な作業では深い思考を要さない」の steering 文を置く。issue #236 (v0.15.0) で単一ファイル (`always-sonnet.md`) を rule 境界で 3 分割したもので、rule 本文・rule ID マーカーは分割前から無変更 (各 part 冒頭のヘッダコメント・`part n/3` 表記・1〜2 文の説明のみが分割に伴う追加)
+- `rule:issue-claim` (連続 issue 解決時の排他制御、part 3/3 に含まれる) のみ、安全機構のため `always-fable.md` / `always-sonnet-3.md` とも手順本体を省略せず完全記載する
 
 #### resolve-model-on-prompt
 
 **ファイル**: `hooks/scripts/resolve-model-on-prompt.sh`
 **イベント**: `UserPromptSubmit`
 
-**動作** (v0.5.0 新設、one-shot 補正):
+**動作** (v0.5.0 新設、one-shot 補正。issue #236 (v0.15.0) で分業規律ブロックを分離):
 
 - `inject-always.sh` が判定不能分岐で作成した pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` が存在しない session では即 `exit 0` (通常時のオーバーヘッドをマーカー存在チェック 1 回に抑える)
 - pending マーカーが存在する場合のみ、`.transcript_path` に対し `inject-always.sh` と同じ transcript 解析コマンドを実行し、最後の main-chain assistant 行のモデル ID を取得する
 - assistant 行がまだ無い (transcript 解析結果が空) 場合は何もせず、pending マーカーを残したまま次回の `UserPromptSubmit` で再試行する
-- assistant 行が見つかりモデルが確定したら、state file への書込 → pending マーカー削除の順で行う (TOCTOU の隙間を作らない、#155 の教訓)
-  - モデル ID が `fable` を含む場合のみ、確定版 (`always-fable.md`) を「以後この確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄する」前置きとともに `additionalContext` で 1 度だけ再注入する。 分業規律 (`discipline-preamble-fable.md` + `discipline-fable.md`) も読めれば同一 additionalContext の末尾に連結して再注入する (v0.9.0、ペイロード単位の fail-open)
-  - それ以外 (sonnet / opus / haiku 等) は自己ゲート時に `always-sonnet.md` と `discipline-sonnet.md` を注入済みと同内容のため再注入しない (pending マーカーの解消と state file 書込のみ行う)
+- assistant 行が見つかりモデルが確定したら、state file への atomic 書込 (同一ディレクトリ内 temp file → `mv`) を試みる:
+  - **書込成功**: pending マーカーを削除する (TOCTOU の隙間を作らない、#155 の教訓)。モデル ID が `fable` を含む場合のみ、常時ルール確定版 (prefix + `always-fable.md`) を `additionalContext` で 1 度だけ再注入する。prefix は「常時適用ルールの確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄すること」に加え「分業規律の Fable 版補正は別要素 (inject-discipline.sh) で届く」旨に触れる。それ以外 (sonnet / opus / haiku 等) は自己ゲート時に `always-sonnet-1.md` (と `inject-rules-part.sh` が配送する part 2/3) を注入済みと同内容のため再注入しない
+  - **書込失敗**: pending マーカーを削除せず、注入も行わず無音 `exit 0` する (次回 `UserPromptSubmit` で再試行。stale state を残したまま pending を消すと、後続スクリプトが誤った変種を確定配送するため)
+- 分業規律 (discipline-\*.md) の Fable 補正は本スクリプトの責務外で、`inject-discipline.sh` の `sonnet-gate` → `final` マーカー遷移が別要素として担う (v0.15.0 でここから分離)
 - `jq` 不在 / 不正 JSON 入力 / `transcript_path` が読めない / `always-fable.md` が読めない場合はすべて無音 `exit 0` (フェイルセーフ)
+
+#### inject-rules-part
+
+**ファイル**: `hooks/scripts/inject-rules-part.sh`
+**イベント**: `UserPromptSubmit`
+**引数**: `2` または `3` (part 番号)。hooks.json に `inject-rules-part.sh 2` / `inject-rules-part.sh 3` の 2 entries で登録する。引数が `2` / `3` 以外、または欠落の場合は無音 `exit 0`
+
+**動作** (v0.15.0 新設、issue #236):
+
+- 常時ルール (Sonnet 版) の part 2/3 または part 3/3 (`always-sonnet-2.md` / `always-sonnet-3.md`) を at-most-once で個別要素として配送する。マーカー `delivered-rules-<n>-<session_id>` が存在すれば即 `exit 0` (毎プロンプトのオーバーヘッドをファイル存在チェックのみに抑える)
+- マーカー不在時は **pending 優先・state 次点** の優先規則 (`pending-model-<session_id>` が存在する間は `model-<session_id>` を信頼しない) で分岐する:
+  - pending あり → `part-self-gate.md` (part 番号非依存の自己ゲート行) + `always-sonnet-<n>.md` を注入し、マーカーを書く
+  - pending 無し + state が fable → 配送不要 (fable は part 1 = `always-fable.md` 全文で完結)。マーカーのみ書く
+  - pending 無し + state が非 fable → `always-sonnet-<n>.md` を注入し、マーカーを書く
+  - pending も state も無い (SessionStart hook が失敗した異常系) → 判定不能と同じ自己ゲート付き配送にフォールバックし、マーカーを書く
+- マーカーの書き込みは注入本文と出力 JSON の生成に成功した後に行う (先にマーカーを書くと、本文読取失敗時に当該要素が session 中永久欠落する)。マーカー自体の書込も同一ディレクトリ内 temp file → `mv` の atomic 書込にする
+- `jq` 不在 / 不正 JSON 入力 / `always-sonnet-<n>.md` (または自己ゲート付き配送時の `part-self-gate.md`) が読めない場合は無音 `exit 0` でマーカーは書かない (次プロンプトで再試行)
+
+#### inject-discipline
+
+**ファイル**: `hooks/scripts/inject-discipline.sh`
+**イベント**: `UserPromptSubmit`
+
+**動作** (v0.15.0 新設、issue #236):
+
+- 分業規律 (discipline-\*.md、モデル別) を独立要素として配送する。マーカー `delivered-discipline-<session_id>` は内容として 3 状態を持つ: **無し** / `sonnet-gate` / `final`
+- **マーカー無し**: pending 優先・state 次点で分岐する:
+  - pending あり → 見出し「# agent-discipline: 分業規律 (Sonnet)」+ `discipline-preamble-self-gate.md` + `discipline-sonnet.md` を注入し、マーカーを `sonnet-gate` にする
+  - pending 無し + state が fable → 見出し「# agent-discipline: 分業規律 (Fable セッション)」+ `discipline-preamble-fable.md` + `discipline-fable.md` (分業規律 fable 版) を注入し、マーカーを `final` にする
+  - pending 無し + state が非 fable → 見出し「# agent-discipline: 分業規律 (Sonnet)」+ `discipline-sonnet.md` (分業規律 sonnet 版) を注入し、マーカーを `final` にする
+  - pending も state も無い異常系 → pending 時と同じ自己ゲート付き配送、マーカーを `sonnet-gate` にする
+- **マーカー `sonnet-gate`** (判定不能時の自己ゲート付き分業規律を配送済み、one-shot 補正の対象):
+  - pending 無し + state が fable に確定していた → 補正前置き (自己ゲート付きで配送済みの Sonnet 版分業規律を破棄し本要素を優先する旨) + 分業規律 fable 版を注入し、マーカーを `final` に更新する
+  - pending 無し + state が非 fable に確定していた → 注入なしでマーカーを `final` に更新する (配送済みの Sonnet 版がそのまま確定内容のため)
+  - pending あり、または state 無し → 何もしない (`resolve-model-on-prompt.sh` の state 書込 → pending 削除の完了待ち。同一 event 内の並列実行で本スクリプトが先に読んだ場合、最大 1 プロンプトの補正遅延が生じる。既知の制約参照)
+- **マーカー `final`**: 即 `exit 0`
+- マーカーの書き込みは注入本文と出力 JSON の生成に成功した後に行う (`sonnet-gate` → `final` の「注入なし」更新は本文生成が無いため直接書く)。マーカーの読み書きも同一ディレクトリ内 temp file → `mv` の atomic 書込にする
+- `jq` 不在 / 不正 JSON 入力 / 配送対象のペイロードが読めない場合は無音 `exit 0` でマーカーは書かない (次プロンプトで再試行)
 
 #### inject-auto
 
@@ -403,30 +460,32 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 
 ### CI (lint)
 
-モデル別 2 プロンプトファイルと `hooks.json` の 4 entries は内容を手で同期する必要があるため、うっかり片方だけ更新して drift する事故を CI で検出します (v0.7.1 新設、#178。v0.7.2 で検出カバレッジの穴 3 件を修正、#184 配下の #185 #186 #187)。
+モデル別プロンプトファイルと `hooks.json` の 4 entries は内容を手で同期する必要があるため、うっかり片方だけ更新して drift する事故を CI で検出します (v0.7.1 新設、#178。v0.7.2 で検出カバレッジの穴 3 件を修正、#184 配下の #185 #186 #187。v0.13.0 でチェック 5 追加、issue #221。v0.15.0 でチェック 1/5 の母集合を 3 part の和集合に変更、issue #236)。
 
 #### lint-prompt-sync.sh
 
 **ファイル**: `scripts/lint-prompt-sync.sh` (plugin 直下、`hooks/` 配下ではない)
 **呼び出し元**: `.github/workflows/agent-discipline-prompt-lint.yml`
 
-**動作** (v0.7.2 で 2 チェック構成から 3 チェック構成に拡張):
+**動作** (v0.7.2 で 2 チェック構成から 3 チェック構成に拡張、v0.13.0 でチェック 4/5 を追加した 5 チェック構成):
 
-- **チェック 1 (ルール ID 一致)**: `hooks/prompts/always-fable.md` と `hooks/prompts/always-sonnet.md` から `<!-- rule:<id> -->` コメントの ID 集合を抽出し、順序に依らず完全一致するか検証する。片方にのみ存在する ID があれば diff 形式で報告して fail する。ルール本文の表現差 (意味的ドリフト) は検出対象外とし、PR レビューでの目視確認に委ねる
+- **チェック 1 (ルール ID 一致)**: `hooks/prompts/always-fable.md` と `hooks/prompts/always-sonnet-{1,2,3}.md` の和集合から `<!-- rule:<id> -->` コメントの ID 集合を抽出し、順序に依らず完全一致するか検証する (issue #236、v0.15.0 で単一ファイルから 3 part の和集合へ変更)。片方にのみ存在する ID があれば diff 形式で報告して fail する。和集合を作る前に、3 part 間で rule ID が重複していないこと (part 分割は rule 境界で行う契約) をペアワイズに検証し、重複があれば fail する。ルール本文の表現差 (意味的ドリフト) は検出対象外とし、PR レビューでの目視確認に委ねる
 - **チェック 2 (hooks.json 4 entries 共通ブロック一致)**: 抽出・正規化・比較より前に **前提検証** (v0.7.2 新設、#186) を行う — `hooks/hooks.json` の `type: agent` entry 数がスクリプト内定数 `EXPECTED_AGENT_ENTRIES` (= 4) と一致すること、および各 entry の `.prompt` が非空文字列であることを検証し、いずれか不成立なら fail する (entry 数の増減や prompt 欠落という前提崩壊時に、空同士の一致などで pass 側へ倒れることを防ぐ)。前提検証を通過した後、4 つの `type: agent` entry (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) の `prompt` から、entry 固有部分を除いた「共通ブロック」が一致するか検証する。entry 固有部分として除去する対象は 3 種類:
   1. 対象コマンド名の記載箇所 (`if` フィールドから機械導出した `gh <cmd>` をプレースホルダに置換)
   2. `gh pr create` のみが持つ Closes 検証 Step (Step 3) と、それに伴う「返り値」Step の番号繰り下がり (Step 4 → Step 3 相当への読み替え)。**除去 (v0.7.2、#187)** より前に、除去対象の Step 3 ブロックが実在することを検証し、実在しなければ fail する
   3. `gh pr create` / `gh pr edit` が共有する PR 固有の判定原則追加文 (「PR body で commit/discussion 経由でユーザ承認が明示されている文脈は禁止対象外」)。**除去 (v0.7.2、#187)** より前に、除去対象の文言が PR 系 2 entries それぞれに実在することを検証し、実在しなければ fail する
   正規化後の 4 entries が byte-identical でなければ diff 形式で乖離箇所を報告して fail する
 - **チェック 3 (gh pr create Step 3 ブロック構造チェック、v0.7.2 新設、#185)**: チェック 2 の `norm_b` は `gh pr create` entry 固有の Step 3 (Closes 検証) ブロックを共通ブロック比較の対象外とするため丸ごと除去する。そのため Step 3 の判定手順がどのように破損しても、開始・終了の見出しパターンさえ残っていれば除去は成功し共通ブロック比較 (チェック 2) は pass してしまう (false pass)。これを埋めるため、除去される前の raw prompt から Step 3 ブロックを独立に抽出し、スクリプト内定数の必須キーワードリスト (`` `<cwd>/.git` ``、`gitdir:`、`ref: refs/heads/`、`issue-<数字>`、`closing keyword`、`境界一致`、`fail-open で誘導層の`、の 7 要素) をすべて含むかを検証する。期待構造のソース・オブ・トゥルースは README 等の外部文書ではなくスクリプト内定数とし (#185 の合意事項)、判定ロジックの意味的な等価性までは検証しない構造スモークチェックである旨を明記している (欠落があれば diff ではなく欠落キーワードの一覧を報告して fail する)
-- **引数**: なし。**実行位置**: リポジトリルートを前提とする (それ以外や前提ファイル欠如は fail-closed で exit 1)。**依存**: `jq` (CI・ローカルとも前提。不在時は明確なエラーメッセージで exit 1)。**exit code**: 全チェック (1〜3) pass で 0、いずれか fail または実行時エラーで 1
+- **チェック 4 (分業規律 2 ファイルの rule ID 一致、#195)**: `hooks/prompts/discipline-fable.md` と `hooks/prompts/discipline-sonnet.md` から `<!-- rule:<id> -->` の ID 集合を抽出し、チェック 1 と同じ方式で完全一致を検証する
+- **チェック 5 (subagent-rules.md の rule ID サブセット検査、#221。v0.15.0 で母集合を和集合化)**: `hooks/prompts/subagent-rules.md` の rule ID 集合が `always-sonnet-{1,2,3}.md` の和集合 (チェック 1 で抽出・重複検査済みの集合) に含まれるかを片方向で検証する。含まれない ID があれば fail する (sonnet 側にのみ存在する ID は「subagent に配送しない」意図的な選択のため検査しない)
+- **引数**: なし。**実行位置**: リポジトリルートを前提とする (それ以外や前提ファイル欠如は fail-closed で exit 1)。**依存**: `jq` (CI・ローカルとも前提。不在時は明確なエラーメッセージで exit 1)。**exit code**: 全チェック (1〜5) pass で 0、いずれか fail または実行時エラーで 1
 - POSIX sh (`#!/bin/sh`) で記述しており `dash` でも動作する。ローカルでリポジトリルートから直接実行できる (`./plugins/agent-discipline/scripts/lint-prompt-sync.sh`)
 
 #### agent-discipline-prompt-lint (workflow)
 
 **ファイル**: `.github/workflows/agent-discipline-prompt-lint.yml`
 
-`always-fable.md` / `always-sonnet.md` / `hooks.json` / lint スクリプト自身 / 本 workflow 自身のいずれかが変更された `push` (master 向け) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `actions/checkout@v4` の後に `lint-prompt-sync.sh` を実行する。ubuntu-latest には `jq` が標準搭載されているため追加のセットアップ step は無い。
+`always-fable.md` / `always-sonnet-{1,2,3}.md` / `hooks.json` / `discipline-fable.md` / `discipline-sonnet.md` / `subagent-rules.md` / lint スクリプト自身 / 本 workflow 自身のいずれかが変更された `push` (master 向け) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `actions/checkout@v4` の後に `lint-prompt-sync.sh` を実行する。ubuntu-latest には `jq` が標準搭載されているため追加のセットアップ step は無い。
 
 ## 旧 plugin との関係 (移行ガイド)
 
@@ -477,20 +536,31 @@ agent-discipline/
 │   ├── hooks.json
 │   ├── prompts/
 │   │   ├── always-fable.md
-│   │   ├── always-sonnet.md
+│   │   ├── always-sonnet-1.md
+│   │   ├── always-sonnet-2.md
+│   │   ├── always-sonnet-3.md
 │   │   ├── auto-mode.md
+│   │   ├── delivery-note.md
 │   │   ├── discipline-fable.md
 │   │   ├── discipline-preamble-fable.md
 │   │   ├── discipline-preamble-self-gate.md
 │   │   ├── discipline-sonnet.md
+│   │   ├── part-self-gate.md
 │   │   ├── preamble-self-gate.md
+│   │   ├── subagent-rules.md
+│   │   ├── temporary/
+│   │   │   └── askuserquestion-preview-workaround.md
 │   │   └── uncommitted-check.md
 │   └── scripts/
 │       ├── block-fable-subagent.sh
+│       ├── check-uncommitted-on-session-start.sh
 │       ├── inject-always.sh
 │       ├── inject-auto.sh
-│       ├── resolve-model-on-prompt.sh
-│       └── check-uncommitted-on-session-start.sh
+│       ├── inject-discipline.sh
+│       ├── inject-rules-part.sh
+│       ├── inject-subagent-rules.sh
+│       ├── inject-temporary.sh
+│       └── resolve-model-on-prompt.sh
 ├── skills/
 │   ├── issue-plan/
 │   │   └── SKILL.md
@@ -500,6 +570,8 @@ agent-discipline/
 │   └── lint-prompt-sync.sh
 └── README.md
 ```
+
+`always-sonnet-1.md` / `always-sonnet-2.md` / `always-sonnet-3.md` は issue #236 (v0.15.0) で単一ファイル `always-sonnet.md` を rule 境界で 3 分割したもの。`delivery-note.md` / `part-self-gate.md` も同 issue で新設した (それぞれ SessionStart / UserPromptSubmit の自己ゲート・配送前置き用)。`temporary/` は問題修正までの一時規律ディレクトリで、中身の md を削除すると注入が消える (v0.12.0)。
 
 `.github/workflows/agent-discipline-prompt-lint.yml` (リポジトリ直下、plugin 配布に含まれない CI 専用 workflow) が `scripts/lint-prompt-sync.sh` を呼び出します。
 
@@ -536,11 +608,16 @@ agent-discipline/
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **`model` フィールド欠落条件は compaction 後が公式未記載** (v0.5.0、#174 V3 実測調査): 公式ドキュメントは `/clear` 後と conversation recovery でセッションが復元された場合の 2 つを model 欠落条件として明記するが、`SessionStart (source=compact)` 時の扱いは明記していない (欠落しない保証も無い)。いずれの場合も fallback chain (transcript 解析 → state file) が source 非依存に欠落を吸収するため、実装上の場合分けは発生しない
 - **セッション途中の `/model` 切替は次の SessionStart まで反映されない** (#157 と同型の制約。v0.8.0 で統合した `block-fable-subagent.sh` も同種の制約を持つ、本セクション内の該当項目を参照): fallback chain の判定は `SessionStart` (startup / resume / clear / compact) でのみ行われるため、`/model` で切替えても注入済みプロンプトは次の SessionStart まで旧モデル向けのまま。次の SessionStart では、`.model` があればその値で、無くても transcript に切替後の main-chain assistant 行があれば transcript 解析 (fallback chain 2 段目) で新モデルが反映される。transcript も空 / 読めない場合に限り state file キャッシュに落ちるため、その経路でのみ旧モデル向け注入が継続しうる
-- **one-shot 補正は判定不能セッションの最初の assistant 応答が生成されるまで暫定適用が続く**: `resolve-model-on-prompt.sh` は pending マーカーが存在し transcript に main-chain assistant 行が現れて初めて確定するため、それまでの `UserPromptSubmit` では自己ゲート付きの `always-sonnet.md` (常時ルール) と `discipline-preamble-self-gate.md` + `discipline-sonnet.md` (分業規律、v0.9.0) が暫定適用され続ける
+- **one-shot 補正は判定不能セッションの最初の assistant 応答が生成されるまで暫定適用が続く**: pending マーカーが存在し transcript に main-chain assistant 行が現れて初めて確定するため、それまでの `UserPromptSubmit` では自己ゲート付きの `always-sonnet-1.md` + `always-sonnet-2.md`/`always-sonnet-3.md` (常時ルール、`resolve-model-on-prompt.sh` / `inject-rules-part.sh` が判定) と `discipline-preamble-self-gate.md` + `discipline-sonnet.md` (分業規律、v0.9.0。issue #236 以降は `inject-discipline.sh` が配送) が暫定適用され続ける
 - **state file / pending マーカーは OS の tmp cleanup による自然消去のみ**: `${TMPDIR:-/tmp}/agent-discipline-state/` 配下に明示的なリトジ (retention) 処理は無く、`check-uncommitted-on-session-start.sh` が使う `agent-discipline-markers/` とは別 namespace を使う
 - **`block-fable-subagent.sh` は agent 定義 frontmatter の `model` を判定できない** (v0.8.0): frontmatter の `model` は `tool_input` に現れないため、env 不在 + model 未指定 + frontmatter が fable を指す構成は本 hook では捕捉不能 (env 側でカバー)。fork subagent (model 指定を無視して親モデルを継承する型) も同様に deny しない (誘導層の「原則使用しない」文言のみで運用する設計判断)
 - **`block-fable-subagent.sh` は Workflow ツール内部の `agent()` 呼び出しを PreToolUse で捕捉できない** (v0.8.0): PreToolUse はメインループのツール呼び出しにのみ発火するため、Workflow スクリプト内部のサブエージェントスポーンは本 hook の対象外 (env 側でカバー)
 - **`block-fable-subagent.sh` はセッション途中の `/model` 切替を検知できない** (v0.8.0): model を含む hook 入力は `SessionStart` のみで、`$CLAUDE_MODEL` 環境変数も存在しない。env 不在時は state file が次の `SessionStart` まで stale になり、fable への切替は素通り (旧 state で allow)、fable からの切替は誤 deny になる (deny メッセージの model 明示誘導で自己修復可能)
+- **compact 直後のギャップ** (issue #236、v0.15.0): `SessionStart(source=compact)` 後、次のユーザプロンプトまでは part 1 要素 (delivery-note + `always-fable.md` / `always-sonnet-1.md`) のみが再注入され、残りの要素 (part 2/3・分業規律) は再配送されない (`UserPromptSubmit` はユーザプロンプトでしか発火しないため)。compact 後に agentic loop が自動継続する経路では、この間の推論は part 1 の delivery-note (自己修復指示) と compact summary 内の痕跡に依存する。従来設計でも同経路では persisted-output (2KB プレビュー) しか届いていなかったため、劣化ではない
+- **判定不能 → Fable 確定の補正遅延** (issue #236、v0.15.0): 分業規律の Fable 補正は `resolve-model-on-prompt.sh` の state 書込と `inject-discipline.sh` の読み取りが同一 event 内で並列競合した場合、最大 1 プロンプト遅れて配送される (誤配送はしない)
+- **exactly-once は保証しない** (issue #236、v0.15.0): hook 出力に配送 ACK が無いため、マーカー書込後に配送が失われた場合の再送はできない (SessionStart での全マーカーリセットが回復手段)。逆に TMPDIR 掃除等でマーカーが消えた場合は再配送される (重複は無害)
+- **state / pending の両方が書けない持続障害下の床** (issue #236、v0.15.0): `inject-always.sh` で state 書込と pending 作成が両方失敗した場合 (TMPDIR が持続的に書込不能等)、後続スクリプトは旧 state (読めれば) または両不在フォールバックに基づいて配送する。`/model` 切替を跨いだ旧 state が残っていると誤ったモデル変種が配送されうるが、この露出は state 書込失敗を無視していた v0.14.0 以前にも存在する
+- **pending 削除失敗時の補正遅延** (issue #236、v0.15.0): `resolve-model-on-prompt.sh` が state 書込に成功した後の pending 削除に失敗した場合、優先規則 (pending 優先) により分業規律の Fable 補正は次の SessionStart (マーカーリセット + pending 掃除) まで配送されない。常時ルールの Fable 確定版 (prefix + `always-fable.md`) は配送済みのため、規律の主要部は欠落しない
 
 ## 関連情報
 
