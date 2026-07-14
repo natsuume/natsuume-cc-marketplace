@@ -1,24 +1,77 @@
 #!/bin/bash
 # diff-hash.sh
-# pre-push-review プラグインで使う「現在のブランチ全差分」のハッシュ計算を共通化する。
+# pre-push-review プラグインで使う「現在のブランチ全差分」のハッシュ計算と
+# 空 push 判定を共通化する。
 #
-# auto-mark.sh が書き込むハッシュと block-pre-push.sh が検証するハッシュが
-# 1 文字でも乖離するとマーカーは永遠に一致せず push が通らなくなる致命的なバグになる。
-# 計算式の単一ソースとしてここに集約し、両スクリプトから source して呼び出す。
+# auto-mark.sh / run-codex-review.sh が書き込むハッシュと block-pre-push.sh が検証する
+# ハッシュが 1 文字でも乖離するとマーカーは永遠に一致せず push が通らなくなる致命的な
+# バグになる。計算式の単一ソースとしてここに集約し、各スクリプトから source して呼び出す。
 #
-# 計算対象は **ブランチ全差分** (`git diff <base>...HEAD`) + 未コミット差分
-# (`git diff --cached`, `git diff`) の連結:
+# ==========================================================================
+# 設計契約 (issue #126 対応、v3.0.5)。実装本体はこの PR の Phase B commit で行う。
+# ==========================================================================
+#
+# ## ハッシュ計算式
+#
+# sha256 の入力は以下の連結 (順序固定。順序が変わると同一の作業状態でも
+# ハッシュが変わるため必ず固定する):
+#   1. HEAD 束縛行: `head <HEAD の commit OID>` + 改行 (`git rev-parse HEAD^{commit}`)
+#   2. ブランチ全差分 (git diff origin/<base>...HEAD)
+#   3. staged 差分 (git diff --cached)
+#   4. unstaged 差分 (git diff)
+#
+# 各要素の意味:
+#   - HEAD 束縛行 (issue #126 で追加): v3.0.4 までは diff 内容のみが入力だったため、
+#     レビュー後に「commit A を積み、commit B で A を revert する」と net diff が
+#     レビュー時点の値へ正確に戻り、失効したはずのマーカーが復活して未レビューの
+#     commit A・B が push できた (A の内容は `git show <A>:file` で remote 履歴に
+#     恒久的に残る)。HEAD の commit OID は親 commit 連鎖を再帰的に束縛するため、
+#     add→revert / amend / rebase / squash など commit 列が変わるあらゆる操作で
+#     マーカーが失効する。`head ` プレフィクス行は diff 本文との入力空間の衝突を
+#     避ける domain separation。OID の取得に失敗した場合は関数全体を非ゼロで
+#     失敗させる (中途半端な入力でハッシュを返すと誤判定の元になるため、
+#     呼び出し側の fail-closed 処理に委ねる)
 #   - ブランチ全差分: push される commit 内容そのもの (PR diff と同じセマンティクス)
-#   - 未コミット差分: /code-review などが残した未コミット edit を push 前に必ず commit させるため。
-#     未コミット edit があるとハッシュが変わり markers 失効 → 「commit してから再 review → push」
-#     を強制できる。未コミットのまま push しても push 自体は committed のみ反映するが、
-#     ローカルの未コミット edit は次回 commit 時にレビューを再走させるためにも検出が必要。
+#   - 未コミット差分: /code-review などが残した未コミット edit を push 前に必ず
+#     commit させるため。未コミット edit があるとハッシュが変わり markers 失効 →
+#     「commit してから再 review → push」を強制できる
 #
-# 統合 diff の生成順は固定:
-#   1. ブランチ全差分 (origin/<base>...HEAD)
-#   2. staged 差分 (git diff --cached)
-#   3. unstaged 差分 (git diff)
-# 順序が変わると同一の作業状態でもハッシュが変わるため必ず固定する。
+# 計算式変更の副作用: v3.0.4 以前に書かれた既存マーカーは plugin 更新後の最初の
+# push で一度失効する (再レビュー 1 回で回復する、意図した一時コスト)。
+#
+# ## 空 push 判定 (is_empty_push / is_empty_push_in)
+#
+# v3.0.4 までは「ハッシュ == EMPTY_DIFF_HASH (空入力の sha256 定数)」で空 push を
+# 判定していたが、HEAD 束縛行が入力に入ると HEAD が存在する限り一致しなくなるため、
+# 専用の判定関数に分離する (EMPTY_DIFF_HASH 定数は廃止)。分離に合わせて skip 条件も
+# 厳格化する:
+#
+#   - diff 3 種 (branch / staged / unstaged) がすべて空、かつ
+#   - origin/<base>..HEAD に merge commit が存在せず、かつ
+#   - 範囲内の全 commit の tree が HEAD の tree と一致する (= 全 commit が
+#     「親と同一 tree の empty commit」)
+#
+# 旧判定 (diff の空のみ) には issue #126 と同根の穴があった: fresh branch に
+# 「commit A + A の revert」だけを積むと net diff が空になり、マーカー検証すら
+# 経ずに未レビュー内容が remote 履歴に到達できた。厳格化後も、issue claim 手順の
+# 「空 commit (--allow-empty) を新 branch に push」は tree 変更が無くレビュー対象が
+# 存在しないため、従来どおりレビュー無しで通る。
+#
+# 判定の正当性: branch diff (triple-dot) が空 ⇔ tree(merge-base) == tree(HEAD)。
+# 範囲内に merge commit が無ければ範囲は HEAD から merge-base への単一の親子鎖で
+# あり、全 commit の tree が tree(HEAD) と一致するなら各 commit は親と同一 tree
+# (= empty commit) である。判定に使う git コマンドが失敗した場合は「空ではない」
+# 側に倒す (fail-closed: skip せずマーカー検証へ進み、ハッシュ計算失敗の明示 deny
+# に到達させる)。
+#
+# ## 利用側の契約 (Phase B で同時に変更)
+#
+#   - block-pre-push.sh: EMPTY_DIFF_HASH 比較による早期 skip を is_empty_push_in に
+#     置換する (dirty-tree gate 通過後・ハッシュ計算前)。マーカー失効メッセージの
+#     文言を「差分または commit 列が変わったため再実行が必要」に更新する
+#   - run-codex-review.sh: EMPTY_DIFF_HASH 比較による review skip を is_empty_push に
+#     置換する
+#   - auto-mark.sh: 変更なし (compute_review_hash の新計算式が自動で波及する)
 
 # 空入力 (`printf '' | sha256sum`) のハッシュ値。SHA-256 アルゴリズムで定数なので
 # hot path で毎回 fork して計算するのを避けるため事前計算値をハードコードする。
