@@ -4,7 +4,7 @@
   discipline-preamble-self-gate.md 付きで配送される (#192 決定事項 5)。
   設計契約: 基本形は discipline-fable.md を踏襲 (決定事項 3)。委任根拠はコンテキスト分離 +
   fresh context の検証独立性で記述し、モデル能力の非対称を根拠にしない (同 3)。verifier 委任は
-  「非自明な全成果物」に義務化 (同 4)。書式は always-sonnet.md と同じ規範 (適用範囲の明示 /
+  「非自明な全成果物」に義務化 (同 4)。書式は always-sonnet-{1,2,3}.md と同じ規範 (適用範囲の明示 /
   具体列挙 / 良い例・悪い例 / 定性閾値の不使用 / 否定形には代替行動を併記)。
   rule ID セットは discipline-fable.md と完全一致 (role-split / delegation-rules /
   delegation-instruction / escalation。#195 で lint チェック対象化予定)。

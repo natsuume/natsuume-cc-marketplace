@@ -1,14 +1,19 @@
 #!/bin/sh
 # lint-prompt-sync.sh
 #
-# agent-discipline plugin のモデル別 2 プロンプトファイル (hooks/prompts/always-fable.md /
-# always-sonnet.md) と hooks/hooks.json の 4 type:agent entries (gh issue create / gh issue
+# agent-discipline plugin のモデル別プロンプトファイル (hooks/prompts/always-fable.md /
+# always-sonnet-1.md / always-sonnet-2.md / always-sonnet-3.md、issue #236 で always-sonnet.md
+# から 3 part に分割) と hooks/hooks.json の 4 type:agent entries (gh issue create / gh issue
 # edit / gh pr create / gh pr edit) が、意図せず同期ドリフトしていないかを検証する構造 lint。
 # #178 (Phase B: 実装本体) で最初に実装された。 #185 (チェック 3 新設) / #186 (チェック 2
 # 前提検証) / #187 (除去系実在性検証) は検出カバレッジの穴を埋める拡張 (v0.7.2 予定) であり、
 # 本 commit はその Phase A (設計記述 commit) である。 本ファイルに書いた契約をそのまま
 # Phase B で実装する。 親 issue #173、 モデル別 2 ファイル化元 #175、 検出層拡張の親 issue
-# #184。
+# #184。 issue #236 で always-sonnet.md の 3 part 分割に伴いチェック 1/5 の母集合を
+# 3 part の和集合へ変更し、 part 間 rule ID 重複検査を追加した。 その後の codex review P2
+# 指摘を受け、 各 part ファイル単体での rule ID マーカー重複検査 (uniq -d) も追加した
+# (part 間 pairwise 検査は自分自身と比較しないため単一ファイル内重複を検出できず、
+# 和集合化 (sort -u) がそれを無音で吸収してしまう盲点への対処)。
 # .github/workflows/agent-discipline-prompt-lint.yml から呼ばれる。
 #
 # ============================================================================
@@ -30,19 +35,39 @@
 #   実行時は利用者が別途インストールする前提とする。
 #
 # ============================================================================
-# チェック 1: ルール ID 一致 (always-fable.md <-> always-sonnet.md)
+# チェック 1: ルール ID 一致 (always-fable.md <-> always-sonnet-{1,2,3}.md の和集合)
 # ============================================================================
 #
 # 対象ファイル:
 #   - plugins/agent-discipline/hooks/prompts/always-fable.md
-#   - plugins/agent-discipline/hooks/prompts/always-sonnet.md
+#   - plugins/agent-discipline/hooks/prompts/always-sonnet-1.md
+#   - plugins/agent-discipline/hooks/prompts/always-sonnet-2.md
+#   - plugins/agent-discipline/hooks/prompts/always-sonnet-3.md
+#
+# 背景 (issue #236):
+#   注入ペイロード分割により always-sonnet.md を rule 境界で 3 part に分割したため、
+#   「sonnet 側の ID 集合」を単一ファイルではなく 3 part ファイルの和集合として扱う。
+#   fable との完全一致検査 (契約 3) は従来どおり維持する。
 #
 # 契約:
-#   1. 両ファイルから `<!-- rule:<id> -->` 形式のコメント行 (例: `<!-- rule:bash-decompose -->`)
-#      を抽出し、 それぞれの ID 集合を作る (grep -o '<!-- rule:[a-z0-9-]\+ -->' などで抽出し、
-#      `rule:` プレフィクスと `-->` サフィックスを取り除いた ID 文字列を要素とする)。
-#   2. 2 つの ID 集合を順序に依らない集合として比較する (ソート済み一覧の diff で可)。
-#   3. 集合が完全一致すれば pass。 一致しない場合は fail し、 片方にのみ存在する ID
+#   1. always-fable.md と always-sonnet-{1,2,3}.md それぞれから `<!-- rule:<id> -->` 形式の
+#      コメント行 (例: `<!-- rule:bash-decompose -->`) を抽出し、 ID 集合を作る (grep -o
+#      '<!-- rule:[a-z0-9-]\+ -->' などで抽出し、 `rule:` プレフィクスと `-->` サフィックスを
+#      取り除いた ID 文字列を要素とする)。 抽出結果は重複を保持したまま sort する (2. の
+#      単一ファイル内重複検査が重複保持出力に依存するため、 ここでは sort -u しない)。
+#   2. (#236 P2、 codex review 指摘) always-sonnet-{1,2,3}.md の各ファイル単体について、
+#      同一ファイル内で rule ID マーカーが重複していないことを検証する (1. の重複保持出力に
+#      `uniq -d` を掛けて重複 ID を抽出する)。 3. のペアワイズ検査は自分自身とは比較しない
+#      ため単一ファイル内の重複を検出できず、 4. の和集合化 (sort -u) は重複を無音で吸収
+#      してしまうため、 両方より前に検証する。 重複があれば fail してその ID を列挙する。
+#   3. always-sonnet-{1,2,3}.md 3 ファイルの ID 集合は互いに素であること (part 間で rule ID が
+#      重複しないこと) を検証する。 和集合化によって重複が隠れてしまうため、 和集合を作る前に
+#      3 ファイルの全 2 組 (1-2, 1-3, 2-3) についてペアワイズに共通要素が無いことを確認し、
+#      共通要素があれば fail してその ID を列挙する。
+#   4. always-sonnet-{1,2,3}.md 3 ファイルの ID 集合の和集合を「sonnet 側の ID 集合」とする。
+#   5. always-fable.md の ID 集合と 4. の和集合を、 順序に依らない集合として比較する
+#      (ソート済み一覧の diff で可)。
+#   6. 集合が完全一致すれば pass。 一致しない場合は fail し、 片方にのみ存在する ID
 #      (差集合) を両方向とも列挙してエラーメッセージに含める。
 #
 # スコープ外 (意図的に検出しない):
@@ -209,8 +234,9 @@
 #   #221 で subagent 向け常時適用ルール (SubagentStart 注入) が新設された。subagent-rules.md
 #   は常時適用ルールの「サブセット + subagent 固有ブロック」で構成されるため、チェック 1/4 の
 #   ような完全一致検査は適用できない。代わりに「rule: プレフィクスのマーカー ID が
-#   always-sonnet.md の ID セットに含まれること」を検証し、always 側での rule ID の改名・削除に
-#   subagent 版が追従し損ねるドリフト (存在しない rule への参照) を CI で検知する。
+#   always-sonnet-{1,2,3}.md の ID セットの和集合に含まれること」を検証し、always 側での
+#   rule ID の改名・削除に subagent 版が追従し損ねるドリフト (存在しない rule への参照) を
+#   CI で検知する (issue #236 で always-sonnet.md が 3 part に分割されたため母集合を和集合化)。
 #
 # 契約:
 #   1. チェック 1 と同じ抽出方式 (extract_rule_ids) で subagent-rules.md の rule ID 集合を
@@ -218,10 +244,11 @@
 #      extract_rule_ids のパターンにマッチしないため、自然に検査対象外となる。
 #   2. 抽出できた ID が 1 件も無い場合は fail (チェック 1/4 と同方針。マーカー形式の変更や
 #      共有ルールの全削除という前提崩壊時に silent pass しない)。
-#   3. 抽出した各 ID が always-sonnet.md の ID 集合 (チェック 1 で抽出済みの ids_sonnet.txt)
-#      に含まれていれば pass。含まれない ID があれば fail し、その ID を列挙して
-#      エラーメッセージに含める (方向は subagent -> sonnet の片方向のみ。sonnet 側にのみ
-#      存在する ID は「subagent に配送しない」という意図的な選択であり、検査しない)。
+#   3. 抽出した各 ID が always-sonnet-{1,2,3}.md の ID 集合の和集合 (チェック 1 で抽出・
+#      重複検査済みの ids_sonnet.txt) に含まれていれば pass。含まれない ID があれば fail し、
+#      その ID を列挙してエラーメッセージに含める (方向は subagent -> sonnet の片方向のみ。
+#      sonnet 側にのみ存在する ID は「subagent に配送しない」という意図的な選択であり、
+#      検査しない)。
 #   4. 対象ファイルは pre-flight の存在チェック対象に加え、見つからなければ fail-closed
 #      (exit 1) とする。
 #   5. 既存チェック 1〜4 の挙動には影響しない (共有するのは extract_rule_ids と WORKDIR、
@@ -240,7 +267,11 @@
 set -u
 
 FABLE_MD="plugins/agent-discipline/hooks/prompts/always-fable.md"
-SONNET_MD="plugins/agent-discipline/hooks/prompts/always-sonnet.md"
+# issue #236 (注入ペイロード分割) で always-sonnet.md を 3 part に分割したため、
+# チェック 1/5 の「sonnet 側」は 3 part ファイルの和集合として扱う (SONNET_MD_LIST)。
+SONNET_MD_1="plugins/agent-discipline/hooks/prompts/always-sonnet-1.md"
+SONNET_MD_2="plugins/agent-discipline/hooks/prompts/always-sonnet-2.md"
+SONNET_MD_3="plugins/agent-discipline/hooks/prompts/always-sonnet-3.md"
 HOOKS_JSON="plugins/agent-discipline/hooks/hooks.json"
 DISCIPLINE_FABLE_MD="plugins/agent-discipline/hooks/prompts/discipline-fable.md"
 DISCIPLINE_SONNET_MD="plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
@@ -252,7 +283,7 @@ EXPECTED_AGENT_ENTRIES=4
 overall_fail=0
 
 # --- pre-flight: リポジトリルートから実行されているか / jq が使えるか ---
-for f in "$FABLE_MD" "$SONNET_MD" "$HOOKS_JSON" "$DISCIPLINE_FABLE_MD" "$DISCIPLINE_SONNET_MD" "$SUBAGENT_MD"; do
+for f in "$FABLE_MD" "$SONNET_MD_1" "$SONNET_MD_2" "$SONNET_MD_3" "$HOOKS_JSON" "$DISCIPLINE_FABLE_MD" "$DISCIPLINE_SONNET_MD" "$SUBAGENT_MD"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: $f が見つかりません。リポジトリルートから実行してください。" >&2
     exit 1
@@ -271,20 +302,86 @@ trap 'rm -rf "$WORKDIR"' EXIT INT TERM HUP
 # チェック 1: ルール ID 一致
 # ============================================================================
 
-echo "== check 1: rule ID set (always-fable.md <-> always-sonnet.md) =="
+echo "== check 1: rule ID set (always-fable.md <-> always-sonnet-{1,2,3}.md union) =="
 
 extract_rule_ids() {
   # $1 = file path。 `<!-- rule:<id> -->` から <id> だけを取り出しソートする。
+  # 重複マーカーはここでは除去しない (sort -u ではなく sort のみ): 単一ファイル内の重複検査
+  # (check_no_intra_file_dup_ids) が uniq -d でこの重複保持出力に依存するため。
   grep -Eo '<!-- rule:[a-zA-Z0-9_-]+ -->' "$1" 2>/dev/null \
     | sed -e 's/<!-- rule:\(.*\) -->/\1/' \
     | sort
 }
 
-extract_rule_ids "$FABLE_MD" > "$WORKDIR/ids_fable.txt"
-extract_rule_ids "$SONNET_MD" > "$WORKDIR/ids_sonnet.txt"
+# $1 = extract_rule_ids の出力ファイル (sort 済み・重複保持)、$2 = エラーメッセージ用の
+# ファイル表示名。同一ファイル内で rule ID マーカーが重複していないかを検査する (#236 P2
+# codex review 指摘: part 間 pairwise 検査は自分自身と比較しないため、単一 part ファイル内の
+# 重複マーカーは検出できない。旧実装の単一ファイル検査は重複を保持したまま fable 側と diff
+# していたため検出できていたが、3 part の和集合化 (sort -u) は重複を無音で吸収してしまう)。
+# 重複が無ければ 0、あれば FAIL メッセージ (重複 ID 列挙付き) を出力して 1 を返す。
+check_no_intra_file_dup_ids() {
+  uniq -d "$1" > "$WORKDIR/dup_intra.txt" 2>/dev/null
+  if [ -s "$WORKDIR/dup_intra.txt" ]; then
+    echo "FAIL: $2 内で rule ID マーカーが重複しています (同一ファイル内に同じ <!-- rule:<id> --> が複数回書かれています):" >&2
+    sed 's/^/  - /' "$WORKDIR/dup_intra.txt" >&2
+    return 1
+  fi
+  return 0
+}
 
-if [ ! -s "$WORKDIR/ids_fable.txt" ] || [ ! -s "$WORKDIR/ids_sonnet.txt" ]; then
-  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($FABLE_MD / $SONNET_MD)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
+# $1 $2 = 比較する 2 つのソート済み ID ファイル、$3 $4 = エラーメッセージ用のファイル表示名。
+# 共通要素が無ければ 0、あれば FAIL メッセージを出力して 1 を返す。
+check_no_dup_ids() {
+  comm -12 "$1" "$2" > "$WORKDIR/dup_pair.txt" 2>/dev/null
+  if [ -s "$WORKDIR/dup_pair.txt" ]; then
+    echo "FAIL: $3 と $4 に重複する rule ID があります (part 分割は rule 境界で行う契約に反する):" >&2
+    sed 's/^/  - /' "$WORKDIR/dup_pair.txt" >&2
+    return 1
+  fi
+  return 0
+}
+
+extract_rule_ids "$FABLE_MD" > "$WORKDIR/ids_fable.txt"
+extract_rule_ids "$SONNET_MD_1" > "$WORKDIR/ids_sonnet_1.txt"
+extract_rule_ids "$SONNET_MD_2" > "$WORKDIR/ids_sonnet_2.txt"
+extract_rule_ids "$SONNET_MD_3" > "$WORKDIR/ids_sonnet_3.txt"
+
+if [ ! -s "$WORKDIR/ids_fable.txt" ] || [ ! -s "$WORKDIR/ids_sonnet_1.txt" ] || [ ! -s "$WORKDIR/ids_sonnet_2.txt" ] || [ ! -s "$WORKDIR/ids_sonnet_3.txt" ]; then
+  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($FABLE_MD / $SONNET_MD_1 / $SONNET_MD_2 / $SONNET_MD_3)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
+  exit 1
+fi
+
+# 各 part ファイル単体で rule ID マーカーが重複していないことを検査する (#236 P2)。
+# part 間 pairwise 検査 (このすぐ後) は自分自身とは比較しないため単一ファイル内の重複を
+# 検出できず、後続の和集合化 (sort -u) は重複を無音で吸収してしまう。両方より前に検査する。
+check1_intra_dup_fail=0
+check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_1.txt" "$SONNET_MD_1" || check1_intra_dup_fail=1
+check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_2.txt" "$SONNET_MD_2" || check1_intra_dup_fail=1
+check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_3.txt" "$SONNET_MD_3" || check1_intra_dup_fail=1
+
+if [ "$check1_intra_dup_fail" -eq 0 ]; then
+  echo "OK: no intra-file duplicate rule IDs within always-sonnet-{1,2,3}.md"
+else
+  overall_fail=1
+fi
+
+# part 間で rule ID が重複しないことを検査する (和集合化によって重複が隠れるため、
+# 和集合を作る前に全 2 組をペアワイズに検査する)。
+check1_dup_fail=0
+check_no_dup_ids "$WORKDIR/ids_sonnet_1.txt" "$WORKDIR/ids_sonnet_2.txt" "$SONNET_MD_1" "$SONNET_MD_2" || check1_dup_fail=1
+check_no_dup_ids "$WORKDIR/ids_sonnet_1.txt" "$WORKDIR/ids_sonnet_3.txt" "$SONNET_MD_1" "$SONNET_MD_3" || check1_dup_fail=1
+check_no_dup_ids "$WORKDIR/ids_sonnet_2.txt" "$WORKDIR/ids_sonnet_3.txt" "$SONNET_MD_2" "$SONNET_MD_3" || check1_dup_fail=1
+
+if [ "$check1_dup_fail" -eq 0 ]; then
+  echo "OK: no duplicate rule IDs across always-sonnet-{1,2,3}.md"
+else
+  overall_fail=1
+fi
+
+cat "$WORKDIR/ids_sonnet_1.txt" "$WORKDIR/ids_sonnet_2.txt" "$WORKDIR/ids_sonnet_3.txt" | sort -u > "$WORKDIR/ids_sonnet.txt"
+
+if [ ! -s "$WORKDIR/ids_sonnet.txt" ]; then
+  echo "ERROR: always-sonnet-{1,2,3}.md の rule ID 和集合が空です。" >&2
   exit 1
 fi
 
@@ -292,7 +389,7 @@ if diff -u "$WORKDIR/ids_fable.txt" "$WORKDIR/ids_sonnet.txt" > "$WORKDIR/ids_di
   id_count=$(wc -l < "$WORKDIR/ids_fable.txt" | tr -d ' ')
   echo "OK: rule ID sets match (${id_count} IDs)"
 else
-  echo "FAIL: rule ID sets differ between $FABLE_MD and $SONNET_MD" >&2
+  echo "FAIL: rule ID sets differ between $FABLE_MD and always-sonnet-{1,2,3}.md union" >&2
   cat "$WORKDIR/ids_diff.txt" >&2
   overall_fail=1
 fi
@@ -509,11 +606,12 @@ else
 fi
 
 # ============================================================================
-# チェック 5: subagent-rules.md の rule ID サブセット検査 (subagent-rules.md ⊆ always-sonnet.md)
+# チェック 5: subagent-rules.md の rule ID サブセット検査
+# (subagent-rules.md ⊆ always-sonnet-{1,2,3}.md の和集合)
 # ============================================================================
 
 echo ""
-echo "== check 5: subagent rule ID subset (subagent-rules.md ⊆ always-sonnet.md) =="
+echo "== check 5: subagent rule ID subset (subagent-rules.md ⊆ always-sonnet-{1,2,3}.md union) =="
 
 extract_rule_ids "$SUBAGENT_MD" > "$WORKDIR/ids_subagent.txt"
 
@@ -522,18 +620,19 @@ if [ ! -s "$WORKDIR/ids_subagent.txt" ]; then
   exit 1
 fi
 
-# always-sonnet.md の ID 集合 (チェック 1 で抽出済みの ids_sonnet.txt) に対する片方向の
-# 包含検査。comm -23 (sorted 前提) で「subagent 側にのみ存在する ID」を取り出す。
-# extract_rule_ids は sort 済みの出力を返すため、そのまま comm に渡せる。
+# always-sonnet-{1,2,3}.md の ID 集合の和集合 (チェック 1 で抽出・重複検査済みの
+# ids_sonnet.txt) に対する片方向の包含検査。comm -23 (sorted 前提) で
+# 「subagent 側にのみ存在する ID」を取り出す。extract_rule_ids は sort 済みの出力を
+# 返すため、そのまま comm に渡せる。
 comm -23 "$WORKDIR/ids_subagent.txt" "$WORKDIR/ids_sonnet.txt" > "$WORKDIR/ids_subagent_orphan.txt"
 
 if [ -s "$WORKDIR/ids_subagent_orphan.txt" ]; then
-  echo "FAIL: $SUBAGENT_MD に、$SONNET_MD に存在しない rule ID が含まれています (always 側での改名・削除への追従漏れ、または typo):" >&2
+  echo "FAIL: $SUBAGENT_MD に、always-sonnet-{1,2,3}.md の和集合に存在しない rule ID が含まれています (always 側での改名・削除への追従漏れ、または typo):" >&2
   sed 's/^/  - /' "$WORKDIR/ids_subagent_orphan.txt" >&2
   overall_fail=1
 else
   subagent_id_count=$(wc -l < "$WORKDIR/ids_subagent.txt" | tr -d ' ')
-  echo "OK: subagent rule IDs (${subagent_id_count} IDs) はすべて always-sonnet.md に存在します"
+  echo "OK: subagent rule IDs (${subagent_id_count} IDs) はすべて always-sonnet-{1,2,3}.md の和集合に存在します"
 fi
 
 # ============================================================================
