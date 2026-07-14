@@ -31,7 +31,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [agent-discipline](#agent-discipline) | 0.14.0 | Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する |
 | [ui-discipline](#ui-discipline) | 0.2.1 | UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う |
 | [natsuume-writing](#natsuume-writing) | 0.4.2 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
-| [codex-advisor](#codex-advisor) | 0.1.1 | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミングと助言の扱いの規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
+| [codex-advisor](#codex-advisor) | 0.1.2 | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミングと助言の扱いの規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.1.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.1.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 

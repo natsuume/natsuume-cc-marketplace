@@ -8,7 +8,8 @@
 #
 # ## I/O 契約
 #
-# - 標準入力 (stdin): 相談プロンプト全文を heredoc / pipe で渡す。 引数は一切受け取らない
+# - 標準入力 (stdin): 相談プロンプト全文をファイルからの stdin リダイレクト
+#   (`< "/path/to/prompt.md"`) / pipe で渡す。 引数は一切受け取らない
 #   (プロンプトを argv に乗せない設計。 shell quoting 事故や history 露出を避けるため
 #   stdin 経由に統一する)
 # - 標準出力 (stdout): Codex companion の stdout (= 助言テキスト) をそのまま流す。 wrapper
@@ -63,10 +64,8 @@ fail() {
 
 # usage を stderr に表示する helper (stdin 未指定 / 空プロンプトの両方から呼ぶため共通化)。
 usage() {
-  printf '%s\n' "[run-codex-advisor] 使い方: 相談プロンプトを heredoc / pipe で stdin から渡してください。引数は受け取りません。" >&2
-  printf '%s\n' "[run-codex-advisor] 例: bash run-codex-advisor.sh <<'EOF'" >&2
-  printf '%s\n' "[run-codex-advisor] <task>...</task>" >&2
-  printf '%s\n' "[run-codex-advisor] EOF" >&2
+  printf '%s\n' "[run-codex-advisor] 使い方: 相談プロンプトをファイルに書き出し、stdin リダイレクト / pipe で渡してください。引数は受け取りません。" >&2
+  printf '%s\n' "[run-codex-advisor] 例: bash run-codex-advisor.sh < \"/path/to/prompt.md\"" >&2
 }
 
 # 「引数は受け取らない」契約 (usage に明記) を実装でも強制する。 stray な引数を silent に
@@ -80,7 +79,7 @@ fi
 command -v node >/dev/null 2>&1 || fail "Node.js が見つかりません。Codex companion の実行には Node.js が必要です。インストールしてから再実行してください。"
 
 # stdin が TTY の場合は相談プロンプトが渡されていない (= 対話的に起動された) ため、
-# usage を出して早期に fail する。 stdin を pipe / heredoc で渡す運用を強制する。
+# usage を出して早期に fail する。 stdin をファイルからのリダイレクト / pipe で渡す運用を強制する。
 if [ -t 0 ]; then
   usage
   fail "相談プロンプトが stdin から渡されていません (TTY 検出)。"
