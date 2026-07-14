@@ -49,6 +49,19 @@ SubagentStart 注入は全 subagent 対象だが、Write ツールを持たな�
 (`echo` / `printf` / `cat` heredoc 等) はプロンプト本文が command 文字列に載るため禁止と明記する。
 この呼び出し側の fail-open は wrapper 側の fail-closed 契約 (空・不在検査) を弱めない。
 
+委任指示が codex-advisor の使用を明示的に許可している場合、その許可には、相談手順に
+不可分な副作用である相談プロンプトファイルをセッションの scratchpad ディレクトリへ
+Write する操作を含むものと advisor-rules-subagent.md で定義する
+(agent-discipline の subagent-rule:default-deny と併用された場合に、Write を持つ subagent が
+プロンプトファイル作成のために不要なエスカレーションを強いられ相談・タスク続行が阻害される
+経路を塞ぐ)。これは default-deny の例外ではなく、明示された codex-advisor 使用許可の
+操作範囲の定義である。この内包許可は当該相談のプロンプトファイル書き出しにのみ適用し、
+scratchpad 外 (プロジェクト内を含む) への書き出しやその他のファイル変更・副作用操作を
+含まない。それらは引き続き default-deny の対象とし、この scratchpad 書き出しについて
+委任指示へ別個の grant は要求しない。この許可範囲の定義は codex-advisor の
+advisor-rules-subagent.md 内で完結させ、agent-discipline の subagent-rules.md および
+各 plugin の injector は変更しない。
+
 ### 3. scripts/run-codex-advisor.sh (usage 文言のみ)
 
 - I/O 契約 (stdin からプロンプト受領・引数拒否・stdout に助言 verbatim・fail-closed) は**不変**
@@ -79,6 +92,9 @@ codex review 壁打ち (2026-07-14) による追加受入基準:
   (`< "<絶対パス>"` 形式の擬似プレースホルダを残さない)
 - Write ツールを持たない subagent の挙動 (相談せず作業続行 + 最終報告に明記、
   Bash によるプロンプトファイル生成の禁止) が明文化される
+- subagent への codex-advisor 使用許可が、当該相談のプロンプトファイルを session
+  scratchpad へ Write する操作を含むと advisor-rules-subagent.md に明記される
+  (scratchpad 外への書き出しおよびその他の副作用操作は引き続き default-deny の対象)
 
 ## スコープ判断の記録
 
