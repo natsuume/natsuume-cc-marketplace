@@ -469,7 +469,7 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 
 **動作** (v0.7.2 で 2 チェック構成から 3 チェック構成に拡張、v0.13.0 でチェック 4/5 を追加した 5 チェック構成):
 
-- **チェック 1 (ルール ID 一致)**: `hooks/prompts/always-fable.md` と `hooks/prompts/always-sonnet-{1,2,3}.md` の和集合から `<!-- rule:<id> -->` コメントの ID 集合を抽出し、順序に依らず完全一致するか検証する (issue #236、v0.15.0 で単一ファイルから 3 part の和集合へ変更)。片方にのみ存在する ID があれば diff 形式で報告して fail する。和集合を作る前に、3 part 間で rule ID が重複していないこと (part 分割は rule 境界で行う契約) をペアワイズに検証し、重複があれば fail する。ルール本文の表現差 (意味的ドリフト) は検出対象外とし、PR レビューでの目視確認に委ねる
+- **チェック 1 (ルール ID 一致)**: `hooks/prompts/always-fable.md` と `hooks/prompts/always-sonnet-{1,2,3}.md` の和集合から `<!-- rule:<id> -->` コメントの ID 集合を抽出し、順序に依らず完全一致するか検証する (issue #236、v0.15.0 で単一ファイルから 3 part の和集合へ変更)。片方にのみ存在する ID があれば diff 形式で報告して fail する。和集合を作る前に、まず各 part ファイル単体で rule ID マーカーが重複していないこと (`uniq -d` で検出。part 間ペアワイズ検査は自分自身と比較しないため単一ファイル内の重複を検出できず、和集合化がそれを無音で吸収してしまう盲点への対処、codex review P2 指摘) を検証し、次に 3 part 間で rule ID が重複していないこと (part 分割は rule 境界で行う契約) をペアワイズに検証する。いずれかで重複があれば fail する。ルール本文の表現差 (意味的ドリフト) は検出対象外とし、PR レビューでの目視確認に委ねる
 - **チェック 2 (hooks.json 4 entries 共通ブロック一致)**: 抽出・正規化・比較より前に **前提検証** (v0.7.2 新設、#186) を行う — `hooks/hooks.json` の `type: agent` entry 数がスクリプト内定数 `EXPECTED_AGENT_ENTRIES` (= 4) と一致すること、および各 entry の `.prompt` が非空文字列であることを検証し、いずれか不成立なら fail する (entry 数の増減や prompt 欠落という前提崩壊時に、空同士の一致などで pass 側へ倒れることを防ぐ)。前提検証を通過した後、4 つの `type: agent` entry (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) の `prompt` から、entry 固有部分を除いた「共通ブロック」が一致するか検証する。entry 固有部分として除去する対象は 3 種類:
   1. 対象コマンド名の記載箇所 (`if` フィールドから機械導出した `gh <cmd>` をプレースホルダに置換)
   2. `gh pr create` のみが持つ Closes 検証 Step (Step 3) と、それに伴う「返り値」Step の番号繰り下がり (Step 4 → Step 3 相当への読み替え)。**除去 (v0.7.2、#187)** より前に、除去対象の Step 3 ブロックが実在することを検証し、実在しなければ fail する

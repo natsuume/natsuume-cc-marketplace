@@ -10,7 +10,10 @@
 # 本 commit はその Phase A (設計記述 commit) である。 本ファイルに書いた契約をそのまま
 # Phase B で実装する。 親 issue #173、 モデル別 2 ファイル化元 #175、 検出層拡張の親 issue
 # #184。 issue #236 で always-sonnet.md の 3 part 分割に伴いチェック 1/5 の母集合を
-# 3 part の和集合へ変更し、 part 間 rule ID 重複検査を追加した。
+# 3 part の和集合へ変更し、 part 間 rule ID 重複検査を追加した。 その後の codex review P2
+# 指摘を受け、 各 part ファイル単体での rule ID マーカー重複検査 (uniq -d) も追加した
+# (part 間 pairwise 検査は自分自身と比較しないため単一ファイル内重複を検出できず、
+# 和集合化 (sort -u) がそれを無音で吸収してしまう盲点への対処)。
 # .github/workflows/agent-discipline-prompt-lint.yml から呼ばれる。
 #
 # ============================================================================
@@ -50,15 +53,21 @@
 #   1. always-fable.md と always-sonnet-{1,2,3}.md それぞれから `<!-- rule:<id> -->` 形式の
 #      コメント行 (例: `<!-- rule:bash-decompose -->`) を抽出し、 ID 集合を作る (grep -o
 #      '<!-- rule:[a-z0-9-]\+ -->' などで抽出し、 `rule:` プレフィクスと `-->` サフィックスを
-#      取り除いた ID 文字列を要素とする)。
-#   2. always-sonnet-{1,2,3}.md 3 ファイルの ID 集合は互いに素であること (part 間で rule ID が
+#      取り除いた ID 文字列を要素とする)。 抽出結果は重複を保持したまま sort する (2. の
+#      単一ファイル内重複検査が重複保持出力に依存するため、 ここでは sort -u しない)。
+#   2. (#236 P2、 codex review 指摘) always-sonnet-{1,2,3}.md の各ファイル単体について、
+#      同一ファイル内で rule ID マーカーが重複していないことを検証する (1. の重複保持出力に
+#      `uniq -d` を掛けて重複 ID を抽出する)。 3. のペアワイズ検査は自分自身とは比較しない
+#      ため単一ファイル内の重複を検出できず、 4. の和集合化 (sort -u) は重複を無音で吸収
+#      してしまうため、 両方より前に検証する。 重複があれば fail してその ID を列挙する。
+#   3. always-sonnet-{1,2,3}.md 3 ファイルの ID 集合は互いに素であること (part 間で rule ID が
 #      重複しないこと) を検証する。 和集合化によって重複が隠れてしまうため、 和集合を作る前に
 #      3 ファイルの全 2 組 (1-2, 1-3, 2-3) についてペアワイズに共通要素が無いことを確認し、
 #      共通要素があれば fail してその ID を列挙する。
-#   3. always-sonnet-{1,2,3}.md 3 ファイルの ID 集合の和集合を「sonnet 側の ID 集合」とする。
-#   4. always-fable.md の ID 集合と 3. の和集合を、 順序に依らない集合として比較する
+#   4. always-sonnet-{1,2,3}.md 3 ファイルの ID 集合の和集合を「sonnet 側の ID 集合」とする。
+#   5. always-fable.md の ID 集合と 4. の和集合を、 順序に依らない集合として比較する
 #      (ソート済み一覧の diff で可)。
-#   5. 集合が完全一致すれば pass。 一致しない場合は fail し、 片方にのみ存在する ID
+#   6. 集合が完全一致すれば pass。 一致しない場合は fail し、 片方にのみ存在する ID
 #      (差集合) を両方向とも列挙してエラーメッセージに含める。
 #
 # スコープ外 (意図的に検出しない):
@@ -297,9 +306,27 @@ echo "== check 1: rule ID set (always-fable.md <-> always-sonnet-{1,2,3}.md unio
 
 extract_rule_ids() {
   # $1 = file path。 `<!-- rule:<id> -->` から <id> だけを取り出しソートする。
+  # 重複マーカーはここでは除去しない (sort -u ではなく sort のみ): 単一ファイル内の重複検査
+  # (check_no_intra_file_dup_ids) が uniq -d でこの重複保持出力に依存するため。
   grep -Eo '<!-- rule:[a-zA-Z0-9_-]+ -->' "$1" 2>/dev/null \
     | sed -e 's/<!-- rule:\(.*\) -->/\1/' \
     | sort
+}
+
+# $1 = extract_rule_ids の出力ファイル (sort 済み・重複保持)、$2 = エラーメッセージ用の
+# ファイル表示名。同一ファイル内で rule ID マーカーが重複していないかを検査する (#236 P2
+# codex review 指摘: part 間 pairwise 検査は自分自身と比較しないため、単一 part ファイル内の
+# 重複マーカーは検出できない。旧実装の単一ファイル検査は重複を保持したまま fable 側と diff
+# していたため検出できていたが、3 part の和集合化 (sort -u) は重複を無音で吸収してしまう)。
+# 重複が無ければ 0、あれば FAIL メッセージ (重複 ID 列挙付き) を出力して 1 を返す。
+check_no_intra_file_dup_ids() {
+  uniq -d "$1" > "$WORKDIR/dup_intra.txt" 2>/dev/null
+  if [ -s "$WORKDIR/dup_intra.txt" ]; then
+    echo "FAIL: $2 内で rule ID マーカーが重複しています (同一ファイル内に同じ <!-- rule:<id> --> が複数回書かれています):" >&2
+    sed 's/^/  - /' "$WORKDIR/dup_intra.txt" >&2
+    return 1
+  fi
+  return 0
 }
 
 # $1 $2 = 比較する 2 つのソート済み ID ファイル、$3 $4 = エラーメッセージ用のファイル表示名。
@@ -322,6 +349,20 @@ extract_rule_ids "$SONNET_MD_3" > "$WORKDIR/ids_sonnet_3.txt"
 if [ ! -s "$WORKDIR/ids_fable.txt" ] || [ ! -s "$WORKDIR/ids_sonnet_1.txt" ] || [ ! -s "$WORKDIR/ids_sonnet_2.txt" ] || [ ! -s "$WORKDIR/ids_sonnet_3.txt" ]; then
   echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($FABLE_MD / $SONNET_MD_1 / $SONNET_MD_2 / $SONNET_MD_3)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
   exit 1
+fi
+
+# 各 part ファイル単体で rule ID マーカーが重複していないことを検査する (#236 P2)。
+# part 間 pairwise 検査 (このすぐ後) は自分自身とは比較しないため単一ファイル内の重複を
+# 検出できず、後続の和集合化 (sort -u) は重複を無音で吸収してしまう。両方より前に検査する。
+check1_intra_dup_fail=0
+check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_1.txt" "$SONNET_MD_1" || check1_intra_dup_fail=1
+check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_2.txt" "$SONNET_MD_2" || check1_intra_dup_fail=1
+check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_3.txt" "$SONNET_MD_3" || check1_intra_dup_fail=1
+
+if [ "$check1_intra_dup_fail" -eq 0 ]; then
+  echo "OK: no intra-file duplicate rule IDs within always-sonnet-{1,2,3}.md"
+else
+  overall_fail=1
 fi
 
 # part 間で rule ID が重複しないことを検査する (和集合化によって重複が隠れるため、
