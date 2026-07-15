@@ -22,6 +22,52 @@
 #
 # 提供する関数:
 #   - resolve_push_target <cmd> : 成功時 stdout に target cwd を出力。 失敗時 return 1。
+#
+# ## issue #127 対応の設計 (Phase A 設計記述 — 実装は Phase B で行う)
+#
+# ### 問題 (現行実装)
+#
+# 本ファイルの push segment 検出 (下記 resolve_push_target 内の regex
+# `(^|[[:space:]/])git([[:space:]]+[^[:space:]]+)*[[:space:]]+push([[:space:]]|$)`) は
+# quote 非対応で、 caller の block-pre-push.sh が token ベース (tokenize_segment +
+# unquote_token、 quote 対応) で確定させた PUSH_SEGMENT とは独立・非対称な第 2 の解析器に
+# なっている。 2 つの解析器が異なる答えを出すと「gate が検証する repo」と「実 push が向かう
+# repo」が乖離する。 実測済みの再現: `git commit -m "let's push it" && cd sub && git push`
+# で regex が segment 0 (quote 内の "push" 文字列) を push segment と誤認し、 `cd sub` を
+# 処理しないまま cwd 解決を終えて親 repo を返す (正しくは sub)。
+#
+# ### 新契約 (Phase B で実装)
+#
+#   resolve_push_target <push_segment_index> <segment>...
+#
+# - 第 1 引数 push_segment_index: caller (block-pre-push.sh) が token ベースの
+#   PUSH_SEGMENT 確定ループで確定した push segment の位置 (SEP 行を除いた segment 配列上の
+#   0 始まり index)。 push segment の特定は caller の token walk を唯一の真実源とし、
+#   本 resolver は push segment の再探索 (regex / token walk のいずれも) を行わない
+#   (同一情報の二重解析が issue #127 の根本原因のため、 解析器を 1 つに構造的に統一する)
+# - 第 2 引数以降: split_command 出力から SEP: 行を除いた segment 配列の全要素。
+#   segments を引数で受けることで、 本 resolver 内部の split_command 再実行を撤廃し、
+#   「caller と resolver の 2 回の split_command が同一結果を返す」という暗黙契約自体を
+#   除去する (cmd-parser.sh の source は tokenize_segment / unquote_token 用に維持)
+# - 引数検証 (fail-closed、 算術評価より前に実施): push_segment_index が canonical
+#   decimal (`^(0|[1-9][0-9]*)$`、 先頭ゼロの octal 解釈を排除) でない、 または
+#   segment 数の範囲外 (index >= segment 数) なら return 1 (caller は保守的 deny)
+# - 防御的 assertion (Phase B で _process_push_segment に追加): git global option walk の
+#   終点 token が `push` でなければ return 1。 これは再探索ではなく「caller が正しい index
+#   を渡した」ことの assertion であり、 将来の caller 契約違反 (誤った in-range index) への
+#   防御。 判定器の二重化にはならない
+#
+# ### 受入基準 (Phase B の検証ケース)
+#
+# 1. `git commit -m "let's push it" && cd sub && git push` (index=2) → `<cwd>/sub`
+#    (issue #127 再現ケース。 現行は親 repo を返す誤り)
+# 2. `cd sub && git push` (index=1) → `<cwd>/sub` (回帰なし)
+# 3. `git -C sub push` (index=0) → `<cwd>/sub` (回帰なし)
+# 4. `GIT_DIR=sub/.git git push` (index=0) → `<cwd>/sub` (回帰なし)
+# 5. index 不正 (空 / 非数値 / 負値 / 範囲外 / 先頭ゼロ付き 例 `01`) → return 1
+# 6. index が push segment 以外を指す (例 `git commit -m x` の segment) → return 1
+#    (assertion 発火)
+# 7. 従来の deny 経路 (subshell / pushd / wrapper / --work-tree 等) の回帰なし
 
 # 引数: <cmd>
 # stdout: target cwd (絶対パス)
