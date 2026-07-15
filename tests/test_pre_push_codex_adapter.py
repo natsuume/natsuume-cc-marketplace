@@ -156,19 +156,19 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
     def test_subagent_stop_updates_each_role_marker_with_shared_hash(self) -> None:
         cases = (
             (
-                "pre-push-correctness-reviewer",
+                "pre_push_correctness_reviewer",
                 "# Correctness Review",
                 "correctness",
                 ".claude-pre-push-code-reviewed",
             ),
             (
-                "pre-push-independent-reviewer",
+                "pre_push_independent_reviewer",
                 "# Independent Review",
                 "independent",
                 ".claude-pre-push-codex-reviewed",
             ),
             (
-                "pre-push-security-reviewer",
+                "pre_push_security_reviewer",
                 "# Security Review",
                 "security",
                 ".claude-pre-push-security-reviewed",
@@ -224,7 +224,7 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             marker = work / ".git" / marker_name
             payload = self.subagent_payload(
                 work,
-                "pre-push-correctness-reviewer",
+                "pre_push_correctness_reviewer",
                 "# Correctness Review",
                 "correctness",
             )
@@ -234,14 +234,14 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             self.assertFalse(marker.exists())
 
             payload = self.subagent_payload(
-                work, "another-reviewer", "# Correctness Review", "correctness"
+                work, "another_reviewer", "# Correctness Review", "correctness"
             )
             self.assertEqual(self.run_codex_auto_mark(work, payload).returncode, 0)
             self.assertFalse(marker.exists())
 
             payload = self.subagent_payload(
                 work,
-                "pre-push-correctness-reviewer",
+                "pre_push_correctness_reviewer",
                 "# Correctness Review",
                 "correctness",
                 stop_hook_active=True,
@@ -251,7 +251,7 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
 
             payload = self.subagent_payload(
                 work,
-                "pre-push-correctness-reviewer",
+                "pre_push_correctness_reviewer",
                 "# Correctness Review",
                 "correctness",
             )
@@ -272,7 +272,7 @@ class SetupCodexAgentsTest(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(
             groups[0]["matcher"],
-            "^pre-push-(correctness|independent|security)-reviewer$",
+            "^pre_push_(correctness|independent|security)_reviewer$",
         )
         handlers = groups[0]["hooks"]
         self.assertEqual(len(handlers), 1)
@@ -320,17 +320,27 @@ class SetupCodexAgentsTest(unittest.TestCase):
             self.assertEqual(written.returncode, 0, written.stderr.decode())
 
             target_dir = repo / ".codex" / "agents"
+            installed_names = set()
             for template in sorted(AGENT_TEMPLATE_DIR.glob("*.toml")):
                 destination = target_dir / template.name
                 self.assertEqual(destination.read_bytes(), template.read_bytes())
                 parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
-                self.assertTrue(parsed["name"].startswith("pre-push-"))
+                self.assertRegex(parsed["name"], r"^[a-z0-9_]+$")
+                installed_names.add(parsed["name"])
                 self.assertEqual(parsed["sandbox_mode"], "read-only")
                 self.assertEqual(parsed["model_reasoning_effort"], "high")
                 self.assertIn(
                     "<!-- pre-push-review:completed",
                     parsed["developer_instructions"],
                 )
+            self.assertEqual(
+                installed_names,
+                {
+                    "pre_push_correctness_reviewer",
+                    "pre_push_independent_reviewer",
+                    "pre_push_security_reviewer",
+                },
+            )
 
             current = self.run_setup(repo, "inspect")
             self.assertEqual(current.returncode, 0, current.stderr.decode())
