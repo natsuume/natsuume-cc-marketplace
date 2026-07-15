@@ -1,24 +1,20 @@
 ---
 name: status
-description: Claude Code のサブスクリプション usage limit (5 時間セッション枠・週次枠の使用率と reset 時刻) を取得する。rate limit / 残量 / usage limit を確認したいときに使う
-user-invocable: true
-when_to_use: |
-  ユーザーが以下のようなリクエストをした場合に使用:
-  - 「rate limit を確認して」「残量を教えて」
-  - 「usage limit はどれくらい残ってる」「使用率を見せて」
-  - 「5 時間枠 / 週次枠の残りを知りたい」
+description: Claude Code のサブスクリプション usage limit (5 時間セッション枠・週次枠の使用率と reset 時刻) を取得する。「rate limit」「残量」「usage limit」「5時間・週次枠の残りや使用率」を確認したいときに使う
 ---
 
 # /rate-limit:status — サブスク usage limit の取得
 
 `scripts/fetch-rate-limit.sh` を実行し、出力された JSON をユーザに報告する。
 
+この `SKILL.md` を含む `skills/status/` の 2 階層上を `<plugin-root>` として解決する。通常の Skill 実行では hook 用の `${CLAUDE_PLUGIN_ROOT}` が設定される保証はないため、実パスを優先する。
+
 ## 1. 実行
 
 Bash ツールで以下を **foreground で 1 回**実行する。リトライはしない (非公式 endpoint への呼び出しをスクリプト内部で 1 回に制限しているため)。
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/fetch-rate-limit.sh"
+bash "<plugin-root>/scripts/fetch-rate-limit.sh"
 ```
 
 ## 2. 出力 JSON の読み方

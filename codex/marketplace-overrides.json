@@ -1,0 +1,480 @@
+{
+  "schemaVersion": 3,
+  "marketplace": {
+    "displayName": "Natsuume Plugins",
+    "category": "Productivity"
+  },
+  "publisher": {
+    "name": "natsuume",
+    "url": "https://github.com/natsuume",
+    "repository": "https://github.com/natsuume/natsuume-cc-marketplace",
+    "license": "MIT"
+  },
+  "plugins": {
+    "git-guardrails": {
+      "displayName": "Git Guardrails",
+      "shortDescription": "GitHub Flow の直接書き込み経路を hook で防止",
+      "defaultPrompt": [
+        "GitHub Flow のガードレールを適用してこの作業を進めてください。"
+      ],
+      "compatibility": {
+        "level": "full",
+        "summary": "Skill と command hook を Claude Code / Codex で共有します。",
+        "limitations": [],
+        "guaranteeDifferences": [],
+        "verificationTests": [
+          {
+            "path": "scripts/smoke_codex_marketplace.sh",
+            "covers": "生成 marketplace から plugin と共有 hook を Codex に install できること"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "f057a4ddccbf6cf3c02cdab49da02f469109420f3c271f6fb15981693696f76c"
+      }
+    },
+    "enforce-draft-pr": {
+      "displayName": "Enforce Draft PR",
+      "shortDescription": "gh pr create に --draft を自動付与",
+      "defaultPrompt": [
+        "新しい pull request を必ず draft として作成してください。"
+      ],
+      "compatibility": {
+        "level": "full",
+        "summary": "PreToolUse hook の入力更新を Claude Code / Codex で共有します。",
+        "limitations": [],
+        "guaranteeDifferences": [],
+        "verificationTests": [
+          {
+            "path": "scripts/smoke_codex_marketplace.sh",
+            "covers": "生成 marketplace から plugin と共有 hook を Codex に install できること"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "9282dd039fde2e290321add807821ac7502059a1d3ffa18b274544407a18a0fc"
+      }
+    },
+    "auto-lint-check": {
+      "displayName": "Auto Lint Check",
+      "shortDescription": "編集・commit 境界で format と lint を自動実行",
+      "defaultPrompt": [
+        "編集時の format と commit 前後の lint を有効にして作業してください。"
+      ],
+      "compatibility": {
+        "level": "full",
+        "summary": "Claude の Edit/Write payload と Codex の apply_patch payload を同じ hook script で正規化します。",
+        "limitations": [],
+        "guaranteeDifferences": [],
+        "verificationTests": [
+          {
+            "path": "tests/test_auto_lint_codex_adapter.py",
+            "covers": "apply_patch path 抽出、ignore 検知、Codex deny JSON の adapter 契約"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "d53f3740bcbb57886978c8fdefbd7b304da2feed2baa95896ea6c2862f7bdeb0"
+      }
+    },
+    "pre-push-review": {
+      "displayName": "Pre-push Review",
+      "shortDescription": "git push 前に correctness・Codex・security review を強制",
+      "defaultPrompt": [
+        "push 前に 3 観点の branch review を実行してください。"
+      ],
+      "compatibility": {
+        "level": "partial",
+        "summary": "push gate と hash marker は共有し、Codex では named custom agents と SubagentStop lifecycle hook で 3 review を編成・記録します。",
+        "limitations": [
+          "Codex plugin manifest は custom agent profile を直接有効化しないため、setup-pre-push-agents Skill による project-scoped .codex/agents への明示的な導入と新しい session が必要です。",
+          "Claude agent の tools allowlist は完全再現せず、Codex custom agent の read-only sandbox と専用 instructions で変更を防ぎます。",
+          "Codex PreToolUse は対応する Bash 経路の guardrail であり、同等の push を行う全 shell 経路の完全な security boundary ではありません。"
+        ],
+        "guaranteeDifferences": [
+          "custom agent profile は plugin install だけでは有効にならず、利用対象 repository ごとの setup 完了を前提とします。",
+          "SubagentStop marker は agent_type・agent_id・終了応答と同一 diff hash の lifecycle 完了を示しますが、レビュー内容の意味的正しさまでは証明しません。",
+          "push gate の強制範囲は現行 Codex PreToolUse が捕捉する Bash invocation に限定されます。"
+        ],
+        "verificationTests": [
+          {
+            "path": "tests/test_pre_push_codex_adapter.py",
+            "covers": "custom-agent setup、SubagentStop role marker、push deny recovery の Codex adapter 契約"
+          }
+        ],
+        "components": [
+          {
+            "source": "commands/review.md",
+            "disposition": "adapted",
+            "codexReplacement": "skills/review-codex/SKILL.md",
+            "reason": "Claude slash command を Codex Skill の orchestration に変換します。",
+            "sourceDigest": "9c198f8efa22e720e6831345f47e791a60119e37cd838a86c6dd6a88d69d5b94"
+          },
+          {
+            "source": "agents/code-reviewer.md",
+            "disposition": "adapted",
+            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-correctness-reviewer.toml",
+            "reason": "Claude agent の correctness 規約を project-scoped read-only custom agent profile に意訳します。",
+            "sourceDigest": "8ce957a5ff3a0e86b4aee0a4ed074f007bc80073e532da163b3eda826e061bf7"
+          },
+          {
+            "source": "agents/codex-reviewer.md",
+            "disposition": "adapted",
+            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-independent-reviewer.toml",
+            "reason": "外部 Codex companion による独立性を、別 context の named Codex custom agent による独立 review として近似します。",
+            "sourceDigest": "be1278a1aedb15163e10ba146375959f87d66524458bc21c16252a94c862a65a"
+          },
+          {
+            "source": "agents/security-reviewer.md",
+            "disposition": "adapted",
+            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-security-reviewer.toml",
+            "reason": "Claude agent の security 規約を project-scoped read-only custom agent profile に意訳します。",
+            "sourceDigest": "0289c10ef0bedf84fd47ad2cf97ef85959e008492c716a96794de5d1b4410c17"
+          }
+        ],
+        "sourceTreeDigest": "c01ebd7f98ec1c5fabff17126e433f382a3cf95eda22114cb5fbe538eaa24117"
+      }
+    },
+    "update-default-branch": {
+      "displayName": "Update Default Branch",
+      "shortDescription": "PR merge 後の default branch 更新と gone branch 整理",
+      "defaultPrompt": [
+        "マージ後のデフォルトブランチ更新と不要ブランチ整理を実行してください。"
+      ],
+      "compatibility": {
+        "level": "full",
+        "summary": "同じ Skill 手順を Claude Code / Codex で共有します。",
+        "limitations": [],
+        "guaranteeDifferences": [],
+        "verificationTests": [
+          {
+            "path": "scripts/smoke_codex_marketplace.sh",
+            "covers": "共有 Skill を含む plugin の Codex install surface"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "36b642a2cac6621c08f5f32f8a443f0605ce3aa8781185b8b83da5888cd6d61d"
+      }
+    },
+    "natsuume-statusline": {
+      "displayName": "Natsuume Statusline",
+      "shortDescription": "Codex の組み込み footer を natsuume statusline 相当に構成",
+      "defaultPrompt": [
+        "Codex の status line をリポジトリ・context・rate limit 表示向けに設定してください。"
+      ],
+      "compatibility": {
+        "level": "partial",
+        "summary": "Codex の組み込み /statusline と tui.status_line を使う setup-codex Skillを提供します。",
+        "limitations": [
+          "Codex は任意 shell statusline、複数行表示、独自 gauge/color、statusline stdin callback を提供しないため、表示は組み込み項目で近似します。"
+        ],
+        "guaranteeDifferences": [
+          "stock Codex TUI では任意 shell callback・3 行 layout・独自 gauge/color を実行せず、固定 item ID の値と描画を Codex runtime が所有します。",
+          "strict config parse は TOML と既知 key を検査しますが status-line item ID の対応可否までは検査しないため、現在の /statusline picker を最終確認の正本とします。",
+          "setup-codex Skill は direct config 編集を検証済み backup 後の atomic replace、strict parse 失敗時の atomic restore、parse 成功時だけの完了報告に限定しますが、これは instruction contract であり専用 binary による hard security boundary ではありません。",
+          "context cache producer の副作用は statusline から再現せず、session-handoff plugin の PreCompact adapter に分離します。"
+        ],
+        "verificationTests": [
+          {
+            "path": "tests/test_statusline_codex_adapter.py",
+            "covers": "組み込み status-line item、backup/atomic replace/strict parse failure/atomic restore の instruction contract、parse 検査境界と rendering 保証差"
+          },
+          {
+            "path": "scripts/smoke_codex_marketplace.sh",
+            "covers": "pinned/latest Codex で strict config parser の unknown key 拒否と有効 config 受理"
+          }
+        ],
+        "components": [
+          {
+            "source": "commands/setup.md",
+            "disposition": "adapted",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Claude settings.json の statusLine.command 設定を Codex の /statusline と config.toml 手順に変換します。",
+            "sourceDigest": "fedf745cd1d033c0d30ab7ea9a6ad00d23ca9170d1aa94790ebd51c81177add1"
+          },
+          {
+            "source": "statusline/context-cache-dump.sh",
+            "disposition": "surface-unavailable",
+            "reason": "Codex に statusline stdin callback はありません。context handoff の意図は session-handoff の PreCompact adapter が担います。",
+            "sourceDigest": "0c584020d0d6045c435b7c58d243687d91efb00dbbfeda7971ee6ceb530df835"
+          },
+          {
+            "source": "statusline/entrypoint.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex に任意 shell statusline entrypoint がありません。",
+            "sourceDigest": "e5ca162aa51aba7c00179f30905bf6f54001e35c62f9b45f7497014ba6aa3a09"
+          },
+          {
+            "source": "statusline/gauges.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex footer は独自 gauge renderer を受け付けません。",
+            "sourceDigest": "c82b07e308099a64928cb16bc0a27abb1608637888ffacc04fe61c4e739709d8"
+          },
+          {
+            "source": "statusline/lib.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "custom statusline runtime が無いため共有 helper の呼び出し先がありません。",
+            "sourceDigest": "d5b8ef0a4c8ee2643e6bf626f58d4d455c10e2debf6dd4ae6b83468bb4d6a8a4"
+          },
+          {
+            "source": "statusline/line1.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex footer は任意の複数行 renderer を受け付けません。",
+            "sourceDigest": "223204ab78ad824153d73886d02911ad0e028a995081dfd6f96c5cd4f5286177"
+          },
+          {
+            "source": "statusline/line2.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex footer は任意の複数行 renderer を受け付けません。",
+            "sourceDigest": "83bf3877e2004dd182839c7db40b986409b7ae02f52203d0cdc5761558f4b6c5"
+          },
+          {
+            "source": "statusline/line3.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex footer は任意の複数行 renderer を受け付けません。",
+            "sourceDigest": "f1e0d4c06eae6eff7da9a4a159cfb25378d971130bc966d7e406e9e88464c57d"
+          },
+          {
+            "source": "statusline/main.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex に custom statusline process の実行面がありません。",
+            "sourceDigest": "87c47294a21030093aa265d70b79cd7339cf3ff7cd6aebceb52d7a05aa2b80da"
+          },
+          {
+            "source": "statusline/weekly-scoped-limits.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex footer の rate limit 表示は組み込み項目が所有します。",
+            "sourceDigest": "1529e071e2fc9b90edf39fb421fc82d84917fd11093e9a9a131ddfb41ae10ebd"
+          }
+        ],
+        "sourceTreeDigest": "41b2d2b683b68e0cc15b44f213482b0d86989c86361963829607a21f17d21d91"
+      }
+    },
+    "agent-discipline": {
+      "displayName": "Agent Discipline",
+      "shortDescription": "作業規律・issue 駆動・分業規律を hook で配送",
+      "defaultPrompt": [
+        "agent-discipline の作業規律に従ってこのタスクを進めてください。"
+      ],
+      "compatibility": {
+        "level": "partial",
+        "summary": "command hook と Skill を共有し、Codex では repo/worktree scoped の provider/privacy opt-in 後だけ Claude の inline semantic agent prompt を隔離した read-only codex exec で評価します。Auto follow-through は検出不能な permission mode へ推測 mapping せず、明示 Skill で意図を代替します。",
+        "limitations": [
+          "semantic validator は既定で無効です。opt-in が無い状態では 4 つの literal gh issue/pr command を scoped deny し、nested Codex は起動しません。",
+          "opt-in 後は対象 gh issue/pr command ごとに別の codex exec を起動するため、ローカル Codex 認証・model availability・rate limit に依存し、同一 runtime handler より latency が増えます。hook payload と参照した --body-file 内容は親とは異なる default provider/model へ送信される可能性があります。",
+          "Codex の PreToolUse は対応する Bash invocation の guardrail であり、env/cd prefix・editor・stdin 等の hook visibility 外経路を含む完全な shell security boundary ではありません。",
+          "Codex hook input の permission_mode は Auto preset を一意に表さないため、after 系と未コミット分類の自動注入は Codex では無効です。auto-codex Skill は現在の approval/sandbox とユーザー依頼 scope 内で follow-through の意図だけを代替します。",
+          "Claude の Agent|Task tool と Fable/Sonnet model routing は Codex の tool/model 系に存在しないため、Fable subagent block は適用対象がありません。"
+        ],
+        "guaranteeDifferences": [
+          "4 本の canonical inline prompt と全 property required の {ok, nullable reason} schema は再利用しますが、Claude hook agent ではなく ephemeral な独立 Codex process が判定します。ok:true は stdout 無出力で通常の approval policy へ継続し、ok:false は PreToolUse deny に変換します。opt-in 後は認証・quota・timeout・schema/条件不適合を fail-closed で deny し、jq 不在または hook payload 自体を安全に解釈できない場合は blast radius を避けて no-op します。",
+          "owner-only regular marker と inspect→明示承認→action token の helper は当該 Git worktree で opt-in 操作が行われたことだけを示します。親/nested process の provider/model 同一性、Claude/Codex の verdict equality、外部 provider のデータ取扱いは保証しません。symlink・非 regular・owner/mode/content 不正 state は変更せず scoped deny します。",
+          "semantic interception は literal な gh issue/pr command head に限定され、同じ外部操作へ到達する全 shell 表現の遮断までは保証しません。",
+          "Codex の default・acceptEdits・dontAsk・bypassPermissions は Claude auto へ対応付けません。auto-codex Skill の follow-through 指示は Auto preset や追加権限を保証せず、外部 push/PR/merge はユーザー依頼 scope を拡張しません。"
+        ],
+        "verificationTests": [
+          {
+            "path": "tests/test_agent_discipline_codex_adapter.py",
+            "covers": "canonical prompt 抽出、read-only/ephemeral validator、provider/privacy opt-in lifecycle、fresh token、owner-only marker、symlink/nonregular 拒否、Structured Outputs subset、fail-closed deny、Codex permission mode no-op、明示代替 Skills、Claude runtime 維持"
+          }
+        ],
+        "components": [
+          {
+            "source": "hooks/hooks.json#/hooks/PreToolUse/0/hooks/0",
+            "disposition": "adapted",
+            "codexReplacement": "hooks/scripts/codex-semantic-validator.sh",
+            "reason": "repo/worktree scoped の明示 opt-in 後だけ Claude type=agent prompt を hooks.json から抽出し、隔離した codex exec の ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
+            "sourceDigest": "14e28de43db38e27a634743f341c99913a4b4af1149e478ffedb2086462abfde"
+          },
+          {
+            "source": "hooks/hooks.json#/hooks/PreToolUse/0/hooks/1",
+            "disposition": "adapted",
+            "codexReplacement": "hooks/scripts/codex-semantic-validator.sh",
+            "reason": "repo/worktree scoped の明示 opt-in 後だけ Claude type=agent prompt を hooks.json から抽出し、隔離した codex exec の ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
+            "sourceDigest": "9956652d26bf01a9b3127cfee333ce5c866f9509e9f92c08426ac136f3963799"
+          },
+          {
+            "source": "hooks/hooks.json#/hooks/PreToolUse/0/hooks/2",
+            "disposition": "adapted",
+            "codexReplacement": "hooks/scripts/codex-semantic-validator.sh",
+            "reason": "repo/worktree scoped の明示 opt-in 後だけ Claude type=agent prompt を hooks.json から抽出し、隔離した codex exec の ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
+            "sourceDigest": "d98f44419940c661498987f990c25a93b99e4fcb4699fef6c6d5fce379750f46"
+          },
+          {
+            "source": "hooks/hooks.json#/hooks/PreToolUse/0/hooks/3",
+            "disposition": "adapted",
+            "codexReplacement": "hooks/scripts/codex-semantic-validator.sh",
+            "reason": "repo/worktree scoped の明示 opt-in 後だけ Claude type=agent prompt を hooks.json から抽出し、隔離した codex exec の ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
+            "sourceDigest": "7dc1aa84a3f679a8ea1dd58126ecbe978b67ffa9da7ceb9399b6ff50fc764959"
+          },
+          {
+            "source": "hooks/hooks.json#/hooks/PreToolUse/1/hooks/0",
+            "disposition": "not-applicable",
+            "reason": "Agent|Task は Claude 固有 tool matcher で、Fable subagent block は Codex model 系に適用されません。",
+            "sourceDigest": "a23b1862a7921dd2daad8ae5ff3addf9ed5fd71b7994ed6a746c788dc4fe1345"
+          }
+        ],
+        "sourceTreeDigest": "022c99505dfa8b11acf45104215461434fc520c4f778dfd46b17a2b5924bcd42"
+      }
+    },
+    "ui-discipline": {
+      "displayName": "UI Discipline",
+      "shortDescription": "UI 実装の共通化・a11y・layout 規律を常時配送",
+      "defaultPrompt": [
+        "UI discipline の規律と pattern を使ってフロントエンドを実装してください。"
+      ],
+      "compatibility": {
+        "level": "full",
+        "summary": "SessionStart/SubagentStart command hook と Skill を共有します。",
+        "limitations": [],
+        "guaranteeDifferences": [],
+        "verificationTests": [
+          {
+            "path": "scripts/smoke_codex_marketplace.sh",
+            "covers": "共有 Skill と lifecycle hook を含む plugin の Codex install surface"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "dcfb2d0502e1922f0a55e176e3c964af48fe4c86e8d1bb39cbab64d0ae908581"
+      }
+    },
+    "natsuume-writing": {
+      "displayName": "Natsuume Writing",
+      "shortDescription": "natsuume の文体規則で outline・draft・review を支援",
+      "defaultPrompt": [
+        "natsuume-writing の文体規則を使って技術文書を作成してください。"
+      ],
+      "compatibility": {
+        "level": "full",
+        "summary": "執筆ルール、3 Skills、SessionStart hook を同じファイルから共有します。",
+        "limitations": [],
+        "guaranteeDifferences": [],
+        "verificationTests": [
+          {
+            "path": "tests/test_sync_codex_marketplace.py",
+            "covers": "3 Skills が Claude Code と Codex の両 runtime surface を明示すること"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "64d438a54c7f0a16950304cd8be4075af66f37fb311bb2a79cd80b208ca593e6"
+      }
+    },
+    "codex-advisor": {
+      "displayName": "Codex Advisor",
+      "shortDescription": "独立した read-only Codex process から助言を取得",
+      "defaultPrompt": [
+        "Codex advisor に方針を相談し、助言と証拠を比較してください。"
+      ],
+      "compatibility": {
+        "level": "partial",
+        "summary": "Claude companion と direct codex exec の双方を同じ wrapper から利用します。",
+        "limitations": [
+          "Codex 内から使う場合も別 read-only Codex process を起動するため、呼び出し元と advisor が同じ model family になる可能性があります。",
+          "注入 prompt 内の /codex:rescue 規律は Claude Code の openai-codex plugin を導入した環境だけに適用されます。"
+        ],
+        "guaranteeDifferences": [
+          "Codex 内の fallback advisor は独立 process・read-only sandbox・別 context を保証しますが、異なる model family からの独立性は保証しません。",
+          "Claude Code の scratchpad file transport は Codex では PTY unified exec の分離 stdin channel に置換されます。受信中は echo 無効・raw/noncanonical mode とし、連続 EOT (0x04 0x04) を切断と区別できる明示 frame terminator にするため、prompt は shell command・argv・永続 file に載せませんが、本文に EOT byte は含められません。",
+          "direct codex exec は read-only・ephemeral・hooks 無効・git repository 検査 skip・xhigh を固定し、既定 600 秒の deadline 超過時は TERM、grace period 後の KILL、wait で回収します。stdout / stderr は同じ foreground session で観察され続けます。",
+          "advisor subprocess の利用可否はローカル Codex 認証と rate limit に依存します。"
+        ],
+        "verificationTests": [
+          {
+            "path": "tests/test_codex_advisor_adapter.py",
+            "covers": "Codex host 分岐、PTY 必須条件と echo 抑止、8 KiB 超単一行 + CR の byte-exact EOT framing、全 direct exec 安全引数、git repository 外起動、deadline 時の TERM/KILL/wait cleanup、Claude file-stdin 経路"
+          },
+          {
+            "path": "scripts/smoke_codex_marketplace.sh",
+            "covers": "direct codex exec fallback を含む Skill/plugin install surface"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "24f2613e81106c9ef65926166fcd335c07f850cde7c182109cae2a37967a4c50"
+      }
+    },
+    "rate-limit": {
+      "displayName": "Rate Limit",
+      "shortDescription": "Claude と Codex の subscription usage limit を取得",
+      "defaultPrompt": [
+        "現在の Codex rate limit と reset 時刻を確認してください。"
+      ],
+      "compatibility": {
+        "level": "partial",
+        "summary": "codex-status Skill は Codex app-server RPC を共有し、setup-codex Skill が組み込み limit footer と /usage を構成します。",
+        "limitations": [
+          "Claude usage の status Skill は cross-provider 機能として利用できますが、Claude の認証情報または cache が必要です。",
+          "Codex は任意 statusline wrapper を持たないため、Claude/Codex cache の常時合成、独自 gauge、statusline 副作用は利用できません。"
+        ],
+        "guaranteeDifferences": [
+          "stock footer の limit 値・更新頻度・描画は Codex runtime が所有し、plugin script が値を差し替えたり Claude usage と合成したりできません。",
+          "strict config parse は TOML と既知 key を検査しますが limit item ID の対応可否までは検査しないため、現在の /statusline picker で最終確認します。",
+          "setup-codex Skill は direct config 編集を検証済み backup 後の atomic replace、strict parse 失敗時の atomic restore、parse 成功時だけの完了報告に限定しますが、これは instruction contract であり専用 binary による hard security boundary ではありません。",
+          "codex-status の詳細取得はローカル Codex 認証と app-server RPC の成功に依存し、取得失敗時は表示値を推測しません。"
+        ],
+        "verificationTests": [
+          {
+            "path": "tests/test_statusline_codex_adapter.py",
+            "covers": "組み込み limit item、backup/atomic replace/strict parse failure/atomic restore の instruction contract、parse 検査境界、/usage、codex-status 導線"
+          },
+          {
+            "path": "scripts/smoke_codex_marketplace.sh",
+            "covers": "codex-status/setup-codex の install surface と strict config parser の実行"
+          }
+        ],
+        "components": [
+          {
+            "source": "commands/setup.md",
+            "disposition": "adapted",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Claude statusLine wrapper setup を Codex の組み込み limit footer と /usage の setup に意訳します。",
+            "sourceDigest": "dc92c470b8a675db35bf43b7004b2852070c9fd0242bbb68ad5a430b35bd4e99"
+          },
+          {
+            "source": "statusline/cache-write-wrapper.sh",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex は任意 statusline wrapper command を実行しません。",
+            "sourceDigest": "017064e4f602da3bb86e97469611f6bd404e2253032fa3f29667178593d335b5"
+          }
+        ],
+        "sourceTreeDigest": "ce06da828ded750ff671b779dbf8982b4ce2779d743ccbb30d137df4c9a311b9"
+      }
+    },
+    "session-handoff": {
+      "displayName": "Session Handoff",
+      "shortDescription": "session 間 handoff の保存と次 session への自動注入",
+      "defaultPrompt": [
+        "この作業の handoff を作成し、次のセッションへ引き継いでください。"
+      ],
+      "compatibility": {
+        "level": "partial",
+        "summary": "pending handoff の SessionStart 注入を共有します。Codex の PreCompact 要約 producer は provider/privacy 越境を明示承認した repository だけで有効になり、既定では transcript を読まず nested Codex も起動しません。",
+        "limitations": [
+          "Codex hook input は context 使用率を提供せず custom statusline callback も無いため、Claude 版と同じ 60% 閾値ではなく auto/manual compaction の直前に発火します。",
+          "transcript_path は安定 API として保証されず、summary 入力はサイズ上限内の末尾 excerpt に限定されます。",
+          "nested Codex は project config/MCP を隔離するため --ignore-user-config を使い、親 session の Azure/Bedrock/local/custom provider・account・data residency を継承または照合できません。repository 固有の inspect と明示承認 token による opt-in が無い限り producer は無音 no-op です。",
+          "nested Codex の認証・model/network・rate limit・timeout 失敗時は compaction を止めず fail-open となり、その回の handoff は保存されません。"
+        ],
+        "guaranteeDifferences": [
+          "Claude 版の 60% early warning と user-driven handoff ではなく PreCompact 直前の自動生成なので、発火時点とユーザーが内容を確認する機会は同一ではありません。",
+          "Codex は親 session と同じ provider/account で要約する保証を構築できません。owner-only exact marker は越境リスクへの repository 単位の同意を表しますが、同一 provider や同一 data-residency の証明ではありません。",
+          "生成物は同一 git-dir 内で atomic 保存し compact 後に一度だけ注入しますが、LLM summary の内容品質と transcript 全履歴の包含は保証しません。",
+          "producer は privacy-safe default として無効です。enable 後も生成失敗は compaction 継続を優先する fail-open 契約であり、すべての compact で handoff が存在することは保証しません。"
+        ],
+        "verificationTests": [
+          {
+            "path": "tests/test_session_handoff_codex_adapter.py",
+            "covers": "既定無効の no-read/no-call、read-only inspect、action-bound token enable/disable、exact owner-only marker と unsafe marker 拒否、単一 stdin prompt+transcript framing と codex exec '-'、tail 制限、nested Codex 隔離、atomic pending 保存、compact 後の once-only 注入、fail-open cleanup"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "957a841dd1de06feeb57df70a80f8d07038538ac7d13ddbe680bb63b0223f15e"
+      }
+    }
+  }
+}

@@ -4,7 +4,11 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## バージョン
 
-v0.2.1
+v0.3.0
+
+### v0.2.1 → v0.3.0 の変更点
+
+- Codex plugin manifest を追加し、SessionStart/SubagentStart hook と ui-patterns Skill を Claude Code / Codex で共有できるようにした
 
 ## 概要
 

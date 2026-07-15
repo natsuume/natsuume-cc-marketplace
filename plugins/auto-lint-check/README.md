@@ -4,7 +4,12 @@
 
 ## バージョン
 
-v0.4.1
+v0.5.0
+
+### v0.4.1 → v0.5.0 の変更点
+
+- Codex の `apply_patch` payload から追加/削除行と複数の変更対象 path を抽出する adapter を追加した。ignore コメントの新規挿入 block と編集後 format を Claude Code / Codex の同じ hook script で実行する
+- Codex plugin manifest と adapter fixture test を追加した
 
 ### v0.4.0 → v0.4.1 の変更点
 

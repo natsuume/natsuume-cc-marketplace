@@ -1,5 +1,6 @@
 {
   "name": "codex-advisor",
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミング・助言の扱い・/codex:rescue の thread 選択自律化 (迷ったら --fresh) を含む codex 利用規律を hook で常時注入し、/codex-advisor:consult skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI)。"
 }

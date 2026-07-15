@@ -1,11 +1,12 @@
 #!/bin/bash
 # check-uncommitted-on-session-start.sh
-# Auto mode セッションの最初の UserPromptSubmit でだけ発火し、cwd に
+# Claude Code Auto セッションで、最初の UserPromptSubmit にだけ発火し、cwd に
 # 未コミットの変更があれば「Claude が出所を分析し、推奨アクションを
 # まとめてユーザに簡潔に確認する」よう指示する additionalContext を注入する。
+# Codex は Auto preset を hook input から識別できないため全 permission mode を no-op とする。
 #
 # 同 session 内では 2 回目以降は何もしない (session_id ベースのマーカーで制御)。
-# auto モード以外、git リポジトリ外、jq 不在環境ではすべて無音終了する。
+# 対象外 permission mode、git リポジトリ外、jq 不在環境ではすべて無音終了する。
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -13,16 +14,30 @@ fi
 
 INPUT=$(cat)
 
-{ read -r RAW_SESSION_ID; read -r PERMISSION_MODE; read -r CWD; } < <(
-  printf '%s' "$INPUT" | jq -r '
-    (.session_id // ""),
-    (.permission_mode // ""),
-    (.cwd // "")
+# cwd の改行を壊さないよう、Linux / macOS bash 3.2 で扱える NUL delimiter を使う。
+{
+  IFS= read -r -d '' RAW_SESSION_ID
+  IFS= read -r -d '' PERMISSION_MODE
+  IFS= read -r -d '' CWD
+  IFS= read -r -d '' TURN_ID
+} < <(
+  printf '%s' "$INPUT" | jq -j '
+    (.session_id // ""), "\u0000",
+    (.permission_mode // ""), "\u0000",
+    (.cwd // ""), "\u0000",
+    (.turn_id // ""), "\u0000"
   '
 )
 
-# auto モード以外、または情報不足ならば何もしない
-if [ "$PERMISSION_MODE" != "auto" ] || [ -z "$RAW_SESSION_ID" ] || [ -z "$CWD" ]; then
+# runtime ごとの permission_mode を安全側へ正規化する。Claude では従来どおり auto のみ、
+# Codex は Auto を証明できないため全 mode を対象外にする。
+SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+if [ -z "$SCRIPT_DIR" ] || [ ! -r "$SCRIPT_DIR/lib/permission-mode.sh" ]; then
+  exit 0
+fi
+# shellcheck source=plugins/agent-discipline/hooks/scripts/lib/permission-mode.sh
+source "$SCRIPT_DIR/lib/permission-mode.sh" || exit 0
+if ! is_agent_discipline_autonomous_mode "$PERMISSION_MODE" "$TURN_ID" || [ -z "$RAW_SESSION_ID" ] || [ -z "$CWD" ]; then
   exit 0
 fi
 

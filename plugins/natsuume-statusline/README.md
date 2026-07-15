@@ -4,7 +4,41 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.7.0
+v0.9.0
+
+### v0.8.0 → v0.9.0 の変更点
+
+- Codex plugin manifest と `setup-codex` Skill を追加した。Codex では任意 shell statusline を構築できないため、`/statusline` / `tui.status_line` の組み込み repository・branch・context・rate limit 項目で近似する
+- 独自 3 行 layout、gauge/color、statusline callback は原理的な互換性差分として台帳に登録した
+- direct config 編集を backup 後の atomic replace と strict parse 失敗時の atomic restore に限定し、
+  parse 成功前に setup 完了を報告しない transaction 契約を追加した
+
+## Codex での代替と保証差
+
+Codex では `$natsuume-statusline:setup-codex` を使い、組み込みの `/statusline` または
+`tui.status_line` に `project-name`、`current-dir`、`git-branch`、
+`context-used`、`five-hour-limit`、`weekly-limit` を設定します。リポジトリ、
+branch、context、rate limit を常時確認するという利用目的は維持します。
+
+一方、stock Codex TUI は任意 shell callback、3 行 layout、独自の色・gauge、
+statusline 実行時の副作用を受け付けません。したがって値の更新頻度と描画は
+Codex runtime の保証に従い、Claude Code 版と同じ見た目や context cache 書き込みは
+保証しません。context handoff の意図は `session-handoff` の Codex `PreCompact`
+adapter が別の lifecycle で担います。direct config の strict parse は TOML と既知 key を
+検証しますが item ID の対応可否までは検証しないため、`/statusline` picker を最終確認の
+正本とします。direct config 編集では、変更前 backup を検証してから同一 directory の一時ファイルを
+rename する atomic replace を使います。strict parse が失敗した場合は直ちに backup から同じ方式で
+atomic restore し、byte-identical な復元を確認して失敗として報告します。strict parse が成功した
+場合だけ setup 完了として扱います。これは setup Skill の instruction contract であり、hook や
+専用 setup binary が agent の file operation を強制する hard security boundary ではありません。
+
+`tests/test_statusline_codex_adapter.py` は、setup Skill が現在の組み込み item ID と
+`/statusline` 導線、direct config の backup / atomic replace / parse failure 時の atomic restore、
+strict parse の検査境界と instruction-level の保証であることを宣言し、この保証差を隠していないことを検証します。
+`scripts/smoke_codex_marketplace.sh` は pinned/latest Codex で unknown key の拒否と有効 config の
+受理を実行し、案内した parse 経路が短絡しないことを検証します。runtime
+自体の描画品質や将来の Codex UI 仕様はこのテストの保証範囲外です。全 plugin 共通の
+保証差と検証範囲は `docs/codex-compatibility.md` を参照してください。
 
 ## 表示内容
 

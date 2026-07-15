@@ -1,0 +1,152 @@
+{
+  "name": "natsuume-plugins",
+  "interface": {
+    "displayName": "Natsuume Plugins"
+  },
+  "plugins": [
+    {
+      "name": "git-guardrails",
+      "source": {
+        "source": "local",
+        "path": "./plugins/git-guardrails"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "enforce-draft-pr",
+      "source": {
+        "source": "local",
+        "path": "./plugins/enforce-draft-pr"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "auto-lint-check",
+      "source": {
+        "source": "local",
+        "path": "./plugins/auto-lint-check"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "pre-push-review",
+      "source": {
+        "source": "local",
+        "path": "./plugins/pre-push-review"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "update-default-branch",
+      "source": {
+        "source": "local",
+        "path": "./plugins/update-default-branch"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "natsuume-statusline",
+      "source": {
+        "source": "local",
+        "path": "./plugins/natsuume-statusline"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "agent-discipline",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agent-discipline"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "ui-discipline",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ui-discipline"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "natsuume-writing",
+      "source": {
+        "source": "local",
+        "path": "./plugins/natsuume-writing"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "codex-advisor",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-advisor"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "rate-limit",
+      "source": {
+        "source": "local",
+        "path": "./plugins/rate-limit"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "session-handoff",
+      "source": {
+        "source": "local",
+        "path": "./plugins/session-handoff"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "name": "ui-discipline",
+  "version": "0.3.0",
+  "description": "UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う。",
+  "author": {
+    "name": "natsuume",
+    "url": "https://github.com/natsuume"
+  },
+  "homepage": "https://github.com/natsuume/natsuume-cc-marketplace#ui-discipline",
+  "repository": "https://github.com/natsuume/natsuume-cc-marketplace",
+  "license": "MIT",
+  "keywords": [
+    "ui",
+    "frontend",
+    "discipline",
+    "system-prompt",
+    "component",
+    "accessibility",
+    "layout-shift",
+    "design-tokens",
+    "hook",
+    "skill"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "UI Discipline",
+    "shortDescription": "UI 実装の共通化・a11y・layout 規律を常時配送",
+    "longDescription": "UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う。 Codex 互換性: SessionStart/SubagentStart command hook と Skill を共有します。",
+    "developerName": "natsuume",
+    "category": "Productivity",
+    "capabilities": [
+      "Skills",
+      "Hooks"
+    ],
+    "websiteURL": "https://github.com/natsuume/natsuume-cc-marketplace",
+    "defaultPrompt": [
+      "UI discipline の規律と pattern を使ってフロントエンドを実装してください。"
+    ]
+  }
+}

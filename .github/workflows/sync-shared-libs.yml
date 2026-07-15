@@ -11,12 +11,17 @@ on:
       - "plugins/*/hooks/scripts/lib/cmd-parser.sh"
       - ".github/workflows/sync-shared-libs.yml"
 
+permissions:
+  contents: read
+
 jobs:
   cmd-parser-sync:
     name: cmd-parser.sh must be byte-identical across plugins
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # cmd-parser.sh は plugin 配布の制約 (cache 経由 install で plugin 外ファイルは
       # 解決されない、 https://docs.claude.com/en/docs/claude-code/plugins-reference) のため

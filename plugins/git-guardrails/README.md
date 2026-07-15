@@ -4,7 +4,11 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.4.2
+v0.5.0
+
+### v0.4.2 → v0.5.0 の変更点
+
+- Codex plugin manifest を追加し、3 つの default branch 保護 hook と rebase Skill を Claude Code / Codex で共有できるようにした
 
 ### v0.4.1 → v0.4.2 の変更点
 

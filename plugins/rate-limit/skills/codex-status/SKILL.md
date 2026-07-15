@@ -1,24 +1,20 @@
 ---
 name: codex-status
-description: codex (OpenAI) の rate limit (週次枠等の使用率・reset 時刻・plan 種別) を取得する。codex の残量 / 使用率を確認したいとき、codex への委任前の使用率ガード判定が必要なときに使う
-user-invocable: true
-when_to_use: |
-  ユーザーが以下のようなリクエストをした場合に使用:
-  - 「codex の rate limit を確認して」「codex の残量を教えて」
-  - 「codex の使用率 / 週次枠はどれくらい」
-  - codex への実装委任の前に使用率ガード判定が必要な場合 (codex-implementer 等)
+description: Codex (OpenAI) の rate limit (週次枠等の使用率・reset 時刻・plan 種別) を取得する。「Codex の rate limit・残量・使用率・週次枠」確認や、Codex への委任前の使用率ガード判定で使う
 ---
 
 # /rate-limit:codex-status — codex の rate limit 取得
 
 `scripts/codex-rate-limit.sh` を実行し、出力された JSON をユーザに報告する。データは `codex app-server` (stdio JSON-RPC) の `account/rateLimits/read` から取得する (公式ドキュメント化済みの RPC。`/rate-limit:status` の経路② のような非公式依存は無い)。
 
+この `SKILL.md` を含む `skills/codex-status/` の 2 階層上を `<plugin-root>` として解決する。通常の Skill 実行では hook 用の `${CLAUDE_PLUGIN_ROOT}` が設定される保証はないため、実パスを優先する。
+
 ## 1. 実行
 
 Bash ツールで以下を **foreground で 1 回**実行する (script 内部に 30 秒の応答 timeout があるため、Bash の timeout は既定で足りる)。
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/codex-rate-limit.sh"
+bash "<plugin-root>/scripts/codex-rate-limit.sh"
 ```
 
 呼び出し側で閾値判定が必要な場合 (委任可否ガード等) は `--max-used-percent <N>` (N は 0〜100 の整数) を付ける。

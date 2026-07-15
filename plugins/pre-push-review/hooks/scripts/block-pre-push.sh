@@ -608,7 +608,7 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C "${TARGET_CWD}" status\` で変更を確認し、 commit してから \`/pre-push-review:review\` slash command で 3 subagent (code-reviewer + codex-reviewer + security-reviewer) を再走させて push してください。
+\`git -C "${TARGET_CWD}" status\` で変更を確認して commit し、Claude Code では \`/pre-push-review:review\`、Codex では \`\$pre-push-review:review-codex\` Skill で 3 review を再走させてから push してください。
 EOF
 )
   deny "$REASON"
@@ -708,23 +708,25 @@ target: ${TARGET_CWD}
 ブランチ: ${BRANCH} (基準: origin/${BASE})
 
 レビュー状態 (下記 3 つすべてが「✓ 最新の差分でレビュー済み」 になると push が許可されます):
-  code review (pre-push-review:code-reviewer subagent)        : $CODE_REVIEWED_STATUS
-  codex review (pre-push-review:codex-reviewer subagent 経由) : $CODEX_STATUS
-  security review (pre-push-review:security-reviewer subagent): $SECURITY_STATUS
+  correctness review : $CODE_REVIEWED_STATUS
+  independent review : $CODEX_STATUS
+  security review    : $SECURITY_STATUS
 
-**\`/pre-push-review:review\` slash command を実行してください**。 このコマンドは 3 レビュー
-を **同じアシスタントメッセージで並列に** 3 subagent (\`pre-push-review:code-reviewer\` +
-\`pre-push-review:codex-reviewer\` + \`pre-push-review:security-reviewer\`) として起動する
-確定的フローです (詳細は \`commands/review.md\`)。
+実行 surface に応じて、次の正規フローを使ってください:
+  - Claude Code: **\`/pre-push-review:review\`** (3 namespaced custom agent を並列起動)
+  - Codex: **\`\$pre-push-review:review-codex\`** Skill (3 project-scoped named read-only agent を並列起動)
+    初回または agent template 更新後は先に **\`\$pre-push-review:setup-pre-push-agents\`** を実行
 
-修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 \`/pre-push-review:review\` を
-実行して再走させ、 全マーカーが ✓ になったら \`git push\` を再試行してください。
+修正後に branch 差分が変わるとマーカーは自動失効します。同じ正規フローで再走させ、
+全マーカーが ✓ になったら \`git push\` を再試行してください。
 
-slash command が動かない環境用の手動 fallback (3 subagent を順次または並列で起動。 同じ
-アシスタントメッセージで並列発出するのが理想だが、 順次でも push gate 通過は保証される):
+Claude Code で slash command が動かない場合のみ、次の手動 fallback を使えます:
   - Agent / Task tool で subagent_type="pre-push-review:code-reviewer" を起動
   - Agent / Task tool で subagent_type="pre-push-review:security-reviewer" を起動
   - Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動
+
+Codex の marker は named agent の SubagentStop hook が自動更新します。helper を直接呼ばず、
+必ず \`\$pre-push-review:review-codex\` Skill から実行してください。
 EOF
 )
 

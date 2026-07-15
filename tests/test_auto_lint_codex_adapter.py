@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+LIB = ROOT / "plugins" / "auto-lint-check" / "hooks" / "scripts" / "lib"
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot import {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+paths_module = load_module("extract_edit_paths", LIB / "extract-edit-paths.py")
+DETECT_SCRIPT = LIB / "detect-new-ignores.py"
+BLOCK_SCRIPT = LIB.parent / "block-ignore-lint-comment.sh"
+
+
+class EditPathAdapterTest(unittest.TestCase):
+    def test_claude_file_path_is_preserved(self) -> None:
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": "src/a.py"}}
+        self.assertEqual(
+            paths_module.extract_paths(payload),
+            [os.path.abspath("src/a.py")],
+        )
+
+    def test_apply_patch_extracts_add_update_and_move_destination(self) -> None:
+        payload = {
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": """*** Begin Patch
+*** Update File: src/old.py
+@@
+-old
++new
+*** Move to: src/new.py
+*** Add File: src/added file.ts
++export const value = 1;
+*** Delete File: src/deleted.py
+*** End Patch"""
+            },
+        }
+        self.assertEqual(
+            paths_module.extract_paths(payload),
+            [os.path.abspath("src/new.py"), os.path.abspath("src/added file.ts")],
+        )
+
+    def test_apply_patch_deduplicates_paths(self) -> None:
+        payload = {
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": """*** Begin Patch
+*** Update File: src/a.py
+@@
+-a
++b
+*** Update File: src/a.py
+@@
+-b
++c
+*** End Patch"""
+            },
+        }
+        self.assertEqual(paths_module.extract_paths(payload), [os.path.abspath("src/a.py")])
+
+
+class IgnoreAdapterTest(unittest.TestCase):
+    def run_detector(self, payload: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [sys.executable, str(DETECT_SCRIPT)],
+            input=json.dumps(payload).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def test_apply_patch_new_ignore_is_denied(self) -> None:
+        result = self.run_detector(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": """*** Begin Patch
+*** Update File: app.py
+@@
+-value = call()
++value = call()  # noqa: F401
+*** End Patch"""
+                },
+            }
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"Ruff", result.stdout)
+
+    def test_added_source_line_starting_with_plus_is_still_inspected(self) -> None:
+        result = self.run_detector(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": """*** Begin Patch
+*** Add File: app.js
++++value; // eslint-disable-line no-undef
+*** End Patch"""
+                },
+            }
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"ESLint", result.stdout)
+
+    def test_apply_patch_removing_ignore_is_allowed(self) -> None:
+        result = self.run_detector(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": """*** Begin Patch
+*** Update File: app.py
+@@
+-value = call()  # noqa: F401
++value = call()
+*** End Patch"""
+                },
+            }
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_apply_patch_moving_same_ignore_is_allowed(self) -> None:
+        result = self.run_detector(
+            {
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "command": """*** Begin Patch
+*** Update File: app.py
+@@
+-value = call()  # noqa: F401
++value = call()  # noqa: F401
+*** End Patch"""
+                },
+            }
+        )
+        self.assertEqual(result.returncode, 0)
+
+    def test_malformed_payload_is_fail_open_signal(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(DETECT_SCRIPT)],
+            input=b"not-json",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+
+    @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+    def test_shell_hook_emits_codex_compatible_deny_json(self) -> None:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": """*** Begin Patch
+*** Update File: app.py
+@@
+-value = call()
++value = call()  # noqa: F401
+*** End Patch"""
+            },
+        }
+        result = subprocess.run(
+            ["bash", str(BLOCK_SCRIPT)],
+            input=json.dumps(payload).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        response = json.loads(result.stdout)
+        hook_output = response["hookSpecificOutput"]
+        self.assertEqual(hook_output["hookEventName"], "PreToolUse")
+        self.assertEqual(hook_output["permissionDecision"], "deny")
+
+
+if __name__ == "__main__":
+    unittest.main()

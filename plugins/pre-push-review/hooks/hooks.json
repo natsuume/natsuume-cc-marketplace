@@ -1,5 +1,5 @@
 {
-  "description": "pre-push-review の配送経路: PreToolUse (Bash) で未レビューの git push を deny (block-pre-push.sh)、codex review wrapper の background 起動を deny (block-bg-codex-wrapper.sh)。PostToolUse (*) で 3 レビュー subagent の完了を検知してレビュー済みマーカーを更新 (auto-mark.sh)。マーカー仕様・設計判断の詳細は plugin README を参照。",
+  "description": "pre-push-review の配送経路: PreToolUse (Bash) で未レビューの git push を deny (block-pre-push.sh)、codex review wrapper の background 起動を deny (block-bg-codex-wrapper.sh)。Claude Code は PostToolUse (*) の auto-mark.sh、Codex は SubagentStop の codex-auto-mark.sh で namespaced/named review agent の完了を検証し、レビュー済みマーカーを更新する。マーカー仕様・保証差は plugin README を参照。",
   "hooks": {
     "PreToolUse": [
       {
@@ -23,6 +23,17 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^pre-push-(correctness|independent|security)-reviewer$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/codex-auto-mark.sh\""
           }
         ]
       }

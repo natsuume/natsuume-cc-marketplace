@@ -1,5 +1,6 @@
 {
   "name": "natsuume-writing",
-  "version": "0.4.2",
+  "version": "0.5.0",
+  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。"
 }

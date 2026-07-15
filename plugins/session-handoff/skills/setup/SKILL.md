@@ -1,14 +1,90 @@
 ---
 name: setup
-description: session-handoff plugin の context cache producer (natsuume-statusline または安定 launcher) を ~/.claude/settings.json に構成する
-user-invocable: true
-when_to_use: |
-  ユーザーが以下のようなリクエストをした場合に使用:
-  - 「session-handoff の setup をして」「/session-handoff:setup」
-  - 「handoff の cache 連携を設定して」「context cache の producer を用意して」
+description: session-handoff の producer を runtime 別に確認・構成する。Claude Code の context cache 連携、Codex の provider/privacy 明示承認付き PreCompact summary opt-in、handoff setup・compaction timing の確認で使う
 ---
 
-# /session-handoff:setup — cache producer の構成
+# session-handoff setup — runtime 別 producer の構成
+
+## Codex runtime
+
+Codex では statusline cache を構成しない。PreCompact adapter は **privacy-safe default として無効**
+であり、repository ごとの git-dir に安全な opt-in marker がある場合だけ次の経路を有効にする。
+
+1. `PreCompact(auto|manual)` の `save-codex-handoff.sh` が transcript 末尾を read-only・ephemeral・
+   hooks/user-config/rules 無効の別 Codex process に渡して Markdown handoff を atomic 保存する
+2. 直後の `SessionStart(source=compact|resume)` は同じ session_id の Codex pending だけを、
+   `clear|startup` は既存 pending 全般を `inject-pending-handoff.sh` で at-most-once 注入する
+
+### 1. Plugin root と対象 repository を確定する
+
+この `SKILL.md` の実パスから `skills/setup/` の 2 階層上を `<plugin-root>` とする。対象 repository は
+現在の作業 repository とし、曖昧なら変更せず確認する。Claude 用の `setup-wrapper.sh`、
+`~/.claude/settings.json`、statusline launcher は操作しない。
+
+### 2. 必ず read-only inspect から始める
+
+```bash
+bash "<plugin-root>/scripts/setup-codex-summary.sh" inspect --repo "<repo>"
+```
+
+`target`、`state`、`protocol`、`exact-content`、`privacy-boundary`、action ごとの plan token を利用者へ
+そのまま提示する。state は `disabled` / `enabled` / `different-*` / `unsafe-*` のいずれかである。
+`unsafe-*` (symlink、非通常ファイル、非 owner directory/file) は自動修復せず停止する。inspect は
+marker や directory を作成・変更しない。
+
+### 3. Provider/privacy 境界を説明して明示承認を得る
+
+nested process は再帰・project config/MCP の影響を避けるため `codex exec --ignore-user-config` を使う。
+そのため親 session が Azure、Bedrock、local/custom provider、別 account/data-residency 設定で動いて
+いても、transcript excerpt が nested Codex の **default provider/account** へ送信される可能性がある。
+追加 usage、最大180秒の待ち時間、transcript tail、LLM summary の品質差も説明する。
+
+enable を希望する場合は、inspect が示した repository 固有 target に exact v1 marker (mode 0600) を
+作成してよいか、上記 provider 越境を含めて明示的な承認を求める。曖昧な返答、一般的な setup 依頼、
+過去の別 repository への承認を同意として扱わない。承認前に marker を直接作ったり enable を実行
+してはならない。
+
+### 4. 承認した action token だけを適用する
+
+enable の承認後:
+
+```bash
+bash "<plugin-root>/scripts/setup-codex-summary.sh" enable \
+  --repo "<repo>" \
+  --plan-token "<approved-enable-plan-token>"
+```
+
+disable の依頼時も inspect → target/state 提示 → marker 削除の明示承認を経て、次を実行する。
+
+```bash
+bash "<plugin-root>/scripts/setup-codex-summary.sh" disable \
+  --repo "<repo>" \
+  --plan-token "<approved-disable-plan-token>"
+```
+
+token mismatch は inspect 後に marker state が変わったことを示す。再 inspect、再提示、再承認を行い、
+古い token を再利用しない。helper は symlink / 非通常 / 非 owner marker を変更せず、enable は同じ
+directory の mode 0600 temp file から atomic rename する。marker を手作業で代替しない。
+
+### 5. Hook trust と残る保証差を報告する
+
+enable 後は `/hooks` で本 plugin の PreCompact / SessionStart hook が表示され current hash が trust
+済みか確認するよう案内する。plugin hook は trust されるまで skip される。disable 後も既存 pending
+の SessionStart 注入は残るが、新しい nested summary は生成されない。
+
+Codex hook input から現在の context 使用率は取得できないため、Claude Code と同じ厳密な60% trigger
+ではなく compaction 直前に発火する。`model_auto_compact_token_limit` は auto compaction を absolute
+token 数で早める任意設定だが、次の理由から本 Skill は自動設定しない。
+
+- handoff だけでなく session 全体の compaction 時期を変える
+- 60% という割合ではなく absolute token 数であり、model の context window 切替へ自動追随しない
+- user / project のどの `.codex/config.toml` layer を変更するかで影響範囲が変わる
+
+利用者が scope、具体的 token 値、compaction への影響を理解したうえで明示的に変更を依頼した場合
+だけ、対象 config をバックアップしてから設定する。値を推測したり「60%相当」と称して自動記入
+してはならない。
+
+## Claude Code runtime
 
 session-handoff plugin の hook (`detect-context-threshold.sh`) は、natsuume-statusline (v0.6.0+)
 が書き出す context 使用率キャッシュ (`${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<session_id>.json`)

@@ -1,12 +1,6 @@
 ---
 name: issue-start
-description: issue に着手する・issue の実装を始める・issue を pick up する際の手順 (pick-up 分岐・軽微判定・TDD 2 段階・closing keyword) を提供する
-user-invocable: true
-when_to_use: |
-  ユーザーが以下のようなリクエストをした場合に使用:
-  - 「issue に着手する」
-  - 「issue の実装を始める」
-  - 「issue を pick up する」
+description: 「issue に着手する」「issue の実装を始める」「issue を pick up する」際の手順 (pick-up 分岐・軽微判定・TDD 2 段階・closing keyword) を提供する
 ---
 
 # issue-start

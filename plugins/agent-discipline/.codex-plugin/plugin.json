@@ -1,0 +1,45 @@
+{
+  "name": "agent-discipline",
+  "version": "0.17.0",
+  "description": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。",
+  "author": {
+    "name": "natsuume",
+    "url": "https://github.com/natsuume"
+  },
+  "homepage": "https://github.com/natsuume/natsuume-cc-marketplace#agent-discipline",
+  "repository": "https://github.com/natsuume/natsuume-cc-marketplace",
+  "license": "MIT",
+  "keywords": [
+    "system-prompt",
+    "discipline",
+    "auto",
+    "issue-driven",
+    "bash",
+    "decompose",
+    "askuserquestion",
+    "permission-mode",
+    "hook",
+    "guardrail",
+    "exclusive-claim",
+    "race-condition",
+    "semantic-validation",
+    "pre-tool-use",
+    "agent-hook"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Discipline",
+    "shortDescription": "作業規律・issue 駆動・分業規律を hook で配送",
+    "longDescription": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。 Codex 互換性: command hook と Skill を共有し、Codex では repo/worktree scoped の provider/privacy opt-in 後だけ Claude の inline semantic agent prompt を隔離した read-only codex exec で評価します。Auto follow-through は検出不能な permission mode へ推測 mapping せず、明示 Skill で意図を代替します。",
+    "developerName": "natsuume",
+    "category": "Productivity",
+    "capabilities": [
+      "Skills",
+      "Hooks"
+    ],
+    "websiteURL": "https://github.com/natsuume/natsuume-cc-marketplace",
+    "defaultPrompt": [
+      "agent-discipline の作業規律に従ってこのタスクを進めてください。"
+    ]
+  }
+}

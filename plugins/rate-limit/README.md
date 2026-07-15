@@ -4,7 +4,40 @@ Claude (エージェント自身) が、セッション内でサブスクリプ�
 
 ## バージョン
 
-v0.2.0
+v0.3.0
+
+### v0.2.0 → v0.3.0 の変更点
+
+- Codex plugin manifest を追加し、`codex-status` Skill の app-server RPC を Codex marketplace からも利用可能にした
+- `status` / `codex-status` Skill の script path を SKILL.md の実パスから解決する形式にし、hook 専用環境変数への依存を除いた。Claude statusLine wrapper は互換性差分として明示した
+- `setup-codex` の direct config 編集を backup 後の atomic replace と strict parse 失敗時の
+  atomic restore に限定し、parse 成功時だけ完了を報告する transaction 契約を追加した
+
+## Codex での代替と保証差
+
+Codex では `$rate-limit:setup-codex` で組み込み status line の `five-hour-limit` と
+`weekly-limit` を有効にし、詳細は `/usage` または `$rate-limit:codex-status` で確認します。
+これにより「limit を常時把握し、必要時に reset 時刻や plan を確認する」という意図を
+Codex native surface へ分割して実現します。
+
+stock Codex TUI は任意 statusline wrapper を実行しないため、Claude と Codex の cache
+合成、独自 gauge、複数行 renderer、描画時の副作用は保証しません。footer の値・更新頻度・
+描画は Codex runtime が所有し、`$rate-limit:codex-status` の詳細取得はローカル認証と app-server
+RPC の成功に依存します。失敗時に plugin が値を推測することはありません。
+direct config の strict parse は TOML と既知 key だけを検査し、item ID の対応可否は
+`/statusline` picker で最終確認します。direct config 編集は、検証済み backup の作成後に
+同一 directory の一時ファイルから atomic replace し、strict parse 失敗時は直ちに backup から
+atomic restore して byte-identical な復元を確認する transaction とします。strict parse 成功時だけ
+setup 完了を報告します。これは setup Skill の instruction contract であり、hook や専用 setup
+binary が agent の file operation を強制する hard security boundary ではありません。
+
+`tests/test_statusline_codex_adapter.py` は組み込み limit item、`/usage`、
+`$rate-limit:codex-status` への導線、direct config の backup / atomic replace / parse failure 時の
+atomic restore、strict parse の検査境界、instruction-level の保証差の明記を検査し、`scripts/smoke_codex_marketplace.sh`
+は両 Skill を含む install surface に加え、pinned/latest Codex の strict config parser が
+unknown key を拒否して有効 config を受理することを検証します。実アカウントの残量や Codex service の
+可用性は CI の保証範囲外です。全 plugin 共通の保証差と検証範囲は
+`docs/codex-compatibility.md` を参照してください。
 
 ## 取得経路
 

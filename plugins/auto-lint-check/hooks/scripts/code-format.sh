@@ -1,7 +1,7 @@
 #!/bin/bash
 # code-format.sh
 #
-# Edit/Write/MultiEdit 実行後に対応する formatter / linter --fix を実行する。
+# Edit/Write/MultiEdit/apply_patch 実行後に対応する formatter / linter --fix を実行する。
 # 失敗しても hook 全体は exit 0 で終わる。
 #
 # - JS/TS: eslint --fix → prettier --write
@@ -14,12 +14,11 @@ source "$SCRIPT_DIR/lib/common.sh"
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
-
-INPUT=$(cat)
-FILE_PATH=$(extract_file_path "$INPUT") || exit 0
-if [ -z "$FILE_PATH" ] || [ ! -f "$FILE_PATH" ]; then
+if ! command -v python3 >/dev/null 2>&1; then
   exit 0
 fi
+
+INPUT=$(cat)
 
 # 配列展開で起動するため、空白を含むパスでも安全。
 run_in() {
@@ -28,21 +27,39 @@ run_in() {
   (cd "$dir" && "$@" >/dev/null 2>&1) || true
 }
 
-if is_js_like "$FILE_PATH"; then
-  ROOT_ESLINT=$(find_config_root "$FILE_PATH" eslint)
-  if [ -n "$ROOT_ESLINT" ] && resolve_eslint "$ROOT_ESLINT"; then
-    run_in "$ROOT_ESLINT" "${ESLINT_CMD[@]}" --fix "$FILE_PATH"
+format_file() {
+  local file_path="$1"
+  local root_eslint root_prettier root_ruff
+
+  if [ -z "$file_path" ] || [ ! -f "$file_path" ]; then
+    return 0
   fi
-  ROOT_PRETTIER=$(find_config_root "$FILE_PATH" prettier)
-  if [ -n "$ROOT_PRETTIER" ] && resolve_prettier "$ROOT_PRETTIER"; then
-    run_in "$ROOT_PRETTIER" "${PRETTIER_CMD[@]}" --write "$FILE_PATH"
+
+  if is_js_like "$file_path"; then
+    root_eslint=$(find_config_root "$file_path" eslint)
+    if [ -n "$root_eslint" ] && resolve_eslint "$root_eslint"; then
+      run_in "$root_eslint" "${ESLINT_CMD[@]}" --fix "$file_path"
+    fi
+    root_prettier=$(find_config_root "$file_path" prettier)
+    if [ -n "$root_prettier" ] && resolve_prettier "$root_prettier"; then
+      run_in "$root_prettier" "${PRETTIER_CMD[@]}" --write "$file_path"
+    fi
+  elif is_python "$file_path"; then
+    root_ruff=$(find_config_root "$file_path" ruff)
+    if [ -n "$root_ruff" ] && resolve_ruff; then
+      run_in "$root_ruff" "${RUFF_CMD[@]}" check --fix "$file_path"
+      run_in "$root_ruff" "${RUFF_CMD[@]}" format "$file_path"
+    fi
   fi
-elif is_python "$FILE_PATH"; then
-  ROOT_RUFF=$(find_config_root "$FILE_PATH" ruff)
-  if [ -n "$ROOT_RUFF" ] && resolve_ruff; then
-    run_in "$ROOT_RUFF" "${RUFF_CMD[@]}" check --fix "$FILE_PATH"
-    run_in "$ROOT_RUFF" "${RUFF_CMD[@]}" format "$FILE_PATH"
-  fi
-fi
+}
+
+# Claude は file_path を 1 件、Codex は apply_patch command に複数 path を持つ。
+# NUL 区切りに正規化して、空白や改行を含む path でも 1 件ずつ安全に処理する。
+while IFS= read -r -d '' FILE_PATH; do
+  format_file "$FILE_PATH"
+done < <(
+  printf '%s' "$INPUT" \
+    | python3 "$AUTO_LINT_CHECK_LIB_DIR/extract-edit-paths.py" 2>/dev/null
+)
 
 exit 0
