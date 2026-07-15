@@ -4,6 +4,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -54,13 +55,19 @@ class MarketplaceSyncTest(unittest.TestCase):
             encoding="utf-8",
         )
         config = {
-            "schemaVersion": 3,
+            "schemaVersion": 5,
             "publisher": {
                 "name": "test-owner",
                 "url": "https://example.test/owner",
             },
             "plugins": {
                 name: {
+                    "distribution": {"status": "available"},
+                    "version": "2.0.0",
+                    "versioning": {
+                        "claudeOnlyPaths": [],
+                        "codexOnlyPaths": [],
+                    },
                     "compatibility": {
                         "components": [],
                         "sourceTreeDigest": "0" * 64,
@@ -100,10 +107,13 @@ class MarketplaceSyncTest(unittest.TestCase):
             script.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
         return marketplace_path, config_path
 
-    def test_plugin_order_matches_claude_marketplace(self) -> None:
+    def test_plugin_order_matches_claude_marketplace_and_codex_filters_exclusions(self) -> None:
         expected = [entry["name"] for entry in self.state.marketplace["plugins"]]
         self.assertEqual([plugin.name for plugin in self.state.plugins], expected)
         self.assertEqual(len(expected), 12)
+        codex_plugins = json.loads(sync.render_codex_marketplace(self.state))["plugins"]
+        self.assertEqual(len(codex_plugins), 11)
+        self.assertNotIn("codex-advisor", [entry["name"] for entry in codex_plugins])
 
     def test_generated_files_are_current(self) -> None:
         for path, expected in sync.expected_files(self.state).items():
@@ -112,7 +122,13 @@ class MarketplaceSyncTest(unittest.TestCase):
 
     def test_codex_marketplace_has_required_policy(self) -> None:
         payload = json.loads(sync.render_codex_marketplace(self.state))
-        for source, entry in zip(self.state.marketplace["plugins"], payload["plugins"]):
+        distributed = [
+            plugin
+            for plugin in self.state.plugins
+            if plugin.port["distribution"]["status"] == "available"
+        ]
+        for plugin, entry in zip(distributed, payload["plugins"]):
+            source = plugin.marketplace
             self.assertEqual(entry["name"], source["name"])
             self.assertEqual(
                 entry["source"], {"source": "local", "path": source["source"]}
@@ -123,16 +139,33 @@ class MarketplaceSyncTest(unittest.TestCase):
             )
             self.assertEqual(entry["category"], "Productivity")
 
-    def test_codex_manifests_share_canonical_metadata(self) -> None:
+    def test_codex_manifests_share_metadata_but_use_independent_versions(self) -> None:
         for plugin in self.state.plugins:
+            if plugin.port["distribution"]["status"] == "excluded":
+                with self.assertRaisesRegex(sync.SyncError, "no Codex manifest"):
+                    sync.render_codex_manifest(self.state, plugin)
+                self.assertNotIn(
+                    plugin.root / ".codex-plugin" / "plugin.json",
+                    sync.expected_files(self.state),
+                )
+                continue
             manifest = json.loads(sync.render_codex_manifest(self.state, plugin))
             self.assertEqual(manifest["name"], plugin.manifest["name"])
-            self.assertEqual(manifest["version"], plugin.manifest["version"])
+            self.assertEqual(manifest["version"], plugin.port["version"])
             self.assertEqual(manifest["description"], plugin.manifest["description"])
             self.assertEqual(manifest["keywords"], plugin.marketplace["keywords"])
-            # Default hooks/hooks.json discovery avoids the current validator/runtime
-            # disagreement about a manifest-level hooks field.
-            self.assertNotIn("hooks", manifest)
+            codex_manifest = plugin.port.get("manifest")
+            if codex_manifest is None:
+                self.assertNotIn("hooks", manifest)
+            else:
+                self.assertEqual(manifest["hooks"], codex_manifest["hooks"])
+
+        plugin = self.state.plugins[0]
+        divergent_port = {**plugin.port, "version": "9.8.7"}
+        divergent = replace(plugin, port=divergent_port)
+        manifest = json.loads(sync.render_codex_manifest(self.state, divergent))
+        self.assertEqual(manifest["version"], "9.8.7")
+        self.assertNotEqual(manifest["version"], plugin.manifest["version"])
 
     def test_agents_is_byte_identical_to_claude_rules(self) -> None:
         self.assertEqual(
@@ -170,6 +203,21 @@ class MarketplaceSyncTest(unittest.TestCase):
 
         config = fresh()
         first_plugin = next(iter(config["plugins"].values()))
+        first_plugin["distribution"]["futureDistributionField"] = True
+        mutations.append(("distribution", config))
+
+        config = fresh()
+        first_plugin = next(iter(config["plugins"].values()))
+        first_plugin["versioning"]["futureVersioningField"] = []
+        mutations.append(("versioning", config))
+
+        config = fresh()
+        first_plugin = next(iter(config["plugins"].values()))
+        first_plugin["manifest"] = {"futureManifestField": True}
+        mutations.append(("manifest", config))
+
+        config = fresh()
+        first_plugin = next(iter(config["plugins"].values()))
         first_plugin["compatibility"]["futureCompatibilityField"] = True
         mutations.append(("compatibility", config))
 
@@ -197,6 +245,60 @@ class MarketplaceSyncTest(unittest.TestCase):
             ):
                 sync._validate_port_config_known_fields(mutated)
 
+    def test_codex_versions_and_runtime_scopes_are_required_and_strict(self) -> None:
+        config = json.loads(json.dumps(self.state.config))
+        first_name = next(iter(config["plugins"]))
+
+        for invalid in (None, "1.2", "v1.2.3", "01.2.3"):
+            with self.subTest(version=invalid):
+                candidate = json.loads(json.dumps(config))
+                if invalid is None:
+                    candidate["plugins"][first_name].pop("version")
+                else:
+                    candidate["plugins"][first_name]["version"] = invalid
+                with self.assertRaisesRegex(sync.SyncError, "strict semver"):
+                    sync._validate_port_config_known_fields(candidate)
+
+        for path in ("/absolute", "./relative", "../escape", "README.md"):
+            with self.subTest(path=path):
+                candidate = json.loads(json.dumps(config))
+                candidate["plugins"][first_name]["versioning"][
+                    "codexOnlyPaths"
+                ] = [path]
+                with self.assertRaisesRegex(sync.SyncError, "unsafe or reserved"):
+                    sync._validate_port_config_known_fields(candidate)
+
+        candidate = json.loads(json.dumps(config))
+        candidate["plugins"][first_name].pop("versioning")
+        with self.assertRaisesRegex(sync.SyncError, "versioning must be an object"):
+            sync._validate_port_config_known_fields(candidate)
+
+        candidate = json.loads(json.dumps(config))
+        candidate["plugins"][first_name]["versioning"] = {
+            "claudeOnlyPaths": ["hooks/"],
+            "codexOnlyPaths": ["hooks/codex-hooks.json"],
+        }
+        with self.assertRaisesRegex(sync.SyncError, "both runtimes"):
+            sync._validate_port_config_known_fields(candidate)
+
+        candidate = json.loads(json.dumps(config))
+        candidate["plugins"][first_name].pop("distribution")
+        with self.assertRaisesRegex(sync.SyncError, "distribution must be an object"):
+            sync._validate_port_config_known_fields(candidate)
+
+        candidate = json.loads(json.dumps(config))
+        candidate["plugins"][first_name]["distribution"] = {"status": "excluded"}
+        with self.assertRaisesRegex(sync.SyncError, "reason must be a non-empty"):
+            sync._validate_port_config_known_fields(candidate)
+
+        candidate = json.loads(json.dumps(config))
+        candidate["plugins"][first_name]["distribution"] = {
+            "status": "available",
+            "reason": "not allowed",
+        }
+        with self.assertRaisesRegex(sync.SyncError, "only valid"):
+            sync._validate_port_config_known_fields(candidate)
+
     def test_declared_verification_paths_are_executed_by_ci(self) -> None:
         for plugin in self.state.plugins:
             for verification in plugin.port["compatibility"]["verificationTests"]:
@@ -223,7 +325,7 @@ class MarketplaceSyncTest(unittest.TestCase):
             )
 
     def test_component_registry_pins_current_claude_source_digests(self) -> None:
-        self.assertEqual(3, self.state.config["schemaVersion"])
+        self.assertEqual(5, self.state.config["schemaVersion"])
         for plugin in self.state.plugins:
             compatibility = plugin.port["compatibility"]
             self.assertEqual(
@@ -518,7 +620,7 @@ class MarketplaceSyncTest(unittest.TestCase):
             config_path.parent.mkdir(parents=True)
             marketplace_path.write_text('{"plugins": []}\n', encoding="utf-8")
             config_path.write_text(
-                '{"schemaVersion": 4, "plugins": {}}\n', encoding="utf-8"
+                '{"schemaVersion": 6, "plugins": {}}\n', encoding="utf-8"
             )
             with (
                 mock.patch.object(sync, "ROOT", root),
@@ -528,7 +630,7 @@ class MarketplaceSyncTest(unittest.TestCase):
                 with self.assertRaises(sync.SyncError):
                     sync.refresh_source_digests(["anything"])
             self.assertEqual(
-                4,
+                6,
                 json.loads(config_path.read_text(encoding="utf-8"))["schemaVersion"],
             )
 
@@ -540,7 +642,7 @@ class MarketplaceSyncTest(unittest.TestCase):
             marketplace_path.parent.mkdir(parents=True)
             config_path.parent.mkdir(parents=True)
             marketplace_path.write_text('{"plugins": []}\n', encoding="utf-8")
-            original = b'{"schemaVersion": 3.0, "plugins": {}}\n'
+            original = b'{"schemaVersion": 5.0, "plugins": {}}\n'
             config_path.write_bytes(original)
             with (
                 mock.patch.object(sync, "ROOT", root),
@@ -574,13 +676,19 @@ class MarketplaceSyncTest(unittest.TestCase):
                 encoding="utf-8",
             )
             config = {
-                "schemaVersion": 3,
+                "schemaVersion": 5,
                 "publisher": {
                     "name": "test-owner",
                     "url": "https://example.test/owner",
                 },
                 "plugins": {
                     name: {
+                        "distribution": {"status": "available"},
+                        "version": "1.0.0",
+                        "versioning": {
+                            "claudeOnlyPaths": [],
+                            "codexOnlyPaths": [],
+                        },
                         "compatibility": {
                             "components": [],
                             "sourceTreeDigest": "0" * 64,
@@ -826,6 +934,9 @@ class MarketplaceSyncTest(unittest.TestCase):
 
     def test_compatibility_doc_explains_guarantees_and_tests(self) -> None:
         rendered = sync.render_compatibility_doc(self.state).decode("utf-8")
+        self.assertIn("| Plugin | Claude Code | Codex |", rendered)
+        self.assertIn("plugin version は独立", rendered)
+        self.assertIn("| `codex-advisor` | 0.3.0 | — | 対象外:", rendered)
         self.assertIn(
             "## 保証差と検証テスト (Guarantee differences and verification tests)",
             rendered,
