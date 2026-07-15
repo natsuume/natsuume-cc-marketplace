@@ -87,8 +87,11 @@
 #   5. poll ループ (0.5 秒 × 60 回 = 最大 30 秒):「id:2 応答 or RPC error の出現 →
 #      `kill -0` でサーバ生存確認」の順で判定する。サーバ死亡検出時は out をもう一度
 #      確認してから失敗分類する (死亡直前に応答を flush している可能性があるため)。
-#      書きかけの JSON 行を parse failure と誤認しないよう、poll 中の jq 失敗は再試行に
-#      倒し、期限到達・サーバ死亡時のみ最終分類する
+#      書きかけの行と malformed 行は「行の完成 (改行)」を境界に区別する: 改行で完結した
+#      行が JSON として parse できない場合は JSONL プロトコル違反として即「JSON 解釈
+#      不能」で失敗する (30 秒待たない)。改行の無い末尾断片は書きかけとして poll を
+#      継続し、polling 終了時 (サーバ死亡・期限到達) の最終走査でのみ完成行と同じ基準で
+#      検証する (codex review 指摘 + rescue 壁打ちで確定)
 #   6. 取得後の shutdown も上限付きにする: FD close → grace → TERM → grace → KILL →
 #      `wait` で reap (単純な `wait` は無期限停止点になるため)
 #
@@ -271,44 +274,80 @@ send_rpc '{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read"}' || fail "
 RESULT_JSON=""
 ERROR_MSG=""
 
-# out を走査する。戻り値: 0 = id:2 の result を検出 (RESULT_JSON に格納) /
-# 1 = 該当する応答なし (poll 継続) / 2 = 即失敗すべき RPC error を検出 (ERROR_MSG に格納)。
+# 完成した JSONL 1 行を検証・分類する。戻り値: 0 = id:2 の result を検出 (RESULT_JSON に
+# 格納) / 1 = この行は対象外 (通知・対象外 id 等、走査継続) / 2 = 即失敗すべき RPC error を
+# 検出 (ERROR_MSG に格納) / 3 = JSON として parse できない (JSONL プロトコル違反)。
+inspect_complete_line() {
+  local line="$1" id err_msg result_json
+
+  [ -n "$line" ] || return 1
+
+  # 完成行の parse 判定には `jq empty` を使う (`jq -e '.'` は valid JSON の false / null
+  # でも非ゼロになるため使わない)。app-server の stdout は JSONL 契約であり、完成した
+  # 非 JSON 行はプロトコル違反 = 「応答が JSON として解釈できない」に分類する。
+  if ! printf '%s' "$line" | jq empty >/dev/null 2>&1; then
+    return 3
+  fi
+
+  id=$(printf '%s' "$line" | jq -r 'if type == "object" then (.id | if . == null then "null" else tostring end) else empty end' 2>/dev/null)
+  [ -n "$id" ] || return 1
+
+  if [ "$id" = "2" ]; then
+    err_msg=$(printf '%s' "$line" | jq -r '.error.message // empty' 2>/dev/null)
+    if [ -n "$err_msg" ]; then
+      ERROR_MSG="account/rateLimits/read が RPC エラーを返しました: $err_msg"
+      return 2
+    fi
+    result_json=$(printf '%s' "$line" | jq -c '.result // empty' 2>/dev/null)
+    if [ -z "$result_json" ] || [ "$result_json" = "null" ]; then
+      ERROR_MSG="account/rateLimits/read の応答に result も error も含まれていません。"
+      return 2
+    fi
+    RESULT_JSON="$result_json"
+    return 0
+  fi
+
+  if [ "$id" = "1" ] || [ "$id" = "null" ]; then
+    err_msg=$(printf '%s' "$line" | jq -r '.error.message // empty' 2>/dev/null)
+    if [ -n "$err_msg" ]; then
+      if [ "$id" = "1" ]; then
+        ERROR_MSG="initialize が RPC エラーを返しました: $err_msg"
+      else
+        ERROR_MSG="RPC エラー応答を受信しました (id: null): $err_msg"
+      fi
+      return 2
+    fi
+  fi
+
+  return 1
+}
+
+# out を走査する。引数: $1 = "final" なら末尾の改行なし断片も完成行として検証する
+# (polling 終了時の最終走査。通常 poll では書きかけとして無視し、これ以上完成しない
+# 局面でのみ分類する — codex review 指摘 + rescue 壁打ちで確定)。
+# 戻り値: 0 = id:2 の result を検出 / 1 = 該当する応答なし (poll 継続) /
+# 2 = 即失敗すべき RPC error を検出 / 3 = JSONL プロトコル違反 (非 JSON 行)。
 check_out() {
-  local line id err_msg result_json
+  local final_scan="${1:-}" line rc
 
-  while IFS= read -r line || [ -n "$line" ]; do
-    [ -n "$line" ] || continue
-
-    id=$(printf '%s' "$line" | jq -r 'if type == "object" then (.id | if . == null then "null" else tostring end) else empty end' 2>/dev/null)
-    [ -n "$id" ] || continue
-
-    if [ "$id" = "2" ]; then
-      err_msg=$(printf '%s' "$line" | jq -r '.error.message // empty' 2>/dev/null)
-      if [ -n "$err_msg" ]; then
-        ERROR_MSG="account/rateLimits/read が RPC エラーを返しました: $err_msg"
-        return 2
-      fi
-      result_json=$(printf '%s' "$line" | jq -c '.result // empty' 2>/dev/null)
-      if [ -z "$result_json" ] || [ "$result_json" = "null" ]; then
-        ERROR_MSG="account/rateLimits/read の応答に result も error も含まれていません。"
-        return 2
-      fi
-      RESULT_JSON="$result_json"
-      return 0
-    fi
-
-    if [ "$id" = "1" ] || [ "$id" = "null" ]; then
-      err_msg=$(printf '%s' "$line" | jq -r '.error.message // empty' 2>/dev/null)
-      if [ -n "$err_msg" ]; then
-        if [ "$id" = "1" ]; then
-          ERROR_MSG="initialize が RPC エラーを返しました: $err_msg"
-        else
-          ERROR_MSG="RPC エラー応答を受信しました (id: null): $err_msg"
-        fi
-        return 2
-      fi
-    fi
+  line=""
+  # 改行で完結した行のみ read が 0 を返す。完成行は即検証し、malformed (rc 3) も
+  # ここで即座に呼び出し元へ返す (30 秒の無駄な timeout 待ちを避ける)。
+  while IFS= read -r line; do
+    inspect_complete_line "$line"
+    rc=$?
+    [ "$rc" -eq 1 ] || return "$rc"
+    line=""
   done < "$OUT"
+
+  # ループ後の $line には改行で終わっていない末尾断片が残る (無ければ空)。通常 poll では
+  # 書きかけとして無視するが、最終走査 (サーバ死亡・期限到達後) ではこれ以上完成しない
+  # ため、完成行と同じ基準で検証する。
+  if [ -n "$final_scan" ] && [ -n "$line" ]; then
+    inspect_complete_line "$line"
+    rc=$?
+    [ "$rc" -eq 1 ] || return "$rc"
+  fi
 
   return 1
 }
@@ -326,17 +365,22 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
   elif [ "$rc" -eq 2 ]; then
     STATUS="rpc-error"
     break
+  elif [ "$rc" -eq 3 ]; then
+    STATUS="malformed"
+    break
   fi
 
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    # サーバ死亡を検出。直前に応答を flush している可能性があるため out をもう一度確認してから
-    # 失敗として分類する。
-    check_out
+    # サーバ死亡を検出。直前に応答を flush している可能性があるため out をもう一度
+    # (最終走査として、末尾断片も含めて) 確認してから失敗として分類する。
+    check_out final
     rc=$?
     if [ "$rc" -eq 0 ]; then
       STATUS="ok"
     elif [ "$rc" -eq 2 ]; then
       STATUS="rpc-error"
+    elif [ "$rc" -eq 3 ]; then
+      STATUS="malformed"
     else
       STATUS="server-died"
     fi
@@ -349,14 +393,16 @@ done
 
 if [ -z "$STATUS" ]; then
   # 最終 iteration の sleep 中に応答が到着した可能性があるため、timeout に分類する前に
-  # もう一度 out を確認する (codex review 指摘)。該当なしの場合はサーバ生存状態で
-  # server-died / timeout を分類し、診断メッセージの一貫性を保つ。
-  check_out
+  # もう一度 out を最終走査 (末尾断片も検証) する (codex review 指摘)。該当なしの場合は
+  # サーバ生存状態で server-died / timeout を分類し、診断メッセージの一貫性を保つ。
+  check_out final
   rc=$?
   if [ "$rc" -eq 0 ]; then
     STATUS="ok"
   elif [ "$rc" -eq 2 ]; then
     STATUS="rpc-error"
+  elif [ "$rc" -eq 3 ]; then
+    STATUS="malformed"
   elif ! kill -0 "$SERVER_PID" 2>/dev/null; then
     STATUS="server-died"
   else
@@ -377,6 +423,9 @@ case "$STATUS" in
       tail -n 20 "$ERR" >&2
     fi
     fail "codex app-server が応答前に終了しました。"
+    ;;
+  malformed)
+    fail "codex app-server の応答が JSON として解釈できません (JSONL に非 JSON 行を検出)。"
     ;;
   timeout)
     fail "30 秒以内に account/rateLimits/read の応答がありませんでした (timeout)。"
