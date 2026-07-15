@@ -1,6 +1,6 @@
 {
   "name": "pre-push-review",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
   "author": {
     "name": "natsuume",
@@ -25,7 +25,7 @@
   "interface": {
     "displayName": "Pre-push Review",
     "shortDescription": "git push 前に correctness・Codex・security review を強制",
-    "longDescription": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。 Codex 互換性: push gate と hash marker は共有し、Codex では named custom agents と SubagentStop lifecycle hook で 3 review を編成・記録します。",
+    "longDescription": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。 Codex 互換性: push gate・hash・marker filename は共有し、Codex では named custom agents と SubagentStop lifecycle hook が writable PLUGIN_DATA の physical git-dir scoped storageへ 3 review を記録します。",
     "developerName": "natsuume",
     "category": "Productivity",
     "capabilities": [

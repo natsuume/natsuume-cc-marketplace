@@ -114,6 +114,16 @@ esac
 HASH=$(compute_review_hash "$BASE") || exit 0
 MARKER_PATH=$("$MARKER_FN" "$GIT_DIR") || exit 0
 
+umask 077
+if [ -n "${PLUGIN_ROOT:-}" ]; then
+  MARKER_DIR=${MARKER_PATH%/*}
+  if ! mkdir -p "$MARKER_DIR"; then
+    printf '[pre-push-review] Codex marker storage directory を作成できません: %s\n' \
+      "$MARKER_DIR" >&2
+    exit 0
+  fi
+fi
+
 TEMP_MARKER="${MARKER_PATH}.tmp.$$"
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2317
@@ -123,7 +133,6 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-umask 077
 if ! printf '%s' "$HASH" > "$TEMP_MARKER"; then
   exit 0
 fi

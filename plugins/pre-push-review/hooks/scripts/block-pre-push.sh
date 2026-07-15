@@ -615,12 +615,19 @@ EOF
   exit 0
 fi
 
-CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR")
-CODEX_MARKER=$(codex_marker_path "$GIT_DIR")
-SECURITY_MARKER=$(security_marker_path "$GIT_DIR")
-CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
-CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
-SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
+if CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR") &&
+  CODEX_MARKER=$(codex_marker_path "$GIT_DIR") &&
+  SECURITY_MARKER=$(security_marker_path "$GIT_DIR"); then
+  CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
+  CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
+  SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
+else
+  # Codex で PLUGIN_DATA が使えない場合を含め、storage 解決不能時は .git へ
+  # fallback せず全 marker を missing として後段の gate を fail-closed にする。
+  CODE_REVIEWED_HASH=""
+  CODEX_HASH=""
+  SECURITY_HASH=""
+fi
 
 # 真の commit push (real push) に到達した時点で BASE が解決できないと branch 全差分が
 # 計算できないため fail-closed deny。 ここに到達するのは deletion / tag-only / matching skip

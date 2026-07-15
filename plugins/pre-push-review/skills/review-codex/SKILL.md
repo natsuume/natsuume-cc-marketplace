@@ -45,11 +45,16 @@ git diff --stat
 
 3 本すべての最終 report を待つ。それぞれの先頭 heading と末尾 footer が profile の契約どおりであることを確認する。Codex plugin の `SubagentStop` hook が `agent_type`、`agent_id`、`turn_id`、`model`、`last_assistant_message`、`stop_hook_active` を検証し、role ごとの既存 marker を自動更新する。
 
+Codex の既定 sandbox では `.git` が read-only なので、hook は writable な `PLUGIN_DATA` 内の `pre-push-review/markers/<repo-key>/` を使う。`repo-key` は physical git-dir の絶対 path を SHA-256 にした値で、repository と linked worktree を分離する。marker filename、review hash、push gate の判定契約は Claude Code の `.git` marker と共通である。`PLUGIN_DATA` が無い場合は `.git` へ fallback せず marker 更新を skip し、push gate が fail-closed に deny する。
+
 `mark-review.sh` その他の marker writer を直接実行しない。marker は各 agent の停止時点における commit 列、merge-base、branch diff、staged/unstaged diff の hash に bind される。review 後に修正・commit・amend・rebase すると失効するため、修正後は 3 review をすべて再実行する。
+
+Codex では `.git` marker の存在や mtime を完了確認に使わない。各 `SubagentStop` hook の marker update output を確認し、同じ repository state の push gate が許可することを完了条件とする。
 
 marker が更新されない場合は、generic agent で代替したり helper を直接呼んだりせず、次を確認して同じ named agent を再実行する。
 
 - `/hooks` で pre-push-review の hook が trust 済みか
+- hook output に `PLUGIN_DATA` の欠落・relative path・storage 作成失敗が出ていないか
 - `jq` と SHA-256 command (`sha256sum` または `shasum`) が利用可能か
 - agent report に正しい heading/footer があるか
 - setup inspect が全ファイル `current` を返すか

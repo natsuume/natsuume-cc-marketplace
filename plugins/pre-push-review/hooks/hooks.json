@@ -1,5 +1,5 @@
 {
-  "description": "pre-push-review の配送経路: PreToolUse (Bash) で未レビューの git push を deny (block-pre-push.sh)、codex review wrapper の background 起動を deny (block-bg-codex-wrapper.sh)。Claude Code は PostToolUse (*) の auto-mark.sh、Codex は SubagentStop の codex-auto-mark.sh で namespaced/named review agent の完了を検証し、レビュー済みマーカーを更新する。マーカー仕様・保証差は plugin README を参照。",
+  "description": "pre-push-review の配送経路: PreToolUse (Bash) で未レビューの git push を deny (block-pre-push.sh)、codex review wrapper の background 起動を deny (block-bg-codex-wrapper.sh)。Claude Code は PostToolUse (*) / wrapper から .git marker、Codex は SubagentStop から writable PLUGIN_DATA の repo/worktree-scoped marker を更新し、同じ push gate で検証する。マーカー仕様・保証差は plugin README を参照。",
   "hooks": {
     "PreToolUse": [
       {
