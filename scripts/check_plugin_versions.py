@@ -287,7 +287,13 @@ def changed_runtime_plugins(
     current_port_global.pop("schemaVersion", None)
     base_port_global.pop("schemaVersion", None)
     if current_port_global != base_port_global:
-        impacts["codex"].update(set(current_port_plugins) | set(base_port_plugins))
+        impacts["codex"].update(
+            name
+            for name in set(current_port_plugins) | set(base_port_plugins)
+            if not _excluded_in_both(
+                name, current_port_plugins, base_port_plugins
+            )
+        )
 
     all_names = (
         set(current_marketplace)
