@@ -25,14 +25,20 @@
 #         install 案内 (`claude plugin install rate-limit@natsuume-plugins`)
 #     (d) 実行環境不備: Node.js 不在 / codex companion 未検出 / stdin 未指定 / 空プロンプト
 #     (e) companion 失敗: codex CLI 未インストール・未認証等 (`/codex:setup` を案内)
+#     (f) 時間超過: work cutoff までに job が完了しなかった。中断の確認状態で文言を
+#         区別する — turn/interrupt RPC の成功確認済み、または安定識別語
+#         `turn interruption unconfirmed` を含む未確認警告 (処理フロー 5-d 参照)
 #
 # ## 処理フロー
 #
-#   0. 絶対 deadline の設定: **wrapper 起動時刻から 570 秒**。Bash tool の timeout (600 秒、
-#      到達時はコマンドを kill せず background 移行する) より確実に短く、以降の全工程
-#      (ガード最大 30 秒・companion 実行・中断・cleanup・診断出力) をこの予算内に収める。
-#      companion 起動後を起点にすると前段と合算で 600 秒に先に到達しうるため、起点は
-#      wrapper 起動時とする (rescue 壁打ち 2026-07-15 で確定)
+#   0. 時間予算の設定 (すべて wrapper 起動時刻起点の絶対時刻。rescue 壁打ち 2026-07-15 で確定):
+#      - **hard deadline = 570 秒**: wrapper が必ず終了する上限。Bash tool の timeout
+#        (600 秒、到達時はコマンドを kill せず background 移行する) より確実に短くする
+#      - **work cutoff = 540 秒**: job の status poll を打ち切り cancel を開始する時刻。
+#        hard deadline との差 30 秒は「cancel RPC 完了待ち 20 秒 + cancel プロセスの
+#        TERM/KILL/reap 最大 4 秒 + JSON 検査・診断出力 6 秒」の固定予算として予約する
+#        (poll を hard deadline まで続けると cancel の実行予算が残らないため、二段階の
+#        時刻が必須)。前段のガード (最大 30 秒) 等もすべて同じ絶対時計で消費される
 #   1. 引数チェック ($# != 0 → usage + exit 1) / Node.js チェック / stdin TTY チェック →
 #      プロンプト読み込み → 空 (空白のみ) チェック
 #   2. 設定読み込み: カレントディレクトリの `.claude/codex-implementer.local.md` の
@@ -64,16 +70,34 @@
 #           --model "$MODEL" --effort xhigh` で job を起動し、起動確認出力から job ID を
 #           抽出する (抽出できなければ即失敗 exit 1)
 #        b. `node "$COMPANION" status <job-id> --json` を数秒間隔で poll し、job の完了を
-#           絶対 deadline (工程 0) まで待つ。待機中は経過を stderr に間欠出力する
+#           **work cutoff** (工程 0) まで待つ。待機中は経過を stderr に間欠出力する
 #        c. job 完了 → `node "$COMPANION" result <job-id>` の stdout (codex の最終
 #           メッセージ・変更ファイル情報) をそのまま流し、job の成否に応じて exit 0/1
-#        d. 絶対 deadline 到達 → `node "$COMPANION" cancel <job-id>` で **アプリケーション
-#           レベルの turn 中断**を発行し、status が running でなくなるまで短い上限付きで
-#           確認 poll したうえで「委任を時間超過で中断した。10 分以内に完了しない実装
-#           タスクは委任に不適 — タスクを分割するか Claude 本体で実装する」旨を stderr に
-#           出して exit 1
-#        e. HUP/INT/TERM trap でも同じ cancel + 確認を実行してから終了する (wrapper の
-#           異常終了経路でも write turn を放置しない)
+#        d. work cutoff 到達 → **上限付き bounded cancel** を実行する:
+#           `node "$COMPANION" cancel <job-id> --json` を background 起動し、cancel RPC
+#           完了待ち予算 (20 秒) 内の完了を poll する。予算超過時は cancel プロセスを
+#           TERM → grace → KILL → wait reap する (プロセス管理は codex-rate-limit.sh の
+#           cleanup パターン。companion の RPC には request timeout が無く、broker が
+#           応答しないと cancel 自体が無期限ブロックするため、cancel も監督対象とする)。
+#           中断結果は cancel の --json 出力の `turnInterrupted` フィールドで判定する
+#           (JSON boolean の true を厳密に要求する。truthy 判定・文字列 "true" は不可):
+#           - cancel が予算内に完了し turnInterrupted == true → 「委任を時間超過で中断した
+#             (turn/interrupt RPC の成功を確認済み)。10 分以内に完了しない実装タスクは
+#             委任に不適 — タスクを分割するか Claude 本体で実装する」を stderr に出して
+#             exit 1
+#           - turnInterrupted が true 以外 (false / 欠損 / null) / JSON 解釈不能 / cancel
+#             非ゼロ終了 / cancel 予算超過・強制終了 → すべて「未確認」に集約し、安定
+#             識別語 **`turn interruption unconfirmed`** を含む警告を stderr に出して
+#             exit 1:「委任を時間超過で中断したが、write turn の停止を確認できなかった。
+#             worktree が並行変更され続けている可能性があるため、worktree の状態
+#             (git status / 変更ファイル) と active turn を確認するまで代替実装を
+#             開始しないこと」。中断確認済みの場合と明確に区別できる文言にする
+#           (job status の "cancelled" は turn 停止の証拠にしない — companion 1.0.6 は
+#            turn/interrupt を発行できない場合でも job を cancelled にするため)
+#        e. HUP/INT/TERM trap でも同じ bounded cancel + 判定を実行してから終了する
+#           (wrapper の異常終了経路でも write turn を放置しない)。trap は再入防止フラグで
+#           二重実行を防ぎ、cleanup は idempotent に書く (cancel subprocess の PID が
+#           設定済みの場合のみ TERM/KILL/reap する)
 #
 # ## 設定 (.claude/codex-implementer.local.md の YAML frontmatter)
 #
@@ -104,7 +128,10 @@
 #   の job 管理 (task --background / status / result / cancel) を使い、中断をアプリケーション
 #   レベルで発行・確認する (rescue 壁打ち 2026-07-15 で確定)。`task --background` の起動
 #   プロセスは起動確認だけで終了する短命プロセスのため、Bash tool の timeout 挙動 (kill
-#   せず background 移行) に依存する経路も構造的に消える
+#   せず background 移行) に依存する経路も構造的に消える。ただし cancel は中断の**試行**
+#   であり保証ではない — turn/interrupt が確認できない経路は隠さず
+#   `turn interruption unconfirmed` として親に警告する (不確実性を silent にしない、
+#   fail-closed の情報版)
 # - **git 状態 (branch / dirty tree) を検査しない**: git-guardrails 等の既存 hook に委ねる
 #   (issue #247 で確定)
 # - **ガードの閾値判定は codex-status 側に委譲**: wrapper は exit code (0/1/2) だけで
