@@ -37,8 +37,15 @@
 #      実行する。codex-status の exit code 契約 (0 = 通過 / 1 = 取得失敗 / 2 = 超過・
 #      到達済み) に従い分岐する:
 #        - exit 0 → ガード通過。stdout (JSON) から usedPercent を stderr の状態表示に使う
-#        - exit 2 → (a) 委任拒否。JSON から rateLimits.primary の usedPercent / resetsAt
-#          (epoch 秒。人間可読へ変換して添える) を抽出して stderr に出し exit 1
+#        - exit 2 → (a) 委任拒否。拒否の判断材料をすべて stderr に出して exit 1:
+#          設定閾値 (max_used_percent)、rateLimits.primary の usedPercent / resetsAt
+#          (epoch 秒。人間可読へ変換して添える)、rateLimits.secondary が存在する場合は
+#          その usedPercent / resetsAt も、rateLimitReachedType が非 null の場合はその値も
+#          表示する (空文字等の falsy 値でも「到達済み」であることが読み取れる表現を使う)。
+#          secondary 窓の超過でも exit 2 になるため、primary のみの表示では「閾値未満の
+#          数値を出しながら拒否する」誤解を招く — 判断材料の全報告で要因を自明にする。
+#          どの窓が要因かの特定ロジックは wrapper に持たせない (判定は codex-status 側の
+#          責務。wrapper 側での判定再実装は二重実装になる)
 #        - exit 1 → (b) fail-closed。委任せず exit 1
 #        - その他の exit code → 契約外だが安全側 (fail-closed) に倒して exit 1
 #      script が解決できない場合は (c)。ガードは wrapper 内で完結し、通過しない限り

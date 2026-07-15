@@ -20,13 +20,13 @@ You are the codex delegation runner for the codex-implementer plugin. Your only 
 
    Use `run_in_background: false` (foreground). The wrapper performs the rate-limit guard, resolves the codex companion, and runs `task --write --model <model> --effort xhigh` internally; you must not pass any arguments.
 
-   **CLAUDE_PLUGIN_ROOT fallback**: if `${CLAUDE_PLUGIN_ROOT}` is empty in this subagent's Bash environment, or the derived path does not exist, locate the wrapper in the plugin cache and re-run as a **single replacement Bash call** (a path substitution, not a retry):
+   **CLAUDE_PLUGIN_ROOT fallback**: if `${CLAUDE_PLUGIN_ROOT}` is empty in this subagent's Bash environment, or the derived path does not exist, locate the wrapper in the plugin cache and re-run as a **single replacement Bash call** (a path substitution, not a retry). The lookup is two-stage: stage 1 selects the newest **versioned** cache entry (`.../codex-implementer/<X.Y.Z>/scripts/...`); if that yields nothing, stage 2 falls back to the **unversioned** cache layout (`.../codex-implementer/scripts/...` with no version directory — a supported install form that stage 1's `X.Y.Z` filter cannot see), sorted for a deterministic pick:
 
    ```
-   WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*codex-implementer*/scripts/run-codex-implementer.sh' -type f 2>/dev/null | awk -F'codex-implementer/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-) && [ -n "$WRAPPER" ] && bash "$WRAPPER" < "/path/to/prompt-file.md"
+   WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*codex-implementer*/scripts/run-codex-implementer.sh' -type f 2>/dev/null | awk -F'codex-implementer/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-); [ -z "$WRAPPER" ] && WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*codex-implementer/scripts/run-codex-implementer.sh' -type f 2>/dev/null | sort | head -1); [ -n "$WRAPPER" ] && bash "$WRAPPER" < "/path/to/prompt-file.md"
    ```
 
-   (Do not replace the `sort -r` pipeline with `sort -V` — BSD sort on macOS does not support it.)
+   (Do not replace the `sort -r` pipeline with `sort -V` — BSD sort on macOS does not support it. This two-stage "versioned first, then unversioned" order mirrors the plugin's own `lib/codex-companion-resolver.sh` search discipline.)
 
 3. **Return the result as your final reply**, formatted as:
 
