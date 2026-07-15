@@ -150,9 +150,15 @@ if [ -z "$BODY" ]; then
   exit 0
 fi
 
+# 自己修復指示 (issue #235、ヘッダ「自己修復指示」節)。ペイロード最先頭に必ず置く。
+# 文言は inject-always.sh の SELF_HEAL と byte-identical に保つこと (二重管理)。
+SELF_HEAL='(自己修復) このメッセージが persisted-output として退避されている場合は、スタブに記載されたパスの退避ファイルを Read で全文読了してから作業を開始すること。'
+
 PREFIX="(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの常時適用ルール (part 1/3 以降) を暫定注入していた。会話の進行によりこのセッションのモデルが Fable であると確定したため、以後は本メッセージ以下の常時適用ルール確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄すること。分業規律の Fable 版補正は別要素 (inject-discipline.sh) で届く。"
 
-CONTEXT="$PREFIX
+CONTEXT="$SELF_HEAL
+
+$PREFIX
 
 $BODY"
 

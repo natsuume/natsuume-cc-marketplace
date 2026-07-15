@@ -4,9 +4,15 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.15.0
+v0.16.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.15.0 → v0.16.0 の変更点
+
+- **自己修復指示の追加 (issue #235)**: SessionStart 注入 (`inject-always.sh`、fable / sonnet / その他 / 判定不能の 4 分岐すべて) と one-shot 補正 (`resolve-model-on-prompt.sh`) の additionalContext 最先頭に、「persisted-output として退避されている場合は、スタブに記載されたパスの退避ファイルを Read で全文読了してから作業を開始する」旨の自己修復指示 (91 字、スクリプト側の SELF_HEAL 定数で付与) を追加。ペイロードが将来 inline 閾値 (約 9〜10K 文字) を超えて退避されても、プレビュー 2KB に必ず入る先頭の指示で読み直しを誘導する (#244 の構造対策完了後も残置する防御)
+- **8K ガードの不落単位を拡張**: 縮退ラダー (実パス行 → delivery-note 全体) の不落単位を ESSENTIAL (= 自己修復指示 + ルール本文) に拡張。ESSENTIAL 単体が 8,000 字を超える場合は超過を許容する (best effort) が、自己修復指示はその場合も先頭に残す
+- **version bump**: `0.15.0` → `0.16.0` (minor)。`plugin.json` / `marketplace.json` / リポジトリ README / plugin README の 4 箇所を同期
 
 ### v0.14.0 → v0.15.0 の変更点
 

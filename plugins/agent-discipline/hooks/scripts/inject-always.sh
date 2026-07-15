@@ -244,32 +244,45 @@ else
   fi
 fi
 
+# 自己修復指示 (issue #235、ヘッダ「自己修復指示」節)。additionalContext の最先頭に必ず置く。
+# 文言は resolve-model-on-prompt.sh の SELF_HEAL と byte-identical に保つこと (二重管理)。
+SELF_HEAL='(自己修復) このメッセージが persisted-output として退避されている場合は、スタブに記載されたパスの退避ファイルを Read で全文読了してから作業を開始すること。'
+
 NOTE=$(cat "$PROMPTS_DIR/delivery-note.md" 2>/dev/null)
 PATH_LINE="(参照パス) $PROMPTS_DIR"
 
 # additionalContext を組み立てた後の全文文字数を計測し、8,000 字を超える場合は
 # (i) 実パス行を落として再計測 → (ii) それでも超えるなら delivery-note 全体を落として再計測、
-# の順で段階的に縮退する。CORE (self-gate 前置き + ルール本文) はいかなる場合も落とさない。
+# の順で段階的に縮退する。ESSENTIAL (= SELF_HEAL + CORE) はいかなる場合も落とさない。
+# ESSENTIAL 単体が 8,000 字を超える場合は超過を許容する (best effort、ヘッダ参照)。
+ESSENTIAL="$SELF_HEAL
+
+$CORE"
+
 if [ -n "$NOTE" ]; then
-  FULL="$NOTE
+  FULL="$SELF_HEAL
+
+$NOTE
 $PATH_LINE
 
 $CORE"
 else
-  FULL="$CORE"
+  FULL="$ESSENTIAL"
 fi
 
 LEN=$(printf '%s' "$FULL" | wc -m)
 
 if [ "$LEN" -gt 8000 ] && [ -n "$NOTE" ]; then
-  FULL="$NOTE
+  FULL="$SELF_HEAL
+
+$NOTE
 
 $CORE"
   LEN=$(printf '%s' "$FULL" | wc -m)
 fi
 
 if [ "$LEN" -gt 8000 ]; then
-  FULL="$CORE"
+  FULL="$ESSENTIAL"
 fi
 
 CONTEXT="$FULL"
