@@ -35,18 +35,19 @@ exit 0 (および exit 2) のとき、stdout に `account/rateLimits/read` 応�
 | `rateLimits.primary.usedPercent` | 使用率 (0〜100 の数値) |
 | `rateLimits.primary.windowDurationMins` | 枠の窓幅 (分)。10080 = 週次 |
 | `rateLimits.primary.resetsAt` | reset 時刻 (**epoch 秒**。ISO 変換はしていない) |
+| `rateLimits.secondary` | 第 2 の枠 (plan によっては存在。無ければ欠損 / null)。構造は `primary` と同じ |
 | `rateLimitsByLimitId` | limitId 別の全枠。本体枠 `codex` のほか、独立枠 (例: `codex_bengalfox` = GPT-5.3-Codex-Spark) を含む |
 | `rateLimitResetCredits` | リセットクレジット一覧 (無ければ null) |
 
-ユーザへ報告するときは、`rateLimits.primary` の `usedPercent` と reset 時刻 (`resetsAt` を人間可読に直す)、`planType`、および `rateLimitsByLimitId` にある独立枠の使用率を報告する。
+ユーザへ報告するときは、`rateLimits.primary` (および存在すれば `secondary`) の `usedPercent` と reset 時刻 (`resetsAt` を人間可読に直す)、`planType`、および `rateLimitsByLimitId` にある独立枠の使用率を報告する。
 
 ## 3. exit code 契約
 
 | exit | 意味 | stdout |
 |---|---|---|
 | 0 | 正常 (`--max-used-percent` の判定 OK を含む) | JSON あり |
-| 1 | 取得失敗・引数不正 (codex CLI 不在 / 未認証等の RPC エラー / 30 秒 timeout / 応答不正 / N の validation 違反) | 保証なし |
-| 2 | `--max-used-percent` 指定時のみ: `usedPercent` が N 超、または `rateLimitReachedType` が非 null (到達済み) | JSON あり |
+| 1 | 取得失敗・引数不正 (codex CLI 不在 / 未認証等の RPC エラー / 30 秒 timeout / 応答不正 (secondary 窓が存在するのに usedPercent 不正を含む) / N の validation 違反) | 保証なし |
+| 2 | `--max-used-percent` 指定時のみ: `primary` / `secondary` (存在する場合) いずれかの `usedPercent` が N 超、または `rateLimitReachedType` が非 null (到達済み) | JSON あり |
 
 呼び出し側は 1 (取得失敗 → fail-closed 判断) と 2 (超過) を区別できる。
 

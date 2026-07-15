@@ -33,19 +33,30 @@
 # - exit code (公開契約。呼び出し側が「取得失敗」と「超過」を区別できること):
 #     0 = 正常 (--max-used-percent 判定 OK を含む)
 #     1 = 取得失敗・引数不正 (codex CLI 不在 / RPC エラー応答 / 30 秒 timeout /
-#         応答が JSON 解釈不能 / rateLimits.primary.usedPercent 欠損 / N の validation 違反)
-#     2 = --max-used-percent 指定時のみ: usedPercent が N 超、または
-#         rateLimitReachedType が非 null (到達済み)。いずれの場合も JSON は出力する
+#         応答が JSON 解釈不能 / rateLimits.primary.usedPercent 欠損 / secondary 窓が
+#         存在するのに usedPercent 不正 / N の validation 違反)
+#     2 = --max-used-percent 指定時のみ: primary / secondary (存在する場合) いずれかの
+#         usedPercent が N 超、または rateLimitReachedType が非 null (到達済み)。
+#         いずれの場合も JSON は出力する
 #
 # ## 判定仕様 (--max-used-percent <N>)
 #
-# - 対象は `.rateLimits.primary.usedPercent` (limitId `codex` の primary)。スキーマ上
+# - 主対象は `.rateLimits.primary.usedPercent` (limitId `codex` の primary、必須)。スキーマ上
 #   `rateLimitsByLimitId` は nullable のため、必須フィールド検証・判定は backward-compatible
 #   な `rateLimits` 側で行う
+# - `.rateLimits.secondary` は tri-state で扱う (rescue 壁打ち 2026-07-15 で確定):
+#   欠損 / null → 正常として無視。非 null で存在 → usedPercent (0-100 の数値) を必須検証し、
+#   欠損・非数値・範囲外は応答不正として exit 1 (plan によっては primary=5h 窓 /
+#   secondary=週次窓の構成がありえ、壊れた窓の黙殺は fail-open になるため)。存在して valid
+#   なら primary と同じ閾値 N で追加判定する
 # - `rateLimitReachedType` が非 null → exit 2 (usedPercent の値に依らず)
-# - usedPercent > N → exit 2 / usedPercent <= N → exit 0 (usedPercent は小数でありうる)
-# - N の validation: 10 進整数かつ 0 <= N <= 100。違反は usage を stderr に出して exit 1。
-#   `--max-used-percent` 以外の引数・値の欠落も usage + exit 1
+# - primary / secondary (存在する場合) のいずれかの usedPercent > N → exit 2 /
+#   すべて N 以下 → exit 0 (usedPercent は小数でありうる)
+# - N の validation: 10 進整数 (最大 3 桁。shell 整数範囲超の全数字文字列を構造排除) かつ
+#   0 <= N <= 100。違反は usage を stderr に出して exit 1。フラグ指定の有無は値と独立に
+#   追跡し、空文字の値 (`--max-used-percent ""`) も validation 違反として exit 1 にする
+#   (「閾値指定なし」への silent fallback = fail-open を塞ぐ)。`--max-used-percent` 以外の
+#   引数・値の欠落も usage + exit 1
 #
 # ## RPC シーケンス (実測確認済み 2026-07-15、codex CLI 0.144.1)
 #
@@ -119,8 +130,14 @@ usage() {
 #
 # 受理するのは --max-used-percent <N> のみ。未知の引数・値欠落・N の validation 違反は
 # すべて usage を出して exit 1 にする。
+#
+# フラグ指定の有無は値 (MAX_USED_PERCENT) と独立した MAX_USED_PERCENT_SET で追跡する。
+# 値の空文字判定 ([ -n "$MAX_USED_PERCENT" ]) をゲートに使うと、`--max-used-percent ""`
+# (呼び出し側の変数が空に展開されたケース) が「閾値指定なし」と同じ挙動に silent に
+# 化けて fail-open になるため (codex review 指摘)。
 
 MAX_USED_PERCENT=""
+MAX_USED_PERCENT_SET=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -130,6 +147,7 @@ while [ "$#" -gt 0 ]; do
         fail "--max-used-percent には値が必要です。"
       fi
       MAX_USED_PERCENT="$2"
+      MAX_USED_PERCENT_SET=1
       shift 2
       ;;
     *)
@@ -139,9 +157,12 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -n "$MAX_USED_PERCENT" ]; then
-  # 10 進整数のみ許可 (小数・負数・空文字・非数字はすべて regex で弾く)。
-  if ! printf '%s' "$MAX_USED_PERCENT" | grep -Eq '^[0-9]+$'; then
+if [ -n "$MAX_USED_PERCENT_SET" ]; then
+  # 10 進整数のみ許可 (小数・負数・空文字・非数字はすべて regex で弾く)。桁数を最大 3 桁に
+  # 制限するのは、shell の整数範囲を超える全数字文字列 (例: 24 桁の 9) が `[ ... -gt 100 ]`
+  # の "integer expression expected" エラー (false 扱い) で validation を素通りする経路を
+  # 塞ぐため (codex review 指摘)。0-999 に絞れば後続の -gt 100 は常に安全に動作する。
+  if ! printf '%s' "$MAX_USED_PERCENT" | grep -Eq '^[0-9]{1,3}$'; then
     usage
     fail "--max-used-percent は 0-100 の10進整数で指定してください (指定値: '$MAX_USED_PERCENT')"
   fi
@@ -326,7 +347,22 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
   sleep 0.5
 done
 
-[ -n "$STATUS" ] || STATUS="timeout"
+if [ -z "$STATUS" ]; then
+  # 最終 iteration の sleep 中に応答が到着した可能性があるため、timeout に分類する前に
+  # もう一度 out を確認する (codex review 指摘)。該当なしの場合はサーバ生存状態で
+  # server-died / timeout を分類し、診断メッセージの一貫性を保つ。
+  check_out
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    STATUS="ok"
+  elif [ "$rc" -eq 2 ]; then
+    STATUS="rpc-error"
+  elif ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    STATUS="server-died"
+  else
+    STATUS="timeout"
+  fi
+fi
 
 case "$STATUS" in
   ok)
@@ -360,15 +396,37 @@ if ! awk -v v="$USED_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
   fail "rateLimits.primary.usedPercent が 0-100 の範囲外です (値: $USED_PERCENT)。"
 fi
 
+# secondary は window 全体が nullable (欠損 / null は正常)。ただし非 null で存在する場合、
+# RateLimitWindow.usedPercent はプロトコル上の必須フィールドのため、欠損・非数値・範囲外は
+# 応答不正として exit 1 にする。plan によっては primary が 5h 窓・secondary が週次窓の構成が
+# ありえ、壊れた secondary を黙って無視すると週次超過を見逃す fail-open になる (codex review
+# 指摘 + rescue 壁打ちで確定した tri-state 検証)。
+SECONDARY_USED_PERCENT=""
+if [ "$(printf '%s' "$RESULT_JSON" | jq -r 'if (.rateLimits.secondary // null) == null then "no" else "yes" end' 2>/dev/null)" = "yes" ]; then
+  SECONDARY_USED_PERCENT=$(printf '%s' "$RESULT_JSON" | jq -r '(.rateLimits.secondary.usedPercent | select(type == "number")) // empty' 2>/dev/null)
+  if [ -z "$SECONDARY_USED_PERCENT" ]; then
+    fail "応答の rateLimits.secondary に usedPercent (0-100 の数値) が含まれていません (secondary 窓が存在する場合は必須)。"
+  fi
+  if ! awk -v v="$SECONDARY_USED_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+    fail "rateLimits.secondary.usedPercent が 0-100 の範囲外です (値: $SECONDARY_USED_PERCENT)。"
+  fi
+fi
+
 # ---- --max-used-percent 判定 (指定時のみ。usedPercent は小数がありうるため awk で数値比較) ----
+#
+# primary に加え、secondary 窓が存在する場合はそれも同じ閾値で判定する (いずれかが N 超で
+# exit 2)。判定ゲートは MAX_USED_PERCENT_SET (フラグ指定の有無) であり、値の空文字判定に
+# 依存しない。
 
 EXIT_CODE=0
 
-if [ -n "$MAX_USED_PERCENT" ]; then
+if [ -n "$MAX_USED_PERCENT_SET" ]; then
   REACHED_TYPE=$(printf '%s' "$RESULT_JSON" | jq -r '.rateLimits.rateLimitReachedType // empty' 2>/dev/null)
   if [ -n "$REACHED_TYPE" ]; then
     EXIT_CODE=2
   elif awk -v v="$USED_PERCENT" -v n="$MAX_USED_PERCENT" 'BEGIN { exit !(v > n) }'; then
+    EXIT_CODE=2
+  elif [ -n "$SECONDARY_USED_PERCENT" ] && awk -v v="$SECONDARY_USED_PERCENT" -v n="$MAX_USED_PERCENT" 'BEGIN { exit !(v > n) }'; then
     EXIT_CODE=2
   fi
 fi
