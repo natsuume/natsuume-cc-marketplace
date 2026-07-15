@@ -1,0 +1,5 @@
+{
+  "name": "codex-implementer",
+  "version": "0.1.0",
+  "description": "実装タスクを OpenAI Codex (既定 gpt-5.6-luna) に委任する subagent を提供するプラグイン。委任前に rate-limit plugin の codex-status で週次枠使用率を検査し、閾値 (既定 50%) 超過・取得失敗時は fail-closed で委任を中止する (codex:review の枠を保護)。"
+}
