@@ -25,7 +25,128 @@ def load_module(name: str, path: Path):
 policy = load_module("check_plugin_versions", ROOT / "scripts/check_plugin_versions.py")
 
 
+def repository_git(repository: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repository,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+
+
+def write_plugin_repository_state(
+    repository: Path,
+    *,
+    claude_version: str,
+    codex_version: str,
+    distribution_status: str,
+    marketplace_description: str = "sample",
+    manifest_description: str = "sample",
+) -> None:
+    write_json(
+        repository / ".claude-plugin/marketplace.json",
+        {
+            "plugins": [
+                {
+                    "name": "sample",
+                    "source": "./plugins/sample",
+                    "version": claude_version,
+                    "description": marketplace_description,
+                    "keywords": ["sample"],
+                }
+            ]
+        },
+    )
+    write_json(
+        repository / "plugins/sample/.claude-plugin/plugin.json",
+        {
+            "name": "sample",
+            "version": claude_version,
+            "description": manifest_description,
+        },
+    )
+    distribution = {"status": distribution_status}
+    if distribution_status == "excluded":
+        distribution["reason"] = "not useful on Codex"
+    write_json(
+        repository / "codex/marketplace-overrides.json",
+        {
+            "schemaVersion": 5,
+            "plugins": {
+                "sample": {
+                    "distribution": distribution,
+                    "version": codex_version,
+                    "versioning": {
+                        "claudeOnlyPaths": [],
+                        "codexOnlyPaths": [],
+                    },
+                    "compatibility": {"summary": "same"},
+                }
+            },
+        },
+    )
+
+
+def initialize_repository(repository: Path) -> None:
+    repository_git(repository, "init")
+    repository_git(repository, "config", "user.name", "Marketplace Test")
+    repository_git(
+        repository,
+        "config",
+        "user.email",
+        "marketplace@example.invalid",
+    )
+
+
+def check_fixture_versions(repository: Path, base_revision: str) -> list[str]:
+    original_root = policy.ROOT
+    policy.ROOT = repository
+    try:
+        return policy.check_versions(base_revision, direct=True)
+    finally:
+        policy.ROOT = original_root
+
+
 class VersionPolicyTest(unittest.TestCase):
+    def check_distribution_transition(
+        self,
+        *,
+        base_status: str,
+        base_version: str,
+        current_status: str,
+        current_version: str,
+    ) -> list[str]:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            repository = Path(temporary_name)
+            initialize_repository(repository)
+            write_plugin_repository_state(
+                repository,
+                claude_version="1.0.0",
+                codex_version=base_version,
+                distribution_status=base_status,
+            )
+            repository_git(repository, "add", ".")
+            repository_git(repository, "commit", "-m", "base")
+            base_revision = repository_git(repository, "rev-parse", "HEAD")
+
+            write_plugin_repository_state(
+                repository,
+                claude_version="1.0.0",
+                codex_version=current_version,
+                distribution_status=current_status,
+            )
+            repository_git(repository, "add", ".")
+            repository_git(repository, "commit", "-m", "change distribution")
+            return check_fixture_versions(repository, base_revision)
+
     def test_strict_semver_comparison(self) -> None:
         self.assertEqual(policy.parse_semver("3.0.6"), (3, 0, 6))
         self.assertGreater(policy.parse_semver("1.10.0"), policy.parse_semver("1.2.99"))
@@ -152,6 +273,92 @@ class VersionPolicyTest(unittest.TestCase):
         self.assertNotEqual(
             policy._without_digest_acknowledgements(previous),
             policy._without_digest_acknowledgements(current),
+        )
+
+    def test_excluded_plugin_claude_metadata_changes_do_not_require_codex_bump(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            repository = Path(temporary_name)
+            initialize_repository(repository)
+            write_plugin_repository_state(
+                repository,
+                claude_version="1.0.0",
+                codex_version="0.3.0",
+                distribution_status="excluded",
+            )
+            repository_git(repository, "add", ".")
+            repository_git(repository, "commit", "-m", "base")
+            base_revision = repository_git(repository, "rev-parse", "HEAD")
+
+            write_plugin_repository_state(
+                repository,
+                claude_version="1.0.1",
+                codex_version="0.3.0",
+                distribution_status="excluded",
+                marketplace_description="updated marketplace metadata",
+                manifest_description="updated manifest metadata",
+            )
+            repository_git(repository, "add", ".")
+            repository_git(repository, "commit", "-m", "change Claude metadata")
+
+            self.assertEqual(
+                check_fixture_versions(repository, base_revision),
+                [],
+            )
+
+    def test_available_to_excluded_requires_major_codex_bump(self) -> None:
+        failures = self.check_distribution_transition(
+            base_status="available",
+            base_version="0.3.0",
+            current_status="excluded",
+            current_version="0.3.1",
+        )
+
+        self.assertTrue(
+            any(
+                "distribution" in failure and "major" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_available_to_excluded_accepts_major_codex_bump(self) -> None:
+        self.assertEqual(
+            self.check_distribution_transition(
+                base_status="available",
+                base_version="0.3.0",
+                current_status="excluded",
+                current_version="1.0.0",
+            ),
+            [],
+        )
+
+    def test_excluded_to_available_requires_minor_or_major_codex_bump(self) -> None:
+        failures = self.check_distribution_transition(
+            base_status="excluded",
+            base_version="1.2.3",
+            current_status="available",
+            current_version="1.2.4",
+        )
+
+        self.assertTrue(
+            any(
+                "distribution" in failure and "minor" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+
+    def test_excluded_to_available_accepts_minor_codex_bump(self) -> None:
+        self.assertEqual(
+            self.check_distribution_transition(
+                base_status="excluded",
+                base_version="1.2.3",
+                current_status="available",
+                current_version="1.3.0",
+            ),
+            [],
         )
 
     def test_direct_comparison_detects_force_push_rollback(self) -> None:
@@ -335,13 +542,13 @@ class VersionPolicyTest(unittest.TestCase):
                 self.assertEqual(len(failures), 1)
                 self.assertIn("codex changes require codex version", failures[0])
 
-                current_port_plugin["version"] = "1.0.1"
+                current_port_plugin["version"] = "2.0.0"
                 write_json(
                     repository / "codex/marketplace-overrides.json",
                     {"schemaVersion": 5, "plugins": {"sample": current_port_plugin}},
                 )
                 git("add", ".")
-                git("commit", "-m", "bump codex exclusion")
+                git("commit", "-m", "major codex exclusion bump")
                 self.assertEqual(
                     policy.check_versions(base_revision, direct=True), []
                 )
