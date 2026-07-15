@@ -99,8 +99,280 @@
 # - jq 必須 (既存 plugin と同じ扱い)。codex CLI 不在は明示エラーで exit 1
 #
 # ---------------------------------------------------------------------------
-# Phase A (設計記述 commit): 上記が確定仕様。実装本体は Phase B で追加する。
+# 実装本体 (Phase B, issue #245)
 # ---------------------------------------------------------------------------
 
-echo "[rate-limit] codex-rate-limit.sh は未実装です (issue #245 Phase A)。" >&2
-exit 1
+set +x
+
+# stderr に "[rate-limit] " プレフィクス付きの人間可読メッセージを出して exit 1 する helper
+# (fetch-rate-limit.sh / run-codex-advisor.sh と同じ設計)。
+fail() {
+  printf '[rate-limit] %s\n' "$1" >&2
+  exit 1
+}
+
+usage() {
+  printf '[rate-limit] 使い方: bash codex-rate-limit.sh [--max-used-percent <N>] (N は 0-100 の10進整数)\n' >&2
+}
+
+# ---- 引数解析 ----
+#
+# 受理するのは --max-used-percent <N> のみ。未知の引数・値欠落・N の validation 違反は
+# すべて usage を出して exit 1 にする。
+
+MAX_USED_PERCENT=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --max-used-percent)
+      if [ "$#" -lt 2 ]; then
+        usage
+        fail "--max-used-percent には値が必要です。"
+      fi
+      MAX_USED_PERCENT="$2"
+      shift 2
+      ;;
+    *)
+      usage
+      fail "不明な引数です: $1"
+      ;;
+  esac
+done
+
+if [ -n "$MAX_USED_PERCENT" ]; then
+  # 10 進整数のみ許可 (小数・負数・空文字・非数字はすべて regex で弾く)。
+  if ! printf '%s' "$MAX_USED_PERCENT" | grep -Eq '^[0-9]+$'; then
+    usage
+    fail "--max-used-percent は 0-100 の10進整数で指定してください (指定値: '$MAX_USED_PERCENT')"
+  fi
+  if [ "$MAX_USED_PERCENT" -gt 100 ]; then
+    usage
+    fail "--max-used-percent は 0-100 の範囲で指定してください (指定値: $MAX_USED_PERCENT)"
+  fi
+fi
+
+# ---- 依存チェック ----
+
+command -v jq >/dev/null 2>&1 || fail "jq が見つかりません。jq をインストールしてから再実行してください。"
+command -v codex >/dev/null 2>&1 || fail "codex CLI が見つかりません。codex CLI をインストールしてから再実行してください。"
+
+# ---- プロセスライフサイクル用の helper 関数群 (workdir 作成・trap 設置より前に定義する) ----
+
+# SERVER_PID (グローバル) が生存しているかを kill -0 で確認しつつ、最大 2 秒
+# (0.2 秒 × 10 回) 待つ。途中で消えたら即 return 0、待ちきっても生きていれば return 1。
+wait_for_server_exit() {
+  local tries=0
+  while [ "$tries" -lt 10 ]; do
+    kill -0 "$SERVER_PID" 2>/dev/null || return 0
+    sleep 0.2
+    tries=$((tries + 1))
+  done
+  return 1
+}
+
+# codex app-server (background) と一時ディレクトリの後始末。EXIT/HUP/INT/TERM のいずれでも
+# 呼ばれる。順序: writer fd close (stdin EOF → 自律終了の grace) → まだ生きていれば TERM →
+# grace → まだ生きていれば KILL → wait で reap (無期限停止を避けるため) → 一時ディレクトリ削除。
+cleanup() {
+  exec 3>&- 2>/dev/null
+
+  if [ -n "$SERVER_PID" ]; then
+    if ! wait_for_server_exit; then
+      kill -TERM "$SERVER_PID" 2>/dev/null
+      if ! wait_for_server_exit; then
+        kill -KILL "$SERVER_PID" 2>/dev/null
+      fi
+    fi
+    wait "$SERVER_PID" 2>/dev/null
+  fi
+
+  [ -n "$WORKDIR" ] && rm -rf "$WORKDIR" 2>/dev/null
+}
+
+# ---- 一時ディレクトリ・trap 設置 ----
+
+umask 077
+WORKDIR=""
+SERVER_PID=""
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/codex-rate-limit.XXXXXX" 2>/dev/null)
+if [ -z "$WORKDIR" ] || [ ! -d "$WORKDIR" ]; then
+  fail "一時ディレクトリの作成に失敗しました。"
+fi
+
+FIFO="$WORKDIR/fifo"
+OUT="$WORKDIR/out"
+ERR="$WORKDIR/err"
+
+trap cleanup EXIT
+# シグナル受信時は明示的に exit する (bash はシグナル trap が普通の関数呼び出しで終わると
+# 中断箇所から実行を再開してしまうため)。exit すれば上の EXIT trap が cleanup を実行する。
+trap 'exit 1' HUP INT TERM
+
+# ---- codex app-server 起動 ----
+#
+# `exec 3<>fifo` は使わない (O_RDWR の移植性問題と、自己保有 read 端による EOF/SIGPIPE
+# 隠蔽があるため。docstring 「プロセスライフサイクル設計」参照)。
+
+mkfifo "$FIFO" || fail "fifo の作成に失敗しました ($FIFO)。"
+
+codex app-server < "$FIFO" > "$OUT" 2> "$ERR" &
+SERVER_PID=$!
+
+if ! exec 3> "$FIFO"; then
+  fail "codex app-server への writer fd を開けませんでした。"
+fi
+
+# サーバ起動後のみ SIGPIPE を無視する (起動前に無視すると codex 側に継承されてしまうため)。
+# 無視することで、読み手が消えた後の printf >&3 は SIGPIPE 即死ではなく EPIPE エラーとして
+# 検知でき、fail() で明示的な exit 1 に変換できる。
+trap '' PIPE
+
+# ---- RPC 送信 (initialize → initialized 通知 → account/rateLimits/read) ----
+#
+# 応答を待たず 3 メッセージを送り切る (docstring の RPC シーケンス参照)。id:1 の error 応答は
+# poll ループ側で検出して即失敗にする。
+
+send_rpc() {
+  printf '%s\n' "$1" >&3 2>/dev/null
+}
+
+INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"rate-limit-plugin","version":"0.2.0"}}}'
+
+send_rpc "$INIT_MSG" || fail "initialize リクエストの送信に失敗しました (writer fd への書き込みエラー)。"
+send_rpc '{"jsonrpc":"2.0","method":"initialized"}' || fail "initialized 通知の送信に失敗しました (writer fd への書き込みエラー)。"
+send_rpc '{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read"}' || fail "account/rateLimits/read リクエストの送信に失敗しました (writer fd への書き込みエラー)。"
+
+# ---- 応答 poll (0.5 秒 × 60 回 = 最大 30 秒) ----
+#
+# out ファイルを毎回先頭から走査し、id:2 の応答行 (result | error) または id:1 / id:null の
+# error 応答を探す。書きかけの行 (jq で parse できない) は再試行扱いにして無視する。
+
+RESULT_JSON=""
+ERROR_MSG=""
+
+# out を走査する。戻り値: 0 = id:2 の result を検出 (RESULT_JSON に格納) /
+# 1 = 該当する応答なし (poll 継続) / 2 = 即失敗すべき RPC error を検出 (ERROR_MSG に格納)。
+check_out() {
+  local line id err_msg result_json
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+
+    id=$(printf '%s' "$line" | jq -r 'if type == "object" then (.id | if . == null then "null" else tostring end) else empty end' 2>/dev/null)
+    [ -n "$id" ] || continue
+
+    if [ "$id" = "2" ]; then
+      err_msg=$(printf '%s' "$line" | jq -r '.error.message // empty' 2>/dev/null)
+      if [ -n "$err_msg" ]; then
+        ERROR_MSG="account/rateLimits/read が RPC エラーを返しました: $err_msg"
+        return 2
+      fi
+      result_json=$(printf '%s' "$line" | jq -c '.result // empty' 2>/dev/null)
+      if [ -z "$result_json" ] || [ "$result_json" = "null" ]; then
+        ERROR_MSG="account/rateLimits/read の応答に result も error も含まれていません。"
+        return 2
+      fi
+      RESULT_JSON="$result_json"
+      return 0
+    fi
+
+    if [ "$id" = "1" ] || [ "$id" = "null" ]; then
+      err_msg=$(printf '%s' "$line" | jq -r '.error.message // empty' 2>/dev/null)
+      if [ -n "$err_msg" ]; then
+        if [ "$id" = "1" ]; then
+          ERROR_MSG="initialize が RPC エラーを返しました: $err_msg"
+        else
+          ERROR_MSG="RPC エラー応答を受信しました (id: null): $err_msg"
+        fi
+        return 2
+      fi
+    fi
+  done < "$OUT"
+
+  return 1
+}
+
+MAX_ATTEMPTS=60
+STATUS=""
+attempt=0
+
+while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
+  check_out
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    STATUS="ok"
+    break
+  elif [ "$rc" -eq 2 ]; then
+    STATUS="rpc-error"
+    break
+  fi
+
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    # サーバ死亡を検出。直前に応答を flush している可能性があるため out をもう一度確認してから
+    # 失敗として分類する。
+    check_out
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      STATUS="ok"
+    elif [ "$rc" -eq 2 ]; then
+      STATUS="rpc-error"
+    else
+      STATUS="server-died"
+    fi
+    break
+  fi
+
+  attempt=$((attempt + 1))
+  sleep 0.5
+done
+
+[ -n "$STATUS" ] || STATUS="timeout"
+
+case "$STATUS" in
+  ok)
+    : # 正常終了。後続の validation へ進む
+    ;;
+  rpc-error)
+    fail "$ERROR_MSG"
+    ;;
+  server-died)
+    if [ -s "$ERR" ]; then
+      printf '[rate-limit] codex app-server の stderr (末尾):\n' >&2
+      tail -n 20 "$ERR" >&2
+    fi
+    fail "codex app-server が応答前に終了しました。"
+    ;;
+  timeout)
+    fail "30 秒以内に account/rateLimits/read の応答がありませんでした (timeout)。"
+    ;;
+esac
+
+# ---- usedPercent の validation ----
+#
+# rateLimitsByLimitId は nullable なので、必須フィールド検証は backward-compatible な
+# rateLimits 側 (limitId `codex` の primary) で行う (docstring 判定仕様参照)。
+
+USED_PERCENT=$(printf '%s' "$RESULT_JSON" | jq -r '(.rateLimits.primary.usedPercent | select(type == "number")) // empty' 2>/dev/null)
+if [ -z "$USED_PERCENT" ]; then
+  fail "応答に rateLimits.primary.usedPercent (0-100 の数値) が含まれていません。"
+fi
+if ! awk -v v="$USED_PERCENT" 'BEGIN { exit !(v >= 0 && v <= 100) }'; then
+  fail "rateLimits.primary.usedPercent が 0-100 の範囲外です (値: $USED_PERCENT)。"
+fi
+
+# ---- --max-used-percent 判定 (指定時のみ。usedPercent は小数がありうるため awk で数値比較) ----
+
+EXIT_CODE=0
+
+if [ -n "$MAX_USED_PERCENT" ]; then
+  REACHED_TYPE=$(printf '%s' "$RESULT_JSON" | jq -r '.rateLimits.rateLimitReachedType // empty' 2>/dev/null)
+  if [ -n "$REACHED_TYPE" ]; then
+    EXIT_CODE=2
+  elif awk -v v="$USED_PERCENT" -v n="$MAX_USED_PERCENT" 'BEGIN { exit !(v > n) }'; then
+    EXIT_CODE=2
+  fi
+fi
+
+# 取得成功時は判定結果 (exit 0/2) に依らず result を無加工で出力する。
+printf '%s\n' "$RESULT_JSON"
+exit "$EXIT_CODE"

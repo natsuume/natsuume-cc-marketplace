@@ -1,10 +1,10 @@
 # rate-limit プラグイン
 
-Claude (エージェント自身) が、セッション内でサブスクリプションの usage limit (5 時間セッション枠・週次枠の使用率と reset 時刻) をユーザ操作なしで取得できる `/rate-limit:status` Skill を提供するプラグインです。
+Claude (エージェント自身) が、セッション内でサブスクリプションの usage limit (5 時間セッション枠・週次枠の使用率と reset 時刻) をユーザ操作なしで取得できる `/rate-limit:status` Skill を提供するプラグインです。加えて、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻・plan 種別) を `codex app-server` RPC 経由で取得する `/rate-limit:codex-status` Skill も提供します。こちらは公式ドキュメント化済みの RPC (`account/rateLimits/read`) を使うため、`/rate-limit:status` の経路② のような非公式依存はありません。
 
 ## バージョン
 
-v0.1.0
+v0.2.0
 
 ## 取得経路
 
@@ -45,6 +45,7 @@ v0.1.0
 
 - `jq` (必須)
 - `curl`、`claude` CLI (経路② を使う場合のみ。UA に埋め込む version の抽出に `claude --version` を使用)
+- `codex` CLI (`/rate-limit:codex-status` を使う場合のみ。認証は codex app-server 自身が内部処理する)
 
 ## macOS について
 
@@ -77,6 +78,7 @@ Keychain からの token 読み出し (`security find-generic-password`) はコ�
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
 | status | `/rate-limit:status` | `scripts/fetch-rate-limit.sh` を実行し、5h/週次の使用率と reset 時刻を報告する |
+| codex-status | `/rate-limit:codex-status` | `scripts/codex-rate-limit.sh` を実行し、codex app-server RPC で codex の rate limit (週次枠使用率・reset 時刻・plan 種別) を報告する。`--max-used-percent <N>` で閾値判定 (exit 0/1/2) |
 
 ### Commands
 
@@ -89,6 +91,7 @@ Keychain からの token 読み出し (`security find-generic-password`) はコ�
 | ファイル | 用途 |
 |---------|------|
 | `scripts/fetch-rate-limit.sh` | 経路①→②のフォールバック取得本体 |
+| `scripts/codex-rate-limit.sh` | codex app-server RPC (`account/rateLimits/read`) による codex の rate limit 取得本体 |
 | `scripts/setup.sh` | 安定 launcher の設置と `statusLine` 設定の書き換え |
 | `scripts/lib/cache-paths.sh` | キャッシュファイルパスの単一定義 |
 | `scripts/lib/portable-time.sh` | epoch↔ISO 8601 UTC 変換・mtime 取得の GNU/BSD 両対応 helper |
@@ -101,4 +104,4 @@ Keychain からの token 読み出し (`security find-generic-password`) はコ�
 
 ## キーワード
 
-`rate-limit` `usage-limit` `statusline` `oauth` `skill`
+`rate-limit` `usage-limit` `statusline` `oauth` `skill` `codex`

@@ -32,7 +32,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [ui-discipline](#ui-discipline) | 0.2.1 | UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う |
 | [natsuume-writing](#natsuume-writing) | 0.4.2 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
 | [codex-advisor](#codex-advisor) | 0.1.2 | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミングと助言の扱いの規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
-| [rate-limit](#rate-limit) | 0.1.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
+| [rate-limit](#rate-limit) | 0.2.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.1.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 
 ---
@@ -357,6 +357,7 @@ Claude (エージェント自身) が、セッション内でサブスクリプ�
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
 | status | `/rate-limit:status` | `scripts/fetch-rate-limit.sh` を実行し、5h/週次の使用率と reset 時刻を報告する |
+| codex-status | `/rate-limit:codex-status` | `scripts/codex-rate-limit.sh` を実行し、codex app-server RPC で codex の rate limit (週次枠使用率・reset 時刻・plan 種別) を報告する。`--max-used-percent <N>` で閾値判定 (exit 0/1/2) |
 
 #### Commands
 
@@ -366,11 +367,11 @@ Claude (エージェント自身) が、セッション内でサブスクリプ�
 
 ### 依存
 
-`jq` (必須)、`curl` と `claude` CLI (経路② のみ)
+`jq` (必須)、`curl` と `claude` CLI (経路② のみ)、`codex` CLI (`/rate-limit:codex-status` のみ)
 
 ### キーワード
 
-`rate-limit` `usage-limit` `statusline` `oauth` `skill`
+`rate-limit` `usage-limit` `statusline` `oauth` `skill` `codex`
 
 ---
 
