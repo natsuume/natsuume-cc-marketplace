@@ -57,12 +57,19 @@
   - 対象: openai-codex plugin の /codex:rescue が「--resume / --fresh 未指定 + 再開可能 thread
     あり」のとき必ず発行する thread 選択の AskUserQuestion (rescue.md v1.0.6 準拠。フラグ指定時
     は質問しない挙動を前提とする)
-  - 指示の要件 (issue #241 受入基準):
+  - 指示の要件 (issue #241 受入基準 + pre-push codex review 指摘 (2026-07-15) による精密化):
     (1) /codex:rescue 起動時 (Skill / command / subagent 経由) は --resume または --fresh を
         常に自分で決定して付与し、thread 選択の AskUserQuestion を発行しない
-    (2) 判定ヒューリスティック: 直前の rescue と同一論点の続き (同じレビュー指摘への反復対応、
-        同じ相談の深掘り等) は --resume。それ以外・迷う場合は --fresh
-    (3) ユーザが継続 / 新規を明示した場合はヒューリスティックより優先する
+    (2) 判定ヒューリスティック: --resume は「直前の rescue と同一論点の続き (同じレビュー指摘
+        への反復対応、同じ相談の深掘り等) であり、かつ継続対象の rescue がこのセッションで
+        最新の再開可能な Codex task だと確実に分かる場合」に限る。--resume は起動順ではなく
+        updatedAt 順で最新の完了済み task を再開するため (openai-codex 1.0.6 の
+        findLatestResumableTaskJob。consult も同じ task 履歴を共有する)、他の Codex task
+        (consult 等) が後から完了した場合・並行 / background の task が存在する場合・迷う
+        場合は --fresh とする
+    (3) ユーザがフラグ (--resume / --fresh) を文字どおり指定した場合はそれを尊重する。自然
+        言語で継続を依頼された場合は継続の意図を尊重しつつ、対象 thread を安全に特定でき
+        なければ --fresh とし、必要な文脈を rescue プロンプトに明示的に書いて補償する
   - 境界の要件: thread 選択の質問のみを対象とし、rescue を使うかどうかの判断や設計 / 仕様
     レベルの決定に関する AskUserQuestion (セクション 3) は変更しない
   - 本文は Phase B で「なぜ + 指示 + 境界」形式で記述する
