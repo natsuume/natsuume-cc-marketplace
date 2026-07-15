@@ -69,7 +69,14 @@
         場合は --fresh とする
     (3) ユーザがフラグ (--resume / --fresh) を文字どおり指定した場合はそれを尊重する。自然
         言語で継続を依頼された場合は継続の意図を尊重しつつ、対象 thread を安全に特定でき
-        なければ --fresh とし、必要な文脈を rescue プロンプトに明示的に書いて補償する
+        なければ --fresh とする。fallback 時の文脈の扱いは task 本文の所有者で分かれる:
+        Claude が rescue task 本文を作成する経路では、呼び出し前に必要な文脈を含む
+        self-contained な本文を作る。ユーザが /codex:rescue の本文を直接指定した経路では、
+        routing flag 以外の本文を変更せずそのまま転送する (文脈の連続性は保証できないが、
+        誤 thread の再開防止と upstream の verbatim 転送契約を優先する。Codex 出力以外の
+        説明を同じ rescue 応答へ追加しない)
+  - README への記載事項: ユーザ直接起動 + 対象 rescue 非最新のケースが安全側の degraded
+    mode (--fresh + raw 転送で文脈連続性なし) になる既知の制約を記載する
   - 境界の要件: thread 選択の質問のみを対象とし、rescue を使うかどうかの判断や設計 / 仕様
     レベルの決定に関する AskUserQuestion (セクション 3) は変更しない
   - 本文は Phase B で「なぜ + 指示 + 境界」形式で記述する
