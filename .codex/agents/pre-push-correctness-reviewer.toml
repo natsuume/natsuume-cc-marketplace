@@ -1,4 +1,4 @@
-name = "pre-push-correctness-reviewer"
+name = "pre_push_correctness_reviewer"
 description = "Run the pre-push-review correctness pass over the complete current branch diff. Use only when the review-codex skill requests this named reviewer."
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"

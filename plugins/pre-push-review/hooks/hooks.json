@@ -29,7 +29,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "^pre-push-(correctness|independent|security)-reviewer$",
+        "matcher": "^pre_push_(correctness|independent|security)_reviewer$",
         "hooks": [
           {
             "type": "command",

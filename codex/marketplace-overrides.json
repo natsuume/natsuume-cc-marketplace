@@ -102,7 +102,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "3.1.0",
+      "version": "3.1.1",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -161,7 +161,7 @@
             "sourceDigest": "0289c10ef0bedf84fd47ad2cf97ef85959e008492c716a96794de5d1b4410c17"
           }
         ],
-        "sourceTreeDigest": "c01ebd7f98ec1c5fabff17126e433f382a3cf95eda22114cb5fbe538eaa24117"
+        "sourceTreeDigest": "e34dd30a84a13ba68303c24e3f2d12575af80a7446f2fe97092f3f0cc5f4c046"
       }
     },
     "update-default-branch": {

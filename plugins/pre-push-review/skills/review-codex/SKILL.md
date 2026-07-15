@@ -35,9 +35,9 @@ git diff --stat
 
 1 つの assistant turn から次の **agent_type を完全一致で指定した** 3 custom agent を同時に起動する。generic `default` / `worker` / `explorer` へ fallback しない。
 
-1. `pre-push-correctness-reviewer`: 「custom agent の developer instructions に従い、現在の branch 全差分を correctness review して report を返す」
-2. `pre-push-independent-reviewer`: 「他 review の結果を見ず、custom agent の developer instructions に従い、同じ branch 全差分を独立 review して report を返す」
-3. `pre-push-security-reviewer`: 「custom agent の developer instructions に従い、現在の branch 全差分を security review して report を返す」
+1. `pre_push_correctness_reviewer`: 「custom agent の developer instructions に従い、現在の branch 全差分を correctness review して report を返す」
+2. `pre_push_independent_reviewer`: 「他 review の結果を見ず、custom agent の developer instructions に従い、同じ branch 全差分を独立 review して report を返す」
+3. `pre_push_security_reviewer`: 「custom agent の developer instructions に従い、現在の branch 全差分を security review して report を返す」
 
 各 profile は `sandbox_mode = "read-only"`、high reasoning、role 固有 instructions と完了 footer を定義する。3 本を並列起動できない場合は同じ named agent を順次実行してよいが、別 agent type や親 agent による代行は禁止する。1 本でも spawn・実行に失敗したら残りの report だけで完了扱いにしない。
 

@@ -16,7 +16,11 @@
 
 ## バージョン
 
-v3.1.0 (前身: `pre-commit-review` v0.4.0)
+v3.1.1 (前身: `pre-commit-review` v0.4.0)
+
+### v3.1.0 → v3.1.1 の変更点
+
+- Codex v0.144.4 が custom agent の `name` に hyphen を受理しないため、Codex の 3 agent type を underscore 形式へ変更した。既存 setup との互換性のため TOML filename は hyphen 形式のまま維持し、marker filename と hash 契約も変更していない
 
 ### v3.0.5 → v3.1.0 の変更点
 
@@ -85,9 +89,9 @@ Codex では `$pre-push-review:setup-pre-push-agents` で対象 repository の `
 
 | agent type | 観点 | marker |
 |---|---|---|
-| `pre-push-correctness-reviewer` | high-confidence correctness bug | `.claude-pre-push-code-reviewed` |
-| `pre-push-independent-reviewer` | 他 report を見ない独立 code review | `.claude-pre-push-codex-reviewed` |
-| `pre-push-security-reviewer` | concrete attack path のある脆弱性 | `.claude-pre-push-security-reviewed` |
+| `pre_push_correctness_reviewer` | high-confidence correctness bug | `.claude-pre-push-code-reviewed` |
+| `pre_push_independent_reviewer` | 他 report を見ない独立 code review | `.claude-pre-push-codex-reviewed` |
+| `pre_push_security_reviewer` | concrete attack path のある脆弱性 | `.claude-pre-push-security-reviewed` |
 
 各 template は `sandbox_mode = "read-only"` と role 固有 `developer_instructions` を持ちます。setup は最初に `inspect` で target、3 ファイルの状態、plan token を表示し、ユーザーが作成・上書きを明示承認した後だけ token 付き `write` を実行します。inspect 後に destination が変化した場合は token mismatch で書き込みを中止します。symlink / 非通常ファイルも上書きしません。custom agent は project config なので、導入後は新しい Codex thread で有効化します。
 
@@ -107,7 +111,7 @@ Codex 代替が保証するのは、**指定した named agent の Codex runtime
 - SubagentStop payload は Codex runtime 由来の構造化 event ですが、暗号署名ではありません。hook は review の意味的な正しさや finding の完全性を証明せず、agent が出力契約まで完走したことを検証します。Claude Code の Agent/Task completion hook も review 内容そのものを証明するものではありません
 - Codex plugin manifest は project custom agent を install 時に `.codex/agents` へ自動配置しません。明示承認を伴う `$pre-push-review:setup-pre-push-agents` が一度必要で、`$pre-push-review:review-codex` は template が byte-identical でないとき generic agent へ fallback しません
 - Codex custom agent は Claude agent の `tools:` allowlist と同じ粒度の tool 制限を持たないため、read-only sandbox で mutation を防ぎます。親 turn の live sandbox / permission override が子へ再適用される surface では、その override が profile より優先されます
-- Claude 側の 3 軸は Anthropic correctness + OpenAI Codex + security ですが、Codex 側は 3 本とも Codex runtime 上です。`pre-push-independent-reviewer` は別 context で他 report を渡さない独立性を持つ一方、provider/model 実装の独立性までは再現しません
+- Claude 側の 3 軸は Anthropic correctness + OpenAI Codex + security ですが、Codex 側は 3 本とも Codex runtime 上です。`pre_push_independent_reviewer` は別 context で他 report を渡さない独立性を持つ一方、provider/model 実装の独立性までは再現しません
 - plugin hook はユーザーの trust 後にだけ動作し、hooks feature の無効化、marker の直接改変、Codex 外の terminal / clone からの push を防ぐ adversarial security boundary ではありません。Claude Code 版と同じく cooperative agent workflow の push gate です
 
 ### 検証テスト

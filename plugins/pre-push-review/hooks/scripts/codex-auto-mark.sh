@@ -64,17 +64,17 @@ HOOK_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd')
 LAST_MESSAGE=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message')
 
 case "$AGENT_TYPE" in
-  pre-push-correctness-reviewer)
+  pre_push_correctness_reviewer)
     ROLE="correctness"
     EXPECTED_HEADING="# Correctness Review"
     MARKER_FN="code_reviewed_marker_path"
     ;;
-  pre-push-independent-reviewer)
+  pre_push_independent_reviewer)
     ROLE="independent"
     EXPECTED_HEADING="# Independent Review"
     MARKER_FN="codex_marker_path"
     ;;
-  pre-push-security-reviewer)
+  pre_push_security_reviewer)
     ROLE="security"
     EXPECTED_HEADING="# Security Review"
     MARKER_FN="security_marker_path"
