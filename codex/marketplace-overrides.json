@@ -447,7 +447,7 @@
         "status": "excluded",
         "reason": "Claude Code から異種モデルの Codex へ相談するための plugin であり、Codex 自身から nested Codex を呼ぶ用途は marketplace 配布対象にしません。"
       },
-      "version": "0.3.1",
+      "version": "1.0.0",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []

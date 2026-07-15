@@ -128,6 +128,29 @@ def _port_plugins(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     return plugins
 
 
+def _distribution_status(plugin: dict[str, Any] | None) -> str:
+    """Return the effective distribution status, including schema v3 defaults."""
+
+    if not isinstance(plugin, dict):
+        return "available"
+    distribution = plugin.get("distribution")
+    if not isinstance(distribution, dict):
+        return "available"
+    status = distribution.get("status")
+    return status if isinstance(status, str) else "available"
+
+
+def _excluded_in_both(
+    plugin_name: str,
+    current_plugins: dict[str, dict[str, Any]],
+    base_plugins: dict[str, dict[str, Any]],
+) -> bool:
+    return (
+        _distribution_status(current_plugins.get(plugin_name)) == "excluded"
+        and _distribution_status(base_plugins.get(plugin_name)) == "excluded"
+    )
+
+
 def _scope_matches(path: str, scope: str) -> bool:
     if scope.endswith("/"):
         return path.startswith(scope)
@@ -221,7 +244,10 @@ def changed_runtime_plugins(
         base_entry.pop("version", None)
         if current_entry != base_entry:
             impacts["claude"].add(name)
-            impacts["codex"].add(name)
+            if not _excluded_in_both(
+                name, current_port_plugins, base_port_plugins
+            ):
+                impacts["codex"].add(name)
 
     current_marketplace_global = dict(current_marketplace_payload or {})
     base_marketplace_global = dict(base_marketplace_payload or {})
@@ -230,7 +256,13 @@ def changed_runtime_plugins(
     if current_marketplace_global != base_marketplace_global:
         names = set(current_marketplace) | set(base_marketplace)
         impacts["claude"].update(names)
-        impacts["codex"].update(names)
+        impacts["codex"].update(
+            name
+            for name in names
+            if not _excluded_in_both(
+                name, current_port_plugins, base_port_plugins
+            )
+        )
 
     for name in set(current_port_plugins) | set(base_port_plugins):
         current_distribution = current_port_plugins.get(name, {}).get("distribution")
@@ -274,7 +306,10 @@ def changed_runtime_plugins(
             base_manifest
         ):
             impacts["claude"].add(name)
-            impacts["codex"].add(name)
+            if not _excluded_in_both(
+                name, current_port_plugins, base_port_plugins
+            ):
+                impacts["codex"].add(name)
     return impacts
 
 
@@ -432,6 +467,43 @@ def check_versions(base_revision: str, *, direct: bool = False) -> list[str]:
                     runtime,
                     *versions[runtime],
                 )
+        current_distribution = _distribution_status(current_port.get(plugin_name))
+        base_distribution = _distribution_status(base_port.get(plugin_name))
+        current_codex, base_codex = versions["codex"]
+        current_codex_tuple = _parsed_version(
+            plugin_name, "codex", current_codex, base=False
+        )
+        base_codex_tuple = _parsed_version(
+            plugin_name, "codex", base_codex, base=True
+        )
+        codex_version_increased = (
+            current_codex_tuple is not None
+            and base_codex_tuple is not None
+            and current_codex_tuple > base_codex_tuple
+        )
+        if (
+            base_distribution == "available"
+            and current_distribution == "excluded"
+            and codex_version_increased
+            and current_codex_tuple[0] <= base_codex_tuple[0]
+        ):
+            failures.append(
+                f"{plugin_name}: Codex distribution available -> excluded requires "
+                f"a major version bump from {base_codex} (current {current_codex})"
+            )
+        if (
+            base_distribution == "excluded"
+            and current_distribution == "available"
+            and codex_version_increased
+            and not is_feature_or_breaking_bump(
+                base_codex_tuple, current_codex_tuple
+            )
+        ):
+            failures.append(
+                f"{plugin_name}: Codex distribution excluded -> available requires "
+                f"a minor or major version bump from {base_codex} "
+                f"(current {current_codex})"
+            )
         if plugin_name in impacts["either"]:
             bumped = False
             for runtime in ("claude", "codex"):
