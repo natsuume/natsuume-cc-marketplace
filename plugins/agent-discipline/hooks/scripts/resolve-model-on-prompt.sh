@@ -19,6 +19,16 @@
 # - prefix の文言を「常時適用ルールの確定版」への言及に更新し、分業規律の補正が別要素で届く
 #   ことに触れる
 #
+# ## 自己修復指示 (issue #235 で追加)
+#
+# 再注入ペイロードの最先頭 (one-shot 補正 prefix より前) に、persisted-output 退避時の
+# 自己修復指示 1 段落を必ず置く (Claude Code は additionalContext 1 要素が inline 閾値
+# 約 9〜10K 文字を超えると本文をファイルへ退避し、スタブ + 先頭 2KB プレビューのみを context
+# に載せるため、プレビューに必ず入る先頭へ置く)。文言は本スクリプト内の SELF_HEAL 定数が
+# 保持し、inject-always.sh の SELF_HEAL 定数と byte-identical に保つ (スクリプト間の二重管理。
+# 変更時は必ず両スクリプトを同時に更新すること)。本スクリプトのペイロードは単一構成
+# (≈5.8K 字) のため 8K ガードは持たないが、指示は無条件で先頭に付す。
+#
 # ## 発火条件
 #
 # pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`
@@ -46,7 +56,7 @@
 #   {
 #     "hookSpecificOutput": {
 #       "hookEventName": "<入力の hook_event_name をそのまま echo>",
-#       "additionalContext": "<prefix + always-fable.md 本文>"
+#       "additionalContext": "<自己修復指示 (SELF_HEAL) + prefix + always-fable.md 本文>"
 #     }
 #   }
 #
@@ -140,9 +150,15 @@ if [ -z "$BODY" ]; then
   exit 0
 fi
 
+# 自己修復指示 (issue #235、ヘッダ「自己修復指示」節)。ペイロード最先頭に必ず置く。
+# 文言は inject-always.sh の SELF_HEAL と byte-identical に保つこと (二重管理)。
+SELF_HEAL='(自己修復) このメッセージが persisted-output として退避されている場合は、スタブに記載されたパスの退避ファイルを Read で全文読了してから作業を開始すること。'
+
 PREFIX="(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの常時適用ルール (part 1/3 以降) を暫定注入していた。会話の進行によりこのセッションのモデルが Fable であると確定したため、以後は本メッセージ以下の常時適用ルール確定版を優先し、セッション冒頭の自己ゲート付き注入は破棄すること。分業規律の Fable 版補正は別要素 (inject-discipline.sh) で届く。"
 
-CONTEXT="$PREFIX
+CONTEXT="$SELF_HEAL
+
+$PREFIX
 
 $BODY"
 

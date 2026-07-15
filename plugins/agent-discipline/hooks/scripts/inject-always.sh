@@ -34,6 +34,9 @@
 #   | 非空でその他   | delivery-note + always-sonnet-1.md                       |
 #   | 判定不能       | delivery-note + preamble-self-gate.md + always-sonnet-1.md |
 #
+# 全分岐共通で、要素の最先頭 (delivery-note より前) に自己修復指示 (SELF_HEAL、issue #235、
+# 下記「自己修復指示」節) が付く。
+#
 # 残り (UserPromptSubmit で個別配送、本スクリプトの責務外):
 #   - always-sonnet-2.md / always-sonnet-3.md (非 fable 確定時、または判定不能時は
 #     part-self-gate.md 付き) … inject-rules-part.sh
@@ -61,15 +64,36 @@
 # `delivered-discipline-<session_id>`) は SessionStart のたびに無条件で削除する (`startup` 以外に
 # `resume` / `clear` / `compact` でも発火するため、全要素を毎回再配送するセマンティクスを維持する)。
 #
-# ## delivery-note と 8K ガード (issue #236 で追加、設計契約 §2)
+# ## 自己修復指示 (issue #235 で追加)
 #
-# 注入本文の先頭に `delivery-note.md` (常時ルール・分業規律が複数メッセージに分割配送される旨の
-# 短い前置き) と、実行時に解決した prompts ディレクトリの絶対パス 1 行を付加する。
-# prompts ディレクトリの実パスは実行環境依存で長さが非有界のため、additionalContext を
-# 最終的に組み立てた後の全文に対して文字数を計測し、8,000 を超える場合は
+# Claude Code は hook の additionalContext 1 要素が inline 閾値 (約 9〜10K 文字、UTF-16
+# code unit 基準) を超えると本文をファイルへ退避し、`<persisted-output>` スタブ (退避パス +
+# 先頭 2KB プレビュー) のみを context に載せる。#236 の分割で全要素は 8,000 字以下に収まって
+# いるが、将来の閾値変動・ペイロード増加で劣化が再発しても「退避ファイルを読み直せば機能する」
+# 状態を保つため、additionalContext の最先頭 (4 分岐すべて、delivery-note より前 = プレビュー
+# 2KB に必ず入る位置) に自己修復指示 1 段落を必ず置く:
+#
+# - 文言はプレビューを圧迫しないよう 200 字以内とし、「persisted-output として退避されている
+#   場合は」という条件付き文言にする (inline 配送時に読んでも違和感がないこと)。指示には
+#   「退避ファイル (スタブに記載されたパス) を Read で全文読了してから作業を開始する」ことを
+#   明記する
+# - 文言は本スクリプト内の SELF_HEAL 定数が保持する (issue #235 の I/O 契約により、md
+#   ファイル側には置かずスクリプト側で付与する)
+# - resolve-model-on-prompt.sh の one-shot 補正ペイロード最先頭にも byte-identical な同文を
+#   置く (スクリプト間の二重管理。変更時は必ず両スクリプトを同時に更新すること)
+#
+# ## delivery-note と 8K ガード (issue #236 で追加、設計契約 §2。#235 で不落単位を拡張)
+#
+# 自己修復指示 (SELF_HEAL) に続けて `delivery-note.md` (常時ルール・分業規律が複数メッセージに
+# 分割配送される旨の短い前置き) と、実行時に解決した prompts ディレクトリの絶対パス 1 行を
+# 付加する。prompts ディレクトリの実パスは実行環境依存で長さが非有界のため、additionalContext
+# を最終的に組み立てた後の全文に対して文字数を計測し、8,000 を超える場合は
 #   (i) 実パス行を落として再計測 → (ii) それでも超える場合は delivery-note 全体を落として再計測
-# の順で段階的に縮退する。self-gate 前置き (preamble-self-gate.md) とルール本文
-# (always-fable.md / always-sonnet-1.md) はいかなる場合も落とさない。
+# の順で段階的に縮退する。SELF_HEAL とルール本文 (self-gate 前置き preamble-self-gate.md を
+# 含む always-fable.md / always-sonnet-1.md) は不落単位 (ESSENTIAL = SELF_HEAL + CORE) であり、
+# いかなる場合も落とさない。ESSENTIAL 単体が 8,000 字を超える場合、ガードは超過を許容する
+# (best effort) — persisted-output 化されたときにこそ自己修復指示が必要になるため、その場合も
+# 指示を先頭に残すことを優先する。
 #
 # ## 出力 JSON 形状
 #
@@ -220,32 +244,45 @@ else
   fi
 fi
 
+# 自己修復指示 (issue #235、ヘッダ「自己修復指示」節)。additionalContext の最先頭に必ず置く。
+# 文言は resolve-model-on-prompt.sh の SELF_HEAL と byte-identical に保つこと (二重管理)。
+SELF_HEAL='(自己修復) このメッセージが persisted-output として退避されている場合は、スタブに記載されたパスの退避ファイルを Read で全文読了してから作業を開始すること。'
+
 NOTE=$(cat "$PROMPTS_DIR/delivery-note.md" 2>/dev/null)
 PATH_LINE="(参照パス) $PROMPTS_DIR"
 
 # additionalContext を組み立てた後の全文文字数を計測し、8,000 字を超える場合は
 # (i) 実パス行を落として再計測 → (ii) それでも超えるなら delivery-note 全体を落として再計測、
-# の順で段階的に縮退する。CORE (self-gate 前置き + ルール本文) はいかなる場合も落とさない。
+# の順で段階的に縮退する。ESSENTIAL (= SELF_HEAL + CORE) はいかなる場合も落とさない。
+# ESSENTIAL 単体が 8,000 字を超える場合は超過を許容する (best effort、ヘッダ参照)。
+ESSENTIAL="$SELF_HEAL
+
+$CORE"
+
 if [ -n "$NOTE" ]; then
-  FULL="$NOTE
+  FULL="$SELF_HEAL
+
+$NOTE
 $PATH_LINE
 
 $CORE"
 else
-  FULL="$CORE"
+  FULL="$ESSENTIAL"
 fi
 
 LEN=$(printf '%s' "$FULL" | wc -m)
 
 if [ "$LEN" -gt 8000 ] && [ -n "$NOTE" ]; then
-  FULL="$NOTE
+  FULL="$SELF_HEAL
+
+$NOTE
 
 $CORE"
   LEN=$(printf '%s' "$FULL" | wc -m)
 fi
 
 if [ "$LEN" -gt 8000 ]; then
-  FULL="$CORE"
+  FULL="$ESSENTIAL"
 fi
 
 CONTEXT="$FULL"
