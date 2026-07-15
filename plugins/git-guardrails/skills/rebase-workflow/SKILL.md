@@ -1,15 +1,6 @@
 ---
 name: rebase-workflow
-description: rebase を用いてリモートのデフォルトブランチの変更を作業ブランチに取り込む
-user-invocable: true
-when_to_use: |
-  ユーザーが以下のようなリクエストをした場合に使用:
-  - 「リモートの変更を取り込みたい」
-  - 「rebase したい」
-  - 「master/main を取り込む」
-  - 「sync」「同期」
-  - 「ブランチを最新にしたい」
-  - 「デフォルトブランチの変更を反映」
+description: rebase を用いてリモートのデフォルトブランチの変更を作業ブランチに取り込む。「リモート変更を取り込む」「rebase」「master/main を同期」「ブランチを最新にする」依頼で使う
 ---
 
 # Rebase Workflow

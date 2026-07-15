@@ -1,12 +1,13 @@
 #!/bin/bash
 # inject-pending-handoff.sh
-# SessionStart (matcher "clear|startup") で発火し、直前セッションが
-# detect-context-threshold.sh の指示に従って書き残した pending handoff を
-# 新セッションへ自動注入する (issue #228)。
+# SessionStart で発火し、直前セッションが書き残した pending handoff を新セッションへ
+# 自動注入する (issue #228)。clear/startup は runtime 間で共有する。resume/compact は
+# save-codex-handoff.sh が同じ session_id で生成した pending-codex-* だけを対象にすることで、
+# Claude Code の generic pending を再開済み context や compact 時に消費しない。
 #
 # 手順 (途中の失敗はすべて無音 exit 0。fail-open でセッションを壊さない):
 #   1. jq 不在
-#   2. source が clear/startup 以外 (hooks.json の matcher と二重防御)
+#   2. hook_event_name が SessionStart でない、source が対象外、または compact なのに session_id がない
 #   3. git 管理下でない (cwd から絶対 git-dir が解決できない)
 #   4. handoff ディレクトリの検証 (symlink 拒否・ディレクトリ確認・所有確認)
 #   5. pending-*.md / consumed-*.md を走査し、各候補ファイルを検証 (symlink 拒否・
@@ -25,17 +26,33 @@ fi
 
 INPUT=$(cat)
 
-{ read -r HOOK_EVENT; read -r SOURCE; read -r CWD; } < <(
-  printf '%s' "$INPUT" | jq -r '
-    (.hook_event_name // ""),
-    (.source // ""),
-    (.cwd // "")
+{
+  IFS= read -r -d '' HOOK_EVENT
+  IFS= read -r -d '' SOURCE
+  IFS= read -r -d '' RAW_SESSION_ID
+  IFS= read -r -d '' CWD
+} < <(
+  printf '%s' "$INPUT" | jq -j '
+    (.hook_event_name // ""), "\u0000",
+    (.source // ""), "\u0000",
+    (.session_id // ""), "\u0000",
+    (.cwd // ""), "\u0000"
   ' 2>/dev/null
 )
 
-# 2. source が clear/startup 以外なら何もしない (hooks.json の matcher と二重防御)。
+# 2. clear/startup は新しい context なので既存 pending 全般を対象にする。SessionStart input には
+# Codex 固有の runtime marker がないため、resume/compact では source と同じ sanitized
+# session_id を filename に持つ Codex producer の pending だけを後段で候補にする。これにより
+# Claude の resume が generic pending を重複注入して consumed 化することを防ぐ。
+[ "$HOOK_EVENT" = "SessionStart" ] || exit 0
+
+CODEX_SESSION_ID=""
 case "$SOURCE" in
   clear | startup) ;;
+  resume | compact)
+    CODEX_SESSION_ID=$(printf '%s' "$RAW_SESSION_ID" | tr -cd 'A-Za-z0-9._-')
+    [ -n "$CODEX_SESSION_ID" ] || exit 0
+    ;;
   *) exit 0 ;;
 esac
 
@@ -80,8 +97,20 @@ for f in "$HANDOFF_DIR"/pending-*.md "$HANDOFF_DIR"/consumed-*.md; do
 
   case "$f" in
     */pending-*.md)
+      if [ "$SOURCE" = "compact" ] || [ "$SOURCE" = "resume" ]; then
+        base=$(basename "$f")
+        name_without_ext=${base%.md}
+        without_unique_suffix=${name_without_ext%-*}
+        timestamp=${without_unique_suffix##*-}
+        producer_prefix=${without_unique_suffix%-*}
+        [[ "$timestamp" =~ ^[0-9]+$ ]] || continue
+        [ "$producer_prefix" = "pending-codex-$CODEX_SESSION_ID" ] || continue
+      fi
       if [ "$age" -le "$TWENTY_FOUR_HOURS" ]; then
-        candidates+=("$mtime|$f")
+        # handoff filename は producer が sanitized/固定文字だけで生成する。repository の絶対
+        # path は改行を含みうるため、newline sort には安全な basename だけを渡し、claim 時に
+        # HANDOFF_DIR と再結合する。
+        candidates+=("$mtime|$(basename "$f")")
       fi
       ;;
   esac
@@ -109,7 +138,7 @@ consumed_path=""
 remaining_paths=()
 
 for entry in "${sorted_candidates[@]}"; do
-  path="${entry#*|}"
+  path="$HANDOFF_DIR/${entry#*|}"
 
   if [ -n "$claimed_path" ]; then
     remaining_paths+=("$path")

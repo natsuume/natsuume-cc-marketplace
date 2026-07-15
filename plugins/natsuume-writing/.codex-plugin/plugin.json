@@ -1,0 +1,37 @@
+{
+  "name": "natsuume-writing",
+  "version": "0.5.1",
+  "description": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。",
+  "author": {
+    "name": "natsuume",
+    "url": "https://github.com/natsuume"
+  },
+  "homepage": "https://github.com/natsuume/natsuume-cc-marketplace#natsuume-writing",
+  "repository": "https://github.com/natsuume/natsuume-cc-marketplace",
+  "license": "MIT",
+  "keywords": [
+    "writing",
+    "tech-blog",
+    "technical-writing",
+    "style-guide",
+    "system-prompt",
+    "hook",
+    "skill"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Natsuume Writing",
+    "shortDescription": "natsuume の文体規則で outline・draft・review を支援",
+    "longDescription": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。 Codex 互換性: 執筆ルール、3 Skills、SessionStart hook を同じファイルから共有します。",
+    "developerName": "natsuume",
+    "category": "Productivity",
+    "capabilities": [
+      "Skills",
+      "Hooks"
+    ],
+    "websiteURL": "https://github.com/natsuume/natsuume-cc-marketplace",
+    "defaultPrompt": [
+      "natsuume-writing の文体規則を使って技術文書を作成してください。"
+    ]
+  }
+}

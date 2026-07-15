@@ -1,12 +1,6 @@
 ---
 name: issue-plan
-description: issue を起票する・issue に分解する・sub-issue を作る際の手順 (起票前の壁打ち・body template・分割基準・関係設定コマンド) を提供する
-user-invocable: true
-when_to_use: |
-  ユーザーが以下のようなリクエストをした場合に使用:
-  - 「issue を起票する」
-  - 「issue に分解する」
-  - 「sub-issue を作る」
+description: 「issue を起票する」「issue に分解する」「sub-issue を作る」際の手順 (起票前の壁打ち・body template・分割基準・関係設定コマンド) を提供する
 ---
 
 # issue-plan

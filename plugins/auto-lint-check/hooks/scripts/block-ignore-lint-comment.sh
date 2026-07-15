@@ -1,7 +1,7 @@
 #!/bin/bash
 # block-ignore-lint-comment.sh
 #
-# Edit/Write/MultiEdit が「新規挿入する」内容に linter/formatter の ignore
+# Edit/Write/MultiEdit/apply_patch が「新規挿入する」内容に linter/formatter の ignore
 # コメントが含まれていたらツール実行を deny する。既に old_string や既存
 # ファイルに含まれていた ignore コメントを保持するだけの編集は許可する
 # (検出は detect-new-ignores.py で多重集合差分により実装)。
@@ -34,7 +34,7 @@ INPUT=$(cat)
 TOOL_NAME=$(extract_tool_name "$INPUT")
 
 case "$TOOL_NAME" in
-  Write|Edit|MultiEdit) ;;
+  Write|Edit|MultiEdit|apply_patch) ;;
   *) exit 0 ;;
 esac
 

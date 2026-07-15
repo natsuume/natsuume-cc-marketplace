@@ -1,5 +1,6 @@
 {
   "name": "enforce-draft-pr",
-  "version": "0.2.3",
+  "version": "0.3.0",
+  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "gh pr create に --draft を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft で作成させ、レビューを経て ready 化する運用を支える。"
 }

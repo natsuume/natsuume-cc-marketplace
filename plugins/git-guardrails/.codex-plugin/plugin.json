@@ -1,0 +1,35 @@
+{
+  "name": "git-guardrails",
+  "version": "0.5.0",
+  "description": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。",
+  "author": {
+    "name": "natsuume",
+    "url": "https://github.com/natsuume"
+  },
+  "homepage": "https://github.com/natsuume/natsuume-cc-marketplace#git-guardrails",
+  "repository": "https://github.com/natsuume/natsuume-cc-marketplace",
+  "license": "MIT",
+  "keywords": [
+    "git",
+    "workflow",
+    "github-flow",
+    "rebase",
+    "default-branch-protection"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Git Guardrails",
+    "shortDescription": "GitHub Flow の直接書き込み経路を hook で防止",
+    "longDescription": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。 Codex 互換性: Skill と command hook を Claude Code / Codex で共有します。",
+    "developerName": "natsuume",
+    "category": "Productivity",
+    "capabilities": [
+      "Skills",
+      "Hooks"
+    ],
+    "websiteURL": "https://github.com/natsuume/natsuume-cc-marketplace",
+    "defaultPrompt": [
+      "GitHub Flow のガードレールを適用してこの作業を進めてください。"
+    ]
+  }
+}

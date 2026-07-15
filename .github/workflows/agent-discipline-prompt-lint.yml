@@ -42,12 +42,17 @@ on:
       - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
       - ".github/workflows/agent-discipline-prompt-lint.yml"
 
+permissions:
+  contents: read
+
 jobs:
   prompt-sync:
     name: agent-discipline prompt sync lint (rule ID set + hooks.json common block)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # lint-prompt-sync.sh は引数を取らず、 リポジトリルートからの相対パスで
       # always-fable.md / always-sonnet-{1,2,3}.md / hooks.json を参照する契約のため、

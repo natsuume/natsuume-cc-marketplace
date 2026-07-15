@@ -4,7 +4,11 @@
 
 ## バージョン
 
-v0.2.3
+v0.3.0
+
+### v0.2.3 → v0.3.0 の変更点
+
+- Codex plugin manifest を追加し、既存の `updatedInput.command` PreToolUse hook を Claude Code / Codex で共有できるようにした
 
 ### v0.2.2 → v0.2.3 の変更点
 

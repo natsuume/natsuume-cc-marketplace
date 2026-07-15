@@ -1,0 +1,35 @@
+{
+  "name": "rate-limit",
+  "version": "0.3.0",
+  "description": "Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する /rate-limit:status Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する /rate-limit:codex-status Skill を提供するプラグイン。/rate-limit:setup で statusline キャッシュ連携を登録する。",
+  "author": {
+    "name": "natsuume",
+    "url": "https://github.com/natsuume"
+  },
+  "homepage": "https://github.com/natsuume/natsuume-cc-marketplace#rate-limit",
+  "repository": "https://github.com/natsuume/natsuume-cc-marketplace",
+  "license": "MIT",
+  "keywords": [
+    "rate-limit",
+    "usage-limit",
+    "statusline",
+    "oauth",
+    "skill",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Rate Limit",
+    "shortDescription": "Claude と Codex の subscription usage limit を取得",
+    "longDescription": "Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する /rate-limit:status Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する /rate-limit:codex-status Skill を提供するプラグイン。/rate-limit:setup で statusline キャッシュ連携を登録する。 Codex 互換性: codex-status Skill は Codex app-server RPC を共有し、setup-codex Skill が組み込み limit footer と /usage を構成します。",
+    "developerName": "natsuume",
+    "category": "Productivity",
+    "capabilities": [
+      "Skills"
+    ],
+    "websiteURL": "https://github.com/natsuume/natsuume-cc-marketplace",
+    "defaultPrompt": [
+      "現在の Codex rate limit と reset 時刻を確認してください。"
+    ]
+  }
+}

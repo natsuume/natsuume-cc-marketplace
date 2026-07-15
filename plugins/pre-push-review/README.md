@@ -16,7 +16,13 @@
 
 ## バージョン
 
-v3.0.5 (前身: `pre-commit-review` v0.4.0)
+v3.1.0 (前身: `pre-commit-review` v0.4.0)
+
+### v3.0.5 → v3.1.0 の変更点
+
+- Codex plugin manifest と `review-codex` Skill を追加した。初期実装では Claude agents の review contract を参照して Codex native subagent 3 本を並列実行した
+- Codex の review 完了後に既存 diff hash / marker lib を使う `mark-review.sh` を追加し、Claude 側と同じ push gate を共有した。現行実装では project custom agent + SubagentStop hook による自動 marker を正規フローとし、この helper は通常フローから外れている
+- push deny の復旧案内に Codex の `$pre-push-review:review-codex` を追加した。初期実装で Skill orchestration に依存していた完了検知は、現行実装では Codex runtime の lifecycle payload と role 固有 report footer の検証へ置換されている
 
 ### v3.0.4 → v3.0.5 の変更点 (#126)
 
@@ -73,6 +79,57 @@ claude plugin install pre-push-review@natsuume-plugins
 claude plugin install codex@openai-codex
 ```
 
+## Codex 代替実装
+
+Codex では `$pre-push-review:setup-pre-push-agents` で対象 repository の `.codex/agents/` に次の project custom agent を導入し、`$pre-push-review:review-codex` が 3 本を並列起動します。
+
+| agent type | 観点 | marker |
+|---|---|---|
+| `pre-push-correctness-reviewer` | high-confidence correctness bug | `.claude-pre-push-code-reviewed` |
+| `pre-push-independent-reviewer` | 他 report を見ない独立 code review | `.claude-pre-push-codex-reviewed` |
+| `pre-push-security-reviewer` | concrete attack path のある脆弱性 | `.claude-pre-push-security-reviewed` |
+
+各 template は `sandbox_mode = "read-only"` と role 固有 `developer_instructions` を持ちます。setup は最初に `inspect` で target、3 ファイルの状態、plan token を表示し、ユーザーが作成・上書きを明示承認した後だけ token 付き `write` を実行します。inspect 後に destination が変化した場合は token mismatch で書き込みを中止します。symlink / 非通常ファイルも上書きしません。custom agent は project config なので、導入後は新しい Codex thread で有効化します。
+
+Codex plugin hook は `SubagentStop` の matcher を上記 3 agent type に限定し、さらに script 内で次を検証します。
+
+- Codex SubagentStop input で required の Codex extension `turn_id` が存在し、非空であること。Claude Code の namespaced agent は matcher が異なり、script が直接呼ばれても `turn_id` 不在なら無害な no-op になる
+- `hook_event_name=SubagentStop`、`agent_type` 完全一致、非空の `agent_id` / `model` / `last_assistant_message`、`stop_hook_active=false`
+- report の先頭 heading と、role 固有の最終 completion footer が template の出力契約と一致すること
+- hook payload の `cwd` で default branch、HEAD、merge-base、branch / staged / unstaged diff の hash を計算できること
+
+検証成功時だけ role に対応する marker を atomic rename で更新します。3 agent が並列停止する間に repository state が外部から変わった場合、marker hash が揃わず push gate が deny するため、変更後の状態で 3 本を再実行する必要があります。`$pre-push-review:review-codex` は `mark-review.sh` を直接呼びません。
+
+### 保証差
+
+Codex 代替が保証するのは、**指定した named agent の Codex runtime lifecycle event が発生し、role 固有の完了 footer を含む report が返された時点の review 対象 hash** です。次は Claude Code 実装と同一、または暗号学的に強い保証ではありません。
+
+- SubagentStop payload は Codex runtime 由来の構造化 event ですが、暗号署名ではありません。hook は review の意味的な正しさや finding の完全性を証明せず、agent が出力契約まで完走したことを検証します。Claude Code の Agent/Task completion hook も review 内容そのものを証明するものではありません
+- Codex plugin manifest は project custom agent を install 時に `.codex/agents` へ自動配置しません。明示承認を伴う `$pre-push-review:setup-pre-push-agents` が一度必要で、`$pre-push-review:review-codex` は template が byte-identical でないとき generic agent へ fallback しません
+- Codex custom agent は Claude agent の `tools:` allowlist と同じ粒度の tool 制限を持たないため、read-only sandbox で mutation を防ぎます。親 turn の live sandbox / permission override が子へ再適用される surface では、その override が profile より優先されます
+- Claude 側の 3 軸は Anthropic correctness + OpenAI Codex + security ですが、Codex 側は 3 本とも Codex runtime 上です。`pre-push-independent-reviewer` は別 context で他 report を渡さない独立性を持つ一方、provider/model 実装の独立性までは再現しません
+- plugin hook はユーザーの trust 後にだけ動作し、hooks feature の無効化、marker の直接改変、Codex 外の terminal / clone からの push を防ぐ adversarial security boundary ではありません。Claude Code 版と同じく cooperative agent workflow の push gate です
+
+### 検証テスト
+
+自動テストは次で実行します。
+
+```bash
+python3 -m unittest tests.test_pre_push_codex_adapter
+python3 /path/to/skill-creator/scripts/quick_validate.py plugins/pre-push-review/skills/review-codex
+python3 /path/to/skill-creator/scripts/quick_validate.py plugins/pre-push-review/skills/setup-pre-push-agents
+python3 scripts/sync_codex_marketplace.py --check
+```
+
+`tests.test_pre_push_codex_adapter` は、setup の inspect → 承認 token 付き atomic install、stale token / symlink 拒否、3 TOML の必須 field と read-only 設定、3 agent type の正常な SubagentStop からの marker 更新、footer 不正・unknown agent・再入 event・`turn_id` 不在の Claude runtime guard で marker を書かないこと、marker hash と push gate の共有を検証します。
+
+実機 E2E では次を確認します。
+
+1. `$pre-push-review:setup-pre-push-agents` で差分を確認・承認し、新しい Codex thread を開始する
+2. `/hooks` で pre-push-review hook を確認して trust し、feature branch の変更に対して `$pre-push-review:review-codex` を実行する
+3. 3 report と marker が揃い、同じ repository state の `git push` gate が許可されることを確認する
+4. edit / commit / amend / rebase のいずれかで state を変え、既存 marker が失効して再 review を要求されることを確認する
+
 ## 機能一覧
 
 ### Commands
@@ -103,7 +160,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 - **working tree が dirty (staged または unstaged 変更あり) の場合は markers の状態に関わらず deny**: push される committed 部分とレビューされた working tree の乖離を防ぐため、 push 前に commit 完了を要求する
 - 3 マーカーがすべて一致した場合はそのまま push を許容する (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する)
 - ハッシュは `head <HEAD の commit OID>` 行 + `mbase <merge-base の commit OID>` 行 + `git diff <merge-base> HEAD` + `git diff --cached` + `git diff` (diff 3 種はいずれも `--no-ext-diff --no-textconv` 付き) を連結した入力に対する sha256 として計算する。 HEAD の commit OID をハッシュ入力に束縛したことで、 レビュー後に commit A を積んでから revert して戻す (net diff は review 時と同一でも commit 列は変わっている) 操作でもマーカーが自動失効するようになった (issue #126 の修正: 従来は branch 全差分 + 未コミット差分のみで計算していたため、 net diff が戻ると失効しているべきマーカーが復活してしまっていた)。 未コミットの edit があると `git diff --cached` / `git diff` の内容が変わりハッシュも変わる点は従来どおりで、 markers が失効し commit + 再 review を強制できる
-- `deny` 時の `permissionDecisionReason` には、 各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と `/pre-push-review:review` slash command の案内が記載される
+- `deny` 時の `permissionDecisionReason` には、 各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と Claude Code の `/pre-push-review:review`、Codex の `$pre-push-review:review-codex` の案内が記載される
 
 **残っている deny 制約 (loop discipline 維持に必要な最小防御)**:
 

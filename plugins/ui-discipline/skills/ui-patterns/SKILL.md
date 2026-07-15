@@ -1,13 +1,6 @@
 ---
 name: ui-patterns
-description: UI 実装規律 (ui-discipline の 10 ルール) に対応する具体的なコード例・チェックリスト・実装パターンを提供する
-user-invocable: true
-when_to_use: |
-  ユーザーが以下のようなリクエストをした場合に使用:
-  - 「UI コンポーネントを作る」
-  - 「画面/ページを実装する」
-  - 「ダイアログ/フォーム/一覧を追加する」
-  - 「UI を修正する・整える」
+description: UI 実装規律 (ui-discipline の 10 ルール) に対応する具体的なコード例・チェックリスト・実装パターンを提供する。UI component、画面・page、dialog、form、一覧の追加・修正・整備で使う
 ---
 
 # ui-patterns

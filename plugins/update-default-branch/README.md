@@ -4,7 +4,12 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 ## バージョン
 
-v0.2.1
+v0.3.0
+
+### v0.2.1 → v0.3.0 の変更点
+
+- Codex plugin manifest を追加し、同じ update-default-branch Skill を Claude Code / Codex で共有できるようにした
+- Skill 内の実行主体表現を Claude 固有名から platform-neutral な「実行中のエージェント」に変更した
 
 ### v0.2.0 → v0.2.1 の変更点
 
