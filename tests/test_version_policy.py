@@ -50,6 +50,7 @@ def write_plugin_repository_state(
     distribution_status: str,
     marketplace_description: str = "sample",
     manifest_description: str = "sample",
+    override_marketplace_category: str = "Productivity",
 ) -> None:
     write_json(
         repository / ".claude-plugin/marketplace.json",
@@ -80,6 +81,10 @@ def write_plugin_repository_state(
         repository / "codex/marketplace-overrides.json",
         {
             "schemaVersion": 5,
+            "marketplace": {
+                "displayName": "Test Marketplace",
+                "category": override_marketplace_category,
+            },
             "plugins": {
                 "sample": {
                     "distribution": distribution,
@@ -301,6 +306,37 @@ class VersionPolicyTest(unittest.TestCase):
             )
             repository_git(repository, "add", ".")
             repository_git(repository, "commit", "-m", "change Claude metadata")
+
+            self.assertEqual(
+                check_fixture_versions(repository, base_revision),
+                [],
+            )
+
+    def test_excluded_plugin_codex_global_metadata_change_does_not_require_bump(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            repository = Path(temporary_name)
+            initialize_repository(repository)
+            write_plugin_repository_state(
+                repository,
+                claude_version="1.0.0",
+                codex_version="0.3.0",
+                distribution_status="excluded",
+            )
+            repository_git(repository, "add", ".")
+            repository_git(repository, "commit", "-m", "base")
+            base_revision = repository_git(repository, "rev-parse", "HEAD")
+
+            write_plugin_repository_state(
+                repository,
+                claude_version="1.0.0",
+                codex_version="0.3.0",
+                distribution_status="excluded",
+                override_marketplace_category="Developer Tools",
+            )
+            repository_git(repository, "add", ".")
+            repository_git(repository, "commit", "-m", "change global metadata")
 
             self.assertEqual(
                 check_fixture_versions(repository, base_revision),
