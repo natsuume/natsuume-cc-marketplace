@@ -401,8 +401,12 @@ fi
 # 応答不正として exit 1 にする。plan によっては primary が 5h 窓・secondary が週次窓の構成が
 # ありえ、壊れた secondary を黙って無視すると週次超過を見逃す fail-open になる (codex review
 # 指摘 + rescue 壁打ちで確定した tri-state 検証)。
+# 存在判定に jq の `//` を使わない: `//` は false と null を両方 falsy として扱うため、
+# malformed 応答で secondary が boolean false 等になった場合に「欠損」扱いで検証を
+# スキップし fail-open になる (codex review 指摘)。null / 欠損のみを「無し」とし、
+# falsy を含む非 null 値はすべて後続の usedPercent 必須検証 (fail-closed の受け皿) に流す。
 SECONDARY_USED_PERCENT=""
-if [ "$(printf '%s' "$RESULT_JSON" | jq -r 'if (.rateLimits.secondary // null) == null then "no" else "yes" end' 2>/dev/null)" = "yes" ]; then
+if [ "$(printf '%s' "$RESULT_JSON" | jq -r '.rateLimits.secondary | if . == null then "no" else "yes" end' 2>/dev/null)" = "yes" ]; then
   SECONDARY_USED_PERCENT=$(printf '%s' "$RESULT_JSON" | jq -r '(.rateLimits.secondary.usedPercent | select(type == "number")) // empty' 2>/dev/null)
   if [ -z "$SECONDARY_USED_PERCENT" ]; then
     fail "応答の rateLimits.secondary に usedPercent (0-100 の数値) が含まれていません (secondary 窓が存在する場合は必須)。"
@@ -421,8 +425,12 @@ fi
 EXIT_CODE=0
 
 if [ -n "$MAX_USED_PERCENT_SET" ]; then
-  REACHED_TYPE=$(printf '%s' "$RESULT_JSON" | jq -r '.rateLimits.rateLimitReachedType // empty' 2>/dev/null)
-  if [ -n "$REACHED_TYPE" ]; then
+  # nullness を固定 sentinel ("null" / "non-null") で判定する。`// empty` + `[ -n ]` は
+  # false や空文字の rateLimitReachedType を「未到達」として隠すため使わない (codex review
+  # 指摘)。契約は「null = 未到達、非 null = 到達済み」であり、falsy を含む非 null 値は
+  # すべて到達済み (exit 2) 側に倒す。
+  REACHED_STATE=$(printf '%s' "$RESULT_JSON" | jq -r '.rateLimits.rateLimitReachedType | if . == null then "null" else "non-null" end' 2>/dev/null)
+  if [ "$REACHED_STATE" = "non-null" ]; then
     EXIT_CODE=2
   elif awk -v v="$USED_PERCENT" -v n="$MAX_USED_PERCENT" 'BEGIN { exit !(v > n) }'; then
     EXIT_CODE=2
