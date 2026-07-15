@@ -65,10 +65,28 @@
 #      同一内容のコピー。plugin 間でファイル共有ができないため各 plugin が自前で持つ) で
 #      codex-companion.mjs を解決する
 #   5. 実行 (job 監督モデル): Bash tool から見ると wrapper は foreground 1 回のままだが、
-#      wrapper 内部では companion の job 管理インタフェースで委任を監督する:
-#        a. `printf '%s' "$PROMPT" | node "$COMPANION" task --background --write
-#           --model "$MODEL" --effort xhigh` で job を起動し、起動確認出力から job ID を
-#           抽出する (抽出できなければ即失敗 exit 1)
+#      wrapper 内部では companion の job 管理インタフェースで委任を監督する。wrapper は
+#      起動時に一意の相関 ID を生成して `CODEX_COMPANION_SESSION_ID` 環境変数に設定し、
+#      **task / status / result / cancel の全 companion 呼び出しに同じ値を渡す** (companion
+#      は job 作成時にこれを sessionId として記録し status もこれで filter するため、
+#      後述の recovery の本人性確立に使える):
+#        a. `printf '%s' "$PROMPT" | node "$COMPANION" task --background --json --write
+#           --model "$MODEL" --effort xhigh` で job を起動し、**JSON payload の `.jobId`**
+#           を厳密に取得する (--json は companion 1.0.6 の usage には非表示だが handleTask
+#           が受理し jobId を含む payload を返すことを実装確認済み。人間可読テキストの
+#           parse はしない)。jobId を取得できない場合は recovery を試みる:
+#           `node "$COMPANION" status --all --json` の running 一覧から
+#           「sessionId == 自分の相関 ID かつ kind == "task" かつ write == true かつ
+#           workspaceRoot 一致かつ createdAt >= wrapper の job 起動時刻」の候補を検索し、
+#           **候補が厳密に 1 件の場合のみ** その job ID を採用して以降の監督に回す。
+#           0 件・複数件・status 呼び出し失敗・JSON 不正はすべて「ID 不明の enqueue 済み
+#           job が存在しうる」として、安定識別語 `turn interruption unconfirmed` を含む
+#           警告 (「write job が起動済みの可能性があるが job ID を特定できなかった。
+#           worktree の状態と active な codex job (status --all) を確認するまで代替実装を
+#           開始しないこと」) を stderr に出して exit 1 (複数候補から最新 1 件を選ぶ等の
+#           近似はしない — 別 job の誤 cancel を防ぐ)。recovery 自体も hard deadline 内で
+#           行う。時刻比較は epoch 秒に正規化して行う (companion の createdAt は ms 付き
+#           ISO、BSD date は秒精度のため、ISO 文字列の単純比較はしない)
 #        b. `node "$COMPANION" status <job-id> --json` を数秒間隔で poll し、job の完了を
 #           **work cutoff** (工程 0) まで待つ。待機中は経過を stderr に間欠出力する
 #        c. job 完了 → `node "$COMPANION" result <job-id>` の stdout (codex の最終
