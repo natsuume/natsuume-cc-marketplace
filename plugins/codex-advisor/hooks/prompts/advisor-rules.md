@@ -1,7 +1,9 @@
 <!--
-  codex-advisor: 相談規律 (issue #219)
+  codex-advisor: 利用規律 (issue #219 で相談規律 3 ルール、#241 で rescue thread 選択を追加)
   各ルールは「意図 (なぜ) + 指示 + 境界」で記述する (agent-discipline / ui-discipline と同形式)。
   配送は SessionStart hook (inject-advisor-rules.sh) が常時行う。
+  サイズ制約: 全文で 8,000 文字 (UTF-16 code unit 基準の inline 閾値の安全マージン込み運用値、
+  #236 調査) を超えないこと。超えると persisted-output 化され注入が 2KB プレビューに劣化する。
 -->
 
 # codex-advisor: Codex への相談規律
@@ -46,3 +48,22 @@
 - コードレビュー用途には使わない (pre-push-review の codex review が担当する)
 - subagent に相談させてよい場合は、委任指示に codex-advisor の使用許可を明示する (相談は課金を伴う外部呼び出しのため、許可の無い subagent は相談しない)
 - advisor が不通のとき (openai-codex plugin 未 install・codex CLI 未認証・タイムアウト) は、相談なしで作業を続行してよい。ただしその旨を作業報告に含める
+
+<!-- rule:rescue-thread -->
+## 4. rescue の thread 選択
+
+<!--
+  設計記述 (issue #241、Phase A):
+  - 対象: openai-codex plugin の /codex:rescue が「--resume / --fresh 未指定 + 再開可能 thread
+    あり」のとき必ず発行する thread 選択の AskUserQuestion (rescue.md v1.0.6 準拠。フラグ指定時
+    は質問しない挙動を前提とする)
+  - 指示の要件 (issue #241 受入基準):
+    (1) /codex:rescue 起動時 (Skill / command / subagent 経由) は --resume または --fresh を
+        常に自分で決定して付与し、thread 選択の AskUserQuestion を発行しない
+    (2) 判定ヒューリスティック: 直前の rescue と同一論点の続き (同じレビュー指摘への反復対応、
+        同じ相談の深掘り等) は --resume。それ以外・迷う場合は --fresh
+    (3) ユーザが継続 / 新規を明示した場合はヒューリスティックより優先する
+  - 境界の要件: thread 選択の質問のみを対象とし、rescue を使うかどうかの判断や設計 / 仕様
+    レベルの決定に関する AskUserQuestion (セクション 3) は変更しない
+  - 本文は Phase B で「なぜ + 指示 + 境界」形式で記述する
+-->
