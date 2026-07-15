@@ -31,7 +31,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [agent-discipline](#agent-discipline) | 0.16.0 | Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する |
 | [ui-discipline](#ui-discipline) | 0.2.1 | UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う |
 | [natsuume-writing](#natsuume-writing) | 0.4.2 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
-| [codex-advisor](#codex-advisor) | 0.1.2 | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミングと助言の扱いの規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
+| [codex-advisor](#codex-advisor) | 0.2.0 | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミング・助言の扱い・`/codex:rescue` の thread 選択自律化 (迷ったら `--fresh`) を含む codex 利用規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.2.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.1.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 
@@ -317,6 +317,8 @@ Codex は read-only sandbox でリポジトリを自分で読んで裏取りし�
 
 メインセッションに加えて subagent からも相談できます (SubagentStart hook で簡約版規律を配送)。ただし注入は規律の配送であって許可の付与ではなく、subagent が相談できるのは委任指示が codex-advisor の使用を明示的に許可している場合のみです (相談は課金を伴う外部呼び出しのため)。
 
+v0.2.0 からは相談規律に加えて `/codex:rescue` の thread 選択規律 (`rule:rescue-thread`) も注入します。rescue 起動時の `--resume` / `--fresh` を Claude が自律決定して常に付与し、thread 選択の質問で自走を止めません (`--resume` は「直前の rescue と同一論点の続き + 対象がセッション内最新の再開可能 task と確実に分かる場合」のみ、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先)。openai-codex plugin の「フラグ指定時は質問しない」挙動 (v1.0.6) を前提とするため、外部 plugin 側は無変更です。
+
 利用には [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) と Codex CLI + 認証が必要です。
 
 ### 機能
@@ -325,7 +327,7 @@ Codex は read-only sandbox でリポジトリを自分で読んで裏取りし�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-advisor-rules` | SessionStart | メインセッション向けの相談規律 3 ルール (`rule:advisor-timing` いつ相談するか / `rule:advisor-weight` 助言のフラットな扱いと reconcile call / `rule:advisor-boundary` ユーザ専権・レビュー用途除外・subagent への許可明示・不通時継続) を `additionalContext` として常時注入する |
+| `inject-advisor-rules` | SessionStart | メインセッション向けの利用規律 4 ルール (`rule:advisor-timing` いつ相談するか / `rule:advisor-weight` 助言のフラットな扱いと reconcile call / `rule:advisor-boundary` ユーザ専権・レビュー用途除外・subagent への許可明示・不通時継続 / `rule:rescue-thread` rescue の thread 選択自律化) を `additionalContext` として常時注入する |
 | `inject-advisor-rules-subagent` | SubagentStart | subagent 向けの簡約版規律 (委任指示の明示許可がある場合のみ相談・タイミング・wrapper 絶対パス入りの実行方法・フラットな扱い・エスカレーション読み替え) を全 subagent 起動時に注入する (Claude Code 2.0.43+) |
 
 #### Skills

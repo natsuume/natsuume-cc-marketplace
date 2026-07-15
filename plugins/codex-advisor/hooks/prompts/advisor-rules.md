@@ -1,12 +1,14 @@
 <!--
-  codex-advisor: 相談規律 (issue #219)
+  codex-advisor: 利用規律 (issue #219 で相談規律 3 ルール、#241 で rescue thread 選択を追加)
   各ルールは「意図 (なぜ) + 指示 + 境界」で記述する (agent-discipline / ui-discipline と同形式)。
   配送は SessionStart hook (inject-advisor-rules.sh) が常時行う。
+  サイズ制約: 全文で 8,000 文字 (UTF-16 code unit 基準の inline 閾値の安全マージン込み運用値、
+  #236 調査) を超えないこと。超えると persisted-output 化され注入が 2KB プレビューに劣化する。
 -->
 
-# codex-advisor: Codex への相談規律
+# codex-advisor: Codex 利用規律
 
-このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は「いつ相談するか」「助言をどう扱うか」の規律である。
+このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は「いつ相談するか」「助言をどう扱うか」の相談規律 (セクション 1〜3) と、`/codex:rescue` の thread 選択規律 (セクション 4) である。
 
 <!-- rule:advisor-timing -->
 ## 1. いつ相談するか
@@ -46,3 +48,16 @@
 - コードレビュー用途には使わない (pre-push-review の codex review が担当する)
 - subagent に相談させてよい場合は、委任指示に codex-advisor の使用許可を明示する (相談は課金を伴う外部呼び出しのため、許可の無い subagent は相談しない)
 - advisor が不通のとき (openai-codex plugin 未 install・codex CLI 未認証・タイムアウト) は、相談なしで作業を続行してよい。ただしその旨を作業報告に含める
+
+<!-- rule:rescue-thread -->
+## 4. rescue の thread 選択
+
+**なぜ**: openai-codex plugin の `/codex:rescue` は、`--resume` / `--fresh` のどちらも指定されず再開可能な thread があると、継続か新規かを AskUserQuestion で必ず 1 回質問する。この質問は auto mode の自走を毎回ブロックする一方、回答は高度に予測可能である (実測でほぼ常に新規、継続はいずれも直前の rescue と同一論点の続きだった)。フラグ指定時は質問しない設計のため、常に自分でフラグを決めて付与すれば、外部 plugin を変更せずに質問分岐へ到達させずに済む。
+
+**指示**: `/codex:rescue` (Skill / command / subagent 経由のいずれも) を起動する際は、`--resume` または `--fresh` を常に自分で決定して付与し、thread 選択の AskUserQuestion を発行しない。判定は以下に従う:
+
+- `--resume` は「直前の rescue と同一論点の続き (同じレビュー指摘への反復対応、同じ相談の深掘り等) であり、かつ継続対象の rescue が、このセッションで threadId を持つ terminal 状態 (完了・失敗・キャンセル) の Codex task のうち最新のものだと確実に分かる場合」に限る。resume は起動順ではなく更新順の最新 task を再開し、`/codex-advisor:consult` も同じ task 履歴を共有し、失敗・キャンセルされた task も候補になる。他の Codex task が後から terminal 状態になった場合・並行 / background の task がある場合・迷う場合は `--fresh` とする
+- ユーザがフラグを文字どおり指定した場合はそれを尊重する。自然言語で継続を依頼された場合は継続の意図を尊重しつつ、対象 thread を安全に特定できなければ `--fresh` とする
+- `--fresh` 時の文脈は task 本文の所有者で扱いが分かれる: 自分が rescue の本文を作成する場合は、呼び出し前に必要な文脈を含む self-contained な本文を作る。ユーザが本文を直接指定した場合は routing flag 以外を変更せずそのまま転送し、Codex 出力以外の説明を同じ rescue 応答に追加しない
+
+**境界**: この規律の対象は thread 選択の質問のみである。rescue を使うかどうかの判断や、設計 / 仕様レベルの決定に関する `AskUserQuestion` (セクション 3) は変更しない。
