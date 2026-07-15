@@ -31,7 +31,8 @@
 # 4. 解決不能 (subshell / pushd / wrapper 等) は保守的 deny
 # 5. 解決した target cwd 上で:
 #    - default branch (master/main) なら git-guardrails に委譲して skip
-#    - branch 全差分 + 未コミット差分のハッシュを計算
+#    - 空 push (全 commit が empty commit の鎖) なら markers gate を skip
+#    - commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを計算
 #    - 3 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義: code-reviewed / codex-reviewed /
 #      security-reviewed) と一致しなければ deny。 3 マーカーは v2.0.0 から常に全て必須
 #      (v1.x の simplified マーカーと CC version 依存の fail-open 緩和は廃止)。
@@ -642,10 +643,20 @@ EOF
   exit 0
 fi
 
+# 空 push (レビュー対象となる変更が remote に載らない push) は markers gate を skip。
+# 判定は tree OID / plumbing ベース (条件と正当性は lib/diff-hash.sh ヘッダ参照)。
+# 全 commit が empty commit の鎖 (issue claim 手順の --allow-empty push 等) のみ skip
+# し、「commit A + A の revert」のような net diff だけが空の鎖はマーカー検証へ進める
+# (#126 と同根の穴を塞ぐ)。dirty-tree gate は通過済みだが、呼び出し順への依存を
+# 作らないよう is_empty_push_in は index / worktree の clean も自前で再検査する。
+if is_empty_push_in "$TARGET_CWD" "$BASE"; then
+  exit 0
+fi
+
 # branch diff hash 計算。 失敗時 (orphan branch / shallow clone 等) は明示 deny。
 if ! CURRENT_HASH=$(compute_review_hash_in "$TARGET_CWD" "$BASE"); then
   REASON=$(cat <<EOF
-プッシュをブロックしました。ブランチ全差分の計算 (\`git -C "${TARGET_CWD}" diff origin/${BASE}...HEAD\`) が失敗しました。
+プッシュをブロックしました。ブランチ全差分のハッシュ計算 (origin/${BASE} と HEAD の merge-base 解決 + \`git -C "${TARGET_CWD}" diff\`) が失敗しました。
 
 考えられる原因:
   - 孤児ブランチ (origin/${BASE} と共通祖先を持たない unrelated history)
@@ -662,13 +673,7 @@ EOF
   exit 0
 fi
 
-# branch 全差分 + 未コミット差分が空なら push しても remote に新規変更は載らない (空 push)。
-# 通す。
-if [ "$CURRENT_HASH" = "$EMPTY_DIFF_HASH" ]; then
-  exit 0
-fi
-
-# マーカーが現在の差分と一致 = 「現状の branch 全差分 + 未コミットに対して該当レビューが
+# マーカーが現在の差分と一致 = 「現状の commit 列 + branch 全差分 + 未コミットに対して該当レビューが
 # 直近で実走済み」を意味する。 markers は明示削除しない: PreToolUse は push 成功確認
 # できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push が
 # レビュー必須になる無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する。
@@ -689,7 +694,7 @@ format_status() {
   elif [ "$stored" = "$CURRENT_HASH" ]; then
     printf '✓ 最新の差分でレビュー済み'
   else
-    printf '⚠ 失効 (差分が変わったため再実行が必要)'
+    printf '⚠ 失効 (差分または commit 列が変わったため再実行が必要)'
   fi
 }
 CODE_REVIEWED_STATUS=$(format_status "$CODE_REVIEWED_HASH")

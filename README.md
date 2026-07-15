@@ -25,7 +25,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [git-guardrails](#git-guardrails) | 0.4.2 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.2.3 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft で作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.4.1 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 3.0.4 | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーとブランチ全差分の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-review](#pre-push-review) | 3.0.5 | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
 | [update-default-branch](#update-default-branch) | 0.2.1 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.8.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.15.0 | Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する |
@@ -141,9 +141,9 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、`pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` / `pre-push-review:security-reviewer` subagent の **3 マーカー** が branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。3 マーカーは常にすべて必須 (v2.0.0 で simplify マーカーと CC version 依存の fail-open 緩和を廃止)。deny メッセージは `/pre-push-review:review` slash command を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
+| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、`pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` / `pre-push-review:security-reviewer` subagent の **3 マーカー** が commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。3 マーカーは常にすべて必須 (v2.0.0 で simplify マーカーと CC version 依存の fail-open 緩和を廃止)。deny メッセージは `/pre-push-review:review` slash command を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
 | `block-bg-codex-wrapper` | PreToolUse (`Bash`) | `run-codex-review.sh` wrapper を Bash tool option `run_in_background: true` または shell-level `&` / `|` で起動する経路を deny する。v3.0.0 では wrapper は通常 `pre-push-review:codex-reviewer` subagent 内から foreground 起動されるが、subagent 内 Bash でも本 hook は発火するため bg 起動防御は引き続き有効 |
-| `auto-mark` | PostToolUse (`*` wildcard) | `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` subagent の Agent / Task tool 完了を自動検知し、対応するマーカーに branch 全差分 + 未コミット差分のハッシュを書き込む。codex マーカーは wrapper script (`run-codex-review.sh`) が直接書き込む設計のため本 hook は codex-reviewer subagent を検知しない (wrapper の non-zero exit と subagent 完了タイミングが乖離する silent-pass 経路を作らないため)。各マーカーは subagent **完了時** に書く (launch ではない) ことで、subagent 失敗時に silent-pass しない |
+| `auto-mark` | PostToolUse (`*` wildcard) | `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` subagent の Agent / Task tool 完了を自動検知し、対応するマーカーに commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを書き込む。codex マーカーは wrapper script (`run-codex-review.sh`) が直接書き込む設計のため本 hook は codex-reviewer subagent を検知しない (wrapper の non-zero exit と subagent 完了タイミングが乖離する silent-pass 経路を作らないため)。各マーカーは subagent **完了時** に書く (launch ではない) ことで、subagent 失敗時に silent-pass しない |
 
 #### Agents
 
