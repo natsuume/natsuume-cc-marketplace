@@ -28,6 +28,11 @@
 #
 # ## 処理フロー
 #
+#   0. 絶対 deadline の設定: **wrapper 起動時刻から 570 秒**。Bash tool の timeout (600 秒、
+#      到達時はコマンドを kill せず background 移行する) より確実に短く、以降の全工程
+#      (ガード最大 30 秒・companion 実行・中断・cleanup・診断出力) をこの予算内に収める。
+#      companion 起動後を起点にすると前段と合算で 600 秒に先に到達しうるため、起点は
+#      wrapper 起動時とする (rescue 壁打ち 2026-07-15 で確定)
 #   1. 引数チェック ($# != 0 → usage + exit 1) / Node.js チェック / stdin TTY チェック →
 #      プロンプト読み込み → 空 (空白のみ) チェック
 #   2. 設定読み込み: カレントディレクトリの `.claude/codex-implementer.local.md` の
@@ -53,8 +58,22 @@
 #   4. companion 解決: lib/codex-companion-resolver.sh (pre-push-review / codex-advisor と
 #      同一内容のコピー。plugin 間でファイル共有ができないため各 plugin が自前で持つ) で
 #      codex-companion.mjs を解決する
-#   5. 実行: `printf '%s' "$PROMPT" | node "$COMPANION" task --write --model "$MODEL" --effort xhigh`
-#      を foreground 実行し、stdout を素通しする
+#   5. 実行 (job 監督モデル): Bash tool から見ると wrapper は foreground 1 回のままだが、
+#      wrapper 内部では companion の job 管理インタフェースで委任を監督する:
+#        a. `printf '%s' "$PROMPT" | node "$COMPANION" task --background --write
+#           --model "$MODEL" --effort xhigh` で job を起動し、起動確認出力から job ID を
+#           抽出する (抽出できなければ即失敗 exit 1)
+#        b. `node "$COMPANION" status <job-id> --json` を数秒間隔で poll し、job の完了を
+#           絶対 deadline (工程 0) まで待つ。待機中は経過を stderr に間欠出力する
+#        c. job 完了 → `node "$COMPANION" result <job-id>` の stdout (codex の最終
+#           メッセージ・変更ファイル情報) をそのまま流し、job の成否に応じて exit 0/1
+#        d. 絶対 deadline 到達 → `node "$COMPANION" cancel <job-id>` で **アプリケーション
+#           レベルの turn 中断**を発行し、status が running でなくなるまで短い上限付きで
+#           確認 poll したうえで「委任を時間超過で中断した。10 分以内に完了しない実装
+#           タスクは委任に不適 — タスクを分割するか Claude 本体で実装する」旨を stderr に
+#           出して exit 1
+#        e. HUP/INT/TERM trap でも同じ cancel + 確認を実行してから終了する (wrapper の
+#           異常終了経路でも write turn を放置しない)
 #
 # ## 設定 (.claude/codex-implementer.local.md の YAML frontmatter)
 #
@@ -78,6 +97,14 @@
 #   (openai/codex#31552) を避けるため、effort は設定可能にしない
 # - **`--write` を付ける**: 本 wrapper は実装委任が目的であり、codex がファイル変更を
 #   行うことが前提。read-only の相談は codex-advisor が担う (役割分離)
+# - **companion を PID kill ではなく job cancel で止める**: companion (1.0.6) は Codex turn
+#   を detached broker で実行するため、foreground の Node プロセスを TERM/KILL しても
+#   write turn が停止する保証がない。時間超過時に PID kill のみで戻ると、親 session が
+#   fallback 実装を始めた worktree を残存 turn が並行変更する競合が生じる (P1)。companion
+#   の job 管理 (task --background / status / result / cancel) を使い、中断をアプリケーション
+#   レベルで発行・確認する (rescue 壁打ち 2026-07-15 で確定)。`task --background` の起動
+#   プロセスは起動確認だけで終了する短命プロセスのため、Bash tool の timeout 挙動 (kill
+#   せず background 移行) に依存する経路も構造的に消える
 # - **git 状態 (branch / dirty tree) を検査しない**: git-guardrails 等の既存 hook に委ねる
 #   (issue #247 で確定)
 # - **ガードの閾値判定は codex-status 側に委譲**: wrapper は exit code (0/1/2) だけで
