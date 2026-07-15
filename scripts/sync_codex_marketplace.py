@@ -253,20 +253,28 @@ def load_json(path: Path) -> dict[str, Any]:
 def assert_safe_repo_path(root: Path, path: Path) -> None:
     """Reject paths that escape ``root`` lexically or through symlinks."""
 
-    root = root.resolve(strict=True)
+    # Keep the caller-visible spelling for the lexical containment check. On macOS,
+    # tempfile commonly returns /var/folders/... while resolve() canonicalizes the
+    # same directory to /private/var/folders/.... Resolving only root before
+    # relative_to() therefore rejects a legitimate child. Paths passed here are
+    # constructed from their root, so compare that shared spelling first, then use
+    # the canonical root for symlink and escape checks.
+    lexical_root = root.absolute()
+    lexical_path = path.absolute()
     try:
-        relative = path.relative_to(root)
+        relative = lexical_path.relative_to(lexical_root)
     except ValueError as exc:
         raise SyncError(f"managed path is outside repository: {path}") from exc
 
-    cursor = root
+    resolved_root = root.resolve(strict=True)
+    cursor = resolved_root
     for part in relative.parts:
         cursor /= part
         if cursor.is_symlink():
             raise SyncError(f"managed path must not contain symlinks: {relative}")
 
     try:
-        path.parent.resolve(strict=False).relative_to(root)
+        lexical_path.parent.resolve(strict=False).relative_to(resolved_root)
     except ValueError as exc:
         raise SyncError(f"managed path resolves outside repository: {relative}") from exc
 

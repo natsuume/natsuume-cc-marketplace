@@ -67,7 +67,7 @@
       "name": "natsuume-writing",
       "source": "./plugins/natsuume-writing",
       "description": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook", "skill"]
     },
     {

@@ -859,6 +859,28 @@ class MarketplaceSyncTest(unittest.TestCase):
             with self.assertRaises(sync.SyncError):
                 sync.assert_safe_repo_path(root, root / "managed" / "artifact.json")
 
+    def test_safe_repo_path_accepts_canonical_alias_above_managed_root(self) -> None:
+        with tempfile.TemporaryDirectory() as root_name:
+            container = Path(root_name).resolve()
+            real_root = container / "private" / "managed"
+            real_root.mkdir(parents=True)
+            alias_root = container / "managed-alias"
+            alias_root.symlink_to(real_root, target_is_directory=True)
+            artifact = alias_root / "artifact.json"
+            artifact.write_text("{}\n", encoding="utf-8")
+
+            sync.assert_safe_repo_path(alias_root, artifact)
+
+    def test_generated_paths_reject_symlink_even_when_target_stays_in_root(self) -> None:
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name).resolve()
+            target = root / "target"
+            target.mkdir()
+            (root / "managed").symlink_to(target, target_is_directory=True)
+
+            with self.assertRaisesRegex(sync.SyncError, "must not contain symlinks"):
+                sync.assert_safe_repo_path(root, root / "managed" / "artifact.json")
+
     def test_natsuume_writing_skills_name_both_runtime_surfaces(self) -> None:
         skills = ROOT / "plugins" / "natsuume-writing" / "skills"
         draft = (skills / "draft" / "SKILL.md").read_text(encoding="utf-8")
