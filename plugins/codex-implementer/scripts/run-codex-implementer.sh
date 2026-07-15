@@ -88,9 +88,25 @@
 #           行う。時刻比較は epoch 秒に正規化して行う (companion の createdAt は ms 付き
 #           ISO、BSD date は秒精度のため、ISO 文字列の単純比較はしない)
 #        b. `node "$COMPANION" status <job-id> --json` を数秒間隔で poll し、job の完了を
-#           **work cutoff** (工程 0) まで待つ。待機中は経過を stderr に間欠出力する
-#        c. job 完了 → `node "$COMPANION" result <job-id>` の stdout (codex の最終
-#           メッセージ・変更ファイル情報) をそのまま流し、job の成否に応じて exit 0/1
+#           **work cutoff** (工程 0) まで待つ。待機中は経過を stderr に間欠出力する。
+#           **post-enqueue の包括 lifecycle 規定 (rescue 壁打ち 2026-07-15 で確定)**:
+#           enqueue 成功以降のあらゆる終了は、以下の「証拠ベース分類」のいずれかに必ず
+#           到達してから exit する (status 呼び出し失敗・JSON 不正等がこの分類を迂回して
+#           終了する経路を作らない):
+#             - job が completed に到達し result を取得できた → 委任成功 (exit 0)。これは
+#               「companion-confirmed task completion」であり (broker の turn/completed
+#               通知を必ず観測した証明ではなく、companion の公開完了契約を信頼する)
+#             - job が failed で、`result <job-id> --json` に正常実行経路から記録された
+#               terminal result (storedJob.result) が存在する → 通常の委任失敗 (exit 1、
+#               unconfirmed ではない)
+#             - job が failed で structured result が無い → worker 例外の可能性があり
+#               broker 側の write turn が残存しうる。failed job は companion の cancel
+#               対象外のため中断は発行できない → unconfirmed 警告 (後述) + exit 1
+#             - 自分が発行していない cancelled / 未知の status / status 取得失敗 /
+#               JSON 不正 / result 取得失敗 → bounded cancel (工程 5-d) を経由して
+#               turnInterrupted 判定に基づき exit 1
+#        c. (b の分類の成功経路) `node "$COMPANION" result <job-id>` の stdout (codex の
+#           最終メッセージ・変更ファイル情報) をそのまま流し、exit 0
 #        d. work cutoff 到達 → **上限付き bounded cancel** を実行する:
 #           `node "$COMPANION" cancel <job-id> --json` を background 起動し、cancel RPC
 #           完了待ち予算 (20 秒) 内の完了を poll する。予算超過時は cancel プロセスを
@@ -109,7 +125,15 @@
 #             exit 1:「委任を時間超過で中断したが、write turn の停止を確認できなかった。
 #             worktree が並行変更され続けている可能性があるため、worktree の状態
 #             (git status / 変更ファイル) と active turn を確認するまで代替実装を
-#             開始しないこと」。中断確認済みの場合と明確に区別できる文言にする
+#             開始しないこと」。中断確認済みの場合と明確に区別できる文言にする。
+#           **unconfirmed 警告の必須構成要素**: すべての unconfirmed 警告 (job ID 不明の
+#           警告を含む) には (i) wrapper が使った相関 ID の値そのもの、(ii) 親がそのまま
+#           コピー実行できる診断コマンド例
+#           (`CODEX_COMPANION_SESSION_ID='<相関ID>' node '<companion絶対パス>' status --cwd '<workspaceRoot>' --all --json`)
+#           を必ず含める。companion の status 一覧は CODEX_COMPANION_SESSION_ID で filter
+#           されるため、wrapper 固有の相関 ID を知らない親からは疑わしい job が見えない
+#           (相関 ID は `[A-Za-z0-9._-]` の安全文字のみで生成し、コマンド例のパスは
+#           shell-safe に quote する)
 #           (job status の "cancelled" は turn 停止の証拠にしない — companion 1.0.6 は
 #            turn/interrupt を発行できない場合でも job を cancelled にするため)
 #        e. HUP/INT/TERM trap でも同じ bounded cancel + 判定を実行してから終了する
