@@ -4,22 +4,25 @@ Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tool
 
 Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐路で別の高知能モデルに相談し、plan / course-correction の助言を受け取って続行する」構成です。本家は Anthropic API のサーバーサイド機能で advisor が Claude モデル限定のため、このプラグインは同パターンを Claude Code の hook + skill + wrapper script として再構成し、advisor に Codex を使えるようにしています。
 
+v0.2.0 でプラグインのスコープを「advisor 相談規律」から「codex 利用規律全般」へ拡張し、`/codex:rescue` の thread 選択自律化 (`rule:rescue-thread`、issue #241) を含むようになりました。rescue はレビューループ外の設計相談でも多用されるため、相談規律と同じ SessionStart 注入で配送します。
+
 ## 機構
 
 | 構成要素 | 役割 |
 |---|---|
-| SessionStart hook (`inject-advisor-rules`) | メインセッション向けの相談規律 3 ルール (下記) を `additionalContext` として常時注入する。公式ドキュメントは「tool 定義だけでは advisor は呼ばれない、システムプロンプト側の明示誘導が必須」と明言しており、この注入がそれに相当する |
+| SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 4 ルール (下記) を `additionalContext` として常時注入する。公式ドキュメントは「tool 定義だけでは advisor は呼ばれない、システムプロンプト側の明示誘導が必須」と明言しており、この注入がそれに相当する |
 | SubagentStart hook (`inject-advisor-rules-subagent`) | subagent 向けの簡約版規律 (許可・タイミング・実行方法・フラットな扱い・失敗時) を全 subagent 起動時に注入する。wrapper の絶対パスは注入時に解決し、jq の `@sh` で shell-quote して埋め込む (subagent の Bash 環境では `${CLAUDE_PLUGIN_ROOT}` が空になりうるため。quote はパスにメタ文字を含む install 環境への防御)。Claude Code 2.0.43 以降で有効 |
 | `/codex-advisor:consult` skill | 相談プロンプトの組み立て方 (self-contained な XML ブロック構成) と wrapper の起動手順を定義する。ユーザによる明示起動も可能 |
 | `scripts/run-codex-advisor.sh` | 公式 codex plugin の companion (`codex-companion.mjs task`) を foreground で 1 回起動する wrapper。`--effort xhigh` 固定・`--write` なし (read-only sandbox 固定)。stdout = Codex の助言、stderr = wrapper 状態 |
 
-### 注入される相談規律 (hooks/prompts/advisor-rules.md)
+### 注入される規律 (hooks/prompts/advisor-rules.md)
 
 | rule ID | 内容 |
 |---|---|
 | `rule:advisor-timing` | いつ相談するか: 実質的な作業前 (オリエンテーションは含まない) / 完了宣言前 (成果物を durable にしてから) / 行き詰まり / 方針転換の検討時。短い反応的タスクでは相談しない |
 | `rule:advisor-weight` | 助言はフラットに扱う (独立した第二視点として自分の証拠・推論と同じ土俵で採否を判断し、採否と理由を明示する。黙って無視しない)。証拠と助言が衝突し自分で判断できないときは reconcile call (衝突を明示した再相談) で解消する |
 | `rule:advisor-boundary` | 設計/仕様の決定はユーザ専権 (助言は AskUserQuestion の代替でない)。レビュー用途は pre-push-review が担当。advisor 不通時は相談なしで続行しユーザ報告 |
+| `rule:rescue-thread` | `/codex:rescue` 起動時は `--resume` / `--fresh` を常に Claude が自律決定して付与し、thread 選択の AskUserQuestion を発行しない。`--resume` は「直前の rescue と同一論点の続き + 対象 rescue がセッション内で最新の再開可能 task (terminal 状態かつ threadId あり) と確実に分かる場合」のみで、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先 |
 
 公式ドキュメントの推奨プロンプト (timing block / advice block) の移植ですが、次の 2 点は意図的に変えています: (1)「最初のファイル変更前に必ず advisor を呼ぶ」型の hard rule は採用していません (公式実測で、強い executor への hard rule 追加は過剰呼び出しを招き純効果がゼロ〜マイナスと報告されているため)。(2) advice block の「助言を重く扱う」も採用せず、フラットな扱いに変更しています (下記の差分参照)。
 
@@ -46,6 +49,11 @@ subagent も同じ wrapper で相談できる。ただし **SubagentStart の注
 - jq (hook の注入 JSON 生成に使用。不在時は注入をスキップする fail-open)
 - Linux (WSL2 含む) / macOS
 - subagent への配送 (SubagentStart hook) は Claude Code 2.0.43 以降。それ未満ではメインセッション向け機能のみ有効
+
+## 既知の制約
+
+- `rule:rescue-thread` は openai-codex plugin (v1.0.6 で確認) の rescue.md の「`--resume` / `--fresh` 指定時は thread 選択を質問しない」挙動を前提とします。外部 plugin の将来更新でこの前提が壊れた場合は規律の見直しが必要です
+- ユーザが `/codex:rescue` の本文を直接指定し、かつ対象の rescue がセッション内で最新の再開可能 task でなくなっている場合 (間に consult 等の Codex task が terminal 状態になった場合)、規律は安全側の degraded mode (`--fresh` + 本文無改変転送、thread 文脈の連続性なし) に倒れます。誤 thread 再開の防止と rescue.md の verbatim 転送契約を文脈の連続性より優先するためで、継続文脈が必要な場合は再依頼時に本文へ含めてください
 
 ## トラブルシュート
 

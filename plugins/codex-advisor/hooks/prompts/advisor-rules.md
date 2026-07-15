@@ -6,9 +6,9 @@
   #236 調査) を超えないこと。超えると persisted-output 化され注入が 2KB プレビューに劣化する。
 -->
 
-# codex-advisor: Codex への相談規律
+# codex-advisor: Codex 利用規律
 
-このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は「いつ相談するか」「助言をどう扱うか」の規律である。
+このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は「いつ相談するか」「助言をどう扱うか」の相談規律 (セクション 1〜3) と、`/codex:rescue` の thread 選択規律 (セクション 4) である。
 
 <!-- rule:advisor-timing -->
 ## 1. いつ相談するか
@@ -52,33 +52,12 @@
 <!-- rule:rescue-thread -->
 ## 4. rescue の thread 選択
 
-<!--
-  設計記述 (issue #241、Phase A):
-  - 対象: openai-codex plugin の /codex:rescue が「--resume / --fresh 未指定 + 再開可能 thread
-    あり」のとき必ず発行する thread 選択の AskUserQuestion (rescue.md v1.0.6 準拠。フラグ指定時
-    は質問しない挙動を前提とする)
-  - 指示の要件 (issue #241 受入基準 + pre-push codex review 指摘 (2026-07-15) による精密化):
-    (1) /codex:rescue 起動時 (Skill / command / subagent 経由) は --resume または --fresh を
-        常に自分で決定して付与し、thread 選択の AskUserQuestion を発行しない
-    (2) 判定ヒューリスティック: --resume は「直前の rescue と同一論点の続き (同じレビュー指摘
-        への反復対応、同じ相談の深掘り等) であり、かつ継続対象の rescue が、このセッションで
-        threadId を持つ terminal 状態 (v1.0.6 では completed / failed / cancelled) の task の
-        うち updatedAt 最新のものだと確実に分かる場合」に限る。--resume は起動順ではなく
-        updatedAt 順でその最新 task を再開するため (openai-codex 1.0.6 の
-        findLatestResumableTaskJob。consult も同じ task 履歴を共有し、失敗・キャンセルされた
-        task も threadId があれば候補になる)、他の Codex task (consult 等) が後から terminal
-        状態になった場合・並行 / background の task が存在する場合・迷う場合は --fresh とする
-    (3) ユーザがフラグ (--resume / --fresh) を文字どおり指定した場合はそれを尊重する。自然
-        言語で継続を依頼された場合は継続の意図を尊重しつつ、対象 thread を安全に特定でき
-        なければ --fresh とする。fallback 時の文脈の扱いは task 本文の所有者で分かれる:
-        Claude が rescue task 本文を作成する経路では、呼び出し前に必要な文脈を含む
-        self-contained な本文を作る。ユーザが /codex:rescue の本文を直接指定した経路では、
-        routing flag 以外の本文を変更せずそのまま転送する (文脈の連続性は保証できないが、
-        誤 thread の再開防止と upstream の verbatim 転送契約を優先する。Codex 出力以外の
-        説明を同じ rescue 応答へ追加しない)
-  - README への記載事項: ユーザ直接起動 + 対象 rescue 非最新のケースが安全側の degraded
-    mode (--fresh + raw 転送で文脈連続性なし) になる既知の制約を記載する
-  - 境界の要件: thread 選択の質問のみを対象とし、rescue を使うかどうかの判断や設計 / 仕様
-    レベルの決定に関する AskUserQuestion (セクション 3) は変更しない
-  - 本文は Phase B で「なぜ + 指示 + 境界」形式で記述する
--->
+**なぜ**: openai-codex plugin の `/codex:rescue` は、`--resume` / `--fresh` のどちらも指定されず再開可能な thread があると、継続か新規かを AskUserQuestion で必ず 1 回質問する。この質問は auto mode の自走を毎回ブロックする一方、回答は高度に予測可能である (実測でほぼ常に新規、継続はいずれも直前の rescue と同一論点の続きだった)。フラグ指定時は質問しない設計のため、常に自分でフラグを決めて付与すれば、外部 plugin を変更せずに質問分岐へ到達させずに済む。
+
+**指示**: `/codex:rescue` (Skill / command / subagent 経由のいずれも) を起動する際は、`--resume` または `--fresh` を常に自分で決定して付与し、thread 選択の AskUserQuestion を発行しない。判定は以下に従う:
+
+- `--resume` は「直前の rescue と同一論点の続き (同じレビュー指摘への反復対応、同じ相談の深掘り等) であり、かつ継続対象の rescue が、このセッションで threadId を持つ terminal 状態 (完了・失敗・キャンセル) の Codex task のうち最新のものだと確実に分かる場合」に限る。resume は起動順ではなく更新順の最新 task を再開し、`/codex-advisor:consult` も同じ task 履歴を共有し、失敗・キャンセルされた task も候補になる。他の Codex task が後から terminal 状態になった場合・並行 / background の task がある場合・迷う場合は `--fresh` とする
+- ユーザがフラグを文字どおり指定した場合はそれを尊重する。自然言語で継続を依頼された場合は継続の意図を尊重しつつ、対象 thread を安全に特定できなければ `--fresh` とする
+- `--fresh` 時の文脈は task 本文の所有者で扱いが分かれる: 自分が rescue の本文を作成する場合は、呼び出し前に必要な文脈を含む self-contained な本文を作る。ユーザが本文を直接指定した場合は routing flag 以外を変更せずそのまま転送し、Codex 出力以外の説明を同じ rescue 応答に追加しない
+
+**境界**: この規律の対象は thread 選択の質問のみである。rescue を使うかどうかの判断や、設計 / 仕様レベルの決定に関する `AskUserQuestion` (セクション 3) は変更しない。
