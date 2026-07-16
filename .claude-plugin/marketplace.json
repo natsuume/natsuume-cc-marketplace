@@ -53,7 +53,7 @@
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。",
-      "version": "0.17.1",
+      "version": "0.18.0",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
