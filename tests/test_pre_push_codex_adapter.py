@@ -293,6 +293,28 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
                 self.run_push_hook(work, env, turn_id="turn-test")
             )
 
+    def test_codex_default_subagent_fallback_uses_report_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temporary = Path(temporary_name)
+            work = self.create_feature_repository(temporary)
+            plugin_data = temporary / "plugin-data"
+            env = self.codex_env(plugin_data)
+            expected_hash = self.expected_review_hash(work)
+            marker_dir = self.codex_marker_dir(work, plugin_data)
+
+            for _, heading, role, marker_name in REVIEW_CASES:
+                payload = self.subagent_payload(work, "default", heading, role)
+                result = self.run_codex_auto_mark(work, payload, env)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                marker = marker_dir / marker_name
+                self.assertTrue(marker.exists(), result.stderr.decode())
+                self.assertEqual(marker.read_text(encoding="utf-8"), expected_hash)
+                self.assertIn("agent_type=default", result.stderr.decode())
+
+            allowed = self.run_push_hook(work, env, turn_id="turn-test")
+            self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
+            self.assertEqual(allowed.stdout, b"")
+
     def test_subagent_stop_rejects_bad_footer_unknown_agent_reentry_and_claude(self) -> None:
         marker_name = ".claude-pre-push-code-reviewed"
         with tempfile.TemporaryDirectory() as temporary_name:
@@ -479,7 +501,9 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
 
 
 class SetupCodexAgentsTest(unittest.TestCase):
-    def test_hook_config_registers_named_codex_subagent_stop_adapter(self) -> None:
+    def test_hook_config_registers_named_and_default_subagent_stop_adapter(
+        self,
+    ) -> None:
         config = json.loads(
             (PLUGIN_DIR / "hooks" / "hooks.json").read_text(encoding="utf-8")
         )
@@ -487,12 +511,21 @@ class SetupCodexAgentsTest(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(
             groups[0]["matcher"],
-            "^pre_push_(correctness|independent|security)_reviewer$",
+            "^(default|pre_push_(correctness|independent|security)_reviewer)$",
         )
         handlers = groups[0]["hooks"]
         self.assertEqual(len(handlers), 1)
         self.assertEqual(handlers[0]["type"], "command")
         self.assertIn("codex-auto-mark.sh", handlers[0]["command"])
+
+    def test_review_skill_documents_current_spawn_agent_fallback(self) -> None:
+        skill = (PLUGIN_DIR / "skills" / "review-codex" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("spawn_agent", skill)
+        self.assertIn("`agent_type` selector", skill)
+        self.assertIn("`default` fallback", skill)
+        self.assertIn("byte-identical", skill)
 
     def run_setup(
         self, repo: Path, mode: str, *args: str
