@@ -67,11 +67,11 @@ pre-push-review のレビューループ自体が何をレビューし何を den
 この構成には AI agent 特有の正当化が 2 点あります:
 
 - テストをユーザ承認済みの契約として先行固定することで、「実装がテストを通らないときテスト側を書き換える」failure mode を構造的に抑止する
-- pre-push-review の diff hash (branch 全差分 + staged + unstaged) により、Phase B でテストを変更するとレビュー済み marker が自動失効し、契約の変更が必ず再審査になる
+- pre-push-review が有効な環境では、diff hash (branch 全差分 + staged + unstaged) により Phase B でテストを変更するとレビュー済み marker が自動失効し、契約の変更が再審査になる
 
 ### 4.2 Phase A テストの provisional 契約
 
-Phase A のテストは「承認済みだが改訂可能な契約」です。実装に接触して初めて分かる不自然さや実装不可能性が判明したら、Phase B の途中でテストを黙って書き換えるのではなく、実装を止めて Phase A に戻り、テストを改訂して再レビュー (push すれば diff hash の失効により自動的に再審査になります) を経てから Phase B を再開します。
+Phase A のテストは「承認済みだが改訂可能な契約」です。実装に接触して初めて分かる不自然さや実装不可能性が判明したら、Phase B の途中でテストを黙って書き換えるのではなく、実装を止めて Phase A に戻り、テストを改訂して再レビュー (pre-push-review が有効な環境では push 時の diff hash 失効により自動的に再審査になります) を経てから Phase B を再開します。
 
 ### 4.3 Phase A の評価基準
 
