@@ -40,7 +40,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [git-guardrails](#git-guardrails) | 0.5.0 | 0.5.0 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.3.0 | 0.3.0 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.5.0 | 0.5.0 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 3.1.3 | 3.1.3 | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-review](#pre-push-review) | 3.1.4 | 3.1.4 | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
 | [update-default-branch](#update-default-branch) | 0.3.0 | 0.3.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.9.0 | 0.9.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.17.1 | 0.17.1 | 作業規律を SessionStart / SubagentStart hook で配送し、gh issue/pr body の未承認推奨表現を PreToolUse で検知する。Codex では semantic validator の provider/privacy 明示 opt-in と、Auto 検出不能を補う明示 follow-through Skill を提供 |
@@ -175,9 +175,9 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 | スキル名 | 説明 |
 |---------|------|
 | `setup-pre-push-agents` | correctness・independent・security の project-scoped read-only custom agent 3 本を、差分確認と明示承認を経て `.codex/agents` に導入する |
-| `review-codex` | 上記 named custom agent 3 本を並列実行し、Codex の `SubagentStop` hook に role ごとの共有 hash marker を自動更新させる |
+| `review-codex` | 上記 custom agent 3 本を並列実行し、Codex の `SubagentStop` hook に role ごとの共有 hash marker を自動更新させる。agent type selector が無い runtime では byte-identical template を読む `default` agent に限定して互換 fallback する |
 
-Codex では最初に `$pre-push-review:setup-pre-push-agents` を実行し、新しい thread で `$pre-push-review:review-codex` を使います。marker hook は `agent_type`・`agent_id`・`turn_id`・model・report heading/footer と同一 diff hash を検証します。これは runtime lifecycle の完了証跡ですが暗号署名ではなく、レビュー内容の意味的な正しさまでは証明しません。marker helper を直接実行しないでください。
+Codex では最初に `$pre-push-review:setup-pre-push-agents` を実行し、新しい thread で `$pre-push-review:review-codex` を使います。marker hook は `agent_type`・`agent_id`・`turn_id`・model・report heading/footer と同一 diff hash を検証します。agent type selector が無い場合の `default` fallback は template の developer instructions による instruction-enforced read-only であり、custom profile の sandbox 強制とは保証が異なります。これは runtime lifecycle の完了証跡ですが暗号署名ではなく、レビュー内容の意味的な正しさまでは証明しません。marker helper を直接実行しないでください。
 
 ### キーワード
 

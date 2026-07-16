@@ -345,6 +345,16 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             self.assertFalse(marker.exists())
 
             payload = self.subagent_payload(
+                work, "default", "# Correctness Review", "security"
+            )
+            result = self.run_codex_auto_mark(work, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(marker.exists())
+            self.assertFalse(
+                (self.codex_marker_dir(work, plugin_data) / MARKER_NAMES[2]).exists()
+            )
+
+            payload = self.subagent_payload(
                 work,
                 "pre_push_correctness_reviewer",
                 "# Correctness Review",

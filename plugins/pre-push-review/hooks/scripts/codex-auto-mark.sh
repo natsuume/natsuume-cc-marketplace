@@ -62,6 +62,8 @@ AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type')
 AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id')
 HOOK_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd')
 LAST_MESSAGE=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message')
+FIRST_NONEMPTY=$(printf '%s\n' "$LAST_MESSAGE" | awk 'NF { sub(/\r$/, ""); print; exit }')
+LAST_NONEMPTY=$(printf '%s\n' "$LAST_MESSAGE" | awk 'NF { line=$0 } END { sub(/\r$/, "", line); print line }')
 # marker runtime は plugin env ではなく、上で検証済みの Codex 固有 turn_id で
 # 選択する。Claude Code も互換用 plugin env を持つため env 推測はしない。
 MARKER_RUNTIME="codex"
@@ -82,13 +84,38 @@ case "$AGENT_TYPE" in
     EXPECTED_HEADING="# Security Review"
     MARKER_FN="security_marker_path"
     ;;
+  default)
+    # Codex 0.144.4 の spawn_agent は agent_type selector を公開せず、project
+    # custom agent を起動しても SubagentStop の agent_type が default になる。
+    # この互換経路だけは、role template が規定する report の先頭 heading と
+    # 最終 footer の完全一致ペアから role を確定する。heading 単独や部分一致、
+    # footer の role mismatch では marker を書かない。
+    case "$FIRST_NONEMPTY:$LAST_NONEMPTY" in
+      '# Correctness Review:<!-- pre-push-review:completed correctness -->')
+        ROLE="correctness"
+        EXPECTED_HEADING="# Correctness Review"
+        MARKER_FN="code_reviewed_marker_path"
+        ;;
+      '# Independent Review:<!-- pre-push-review:completed independent -->')
+        ROLE="independent"
+        EXPECTED_HEADING="# Independent Review"
+        MARKER_FN="codex_marker_path"
+        ;;
+      '# Security Review:<!-- pre-push-review:completed security -->')
+        ROLE="security"
+        EXPECTED_HEADING="# Security Review"
+        MARKER_FN="security_marker_path"
+        ;;
+      *)
+        exit 0
+        ;;
+    esac
+    ;;
   *)
     exit 0
     ;;
 esac
 
-FIRST_NONEMPTY=$(printf '%s\n' "$LAST_MESSAGE" | awk 'NF { sub(/\r$/, ""); print; exit }')
-LAST_NONEMPTY=$(printf '%s\n' "$LAST_MESSAGE" | awk 'NF { line=$0 } END { sub(/\r$/, "", line); print line }')
 EXPECTED_FOOTER="<!-- pre-push-review:completed $ROLE -->"
 if [ "$FIRST_NONEMPTY" != "$EXPECTED_HEADING" ] || [ "$LAST_NONEMPTY" != "$EXPECTED_FOOTER" ]; then
   printf '[pre-push-review] %s (%s) の完了 footer を検証できず marker を更新しません。\n' \
@@ -144,6 +171,6 @@ if ! mv "$TEMP_MARKER" "$MARKER_PATH"; then
 fi
 TEMP_MARKER=""
 
-printf '[pre-push-review] Codex %s marker updated from SubagentStop: %s (agent_id=%s)\n' \
-  "$ROLE" "$MARKER_PATH" "$AGENT_ID" >&2
+printf '[pre-push-review] Codex %s marker updated from SubagentStop: %s (agent_type=%s agent_id=%s)\n' \
+  "$ROLE" "$MARKER_PATH" "$AGENT_TYPE" "$AGENT_ID" >&2
 exit 0

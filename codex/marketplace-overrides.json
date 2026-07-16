@@ -102,7 +102,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "3.1.3",
+      "version": "3.1.4",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -114,15 +114,15 @@
       ],
       "compatibility": {
         "level": "partial",
-        "summary": "push gate・hash・marker filename は共有し、Codex では named custom agents と SubagentStop lifecycle hook が writable plugin data の physical git-dir scoped storageへ 3 review を記録します。",
+        "summary": "push gate・hash・marker filename は共有し、Codex では agent type selector がある runtime の named custom agents、または byte-identical template に従う限定的な default fallback と SubagentStop lifecycle hook が、writable plugin data の physical git-dir scoped storageへ 3 review を記録します。",
         "limitations": [
           "Codex plugin manifest は custom agent profile を直接有効化しないため、setup-pre-push-agents Skill による project-scoped .codex/agents への明示的な導入と新しい session が必要です。",
           "Codex の marker storage は runtime が提供する absolute PLUGIN_DATA を優先し、未設定時は absolute CLAUDE_PLUGIN_DATA を互換 fallback として使います。選択した path が利用できない場合は .git へ fallback せず push gate を fail-closed に deny します。",
-          "Claude agent の tools allowlist は完全再現せず、Codex custom agent の read-only sandbox と専用 instructions で変更を防ぎます。",
+          "Claude agent の tools allowlist は完全再現しません。named custom agent では read-only sandbox と専用 instructions を使いますが、agent type selector が無い runtime の default fallback は template と task による instruction-enforced read-only であり、sandbox 強制ではありません。",
           "Codex PreToolUse は対応する Bash 経路の guardrail であり、同等の push を行う全 shell 経路の完全な security boundary ではありません。"
         ],
         "guaranteeDifferences": [
-          "custom agent profile は plugin install だけでは有効にならず、利用対象 repository ごとの setup 完了を前提とします。",
+          "custom agent profile は plugin install だけでは有効にならず、利用対象 repository ごとの setup 完了を前提とします。agent type selector が無い runtime では、setup で byte-identical と確認した template を default agent が全文読取して遵守する互換 fallback を使います。",
           "Codex marker は PLUGIN_DATA (未設定時は CLAUDE_PLUGIN_DATA) 配下の pre-push-review/markers/<physical-git-dir-sha256>/ に保存され、Claude Code の .git marker とは storage location が異なります。",
           "SubagentStop marker は agent_type・agent_id・終了応答と同一 diff hash の lifecycle 完了を示しますが、レビュー内容の意味的正しさまでは証明しません。",
           "push gate の強制範囲は現行 Codex PreToolUse が捕捉する Bash invocation に限定されます。"
@@ -130,7 +130,7 @@
         "verificationTests": [
           {
             "path": "tests/test_pre_push_codex_adapter.py",
-            "covers": "custom-agent setup、turn_id による runtime 識別、PLUGIN_DATA / CLAUDE_PLUGIN_DATA の repo/worktree-scoped SubagentStop marker、欠落時 fail-closed、Claude .git 維持、push deny recovery の Codex adapter 契約"
+            "covers": "custom-agent setup、named/default SubagentStop の exact report 契約、turn_id による runtime 識別、PLUGIN_DATA / CLAUDE_PLUGIN_DATA の repo/worktree-scoped marker、欠落時 fail-closed、Claude .git 維持、push deny recovery の Codex adapter 契約"
           }
         ],
         "components": [
@@ -163,7 +163,7 @@
             "sourceDigest": "0289c10ef0bedf84fd47ad2cf97ef85959e008492c716a96794de5d1b4410c17"
           }
         ],
-        "sourceTreeDigest": "11d7efa55b06587baa64993b7a330a16246b7bec0ebb0085c22de2f12fea7847"
+        "sourceTreeDigest": "d443cd02e82abf22d5e86bc6ad8e740ccedcd276983e0f86a485f89c1b77b847"
       }
     },
     "update-default-branch": {

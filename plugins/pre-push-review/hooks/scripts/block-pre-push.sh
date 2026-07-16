@@ -731,7 +731,7 @@ target: ${TARGET_CWD}
 
 実行 surface に応じて、次の正規フローを使ってください:
   - Claude Code: **\`/pre-push-review:review\`** (3 namespaced custom agent を並列起動)
-  - Codex: **\`\$pre-push-review:review-codex\`** Skill (3 project-scoped named read-only agent を並列起動)
+  - Codex: **\`\$pre-push-review:review-codex\`** Skill (3 project-scoped agent を並列起動。agent type selector 不在時は byte-identical template に従う default fallback)
     初回または agent template 更新後は先に **\`\$pre-push-review:setup-pre-push-agents\`** を実行
 
 修正後に branch 差分が変わるとマーカーは自動失効します。同じ正規フローで再走させ、
@@ -742,7 +742,7 @@ Claude Code で slash command が動かない場合のみ、次の手動 fallbac
   - Agent / Task tool で subagent_type="pre-push-review:security-reviewer" を起動
   - Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動
 
-Codex の marker は named agent の SubagentStop hook が自動更新します。helper を直接呼ばず、
+Codex の marker は許可した named/default agent の SubagentStop hook が自動更新します。helper を直接呼ばず、
 必ず \`\$pre-push-review:review-codex\` Skill から実行してください。
 EOF
 )

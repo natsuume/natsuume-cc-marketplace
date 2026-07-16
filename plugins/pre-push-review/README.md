@@ -16,7 +16,13 @@
 
 ## バージョン
 
-v3.1.3 (前身: `pre-commit-review` v0.4.0)
+v3.1.4 (前身: `pre-commit-review` v0.4.0)
+
+### v3.1.3 → v3.1.4 の変更点
+
+- Codex 0.144.4 の `spawn_agent` が `agent_type` selector を公開せず、project custom agent の停止 event も `agent_type=default` になる互換差へ対応した。selector がある runtime では従来どおり 3 named profile を使い、無い runtime だけ byte-identical な `.codex/agents/*.toml` を全文読取して `developer_instructions` に従う `default` agent へ限定 fallback する
+- `SubagentStop` hook は 3 named type に加えて `default` を受け、`default` の場合だけ report の最初の非空 heading と最後の completion footer の完全一致ペアから role を確定する。未知 type、未知 heading、role mismatch footer は marker を書かない
+- `default` fallback の read-only は custom profile の sandbox 強制ではなく task と template による instruction-enforced な保証であることを明記した。marker storage、runtime の `turn_id` guard、review hash、push gate 契約は変更していない
 
 ### v3.1.2 → v3.1.3 の変更点
 
@@ -93,7 +99,7 @@ claude plugin install codex@openai-codex
 
 ## Codex 代替実装
 
-Codex では `$pre-push-review:setup-pre-push-agents` で対象 repository の `.codex/agents/` に次の project custom agent を導入し、`$pre-push-review:review-codex` が 3 本を並列起動します。
+Codex では `$pre-push-review:setup-pre-push-agents` で対象 repository の `.codex/agents/` に次の project custom agent を導入し、`$pre-push-review:review-codex` が runtime の `spawn_agent` capability に応じて named profile または限定的な `default` fallback で 3 本を並列起動します。
 
 | agent type | 観点 | marker |
 |---|---|---|
@@ -105,23 +111,23 @@ Codex では `$pre-push-review:setup-pre-push-agents` で対象 repository の `
 
 Codex の既定 sandbox では `.git` が常に read-only なので、marker は hook に渡される writable な plugin data の `pre-push-review/markers/<repo-key>/` に保存します。`PLUGIN_DATA` が設定されていればそれを優先し、未設定の runtime では `CLAUDE_PLUGIN_DATA` を互換 fallback として使います。`repo-key` は physical git-dir の絶対 path bytes だけを SHA-256 にした lowercase hex で、同じ plugin data を共有する repository と linked worktree を分離します。Claude Code は従来どおり対象 `.git` を使います。両 runtime で marker filename、review hash、push gate の判定は共通です。Codex の runtime 識別は plugin env の存在ではなく hook payload の非空 `turn_id` で行います。選択した plugin data path が空・relative path の場合は `.git` へ fallback せず、marker 更新を skip して push gate を fail-closed に deny します。
 
-Codex plugin hook は `SubagentStop` の matcher を上記 3 agent type に限定し、さらに script 内で次を検証します。
+Codex plugin hook は `SubagentStop` の matcher を上記 3 agent type と `default` に限定し、さらに script 内で次を検証します。
 
 - Codex SubagentStop input で required の Codex extension `turn_id` が存在し、非空であること。Claude Code の namespaced agent は matcher が異なり、script が直接呼ばれても `turn_id` 不在なら無害な no-op になる
-- `hook_event_name=SubagentStop`、`agent_type` 完全一致、非空の `agent_id` / `model` / `last_assistant_message`、`stop_hook_active=false`
-- report の先頭 heading と、role 固有の最終 completion footer が template の出力契約と一致すること
+- `hook_event_name=SubagentStop`、許可した named type または `default` に完全一致する `agent_type`、非空の `agent_id` / `model` / `last_assistant_message`、`stop_hook_active=false`
+- named type では type 固有の report heading / completion footer が一致すること。`default` では最初の非空 heading と最後の非空 completion footer の完全一致ペアだけから role を確定できること
 - hook payload の `cwd` で default branch、HEAD、merge-base、branch / staged / unstaged diff の hash を計算できること
 
 検証成功時だけ role に対応する plugin data marker を同じ directory 内の atomic rename で更新します。3 agent が並列停止する間に repository state が外部から変わった場合、marker hash が揃わず push gate が deny するため、変更後の状態で 3 本を再実行する必要があります。`$pre-push-review:review-codex` は `mark-review.sh` を直接呼びません。Codex では `.git` marker の存在や mtime ではなく、SubagentStop hook の update output と同じ state に対する push gate で完了を確認します。
 
 ### 保証差
 
-Codex 代替が保証するのは、**指定した named agent の Codex runtime lifecycle event が発生し、role 固有の完了 footer を含む report が返された時点の review 対象 hash** です。次は Claude Code 実装と同一、または暗号学的に強い保証ではありません。
+Codex 代替が保証するのは、**許可した named agent、または agent type selector が無い runtime で byte-identical template に従う `default` agent の Codex runtime lifecycle event が発生し、role 固有の heading / 完了 footer を含む report が返された時点の review 対象 hash** です。次は Claude Code 実装と同一、または暗号学的に強い保証ではありません。
 
 - SubagentStop payload は Codex runtime 由来の構造化 event ですが、暗号署名ではありません。hook は review の意味的な正しさや finding の完全性を証明せず、agent が出力契約まで完走したことを検証します。Claude Code の Agent/Task completion hook も review 内容そのものを証明するものではありません
-- Codex plugin manifest は project custom agent を install 時に `.codex/agents` へ自動配置しません。明示承認を伴う `$pre-push-review:setup-pre-push-agents` が一度必要で、`$pre-push-review:review-codex` は template が byte-identical でないとき generic agent へ fallback しません
+- Codex plugin manifest は project custom agent を install 時に `.codex/agents` へ自動配置しません。明示承認を伴う `$pre-push-review:setup-pre-push-agents` が一度必要で、`$pre-push-review:review-codex` は template が byte-identical でないとき generic agent へ fallback しません。selector 不在時の fallback は `agent_type=default` だけを許可します
 - Codex marker は runtime が提供する writable な `PLUGIN_DATA` (未設定時は互換用 `CLAUDE_PLUGIN_DATA`) に依存します。選択した path の欠落・空・relative path、storage 作成失敗、SHA-256 command 不在時は marker を書かず push gate を deny します
-- Codex custom agent は Claude agent の `tools:` allowlist と同じ粒度の tool 制限を持たないため、read-only sandbox で mutation を防ぎます。親 turn の live sandbox / permission override が子へ再適用される surface では、その override が profile より優先されます
+- Codex custom agent は Claude agent の `tools:` allowlist と同じ粒度の tool 制限を持たないため、named profile では read-only sandbox で mutation を防ぎます。agent type selector が無い `default` fallback は template の `developer_instructions` と task による instruction-enforced read-only であり、sandbox による強制ではありません。親 turn の live sandbox / permission override が子へ再適用される surface では、その override が profile より優先されます
 - Claude 側の 3 軸は Anthropic correctness + OpenAI Codex + security ですが、Codex 側は 3 本とも Codex runtime 上です。`pre_push_independent_reviewer` は別 context で他 report を渡さない独立性を持つ一方、provider/model 実装の独立性までは再現しません
 - plugin hook はユーザーの trust 後にだけ動作し、hooks feature の無効化、marker の直接改変、Codex 外の terminal / clone からの push を防ぐ adversarial security boundary ではありません。Claude Code 版と同じく cooperative agent workflow の push gate です
 
@@ -136,7 +142,7 @@ python3 /path/to/skill-creator/scripts/quick_validate.py plugins/pre-push-review
 python3 scripts/sync_codex_marketplace.py --check
 ```
 
-`tests.test_pre_push_codex_adapter` は、setup の inspect → 承認 token 付き atomic install、stale token / symlink 拒否、3 TOML の必須 field と read-only 設定、`turn_id` による runtime 識別、3 agent type の正常な SubagentStop からの `PLUGIN_DATA` / `CLAUDE_PLUGIN_DATA` marker 更新、physical git-dir key による repository / worktree 分離、plugin data 欠落時の no-fallback / fail-closed、Claude `.git` marker の維持、marker hash と push gate の共有を検証します。
+`tests.test_pre_push_codex_adapter` は、setup の inspect → 承認 token 付き atomic install、stale token / symlink 拒否、3 TOML の必須 field と read-only 設定、`turn_id` による runtime 識別、3 named agent type と exact report 契約を満たす `default` の正常な SubagentStop からの `PLUGIN_DATA` / `CLAUDE_PLUGIN_DATA` marker 更新、未知 type / 不正 footer の拒否、physical git-dir key による repository / worktree 分離、plugin data 欠落時の no-fallback / fail-closed、Claude `.git` marker の維持、marker hash と push gate の共有を検証します。
 
 実機 E2E では次を確認します。
 
