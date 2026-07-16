@@ -602,6 +602,103 @@ class EnforceDraftPrTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_rewrite(command, expected)
 
+    def test_h15_opaque_fallback_with_prior_draft_false_denied(self) -> None:
+        # opaque fallback でも fallback 前に確定したトークンの falsy 判定は
+        # 生きる。fallback 時に確定済みトークンの判定を省く実装は非 draft PR
+        # を素通しする (enforce 迂回)。H10b の deny 版 witness。
+        command = (
+            'gh pr create --draft=false --title "t" --body-file - <<E"OF"'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
+
+    def test_h16_plain_heredoc_tab_indented_terminator_not_end(self) -> None:
+        # H12 の対になる negative control。ダッシュ形式 (`<<-`) 専用のタブ
+        # 除去を全形式に適用する誤実装は fake への挿入で fail する。
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF'
+            + NL
+            + TAB
+            + "EOF"
+            + NL
+            + "note; gh pr create fake"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF'
+            + NL
+            + TAB
+            + "EOF"
+            + NL
+            + "note; gh pr create fake"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h17_mixed_mode_heredocs_per_entry_state(self) -> None:
+        # 全 entry に単一 mode を共有する誤実装 (例: 全部 quoted 扱い / 全部
+        # タブ除去なし) では B の終端を誤り、後続行の挿入欠落または fake への
+        # 挿入で fail する。
+        command = (
+            "cat <<'A' <<-B; gh pr create --title \"t\" --body \"b\""
+            + NL
+            + "bodyA; gh pr create fakeA"
+            + NL
+            + "A"
+            + NL
+            + TAB
+            + "bodyB; gh pr create fakeB"
+            + NL
+            + TAB
+            + "B"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
+        expected = (
+            "cat <<'A' <<-B; gh pr create --draft --title \"t\" --body \"b\""
+            + NL
+            + "bodyA; gh pr create fakeA"
+            + NL
+            + "A"
+            + NL
+            + TAB
+            + "bodyB; gh pr create fakeB"
+            + NL
+            + TAB
+            + "B"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h18_delimiter_with_digit_and_underscore(self) -> None:
+        # 英字のみ受理する誤実装は EOF_1 を fallback 扱いして後続の挿入欠落で
+        # fail する。
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF_1'
+            + NL
+            + "body; gh pr create fake"
+            + NL
+            + "EOF_1"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF_1'
+            + NL
+            + "body; gh pr create fake"
+            + NL
+            + "EOF_1"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
+        )
+        self.assert_rewrite(command, expected)
+
     # ------------------------------------------------------------------
     # グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との
     # 複合パターンのため現行実装では fail (red) するはず — `<<` 内の `1` を heredoc
@@ -770,27 +867,32 @@ class EnforceDraftPrTest(unittest.TestCase):
     def test_l06_quoted_heredoc_backslash_line_terminator_still_ends(
         self,
     ) -> None:
-        command = (
-            "gh pr create --title \"t\" --body-file - <<'EOF'"
-            + NL
-            + "line1"
-            + BS
-            + NL
-            + "EOF"
-            + NL
-            + ':; gh pr create --title "t2" --body "b2"'
-        )
-        expected = (
-            "gh pr create --draft --title \"t\" --body-file - <<'EOF'"
-            + NL
-            + "line1"
-            + BS
-            + NL
-            + "EOF"
-            + NL
-            + ':; gh pr create --draft --title "t2" --body "b2"'
-        )
-        self.assert_rewrite(command, expected)
+        declarations = ("<<'EOF'", '<<"EOF"', "<<" + BS + "EOF")
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                command = (
+                    'gh pr create --title "t" --body-file - '
+                    + declaration
+                    + NL
+                    + "line1"
+                    + BS
+                    + NL
+                    + "EOF"
+                    + NL
+                    + ':; gh pr create --title "t2" --body "b2"'
+                )
+                expected = (
+                    'gh pr create --draft --title "t" --body-file - '
+                    + declaration
+                    + NL
+                    + "line1"
+                    + BS
+                    + NL
+                    + "EOF"
+                    + NL
+                    + ':; gh pr create --draft --title "t2" --body "b2"'
+                )
+                self.assert_rewrite(command, expected)
 
     def test_l07_unquoted_heredoc_even_backslash_terminator_ends(
         self,
@@ -854,6 +956,17 @@ class EnforceDraftPrTest(unittest.TestCase):
         # トークン値の解釈で除去し、falsy 判定を維持すること」の退行防止テスト。
         command = (
             'gh pr create --draft="fal' + BS + NL + 'se" --title "t" --body "b"'
+        )
+        self.assert_denied(command)
+
+    def test_l10_single_quote_newline_then_draft_false_denied(self) -> None:
+        # single quote 内の生改行を物理行境界 (TNL) と誤解釈すると引数走査が
+        # 停止し、後続の --draft=false を見逃して deny 漏れになる (enforce
+        # 迂回)。その経路の固定。
+        command = (
+            "gh pr create --title \"t\" --body 'multi"
+            + NL
+            + "line' --draft=false"
         )
         self.assert_denied(command)
 
