@@ -86,13 +86,13 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 ユーザへの質問・確認・判断伺い・すり合わせを行う場合、自由文で尋ねて turn を終えず、必ず `AskUserQuestion` ツールを発行する。理由: 回答が構造化され、選択肢の取りこぼしを防げる。
 
 <!-- rule:tdd-two-phase -->
-## 9. TDD 2 段階の開発手順 (R3c)
+## 9. spec-first 2 段階の開発手順 (R3c)
 
-軽微な修正を除き、実装は同一 PR 内で 2 段階の commit に分けて進める: Phase A (テストがある場合は失敗するテスト + 設計骨格) → push して pre-push-review のレビューを通過させ draft PR を作る → Phase B (実装本体) → push → PR を ready 化する。
+軽微な修正を除き、実装は同一 PR 内で 2 段階の commit に分けて進める: Phase A (テストがある場合は失敗するテスト + 設計骨格) → push して pre-push-review のレビューを通過させ draft PR を作る → Phase B (実装本体) → push → PR を ready 化する。これは正典 TDD (1 テストずつの red-green) を要求する規律ではなく、実行可能仕様の先行固定 (spec-first) である。
 
 **境界**: sh スクリプトや markdown のようにテストハーネスを持たない成果物では、Phase A のテストを「設計記述 commit」(ファイル構成・I/O 契約・ルール ID 一覧などを docs コメントとして含む骨格) に置き換える。
 
-着手手順の詳細 (pick-up 分岐・軽微判定・2 段階の具体手順) は `issue-start` skill を参照。
+着手手順の詳細 (pick-up 分岐・軽微判定・2 段階の具体手順・spec-first の定義) は `issue-start` skill を参照。
 
 ---
 

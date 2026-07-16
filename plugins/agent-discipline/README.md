@@ -4,9 +4,16 @@ Claude Code と Codex の振る舞い規律 (= agent としての discipline) �
 
 ## バージョン
 
-v0.17.1
+v0.18.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### Claude Code v0.17.1 / Codex v0.17.2 → v0.18.0 の変更点
+
+- 常時ルール `rule:tdd-two-phase` の呼称を「TDD 2 段階」から「spec-first 2 段階」へ rename した (rule ID は不変)。本ワークフローの二段階構成 (Phase A でテスト一括先行 + 設計骨格 → レビュー → Phase B で実装) は正典 TDD (1 テストずつの red-green。Canon TDD はテストリスト全項目の一括テスト化を Mistake と名指しする) ではなく、実行可能仕様の先行固定 (spec-first、ATDD / Specification by Example の系譜) であり、「TDD」の語が誘発する正典 TDD 方向の挙動ドリフト・レビュー偽陽性を避ける (issue #272)
+- issue-start skill の第 4 章を「spec-first 2 段階手順」へ rename し、局所定義 (spec-first の位置づけと AI agent 特有の正当化 2 点) / Phase A テストの provisional 契約 (実装接触後に欠陥が判明したら Phase A へ戻して改訂・再レビューする) / Phase A の評価基準 (test matrix・seam 選定・実装詳細への非結合) / 成果物粒度 (Phase A で固定するものと Phase B に委ねるもの) / Phase B 内の進め方 (1 つずつ green 化、欠陥発見時は Phase A ループへ) の 5 小節 (4.1〜4.5) を追加した
+- 軽微判定の既存規定・Phase A/B の手順自体 (push・レビュー・draft PR の流れ) は変更していない。本 README の変更履歴中の旧称「TDD 2 段階」は過去記録のため残置
+- 共有 Skill / prompt の変更のため Claude Code / Codex の両 version を minor bump した
 
 ### Codex v0.17.1 → v0.17.2 の変更点
 
@@ -197,7 +204,7 @@ Claude Code と Codex に「個人の開発スタイル」を一括で適用す�
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
 | **物理層 (Bash 分解)** | `SessionStart` (inject-always.sh、モデル別に `always-fable.md` / `always-sonnet-1.md` の part 1 を配送) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
-| **before 系** | `SessionStart` (同上) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約、 AskUserQuestion の必須化 (R6、 v0.5.0 新設)、 TDD 2 段階の開発手順 (R3c、 v0.5.0 新設) |
+| **before 系** | `SessionStart` (同上) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約、 AskUserQuestion の必須化 (R6、 v0.5.0 新設)、 spec-first 2 段階の開発手順 (R3c、 v0.5.0 新設・v0.18.0 で TDD 2 段階から rename) |
 | **during 系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` の無い旧形式 claim は他 session 扱いで削除禁止、 v0.14.0) |
 | **モデル判定 / 分割配送** (v0.5.0 新設、分業規律の連結配送は v0.8.0/v0.9.0、issue #236 (v0.15.0) で要素分割に再設計) | `SessionStart` (inject-always.sh の fallback chain、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh / resolve-model-on-prompt.sh) | 常時 (各要素は at-most-once、判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し `always-fable.md` / `always-sonnet-1.md` を出し分けて SessionStart で part 1 のみ注入する。残りの part (`always-sonnet-2.md` / `always-sonnet-3.md`) と分業規律 (discipline-\*.md、モデル別) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (8K 閾値超過を避けるための分割、詳細は `inject-always.sh` ヘッダの配送マトリクス参照)。判定不能時は自己ゲート付きで暫定配送し、後続の `UserPromptSubmit` で transcript から確定したら常時ルール確定版 (resolve-model-on-prompt.sh) と分業規律確定版 (inject-discipline.sh) をそれぞれ 1 度だけ再注入する |
@@ -261,7 +268,7 @@ claude plugin install agent-discipline@natsuume-plugins
 6. **自律作業中の判断境界** (`rule:autonomy-boundary`): 実装は自走、設計 / 仕様 (= issue で決まっているはずの内容) は再確認しない。ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる
 7. **連続 issue 解決時の排他制御** (`rule:issue-claim`): `/goal` 等の並列 session フロー向け。(a) `gh issue view` で `ai:in-progress` ラベル / claim comment 早期判定、(b) claim comment 投稿 (`session=<セッションID>` で自他判別)、(c) 3 秒待機 + REST issue comments の全ページ再取得 + `(created_at, 数値 id)` の辞書順比較による先着判定、(d) 作業 branch 切ってセッション ID 入りの空 commit + 即 push で確定的排他、(e) push 成功時のみラベル付与。安全機構のため両ファイルとも手順を省略せず全文記載する
 8. **AskUserQuestion の必須化** (`rule:ask-user-question`、v0.5.0 新設・R6): ユーザへの質問・確認・判断伺い・すり合わせは自由文で turn を終えず必ず `AskUserQuestion` を発行する
-9. **TDD 2 段階の開発手順** (`rule:tdd-two-phase`、v0.5.0 新設・R3c): 軽微な修正を除き、実装は Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める
+9. **spec-first 2 段階の開発手順** (`rule:tdd-two-phase`、v0.5.0 新設・R3c、v0.18.0 で TDD 2 段階から rename): 軽微な修正を除き、実装は Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める。正典 TDD ではなく実行可能仕様の先行固定 (spec-first) であり、局所定義・評価基準の詳細は issue-start skill が持つ
 
 **モデル別ファイルの書き分け**:
 
@@ -526,7 +533,7 @@ issue の起票・分解フェーズの手順をガイドします: 起票前の
 
 **ファイル**: `skills/issue-start/SKILL.md`
 
-issue の着手・実装開始フェーズの手順をガイドします: pick-up 分岐 (既存の branch / PR 状態確認)、排他制御 (`rule:issue-claim` への参照)、軽微判定 (2 段構え)、TDD 2 段階の具体コマンド手順、closing keyword。
+issue の着手・実装開始フェーズの手順をガイドします: pick-up 分岐 (既存の branch / PR 状態確認)、排他制御 (`rule:issue-claim` への参照)、軽微判定 (2 段構え)、spec-first 2 段階の具体コマンド手順 (局所定義・provisional 契約・Phase A 評価基準・成果物粒度・Phase B 内の進め方の 4.1〜4.5 を含む)、closing keyword。
 
 **使用シーン**:
 

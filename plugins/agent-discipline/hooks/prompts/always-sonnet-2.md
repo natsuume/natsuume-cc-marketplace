@@ -8,7 +8,7 @@
 
 # agent-discipline: 常時適用ルール (Sonnet) — part 2/3
 
-本メッセージは常時適用ルール (Sonnet 版) の part 2/3 であり、part 1/3 (Bash コマンド分解・設計判断の事前確認) および part 3/3 (排他制御・AskUserQuestion 必須化・TDD 2 段階) と合わせて 1 つのルールセットを構成する。到着順序に依らず、本 part 単独でも各ルールはそのまま適用される。
+本メッセージは常時適用ルール (Sonnet 版) の part 2/3 であり、part 1/3 (Bash コマンド分解・設計判断の事前確認) および part 3/3 (排他制御・AskUserQuestion 必須化・spec-first 2 段階) と合わせて 1 つのルールセットを構成する。到着順序に依らず、本 part 単独でも各ルールはそのまま適用される。
 
 <!-- rule:issue-body -->
 ## 3. issue 起票時の詳細化

@@ -312,7 +312,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.17.2",
+      "version": "0.18.0",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": [
@@ -395,7 +395,7 @@
             "sourceDigest": "a23b1862a7921dd2daad8ae5ff3addf9ed5fd71b7994ed6a746c788dc4fe1345"
           }
         ],
-        "sourceTreeDigest": "cbb00072e7739e170b834d9231f612a132e8e9f3088fcd65d12d2e155afd31b8"
+        "sourceTreeDigest": "88902f5037601de0468b08e23ac322378091ebd92fec77e20baba5e9452dfb97"
       }
     },
     "ui-discipline": {
