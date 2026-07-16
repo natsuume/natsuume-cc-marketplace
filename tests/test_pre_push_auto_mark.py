@@ -126,6 +126,26 @@ class PrePushAutoMarkTest(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
 
+    def wrapper_environment(
+        self, home: Path, base_env: dict[str, str]
+    ) -> dict[str, str]:
+        real_node = Path(
+            subprocess.check_output(
+                ["node", "-e", "process.stdout.write(process.execPath)"]
+            )
+            .decode()
+            .strip()
+        )
+        env = base_env.copy()
+        existing_path = env.get("PATH")
+        env["PATH"] = (
+            f"{real_node.parent}{os.pathsep}{existing_path}"
+            if existing_path
+            else str(real_node.parent)
+        )
+        env["HOME"] = str(home)
+        return env
+
     def marker_path(self, work: Path, agent_type: str) -> Path:
         return self.git_dir(work) / MARKERS[agent_type]
 
@@ -317,8 +337,16 @@ class PrePushAutoMarkTest(unittest.TestCase):
                 'process.stdout.write("# Review\\n\\nNo findings.\\n");\n',
                 encoding="utf-8",
             )
-            env = os.environ.copy()
-            env["HOME"] = str(home)
+            shim_directory = temporary / "node-shim"
+            shim_directory.mkdir()
+            node_shim = shim_directory / "node"
+            node_shim.write_text("#!/bin/sh\nexit 126\n", encoding="utf-8")
+            node_shim.chmod(0o755)
+            base_env = os.environ.copy()
+            base_env["PATH"] = (
+                f"{shim_directory}{os.pathsep}{base_env.get('PATH', '')}"
+            )
+            env = self.wrapper_environment(home, base_env)
             result = subprocess.run(
                 ["bash", str(RUN_CODEX_REVIEW)],
                 cwd=work,
@@ -328,6 +356,7 @@ class PrePushAutoMarkTest(unittest.TestCase):
                 env=env,
             )
             self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertIn("# Review", result.stdout.decode())
             final_marker = self.marker_path(
                 work, "pre-push-review:codex-reviewer"
             )
@@ -359,9 +388,12 @@ class PrePushAutoMarkTest(unittest.TestCase):
                 / "codex-companion.mjs"
             )
             companion.parent.mkdir(parents=True)
-            companion.write_text("process.exit(1);\n", encoding="utf-8")
-            env = os.environ.copy()
-            env["HOME"] = str(home)
+            companion.write_text(
+                'process.stderr.write("intentional companion failure\\n");\n'
+                "process.exit(1);\n",
+                encoding="utf-8",
+            )
+            env = self.wrapper_environment(home, os.environ.copy())
             result = subprocess.run(
                 ["bash", str(RUN_CODEX_REVIEW)],
                 cwd=work,
@@ -371,6 +403,10 @@ class PrePushAutoMarkTest(unittest.TestCase):
                 env=env,
             )
             self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "intentional companion failure",
+                result.stderr.decode(),
+            )
             self.assertFalse(pending.exists(), result.stderr.decode())
             self.assertFalse(
                 self.marker_path(
