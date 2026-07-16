@@ -54,7 +54,7 @@ Claude Code marketplace を version 以外の共有 metadata の正本とし、S
 |---|---|---|---|---|---|
 | `pre-push-review` | `commands/review.md` | `8c63cb9fe56a…` | `surface-unavailable` | — | 現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。 |
 | `pre-push-review` | `agents/code-reviewer.md` | `477c89164f05…` | `surface-unavailable` | — | 現行 Codex runtime では correctness reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。 |
-| `pre-push-review` | `agents/codex-reviewer.md` | `d5ada4982440…` | `surface-unavailable` | — | 現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。 |
+| `pre-push-review` | `agents/codex-reviewer.md` | `48647cc55221…` | `surface-unavailable` | — | 現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。 |
 | `pre-push-review` | `agents/security-reviewer.md` | `f243518b30af…` | `surface-unavailable` | — | 現行 Codex runtime では security reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。 |
 | `natsuume-statusline` | `commands/setup.md` | `fedf745cd1d0…` | `adapted` | `skills/setup-codex/SKILL.md` | Claude settings.json の statusLine.command 設定を Codex の /statusline と config.toml 手順に変換します。 |
 | `natsuume-statusline` | `statusline/context-cache-dump.sh` | `0c584020d0d6…` | `surface-unavailable` | — | Codex に statusline stdin callback はありません。context handoff の意図は session-handoff の PreCompact adapter が担います。 |

@@ -74,6 +74,7 @@ class ReviewerParentSafeReportContractTest(unittest.TestCase):
             "Return the captured output",
             "relay its output",
             "stdout / stderr をまとめた markdown report",
+            "parent session can observe the codex output",
         )
         for text in forbidden:
             with self.subTest(text=text):

@@ -147,7 +147,7 @@
             "source": "agents/codex-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "d5ada4982440e9db1e12a4a9dba46ec3af201be374fb16019ec0b6cd5fdee056"
+            "sourceDigest": "48647cc5522152392b1727fe32de4284da3f9eda959165452e395c3ba063f760"
           },
           {
             "source": "agents/security-reviewer.md",
@@ -156,7 +156,7 @@
             "sourceDigest": "f243518b30af859903e26621015fe3b6e5dbd9c7e35197f922531aebebc60191"
           }
         ],
-        "sourceTreeDigest": "cf64b7ac68fad17ad3cebbed0857a32875b78af8481412aea2e5f52a7939df08"
+        "sourceTreeDigest": "91769513df3fdf710e4e7b106983e3dae0447517cdb73451d003286425c9db8e"
       }
     },
     "update-default-branch": {
