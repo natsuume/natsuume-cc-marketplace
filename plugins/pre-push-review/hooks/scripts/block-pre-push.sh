@@ -71,6 +71,15 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
+# Codex PreToolUse payload の非空 string turn_id だけを runtime discriminator にする。
+# Claude Code も CLAUDE_PLUGIN_ROOT / CLAUDE_PLUGIN_DATA を持つため env 推測はしない。
+MARKER_RUNTIME="claude"
+if printf '%s' "$INPUT" | jq -e '
+  (.turn_id | type == "string" and length > 0)
+' >/dev/null 2>&1; then
+  MARKER_RUNTIME="codex"
+fi
+
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 if [ -z "$COMMAND" ]; then
   exit 0
@@ -608,19 +617,27 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C "${TARGET_CWD}" status\` で変更を確認して commit し、Claude Code では \`/pre-push-review:review\`、Codex では \`\$pre-push-review:review-codex\` Skill で 3 review を再走させてから push してください。
+\`git -C "${TARGET_CWD}" status\` で変更を確認して commit し、Claude Code の \`/pre-push-review:review\` で 3 review を再走させてから push してください。現行 Codex runtime は \`spawn_agent\` に \`agent_type\` selector を公開しないため、Codex 版は marketplace 配布対象外です。
 EOF
 )
   deny "$REASON"
   exit 0
 fi
 
-CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR")
-CODEX_MARKER=$(codex_marker_path "$GIT_DIR")
-SECURITY_MARKER=$(security_marker_path "$GIT_DIR")
-CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
-CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
-SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
+if CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR" "$MARKER_RUNTIME") &&
+  CODEX_MARKER=$(codex_marker_path "$GIT_DIR" "$MARKER_RUNTIME") &&
+  SECURITY_MARKER=$(security_marker_path "$GIT_DIR" "$MARKER_RUNTIME"); then
+  CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
+  CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
+  SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
+else
+  # Codex で PLUGIN_DATA / CLAUDE_PLUGIN_DATA が使えない場合を含め、
+  # storage 解決不能時は .git へ fallback せず全 marker を missing として
+  # 後段の gate を fail-closed にする。
+  CODE_REVIEWED_HASH=""
+  CODEX_HASH=""
+  SECURITY_HASH=""
+fi
 
 # 真の commit push (real push) に到達した時点で BASE が解決できないと branch 全差分が
 # 計算できないため fail-closed deny。 ここに到達するのは deletion / tag-only / matching skip
@@ -714,8 +731,7 @@ target: ${TARGET_CWD}
 
 実行 surface に応じて、次の正規フローを使ってください:
   - Claude Code: **\`/pre-push-review:review\`** (3 namespaced custom agent を並列起動)
-  - Codex: **\`\$pre-push-review:review-codex\`** Skill (3 project-scoped named read-only agent を並列起動)
-    初回または agent template 更新後は先に **\`\$pre-push-review:setup-pre-push-agents\`** を実行
+  - Codex: 現行 runtime の \`spawn_agent\` に \`agent_type\` selector が無く、generic agent の reviewer identity を認証できないため marketplace 配布対象外。Codex から generic agent で代行したり marker helper を直接実行したりしない
 
 修正後に branch 差分が変わるとマーカーは自動失効します。同じ正規フローで再走させ、
 全マーカーが ✓ になったら \`git push\` を再試行してください。
@@ -725,8 +741,7 @@ Claude Code で slash command が動かない場合のみ、次の手動 fallbac
   - Agent / Task tool で subagent_type="pre-push-review:security-reviewer" を起動
   - Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動
 
-Codex の marker は named agent の SubagentStop hook が自動更新します。helper を直接呼ばず、
-必ず \`\$pre-push-review:review-codex\` Skill から実行してください。
+Codex 用に保存している adapter は、runtime が \`agent_type\` selector を公開し、named reviewer identity を SubagentStop event へ引き継げる将来の実行面だけを想定しています。現行 runtime では marker を生成せずfail-closed に停止してください。
 EOF
 )
 

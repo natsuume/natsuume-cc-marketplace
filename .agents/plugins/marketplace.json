@@ -41,18 +41,6 @@
       "category": "Productivity"
     },
     {
-      "name": "pre-push-review",
-      "source": {
-        "source": "local",
-        "path": "./plugins/pre-push-review"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    },
-    {
       "name": "update-default-branch",
       "source": {
         "source": "local",
@@ -105,18 +93,6 @@
       "source": {
         "source": "local",
         "path": "./plugins/natsuume-writing"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    },
-    {
-      "name": "codex-advisor",
-      "source": {
-        "source": "local",
-        "path": "./plugins/codex-advisor"
       },
       "policy": {
         "installation": "AVAILABLE",

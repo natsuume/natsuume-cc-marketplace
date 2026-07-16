@@ -62,19 +62,24 @@ AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type')
 AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id')
 HOOK_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd')
 LAST_MESSAGE=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message')
+FIRST_NONEMPTY=$(printf '%s\n' "$LAST_MESSAGE" | awk 'NF { sub(/\r$/, ""); print; exit }')
+LAST_NONEMPTY=$(printf '%s\n' "$LAST_MESSAGE" | awk 'NF { line=$0 } END { sub(/\r$/, "", line); print line }')
+# marker runtime は plugin env ではなく、上で検証済みの Codex 固有 turn_id で
+# 選択する。Claude Code も互換用 plugin env を持つため env 推測はしない。
+MARKER_RUNTIME="codex"
 
 case "$AGENT_TYPE" in
-  pre-push-correctness-reviewer)
+  pre_push_correctness_reviewer)
     ROLE="correctness"
     EXPECTED_HEADING="# Correctness Review"
     MARKER_FN="code_reviewed_marker_path"
     ;;
-  pre-push-independent-reviewer)
+  pre_push_independent_reviewer)
     ROLE="independent"
     EXPECTED_HEADING="# Independent Review"
     MARKER_FN="codex_marker_path"
     ;;
-  pre-push-security-reviewer)
+  pre_push_security_reviewer)
     ROLE="security"
     EXPECTED_HEADING="# Security Review"
     MARKER_FN="security_marker_path"
@@ -84,8 +89,6 @@ case "$AGENT_TYPE" in
     ;;
 esac
 
-FIRST_NONEMPTY=$(printf '%s\n' "$LAST_MESSAGE" | awk 'NF { sub(/\r$/, ""); print; exit }')
-LAST_NONEMPTY=$(printf '%s\n' "$LAST_MESSAGE" | awk 'NF { line=$0 } END { sub(/\r$/, "", line); print line }')
 EXPECTED_FOOTER="<!-- pre-push-review:completed $ROLE -->"
 if [ "$FIRST_NONEMPTY" != "$EXPECTED_HEADING" ] || [ "$LAST_NONEMPTY" != "$EXPECTED_FOOTER" ]; then
   printf '[pre-push-review] %s (%s) の完了 footer を検証できず marker を更新しません。\n' \
@@ -112,7 +115,17 @@ case "$BRANCH" in
   master|main) exit 0 ;;
 esac
 HASH=$(compute_review_hash "$BASE") || exit 0
-MARKER_PATH=$("$MARKER_FN" "$GIT_DIR") || exit 0
+MARKER_PATH=$("$MARKER_FN" "$GIT_DIR" "$MARKER_RUNTIME") || exit 0
+
+umask 077
+if [ "$MARKER_RUNTIME" = "codex" ]; then
+  MARKER_DIR=${MARKER_PATH%/*}
+  if ! mkdir -p "$MARKER_DIR"; then
+    printf '[pre-push-review] Codex marker storage directory を作成できません: %s\n' \
+      "$MARKER_DIR" >&2
+    exit 0
+  fi
+fi
 
 TEMP_MARKER="${MARKER_PATH}.tmp.$$"
 # Invoked indirectly by the EXIT trap below.
@@ -123,7 +136,6 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-umask 077
 if ! printf '%s' "$HASH" > "$TEMP_MARKER"; then
   exit 0
 fi
@@ -132,6 +144,6 @@ if ! mv "$TEMP_MARKER" "$MARKER_PATH"; then
 fi
 TEMP_MARKER=""
 
-printf '[pre-push-review] Codex %s marker updated from SubagentStop: %s (agent_id=%s)\n' \
-  "$ROLE" "$MARKER_PATH" "$AGENT_ID" >&2
+printf '[pre-push-review] Codex %s marker updated from SubagentStop: %s (agent_type=%s agent_id=%s)\n' \
+  "$ROLE" "$MARKER_PATH" "$AGENT_TYPE" "$AGENT_ID" >&2
 exit 0

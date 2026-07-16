@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 5,
   "marketplace": {
     "displayName": "Natsuume Plugins",
     "category": "Productivity"
@@ -12,6 +12,14 @@
   },
   "plugins": {
     "git-guardrails": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.5.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Git Guardrails",
       "shortDescription": "GitHub Flow の直接書き込み経路を hook で防止",
       "defaultPrompt": [
@@ -33,6 +41,14 @@
       }
     },
     "enforce-draft-pr": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.3.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Enforce Draft PR",
       "shortDescription": "gh pr create に --draft を自動付与",
       "defaultPrompt": [
@@ -54,6 +70,14 @@
       }
     },
     "auto-lint-check": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.5.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Auto Lint Check",
       "shortDescription": "編集・commit 境界で format と lint を自動実行",
       "defaultPrompt": [
@@ -75,64 +99,75 @@
       }
     },
     "pre-push-review": {
+      "distribution": {
+        "status": "excluded",
+        "reason": "現行 Codex runtime の spawn_agent に agent_type selector が無く、agent_type=default の unauthenticated default agents を 3 reviewer として安全に識別できないため、fail-closed で marketplace 配布対象から除外します。"
+      },
+      "version": "4.0.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Pre-push Review",
       "shortDescription": "git push 前に correctness・Codex・security review を強制",
       "defaultPrompt": [
         "push 前に 3 観点の branch review を実行してください。"
       ],
       "compatibility": {
-        "level": "partial",
-        "summary": "push gate と hash marker は共有し、Codex では named custom agents と SubagentStop lifecycle hook で 3 review を編成・記録します。",
+        "level": "metadata-only",
+        "summary": "現行 Codex runtime では reviewer identity を認証できないため、Codex marketplace に pre-push-review の entry、manifest、Skill、hook を配布しません。Claude Code 版は従来どおり配布します。",
         "limitations": [
-          "Codex plugin manifest は custom agent profile を直接有効化しないため、setup-pre-push-agents Skill による project-scoped .codex/agents への明示的な導入と新しい session が必要です。",
-          "Claude agent の tools allowlist は完全再現せず、Codex custom agent の read-only sandbox と専用 instructions で変更を防ぎます。",
-          "Codex PreToolUse は対応する Bash 経路の guardrail であり、同等の push を行う全 shell 経路の完全な security boundary ではありません。"
+          "Codex marketplace では pre-push-review の entry、manifest、Skill、hook を公開しないため、Codex から workflow を install・選択できません。",
+          "Codex 版 v3.1.4 以前の既存 install は marketplace からの除外だけでは local config/cache から削除されません。codex plugin remove pre-push-review@natsuume-plugins を実行し、新しい Codex thread を開始する必要があります。",
+          "Claude Code marketplace の plugin、command、agent、hook は v3.1.4 として引き続き利用できます。"
         ],
         "guaranteeDifferences": [
-          "custom agent profile は plugin install だけでは有効にならず、利用対象 repository ごとの setup 完了を前提とします。",
-          "SubagentStop marker は agent_type・agent_id・終了応答と同一 diff hash の lifecycle 完了を示しますが、レビュー内容の意味的正しさまでは証明しません。",
-          "push gate の強制範囲は現行 Codex PreToolUse が捕捉する Bash invocation に限定されます。"
+          "Codex 版の意図等価 adapter は提供しません。agent_type selector が実装され、runtime が named reviewer identity を lifecycle event で保証できるまで fail-closed の除外を維持します。"
         ],
         "verificationTests": [
           {
             "path": "tests/test_pre_push_codex_adapter.py",
-            "covers": "custom-agent setup、SubagentStop role marker、push deny recovery の Codex adapter 契約"
+            "covers": "Codex marketplace からの除外、generic agent_type=default の marker 生成拒否、named agent type に限定した fail-closed 契約"
           }
         ],
         "components": [
           {
             "source": "commands/review.md",
-            "disposition": "adapted",
-            "codexReplacement": "skills/review-codex/SKILL.md",
-            "reason": "Claude slash command を Codex Skill の orchestration に変換します。",
+            "disposition": "surface-unavailable",
+            "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
             "sourceDigest": "9c198f8efa22e720e6831345f47e791a60119e37cd838a86c6dd6a88d69d5b94"
           },
           {
             "source": "agents/code-reviewer.md",
-            "disposition": "adapted",
-            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-correctness-reviewer.toml",
-            "reason": "Claude agent の correctness 規約を project-scoped read-only custom agent profile に意訳します。",
+            "disposition": "surface-unavailable",
+            "reason": "現行 Codex runtime では correctness reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
             "sourceDigest": "8ce957a5ff3a0e86b4aee0a4ed074f007bc80073e532da163b3eda826e061bf7"
           },
           {
             "source": "agents/codex-reviewer.md",
-            "disposition": "adapted",
-            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-independent-reviewer.toml",
-            "reason": "外部 Codex companion による独立性を、別 context の named Codex custom agent による独立 review として近似します。",
+            "disposition": "surface-unavailable",
+            "reason": "現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
             "sourceDigest": "be1278a1aedb15163e10ba146375959f87d66524458bc21c16252a94c862a65a"
           },
           {
             "source": "agents/security-reviewer.md",
-            "disposition": "adapted",
-            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-security-reviewer.toml",
-            "reason": "Claude agent の security 規約を project-scoped read-only custom agent profile に意訳します。",
+            "disposition": "surface-unavailable",
+            "reason": "現行 Codex runtime では security reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
             "sourceDigest": "0289c10ef0bedf84fd47ad2cf97ef85959e008492c716a96794de5d1b4410c17"
           }
         ],
-        "sourceTreeDigest": "c01ebd7f98ec1c5fabff17126e433f382a3cf95eda22114cb5fbe538eaa24117"
+        "sourceTreeDigest": "574e5a28bd0f4420253d83f0942c1595ae5f74b7d8316d6faf322832dec19db5"
       }
     },
     "update-default-branch": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.3.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Update Default Branch",
       "shortDescription": "PR merge 後の default branch 更新と gone branch 整理",
       "defaultPrompt": [
@@ -154,6 +189,14 @@
       }
     },
     "natsuume-statusline": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.9.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Natsuume Statusline",
       "shortDescription": "Codex の組み込み footer を natsuume statusline 相当に構成",
       "defaultPrompt": [
@@ -256,14 +299,27 @@
       }
     },
     "agent-discipline": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.17.1",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": [
+          "hooks/codex-hooks.json"
+        ]
+      },
       "displayName": "Agent Discipline",
       "shortDescription": "作業規律・issue 駆動・分業規律を hook で配送",
       "defaultPrompt": [
         "agent-discipline の作業規律に従ってこのタスクを進めてください。"
       ],
+      "manifest": {
+        "hooks": "./hooks/codex-hooks.json"
+      },
       "compatibility": {
         "level": "partial",
-        "summary": "command hook と Skill を共有し、Codex では repo/worktree scoped の provider/privacy opt-in 後だけ Claude の inline semantic agent prompt を隔離した read-only codex exec で評価します。Auto follow-through は検出不能な permission mode へ推測 mapping せず、明示 Skill で意図を代替します。",
+        "summary": "Claude の hooks.json と Codex の command-only hooks を分離し、Codex では repo/worktree scoped の provider/privacy opt-in 後だけ Claude の inline semantic agent prompt を隔離した read-only codex exec で評価します。Auto follow-through は検出不能な permission mode へ推測 mapping せず、明示 Skill で意図を代替します。",
         "limitations": [
           "semantic validator は既定で無効です。opt-in が無い状態では 4 つの literal gh issue/pr command を scoped deny し、nested Codex は起動しません。",
           "opt-in 後は対象 gh issue/pr command ごとに別の codex exec を起動するため、ローカル Codex 認証・model availability・rate limit に依存し、同一 runtime handler より latency が増えます。hook payload と参照した --body-file 内容は親とは異なる default provider/model へ送信される可能性があります。",
@@ -272,6 +328,7 @@
           "Claude の Agent|Task tool と Fable/Sonnet model routing は Codex の tool/model 系に存在しないため、Fable subagent block は適用対象がありません。"
         ],
         "guaranteeDifferences": [
+          "Codex manifest は hooks/codex-hooks.json を明示参照し、Claude 固有の type:agent handler と Agent|Task matcher を runtime discovery から除外します。共有 command handler は Claude 正本との差分テストで同期します。",
           "4 本の canonical inline prompt と全 property required の {ok, nullable reason} schema は再利用しますが、Claude hook agent ではなく ephemeral な独立 Codex process が判定します。ok:true は stdout 無出力で通常の approval policy へ継続し、ok:false は PreToolUse deny に変換します。opt-in 後は認証・quota・timeout・schema/条件不適合を fail-closed で deny し、jq 不在または hook payload 自体を安全に解釈できない場合は blast radius を避けて no-op します。",
           "owner-only regular marker と inspect→明示承認→action token の helper は当該 Git worktree で opt-in 操作が行われたことだけを示します。親/nested process の provider/model 同一性、Claude/Codex の verdict equality、外部 provider のデータ取扱いは保証しません。symlink・非 regular・owner/mode/content 不正 state は変更せず scoped deny します。",
           "semantic interception は literal な gh issue/pr command head に限定され、同じ外部操作へ到達する全 shell 表現の遮断までは保証しません。",
@@ -280,7 +337,7 @@
         "verificationTests": [
           {
             "path": "tests/test_agent_discipline_codex_adapter.py",
-            "covers": "canonical prompt 抽出、read-only/ephemeral validator、provider/privacy opt-in lifecycle、fresh token、owner-only marker、symlink/nonregular 拒否、Structured Outputs subset、fail-closed deny、Codex permission mode no-op、明示代替 Skills、Claude runtime 維持"
+            "covers": "Claude/Codex hook 分離と command handler 同期、canonical prompt 抽出、read-only/ephemeral validator、provider/privacy opt-in lifecycle、fresh token、owner-only marker、symlink/nonregular 拒否、Structured Outputs subset、fail-closed deny、Codex permission mode no-op、明示代替 Skills、Claude runtime 維持"
           }
         ],
         "components": [
@@ -319,10 +376,18 @@
             "sourceDigest": "a23b1862a7921dd2daad8ae5ff3addf9ed5fd71b7994ed6a746c788dc4fe1345"
           }
         ],
-        "sourceTreeDigest": "022c99505dfa8b11acf45104215461434fc520c4f778dfd46b17a2b5924bcd42"
+        "sourceTreeDigest": "679667f9312982c739c15e456305712910564c4c0de0e1c962c2a3826cf1ad89"
       }
     },
     "ui-discipline": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.3.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "UI Discipline",
       "shortDescription": "UI 実装の共通化・a11y・layout 規律を常時配送",
       "defaultPrompt": [
@@ -344,6 +409,14 @@
       }
     },
     "natsuume-writing": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.5.1",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Natsuume Writing",
       "shortDescription": "natsuume の文体規則で outline・draft・review を支援",
       "defaultPrompt": [
@@ -361,43 +434,57 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "7e2781c077fa8c856532907fc57d75372047f41513b81e9c4a60c4e37c03db1a"
+        "sourceTreeDigest": "6df9414cf20d50fbc27855d5af882b369c6e79aa1297b82286579833461cd87e"
       }
     },
     "codex-advisor": {
+      "distribution": {
+        "status": "excluded",
+        "reason": "Claude Code から異種モデルの Codex へ相談するための plugin であり、Codex 自身から nested Codex を呼ぶ用途は marketplace 配布対象にしません。"
+      },
+      "version": "1.0.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Codex Advisor",
       "shortDescription": "独立した read-only Codex process から助言を取得",
       "defaultPrompt": [
         "Codex advisor に方針を相談し、助言と証拠を比較してください。"
       ],
       "compatibility": {
-        "level": "partial",
-        "summary": "Claude companion と direct codex exec の双方を同じ wrapper から利用します。",
+        "level": "metadata-only",
+        "summary": "Claude Code から Codex へ相談するための plugin なので、Codex marketplace には install surface を配布しません。",
         "limitations": [
-          "Codex 内から使う場合も別 read-only Codex process を起動するため、呼び出し元と advisor が同じ model family になる可能性があります。",
-          "注入 prompt 内の /codex:rescue 規律は Claude Code の openai-codex plugin を導入した環境だけに適用されます。"
+          "Codex marketplace では codex-advisor の entry、manifest、Skill、hook を公開しないため、Codex から $codex-advisor:consult を選択・install できません。",
+          "Claude Code marketplace の plugin、hook、Skill、wrapper は従来どおり利用できます。"
         ],
         "guaranteeDifferences": [
-          "Codex 内の fallback advisor は独立 process・read-only sandbox・別 context を保証しますが、異なる model family からの独立性は保証しません。",
-          "Claude Code の scratchpad file transport は Codex では PTY unified exec の分離 stdin channel に置換されます。受信中は echo 無効・raw/noncanonical mode とし、連続 EOT (0x04 0x04) を切断と区別できる明示 frame terminator にするため、prompt は shell command・argv・永続 file に載せませんが、本文に EOT byte は含められません。",
-          "direct codex exec は read-only・ephemeral・hooks 無効・git repository 検査 skip・xhigh を固定し、既定 600 秒の deadline 超過時は TERM、grace period 後の KILL、wait で回収します。stdout / stderr は同じ foreground session で観察され続けます。",
-          "advisor subprocess の利用可否はローカル Codex 認証と rate limit に依存します。"
+          "Codex 版としての意図等価 adapter は提供せず、Claude Code が異種モデルの Codex を advisor にする本来の利用境界を維持します。"
         ],
         "verificationTests": [
           {
             "path": "tests/test_codex_advisor_adapter.py",
-            "covers": "Codex host 分岐、PTY 必須条件と echo 抑止、8 KiB 超単一行 + CR の byte-exact EOT framing、全 direct exec 安全引数、git repository 外起動、deadline 時の TERM/KILL/wait cleanup、Claude file-stdin 経路"
+            "covers": "Claude Code から利用する advisor wrapper の file-stdin companion、direct fallback、安全引数、deadline cleanup 契約"
           },
           {
-            "path": "scripts/smoke_codex_marketplace.sh",
-            "covers": "direct codex exec fallback を含む Skill/plugin install surface"
+            "path": "tests/test_sync_codex_marketplace.py",
+            "covers": "codex-advisor が Codex marketplace と生成 manifest から除外され、Claude plugin 一覧には残ること"
           }
         ],
         "components": [],
-        "sourceTreeDigest": "24f2613e81106c9ef65926166fcd335c07f850cde7c182109cae2a37967a4c50"
+        "sourceTreeDigest": "564ae9db0dfb01cffa9f56db699fcbb5f9e98efd8eab64cd26a707e89972acfe"
       }
     },
     "rate-limit": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.3.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Rate Limit",
       "shortDescription": "Claude と Codex の subscription usage limit を取得",
       "defaultPrompt": [
@@ -446,6 +533,14 @@
       }
     },
     "session-handoff": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.2.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
       "displayName": "Session Handoff",
       "shortDescription": "session 間 handoff の保存と次 session への自動注入",
       "defaultPrompt": [

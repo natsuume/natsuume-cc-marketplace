@@ -35,20 +35,22 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 
 ## プラグイン一覧
 
-| プラグイン | バージョン | 説明 |
-|-----------|-----------|------|
-| [git-guardrails](#git-guardrails) | 0.5.0 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
-| [enforce-draft-pr](#enforce-draft-pr) | 0.3.0 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft で作成させ、レビューを経て ready 化する運用を支える |
-| [auto-lint-check](#auto-lint-check) | 0.5.0 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 3.1.0 | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
-| [update-default-branch](#update-default-branch) | 0.3.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
-| [natsuume-statusline](#natsuume-statusline) | 0.9.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
-| [agent-discipline](#agent-discipline) | 0.17.0 | 作業規律を SessionStart / SubagentStart hook で配送し、gh issue/pr body の未承認推奨表現を PreToolUse で検知する。Codex では semantic validator の provider/privacy 明示 opt-in と、Auto 検出不能を補う明示 follow-through Skill を提供 |
-| [ui-discipline](#ui-discipline) | 0.3.0 | UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う |
-| [natsuume-writing](#natsuume-writing) | 0.5.1 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
-| [codex-advisor](#codex-advisor) | 0.3.0 | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミング・助言の扱い・`/codex:rescue` の thread 選択自律化 (迷ったら `--fresh`) を含む codex 利用規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
-| [rate-limit](#rate-limit) | 0.3.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
-| [session-handoff](#session-handoff) | 0.2.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
+| プラグイン | Claude Code | Codex | 説明 |
+|-----------|------------:|------:|------|
+| [git-guardrails](#git-guardrails) | 0.5.0 | 0.5.0 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
+| [enforce-draft-pr](#enforce-draft-pr) | 0.3.0 | 0.3.0 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
+| [auto-lint-check](#auto-lint-check) | 0.5.0 | 0.5.0 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
+| [pre-push-review](#pre-push-review) | 3.1.4 | — | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [update-default-branch](#update-default-branch) | 0.3.0 | 0.3.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
+| [natsuume-statusline](#natsuume-statusline) | 0.9.0 | 0.9.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
+| [agent-discipline](#agent-discipline) | 0.17.1 | 0.17.1 | 作業規律を SessionStart / SubagentStart hook で配送し、gh issue/pr body の未承認推奨表現を PreToolUse で検知する。Codex では semantic validator の provider/privacy 明示 opt-in と、Auto 検出不能を補う明示 follow-through Skill を提供 |
+| [ui-discipline](#ui-discipline) | 0.3.0 | 0.3.0 | UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う |
+| [natsuume-writing](#natsuume-writing) | 0.5.1 | 0.5.1 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
+| [codex-advisor](#codex-advisor) | 0.3.0 | — | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミング・助言の扱い・`/codex:rescue` の thread 選択自律化 (迷ったら `--fresh`) を含む codex 利用規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
+| [rate-limit](#rate-limit) | 0.3.0 | 0.3.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
+| [session-handoff](#session-handoff) | 0.2.0 | 0.2.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
+
+Codex version が `—` の plugin は Codex marketplace の配布対象外です。Claude Code marketplace と Claude plugin は引き続き提供します。
 
 ---
 
@@ -156,7 +158,7 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、3 マーカーが commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。deny メッセージは Claude Code の `/pre-push-review:review` と Codex の `$pre-push-review:review-codex` の両方を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
+| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、3 マーカーが commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。deny メッセージは Claude Code の `/pre-push-review:review` を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
 | `block-bg-codex-wrapper` | PreToolUse (`Bash`) | `run-codex-review.sh` wrapper を Bash tool option `run_in_background: true` または shell-level `&` / `|` で起動する経路を deny する。v3.0.0 では wrapper は通常 `pre-push-review:codex-reviewer` subagent 内から foreground 起動されるが、subagent 内 Bash でも本 hook は発火するため bg 起動防御は引き続き有効 |
 | `auto-mark` | PostToolUse (`*` wildcard) | `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` subagent の Agent / Task tool 完了を自動検知し、対応するマーカーに commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを書き込む。codex マーカーは wrapper script (`run-codex-review.sh`) が直接書き込む設計のため本 hook は codex-reviewer subagent を検知しない (wrapper の non-zero exit と subagent 完了タイミングが乖離する silent-pass 経路を作らないため)。各マーカーは subagent **完了時** に書く (launch ではない) ことで、subagent 失敗時に silent-pass しない |
 
@@ -168,14 +170,11 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 | `codex-reviewer` | `git push` 前のレビューループの codex review ステップで起動する最小 subagent (v3.0.0 で追加)。 内部で `hooks/scripts/run-codex-review.sh` wrapper を foreground で 1 回起動し、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。 codex-reviewed marker は wrapper 自身が atomic rename で書く設計を維持。 v2.x までの Bash 直接起動を置換 |
 | `security-reviewer` | `git push` 前のレビューループの security review ステップで起動する self-contained subagent。 input validation / authn / crypto / injection / data exposure の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す。 標準 `/security-review` skill を invoke しないのは、 直接呼ぶと主 session の turn が終了し、 subagent 内から呼んでも標準 skill が要求する nested subagent (Task tool) が Claude Code の制約で動かないため |
 
-#### Codex Skills
+#### Codex 配布状態
 
-| スキル名 | 説明 |
-|---------|------|
-| `setup-pre-push-agents` | correctness・independent・security の project-scoped read-only custom agent 3 本を、差分確認と明示承認を経て `.codex/agents` に導入する |
-| `review-codex` | 上記 named custom agent 3 本を並列実行し、Codex の `SubagentStop` hook に role ごとの共有 hash marker を自動更新させる |
+pre-push-review は Codex marketplace の配布対象外です。現行 Codex runtime の `spawn_agent` schema に `agent_type` selector がなく、`agent_type=default` の generic agent は reviewer identity を認証できません。heading/footer は任意の agent が生成できるため marker の権限根拠にせず、Codex entry、manifest、Skill、hook を生成しない fail-closed の配布契約とします。Claude Code 版 v3.1.4 は引き続き利用できます。
 
-Codex では最初に `$pre-push-review:setup-pre-push-agents` を実行し、新しい thread で `$pre-push-review:review-codex` を使います。marker hook は `agent_type`・`agent_id`・`turn_id`・model・report heading/footer と同一 diff hash を検証します。これは runtime lifecycle の完了証跡ですが暗号署名ではなく、レビュー内容の意味的な正しさまでは証明しません。marker helper を直接実行しないでください。
+Codex 版 v3.1.4 以前をインストール済みの場合、marketplace からの除外だけでは local config と cache は削除されません。`codex plugin remove pre-push-review@natsuume-plugins` を実行してから新しい Codex thread を開始してください。旧 thread や残存 cache の `default` fallback を使い続けないでください。
 
 ### キーワード
 
@@ -252,7 +251,7 @@ v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定�
 
 加えて、 auto mode セッションの `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
 
-Codex は Claude の `type: agent` hook を実行しないため、同じ inline prompt を正本として読む command adapter で 4 つの `gh issue/pr create/edit` を semantic 判定します。nested `codex exec --ignore-user-config` は親と異なる provider/model へ body を送る可能性があるため既定では対象 command を deny し、`$agent-discipline:setup-codex-semantic-validator` の repository/worktree 単位の明示 opt-in 後だけ実行します。また Codex hook の `permission_mode` から Auto preset は一意に判別できないため after 系の自動注入は行わず、ユーザーが `$agent-discipline:auto-codex` を明示した task だけ、現在の sandbox/approval と依頼 scope 内で follow-through の意図を代替します。
+Codex は Claude の `type: agent` hook を実行しないため、Codex manifest は command-only の `hooks/codex-hooks.json` を明示参照します。command adapter は Claude の `hooks/hooks.json` にある inline prompt を正本として読み、4 つの `gh issue/pr create/edit` を semantic 判定します。nested `codex exec --ignore-user-config` は親と異なる provider/model へ body を送る可能性があるため既定では対象 command を deny し、`$agent-discipline:setup-codex-semantic-validator` の repository/worktree 単位の明示 opt-in 後だけ実行します。また Codex hook の `permission_mode` から Auto preset は一意に判別できないため after 系の自動注入は行わず、ユーザーが `$agent-discipline:auto-codex` を明示した task だけ、現在の sandbox/approval と依頼 scope 内で follow-through の意図を代替します。
 
 ### 機能
 
@@ -360,7 +359,7 @@ Codex は read-only sandbox でリポジトリを自分で読んで裏取りし�
 
 v0.2.0 からは相談規律に加えて `/codex:rescue` の thread 選択規律 (`rule:rescue-thread`) も注入します。rescue 起動時の `--resume` / `--fresh` を Claude が自律決定して常に付与し、thread 選択の質問で自走を止めません (`--resume` は「直前の rescue と同一論点の続き + 対象がセッション内最新の再開可能 task と確実に分かる場合」のみ、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先)。openai-codex plugin の「フラグ指定時は質問しない」挙動 (v1.0.6) を前提とするため、外部 plugin 側は無変更です。
 
-Claude Code からの利用には [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) と Codex CLI + 認証が必要です。Codex host では `$codex-advisor:consult` を使い、Claude 固有の Write/scratchpad の代わりに PTY unified exec の stdin channel から本文を渡します。別 context・read-only・ephemeral process は維持しますが、実行役と advisor が同じ model family になる可能性は残ります。adapter test は prompt 転送と terminal echo 抑止を検証し、model の独立性や外部 service の可用性は保証しません。
+Claude Code からの利用には [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) と Codex CLI + 認証が必要です。この plugin は Claude Code から異種モデルの Codex へ相談するためのものなので、Codex marketplace では配布しません。Claude Code marketplace の hook、Skill、wrapper は従来どおり利用できます。
 
 ### 機能
 
@@ -375,7 +374,7 @@ Claude Code からの利用には [公式 codex plugin](https://github.com/opena
 
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
-| consult | Claude: `/codex-advisor:consult` / Codex: `$codex-advisor:consult` | self-contained な相談プロンプトを組み立て、Claude host は companion、Codex host は PTY stdin + direct read-only process を foreground 起動して助言を受け取る |
+| consult | Claude: `/codex-advisor:consult` | self-contained な相談プロンプトを組み立て、companion または direct read-only process を foreground 起動して助言を受け取る |
 
 ### キーワード
 
@@ -463,7 +462,7 @@ Claude Code の Stop hook による handoff 作成の強制、transcript のパ�
 
 ## Marketplace の同期・検証
 
-共通 metadata の正本は `.claude-plugin/marketplace.json` と各 `.claude-plugin/plugin.json` です。Codex 固有 metadata と意図した差分だけを `codex/marketplace-overrides.json` に記述します。
+共有 metadata の正本は `.claude-plugin/marketplace.json` と各 `.claude-plugin/plugin.json` です。ただし、Codex での配布対象、plugin version は runtime ごとに独立しており、Claude Code version は Claude manifest / marketplace、Codex の配布状態と version は `codex/marketplace-overrides.json` で管理します。Codex 固有 metadata と意図した差分も同じ差分台帳に記述します。
 
 ```bash
 python3 scripts/sync_codex_marketplace.py --write
@@ -471,6 +470,6 @@ python3 scripts/sync_codex_marketplace.py --check
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-`.agents/plugins/marketplace.json`、各 `.codex-plugin/plugin.json`、`AGENTS.md`、互換性表は生成物です。CI は生成差分、plugin/version 集合、未登録 component 差分、adapter fixture、Linux/macOS の shell syntax に加え、固定版 Claude Code の strict validation と固定版 Codex CLI での marketplace・全 plugin 実 install を行います。Claude の既定 component と manifest / marketplace entry の宣言は明示的な差分登録を要求し、未知 field は Codex での扱いが決まるまで fail-closed です。PR と `master` への直接 push の双方で version bump を検査し、初回 Codex install surface の追加には minor 以上を要求します。毎週 latest Claude Code / Codex でも compatibility canary を走らせます。`master` への merge が Git marketplace の配布更新になるため、write 権限を持つ release bot は使用しません。
+`.agents/plugins/marketplace.json`、各 `.codex-plugin/plugin.json`、`AGENTS.md`、互換性表は生成物です。CI は生成差分、plugin/version 集合、未登録 component 差分、adapter fixture、Linux/macOS の shell syntax に加え、固定版 Claude Code の strict validation と固定版 Codex CLI での marketplace・全 plugin 実 install を行います。Claude の既定 component と manifest / marketplace entry の宣言は明示的な差分登録を要求し、未知 field は Codex での扱いが決まるまで fail-closed です。PR と `master` への直接 push の双方で runtime 別 version bump を検査します。`versioning.claudeOnlyPaths` / `codexOnlyPaths` に明示した path は該当 runtime だけ、それ以外の plugin path は共有扱いとして両 version の bump が必要です。plugin README は release documentation として、内容が関係する runtime の少なくとも片方を bump します。毎週 latest Claude Code / Codex でも compatibility canary を走らせます。`master` への merge が Git marketplace の配布更新になるため、write 権限を持つ release bot は使用しません。
 
 共有 Skill の自動選択条件は Claude 固有 `when_to_use` へ分岐させず、両 runtime が読む `description` に集約します。generator は Skill frontmatter を共通 intersection の `name` / `description` に限定します。

@@ -16,7 +16,25 @@
 
 ## バージョン
 
-v3.1.0 (前身: `pre-commit-review` v0.4.0)
+v3.1.4 (前身: `pre-commit-review` v0.4.0)
+
+### v3.1.3 → v3.1.4 の変更点
+
+- 実機 E2E により、Codex 0.144.4 の `spawn_agent` は `agent_type` selector を公開せず、project custom agent の停止 event も `agent_type=default` になることを確認した。generic agent は role 固有の heading/footer を複製できるため、出力文字列だけで reviewer identity を認証することはできない
+- `SubagentStop` hook の matcher と script を 3 named type の完全一致に戻し、`agent_type=default` は marker を書かない fail-closed 契約にした。`review-codex` Skill も `agent_type` selector が無い runtime で generic agent を起動せず、marker を生成せず停止する
+- 現行 Codex runtime では安全な reviewer identity 契約を構築できないため、Codex marketplace の配布状態を `excluded` にした。Codex entry、manifest、Skill、hook は生成せず、Claude Code 版 v3.1.4 は従来どおり配布する。Codex 用 named profile template と adapter source は、selector を公開する将来 runtime の再検証用に保存する
+
+### v3.1.2 → v3.1.3 の変更点
+
+- Claude Code も `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` を持つため、plugin env の存在で Codex を識別する方式を廃止し、hook payload の非空 `turn_id` で runtime を識別するよう修正した。Codex marker storage は `PLUGIN_DATA` を優先し、未設定時は `CLAUDE_PLUGIN_DATA` を互換 fallback として使う。選択した path が空・relative path なら `.git` へ fallback せず fail-closed を維持する
+
+### v3.1.1 → v3.1.2 の変更点
+
+- Codex の既定 workspace-write sandbox では `.git` が read-only のため、Codex marker を writable な `PLUGIN_DATA/pre-push-review/markers/<repo-key>/` へ移した。`repo-key` は physical git-dir の絶対 path を SHA-256 にして repository / linked worktree を分離し、`PLUGIN_DATA` が使えない場合は `.git` へ fallback せず push gate を fail-closed に deny する。Claude Code の `.git` storage、marker filename、review hash、gate 契約は変更していない
+
+### v3.1.0 → v3.1.1 の変更点
+
+- Codex v0.144.4 が custom agent の `name` に hyphen を受理しないため、Codex の 3 agent type を underscore 形式へ変更した。既存 setup との互換性のため TOML filename は hyphen 形式のまま維持し、marker filename と hash 契約も変更していない
 
 ### v3.0.5 → v3.1.0 の変更点
 
@@ -79,56 +97,21 @@ claude plugin install pre-push-review@natsuume-plugins
 claude plugin install codex@openai-codex
 ```
 
-## Codex 代替実装
+## Codex 配布状態
 
-Codex では `$pre-push-review:setup-pre-push-agents` で対象 repository の `.codex/agents/` に次の project custom agent を導入し、`$pre-push-review:review-codex` が 3 本を並列起動します。
+pre-push-review は現在 Codex marketplace の配布対象外です。Codex 0.144.4 の `spawn_agent` schema は `agent_type` selector を公開せず、project custom agent を起動しても `SubagentStop` には `agent_type=default` が届きます。generic agent が role 固有の heading/footer を生成できる以上、その文字列を marker 更新の権限根拠にすることはできません。
 
-| agent type | 観点 | marker |
-|---|---|---|
-| `pre-push-correctness-reviewer` | high-confidence correctness bug | `.claude-pre-push-code-reviewed` |
-| `pre-push-independent-reviewer` | 他 report を見ない独立 code review | `.claude-pre-push-codex-reviewed` |
-| `pre-push-security-reviewer` | concrete attack path のある脆弱性 | `.claude-pre-push-security-reviewed` |
+このため Codex version 4.0.0 で distribution を `excluded` にし、Codex marketplace entry、`.codex-plugin/plugin.json`、Skill、hook を生成しません。repository 直下の `.codex/agents/pre-push-*.toml` も配布対象 adapter と誤認させないため配置しません。Claude Code 版 v3.1.4 の command、agent、hook、marker 契約に変更はありません。
 
-各 template は `sandbox_mode = "read-only"` と role 固有 `developer_instructions` を持ちます。setup は最初に `inspect` で target、3 ファイルの状態、plan token を表示し、ユーザーが作成・上書きを明示承認した後だけ token 付き `write` を実行します。inspect 後に destination が変化した場合は token mismatch で書き込みを中止します。symlink / 非通常ファイルも上書きしません。custom agent は project config なので、導入後は新しい Codex thread で有効化します。
-
-Codex plugin hook は `SubagentStop` の matcher を上記 3 agent type に限定し、さらに script 内で次を検証します。
-
-- Codex SubagentStop input で required の Codex extension `turn_id` が存在し、非空であること。Claude Code の namespaced agent は matcher が異なり、script が直接呼ばれても `turn_id` 不在なら無害な no-op になる
-- `hook_event_name=SubagentStop`、`agent_type` 完全一致、非空の `agent_id` / `model` / `last_assistant_message`、`stop_hook_active=false`
-- report の先頭 heading と、role 固有の最終 completion footer が template の出力契約と一致すること
-- hook payload の `cwd` で default branch、HEAD、merge-base、branch / staged / unstaged diff の hash を計算できること
-
-検証成功時だけ role に対応する marker を atomic rename で更新します。3 agent が並列停止する間に repository state が外部から変わった場合、marker hash が揃わず push gate が deny するため、変更後の状態で 3 本を再実行する必要があります。`$pre-push-review:review-codex` は `mark-review.sh` を直接呼びません。
-
-### 保証差
-
-Codex 代替が保証するのは、**指定した named agent の Codex runtime lifecycle event が発生し、role 固有の完了 footer を含む report が返された時点の review 対象 hash** です。次は Claude Code 実装と同一、または暗号学的に強い保証ではありません。
-
-- SubagentStop payload は Codex runtime 由来の構造化 event ですが、暗号署名ではありません。hook は review の意味的な正しさや finding の完全性を証明せず、agent が出力契約まで完走したことを検証します。Claude Code の Agent/Task completion hook も review 内容そのものを証明するものではありません
-- Codex plugin manifest は project custom agent を install 時に `.codex/agents` へ自動配置しません。明示承認を伴う `$pre-push-review:setup-pre-push-agents` が一度必要で、`$pre-push-review:review-codex` は template が byte-identical でないとき generic agent へ fallback しません
-- Codex custom agent は Claude agent の `tools:` allowlist と同じ粒度の tool 制限を持たないため、read-only sandbox で mutation を防ぎます。親 turn の live sandbox / permission override が子へ再適用される surface では、その override が profile より優先されます
-- Claude 側の 3 軸は Anthropic correctness + OpenAI Codex + security ですが、Codex 側は 3 本とも Codex runtime 上です。`pre-push-independent-reviewer` は別 context で他 report を渡さない独立性を持つ一方、provider/model 実装の独立性までは再現しません
-- plugin hook はユーザーの trust 後にだけ動作し、hooks feature の無効化、marker の直接改変、Codex 外の terminal / clone からの push を防ぐ adversarial security boundary ではありません。Claude Code 版と同じく cooperative agent workflow の push gate です
-
-### 検証テスト
-
-自動テストは次で実行します。
+Codex 版 v3.1.4 以前をインストール済みの場合、marketplace entry の削除だけでは local config と cache は自動削除されません。次を実行して旧 plugin を削除し、新しい Codex thread を開始してください。旧 thread や残存 cache の `default` fallback は使用しないでください。
 
 ```bash
-python3 -m unittest tests.test_pre_push_codex_adapter
-python3 /path/to/skill-creator/scripts/quick_validate.py plugins/pre-push-review/skills/review-codex
-python3 /path/to/skill-creator/scripts/quick_validate.py plugins/pre-push-review/skills/setup-pre-push-agents
-python3 scripts/sync_codex_marketplace.py --check
+codex plugin remove pre-push-review@natsuume-plugins
 ```
 
-`tests.test_pre_push_codex_adapter` は、setup の inspect → 承認 token 付き atomic install、stale token / symlink 拒否、3 TOML の必須 field と read-only 設定、3 agent type の正常な SubagentStop からの marker 更新、footer 不正・unknown agent・再入 event・`turn_id` 不在の Claude runtime guard で marker を書かないこと、marker hash と push gate の共有を検証します。
+Codex 用の named profile template、setup script、`review-codex` Skill source、SubagentStop adapter source は、`agent_type` selector を公開する将来 runtime の再監査用に plugin tree 内へ保存します。保存した hook は `pre_push_correctness_reviewer`、`pre_push_independent_reviewer`、`pre_push_security_reviewer` の 3 named type だけを受理し、generic type では marker を書きません。`review-codex` Skill も tool schema に **`agent_type` selector** が無ければ generic agent を spawn せず、marker を生成せず停止する契約です。
 
-実機 E2E では次を確認します。
-
-1. `$pre-push-review:setup-pre-push-agents` で差分を確認・承認し、新しい Codex thread を開始する
-2. `/hooks` で pre-push-review hook を確認して trust し、feature branch の変更に対して `$pre-push-review:review-codex` を実行する
-3. 3 report と marker が揃い、同じ repository state の `git push` gate が許可されることを確認する
-4. edit / commit / amend / rebase のいずれかで state を変え、既存 marker が失効して再 review を要求されることを確認する
+`tests.test_pre_push_codex_adapter` は Codex distribution からの除外、`agent_type=default` の marker 生成拒否、3 named type の exact report 契約、plugin data 欠落時の fail-closed、Claude Code の `.git` marker 維持を検証します。
 
 ## 機能一覧
 
@@ -160,7 +143,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 - **working tree が dirty (staged または unstaged 変更あり) の場合は markers の状態に関わらず deny**: push される committed 部分とレビューされた working tree の乖離を防ぐため、 push 前に commit 完了を要求する
 - 3 マーカーがすべて一致した場合はそのまま push を許容する (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する)
 - ハッシュは `head <HEAD の commit OID>` 行 + `mbase <merge-base の commit OID>` 行 + `git diff <merge-base> HEAD` + `git diff --cached` + `git diff` (diff 3 種はいずれも `--no-ext-diff --no-textconv` 付き) を連結した入力に対する sha256 として計算する。 HEAD の commit OID をハッシュ入力に束縛したことで、 レビュー後に commit A を積んでから revert して戻す (net diff は review 時と同一でも commit 列は変わっている) 操作でもマーカーが自動失効するようになった (issue #126 の修正: 従来は branch 全差分 + 未コミット差分のみで計算していたため、 net diff が戻ると失効しているべきマーカーが復活してしまっていた)。 未コミットの edit があると `git diff --cached` / `git diff` の内容が変わりハッシュも変わる点は従来どおりで、 markers が失効し commit + 再 review を強制できる
-- `deny` 時の `permissionDecisionReason` には、 各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と Claude Code の `/pre-push-review:review`、Codex の `$pre-push-review:review-codex` の案内が記載される
+- `deny` 時の `permissionDecisionReason` には、 各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と Claude Code の `/pre-push-review:review` を記載する。Codex については、現行 runtime に `agent_type` selector が無いため marketplace 配布対象外であり、generic agent や marker helper で代行しないことを案内する
 
 **残っている deny 制約 (loop discipline 維持に必要な最小防御)**:
 
@@ -186,7 +169,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 - GitHub サーバ側で実施される操作 (Web UI のマージ / rebase 等) も Claude Code hook 範囲外
 - **default branch (master/main) 上での push は本プラグイン単独では gate されない**: 本プラグインは `git-guardrails` の `block-default-branch-push.sh` が default branch push を deny する前提で gate を skip する。 `git-guardrails` を併用していない環境では default branch 上の push が review なしで通る経路が残る
 
-> **target-mismatch の構造的解決**: 本プラグインは独自の bash command parser (`lib/cmd-parser.sh`) と target resolver (`lib/target-resolver.sh`) で `cd dir && git push` / `git -C dir push` / `GIT_DIR=path/.git git push` の **実 push target を決定的に解決** し、 解決した target cwd の `.git` 配下に対して markers / hash 比較を行います。 解析不能な形式 (subshell `(...)`, brace group `{...}`, `bash -c "..."`, `pushd`/`popd`, `export GIT_DIR=...`, `--work-tree=...`, `time` / `env` 等の未対応 wrapper) は **保守的に deny** します。
+> **target-mismatch の構造的解決**: 本プラグインは独自の bash command parser (`lib/cmd-parser.sh`) と target resolver (`lib/target-resolver.sh`) で `cd dir && git push` / `git -C dir push` / `GIT_DIR=path/.git git push` の **実 push target を決定的に解決** し、解決した target cwd の runtime 別 storage (Claude Code は `.git`、Codex は physical git-dir key で分離した `PLUGIN_DATA` / `CLAUDE_PLUGIN_DATA`) に対して markers / hash 比較を行います。解析不能な形式 (subshell `(...)`, brace group `{...}`, `bash -c "..."`, `pushd`/`popd`, `export GIT_DIR=...`, `--work-tree=...`, `time` / `env` 等の未対応 wrapper) は **保守的に deny** します。
 
 #### 2. block-bg-codex-wrapper (PreToolUse, matcher: `Bash`)
 

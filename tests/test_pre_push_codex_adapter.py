@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -25,6 +26,31 @@ CODEX_AUTO_MARK = PLUGIN_DIR / "hooks" / "scripts" / "codex-auto-mark.sh"
 SETUP = PLUGIN_DIR / "scripts" / "setup-codex-agents.sh"
 AGENT_TEMPLATE_DIR = (
     PLUGIN_DIR / "skills" / "setup-pre-push-agents" / "assets" / "agents"
+)
+MARKER_NAMES = (
+    ".claude-pre-push-code-reviewed",
+    ".claude-pre-push-codex-reviewed",
+    ".claude-pre-push-security-reviewed",
+)
+REVIEW_CASES = (
+    (
+        "pre_push_correctness_reviewer",
+        "# Correctness Review",
+        "correctness",
+        MARKER_NAMES[0],
+    ),
+    (
+        "pre_push_independent_reviewer",
+        "# Independent Review",
+        "independent",
+        MARKER_NAMES[1],
+    ),
+    (
+        "pre_push_security_reviewer",
+        "# Security Review",
+        "security",
+        MARKER_NAMES[2],
+    ),
 )
 
 
@@ -64,31 +90,23 @@ class GitRepositoryMixin:
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
-    def test_deny_message_names_claude_and_codex_recovery_flows(self) -> None:
+    def test_deny_message_names_claude_flow_and_codex_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             temporary = Path(temporary_name)
             work = self.create_feature_repository(temporary)
 
-            payload = {
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Bash",
-                "tool_input": {"command": "git push origin HEAD"},
-            }
-            result = subprocess.run(
-                ["bash", str(HOOK)],
-                cwd=work,
-                input=json.dumps(payload).encode("utf-8"),
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            result = self.run_push_hook(
+                work,
+                self.claude_env(temporary / "claude-plugin-data"),
             )
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             response = json.loads(result.stdout)
             reason = response["hookSpecificOutput"]["permissionDecisionReason"]
             self.assertIn("/pre-push-review:review", reason)
-            self.assertIn("$pre-push-review:review-codex", reason)
-            self.assertIn("$pre-push-review:setup-pre-push-agents", reason)
-            self.assertIn("SubagentStop hook が自動更新", reason)
+            self.assertIn("marketplace 配布対象外", reason)
+            self.assertIn("agent_type", reason)
+            self.assertNotIn("$pre-push-review:review-codex", reason)
+            self.assertNotIn("$pre-push-review:setup-pre-push-agents", reason)
 
     def expected_review_hash(self, work: Path) -> str:
         head = self.git_output(work, "rev-parse", "HEAD^{commit}").decode().strip()
@@ -109,6 +127,61 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             # Bash command substitution in diff-hash.sh strips trailing newlines.
             chunks.append(self.git_output(work, *args).rstrip(b"\n"))
         return hashlib.sha256(b"".join(chunks)).hexdigest()
+
+    def absolute_git_dir(self, work: Path) -> Path:
+        path = self.git_output(work, "rev-parse", "--absolute-git-dir").decode().strip()
+        return Path(path).resolve()
+
+    def expected_repo_key(self, work: Path) -> str:
+        git_dir = str(self.absolute_git_dir(work)).encode("utf-8")
+        return hashlib.sha256(git_dir).hexdigest()
+
+    def codex_marker_dir(self, work: Path, plugin_data: Path) -> Path:
+        return (
+            plugin_data
+            / "pre-push-review"
+            / "markers"
+            / self.expected_repo_key(work)
+        )
+
+    def claude_env(self, plugin_data: Path) -> dict[str, str]:
+        env = os.environ.copy()
+        env.pop("PLUGIN_ROOT", None)
+        env.pop("PLUGIN_DATA", None)
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_DIR)
+        env["CLAUDE_PLUGIN_DATA"] = str(plugin_data)
+        return env
+
+    def codex_env(
+        self,
+        plugin_data: Path,
+        *,
+        bare_plugin_data: Path | None = None,
+    ) -> dict[str, str]:
+        env = os.environ.copy()
+        env.pop("PLUGIN_ROOT", None)
+        env.pop("PLUGIN_DATA", None)
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_DIR)
+        env["CLAUDE_PLUGIN_DATA"] = str(plugin_data)
+        if bare_plugin_data is not None:
+            env["PLUGIN_DATA"] = str(bare_plugin_data)
+        return env
+
+    def codex_missing_data_env(self, value: str | None) -> dict[str, str]:
+        env = os.environ.copy()
+        env.pop("PLUGIN_ROOT", None)
+        env.pop("PLUGIN_DATA", None)
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_DIR)
+        if value is None:
+            env.pop("CLAUDE_PLUGIN_DATA", None)
+        else:
+            env["CLAUDE_PLUGIN_DATA"] = value
+        return env
+
+    def write_git_markers(self, work: Path, review_hash: str) -> None:
+        git_dir = self.absolute_git_dir(work)
+        for marker_name in MARKER_NAMES:
+            (git_dir / marker_name).write_text(review_hash, encoding="utf-8")
 
     def subagent_payload(
         self,
@@ -143,6 +216,7 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
         self,
         work: Path,
         payload: dict[str, object],
+        env: dict[str, str],
     ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
             ["bash", str(CODEX_AUTO_MARK)],
@@ -151,120 +225,291 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=env,
         )
 
-    def test_subagent_stop_updates_each_role_marker_with_shared_hash(self) -> None:
-        cases = (
-            (
-                "pre-push-correctness-reviewer",
-                "# Correctness Review",
-                "correctness",
-                ".claude-pre-push-code-reviewed",
-            ),
-            (
-                "pre-push-independent-reviewer",
-                "# Independent Review",
-                "independent",
-                ".claude-pre-push-codex-reviewed",
-            ),
-            (
-                "pre-push-security-reviewer",
-                "# Security Review",
-                "security",
-                ".claude-pre-push-security-reviewed",
-            ),
+    def run_push_hook(
+        self,
+        work: Path,
+        env: dict[str, str],
+        *,
+        turn_id: str | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git push origin HEAD"},
+        }
+        if turn_id is not None:
+            payload["turn_id"] = turn_id
+        return subprocess.run(
+            ["bash", str(HOOK)],
+            cwd=work,
+            input=json.dumps(payload).encode("utf-8"),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
         )
+
+    def assert_push_denied(self, result: subprocess.CompletedProcess[bytes]) -> None:
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertNotEqual(result.stdout, b"")
+        response = json.loads(result.stdout)
+        self.assertEqual(
+            response["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+
+    def test_codex_subagent_stop_uses_plugin_data_and_shared_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
-            work = self.create_feature_repository(Path(temporary_name))
+            temporary = Path(temporary_name)
+            work = self.create_feature_repository(temporary)
+            plugin_data = temporary / "plugin-data"
+            env = self.codex_env(plugin_data)
             expected_hash = self.expected_review_hash(work)
-            for agent_type, heading, role, marker_name in cases:
+            marker_dir = self.codex_marker_dir(work, plugin_data)
+            self.assertRegex(marker_dir.name, r"^[0-9a-f]{64}$")
+            for agent_type, heading, role, marker_name in REVIEW_CASES:
                 payload = self.subagent_payload(work, agent_type, heading, role)
-                result = self.run_codex_auto_mark(work, payload)
+                result = self.run_codex_auto_mark(work, payload, env)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                marker = work / ".git" / marker_name
+                marker = marker_dir / marker_name
                 self.assertTrue(marker.exists(), result.stderr.decode())
                 self.assertEqual(marker.read_text(encoding="utf-8"), expected_hash)
                 self.assertIn(f"agent_id=agent-{role}", result.stderr.decode())
+                self.assertFalse((self.absolute_git_dir(work) / marker_name).exists())
 
-            push_payload = {
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Bash",
-                "tool_input": {"command": "git push origin HEAD"},
-            }
-            allowed = subprocess.run(
-                ["bash", str(HOOK)],
-                cwd=work,
-                input=json.dumps(push_payload).encode("utf-8"),
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            self.assertEqual(
+                {path.name for path in marker_dir.iterdir()}, set(MARKER_NAMES)
             )
+
+            allowed = self.run_push_hook(work, env, turn_id="turn-test")
             self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
             self.assertEqual(allowed.stdout, b"")
 
             (work / "example.txt").write_text("changed again\n", encoding="utf-8")
-            invalidated = subprocess.run(
-                ["bash", str(HOOK)],
-                cwd=work,
-                input=json.dumps(push_payload).encode("utf-8"),
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            self.git(work, "add", "example.txt")
+            self.git(work, "commit", "-m", "change state")
+            self.assert_push_denied(
+                self.run_push_hook(work, env, turn_id="turn-test")
             )
-            self.assertEqual(invalidated.returncode, 0, invalidated.stderr.decode())
-            response = json.loads(invalidated.stdout)
-            self.assertEqual(
-                response["hookSpecificOutput"]["permissionDecision"], "deny"
+
+    def test_codex_default_subagent_cannot_create_review_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temporary = Path(temporary_name)
+            work = self.create_feature_repository(temporary)
+            plugin_data = temporary / "plugin-data"
+            env = self.codex_env(plugin_data)
+            marker_dir = self.codex_marker_dir(work, plugin_data)
+
+            for _, heading, role, marker_name in REVIEW_CASES:
+                payload = self.subagent_payload(work, "default", heading, role)
+                result = self.run_codex_auto_mark(work, payload, env)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                marker = marker_dir / marker_name
+                self.assertFalse(marker.exists(), result.stderr.decode())
+
+            self.assert_push_denied(
+                self.run_push_hook(work, env, turn_id="turn-test")
             )
 
     def test_subagent_stop_rejects_bad_footer_unknown_agent_reentry_and_claude(self) -> None:
         marker_name = ".claude-pre-push-code-reviewed"
         with tempfile.TemporaryDirectory() as temporary_name:
-            work = self.create_feature_repository(Path(temporary_name))
-            marker = work / ".git" / marker_name
+            temporary = Path(temporary_name)
+            work = self.create_feature_repository(temporary)
+            plugin_data = temporary / "plugin-data"
+            env = self.codex_env(plugin_data)
+            marker = self.codex_marker_dir(work, plugin_data) / marker_name
             payload = self.subagent_payload(
                 work,
-                "pre-push-correctness-reviewer",
+                "pre_push_correctness_reviewer",
                 "# Correctness Review",
                 "correctness",
             )
 
             payload["last_assistant_message"] = "# Correctness Review\n\nincomplete"
-            self.assertEqual(self.run_codex_auto_mark(work, payload).returncode, 0)
+            self.assertEqual(
+                self.run_codex_auto_mark(work, payload, env).returncode, 0
+            )
             self.assertFalse(marker.exists())
 
             payload = self.subagent_payload(
-                work, "another-reviewer", "# Correctness Review", "correctness"
+                work, "another_reviewer", "# Correctness Review", "correctness"
             )
-            self.assertEqual(self.run_codex_auto_mark(work, payload).returncode, 0)
+            self.assertEqual(
+                self.run_codex_auto_mark(work, payload, env).returncode, 0
+            )
             self.assertFalse(marker.exists())
+
+            payload = self.subagent_payload(
+                work, "default", "# Correctness Review", "security"
+            )
+            result = self.run_codex_auto_mark(work, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(marker.exists())
+            self.assertFalse(
+                (self.codex_marker_dir(work, plugin_data) / MARKER_NAMES[2]).exists()
+            )
 
             payload = self.subagent_payload(
                 work,
-                "pre-push-correctness-reviewer",
+                "pre_push_correctness_reviewer",
                 "# Correctness Review",
                 "correctness",
                 stop_hook_active=True,
             )
-            self.assertEqual(self.run_codex_auto_mark(work, payload).returncode, 0)
+            self.assertEqual(
+                self.run_codex_auto_mark(work, payload, env).returncode, 0
+            )
             self.assertFalse(marker.exists())
 
             payload = self.subagent_payload(
                 work,
-                "pre-push-correctness-reviewer",
+                "pre_push_correctness_reviewer",
                 "# Correctness Review",
                 "correctness",
             )
             payload.pop("turn_id")
-            result = self.run_codex_auto_mark(work, payload)
+            result = self.run_codex_auto_mark(
+                work,
+                payload,
+                self.claude_env(plugin_data),
+            )
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertEqual(result.stdout, b"")
             self.assertEqual(result.stderr, b"")
             self.assertFalse(marker.exists())
 
+    def test_codex_plugin_data_separates_repositories_and_worktrees(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temporary = Path(temporary_name)
+            first_root = temporary / "first"
+            second_root = temporary / "second"
+            first_root.mkdir()
+            second_root.mkdir()
+            first = self.create_feature_repository(first_root)
+            second = self.create_feature_repository(second_root)
+            linked = temporary / "linked-worktree"
+            self.git(
+                first,
+                "worktree",
+                "add",
+                "-b",
+                "feature/linked",
+                str(linked),
+                "master",
+            )
+            (linked / "example.txt").write_text("linked change\n", encoding="utf-8")
+            self.git(linked, "add", "example.txt")
+            self.git(linked, "commit", "-m", "linked change")
+
+            plugin_data = temporary / "plugin-data"
+            env = self.codex_env(plugin_data)
+            marker_dirs = set()
+            for work in (first, second, linked):
+                payload = self.subagent_payload(
+                    work,
+                    "pre_push_correctness_reviewer",
+                    "# Correctness Review",
+                    "correctness",
+                )
+                result = self.run_codex_auto_mark(work, payload, env)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                marker_dir = self.codex_marker_dir(work, plugin_data)
+                marker_dirs.add(marker_dir)
+                marker = marker_dir / MARKER_NAMES[0]
+                self.assertTrue(marker.exists(), result.stderr.decode())
+                self.assertEqual(
+                    marker.read_text(encoding="utf-8"),
+                    self.expected_review_hash(work),
+                )
+
+            self.assertEqual(len(marker_dirs), 3)
+            marker_root = plugin_data / "pre-push-review" / "markers"
+            self.assertEqual(
+                {path.name for path in marker_root.iterdir()},
+                {self.expected_repo_key(work) for work in (first, second, linked)},
+            )
+
+    def test_codex_missing_plugin_data_does_not_fallback_to_git_dir(self) -> None:
+        for label, plugin_data in (("unset", None), ("empty", "")):
+            with self.subTest(plugin_data=label), tempfile.TemporaryDirectory() as name:
+                work = self.create_feature_repository(Path(name))
+                payload = self.subagent_payload(
+                    work,
+                    "pre_push_correctness_reviewer",
+                    "# Correctness Review",
+                    "correctness",
+                )
+                result = self.run_codex_auto_mark(
+                    work,
+                    payload,
+                    self.codex_missing_data_env(plugin_data),
+                )
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertFalse(
+                    (self.absolute_git_dir(work) / MARKER_NAMES[0]).exists()
+                )
+
+    def test_codex_missing_plugin_data_gate_ignores_git_markers(self) -> None:
+        for label, plugin_data in (("unset", None), ("empty", "")):
+            with self.subTest(plugin_data=label), tempfile.TemporaryDirectory() as name:
+                work = self.create_feature_repository(Path(name))
+                self.write_git_markers(work, self.expected_review_hash(work))
+                result = self.run_push_hook(
+                    work,
+                    self.codex_missing_data_env(plugin_data),
+                    turn_id="turn-test",
+                )
+                self.assert_push_denied(result)
+
+    def test_claude_surface_uses_git_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            temporary = Path(name)
+            work = self.create_feature_repository(temporary)
+            plugin_data = temporary / "claude-plugin-data"
+            self.write_git_markers(work, self.expected_review_hash(work))
+            result = self.run_push_hook(work, self.claude_env(plugin_data))
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(result.stdout, b"")
+            self.assertFalse(
+                (self.codex_marker_dir(work, plugin_data) / MARKER_NAMES[0]).exists()
+            )
+
+    def test_codex_prefers_bare_plugin_data_over_compatibility_name(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            temporary = Path(name)
+            work = self.create_feature_repository(temporary)
+            compatibility_data = temporary / "compatibility-plugin-data"
+            bare_data = temporary / "bare-plugin-data"
+            env = self.codex_env(
+                compatibility_data,
+                bare_plugin_data=bare_data,
+            )
+            for agent_type, heading, role, marker_name in REVIEW_CASES:
+                payload = self.subagent_payload(work, agent_type, heading, role)
+                result = self.run_codex_auto_mark(work, payload, env)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                bare_marker = self.codex_marker_dir(work, bare_data) / marker_name
+                self.assertTrue(bare_marker.exists(), result.stderr.decode())
+                self.assertFalse(
+                    (
+                        self.codex_marker_dir(work, compatibility_data)
+                        / marker_name
+                    ).exists()
+                )
+                self.assertFalse(
+                    (self.absolute_git_dir(work) / marker_name).exists()
+                )
+
+            allowed = self.run_push_hook(work, env, turn_id="turn-test")
+            self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
+            self.assertEqual(allowed.stdout, b"")
+
 
 class SetupCodexAgentsTest(unittest.TestCase):
-    def test_hook_config_registers_named_codex_subagent_stop_adapter(self) -> None:
+    def test_hook_config_registers_named_subagent_stop_adapter(self) -> None:
         config = json.loads(
             (PLUGIN_DIR / "hooks" / "hooks.json").read_text(encoding="utf-8")
         )
@@ -272,12 +517,65 @@ class SetupCodexAgentsTest(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(
             groups[0]["matcher"],
-            "^pre-push-(correctness|independent|security)-reviewer$",
+            "^pre_push_(correctness|independent|security)_reviewer$",
         )
         handlers = groups[0]["hooks"]
         self.assertEqual(len(handlers), 1)
         self.assertEqual(handlers[0]["type"], "command")
         self.assertIn("codex-auto-mark.sh", handlers[0]["command"])
+
+    def test_review_skill_fails_closed_without_agent_type_selector(self) -> None:
+        skill = (PLUGIN_DIR / "skills" / "review-codex" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("spawn_agent", skill)
+        self.assertIn("`agent_type` selector", skill)
+        self.assertIn("marker を生成せず停止", skill)
+        self.assertNotIn("`default` fallback", skill)
+
+    def test_pre_push_review_is_excluded_from_codex_distribution(self) -> None:
+        overrides = json.loads(
+            (ROOT / "codex" / "marketplace-overrides.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        plugin = overrides["plugins"]["pre-push-review"]
+        self.assertEqual(plugin["distribution"]["status"], "excluded")
+        self.assertEqual(plugin["version"], "4.0.0")
+        self.assertIn("agent_type", plugin["distribution"]["reason"])
+        self.assertEqual(plugin["compatibility"]["level"], "metadata-only")
+        components = plugin["compatibility"]["components"]
+        self.assertEqual(len(components), 4)
+        self.assertEqual(
+            {component["disposition"] for component in components},
+            {"surface-unavailable"},
+        )
+        uninstall_command = (
+            "codex plugin remove pre-push-review@natsuume-plugins"
+        )
+        self.assertTrue(
+            any(
+                uninstall_command in limitation
+                for limitation in plugin["compatibility"]["limitations"]
+            )
+        )
+        plugin_readme = (PLUGIN_DIR / "README.md").read_text(encoding="utf-8")
+        self.assertIn(uninstall_command, plugin_readme)
+
+        marketplace = json.loads(
+            (ROOT / ".agents" / "plugins" / "marketplace.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        names = {entry["name"] for entry in marketplace["plugins"]}
+        self.assertNotIn("pre-push-review", names)
+        self.assertFalse((PLUGIN_DIR / ".codex-plugin" / "plugin.json").exists())
+        for profile in (
+            "pre-push-correctness-reviewer.toml",
+            "pre-push-independent-reviewer.toml",
+            "pre-push-security-reviewer.toml",
+        ):
+            self.assertFalse((ROOT / ".codex" / "agents" / profile).exists())
 
     def run_setup(
         self, repo: Path, mode: str, *args: str
@@ -320,17 +618,27 @@ class SetupCodexAgentsTest(unittest.TestCase):
             self.assertEqual(written.returncode, 0, written.stderr.decode())
 
             target_dir = repo / ".codex" / "agents"
+            installed_names = set()
             for template in sorted(AGENT_TEMPLATE_DIR.glob("*.toml")):
                 destination = target_dir / template.name
                 self.assertEqual(destination.read_bytes(), template.read_bytes())
                 parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
-                self.assertTrue(parsed["name"].startswith("pre-push-"))
+                self.assertRegex(parsed["name"], r"^[a-z0-9_]+$")
+                installed_names.add(parsed["name"])
                 self.assertEqual(parsed["sandbox_mode"], "read-only")
                 self.assertEqual(parsed["model_reasoning_effort"], "high")
                 self.assertIn(
                     "<!-- pre-push-review:completed",
                     parsed["developer_instructions"],
                 )
+            self.assertEqual(
+                installed_names,
+                {
+                    "pre_push_correctness_reviewer",
+                    "pre_push_independent_reviewer",
+                    "pre_push_security_reviewer",
+                },
+            )
 
             current = self.run_setup(repo, "inspect")
             self.assertEqual(current.returncode, 0, current.stderr.decode())

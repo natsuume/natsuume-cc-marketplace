@@ -14,6 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "plugins" / "agent-discipline"
 HOOKS_PATH = PLUGIN_DIR / "hooks" / "hooks.json"
+CODEX_HOOKS_PATH = PLUGIN_DIR / "hooks" / "codex-hooks.json"
 VALIDATOR = PLUGIN_DIR / "hooks" / "scripts" / "codex-semantic-validator.sh"
 VALIDATOR_SCHEMA = (
     PLUGIN_DIR / "hooks" / "schemas" / "codex-semantic-validator-output.schema.json"
@@ -188,6 +189,52 @@ esac
         self.assertTrue(all(handler["prompt"].endswith("$ARGUMENTS") for handler in agents))
         self.assertEqual(1, len(commands))
         self.assertTrue(commands[0]["command"].endswith("/codex-semantic-validator.sh"))
+
+    def test_codex_hooks_are_command_only_without_losing_shared_handlers(self) -> None:
+        claude_hooks = json.loads(HOOKS_PATH.read_text(encoding="utf-8"))
+        codex_hooks = json.loads(CODEX_HOOKS_PATH.read_text(encoding="utf-8"))
+
+        def command_handlers(payload: dict[str, object]) -> set[tuple[object, ...]]:
+            result: set[tuple[object, ...]] = set()
+            for event, groups in payload["hooks"].items():
+                for group in groups:
+                    for handler in group["hooks"]:
+                        if handler["type"] == "command":
+                            result.add(
+                                (
+                                    event,
+                                    group.get("matcher"),
+                                    handler["command"],
+                                    handler.get("timeout"),
+                                )
+                            )
+            return result
+
+        expected = {
+            handler
+            for handler in command_handlers(claude_hooks)
+            if not str(handler[2]).endswith("/block-fable-subagent.sh")
+        }
+        actual = command_handlers(codex_hooks)
+        all_codex_handlers = [
+            handler
+            for groups in codex_hooks["hooks"].values()
+            for group in groups
+            for handler in group["hooks"]
+        ]
+
+        self.assertEqual(expected, actual)
+        self.assertTrue(
+            all(handler["type"] == "command" for handler in all_codex_handlers)
+        )
+        self.assertNotIn(
+            "Agent|Task",
+            {
+                group.get("matcher")
+                for groups in codex_hooks["hooks"].values()
+                for group in groups
+            },
+        )
 
     def test_claude_runtime_guard_preserves_no_output_and_skips_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

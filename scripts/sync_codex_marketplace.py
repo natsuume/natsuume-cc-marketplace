@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Generate and verify the Codex marketplace from the Claude marketplace.
+"""Generate and verify the Codex marketplace from shared Claude metadata.
 
-The Claude marketplace is the canonical authoring surface. Codex-specific UX
-metadata and explicit compatibility exceptions live in
+The Claude marketplace is the canonical authoring surface for shared metadata,
+except that each runtime owns an independent plugin version. Codex distribution,
+versions, Codex-specific UX metadata, and explicit compatibility exceptions live in
 ``codex/marketplace-overrides.json``. Generated files are committed so a
 marketplace installed from any Git ref is immediately usable.
 """
@@ -36,7 +37,7 @@ README_PATH = ROOT / "README.md"
 SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 README_VERSION_RE = re.compile(
-    r"^\| \[([a-z0-9-]+)\]\(#[^)]+\) \| ([0-9]+\.[0-9]+\.[0-9]+) \|",
+    r"^\| \[([a-z0-9-]+)\]\(#[^)]+\) \| ([0-9]+\.[0-9]+\.[0-9]+) \| ([0-9]+\.[0-9]+\.[0-9]+|—) \|",
     re.MULTILINE,
 )
 PLUGIN_README_VERSION_RE = re.compile(
@@ -151,11 +152,19 @@ PORT_CONFIG_TOP_LEVEL_FIELDS = {"schemaVersion", "marketplace", "publisher", "pl
 PORT_CONFIG_MARKETPLACE_FIELDS = {"displayName", "category"}
 PORT_CONFIG_PUBLISHER_FIELDS = {"name", "url", "repository", "license"}
 PORT_CONFIG_PLUGIN_FIELDS = {
+    "distribution",
+    "version",
+    "versioning",
     "displayName",
     "shortDescription",
     "defaultPrompt",
+    "manifest",
     "compatibility",
 }
+PORT_CONFIG_DISTRIBUTION_FIELDS = {"status", "reason"}
+ALLOWED_DISTRIBUTION_STATUSES = {"available", "excluded"}
+PORT_CONFIG_VERSIONING_FIELDS = {"claudeOnlyPaths", "codexOnlyPaths"}
+PORT_CONFIG_MANIFEST_FIELDS = {"hooks"}
 PORT_CONFIG_COMPATIBILITY_FIELDS = {
     "level",
     "summary",
@@ -345,6 +354,86 @@ def _validate_port_config_known_fields(config: dict[str, Any]) -> None:
         if not isinstance(port, dict):
             raise SyncError(f"{label} must be an object")
         _reject_unknown_fields(port, PORT_CONFIG_PLUGIN_FIELDS, label)
+        distribution = port.get("distribution")
+        if not isinstance(distribution, dict):
+            raise SyncError(f"{label}.distribution must be an object")
+        _reject_unknown_fields(
+            distribution,
+            PORT_CONFIG_DISTRIBUTION_FIELDS,
+            f"{label}.distribution",
+        )
+        status = distribution.get("status")
+        if status not in ALLOWED_DISTRIBUTION_STATUSES:
+            raise SyncError(
+                f"{label}.distribution.status must be one of: "
+                + ", ".join(sorted(ALLOWED_DISTRIBUTION_STATUSES))
+            )
+        reason = distribution.get("reason")
+        if status == "excluded":
+            require_non_empty_string(
+                distribution, "reason", f"{label}.distribution"
+            )
+        elif reason is not None:
+            raise SyncError(
+                f"{label}.distribution.reason is only valid when status is excluded"
+            )
+        version = port.get("version")
+        if not isinstance(version, str) or SEMVER_RE.fullmatch(version) is None:
+            raise SyncError(f"{label}.version must use strict semver")
+        versioning = port.get("versioning")
+        if not isinstance(versioning, dict):
+            raise SyncError(f"{label}.versioning must be an object")
+        _reject_unknown_fields(
+            versioning,
+            PORT_CONFIG_VERSIONING_FIELDS,
+            f"{label}.versioning",
+        )
+        scoped_paths: dict[str, set[str]] = {}
+        for field in sorted(PORT_CONFIG_VERSIONING_FIELDS):
+            paths = require_string_list(
+                versioning, field, f"{label}.versioning"
+            )
+            scoped_paths[field] = set(paths)
+            for path in paths:
+                relative = Path(path.rstrip("/"))
+                normalized = relative.as_posix() + ("/" if path.endswith("/") else "")
+                if (
+                    path.startswith("/")
+                    or path.startswith("./")
+                    or relative.is_absolute()
+                    or ".." in relative.parts
+                    or relative.as_posix() in {"", "."}
+                    or normalized != path
+                    or path in {"README.md", ".claude-plugin", ".codex-plugin"}
+                    or path.startswith(".claude-plugin/")
+                    or path.startswith(".codex-plugin/")
+                ):
+                    raise SyncError(
+                        f"{label}.versioning.{field} contains an unsafe or "
+                        f"reserved plugin path: {path!r}"
+                    )
+        overlaps = sorted(
+            f"{claude} <> {codex}"
+            for claude in scoped_paths["claudeOnlyPaths"]
+            for codex in scoped_paths["codexOnlyPaths"]
+            if claude == codex
+            or (claude.endswith("/") and codex.startswith(claude))
+            or (codex.endswith("/") and claude.startswith(codex))
+        )
+        if overlaps:
+            raise SyncError(
+                f"{label}.versioning paths cannot belong to both runtimes: "
+                + ", ".join(overlaps)
+            )
+        manifest = port.get("manifest")
+        if manifest is not None:
+            if not isinstance(manifest, dict):
+                raise SyncError(f"{label}.manifest must be an object")
+            _reject_unknown_fields(
+                manifest,
+                PORT_CONFIG_MANIFEST_FIELDS,
+                f"{label}.manifest",
+            )
         compatibility = port.get("compatibility")
         if compatibility is None:
             continue
@@ -584,6 +673,45 @@ def _codex_command_handler_supported(handler: dict[str, Any]) -> bool:
     if handler.get("async") not in {None, False}:
         return False
     return True
+
+
+def _validate_codex_hooks_payload(
+    plugin_name: str, hooks_path: str, payload: dict[str, Any]
+) -> None:
+    hook_map = payload.get("hooks")
+    if not isinstance(hook_map, dict):
+        raise SyncError(f"{plugin_name}: Codex hooks file must contain a hooks object")
+    for event, groups in hook_map.items():
+        if event not in CODEX_HOOK_EVENTS or not isinstance(groups, list):
+            raise SyncError(
+                f"{plugin_name}: unsupported Codex hook event in {hooks_path}: {event}"
+            )
+        for group_index, group in enumerate(groups):
+            if not isinstance(group, dict) or set(group) - {"matcher", "hooks"}:
+                raise SyncError(
+                    f"{plugin_name}: malformed Codex hook group "
+                    f"{event}/{group_index} in {hooks_path}"
+                )
+            matcher = group.get("matcher", "")
+            handlers = group.get("hooks")
+            if (
+                not isinstance(matcher, str)
+                or not _codex_hook_matcher_supported(event, matcher)
+                or not isinstance(handlers, list)
+            ):
+                raise SyncError(
+                    f"{plugin_name}: unsupported Codex hook matcher "
+                    f"{event}/{group_index} in {hooks_path}"
+                )
+            for handler_index, handler in enumerate(handlers):
+                if not isinstance(handler, dict) or not _codex_command_handler_supported(
+                    handler
+                ):
+                    raise SyncError(
+                        f"{plugin_name}: Codex hook handler "
+                        f"{event}/{group_index}/{handler_index} must be a supported "
+                        f"type:command handler in {hooks_path}"
+                    )
 
 
 def discover_component_differences(
@@ -1026,8 +1154,8 @@ def load_repository_state() -> RepositoryState:
     marketplace = load_json(CLAUDE_MARKETPLACE_PATH)
     config = load_json(PORT_CONFIG_PATH)
     schema_version = config.get("schemaVersion")
-    if type(schema_version) is not int or schema_version != 3:
-        raise SyncError("codex port config schemaVersion must be 3")
+    if type(schema_version) is not int or schema_version != 5:
+        raise SyncError("codex port config schemaVersion must be 5")
     _validate_port_config_known_fields(config)
     _validate_marketplace_header(marketplace, config)
     marketplace_config = config.get("marketplace")
@@ -1108,6 +1236,23 @@ def load_repository_state() -> RepositoryState:
             raise SyncError(f"missing Codex port config for {name}")
         require_non_empty_string(port, "displayName", f"config.plugins.{name}")
         require_non_empty_string(port, "shortDescription", f"config.plugins.{name}")
+        codex_manifest = port.get("manifest")
+        if codex_manifest is not None:
+            hooks_path = require_non_empty_string(
+                codex_manifest,
+                "hooks",
+                f"config.plugins.{name}.manifest",
+            )
+            if not hooks_path.startswith("./"):
+                raise SyncError(f"{name}: Codex manifest hooks must start with './'")
+            hooks_relative = Path(hooks_path[2:])
+            if hooks_relative.is_absolute() or ".." in hooks_relative.parts:
+                raise SyncError(f"{name}: Codex manifest hooks must stay in plugin root")
+            hooks_file = plugin_root / hooks_relative
+            if not hooks_file.is_file():
+                raise SyncError(f"{name}: missing Codex hooks file: {hooks_path}")
+            hooks_payload = load_json(hooks_file)
+            _validate_codex_hooks_payload(name, hooks_path, hooks_payload)
         prompts = require_string_list(port, "defaultPrompt", f"config.plugins.{name}")
         if len(prompts) > 3 or any(len(prompt) > 128 for prompt in prompts):
             raise SyncError(f"{name}: defaultPrompt allows at most 3 entries of 128 chars")
@@ -1168,12 +1313,27 @@ def load_repository_state() -> RepositoryState:
             f"manifests={sorted(manifest_names)}, marketplace={sorted(names)}"
         )
 
-    readme_versions = dict(README_VERSION_RE.findall(README_PATH.read_text(encoding="utf-8")))
-    expected_versions = {state.name: state.manifest["version"] for state in states}
+    readme_versions = {
+        name: {"claude": claude, "codex": codex}
+        for name, claude, codex in README_VERSION_RE.findall(
+            README_PATH.read_text(encoding="utf-8")
+        )
+    }
+    expected_versions = {
+        state.name: {
+            "claude": state.manifest["version"],
+            "codex": (
+                state.port["version"]
+                if state.port["distribution"]["status"] == "available"
+                else "—"
+            ),
+        }
+        for state in states
+    }
     if readme_versions != expected_versions:
         raise SyncError(
-            "README plugin table differs from Claude manifests: "
-            f"README={readme_versions}, manifests={expected_versions}"
+            "README plugin table differs from runtime versions: "
+            f"README={readme_versions}, expected={expected_versions}"
         )
 
     return RepositoryState(
@@ -1204,12 +1364,15 @@ def render_codex_marketplace(state: RepositoryState) -> bytes:
                 "category": marketplace_config["category"],
             }
             for plugin in state.plugins
+            if plugin.port["distribution"]["status"] == "available"
         ],
     }
     return json_bytes(payload)
 
 
 def render_codex_manifest(state: RepositoryState, plugin: PluginState) -> bytes:
+    if plugin.port["distribution"]["status"] != "available":
+        raise SyncError(f"{plugin.name}: excluded plugin has no Codex manifest")
     publisher = state.config["publisher"]
     compatibility = plugin.port["compatibility"]
     capabilities: list[str] = []
@@ -1220,7 +1383,7 @@ def render_codex_manifest(state: RepositoryState, plugin: PluginState) -> bytes:
 
     manifest: dict[str, Any] = {
         "name": plugin.name,
-        "version": plugin.manifest["version"],
+        "version": plugin.port["version"],
         "description": plugin.manifest["description"],
         "author": {"name": publisher["name"], "url": publisher["url"]},
         "homepage": f"{publisher['repository']}#{plugin.name}",
@@ -1230,6 +1393,9 @@ def render_codex_manifest(state: RepositoryState, plugin: PluginState) -> bytes:
     }
     if plugin.skill_count:
         manifest["skills"] = "./skills/"
+    codex_manifest = plugin.port.get("manifest")
+    if isinstance(codex_manifest, dict):
+        manifest["hooks"] = codex_manifest["hooks"]
     manifest["interface"] = {
         "displayName": plugin.port["displayName"],
         "shortDescription": plugin.port["shortDescription"],
@@ -1260,13 +1426,14 @@ def render_compatibility_doc(state: RepositoryState) -> bytes:
         "",
         "<!-- Generated by scripts/sync_codex_marketplace.py. Do not edit directly. -->",
         "",
-        "Claude Code marketplace を正本とし、Skill・script・command hook は可能な限り同じ物理ファイルを共有します。直接機構の差分、Codex 用の意図等価 adapter、残る保証差、検証面は `codex/marketplace-overrides.json` で個別管理されます。",
+        "Claude Code marketplace を version 以外の共有 metadata の正本とし、Skill・script・command hook は可能な限り同じ物理ファイルを共有します。Claude Code / Codex の plugin version は独立しており、Codex version、直接機構の差分、Codex 用の意図等価 adapter、残る保証差、検証面は `codex/marketplace-overrides.json` で個別管理されます。",
         "",
-        "| Plugin | Version | 移植状態 | Skills | command hooks | 意図した差分 |",
-        "|---|---:|---|---:|---:|---|",
+        "| Plugin | Claude Code | Codex | Codex 配布 | 移植状態 | Skills | command hooks | 意図した差分 |",
+        "|---|---:|---:|---|---|---:|---:|---|",
     ]
     for plugin in state.plugins:
         compatibility = plugin.port["compatibility"]
+        distribution = plugin.port["distribution"]
         limitations = compatibility["limitations"]
         difference = "なし" if not limitations else "<br>".join(limitations)
         lines.append(
@@ -1275,6 +1442,16 @@ def render_compatibility_doc(state: RepositoryState) -> bytes:
                 [
                     f"`{plugin.name}`",
                     plugin.manifest["version"],
+                    (
+                        plugin.port["version"]
+                        if distribution["status"] == "available"
+                        else "—"
+                    ),
+                    (
+                        "対象"
+                        if distribution["status"] == "available"
+                        else "対象外: " + _escape_markdown(distribution["reason"])
+                    ),
                     labels[compatibility["level"]],
                     str(plugin.skill_count),
                     f"{plugin.command_hook_count}/{plugin.hook_count}",
@@ -1363,8 +1540,9 @@ def render_compatibility_doc(state: RepositoryState) -> bytes:
             "",
             "## Synchronization contract",
             "",
-            "- Canonical metadata: `.claude-plugin/marketplace.json` and `plugins/*/.claude-plugin/plugin.json`",
-            "- Codex-specific registry: `codex/marketplace-overrides.json`",
+            "- Shared metadata and Claude Code versions: `.claude-plugin/marketplace.json` and `plugins/*/.claude-plugin/plugin.json`",
+            "- Codex distribution, versions, and Codex-specific registry: `codex/marketplace-overrides.json`",
+            "- Runtime version policy: paths declared in `versioning.claudeOnlyPaths` / `codexOnlyPaths` bump only that runtime; unclassified plugin paths are shared and require both versions to advance",
             "- Generated artifacts: `.agents/plugins/marketplace.json`, `plugins/*/.codex-plugin/plugin.json`, `AGENTS.md`, this document",
             "- Runtime validation: pinned Claude Code strict-validates the canonical marketplace; pinned Codex installs every generated plugin on each PR/push, and scheduled latest-version jobs act as compatibility canaries",
             "- Every plugin entry declares `guaranteeDifferences` and at least one `verificationTests[].path`; each path must be executed by unittest discovery or the marketplace smoke job, so CI rejects missing or unexecuted evidence declarations",
@@ -1384,9 +1562,10 @@ def expected_files(state: RepositoryState) -> dict[Path, bytes]:
         AGENTS_PATH: CLAUDE_RULES_PATH.read_bytes(),
     }
     for plugin in state.plugins:
-        result[plugin.root / ".codex-plugin" / "plugin.json"] = render_codex_manifest(
-            state, plugin
-        )
+        if plugin.port["distribution"]["status"] == "available":
+            result[plugin.root / ".codex-plugin" / "plugin.json"] = (
+                render_codex_manifest(state, plugin)
+            )
     return result
 
 
@@ -1414,7 +1593,9 @@ def write_files(state: RepositoryState) -> None:
         print(f"wrote {path.relative_to(ROOT)}")
 
     expected_manifest_paths = {
-        plugin.root / ".codex-plugin" / "plugin.json" for plugin in state.plugins
+        plugin.root / ".codex-plugin" / "plugin.json"
+        for plugin in state.plugins
+        if plugin.port["distribution"]["status"] == "available"
     }
     for stale in sorted((ROOT / "plugins").glob("*/.codex-plugin/plugin.json")):
         if stale not in expected_manifest_paths:
@@ -1452,7 +1633,7 @@ def _build_digest_refresh_plan(plugin_names: Iterable[str]) -> DigestRefreshPlan
     marketplace = _load_json_bytes(CLAUDE_MARKETPLACE_PATH, marketplace_bytes)
     config = _load_json_bytes(PORT_CONFIG_PATH, config_bytes)
     schema_version = config.get("schemaVersion")
-    if type(schema_version) is not int or schema_version not in {2, 3}:
+    if type(schema_version) is not int or schema_version != 5:
         raise SyncError("cannot refresh digests for an unsupported port config schema")
     _validate_port_config_known_fields(config)
     _validate_marketplace_header(marketplace, config)
@@ -1585,8 +1766,6 @@ def _build_digest_refresh_plan(plugin_names: Iterable[str]) -> DigestRefreshPlan
     unknown = sorted(requested - set(marketplace_names))
     if unknown:
         raise SyncError("unknown --plugin name(s): " + ", ".join(unknown))
-    if schema_version == 2:
-        stale_plugins.update(marketplace_names)
     if requested != stale_plugins:
         raise SyncError(
             "digest refresh must explicitly name exactly all stale plugins; "
@@ -1594,17 +1773,6 @@ def _build_digest_refresh_plan(plugin_names: Iterable[str]) -> DigestRefreshPlan
         )
 
     candidate = copy.deepcopy(config)
-    if schema_version != 3:
-        changes.insert(
-            0,
-            DigestChange(
-                plugin="<registry>",
-                label="schemaVersion",
-                target_path=("schemaVersion",),
-                previous=schema_version,
-                current=3,
-            ),
-        )
     for change in changes:
         _set_json_path(candidate, change.target_path, change.current)
 
@@ -1763,7 +1931,9 @@ def check_files(state: RepositoryState) -> bool:
             sys.stderr.writelines(_text_diff(path, actual, expected))
 
     expected_manifest_paths = {
-        plugin.root / ".codex-plugin" / "plugin.json" for plugin in state.plugins
+        plugin.root / ".codex-plugin" / "plugin.json"
+        for plugin in state.plugins
+        if plugin.port["distribution"]["status"] == "available"
     }
     actual_manifest_paths = set(
         (ROOT / "plugins").glob("*/.codex-plugin/plugin.json")

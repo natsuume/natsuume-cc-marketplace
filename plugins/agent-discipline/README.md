@@ -4,9 +4,15 @@ Claude Code の振る舞い規律 (= agent としての discipline) を統合配
 
 ## バージョン
 
-v0.17.0
+v0.17.1
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.17.0 → v0.17.1 の変更点
+
+- Claude Code は既存の `hooks/hooks.json` を引き続き使用し、Codex manifest だけを command-only の `hooks/codex-hooks.json` へ向けるように分離した。Codex が未対応の `type: agent` 4 本を discovery しないため、起動時の `agent hooks are not supported yet` 警告を解消する
+- Codex 用 hook には共有 command handler を維持し、Claude 固有の `Agent|Task` matcher / Fable guard だけを除外した。両 hook 定義の command handler 同期を adapter test で固定した
+- version を `0.17.0` から `0.17.1` へ patch bump し、Claude marketplace を正本とする生成物へ同期した
 
 ### v0.16.0 → v0.17.0 の変更点
 
@@ -413,7 +419,7 @@ v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh 
 
 **matcher**: `Bash` (`hooks.json` の既存 Bash group に `type: command` handler として追加)
 
-Codex は `type: agent` handler を parse しても実行しないため、command adapter が Claude の 4 本の inline prompt を正本として再利用する。Codex の turn-scoped hook input で必須の extension `turn_id` が非空の場合だけ動作し、`turn_id` を持たない Claude Code input では無音 `exit 0` するので、Claude 側の `if` filter・model pin・60 秒 timeout・prompt 本文・allow/deny セマンティクスは変更しない。`CLAUDE_PLUGIN_ROOT` は両 runtime が設定しうるため runtime 判定には用いない。
+Codex manifest は command-only の `hooks/codex-hooks.json` を明示参照するため、未対応の `type: agent` handler を runtime discovery しない。command adapter は Claude の `hooks/hooks.json` にある 4 本の inline prompt を正本として再利用する。Codex の turn-scoped hook input で必須の extension `turn_id` が非空の場合だけ動作し、`turn_id` を持たない Claude Code input では無音 `exit 0` するので、Claude 側の `if` filter・model pin・60 秒 timeout・prompt 本文・allow/deny セマンティクスは変更しない。`CLAUDE_PLUGIN_ROOT` は両 runtime が設定しうるため runtime 判定には用いない。
 
 Codex 側の処理は次のとおり:
 
@@ -606,6 +612,7 @@ agent-discipline/
 │   └── plugin.json
 ├── hooks/
 │   ├── hooks.json
+│   ├── codex-hooks.json
 │   ├── schemas/
 │   │   └── codex-semantic-validator-output.schema.json
 │   ├── prompts/
