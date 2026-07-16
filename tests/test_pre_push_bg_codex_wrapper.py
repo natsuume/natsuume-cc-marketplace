@@ -139,6 +139,7 @@ class BlockBgCodexWrapperAgentTypeGateTest(unittest.TestCase):
             self.assert_allowed(result)
 
 
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
     """実行形 segment 分類 (codex review P2 指摘の regression 修正) のテスト。
 
@@ -320,6 +321,204 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
+
+    def test_single_quoted_dollar_paren_literal_is_allowed(self) -> None:
+        # codex review High 指摘の regression 修正確認: 引用符内の literal な `$(` を
+        # indirection と誤分類しない (wrapper のコマンド置換使用箇所を監査する grep)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "grep -n '$(' plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_double_quoted_escaped_dollar_paren_literal_is_allowed(self) -> None:
+        # double quote 内でも `\$(` は escape されているため indirection ではない。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        'grep -n "\\$(" plugins/pre-push-review/hooks/scripts/'
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_single_quoted_backtick_literal_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "grep -n '`' plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_single_quoted_process_substitution_literal_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "grep -n '<(' plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_double_quoted_real_command_substitution_is_denied(self) -> None:
+        # regression guard: double quote 内の実 command 置換は quote-aware 判定後も
+        # 引き続き indirection として deny される。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        'cat "$(bash plugins/pre-push-review/hooks/scripts/'
+                        'run-codex-review.sh)"'
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_cat_piped_to_bash_with_missing_agent_type_is_denied(self) -> None:
+        # 修正 1 の代表攻撃形: mention 扱い (cat) segment に隣接する pipe 接続先が
+        # allowlist 外の bash であり、 stdin 経由で wrapper の内容を実行できる。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh | bash"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_cat_head_piped_to_bash_with_missing_agent_type_is_denied(
+        self,
+    ) -> None:
+        # transitive chain: allowlist コマンド (head) を 1 段挟んでも、 pipe chain
+        # 全体を検査するため末尾の bash が検出され deny される。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh | head -100 | bash"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_bash_piped_to_grep_mention_with_missing_agent_type_is_denied(
+        self,
+    ) -> None:
+        # 上流側 neighbor (bash gen-pattern.sh) が allowlist 外のため、 下流の grep
+        # mention segment を含む pipe chain 全体が実行形として deny される。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "bash gen-pattern.sh | grep -n -f - "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_full_mention_chain_missing_agent_type_is_allowed(self) -> None:
+        # pipe chain 内の全 segment が mention-safe (cat / grep / head) なら allow の
+        # まま維持される。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh | grep -n marker | head -5"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_grep_piped_from_command_substitution_neighbor_is_denied(
+        self,
+    ) -> None:
+        # neighbor の indirection: allowlist head (grep) でもコマンド置換の内側
+        # (bash) が pipe の stdin (= wrapper 内容) を読んで実行できるため deny する。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat plugins/pre-push-review/hooks/scripts/"
+                        'run-codex-review.sh | grep "$(bash)"'
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_git_grep_mention_with_missing_agent_type_is_denied(self) -> None:
+        # 修正 2: git 特例の subcommand 集合から grep を除外した (git grep の
+        # --open-files-in-pager / -O<cmd> option が外部プログラムを起動できるため)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "git grep -n marker -- "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_git_log_piped_to_head_mention_missing_agent_type_is_allowed(
+        self,
+    ) -> None:
+        # git 特例 (log) の mention segment + allowlist neighbor (head) の chain は
+        # 引き続き allow される。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "git log --oneline -- "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh | head -5"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
 
 
 if __name__ == "__main__":

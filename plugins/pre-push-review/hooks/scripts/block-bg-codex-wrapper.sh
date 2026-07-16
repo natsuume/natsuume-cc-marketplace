@@ -58,23 +58,47 @@
 #    分類する。 **実行形 segment が 1 つも無ければ、 agent_type gate も bg / pipeline 判定も
 #    skip して allow する** (= wrapper を実行せず言及するだけの read-only コマンドは deny
 #    しない)。
-#      - **規則 1 (実行形 + indirection、 最優先)**: segment がコマンド置換 `$(` /
-#        バッククォート `` ` `` / プロセス置換 `<(` `>(` のいずれかを含む場合。 これらの
-#        内部は本 parser が安全に解析できないため保守的に実行形とし、 command 全体の
-#        INDIRECTION フラグを立てる (下記 2. で使用)。
+#      - **規則 1 (実行形 + indirection、 最優先、 quote-aware)**: segment がコマンド置換
+#        `$(` / バッククォート `` ` `` / プロセス置換 `<(` `>(` のいずれかを **quote 状態を
+#        考慮した上で** 含む場合。 quote 状態 (single / double / escaped) を 1 文字ずつ
+#        追跡し、 single quote 内の literal な `$(` 等 (例: `grep -n '$(' file` の監査
+#        コマンド) は indirection と判定しない。 double quote 内は bash が実際に `$(...)`
+#        / バッククォートを展開するため引き続き indirection、 escape (`\$(` 等) された
+#        ものは非 indirection とする (詳細は `segment_has_indirection` 関数コメント参照)。
+#        これらの内部は本 parser が安全に解析できないため保守的に実行形とし、 command 全体
+#        の INDIRECTION フラグを立てる (下記 2. で使用)。
 #      - **規則 2 (言及のみ)**: `tokenize_segment` + `skip_env_assignments` 後の先頭コマンド
 #        token (`unquote_token` 適用) が、 exec 機能を持たない read-only allowlist
 #        (`cat` `head` `tail` `nl` `wc` `grep` `diff` `cmp` `file` `stat` `ls` `md5sum`
 #        `sha1sum` `shasum` `sha256sum` `uniq` `cut` `shellcheck`) に完全一致する場合。
 #        `git` は特例で、 直後 token (global option を挟まない) が `diff` / `log` / `show` /
-#        `status` / `grep` / `ls-files` / `rev-parse` / `cat-file` のいずれかに完全一致し、
-#        かつ segment 内に `--ext-diff` / `--textconv` token が無い場合のみ言及扱いとする
-#        (直後 token が `-` 始まりの global option (`git -c ... diff` 等) の場合や、 上記
-#        以外の subcommand (`difftool` 等) は実行形)。 path 修飾形 (`/bin/cat` 等) は allowlist
-#        文字列と完全一致しないため規則 3 へ落ちる。 `sed` / `awk` / `find` / `rg` / `sort` /
-#        `less` / `more` / `xargs` は子プロセス実行面 (GNU sed の `e` コマンド、 awk
-#        `system()`、 `find -exec`、 `rg --pre`、 `sort --compress-program`、 pager の shell
-#        escape) を持つため allowlist に含めない。
+#        `status` / `ls-files` / `rev-parse` / `cat-file` のいずれかに完全一致し、 かつ
+#        segment 内に `--ext-diff` / `--textconv` token が無い場合のみ言及扱いとする (直後
+#        token が `-` 始まりの global option (`git -c ... diff` 等) の場合や、 上記以外の
+#        subcommand (`difftool` 等) は実行形)。 `git grep` は `--open-files-in-pager
+#        [=<cmd>]` / `-O<cmd>` option で外部プログラムを起動できるため、 git 特例の
+#        subcommand 集合から除外した (単体コマンドの `grep` は上の allowlist に引き続き
+#        含まれる。 `git log -- file | grep pattern` のように単体 `grep` へ差し替えて使う
+#        こと)。 path 修飾形 (`/bin/cat` 等) は allowlist 文字列と完全一致しないため規則 3 へ
+#        落ちる。 `sed` / `awk` / `find` / `rg` / `sort` / `less` / `more` / `xargs` は
+#        子プロセス実行面 (GNU sed の `e` コマンド、 awk `system()`、 `find -exec`、
+#        `rg --pre`、 `sort --compress-program`、 pager の shell escape) を持つため
+#        allowlist に含めない。
+#        **mention 扱い segment の pipe chain 検査**: 規則 2 で言及扱いに分類された segment
+#        についても、 その segment が属する pipe chain (両方向に separator が `|` である限り
+#        連続する segment の極大区間、 `&&` / `||` / `;` / `&` で途切れる。 `split_command`
+#        の出力仕様上 SEPARATORS[i-1] が SEGMENTS[i] の直前、 SEPARATORS[i] が直後を指す)
+#        内の他の全 segment (substring を含まないものも含む) が `mention_safe_segment`
+#        (indirection 不在 + allowlist / git 特例一致) を満たすことを要求する
+#        (`pipe_chain_all_mention_safe` 関数)。 隣接 1 段でなく chain 全体を見るのは、
+#        `cat wrapper | head -100 | bash` のように allowlist コマンドを 1 段挟むと隣接判定
+#        だけでは素通りするため (上流側 `bash gen.sh | grep -f - wrapper` も同様に保守的に
+#        検査する)。 また `cat wrapper | grep "$(bash)"` のように allowlist head でも
+#        コマンド置換の内側 (`bash`) が pipe の stdin (= wrapper 内容) を読んで実行できる
+#        ため、 neighbor の indirection も同じ chain 走査で検査する。 chain 内に
+#        mention-safe でない segment が 1 つでもあれば command 全体を実行形とする (下記 1.
+#        の agent_type gate を発火させる。 該当 segment が indirection を含む場合は
+#        INDIRECTION フラグも連動して立てる)。
 #      - **規則 3 (実行形・既定)**: 上記 2 規則のいずれにも該当しない場合 (bash/sh 等
 #        interpreter、 不明コマンド、 env 代入のみで先頭コマンド token が無い segment、
 #        path 修飾された allowlist コマンド等)。 分類不能・想定外の形はすべてここに落ちる
@@ -161,6 +185,210 @@ while IFS= read -r line; do
   SEGMENTS+=("$line")
 done < <(split_command "$COMMAND")
 
+# segment_has_indirection <segment>
+# 戻り値: 0 = quote-aware に indirection shape (コマンド置換 `$(` / バッククォート /
+# プロセス置換 `<(` `>(`) を検出、 1 = 未検出。
+#
+# 規則 1 の生 substring 判定 (`*'$('*` 等) は、 引用符内の literal な文字列 (例:
+# `grep -n '$(' run-codex-review.sh` のような wrapper 監査コマンド) まで indirection と
+# 誤分類する false positive があった (codex review High 指摘)。 本関数は segment 文字列を
+# 1 文字ずつ走査し、 in_single / in_double / (backslash による) escaped の状態を追跡して
+# 以下のみを indirection と判定する:
+#   - コマンド置換 `$(` : single quote 内でなく、 `$` が escape されていない場合
+#     (double quote 内は bash が実際に展開するため indirection のまま)
+#   - バッククォート `` ` `` : single quote 内でなく、 escape されていない場合
+#     (double quote 内も展開されるため indirection)
+#   - プロセス置換 `<(` / `>(` : single quote 内でも double quote 内でもなく、
+#     escape されていない場合 (プロセス置換は unquoted の文脈でのみ有効なため)
+# escape (`\`) は single quote 内では literal 文字として扱い (次の文字を escape しない)、
+# それ以外 (unquoted / double quote 内) では次の 1 文字を escape して読み飛ばす。
+# substring `run-codex-review.sh` を含む segment に対してのみ呼ばれる低頻度パスのため、
+# 1 文字ループの性能コストは許容する (cmd-parser.sh の split_command / tokenize_segment と
+# 同じ設計判断)。 bash 3.2 互換 (mapfile / declare -A / `${var,,}` を使わない)。
+segment_has_indirection() {
+  local seg="$1"
+  local i=0 len=${#seg}
+  local in_squote=0 in_dquote=0
+  local c nc
+
+  while [ "$i" -lt "$len" ]; do
+    c="${seg:$i:1}"
+
+    if [ "$in_squote" -eq 1 ]; then
+      # single quote 内: `\` も含めすべて literal。 close quote のみ判定する。
+      [ "$c" = "'" ] && in_squote=0
+      i=$((i+1))
+      continue
+    fi
+
+    if [ "$c" = "\\" ]; then
+      # unquoted / double quote 内の `\` は次の 1 文字を escape して読み飛ばす
+      # (escape された `$` / `` ` `` / `<` / `>` は indirection と判定しない)。
+      i=$((i+2))
+      continue
+    fi
+
+    if [ "$in_dquote" -eq 1 ]; then
+      if [ "$c" = '"' ]; then
+        in_dquote=0
+        i=$((i+1))
+        continue
+      fi
+      # double quote 内でも `$(` / バッククォートは bash が実際に展開するため indirection。
+      nc="${seg:$((i+1)):1}"
+      if [ "$c" = '$' ] && [ "$nc" = "(" ]; then
+        return 0
+      fi
+      if [ "$c" = '`' ]; then
+        return 0
+      fi
+      i=$((i+1))
+      continue
+    fi
+
+    # unquoted 領域
+    case "$c" in
+      "'") in_squote=1; i=$((i+1)); continue ;;
+      '"') in_dquote=1; i=$((i+1)); continue ;;
+    esac
+    nc="${seg:$((i+1)):1}"
+    if [ "$c" = '$' ] && [ "$nc" = "(" ]; then
+      return 0
+    fi
+    if [ "$c" = '`' ]; then
+      return 0
+    fi
+    if [ "$c" = '<' ] && [ "$nc" = "(" ]; then
+      return 0
+    fi
+    if [ "$c" = '>' ] && [ "$nc" = "(" ]; then
+      return 0
+    fi
+    i=$((i+1))
+  done
+
+  return 1
+}
+
+# mention_safe_segment <segment>
+# 戻り値: 0 = mention-safe (indirection を含まず、 かつ先頭コマンド token が read-only
+#   allowlist または git 特例 (縮小 subcommand 集合) に完全一致)、 1 = mention-safe でない。
+#
+# 規則 2 の主 segment 判定と、 修正 1 の pipe chain 検査 (`pipe_chain_all_mention_safe`)
+# の両方から呼ばれる共通 helper (ファイルヘッダ「検知ロジック」規則 2 節参照)。 先頭コマンド
+# token が無い segment (env 代入のみ・空) は fail-closed で mention-safe でないとする。
+mention_safe_segment() {
+  local _ms_seg="$1"
+
+  if segment_has_indirection "$_ms_seg"; then
+    return 1
+  fi
+
+  local -a _ms_toks
+  tokenize_segment "$_ms_seg" _ms_toks
+  local _ms_idx=0
+  local _ms_n=${#_ms_toks[@]}
+  skip_env_assignments _ms_toks _ms_idx
+
+  if [ "$_ms_idx" -ge "$_ms_n" ]; then
+    unset _ms_toks
+    return 1
+  fi
+
+  local _ms_head
+  _ms_head="$(unquote_token "${_ms_toks[$_ms_idx]}")"
+
+  case "$_ms_head" in
+    cat|head|tail|nl|wc|grep|diff|cmp|file|stat|ls|md5sum|sha1sum|shasum|sha256sum|uniq|cut|shellcheck)
+      unset _ms_toks
+      return 0
+      ;;
+    git)
+      # git 特例: 直後 token (global option を挟まない) が縮小 subcommand 集合に完全一致
+      # し、 かつ segment 内に --ext-diff / --textconv token が無い場合のみ mention-safe。
+      # `grep` は修正 2 (issue #267 codex review 指摘) で本集合から除外した (`git grep` の
+      # `--open-files-in-pager[=<cmd>]` / `-O<cmd>` option で外部プログラムを起動できる
+      # ため。 単体コマンドの `grep` は上の allowlist に引き続き含まれる)。
+      local _ms_next_idx=$((_ms_idx+1))
+      if [ "$_ms_next_idx" -lt "$_ms_n" ]; then
+        local _ms_next
+        _ms_next="$(unquote_token "${_ms_toks[$_ms_next_idx]}")"
+        case "$_ms_next" in
+          diff|log|show|status|ls-files|rev-parse|cat-file)
+            local _ms_has_ext=0
+            local _ms_gt _ms_gtu
+            for _ms_gt in "${_ms_toks[@]}"; do
+              _ms_gtu="$(unquote_token "$_ms_gt")"
+              case "$_ms_gtu" in
+                --ext-diff|--textconv) _ms_has_ext=1; break ;;
+              esac
+            done
+            if [ "$_ms_has_ext" -eq 0 ]; then
+              unset _ms_toks
+              return 0
+            fi
+            ;;
+        esac
+      fi
+      ;;
+  esac
+
+  unset _ms_toks
+  return 1
+}
+
+# pipe_chain_all_mention_safe <segment_index>
+# 修正 1 (issue #267 codex review 指摘): 規則 2 で言及扱いに分類された segment (SEGMENTS
+# 配列の index で指定) が属する pipe chain — 両方向に separator が `|` である限り連続する
+# segment の極大連続区間 (`&&` / `||` / `;` / `&` で途切れる) — を走査し、 当該 segment 以外
+# の全 segment (substring `run-codex-review.sh` を含まないものも含む) が
+# `mention_safe_segment` を満たすことを確認する。 1 つでも満たさない segment があれば 1
+# (false) を返す。 その segment が `segment_has_indirection` にも該当する場合は、 呼び出し元
+# (メインの分類 loop) が INDIRECTION フラグも連動して立てられるよう、 グローバル変数
+# HAS_INDIRECTION を直接更新する (本 hook は関数を同一プロセス内で呼ぶ trusted script のため
+# グローバル変更で問題ない)。
+#
+# なぜ隣接 1 段でなく chain 全体を見るか: `cat wrapper | head -100 | bash` のように allowlist
+# コマンドを 1 段挟むと隣接判定だけでは素通りしてしまう (上流側 `bash gen.sh | grep -f -
+# wrapper` も同様に保守的に検査する)。 また `cat wrapper | grep "$(bash)"` のように allowlist
+# head でもコマンド置換の内側 (`bash`) が pipe の stdin (= wrapper 内容) を読んで実行できる
+# ため、 neighbor の indirection も同じ chain 走査で検査する。
+#
+# 戻り値: 0 = chain 内の他 segment がすべて mention-safe、 1 = 1 つでも mention-safe でない
+# segment がある。
+pipe_chain_all_mention_safe() {
+  local _pc_center="$1"
+  local _pc_lo=$_pc_center
+  local _pc_hi=$_pc_center
+
+  # 左方向へ拡張: SEPARATORS[_pc_lo-1] (= SEGMENTS[_pc_lo] の直前 separator) が `|` である
+  # 限り _pc_lo を減らす。
+  while [ "$_pc_lo" -gt 0 ] && [ "${SEPARATORS[$((_pc_lo-1))]}" = "|" ]; do
+    _pc_lo=$((_pc_lo-1))
+  done
+
+  # 右方向へ拡張: SEPARATORS[_pc_hi] (= SEGMENTS[_pc_hi] の直後 separator) が `|` である限り
+  # _pc_hi を増やす。
+  while [ "$_pc_hi" -lt "${#SEPARATORS[@]}" ] && [ "${SEPARATORS[$_pc_hi]}" = "|" ]; do
+    _pc_hi=$((_pc_hi+1))
+  done
+
+  local _pc_j=$_pc_lo
+  while [ "$_pc_j" -le "$_pc_hi" ]; do
+    if [ "$_pc_j" -ne "$_pc_center" ]; then
+      if ! mention_safe_segment "${SEGMENTS[$_pc_j]}"; then
+        if segment_has_indirection "${SEGMENTS[$_pc_j]}"; then
+          HAS_INDIRECTION=1
+        fi
+        return 1
+      fi
+    fi
+    _pc_j=$((_pc_j+1))
+  done
+
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # 0. segment 分類 (実行形のみ gate、 fail-closed)。 詳細はファイルヘッダ「検知ロジック」
 #    節を参照。 HAS_EXEC_SEGMENT が 0 のままなら agent_type gate も bg / pipeline 判定も
@@ -176,68 +404,32 @@ for _cls_i in "${!SEGMENTS[@]}"; do
     *) continue ;;
   esac
 
-  # 規則 1 (実行形 + indirection、 最優先): コマンド置換 `$(` / バッククォート /
-  # プロセス置換 `<(` `>(` のいずれかを含む segment は、 実 target を本 parser が解析
-  # できないため保守的に実行形とし、 command 全体の INDIRECTION フラグを立てる。
-  case "$_cls_seg" in
-    *'$('*|*'`'*|*'<('*|*'>('*)
-      HAS_EXEC_SEGMENT=1
-      HAS_INDIRECTION=1
-      continue
-      ;;
-  esac
-
-  # 規則 2 (言及のみ): 先頭コマンド token (env 代入 skip 後、 unquote 適用) が exec 機能を
-  # 持たない read-only allowlist に完全一致すれば言及のみとする。
-  declare -a _cls_toks
-  tokenize_segment "$_cls_seg" _cls_toks
-  _cls_idx=0
-  _cls_n=${#_cls_toks[@]}
-  skip_env_assignments _cls_toks _cls_idx
-
-  if [ "$_cls_idx" -ge "$_cls_n" ]; then
-    # env 代入のみ / 空 segment: 先頭コマンド token が無いため規則 3 (実行形) に倒す。
+  # 規則 1 (実行形 + indirection、 最優先、 quote-aware): コマンド置換 `$(` / バッククォート
+  # / プロセス置換 `<(` `>(` のいずれかを quote 状態を考慮して含む segment は、 実 target を
+  # 本 parser が解析できないため保守的に実行形とし、 command 全体の INDIRECTION フラグを
+  # 立てる。 single quote 内の literal な `$(` 等は indirection と判定しない
+  # (`segment_has_indirection` 関数コメント参照)。
+  if segment_has_indirection "$_cls_seg"; then
     HAS_EXEC_SEGMENT=1
-    unset _cls_toks
+    HAS_INDIRECTION=1
     continue
   fi
 
-  _cls_head="$(unquote_token "${_cls_toks[$_cls_idx]}")"
-  _cls_mention=0
-  case "$_cls_head" in
-    cat|head|tail|nl|wc|grep|diff|cmp|file|stat|ls|md5sum|sha1sum|shasum|sha256sum|uniq|cut|shellcheck)
-      _cls_mention=1
-      ;;
-    git)
-      # git 特例: 直後 token (global option を挟まない) が read-only subcommand に完全
-      # 一致し、 かつ segment 内に --ext-diff / --textconv token が無い場合のみ言及扱い。
-      # 直後 token が `-` 始まり (global option) や上記以外の subcommand (difftool 等)
-      # は実行形のまま (_cls_mention は 0 のまま)。
-      _cls_next_idx=$((_cls_idx+1))
-      if [ "$_cls_next_idx" -lt "$_cls_n" ]; then
-        _cls_next="$(unquote_token "${_cls_toks[$_cls_next_idx]}")"
-        case "$_cls_next" in
-          diff|log|show|status|grep|ls-files|rev-parse|cat-file)
-            _cls_has_ext=0
-            for _cls_gt in "${_cls_toks[@]}"; do
-              _cls_gtu="$(unquote_token "$_cls_gt")"
-              case "$_cls_gtu" in
-                --ext-diff|--textconv) _cls_has_ext=1; break ;;
-              esac
-            done
-            [ "$_cls_has_ext" -eq 0 ] && _cls_mention=1
-            ;;
-        esac
-      fi
-      ;;
-  esac
-
-  if [ "$_cls_mention" -eq 0 ]; then
-    # 規則 3 (実行形・既定): allowlist 不一致 (bash/sh 等 interpreter、 不明コマンド、
-    # path 修飾された allowlist コマンド等) は fail-closed に実行形として扱う。
+  # 規則 2 / 3: mention_safe_segment (indirection 不在 + read-only allowlist / git 特例
+  # 一致) を満たせば言及のみ。 満たさなければ規則 3 (実行形・既定) の fail-closed 分類
+  # (env 代入のみ・空 segment、 bash/sh 等 interpreter、 不明コマンド、 path 修飾された
+  # allowlist コマンド等はすべて mention_safe_segment が 1 を返し、 ここに落ちる)。
+  if mention_safe_segment "$_cls_seg"; then
+    # 修正 1 (issue #267 codex review 指摘): 言及扱いでも、 この segment が属する pipe
+    # chain 内の他 segment が全て mention-safe でなければ command 全体を実行形とする
+    # (詳細はファイルヘッダ「mention 扱い segment の pipe chain 検査」節、 および
+    # `pipe_chain_all_mention_safe` 関数コメント参照)。
+    if ! pipe_chain_all_mention_safe "$_cls_i"; then
+      HAS_EXEC_SEGMENT=1
+    fi
+  else
     HAS_EXEC_SEGMENT=1
   fi
-  unset _cls_toks
 done
 
 # 実行形 segment が 1 つも無ければ、 agent_type gate も bg / pipeline 判定も skip して
