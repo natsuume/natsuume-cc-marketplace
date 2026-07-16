@@ -302,11 +302,15 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.17.1",
+      "version": "0.17.2",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": [
-          "hooks/codex-hooks.json"
+          "hooks/codex-hooks.json",
+          "hooks/scripts/codex-semantic-validator.sh",
+          "scripts/setup-codex-semantic-validator.sh",
+          "skills/setup-codex-semantic-validator/",
+          "codex/"
         ]
       },
       "displayName": "Agent Discipline",
@@ -315,21 +319,22 @@
         "agent-discipline の作業規律に従ってこのタスクを進めてください。"
       ],
       "manifest": {
-        "hooks": "./hooks/codex-hooks.json"
+        "hooks": "./codex/hooks.json"
       },
       "compatibility": {
         "level": "partial",
-        "summary": "Claude の hooks.json と Codex の command-only hooks を分離し、Codex では repo/worktree scoped の provider/privacy opt-in 後だけ Claude の inline semantic agent prompt を隔離した read-only codex exec で評価します。Auto follow-through は検出不能な permission mode へ推測 mapping せず、明示 Skill で意図を代替します。",
+        "summary": "GPT-5.6 Sol/Luna 向けの短い SessionStart/SubagentStart prompt と command-only hooks を Codex 専用正本から配送します。semantic validator も Claude inline prompt の転用をやめ、Codex 専用 policy を developer role、事前取得した untrusted data を user request に分離し、repository instructions と web search から隔離した read-only codex exec で評価します。",
         "limitations": [
           "semantic validator は既定で無効です。opt-in が無い状態では 4 つの literal gh issue/pr command を scoped deny し、nested Codex は起動しません。",
-          "opt-in 後は対象 gh issue/pr command ごとに別の codex exec を起動するため、ローカル Codex 認証・model availability・rate limit に依存し、同一 runtime handler より latency が増えます。hook payload と参照した --body-file 内容は親とは異なる default provider/model へ送信される可能性があります。",
+          "opt-in 後は対象 gh issue/pr command ごとに別の codex exec を起動するため、ローカル Codex 認証・model availability・rate limit に依存し、同一 runtime handler より latency が増えます。hook payload と参照した --body-file 内容は親とは異なる provider へ送信される可能性があります。",
           "Codex の PreToolUse は対応する Bash invocation の guardrail であり、env/cd prefix・editor・stdin 等の hook visibility 外経路を含む完全な shell security boundary ではありません。",
-          "Codex hook input の permission_mode は Auto preset を一意に表さないため、after 系と未コミット分類の自動注入は Codex では無効です。auto-codex Skill は現在の approval/sandbox とユーザー依頼 scope 内で follow-through の意図だけを代替します。",
-          "Claude の Agent|Task tool と Fable/Sonnet model routing は Codex の tool/model 系に存在しないため、Fable subagent block は適用対象がありません。"
+          "Codex の常時 prompt は permission mode から Auto preset を推測せず、commit/push/issue/PR/merge をユーザー依頼 scope に含まれる場合だけ行います。auto-codex Skill は明示呼び出し時だけ follow-through の意図を追加します。",
+          "semantic validator は既定で gpt-5.6-sol を使います。AGENT_DISCIPLINE_CODEX_MODEL=gpt-5.6-luna で Luna に切り替えられますが、ローカル Codex の認証・model availability・rate limit に依存します。"
         ],
         "guaranteeDifferences": [
-          "Codex manifest は hooks/codex-hooks.json を明示参照し、Claude 固有の type:agent handler と Agent|Task matcher を runtime discovery から除外します。共有 command handler は Claude 正本との差分テストで同期します。",
-          "4 本の canonical inline prompt と全 property required の {ok, nullable reason} schema は再利用しますが、Claude hook agent ではなく ephemeral な独立 Codex process が判定します。ok:true は stdout 無出力で通常の approval policy へ継続し、ok:false は PreToolUse deny に変換します。opt-in 後は認証・quota・timeout・schema/条件不適合を fail-closed で deny し、jq 不在または hook payload 自体を安全に解釈できない場合は blast radius を避けて no-op します。",
+          "Codex manifest は codex/hooks.json を明示参照し、Claude のモデル分類・分割配送・temporary UI workaround・UserPromptSubmit prompt を runtime discovery から除外します。Codex prompt は 1 要素 8,000 文字以下を adapter test で固定します。",
+          "semantic validator は repository 外の一時 cwd で project document discovery、project root discovery、user/project config、hooks、rules、web search、shell/search tools を無効化し、対象 repository の AGENTS.md を validator policy から隔離します。Codex native policy は developer role、shell adapter が事前取得した inline/body file・branch・hook payload は user request の untrusted JSON として instruction hierarchy を分離します。",
+          "semantic validator は Codex 専用 prompt と全 property required の {ok, nullable reason} schema を使います。ok:true は stdout 無出力で通常の approval policy へ継続し、ok:false は PreToolUse deny に変換します。opt-in 後は認証・quota・timeout・strict config・schema/条件不適合を fail-closed で deny し、jq 不在または hook payload 自体を安全に解釈できない場合は blast radius を避けて no-op します。",
           "owner-only regular marker と inspect→明示承認→action token の helper は当該 Git worktree で opt-in 操作が行われたことだけを示します。親/nested process の provider/model 同一性、Claude/Codex の verdict equality、外部 provider のデータ取扱いは保証しません。symlink・非 regular・owner/mode/content 不正 state は変更せず scoped deny します。",
           "semantic interception は literal な gh issue/pr command head に限定され、同じ外部操作へ到達する全 shell 表現の遮断までは保証しません。",
           "Codex の default・acceptEdits・dontAsk・bypassPermissions は Claude auto へ対応付けません。auto-codex Skill の follow-through 指示は Auto preset や追加権限を保証せず、外部 push/PR/merge はユーザー依頼 scope を拡張しません。"
@@ -337,36 +342,40 @@
         "verificationTests": [
           {
             "path": "tests/test_agent_discipline_codex_adapter.py",
-            "covers": "Claude/Codex hook 分離と command handler 同期、canonical prompt 抽出、read-only/ephemeral validator、provider/privacy opt-in lifecycle、fresh token、owner-only marker、symlink/nonregular 拒否、Structured Outputs subset、fail-closed deny、Codex permission mode no-op、明示代替 Skills、Claude runtime 維持"
+            "covers": "Claude/Codex hook 分離、Codex native semantic policy の developer role 分離、Sol/Luna model 制約、attached short flag・行継続を含む shell-pre-extracted body/branch、isolated cwd、hostile AGENTS/project config 非読込、web/shell/search tools 無効化、read-only/ephemeral validator、provider/privacy opt-in lifecycle、Structured Outputs subset、fail-closed deny、明示代替 Skills、Claude runtime 維持"
+          },
+          {
+            "path": "tests/test_codex_prompt_injection.py",
+            "covers": "Sol/Luna 共通の短い Codex SessionStart/SubagentStart prompt、Claude 固有語の非配送、Goal/Context/Boundaries/Done when 契約、POSIX injector、Codex 専用 manifest"
           }
         ],
         "components": [
           {
             "source": "hooks/hooks.json#/hooks/PreToolUse/0/hooks/0",
             "disposition": "adapted",
-            "codexReplacement": "hooks/scripts/codex-semantic-validator.sh",
-            "reason": "repo/worktree scoped の明示 opt-in 後だけ Claude type=agent prompt を hooks.json から抽出し、隔離した codex exec の ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
+            "codexReplacement": "codex/prompts/semantic-validator.md",
+            "reason": "repo/worktree scoped の明示 opt-in 後だけ、Codex 専用 semantic policy を developer role、shell-pre-extracted data を user request として階層分離した隔離 codex exec で評価し、ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
             "sourceDigest": "14e28de43db38e27a634743f341c99913a4b4af1149e478ffedb2086462abfde"
           },
           {
             "source": "hooks/hooks.json#/hooks/PreToolUse/0/hooks/1",
             "disposition": "adapted",
-            "codexReplacement": "hooks/scripts/codex-semantic-validator.sh",
-            "reason": "repo/worktree scoped の明示 opt-in 後だけ Claude type=agent prompt を hooks.json から抽出し、隔離した codex exec の ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
+            "codexReplacement": "codex/prompts/semantic-validator.md",
+            "reason": "repo/worktree scoped の明示 opt-in 後だけ、Codex 専用 semantic policy を developer role、shell-pre-extracted data を user request として階層分離した隔離 codex exec で評価し、ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
             "sourceDigest": "9956652d26bf01a9b3127cfee333ce5c866f9509e9f92c08426ac136f3963799"
           },
           {
             "source": "hooks/hooks.json#/hooks/PreToolUse/0/hooks/2",
             "disposition": "adapted",
-            "codexReplacement": "hooks/scripts/codex-semantic-validator.sh",
-            "reason": "repo/worktree scoped の明示 opt-in 後だけ Claude type=agent prompt を hooks.json から抽出し、隔離した codex exec の ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
+            "codexReplacement": "codex/prompts/semantic-validator.md",
+            "reason": "repo/worktree scoped の明示 opt-in 後だけ、Codex 専用 semantic policy を developer role、shell-pre-extracted data を user request として階層分離した隔離 codex exec で評価し、ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
             "sourceDigest": "d98f44419940c661498987f990c25a93b99e4fcb4699fef6c6d5fce379750f46"
           },
           {
             "source": "hooks/hooks.json#/hooks/PreToolUse/0/hooks/3",
             "disposition": "adapted",
-            "codexReplacement": "hooks/scripts/codex-semantic-validator.sh",
-            "reason": "repo/worktree scoped の明示 opt-in 後だけ Claude type=agent prompt を hooks.json から抽出し、隔離した codex exec の ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
+            "codexReplacement": "codex/prompts/semantic-validator.md",
+            "reason": "repo/worktree scoped の明示 opt-in 後だけ、Codex 専用 semantic policy を developer role、shell-pre-extracted data を user request として階層分離した隔離 codex exec で評価し、ok:true を無出力継続、ok:false を PreToolUse deny に変換します。",
             "sourceDigest": "7dc1aa84a3f679a8ea1dd58126ecbe978b67ffa9da7ceb9399b6ff50fc764959"
           },
           {
@@ -376,65 +385,93 @@
             "sourceDigest": "a23b1862a7921dd2daad8ae5ff3addf9ed5fd71b7994ed6a746c788dc4fe1345"
           }
         ],
-        "sourceTreeDigest": "679667f9312982c739c15e456305712910564c4c0de0e1c962c2a3826cf1ad89"
+        "sourceTreeDigest": "cbb00072e7739e170b834d9231f612a132e8e9f3088fcd65d12d2e155afd31b8"
       }
     },
     "ui-discipline": {
       "distribution": {
         "status": "available"
       },
-      "version": "0.3.0",
+      "version": "0.3.1",
       "versioning": {
         "claudeOnlyPaths": [],
-        "codexOnlyPaths": []
+        "codexOnlyPaths": [
+          "codex/"
+        ]
       },
       "displayName": "UI Discipline",
       "shortDescription": "UI 実装の共通化・a11y・layout 規律を常時配送",
       "defaultPrompt": [
         "UI discipline の規律と pattern を使ってフロントエンドを実装してください。"
       ],
+      "manifest": {
+        "hooks": "./codex/hooks.json"
+      },
       "compatibility": {
-        "level": "full",
-        "summary": "SessionStart/SubagentStart command hook と Skill を共有します。",
-        "limitations": [],
-        "guaranteeDifferences": [],
+        "level": "partial",
+        "summary": "10 個の rule ID と UI 判断基準を維持しつつ、GPT-5.6 Sol/Luna 向けの短い Goal/Context/Boundaries/Done when prompt と Codex native question/subagent semantics に書き換えて配送します。",
+        "limitations": [
+          "Codex prompt は Claude prompt と別ファイルで保守するため、文言や質問 UI の逐語一致は保証せず、10 rule ID と受入結果の等価性を adapter test の範囲で保証します。"
+        ],
+        "guaranteeDifferences": [
+          "Codex は codex/hooks.json から ${PLUGIN_ROOT} を使う command-only injector を読み、Claude 固有の AskUserQuestion・plugin root・SubagentStart 前置きを配送しません。",
+          "main agent では request_user_input が利用できる場合だけ上限内の 3 選択肢を使い、subagent は session prompt の後ろに置く override に従って未指定の open-ended visual direction を実装せず親 agent へ返します。"
+        ],
         "verificationTests": [
           {
             "path": "scripts/smoke_codex_marketplace.sh",
             "covers": "共有 Skill と lifecycle hook を含む plugin の Codex install surface"
+          },
+          {
+            "path": "tests/test_codex_prompt_injection.py",
+            "covers": "10 rule ID、Sol/Luna prompt、3-option question、subagent override ordering、8K 上限、POSIX injector、Codex 専用 manifest"
           }
         ],
         "components": [],
-        "sourceTreeDigest": "dcfb2d0502e1922f0a55e176e3c964af48fe4c86e8d1bb39cbab64d0ae908581"
+        "sourceTreeDigest": "983f5ab37e02f8c7444983c3c8829e3e06497026fd85c2eea9e5fdf46c4bab06"
       }
     },
     "natsuume-writing": {
       "distribution": {
         "status": "available"
       },
-      "version": "0.5.1",
+      "version": "0.5.2",
       "versioning": {
         "claudeOnlyPaths": [],
-        "codexOnlyPaths": []
+        "codexOnlyPaths": [
+          "codex/"
+        ]
       },
       "displayName": "Natsuume Writing",
       "shortDescription": "natsuume の文体規則で outline・draft・review を支援",
       "defaultPrompt": [
         "natsuume-writing の文体規則を使って技術文書を作成してください。"
       ],
+      "manifest": {
+        "hooks": "./codex/hooks.json"
+      },
       "compatibility": {
-        "level": "full",
-        "summary": "執筆ルール、3 Skills、SessionStart hook を同じファイルから共有します。",
-        "limitations": [],
-        "guaranteeDifferences": [],
+        "level": "partial",
+        "summary": "共有の執筆規則と 3 Skills は維持し、SessionStart だけを GPT-5.6 Sol/Luna 向けの短い Codex prompt と `$plugin:skill` 呼び出し表記へ適応します。",
+        "limitations": [
+          "Codex SessionStart prompt は共有 core-summary.md の逐語コピーではないため、常時注入文の完全一致は保証せず、詳細な媒体別規則は共有 Skills が読む writing-rules.md を正本とします。"
+        ],
+        "guaranteeDifferences": [
+          "Codex は codex/hooks.json と ${PLUGIN_ROOT} を使う専用 injector から執筆 core を受け取り、Claude slash command 表記を配送しません。",
+          "詳細な outline/draft/review の規律は共有 Skill が rules/writing-rules.md を読むため、媒体別文体契約は両 runtime で同じです。"
+        ],
         "verificationTests": [
           {
             "path": "tests/test_sync_codex_marketplace.py",
             "covers": "3 Skills が Claude Code と Codex の両 runtime surface を明示すること"
+          },
+          {
+            "path": "tests/test_codex_prompt_injection.py",
+            "covers": "Sol/Luna prompt、Codex Skill 名、非執筆時の非適用、8K 上限、POSIX injector、Codex 専用 manifest"
           }
         ],
         "components": [],
-        "sourceTreeDigest": "6df9414cf20d50fbc27855d5af882b369c6e79aa1297b82286579833461cd87e"
+        "sourceTreeDigest": "29dd98af4d35f6e4d32d9960ddbb08d96c07ea6e50c380c1ccdc1ed991476934"
       }
     },
     "codex-advisor": {

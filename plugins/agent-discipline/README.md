@@ -1,12 +1,19 @@
 # agent-discipline プラグイン
 
-Claude Code の振る舞い規律 (= agent としての discipline) を統合配送する system prompt plugin です。 旧 [decompose-bash](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/decompose-bash) と [auto-followthrough](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/auto-followthrough) を吸収し、 「物理層 + before / during / 排他 / 検知 / after」 の常時適用ルールをセッションのモデル (Fable / Sonnet) に応じて書き分けて additionalContext を注入します (v0.5.0)。
+Claude Code と Codex の振る舞い規律 (= agent としての discipline) を runtime ごとに配送する system prompt plugin です。旧 [decompose-bash](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/decompose-bash) と [auto-followthrough](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/auto-followthrough) を吸収しています。Claude Code には Fable / Sonnet 向けの既存規律を、Codex には GPT-5.6 Sol / Luna 向けに再設計した compact な developer context を注入します。
 
 ## バージョン
 
 v0.17.1
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### Codex v0.17.1 → v0.17.2 の変更点
+
+- Codex manifest を `codex/hooks.json` へ移し、SessionStart / SubagentStart から GPT-5.6 Sol / Luna 共通の native prompt を注入するようにした。Codex prompt は Goal / Context / Boundaries / Done when を先に示し、依頼種別に応じた自律範囲、判断境界、検証、subagent 契約を短く明示する
+- Claude Code 固有の Fable / Sonnet 分岐、`AskUserQuestion`、Claude の auto mode、環境変数、強制的な TDD フェーズ、依頼されていない claim / push / PR 操作、Codex 配布対象外 plugin への依存を Codex 注入文から除外した。ユーザー判断は Codex で利用可能な `request_user_input`、または通常の短い質問へ読み替える
+- semantic validator は Claude の inline prompt を流用せず、`codex/prompts/semantic-validator.md` を developer instructions の正本として、untrusted hook payload と instruction hierarchy を分離する。nested model は既定で `gpt-5.6-sol`、必要な場合だけ `AGENT_DISCIPLINE_CODEX_MODEL=gpt-5.6-luna` を許可する
+- Claude Code の配布物・version は変更せず、Codex version だけを patch bump した
 
 ### v0.17.0 → v0.17.1 の変更点
 
@@ -183,9 +190,9 @@ agent-discipline v0.5.0 再設計 (親 issue #173) の実装です。
 
 ## 概要
 
-Claude Code に「個人の開発スタイル」 を一括で適用するための plugin です。 機能ごとに別 plugin に分けず、 1 plugin 内に複数のルール群を集約することで、 個人 marketplace の plugin 数肥大化を抑えます。
+Claude Code と Codex に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
 
-注入される規律は次のレイヤに分かれます (v0.5.0 でモデル別 2 ファイル分離 + one-shot 補正を追加):
+次の表は Claude Code 側の既存配送設計です (v0.5.0 でモデル別 2 ファイル分離 + one-shot 補正を追加)。Codex はこの配送構造や Claude 固有 tool 名を複製せず、表の意図を Codex native prompt と command adapter へ写像します。
 
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
@@ -194,10 +201,12 @@ Claude Code に「個人の開発スタイル」 を一括で適用するため�
 | **during 系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` の無い旧形式 claim は他 session 扱いで削除禁止、 v0.14.0) |
 | **モデル判定 / 分割配送** (v0.5.0 新設、分業規律の連結配送は v0.8.0/v0.9.0、issue #236 (v0.15.0) で要素分割に再設計) | `SessionStart` (inject-always.sh の fallback chain、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh / resolve-model-on-prompt.sh) | 常時 (各要素は at-most-once、判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し `always-fable.md` / `always-sonnet-1.md` を出し分けて SessionStart で part 1 のみ注入する。残りの part (`always-sonnet-2.md` / `always-sonnet-3.md`) と分業規律 (discipline-\*.md、モデル別) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (8K 閾値超過を避けるための分割、詳細は `inject-always.sh` ヘッダの配送マトリクス参照)。判定不能時は自己ゲート付きで暫定配送し、後続の `UserPromptSubmit` で transcript から確定したら常時ルール確定版 (resolve-model-on-prompt.sh) と分業規律確定版 (inject-discipline.sh) をそれぞれ 1 度だけ再注入する |
-| **検知系 (gh issue/pr body)** (v0.4.0、Closes 検証 Step は v0.7.0) | `PreToolUse`。Claude は hooks.json inline `type: agent` 4 entries、Codex は同 prompt を使う command adapter | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない。Codex は repo/worktree scoped opt-in が有効な場合のみ nested model を起動し、既定は対象 command を deny | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。Claude は claude-sonnet-5 pin、Codex は明示同意後に read-only / ephemeral 別 process (保証差は後述) |
+| **検知系 (gh issue/pr body)** (v0.4.0、Closes 検証 Step は v0.7.0) | `PreToolUse`。Claude は hooks.json inline `type: agent` 4 entries、Codex は native semantic prompt を使う command adapter | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない。Codex は repo/worktree scoped opt-in が有効な場合のみ nested model を起動し、既定は対象 command を deny | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。Claude は claude-sonnet-5 pin、Codex は明示同意後に read-only / ephemeral 別 process (保証差は後述) |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | Claude: `permission_mode == "auto"`。Codex: hook から Auto を判別できないため自動注入なし (`auto-codex` Skill が明示代替) | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、Claude auto セッションで `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。Codex では permission mode から Auto を証明できないためこの hook は no-op とし、`auto-codex` Skill が明示 workflow 内で同じ確認意図を担います。
+
+Codex v0.17.2 は `codex/hooks.json` から SessionStart と SubagentStart にそれぞれ専用 prompt を注入します。どちらも GPT-5.6 Sol / Luna 共通で、Goal / Context / Boundaries / Done when と、Codex の approval・sandbox・tool surface に合わせた判断境界を result-first に記述しています。PreToolUse の semantic validator も Codex 専用 prompt を使い、Claude の長い inline prompt や tool 名を developer context へ混在させません。
 
 ## インストール
 
@@ -417,21 +426,21 @@ v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh 
 
 **イベント**: `PreToolUse`
 
-**matcher**: `Bash` (`hooks.json` の既存 Bash group に `type: command` handler として追加)
+**matcher**: `Bash` (`codex/hooks.json` の `PreToolUse` command handler)
 
-Codex manifest は command-only の `hooks/codex-hooks.json` を明示参照するため、未対応の `type: agent` handler を runtime discovery しない。command adapter は Claude の `hooks/hooks.json` にある 4 本の inline prompt を正本として再利用する。Codex の turn-scoped hook input で必須の extension `turn_id` が非空の場合だけ動作し、`turn_id` を持たない Claude Code input では無音 `exit 0` するので、Claude 側の `if` filter・model pin・60 秒 timeout・prompt 本文・allow/deny セマンティクスは変更しない。`CLAUDE_PLUGIN_ROOT` は両 runtime が設定しうるため runtime 判定には用いない。
+Codex manifest は command-only の `codex/hooks.json` を明示参照するため、未対応の `type: agent` handler を runtime discovery しない。command adapter は `codex/prompts/semantic-validator.md` を Codex 側の正本として使い、Claude の `hooks/hooks.json` にある 4 本の inline prompt は読み込まない。Codex の turn-scoped hook input で必須の extension `turn_id` が非空の場合だけ動作し、`turn_id` を持たない Claude Code input では無音 `exit 0` するので、Claude 側の `if` filter・model pin・60 秒 timeout・prompt 本文・allow/deny セマンティクスは変更しない。
 
 Codex 側の処理は次のとおり:
 
 1. `tool_input.command` が literal head で `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` のいずれかに一致する場合だけ起動する。無関係な Bash、env prefix、`cd ... &&` 等の compound 経路は既存 prompt の Step 0 と同じく対象外
 2. hook input の `cwd` を Git worktree として解決し、absolute git dir 配下の `.agent-discipline-codex-semantic-validator/enabled` marker を検証する。marker が無い既定状態、Git worktree 外、symlink / 非 regular / owner・mode・content 不正のいずれでも、nested Codex を起動せず対象 command を明瞭な理由付きで `deny` する
-3. opt-in が有効な場合だけ `hooks.json` から対応する `type: agent` entry を `.if` で一意に抽出し、末尾の `$ARGUMENTS` placeholder だけを hook input JSON に置換する。禁止カテゴリや Closes 検証の Codex 用複製は持たない
-4. `codex exec --sandbox read-only --ephemeral --disable hooks --ignore-user-config --ignore-rules --output-schema ...` を独立 process で起動する。`--disable hooks` と再入 guard env の二段で再帰を防ぎ、親の model/config/rules による prompt drift を避ける。Structured Outputs schema は `ok` と nullable `reason` の全 property を required にする対応 subset だけを使い、`ok:true ⇔ reason:null` / `ok:false ⇔ 非空 reason` の条件は shell の `jq` 検証で強制する (`--ignore-user-config` でも認証 state は維持される)
-5. `ok:true` は stdout 無出力の成功 (= 通常の approval policy を短絡せず tool call を継続)、`ok:false` は `reason` 付き PreToolUse `deny` に変換する。Codex の `permissionDecision:allow` は `updatedInput` を伴う書換え hook 用で、semantic pass に使うと unsupported になるため返さない。opt-in 後の対象 command で codex CLI 不在、cwd/config/schema 欠落、prompt 抽出 drift、exec failure、55 秒 timeout、不正応答が起きた場合は明瞭な理由を付けて fail-closed `deny` にする。nested process は Linux/macOS 共通の Bash monitor mode で専用 process group に置き、timeout・signal 時は descendant を含む group 全体を TERM → grace → KILL して leader を `wait` する
+3. opt-in が有効な場合だけ shell adapter が literal command を `eval` 無しで tokenize し、inline body または明示された regular readable `--body-file`、current branch を payload `cwd` 基準で事前取得する。attached short flag と shell の行継続も解釈し、compound / redirection / heredoc / command substitution / 不均衡 quote / unreadable file は nested model 起動前に fail-closed で deny する。取得結果と完全な hook input は user request 内の JSON untrusted data とし、nested model 自身には repository file を読ませない
+4. `codex exec --sandbox read-only --ephemeral --disable hooks --ignore-user-config --ignore-rules --strict-config --skip-git-repo-check --model gpt-5.6-sol --output-schema ...` を、repository 外の一時 directory を cwd とする独立 process で起動する。Codex native policy は `developer_instructions` config から developer role へ配置し、body 内の命令より上位に固定する。`project_doc_max_bytes=0` / `project_root_markers=[]` で global・project `AGENTS.md` と project config の発見経路を閉じ、`web_search="disabled"` で network search を無効化する。shell / unified exec / local search / tool search も feature flag で無効化し、nested model は事前取得済み JSON のみを判定する。既定は推論量を要する semantic 判定向けの Sol で、明示的に `AGENT_DISCIPLINE_CODEX_MODEL=gpt-5.6-luna` を設定した場合だけ Luna を使う。`--disable hooks` と再入 guard env の二段で再帰を防ぐ。Structured Outputs schema は `ok` と nullable `reason` の全 property を required にする対応 subset だけを使い、`ok:true ⇔ reason:null` / `ok:false ⇔ 非空 reason` の条件は shell の `jq` 検証で強制する (`--ignore-user-config` でも認証 state は維持される)
+5. `ok:true` は stdout 無出力の成功 (= 通常の approval policy を短絡せず tool call を継続)、`ok:false` は `reason` 付き PreToolUse `deny` に変換する。Codex の `permissionDecision:allow` は `updatedInput` を伴う書換え hook 用で、semantic pass に使うと unsupported になるため返さない。opt-in 後の対象 command で codex CLI 不在、cwd/config/schema/prompt 欠落、exec failure、55 秒 timeout、不正応答が起きた場合は明瞭な理由を付けて fail-closed `deny` にする。nested process は Linux/macOS 共通の Bash monitor mode で専用 process group に置き、timeout・signal 時は descendant を含む group 全体を TERM → grace → KILL して leader を `wait` する
 
 **provider/privacy opt-in**:
 
-推奨経路は `$agent-discipline:setup-codex-semantic-validator` Skill である。Skill は helper の `inspect` 結果に含まれる disclosure (送信対象、nested provider/model 差、永続範囲) をユーザーへ提示し、その turn で明示承認を得た後だけ action-specific token を `enable` / `disable` に渡す。token 自体は fresh inspection の証拠であって、ユーザー承認の代わりではない。
+推奨経路は `$agent-discipline:setup-codex-semantic-validator` Skill である。Skill は helper の `inspect` 結果に含まれる disclosure (送信対象、nested provider 差、Sol/Luna model 制約、隔離境界、永続範囲) をユーザーへ提示し、その turn で明示承認を得た後だけ action-specific token を `enable` / `disable` に渡す。token 自体は fresh inspection の証拠であって、ユーザー承認の代わりではない。
 
 helper を直接使う場合も `inspect → disclosure の確認・承認 → token 付き mutation → inspect` の順序を守る:
 
@@ -445,11 +454,12 @@ marker は Git worktree ごとの absolute git dir にある helper-owned `0700`
 
 **保証差**:
 
-- Claude は `claude-sonnet-5` に pin された hook agent、Codex は user config を無視した独立 process の default provider/model を使う。親 Codex session と nested process の provider/model が同じ保証もなく、同一 canonical prompt でも model family・provider・verdict の完全一致は保証しない
+- Claude は `claude-sonnet-5` に pin された hook agent、Codex は user config を無視した独立 process で `gpt-5.6-sol` または `gpt-5.6-luna` を使う。親 Codex session と nested process の provider/model が同じ保証はなく、runtime 別 prompt と model family が異なるため verdict の完全一致も保証しない
+- Codex nested process は repository 外の一時 cwd で project document discovery を無効化し、hook・rules・user/project config・web search・shell/search tool を読み込まない。repository の `AGENTS.md` や `.codex/config.toml` は validator policy を上書きできない。policy は developer role、shell adapter が事前取得した inline/body file・branch・hook payload は user request の JSON data として階層分離する
 - Codex は明示 opt-in が無い限り scoped な 4 command を deny し、nested process を起動しない。marker が保証するのは「当該 worktree owner が disclosure 後の有効化操作を行った」ことだけで、送信先 provider/model の同一性やデータ取扱いを保証しない
-- opt-in 後は hook payload (inline issue/PR body を含む) と、canonical prompt が読む `--body-file` 内容が nested process の provider へ送られうる。read-only sandbox はローカルファイル変更を禁止するだけで外部送信を防ぐ保証ではない
+- opt-in 後は hook payload (inline issue/PR body を含む) と、Codex native prompt が読む `--body-file` 内容が nested process の provider へ送られうる。read-only sandbox はローカルファイル変更を禁止するだけで外部送信を防ぐ保証ではない
 - Codex adapter は別 process の起動時間・トークン・rate limit を消費し、正常系にも追加 latency がある。読み取り可能範囲は実行中 nested Codex の sandbox/config に従う
-- `--body-file PATH` は read-only process が読める場合のみ検証できる。対象 command で process 自体が失敗した場合は deny する一方、editor/stdin/compound 経路を prompt が `ok:true` とする既存の可視性境界は Claude と同じ
+- `--body-file PATH` は shell adapter が regular readable file として取得できる場合のみ検証できる。editor / stdin 経路は visibility 外として通過し、compound / redirection / heredoc / dynamic expansion は安全に pre-extract できないため nested model を起動せず deny する
 - `jq` が無い場合は対象 command を安全に同定・JSON 応答できないため command adapter は無音終了する。この一点は fail-closed ではなく、既存誘導層だけへ縮退する
 
 #### block-fable-subagent (v0.8.0 新設)
@@ -598,7 +608,7 @@ v0.3.0 までは `additionalContext` 注入のみで Claude の自発的な遵�
 | レイヤ | 機構 | 効き目 | 対象 leak 経路 |
 |---|---|---|---|
 | 誘導層 | SessionStart で additionalContext 注入 | Claude が自発的に self-check する確率を上げる | issue body / PR 説明 / plan / commit message / 実装コード (= 全 leak 経路) |
-| 検知層 (v0.4.0、Codex adapter 追加) | Claude: PreToolUse type:agent hook 4 entries。Codex: repo/worktree scoped opt-in 後に同じ inline prompt を read-only `codex exec` で評価する command adapter | `gh issue/pr create/edit` 経路の物理 intercept (誘導層の取りこぼし防止)。literal head prefilter により非該当 Bash では model を起動しない。Codex は未同意時に対象 command を deny し nested model を起動しない | `gh issue create/edit` / `gh pr create/edit` のうち `--body inline` / `--body-file PATH` 形式 |
+| 検知層 (v0.4.0、Codex adapter 追加) | Claude: PreToolUse type:agent hook 4 entries。Codex: repo/worktree scoped opt-in 後に Codex native semantic-validator prompt を read-only `codex exec` で評価する command adapter | `gh issue/pr create/edit` 経路の物理 intercept (誘導層の取りこぼし防止)。literal head prefilter により非該当 Bash では model を起動しない。Codex は未同意時に対象 command を deny し nested model を起動しない | `gh issue create/edit` / `gh pr create/edit` のうち `--body inline` / `--body-file PATH` 形式 |
 
 検知層は対象範囲を限定的にしています (= `gh api` 直接叩き / editor 起動経路 / 実装コード内のコメント等は cover しない)。 これは誘導層 (= Claude の自発遵守) を主、 検知層を補助とする非対称設計です。 全 leak 経路を物理層で塞ぐと regex / semantic 判定の網羅が困難になり false positive / false negative が増えるため、 「Claude 自身に最も書きやすい経路 (`gh issue/pr create/edit`)」 だけを物理 catch する戦略を採っています。
 
@@ -610,9 +620,17 @@ v0.3.0 までは `additionalContext` 注入のみで Claude の自発的な遵�
 agent-discipline/
 ├── .claude-plugin/
 │   └── plugin.json
+├── codex/
+│   ├── hooks.json
+│   ├── prompts/
+│   │   ├── semantic-validator.md
+│   │   ├── session.md
+│   │   └── subagent.md
+│   └── scripts/
+│       ├── inject-session.sh
+│       └── inject-subagent.sh
 ├── hooks/
 │   ├── hooks.json
-│   ├── codex-hooks.json
 │   ├── schemas/
 │   │   └── codex-semantic-validator-output.schema.json
 │   ├── prompts/
@@ -697,7 +715,7 @@ agent-discipline/
 - **検知層は公式ドキュメント上 experimental な type:agent hook に依存** (#153、v0.7.0): PreToolUse `type: agent` hook は Claude Code 公式ドキュメントで experimental (実験的機能) と位置付けられており、 将来の仕様変更で挙動が変わる、 または廃止される可能性がある。 検知層全体 (4 entries すべて) がこの機能に依存しているため、 仕様変更時は検知層が機能しなくなりうる (= その場合は誘導層のみが防衛する状態に自然縮退する。 fail-open 設計のため縮退時に semantic 誤 block が発生することはない)
 - **検知層の model pin は手動メンテナンス**: Claude Code 自体の session model を upgrade した場合 (例: sonnet-5 → sonnet-6)、 `hooks/hooks.json` の `model` field も手動同期しないと SPOF 構造が再来する (= 古い model のみダウン時に hook だけ落ちる経路が復活)
 - **Codex Auto preset は hook input から検出不能**: Codex の `permission_mode=default` は複数 approval policy に対応し sandbox 状態も表さない。`acceptEdits` / `dontAsk` / `bypassPermissions` も Claude auto と同じ権限意味ではないため、Codex runtime では after 系と未コミット分類 hook を全 mode で no-op にする。`auto-codex` Skill は follow-through の意図だけを明示代替し、現在の sandbox / approval policy を強化も迂回もせず、外部操作の scope を拡張しない
-- **Codex semantic validator は provider/privacy opt-in が必要**: 未同意・Git worktree 外・marker 不正時は 4 つの literal gh command を deny し nested Codex を起動しない。opt-in 後も nested process が親と同じ provider/model を使う保証はなく、payload / `--body-file` 内容が別 provider へ送信されうる。marker は owner-only regular file であることと明示 enable state だけを保証し、provider identity や verdict equality は保証しない
+- **Codex semantic validator は provider/privacy opt-in が必要**: 未同意・Git worktree 外・marker 不正時は 4 つの literal gh command を deny し nested Codex を起動しない。opt-in 後も nested process が親と同じ provider/model を使う保証はなく、payload / `--body-file` 内容が別 provider へ送信されうる。nested model は既定で `gpt-5.6-sol`、明示設定時だけ `gpt-5.6-luna` を使う。marker は owner-only regular file であることと明示 enable state だけを保証し、provider identity や verdict equality は保証しない
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **`model` フィールド欠落条件は compaction 後が公式未記載** (v0.5.0、#174 V3 実測調査): 公式ドキュメントは `/clear` 後と conversation recovery でセッションが復元された場合の 2 つを model 欠落条件として明記するが、`SessionStart (source=compact)` 時の扱いは明記していない (欠落しない保証も無い)。いずれの場合も fallback chain (transcript 解析 → state file) が source 非依存に欠落を吸収するため、実装上の場合分けは発生しない
 - **セッション途中の `/model` 切替は次の SessionStart まで反映されない** (#157 と同型の制約。v0.8.0 で統合した `block-fable-subagent.sh` も同種の制約を持つ、本セクション内の該当項目を参照): fallback chain の判定は `SessionStart` (startup / resume / clear / compact) でのみ行われるため、`/model` で切替えても注入済みプロンプトは次の SessionStart まで旧モデル向けのまま。次の SessionStart では、`.model` があればその値で、無くても transcript に切替後の main-chain assistant 行があれば transcript 解析 (fallback chain 2 段目) で新モデルが反映される。transcript も空 / 読めない場合に限り state file キャッシュに落ちるため、その経路でのみ旧モデル向け注入が継続しうる
@@ -719,7 +737,7 @@ Codex adapter の自動検証は `tests/test_agent_discipline_codex_adapter.py` 
 - `turn_id` の無い Claude runtime input では対象 command でも command adapter が無出力で、Codex process を起動しない
 - Codex 対象 command は opt-in 未設定時に scoped deny となり、fake Codex process を一度も起動しない。helper の inspect → fresh token → enable → fresh token → disable lifecycle、marker の owner/mode、stale token も検証する
 - symlink・directory (非 regular)・owner-only でない mode の marker は helper が上書きも削除もせず拒否する
-- 4 本の Claude `type: agent` prompt が残り、adapter が対応 prompt の**最後の** `$ARGUMENTS` だけを実 payload に置換する。read-only / ephemeral / hooks-disabled / output-schema flags も確認する
+- 4 本の Claude `type: agent` prompt は Claude 側に残したまま、adapter が Codex native policy を developer role、matched operation と untrusted hook payload を user request として分離して nested process へ渡す。read-only / ephemeral / hooks-disabled / output-schema flags、isolated cwd、project document 無効化、web search 無効化、既定 Sol と明示 Luna model も確認する
 - `{ "ok": true, "reason": null }` が stdout 無出力の継続、`{ "ok": false, "reason": ... }` が PreToolUse deny に変換され、codex CLI 不在・exec failure・timeout・schema 不適合応答が deny になる。schema の全 properties が required で、条件 schema 等の非対応 keyword を含まないことも構造検査する
 - 無関係な Bash は model process を起動しない
 - permission adapter は Claude の `auto` 限定挙動を維持し、Codex は `auto` / `default` / `acceptEdits` / `dontAsk` / `bypassPermissions` / `plan` をすべて no-op にする。未コミット検査でも同じ境界を確認し、明示代替 Skills が provider disclosure・approval token・sandbox/scope 非拡張を記載することを検査する
@@ -729,12 +747,15 @@ Codex adapter の自動検証は `tests/test_agent_discipline_codex_adapter.py` 
 ローカルでは次を実行する:
 
 ```bash
-python3 -m unittest tests.test_agent_discipline_codex_adapter
+python3 -m unittest tests.test_codex_prompt_injection tests.test_agent_discipline_codex_adapter
 plugins/agent-discipline/scripts/lint-prompt-sync.sh
 ```
 
-前者は runtime adapter、provider/privacy opt-in、Structured Outputs subset、permission mode の保証差を扱う境界テスト、後者はモデル別 rule ID、4 本の正本 prompt の共通ブロック、`gh pr create` 固有 Closes block の構造検査である。LLM の semantic 判定品質、Claude model と Codex model の同一 verdict、親/nested Codex の provider identity、Skill 指示の完全遵守は決定論的 CI では保証せず、prompt 同一性・入出力契約・安全側 state transition を検証対象とする。
+unittest は Codex prompt の構造・サイズ・禁止された Claude 固有語、runtime adapter、provider/privacy opt-in、Structured Outputs subset、permission mode の保証差を扱う。lint は Claude Code のモデル別 rule ID、4 本の正本 prompt の共通ブロック、`gh pr create` 固有 Closes block の構造を検査する。LLM の semantic 判定品質、Claude model と Codex model の同一 verdict、親/nested Codex の provider identity、Skill 指示の完全遵守は決定論的 CI では保証せず、runtime 別 prompt 契約・入出力契約・安全側 state transition を検証対象とする。
 
 ## 関連情報
 
 - [Claude Code Hooks ドキュメント](https://code.claude.com/docs/en/hooks)
+- [Codex Prompting](https://learn.chatgpt.com/docs/prompting)
+- [Codex Hooks](https://learn.chatgpt.com/docs/hooks)
+- [Codex Models](https://learn.chatgpt.com/docs/models)

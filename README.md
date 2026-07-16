@@ -43,9 +43,9 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [pre-push-review](#pre-push-review) | 3.1.4 | — | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
 | [update-default-branch](#update-default-branch) | 0.3.0 | 0.3.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.9.0 | 0.9.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
-| [agent-discipline](#agent-discipline) | 0.17.1 | 0.17.1 | 作業規律を SessionStart / SubagentStart hook で配送し、gh issue/pr body の未承認推奨表現を PreToolUse で検知する。Codex では semantic validator の provider/privacy 明示 opt-in と、Auto 検出不能を補う明示 follow-through Skill を提供 |
-| [ui-discipline](#ui-discipline) | 0.3.0 | 0.3.0 | UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う |
-| [natsuume-writing](#natsuume-writing) | 0.5.1 | 0.5.1 | natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する |
+| [agent-discipline](#agent-discipline) | 0.17.1 | 0.17.2 | 作業規律を runtime 別の SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知する。Codex は GPT-5.6 Sol / Luna native prompt、provider/privacy 明示 opt-in、明示 follow-through Skill を提供 |
+| [ui-discipline](#ui-discipline) | 0.3.0 | 0.3.1 | UI 実装の 10 規律を runtime 別の SessionStart / SubagentStart prompt で常時注入するプラグイン。Codex は GPT-5.6 Sol / Luna の質問・subagent semantics へ適応し、具体例は ui-patterns Skill が提供する |
+| [natsuume-writing](#natsuume-writing) | 0.5.1 | 0.5.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン。Codex は GPT-5.6 Sol / Luna native prompt と `$plugin:skill` 表記を使い、outline / draft / review の共有 Skills へ接続する |
 | [codex-advisor](#codex-advisor) | 0.3.0 | — | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミング・助言の扱い・`/codex:rescue` の thread 選択自律化 (迷ったら `--fresh`) を含む codex 利用規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.3.0 | 0.3.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.2.0 | 0.2.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
@@ -232,7 +232,9 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 ## agent-discipline
 
-Claude Code の振る舞い規律 (= agent としての discipline) を統合配送する system prompt plugin + gh issue/pr 物理層検知です。 旧 `decompose-bash` と `auto-followthrough` を吸収し、 「物理層 + before / during / 排他 / 検知 / after」 の 6 段構成 (v0.4.0 で検知層を追加) で `additionalContext` の注入と `PreToolUse type:agent hook` での semantic 検証を提供します。 個人 marketplace の plugin 数肥大化を抑えるため、 機能ごとに別 plugin に分けず 1 plugin 内に複数のルール群を集約しています。
+Claude Code / Codex の振る舞い規律 (= agent としての discipline) を runtime 別に配送する system prompt plugin + gh issue/pr 物理層検知です。旧 `decompose-bash` と `auto-followthrough` を吸収し、個人 marketplace の plugin 数肥大化を抑えるため、機能ごとに別 plugin に分けず 1 plugin 内に複数のルール群を集約しています。
+
+以下の 6 レイヤと v0.4.0 以降の説明は Claude Code 正本の配送設計です。Codex v0.17.2 はこれを逐語移植せず、GPT-5.6 Sol / Luna 向けの Goal / Context / Boundaries / Done when、依頼種別ごとの自律範囲、判断境界、検証、subagent 契約へ再構成します。
 
 v0.4.0 で PreToolUse `type:agent` hook を追加し、 `gh (issue|pr) (create|edit)` の body content をセクション 2.1 / 3.1 の禁止表現規範で semantic 検証する **検知層** を新設しました。 `--body inline` と `--body-file PATH` の両形式に対応 (`block-commit-lint` plugin が PR body に `--body-file` を強制している repo policy との整合上、 ファイル読み取りが必要なため `type: agent` を採用)。 `model` は明示的に `claude-sonnet-5` (= 実装系メインセッションおよび全 subagent と同系列) に pin し、 各 hook の `if: "Bash(gh <cmd>:*)"` filter (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) で 4 entries (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) に分割した hook config 段階の物理 prefilter と組み合わせて、 旧 `llm-default-branch-push-poc` 廃止教訓の非対称 SPOF (= 全 Bash 発火の hook が暗黙 default = haiku ダウン時に全 Bash を PreToolUse error にする経路) を構造的に排除しました。 非該当 Bash 呼び出し (= `ls` / `git status` / `rg` / `gh issue view` 等の大半) では agent subagent がそもそも起動しません。 これにより誘導層 (v0.3.0 までの additionalContext 注入) と検知層 (v0.4.0 の物理 intercept) の defense-in-depth が成立しています。
 
@@ -251,7 +253,7 @@ v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定�
 
 加えて、 auto mode セッションの `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
 
-Codex は Claude の `type: agent` hook を実行しないため、Codex manifest は command-only の `hooks/codex-hooks.json` を明示参照します。command adapter は Claude の `hooks/hooks.json` にある inline prompt を正本として読み、4 つの `gh issue/pr create/edit` を semantic 判定します。nested `codex exec --ignore-user-config` は親と異なる provider/model へ body を送る可能性があるため既定では対象 command を deny し、`$agent-discipline:setup-codex-semantic-validator` の repository/worktree 単位の明示 opt-in 後だけ実行します。また Codex hook の `permission_mode` から Auto preset は一意に判別できないため after 系の自動注入は行わず、ユーザーが `$agent-discipline:auto-codex` を明示した task だけ、現在の sandbox/approval と依頼 scope 内で follow-through の意図を代替します。
+Codex manifest は command-only の `codex/hooks.json` を参照します。SessionStart / SubagentStart は Claude 固有の Fable / Sonnet 分岐、`AskUserQuestion`、auto mode、環境変数を含まない Codex native prompt を配送します。PreToolUse command adapter は `codex/prompts/semantic-validator.md` を developer instructions の正本にして 4 つの `gh issue/pr create/edit` を semantic 判定し、nested model は既定で `gpt-5.6-sol`、明示設定時だけ `gpt-5.6-luna` を使います。policy は developer role、shell adapter が事前取得した body / branch / hook payload は user request の untrusted JSON として階層分離します。nested process は repository 外の一時 cwd で project document / config、web search、shell/search tools を無効化するため、対象 repository の `AGENTS.md` は validator policy を上書きできません。親と異なる provider へ body を送る可能性があるため既定では対象 command を deny し、`$agent-discipline:setup-codex-semantic-validator` の repository/worktree 単位の明示 opt-in 後だけ実行します。外部操作はユーザー依頼 scope に含まれる場合だけ行い、`$agent-discipline:auto-codex` は明示呼び出し時に現在の sandbox / approval 内で follow-through の意図を追加します。
 
 ### 機能
 
@@ -260,7 +262,7 @@ Codex は Claude の `type: agent` hook を実行しないため、Codex manifes
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
 | `inject-always` | SessionStart | 常時適用ルール (物理層 + before 系 + closing keyword 規約 + during 系 + 排他系) を `additionalContext` として一括注入する。 内訳: (1) Bash 分解、 (2) 設計 / 仕様事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) と自己検知トリガー 8 項目 / 名指し禁止表現 (v0.3.0)、 (3) issue 詳細化と body 全埋め込み規約 + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出 + PR / plan / commit へも同規律適用 (3.1 / 3.2、 v0.3.0)、 (4) issue 粒度と sub-issue + `#N` 関係性、 (5) PR closing keyword、 (6) 自律作業中の判断境界、 (7) 連続 issue 解決時の claim comment + branch push 排他制御 |
-| **(inline) type:agent hook × 4 + Codex command adapter** | PreToolUse (matcher: Bash) | Claude は4本の pinned agent hook、Codex は同じ canonical prompt を独立 read-only process で評価する。Codex は provider/privacy opt-in が無い既定状態では対象4 commandだけを denyし、無関係なBashではmodelを起動しない |
+| **(inline) type:agent hook × 4 + Codex command adapter** | PreToolUse (matcher: Bash) | Claude は4本の pinned agent hook、Codex は native semantic prompt を独立 read-only process で評価する。Codex は provider/privacy opt-in が無い既定状態では対象4 commandだけを denyし、無関係なBashではmodelを起動しない |
 | `inject-auto` | UserPromptSubmit | Claude の `permission_mode == "auto"` 時だけ after 系を注入する。Codex は Auto 判別不能のため全 mode で no-op とし、明示 Skill に分離 |
 | `check-uncommitted-on-session-start` | UserPromptSubmit (session 内初回のみ) | Claude auto で未コミット変更を4分類する。Codex は permission mode を根拠にせず no-op、明示 Skill が同じ確認意図を担う |
 
@@ -271,7 +273,7 @@ Codex は Claude の `type: agent` hook を実行しないため、Codex manifes
 | `$agent-discipline:setup-codex-semantic-validator` | provider/payload disclosure を提示し、fresh action token と当該 turn の明示承認で worktree 固有 validator marker を enable/disableする |
 | `$agent-discipline:auto-codex` | Auto権限を仮定・付与せず、現在のsandbox/approvalとユーザー依頼scope内だけで実装・検証・必要なdeliveryを完遂する意図代替 |
 
-保証差と fixture は plugin README および [Codex compatibility](docs/codex-compatibility.md) に集約しています。schema/opt-in/permission-modeを含む adapter contract は `tests/test_agent_discipline_codex_adapter.py` が検証しますが、LLM verdict の Claude/Codex 一致やprovider identityは保証しません。
+保証差と fixture は plugin README および [Codex compatibility](docs/codex-compatibility.md) に集約しています。prompt 構造は `tests/test_codex_prompt_injection.py`、schema / opt-in / permission-mode を含む adapter contract は `tests/test_agent_discipline_codex_adapter.py` が検証しますが、LLM verdict の Claude/Codex 一致や provider identity は保証しません。
 
 ### 統合経緯 (旧 plugin との関係)
 
@@ -298,7 +300,7 @@ Codex は Claude の `type: agent` hook を実行しないため、Codex manifes
 
 UI (フロントエンド) 実装時の規律を配送するプラグインです。UI を持つプロジェクトでのみ enable して使います。共通化すべきか / 表示・非表示をどう決めるか / レイアウトが崩れないか、といった UI 実装で繰り返し発生する判断基準を 10 ルールとして常時配送し、判断のぶれによる重複 component や CLS (Cumulative Layout Shift)、a11y 欠落を防ぎます。
 
-常時注入層 (`SessionStart`) が 10 ルールのコンパクト版 (意図 + 短い指示 + 境界) を配送し、ui-patterns skill が対応する具体的なコード例・チェックリストを提供する 2 層構成です。加えて `SubagentStart` (Claude Code 2.0.43+) で同一の 10 ルールに subagent 向け前置き注記を連結して全 subagent にも注入します — 分業規律では実装は subagent へ委任されるため、UI 実装の実作業者に規律が届く必要があります。subagent には AskUserQuestion が無いため、前置き注記が rule:visual-direction の「ユーザの選択を得る」をエスカレーションに読み替えます。UI 実装規律は UI を持つプロジェクトでのみ意味を持つため agent-discipline には統合せず、plugin の enable 単位をそのまま適用範囲の単位とする独立 plugin としています。10 ルールはモデルに依存しない UI 実装上の判断基準であるため、モデル別の prompt 分岐は持ちません。
+常時注入層 (`SessionStart`) が 10 ルールの compact 版を配送し、ui-patterns Skill が具体的なコード例・チェックリストを提供する 2 層構成です。Claude Code は `hooks/prompts/ui-rules.md` と subagent 前置き、Codex v0.3.1 は GPT-5.6 Sol / Luna 共通の `codex/prompts/session.md` と `subagent.md` を使います。Codex main agent は `request_user_input` が利用できる場合だけ構造化質問を使い、subagent は未決定の open-ended visual direction を実装せず親 agent へ返します。UI 実装規律は UI を持つプロジェクトでのみ意味を持つため agent-discipline には統合せず、plugin の enable 単位をそのまま適用範囲の単位としています。
 
 ### 機能
 
@@ -306,14 +308,14 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-ui-rules` | SessionStart | `hooks/prompts/ui-rules.md` の全文を `additionalContext` として常時注入する。モデル判定・permission_mode 判定等の条件分岐は持たない |
-| `inject-ui-rules-subagent` | SubagentStart | 同一の `ui-rules.md` に subagent 向け前置き注記 (`ui-rules-subagent-preamble.md`) を連結して全 subagent 起動時に注入する。注記中の ui-patterns SKILL.md への参照パスは注入時に絶対パスへ解決する (Claude Code 2.0.43+) |
+| `inject-ui-rules` / Codex `inject-session` | SessionStart | runtime 別 prompt から同じ 10 rule ID を `additionalContext` として常時注入する |
+| `inject-ui-rules-subagent` / Codex `inject-subagent` | SubagentStart | Claude は前置き注記 + 共通 prompt、Codex は session prompt + native subagent override の順に連結し、未決定の視覚方向を親 agent へ戻す |
 
 #### Skills
 
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
-| ui-patterns | `/ui-patterns` | 常時注入される 10 ルールに対応する具体的なコード例・チェックリストを提供する |
+| ui-patterns | Claude: `/ui-patterns` / Codex: `$ui-discipline:ui-patterns` | 常時注入される 10 ルールに対応する具体的なコード例・チェックリストを提供する |
 
 ### キーワード
 
@@ -323,7 +325,7 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## natsuume-writing
 
-テックブログ・技術書執筆を支援するプラグインです。natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) を `rules/writing-rules.md` に配置し、SessionStart でそこから抽出したコア要点 (`rules/core-summary.md`) を常時注入します。詳細ルール全文と常時注入されるコア要点の 2 層構成により、地の文の断定度・文末表現・表記といった判断基準を常に手元に置きつつ、context を圧迫しない形で執筆規律を届けます。
+テックブログ・技術書執筆を支援するプラグインです。natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) を `rules/writing-rules.md` に配置します。Claude Code は `rules/core-summary.md`、Codex v0.5.2 は GPT-5.6 Sol / Luna 共通の `codex/prompts/session.md` を SessionStart で常時注入します。詳細ルールは共有 Skills が同じ正本から読み、Codex prompt は Goal / Context / Boundaries / Done when と `$natsuume-writing:*` の Skill 名を使います。
 
 現時点では rules 配置 + SessionStart コア注入 hook + outline skill (章立ての壁打ち + インファイルスケルトン書き込み) + draft skill (スケルトンからのたたき台一括生成 + 未検証事項の TODO 明示) + review skill (文体・構成・技術的正確さ・表記の 4 観点レビュー) を提供します。
 
@@ -333,15 +335,15 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-core` | SessionStart | `rules/core-summary.md` の全文を `additionalContext` として常時注入する。モデル判定・permission_mode 判定等の条件分岐は持たない |
+| Claude `inject-core` / Codex `inject-session` | SessionStart | Claude は `rules/core-summary.md`、Codex は native prompt を `additionalContext` として常時注入する |
 
 #### Skills
 
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
-| outline | `/natsuume-writing:outline` | 壁打ちで技術記事・技術書の章立て・セクション構成を決め、記事ファイルにインファイルスケルトン (見出し + HTML コメント) を書き込む |
-| draft | `/natsuume-writing:draft` | スケルトン付き記事ファイル (outline skill の成果物) から、執筆ルールに準拠したたたき台を一括生成する。未検証事項は TODO コメントで明示する |
-| review | `/natsuume-writing:review` | 技術記事・技術書の原稿を 4 観点 (文体ルール準拠 / 構成・論理展開 / 技術的正確さ / 誤字脱字・表記ゆれ) でレビューし、severity 付きの指摘一覧を提示する。ファイルは変更しない |
+| outline | Claude: `/natsuume-writing:outline` / Codex: `$natsuume-writing:outline` | 壁打ちで技術記事・技術書の章立て・セクション構成を決め、記事ファイルにインファイルスケルトン (見出し + HTML コメント) を書き込む |
+| draft | Claude: `/natsuume-writing:draft` / Codex: `$natsuume-writing:draft` | スケルトン付き記事ファイルから、執筆ルールに準拠したたたき台を一括生成する。未検証事項は TODO コメントで明示する |
+| review | Claude: `/natsuume-writing:review` / Codex: `$natsuume-writing:review` | 原稿を文体・構成・技術的正確さ・表記の 4 観点で読み取り専用レビューし、severity 付きの指摘一覧を提示する |
 
 ### キーワード
 
