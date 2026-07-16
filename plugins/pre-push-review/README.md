@@ -3,20 +3,29 @@
 `git push` を実行する前に **3 レビュー** を必ず実行させ、 未レビューな commit が remote に到達するのを構造的にブロックするプラグインです (`pre-commit-review` の後継)。 3 レビューはすべて subagent 経由で実行されます:
 
 - **`pre-push-review:code-reviewer` subagent** (self-contained correctness バグ検出 / 詳細は [Agents](#agents))
-- **`pre-push-review:codex-reviewer` subagent** (codex review wrapper `run-codex-review.sh` を foreground 起動して output を report として返す / 詳細は [Agents](#agents))
+- **`pre-push-review:codex-reviewer` subagent** (codex review wrapper `run-codex-review.sh` を foreground 起動し、結果を parent-safe report に抽象化 / 詳細は [Agents](#agents))
 - **`pre-push-review:security-reviewer` subagent** (self-contained security review / 詳細は [Agents](#agents))
 
 の 3 軸構成で、 **Anthropic と OpenAI の独立した 2 つのバグレビュー** に security review を重ねた defense-in-depth です。 修正や commit 列の変更 (add→revert / amend / rebase 含む) により hash が変わると 3 マーカーは自動失効し、 Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
 
 > **v3.0.0 で 3 レビューすべてを subagent 経由に統一** (互換破壊あり): v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、 それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しました。 設計のメリット:
 >
-> - **context isolation**: 各レビューの詳細出力 (codex の verdict / findings、 code review の詳細指摘) は subagent context に閉じ込められ、 親 session の context が圧迫されません。 親 session に返るのは markdown report (要約) だけです。
+> - **context isolation**: raw stdout / stderr、実行可能な command、具体的な再現手順は subagent context に閉じ込められます。 親 session に返るのは severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけです。
 > - **起動経路の単一化**: 親 session は 3 軸とも同じ `Agent` / `Task` tool で起動します。 v2.x までは Skill / Bash / Agent の 3 通りの tool で経路がばらけていました。 marker 書き込み経路は 2 軸 (code / security) が auto-mark.sh の Agent 完了検知、 1 軸 (codex) が wrapper の exit 0 内部書き込みで非対称が残りますが (wrapper の dirty 検知と verdict 非依存 atomic rename の防御を維持するため意図的に非対称に倒している)、 親 session 側の起動 API は統一されました。
 > - **`/pre-push-review:review` slash command を 3 subagent 並列発出に書き換え**: deny メッセージとともに案内されます。 wall-clock は最遅レビュー 1 本の時間で完了します。
 
 ## バージョン
 
-v4.0.0 (前身: `pre-commit-review` v0.4.0)
+v4.0.1 (前身: `pre-commit-review` v0.4.0)
+
+### v4.0.0 → v4.0.1 の変更点 (issue #281)
+
+- 3 reviewer に共通の parent-safe report 契約を追加し、 finding ID、priority、confidence、location、cause class、violated invariant、impact、verification、fix direction、disposition を親 session へ返す形式に統一した
+- `codex-reviewer` が wrapper の stdout / stderr を verbatim relay する挙動を廃止した。raw output は subagent context / transcript に留め、親へは各 finding を抽象化した summary、または正規化した execution failure だけを返す
+- `code-reviewer` / `security-reviewer` も、内部では具体的な failure / attack scenario を検証しつつ、実行可能な command、再利用可能な payload、具体的な環境値、段階的な再現・回避手順を final report へ含めない
+- exact detail を使った追加検証は、親へ raw detail を返す代わりに同一 reviewer subagent を resume して行い、結果だけを parent-safe report で返す
+- `/pre-push-review:review` の 3 delegation prompt も parent-safe report を明示的に要求し、codex wrapper の stdout / stderr をまとめて返す旧指示を削除した
+- agent 定義と command の contract test を追加し、必須 field と raw detail relay 禁止規律を固定した
 
 ### v3.1.4 → v4.0.0 の変更点 (互換破壊あり / issue #267)
 
@@ -254,7 +263,7 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 
 - tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/code-review` skill を invoke できないようにしている (理由は security-reviewer と同じ; 下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため
 - subagent body には logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリと exclusion ルール (style / docs / perf / refactor / security / pre-existing bug 等) が prompt として含まれており、 単一 turn で review を完遂する
-- 親 session は `Agent` / `Task` tool の result として markdown report を受け取り、 後続フロー (`git push` 等) を継続できる
+- 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - PostToolUse hook (auto-mark.sh) は subagent **完了時** に発火する Agent / Task tool 検知ロジックで code-reviewed マーカーを更新する
 - model は `inherit` で親 session と同じモデルを使用
 
@@ -262,13 +271,14 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 
 **ファイル**: `agents/codex-reviewer.md`
 
-codex review wrapper (`hooks/scripts/run-codex-review.sh`) を foreground で 1 回起動し、 wrapper の stdout (codex review の verdict / findings) と stderr (wrapper status) を組み立てた markdown report として親 session に返す最小 subagent です。 v2.x までの Bash 直接起動 (commands/review.md と deny メッセージに wrapper 絶対パスを案内) を置換するため v3.0.0 で追加されました。
+codex review wrapper (`hooks/scripts/run-codex-review.sh`) を foreground で 1 回起動し、 wrapper の stdout / stderr を subagent context 内で評価して parent-safe markdown report に抽象化する最小 subagent です。 v2.x までの Bash 直接起動 (commands/review.md と deny メッセージに wrapper 絶対パスを案内) を置換するため v3.0.0 で追加され、v4.0.1 で verbatim relay を廃止しました。
 
 **動作**:
 
 - tools は `Bash` のみ (Read / Edit / Write / Skill / Task はすべて非許可)。 wrapper-only な実行サーフェスを構造的に強制
-- subagent body は wrapper を `run_in_background: false` で 1 回起動し、 output を markdown report で return する単純な指示のみ
-- 親 session は subagent の return として markdown report を受け取る (codex review の詳細出力は subagent context に閉じ込められる)
+- subagent body は wrapper を `run_in_background: false` で 1 回起動し、raw output を final reply へコピーせず parent-safe report に変換する
+- 親 session は finding の priority / location / impact / verification / fix direction / disposition を受け取る。実行可能な command、payload、環境値、段階的な再現・回避手順、raw stdout / stderr は subagent context に閉じ込められる
+- exact detail を使った追加確認が必要な場合は同一 codex-reviewer を resume し、検証結果だけを再度 parent-safe report で受け取る
 - codex-reviewed marker は wrapper 自身が exit 0 完了時に atomic rename で書き込む設計を維持。 subagent 完了タイミングでは marker を書かない (silent-pass 防止 / 詳細は auto-mark の節を参照)
 - model は `inherit` で親 session と同じモデルを使用
 - **v4.0.0 で frontmatter `description` を起動条件中心に縮小**: 呼び出しタイミング (deny メッセージがどのマーカーを指摘したときか) と `subagent_type="pre-push-review:codex-reviewer"` の呼び出し方だけを記載し、 wrapper のパス (`run-codex-review.sh` / `${CLAUDE_PLUGIN_ROOT}` 等) や「wrapper 自身が marker を書く」 という実装詳細はメインセッションへ直接開示しなくなった (実行手順・report 形式は引き続き body に定義)
@@ -283,7 +293,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 - tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/security-review` skill を invoke できないようにしている (理由は下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため
 - subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
-- 親 session は `Agent` / `Task` tool の result として markdown report を受け取り、 後続フロー (`git push` 等) を継続できる
+- 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - PostToolUse hook (auto-mark.sh) は subagent **完了時** に発火する Agent / Task tool 検知ロジックで security マーカーを更新する (launch 時点ではなく completion で書くことで、 subagent 失敗時の silent-pass を防ぐ)
 - model は `inherit` で親 session と同じモデルを使用
 

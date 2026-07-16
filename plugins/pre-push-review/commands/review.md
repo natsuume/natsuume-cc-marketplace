@@ -10,14 +10,14 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
 
 次のアシスタントメッセージ (= このコマンドへの最初の応答) で、 **以下 3 つの Agent / Task tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
 
-1. **Agent / Task tool**: `subagent_type: "pre-push-review:code-reviewer"`、 prompt: "branch の差分に対して self-contained に correctness バグ検出を実行し、 markdown report を返してください。"、 description: "branch 差分の code review"
-2. **Agent / Task tool**: `subagent_type: "pre-push-review:security-reviewer"`、 prompt: "branch の差分に対して self-contained に security review を実行し、 markdown report を返してください。"、 description: "branch 差分の security review"
-3. **Agent / Task tool**: `subagent_type: "pre-push-review:codex-reviewer"`、 prompt: "codex review wrapper を foreground で 1 回起動し、 stdout / stderr をまとめた markdown report を返してください。"、 description: "codex review wrapper の foreground 実行"
+1. **Agent / Task tool**: `subagent_type: "pre-push-review:code-reviewer"`、 prompt: "branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review"
+2. **Agent / Task tool**: `subagent_type: "pre-push-review:security-reviewer"`、 prompt: "branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review"
+3. **Agent / Task tool**: `subagent_type: "pre-push-review:codex-reviewer"`、 prompt: "codex review wrapper を foreground で 1 回起動し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "codex review wrapper の foreground 実行"
 
 ## 確定的フローの理由
 
 - **順次起動ではなく並列起動**: wall-clock が最遅レビュー 1 本の時間で完了します (順次より大幅に高速)。 3 レビューは互いに独立しているため並列化に乗ります。
-- **Skill / Bash ではなく subagent**: 3 レビューを subagent に統一することで、 (1) 各レビューの詳細出力は subagent context に閉じ込められ親 session の context が圧迫されず、 (2) 親 session に返るのは markdown report (要約) だけになり、 (3) 失敗時の検知 (subagent の `tool_response.is_error` / `interrupted`) が 3 軸で対称になります。 v3.0.0 で Skill (code-review) と Bash (codex wrapper の直接起動) を subagent 経由に移行しました。
+- **Skill / Bash ではなく subagent**: 3 レビューを subagent に統一することで、 (1) raw output・具体的な再現手順・実行可能な詳細は subagent context に閉じ込められ、 (2) 親 session に返るのは severity / location / impact / fix direction 等を保った parent-safe report だけになり、 (3) 失敗時の検知 (subagent の `tool_response.is_error` / `interrupted`) が 3 軸で対称になります。 v3.0.0 で Skill (code-review) と Bash (codex wrapper の直接起動) を subagent 経由に移行し、 v4.0.1 で返却 report の context isolation も契約化しました。
 - **Claude による自律判断ではなく確定的実行**: Claude は「どのレビューを走らせるか / どの順番で / 引数は何か」 を判断しません。 上記 3 つを **そのまま** 並列発出するだけです。 これによりレビューの抜けや順序揺れによる無駄ループが構造的に排除されます。
 - **`/code-review` / `/codex:review` / `/security-review` 標準 skill を直接呼ばない理由**: いずれの標準 skill も末尾で「最終応答をマークダウンレポートだけにする」 ことを Claude に指示するか、 内部で sub-task (Task tool) を spawn する設計です。 主 session の Claude が直接呼ぶと turn が終了して push まで進めず、 subagent 内から呼んでも nested subagent 制約で sub-task が動かない degraded mode に倒れます。 `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` / `pre-push-review:security-reviewer` の 3 subagent はそれぞれ同等のレビュー内容を self-contained に持つか、 wrapper を foreground 起動するだけの最小実装で、 親 session の turn を止めずに report を返します。
 
@@ -41,6 +41,7 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
    - `kill <pid>` で終了させ、 同じ入力で `/codex:rescue --wait` をやり直す
    - rescue 自体はマーカー対象外なので、 何回やり直しても push gate には影響しません。
 3. **code-reviewer / security-reviewer subagent からの指摘** は通常具体的な対処 (バグ修正 / input validation / 秘匿情報削除 / injection 対策) なので `/codex:rescue` 壁打ちは optional。 ただし設計判断が絡む修正では rescue 推奨。
-4. 修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 `/pre-push-review:review` を実行して 3 subagent を再走させる。
+4. parent-safe report だけでは追加検証が必要な場合は、 raw detail を親へ要求せず、 対象の同一 reviewer subagent を resume して focused question を渡す。 reviewer は自分の context / transcript に残る詳細で検証し、 結果だけを parent-safe report で返す。
+5. 修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 `/pre-push-review:review` を実行して 3 subagent を再走させる。
 
 3 マーカーすべてが「✓ 最新の差分でレビュー済み」 になったら `git push` を実行してください。

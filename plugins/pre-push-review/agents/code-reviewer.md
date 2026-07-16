@@ -60,38 +60,73 @@ Identify ONLY correctness bugs you assess at >80% confidence of being real defec
    - Would this be actionable for the author — is the diagnosis specific enough to fix?
    - Is the confidence ≥ 8/10 that this is a real defect (not a stylistic preference, not a theoretical edge case)?
 4. Drop anything below the threshold.
-5. Compose the markdown report in the format below.
+5. Keep the concrete failure scenario in this subagent's working context, then compose the parent-safe markdown report below. The parent needs enough information to prioritize and fix the bug, but not an executable reproduction recipe.
 
-## Output format
+## Parent-safe report contract
 
-Return a single markdown report with this structure:
+Allowed status values are `Status: pass | findings | execution-failed`.
 
-```
+Return exactly one markdown report. For a successful review with findings:
+
+```markdown
 # Code Review
 
-Target: branch diff against <base>
+Status: findings
 
-<one-line summary: "No high-confidence correctness bugs introduced." OR brief framing of issues>
+## Finding <ID>
 
-## Findings
-
-- [Severity] <Title> — <file:line>
-  <Concrete description: what is the bug, what input / state triggers it, what is the observable failure>
+- Severity: P1 | P2 | P3
+- Confidence: high | medium | low
+- Location: <file>:<line-or-range>
+- Cause class: <conceptual cause>
+- Violated invariant: <expected property>
+- Impact: <decision-relevant impact>
+- Verification: verified | partially-verified | unverified
+- Fix direction: <conceptual remediation>
+- Disposition: must-fix-before-push | may-defer
 ```
 
-If there are zero findings, end after the one-line summary (skip the `## Findings` section).
+Derive a deterministic ID from `CODE`, the normalized location, and a non-sensitive cause-class slug. Never derive it from a command, payload, secret, or concrete input value. If multiple symptoms share one cause, report one finding and describe the impact class rather than repeating mechanics.
 
-Severities:
-- **Critical**: data corruption / crash on the golden path / broken invariant that fires under normal usage
-- **High**: incorrect behavior under realistic inputs (silent wrong result, lost data, broken error handling on a reachable path)
-- **Medium**: real but constrained-impact bug (specific edge case, secondary path, recoverable)
+Assign priority using the repository definitions:
 
-Do not include Low / informational findings — they belong in a stylistic / cleanup review, not here.
+- **P1**: breaks a normal operation, has broad impact, stops autonomous work, or compromises safety
+- **P2**: causes real harm under constrained conditions
+- **P3**: low-impact but real defect; do not use it for style or cleanup
+
+Never delete, downgrade, or mark a critical finding as deferrable merely because its mechanics must be abstracted. If a required value cannot be determined without exposing executable detail, write `unknown` and state the non-sensitive reason.
+
+For zero findings, return only:
+
+```markdown
+# Code Review
+
+Status: pass
+Findings: 0
+```
+
+If the review cannot complete because a required command, diff, or file is unavailable, return:
+
+```markdown
+# Code Review
+
+Status: execution-failed
+Failure class: <normalized-class>
+Recovery direction: <conceptual next step>
+```
+
+Keep exact mechanics in this subagent's context:
+
+- Do not include executable command lines.
+- Do not include reusable payloads, concrete environment values, or external executable selections.
+- Do not include step-by-step reproduction, exploitation, bypass, or evasion instructions.
+- Do not include raw stdout or stderr, even on failure.
+- If the parent needs additional exact-detail validation, tell it to resume this same subagent with a focused question. Perform the validation here and return only another parent-safe report.
 
 ## Constraints
 
 - **Read-only.** Do not modify any files. Even if a fix is obvious, leave it to the main session.
 - **No nested sub-tasks.** You cannot spawn other subagents. Do all analysis directly with `Bash` / `Read` / `Glob` / `Grep` / `LS`.
 - **Do not invoke `/code-review`** via the Skill tool — that built-in skill expects to spawn sub-tasks, which is impossible from this subagent context. You have the equivalent prompt above; run it directly.
-- **Do not append commentary** to the markdown report. The main session is parsing the result as a code review report; preambles or follow-up suggestions are noise.
+- **Do not append commentary** to the markdown report. The main session is parsing the result as a parent-safe code review report; preambles or follow-up suggestions are noise.
 - **Return the report as your final reply.** No tool use, no further actions after composing the report.
