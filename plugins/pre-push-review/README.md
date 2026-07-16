@@ -21,6 +21,7 @@ v4.0.0 (前身: `pre-commit-review` v0.4.0)
 ### v3.1.4 → v4.0.0 の変更点 (互換破壊あり / issue #267)
 
 - **agent_type 検証 gate を追加 (fail-closed)**: `block-bg-codex-wrapper.sh` が hook payload トップレベルの `agent_type` を検証し、 `pre-push-review:codex-reviewer` (namespace 付き完全一致) 以外からの `run-codex-review.sh` wrapper 起動を deny するようにした。 **互換破壊**: hook payload に `agent_type` を含めない旧 Claude Code では、 正規フロー経由の wrapper 起動も deny される。 本 gate は Claude Code 2.1.211 で実機検証済み (= 動作要件の検証済み最低 version)
+- **agent_type gate の発火対象を実行形コマンドのみに限定 (codex review P2 指摘への追加修正 / fail-closed 分類)**: substring `run-codex-review.sh` を含む segment を `split_command` / `tokenize_segment` / `skip_env_assignments` / `unquote_token` (cmd-parser.sh) で 3 規則に分類し、 wrapper を実行せず言及するだけの read-only コマンド (`cat` / `head` / `tail` / `grep` / `git diff` 等の言及 allowlist) は gate 対象外にした。 interpreter 起動・コマンド置換 (`$(...)` / バッククォート / `<(...)` / `>(...)`) を含む形・不明コマンドのみを実行形として gate し、 分類不能・想定外の形は fail-closed に実行形として扱う (regression: 従来は substring 一致のみで無害な言及コマンドまで deny していた)。 コマンド置換等の間接実行を検出した場合は、 `&` / `|` が wrapper 呼び出しに隣接していなくても位置を問わず deny するようにした (indirection 経由は substring を含む segment と実際に wrapper を実行する segment の対応関係を parser が追跡できないため)
 - bg / pipeline deny の文言を、 gate 通過後にのみ到達する codex-reviewer subagent 向けに更新し、 直接実行の再実行を案内する文言 (「デフォルト false で再実行してください」等) を廃止した
 - `agents/codex-reviewer.md` の frontmatter `description` から wrapper のパスと marker 実装詳細を削除し、 起動条件 (呼び出しタイミングと subagent_type) 中心の記述に縮小した (手順詳細は body のみに保持)
 - `block-pre-push.sh` の deny メッセージで、 一部マーカーのみ失効している場合の該当 subagent 単独再起動を正規案内化した (`commands/review.md` も同じ案内で整合)
@@ -186,6 +187,8 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 **ファイル**: `hooks/scripts/block-bg-codex-wrapper.sh`
 
 `run-codex-review.sh` wrapper の起動を検証する PreToolUse hook です。 **v4.0.0 で agent_type 検証 gate を追加** (issue #267): wrapper を含む Bash 実行の hook payload トップレベル `agent_type` が `pre-push-review:codex-reviewer` (namespace 付き完全一致) でなければ **fail-closed に deny** します。 `agent_type` 欠落はメインセッションからの直接実行、 または `agent_type` を hook payload に含めない旧 Claude Code を意味します。 本 gate は **Claude Code 2.1.211 で実機検証済み** (= 動作要件の検証済み最低 version) で、 それより古く `agent_type` を送らない Claude Code では、 正規フロー (`/pre-push-review:review` や codex-reviewer subagent 経由起動) からの wrapper 起動も deny されるため、 2.1.211 以上への更新が必要です。
+
+**gate の発火対象は実行形コマンドのみ**: command が `run-codex-review.sh` の substring を含んでいても、 wrapper を実行せず言及するだけの read-only 検査コマンド (`cat` / `grep` / `git diff` 等) は agent_type gate を skip して許可します。 interpreter 起動 (`bash` / `sh` 等)、 コマンド置換 (`$(...)` / バッククォート / `<(...)` / `>(...)`) を含む形、 不明コマンドのみを実行形として gate します。 分類は fail-closed (不明・解析不能な形はすべて実行形扱い) です。 コマンド置換等の間接実行を含む場合は、 `&` / `|` が wrapper 呼び出しに隣接していなくても位置を問わず deny します (詳細は `block-bg-codex-wrapper.sh` のファイルヘッダ「検知ロジック」節を参照)。
 
 agent_type gate を通過した後は、 従来どおり次の 2 経路の background 起動を検知します:
 
