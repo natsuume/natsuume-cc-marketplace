@@ -105,6 +105,7 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             self.assertIn("/pre-push-review:review", reason)
             self.assertIn("marketplace 配布対象外", reason)
             self.assertIn("agent_type", reason)
+            self.assertGreaterEqual(reason.count("run_in_background: false"), 3)
             self.assertNotIn("$pre-push-review:review-codex", reason)
             self.assertNotIn("$pre-push-review:setup-pre-push-agents", reason)
 
@@ -545,10 +546,14 @@ class SetupCodexAgentsTest(unittest.TestCase):
         self.assertIn("agent_type", plugin["distribution"]["reason"])
         self.assertEqual(plugin["compatibility"]["level"], "metadata-only")
         components = plugin["compatibility"]["components"]
-        self.assertEqual(len(components), 4)
+        self.assertEqual(len(components), 5)
         self.assertEqual(
             {component["disposition"] for component in components},
             {"surface-unavailable"},
+        )
+        self.assertIn(
+            "hooks/hooks.json#/hooks/PostToolUseFailure/0/hooks/0",
+            {component["source"] for component in components},
         )
         uninstall_command = (
             "codex plugin remove pre-push-review@natsuume-plugins"

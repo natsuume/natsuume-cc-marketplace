@@ -11,7 +11,7 @@
 > **v3.0.0 で 3 レビューすべてを subagent 経由に統一** (互換破壊あり): v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、 それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しました。 設計のメリット:
 >
 > - **context isolation**: raw stdout / stderr、実行可能な command、具体的な再現手順は subagent context に閉じ込められます。 親 session に返るのは severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけです。
-> - **起動経路の単一化**: 親 session は 3 軸とも同じ `Agent` / `Task` tool で起動します。 v2.x までは Skill / Bash / Agent の 3 通りの tool で経路がばらけていました。 marker 書き込み経路は 2 軸 (code / security) が auto-mark.sh の Agent 完了検知、 1 軸 (codex) が wrapper の exit 0 内部書き込みで非対称が残りますが (wrapper の dirty 検知と verdict 非依存 atomic rename の防御を維持するため意図的に非対称に倒している)、 親 session 側の起動 API は統一されました。
+> - **起動・marker 発行経路の単一化**: 親 session は 3 軸とも同じ `Agent` / `Task` tool で起動し、3 marker とも auto-mark.sh が foreground completion と parent-safe report を検証して発行します。Codex wrapper は review 開始時点の hash を pending attestation に束縛し、auto-mark が report 成功後に final marker へ昇格します。
 > - **`/pre-push-review:review` slash command を 3 subagent 並列発出に書き換え**: deny メッセージとともに案内されます。 wall-clock は最遅レビュー 1 本の時間で完了します。
 
 ## バージョン
@@ -27,7 +27,8 @@ v4.0.1 (前身: `pre-commit-review` v0.4.0)
 - exact detail を使った追加検証は、親へ raw detail を返す代わりに同一 reviewer subagent を resume して行い、結果だけを parent-safe report で返す
 - `/pre-push-review:review` の 3 delegation prompt も parent-safe report を明示的に要求し、codex wrapper の stdout / stderr をまとめて返す旧指示を削除した。3 Agent call は `run_in_background: false` を明記し、Claude Code の background-default 時にも launch を review 完了と誤認しない
 - 親の user-facing summary から agent ID、output file、transcript path、raw tool metadata を除外し、review の方針判断に不要な orchestration detail も context isolation の対象にした
-- `auto-mark.sh` は Agent PostToolUse の `tool_response.status=completed` と final `content[].text` の単一 `Status: pass|findings` を両方確認した場合だけ code/security marker を書くようにした。`async_launched`、`Status: execution-failed`、status 欠落・重複・未知値は marker を書かず、push gate を deny のまま維持する
+- `auto-mark.sh` は Agent PostToolUse の `tool_response.status=completed` と final `content[].text` の単一 `Status: pass|findings` を両方確認した場合だけ 3 reviewer の marker を書くようにした。`async_launched`、`Status: execution-failed`、status 欠落・重複・未知値は marker を書かず、push gate を deny のまま維持する
+- Codex wrapper の final marker 直書きを廃止し、review 開始時点の hash を atomic な pending attestation に保存する方式へ変更した。auto-mark は attestation と current hash の一致を確認し、codex-reviewer の parent-safe report 成功後にのみ final marker へ atomic rename する。report 失敗・PostToolUseFailure・hash mismatch では pending を破棄する
 - agent 定義・command・auto-mark の contract / integration test を追加し、必須 field、raw detail relay 禁止規律、foreground completion の fail-closed 判定を固定した
 
 ### v3.1.4 → v4.0.0 の変更点 (互換破壊あり / issue #267)
@@ -91,9 +92,9 @@ plugin description (plugin.json / marketplace.json) を人間向けの簡潔な�
 ### v2.0.1 → v3.0.0 の変更点 (互換破壊あり)
 
 - **`agents/code-reviewer.md` を新設**: v2.x の Skill `/code-review` (Anthropic bundled skill / read-only correctness バグ検出) に相当する self-contained subagent。 prompt は標準 skill と独立に管理 (security-reviewer と同じ理由: 主 session から直接 skill を呼ぶと turn が終了、 subagent 内から呼んでも nested subagent 制約で sub-task が動かないため)。 tools は `Bash, Read, Glob, Grep, LS` で `Skill` / `Task` を含まない (= 標準 skill を invoke できない構造的防御)。
-- **`agents/codex-reviewer.md` を新設**: codex review wrapper (`run-codex-review.sh`) を foreground で 1 回起動するだけの最小 subagent。 tools は `Bash` のみで、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。 wrapper が atomic rename で codex-reviewed marker を書く設計は維持。
+- **`agents/codex-reviewer.md` を新設**: codex review wrapper (`run-codex-review.sh`) を foreground で 1 回起動するだけの最小 subagent。 tools は `Bash` のみで、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。v3.0.0 当時は wrapper が codex-reviewed marker を書いたが、v4.0.1 で pending attestation + auto-mark 昇格へ変更した。
 - **`commands/review.md` を 3 subagent 並列発出に書き換え**: Skill (`code-review`) + Bash (codex wrapper) + Agent (security-reviewer) の 3 経路混在を、 Agent x 3 (code-reviewer + codex-reviewer + security-reviewer) に統一しました。
-- **`auto-mark.sh` の検知ロジックを Skill → Agent に移行 + name-only 受理を廃止**: PRECHECK\_RE と case 文から Skill `code-review` / `security-review` の検知を全廃。 subagent\_type が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` (**namespace prefix 必須**) の完全一致のみを検知します。 v2.x までの name-only (`code-reviewer` / `security-reviewer` 単独) 受理は v3.0.0 で廃止しました。 他 plugin (pr-review-toolkit / feature-dev 等) が同名 `code-reviewer` subagent を提供する環境で、 ユーザが name-only で別 plugin の subagent を呼ぶと PostToolUse の subagent\_type が name-only 文字列で届き本 hook が pre-push-review の marker を誤って書く push gate bypass 経路があったため。 `/pre-push-review:review` slash command と block-pre-push.sh の deny メッセージは v2.x から namespace 付きで案内しているため、 正常運用パスへの影響は無いです。 substring pre-filter は `"subagent_type"` 単独で十分になりました。 codex-reviewer subagent は auto-mark の検知対象外 (= marker は wrapper が書く設計を維持): subagent が wrapper の non-zero exit を観察してから report を返した場合に、 Agent 完了で marker を書くと「失敗した review なのに marker が書かれる」 silent-pass の経路を作るため。
+- **`auto-mark.sh` の検知ロジックを Skill → Agent に移行 + name-only 受理を廃止**: PRECHECK\_RE と case 文から Skill `code-review` / `security-review` の検知を全廃。v3.0.0 当時は namespace 付き code/security reviewer のみを検知し、codex marker は wrapper が書いた。v4.0.1 では正規 report Status を検証できるようになったため namespace 付き codex-reviewer も検知対象へ加え、pending attestation を final marker へ昇格する。name-only (`code-reviewer` / `security-reviewer` / `codex-reviewer`) は他 plugin の同名 agent との衝突を避けるため引き続き受理しない。
 - **`block-pre-push.sh` の deny メッセージを 3 Agent 案内に書き換え**: Skill (`code-review`) と Bash (codex wrapper) の fallback 起動コマンドを Agent x 3 に置換。 wrapper の絶対パス埋め込み (CODEX_WRAPPER_PATH) も削除しました (subagent 経由で起動するため不要)。
 - **後方互換 / 移行**: 既存の `.claude-pre-push-code-reviewed` / `.claude-pre-push-codex-reviewed` / `.claude-pre-push-security-reviewed` marker file 名と hash 計算式は不変です。 v2.x で実行済みの marker は v3.0.0 でも hash が一致する限り有効。 v2.x ユーザは v3.0.0 アップグレード後の最初の push で「`/pre-push-review:review` を実行してください」 と案内され、 そこから 3 subagent が走ります。
 - **major bump にした理由**: ユーザフロー変更 (Skill / Bash 経路の廃止、 Agent 統一) と auto-mark の検知契約変更 (Skill 検知の全廃) を伴うため major。 marker file 名と hash 計算式は不変なので、 既存 marker は hash 一致時に引き続き有効。
@@ -149,7 +150,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 
 並列発出が技術的に成立しない / 一部のレビューが失敗した場合は、 3 subagent を順次起動しても push gate の構造的保証は同じ (3 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。
 
-一部の marker のみ「未実行」 / 「失効」 の場合は、 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (v4.0.0 で正規化。 block-pre-push.sh の deny メッセージも同じ案内をします)。 3 subagent 並列発出が既定であることは変わりません。
+一部の marker のみ「未実行」 / 「失効」 の場合は、 該当 subagent だけを Agent / Task tool で `run_in_background: false` を明示して単独再起動するのが正規経路です (v4.0.0 で正規化。 block-pre-push.sh の deny メッセージも同じ案内をします)。 3 subagent 並列発出が既定であることは変わりません。
 
 ### Hooks
 
@@ -210,13 +211,13 @@ agent_type gate を通過した後は、 従来どおり次の 2 経路の backg
 - Bash tool option `run_in_background: true` で wrapper を起動
 - shell-level の `&` (background) や `|` (pipeline) で wrapper を連結
 
-理由: wrapper 自身は foreground で codex review を実行して marker を書きますが、 上記経路で起動すると **codex-reviewer subagent (ひいては親 session) は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しません**。 marker の存在だけで push gate を通過するため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。 v2.0.0 でも v1.1.0 と同じ regression 防御を継続しています。 jq 不在等の環境失敗時は本 hook 全体として fail-open に倒れますが、 agent_type gate 自体は fail-closed です。
+理由: 上記経路で起動すると **codex-reviewer subagent (ひいては親 session) は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しない / 途中でしか観察しない** ため、正しい parent-safe report を組み立てられません。v4.0.1 以降は pending attestation があっても report 成功前に final marker へ昇格しないため push gate bypass にはなりませんが、無駄な review cycle と不正 report を防ぐため foreground を引き続き強制します。 jq 不在等の環境失敗時は本 hook 全体として fail-open に倒れますが、 agent_type gate 自体は fail-closed です。
 
 #### 3. auto-mark (PostToolUse, matcher: `*` — wildcard)
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` subagent の **実行完了** を PostToolUse hook で自動検知し、 対応するマーカーファイルに「commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュ」 を書き込みます。 v3.0.0 で Skill `/code-review` / `/security-review` の検知は全廃しました (Skill 経路を廃止し subagent 経由に統一)。 codex review の marker は wrapper script (`run-codex-review.sh`) が完了時に直接書き込む設計で本 hook では扱いません (codex-reviewer subagent も検知対象外。 理由は後述)。
+3 reviewer subagent の **実行完了** を PostToolUse hook で自動検知し、対応するマーカーファイルに「commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュ」 を書き込みます。v3.0.0 で Skill `/code-review` / `/security-review` の検知は全廃しました。Codex は wrapper が review 時 hash の pending attestation を書き、本 hook が parent-safe report 成功後に final marker へ昇格します。PostToolUseFailure でも本 script を呼び、残った Codex pending を破棄します。
 
 hooks.json の matcher は `"*"` (wildcard) で、 すべての tool 完了時に本フックが呼ばれます。 フィルタリングはスクリプト側の bash 内蔵正規表現マッチが行うため、 対象外 tool は subprocess を立てずに即離脱します。
 
@@ -225,22 +226,24 @@ hooks.json の matcher は `"*"` (wildcard) で、 すべての tool 完了時�
 | 検知対象                                                | tool 名 | 判定                                                                                                                                                                            | 書き込むマーカー                              |
 | ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
 | `pre-push-review:code-reviewer` subagent の完了 | `Agent` / `Task` | namespace 付き `subagent_type` + `tool_response.status=completed` + final report の単一 `Status: pass\|findings` | `<git-dir>/.claude-pre-push-code-reviewed`    |
+| `pre-push-review:codex-reviewer` subagent の完了 | `Agent` / `Task` | 上記 completion 条件 + wrapper pending hash が current hash と一致 | `<git-dir>/.claude-pre-push-codex-reviewed` |
 | `pre-push-review:security-reviewer` subagent の完了 | `Agent` / `Task` | namespace 付き `subagent_type` + `tool_response.status=completed` + final report の単一 `Status: pass\|findings` | `<git-dir>/.claude-pre-push-security-reviewed` |
 
 **subagent を completion タイミングで検知する理由**:
 
 各 subagent は内部で標準 skill を呼ばずに self-contained でレビューを実行します。 PostToolUse の発火だけでは background Agent の launch や、内部失敗を `Status: execution-failed` で報告した正常 return も含まれるため、auto-mark は `tool_response.status=completed` と final report の正規 Status を併せて検証します。`pass` / `findings` だけが完遂扱いで、外側の `is_error` / `interrupted`、`async_launched`、`execution-failed`、report 不正ではマーカーを書きません。push gate が deny のまま残るため silent-pass しない設計です。
 
-**codex-reviewer subagent が検知対象外な理由**:
+**Codex pending attestation を挟む理由**:
 
-codex-reviewer subagent は wrapper script (`run-codex-review.sh`) を foreground で 1 回起動するだけの実装で、 wrapper 自身が完了時 (exit 0) に codex-reviewed marker を atomic rename で書きます。 もし auto-mark で subagent 完了タイミングにも marker を書く設計にすると、 「wrapper が non-zero exit したのに subagent が status report だけ返して完了した」 ケースで `tool_response.is_error` が `false` のまま auto-mark が marker を書く silent-pass の経路を作るため、 検知しない設計に倒しています (= 「codex review が exit 0 で完了したときだけ marker が書かれる」 を wrapper 内で完結させる)。
+wrapper exit 0 だけで final marker を書くと、その後の report 正規化が失敗・中断しても push gate が通り得ます。一方、report 完了時の current hash だけで marker を書くと review 中に branch state が変わった場合に「Codex が見ていない差分」をレビュー済みと誤認します。このため wrapper は review 対象 hash を pending に atomic write し、auto-mark は正規 report 成功と pending/current hash 一致の両方を確認して final marker へ atomic rename します。
 
 **書き込みをスキップする条件**:
 
 - `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない)
 - `tool_response.status` が `completed` 以外 (`async_launched` を含む)
 - final `tool_response.content[].text` に単一の `Status: pass` / `Status: findings` が無い (`execution-failed`、欠落、重複、未知値、content shape 不正)
-- `tool_input.subagent_type` が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` 以外 (別の subagent 起動 / name-only 形式 / namespace ミスマッチはマーカー対象外。 codex-reviewer もここで弾かれる)
+- `tool_input.subagent_type` が namespace 付き 3 reviewer 以外 (別の subagent 起動 / name-only 形式 / namespace ミスマッチ)
+- codex-reviewer では pending attestation が無い、regular file でない、または current hash と不一致
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)
 
@@ -251,7 +254,8 @@ codex-reviewer subagent は wrapper script (`run-codex-review.sh`) を foregroun
 | ファイル | 内容 | 寿命 |
 |---|---|---|
 | `.claude-pre-push-code-reviewed` | `pre-push-review:code-reviewer` subagent 完了時の commit 列 + branch 全差分のハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
-| `.claude-pre-push-codex-reviewed` | codex review (wrapper script `run-codex-review.sh` 経由 / `pre-push-review:codex-reviewer` subagent が内部起動) 完了時の commit 列 + branch 全差分のハッシュ。 wrapper script 自身が書き込む | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-codex-reviewed` | codex review + parent-safe report 完了時の commit 列 + branch 全差分のハッシュ。wrapper pending を auto-mark が昇格する | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-codex-reviewed.pending` | wrapper が束縛した review 対象 hash。final report 成功時だけ marker へ rename | report 失敗・hash mismatch・次回 wrapper 起動で削除 |
 | `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の commit 列 + branch 全差分のハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 
 > **v2.x → v3.0.0 アップグレード時の注意**: v2.x で実行済みの 3 マーカー (code-reviewed / codex-reviewed / security-reviewed) は v3.0.0 でも hash が一致する限り有効です。 marker file 名と hash 計算式は不変なので追加の cleanup は不要です。
@@ -284,9 +288,9 @@ codex review wrapper (`hooks/scripts/run-codex-review.sh`) を foreground で 1 
 - subagent body は wrapper を `run_in_background: false` で 1 回起動し、raw output を final reply へコピーせず parent-safe report に変換する
 - 親 session は finding の priority / location / impact / verification / fix direction / disposition を受け取る。実行可能な command、payload、環境値、段階的な再現・回避手順、raw stdout / stderr は subagent context に閉じ込められる
 - exact detail を使った追加確認が必要な場合は同一 codex-reviewer を resume し、検証結果だけを再度 parent-safe report で受け取る
-- codex-reviewed marker は wrapper 自身が exit 0 完了時に atomic rename で書き込む設計を維持。 subagent 完了タイミングでは marker を書かない (silent-pass 防止 / 詳細は auto-mark の節を参照)
+- wrapper は exit 0 完了時に hash-bound pending attestation を atomic write し、auto-mark が subagent の正規 `pass/findings` report と current hash 一致を確認して codex-reviewed marker へ昇格する
 - model は `inherit` で親 session と同じモデルを使用
-- **v4.0.0 で frontmatter `description` を起動条件中心に縮小**: 呼び出しタイミング (deny メッセージがどのマーカーを指摘したときか) と `subagent_type="pre-push-review:codex-reviewer"` の呼び出し方だけを記載し、 wrapper のパス (`run-codex-review.sh` / `${CLAUDE_PLUGIN_ROOT}` 等) や「wrapper 自身が marker を書く」 という実装詳細はメインセッションへ直接開示しなくなった (実行手順・report 形式は引き続き body に定義)
+- **v4.0.0 で frontmatter `description` を起動条件中心に縮小**: 呼び出しタイミング (deny メッセージがどのマーカーを指摘したときか) と `subagent_type="pre-push-review:codex-reviewer"` の呼び出し方だけを記載し、 wrapper path や marker/attestation 実装詳細はメインセッションへ直接開示しない (実行手順・report 形式は引き続き body に定義)
 
 #### `pre-push-review:security-reviewer` (subagent)
 

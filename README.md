@@ -137,7 +137,7 @@ ignore コメント挿入を編集時に禁止し、 `git commit` 直前に stag
 **v3.0.0 で 3 レビューすべてを subagent 経由に統一**しました (互換破壊あり)。v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しています。これにより:
 
 - **context isolation**: raw stdout / stderr、実行可能な command、具体的な再現手順は subagent context に閉じ込められます。親 session に返るのは severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけです。追加検証が必要な場合は同じ subagent を resume し、raw detail を親へ流さず結果だけを再要約します。
-- **起動経路の単一化**: 3 軸とも `Agent` / `Task` tool で起動します。v2.x までは Skill / Bash / Agent の 3 通りで経路がばらけていました。marker 書き込み経路は 2 軸 (code / security) が `auto-mark.sh` の Agent 完了検知、1 軸 (codex) が wrapper の exit 0 内部書き込みで意図的に非対称が残ります (wrapper の dirty 検知と verdict 非依存 atomic rename の防御を維持するため)。
+- **起動・marker 発行経路の単一化**: 3 軸とも `Agent` / `Task` tool で起動し、`auto-mark.sh` が foreground completion と parent-safe report を検証して marker を発行します。Codex wrapper は review 開始時点の hash を pending attestation に束縛し、正規 report 完了後にだけ final marker へ昇格します。
 - **`auto-mark.sh` の簡略化と namespace prefix 必須化**: PRECHECK_RE / case 文は subagent_type が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` (**namespace prefix 必須**) の完全一致のみを検知する形に縮みました。v2.x の name-only 受理は廃止 (他 plugin の同名 subagent が push gate marker を誤って書く bypass 経路を構造排除)。Skill 検知も全廃。
 - **`/pre-push-review:review` slash command は 3 subagent 並列発出に書き換え**: deny メッセージとともに案内され、Claude はコマンド本文に固定された 3 `Agent` / `Task` tool call を 1 つのアシスタントメッセージ内で並列発出するだけです。順序揺れや起動漏れによる無駄ループが構造的に排除されます。wall-clock は最遅レビュー 1 本の時間で完了します。
 
@@ -167,7 +167,7 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 | Agent 名 | 説明 |
 |---------|------|
 | `code-reviewer` | `git push` 前のレビューループの code review (correctness バグ検出) ステップで起動する self-contained subagent (v3.0.0 で追加)。 logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す。 v2.x までの Skill `/code-review` を置換 |
-| `codex-reviewer` | `git push` 前のレビューループの codex review ステップで起動する最小 subagent (v3.0.0 で追加)。 内部で `hooks/scripts/run-codex-review.sh` wrapper を foreground で 1 回起動し、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。 codex-reviewed marker は wrapper 自身が atomic rename で書く設計を維持。 v2.x までの Bash 直接起動を置換 |
+| `codex-reviewer` | `git push` 前のレビューループの codex review ステップで起動する最小 subagent (v3.0.0 で追加)。内部で `hooks/scripts/run-codex-review.sh` wrapper を foreground で 1 回起動し、raw output は subagent context に留めて parent-safe report へ抽象化する。wrapper の pending attestation は正規 report 完了後に `auto-mark.sh` が codex-reviewed marker へ昇格する。v2.x までの Bash 直接起動を置換 |
 | `security-reviewer` | `git push` 前のレビューループの security review ステップで起動する self-contained subagent。 input validation / authn / crypto / injection / data exposure の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す。 標準 `/security-review` skill を invoke しないのは、 直接呼ぶと主 session の turn が終了し、 subagent 内から呼んでも標準 skill が要求する nested subagent (Task tool) が Claude Code の制約で動かないため |
 
 #### Codex 配布状態

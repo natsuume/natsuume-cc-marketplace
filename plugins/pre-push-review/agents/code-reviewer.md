@@ -101,7 +101,9 @@ self-contained reviewer, use `not-applicable` unless you are carrying forward
 an externally supplied severity. If any source finding is P0, normalize it to `Severity: P1`,
 retain `Source severity: P0`, and set
 `Disposition: must-fix-before-push`. Never map source P0 to P2/P3 or omit its
-source severity.
+source severity. If source severity is `unknown` and impact cannot be mapped
+confidently, default to `Severity: P1` and
+`Disposition: must-fix-before-push` rather than inventing a lower priority.
 
 Never delete, downgrade, or mark a critical finding as deferrable merely because its mechanics must be abstracted. If a required value cannot be determined without exposing executable detail, write `unknown` and state the non-sensitive reason.
 

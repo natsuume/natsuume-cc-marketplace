@@ -74,6 +74,7 @@ class ReviewerParentSafeReportContractTest(unittest.TestCase):
                 self.assertIn("Source severity: P0", body)
                 self.assertIn("normalize it to `Severity: P1`", body)
                 self.assertIn("Disposition: must-fix-before-push", body)
+                self.assertIn("default to `Severity: P1`", body)
 
     def test_codex_reviewer_no_longer_relays_wrapper_output_verbatim(self) -> None:
         body = self.read(AGENTS["Codex"])

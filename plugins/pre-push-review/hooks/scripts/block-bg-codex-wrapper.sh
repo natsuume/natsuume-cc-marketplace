@@ -18,17 +18,19 @@
 #
 # ## なぜ必要か
 #
-# v1.1.0 で codex review は wrapper script (run-codex-review.sh) 経由に切替え、 wrapper 自身が
-# 完了時に codex marker を書く設計に統一した。 これは silent failure 経路を排除する意図だが、
-# **wrapper を Bash tool の `run_in_background: true` で起動すると新たな regression が発生する**:
+# v1.1.0 で codex review は wrapper script (run-codex-review.sh) 経由に切替えた。当時は
+# wrapper 自身が完了時に codex marker を書いていたが、v4.0.1 では review 開始時点の hash を
+# pending attestation に書き、codex-reviewer の parent-safe report 完了後に auto-mark.sh が
+# final marker へ昇格する設計へ変更した。それでも **wrapper を Bash tool の
+# `run_in_background: true` で起動すると regression が発生する**:
 #   - wrapper 内部の `node codex-companion.mjs review --wait --scope branch` は foreground で
-#     完走するため codex review 自体は正しく実行される
-#   - wrapper 完了時に codex marker は書き込まれる (= block-pre-push.sh の hash check は通る)
-#   - **しかし主 Claude session は wrapper の stdout / stderr (= codex review の verdict /
-#     findings) を観察しない**。 Bash tool は bg 起動の場合 `BashOutput` で後追い取得する
-#     必要があるが、 push gate は marker の存在だけ確認するため、 主 session は review 結果を
-#     見ずに push に進める経路ができる。 結果として review 指摘が修正されないまま push が
-#     通過する **foreground review 要件の regression**
+#     完走するが、codex-reviewer subagent の Agent tool は先に完了しうる
+#   - **codex-reviewer subagent が wrapper の stdout / stderr (= codex review の verdict /
+#     findings) を観察できず、parent-safe report を正規化できない**。Bash tool は bg 起動の
+#     場合 `BashOutput` で後追い取得する必要があるため、review cycle と Agent completion の
+#     順序が分離される
+#   - final marker は report 成功前には発行されないので push gate bypass にはならないが、
+#     後から stale pending attestation だけが残り、review 完了を正しく配送できない
 #
 # v1.0.0 までは PreToolUse の `block-bg-codex-review.sh` が `run_in_background: true` を deny
 # して同類の問題を防いでいたが、 v1.1.0 で Skill 経由 `/codex:review` 廃止に伴い不要として
@@ -36,14 +38,15 @@
 # 本 hook を再導入する。
 #
 # v3.0.0 で codex review は `pre-push-review:codex-reviewer` subagent 経由の起動に統一されたが、
-# **メインセッションが wrapper を直接 Bash 実行しても同じく marker が書かれてしまい**、
+# 当時は **メインセッションが wrapper を直接 Bash 実行しても同じく marker が書かれてしまい**、
 # subagent 経由での起動は agents/codex-reviewer.md の指示文という prompt 規律だけで担保されて
 # いた (issue #267)。 メインセッションによる直接実行は subagent が持つ context isolation
 # (詳細出力を subagent context に閉じ込め、 親 session には report だけを返す設計) を毀損する。
-# さらに marker は wrapper 自身が書き込む (= tool 呼び出し元を区別しない) ため、 **呼び出し元
-# (caller) の検証こそが本 gate の唯一の防御層**になる。 v4.0.0 で agent_type gate (下記) を
-# 追加し、 `pre-push-review:codex-reviewer` subagent 以外からの wrapper 起動を fail-closed に
-# deny するようにした。
+# v4.0.0 で agent_type gate (下記) を追加し、 `pre-push-review:codex-reviewer` subagent 以外から
+# の wrapper 起動を fail-closed に deny するようにした。v4.0.1 では direct wrapper が作れる
+# のは pending attestation までで、対応する正規 Agent report がなければ final marker には
+# ならないが、raw review output の親 context 流入と、不正な caller が残す pending artifact を
+# 防ぐため caller gate は引き続き必要。
 #
 # その後の codex review (P2 指摘) で、 agent_type gate が command 文字列に
 # `run-codex-review.sh` substring を含むだけで無条件に発火するため、 wrapper を実行せず
@@ -135,7 +138,7 @@ source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
 # いる)。
 # shellcheck source=lib/cmd-parser.sh
 source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/cmd-parser.sh"
-install_exit_trap "block-bg-codex-wrapper" "run-codex-review wrapper の background 起動 deny が機能していない可能性があり、 wrapper を bg で起動した際に marker が書かれて review 結果未観察のまま push が通る経路に戻っているかもしれません。"
+install_exit_trap "block-bg-codex-wrapper" "run-codex-review wrapper の background 起動 deny が機能していない可能性があり、 codex-reviewer が review 結果を観察できず parent-safe report を正しく返せないかもしれません。"
 
 INPUT=$(cat)
 
@@ -544,7 +547,7 @@ if [ "$RUN_IN_BG" = "true" ]; then
   REASON=$(cat <<'EOF'
 プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper を `run_in_background: true` で起動することはできません。
 
-理由: wrapper 自身は foreground で codex review を実行して marker を書きますが、 Bash tool の `run_in_background: true` で起動すると **主 Claude session は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しません**。 主 session は marker の存在だけで push gate を通過してしまうため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。
+理由: wrapper 自身は codex review を foreground で実行しますが、 Bash tool の `run_in_background: true` で起動すると **codex-reviewer subagent は wrapper の stdout / stderr (= codex review の verdict / findings) を観察できないまま完了しうる**ため、parent-safe report を正しく組み立てられません。v4.0.1 以降は wrapper が pending attestation を書いても、正規 report 成功前に final marker へ昇格しないため push gate bypass にはなりませんが、review cycle と report delivery が分離し、stale pending だけが残る不正な完了になります。
 
 対応: `run_in_background: true` を使わず、 wrapper を plain foreground の単独コマンドとして再実行してください。 wrapper は内部で codex companion を `--wait` で foreground 起動するため、 Bash 呼び出し自体が review 完了まで block しますが、 これが本プラグインの想定する正しい使い方です (= review 結果を観察してから push 判断する)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent を再起動してください。
 EOF
@@ -553,7 +556,7 @@ elif [ "$HAS_INDIRECTION" -eq 1 ]; then
   REASON=$(cat <<'EOF'
 プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper を shell-level の `&` (background) や `|` (pipeline) で起動することはできません。
 
-理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動するため、 **主 Claude session は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しない / 途中でしか観察しない** 経路ができます。 主 session は marker の存在だけで push gate を通過してしまうため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。
+理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動したり、output を別 process が変換したりするため、 **codex-reviewer subagent が wrapper の verdict / findings を観察しない / 不完全にしか観察しない** 経路ができます。pending attestation と schema 上の report だけが揃っても、report の根拠となる review output を完全に観察した保証がないため、foreground review 要件に反します。
 
 本コマンドはコマンド置換 `$(...)` 等の間接実行 (indirection) を含むため、 `&` / `|` が wrapper 呼び出しの直前・直後に隣接していなくても **位置を問わず** deny しています (indirection 経由の実行は、 substring を含む segment と実際に wrapper を実行する segment の対応関係を本 parser が追跡できないため、 保守的に deny する必要があります)。
 
@@ -564,7 +567,7 @@ else
   REASON=$(cat <<'EOF'
 プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper を shell-level の `&` (background) や `|` (pipeline) で起動することはできません。
 
-理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動するため、 **主 Claude session は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しない / 途中でしか観察しない** 経路ができます。 主 session は marker の存在だけで push gate を通過してしまうため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。
+理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動したり、output を別 process が変換したりするため、 **codex-reviewer subagent が wrapper の verdict / findings を観察しない / 不完全にしか観察しない** 経路ができます。pending attestation と schema 上の report だけが揃っても、report の根拠となる review output を完全に観察した保証がないため、foreground review 要件に反します。
 
 対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent を再起動してください。
 EOF

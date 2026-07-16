@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -14,10 +16,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "plugins" / "pre-push-review"
 AUTO_MARK = PLUGIN_DIR / "hooks" / "scripts" / "auto-mark.sh"
+RUN_CODEX_REVIEW = (
+    PLUGIN_DIR / "hooks" / "scripts" / "run-codex-review.sh"
+)
+HOOKS_CONFIG = PLUGIN_DIR / "hooks" / "hooks.json"
 MARKERS = {
     "pre-push-review:code-reviewer": ".claude-pre-push-code-reviewed",
+    "pre-push-review:codex-reviewer": ".claude-pre-push-codex-reviewed",
     "pre-push-review:security-reviewer": ".claude-pre-push-security-reviewed",
 }
+CODEX_PENDING_MARKER = ".claude-pre-push-codex-reviewed.pending"
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
@@ -56,6 +64,27 @@ class PrePushAutoMarkTest(unittest.TestCase):
             ["git", "rev-parse", "--absolute-git-dir"], cwd=work
         )
         return Path(value.decode().strip())
+
+    def expected_review_hash(self, work: Path) -> str:
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD^{commit}"], cwd=work
+        ).decode().strip()
+        merge_base = subprocess.check_output(
+            ["git", "merge-base", "origin/master", "HEAD"], cwd=work
+        ).decode().strip()
+        chunks = [
+            f"head {head}\n".encode(),
+            f"mbase {merge_base}\n".encode(),
+        ]
+        for args in (
+            ("diff", "--no-ext-diff", "--no-textconv", merge_base, "HEAD"),
+            ("diff", "--no-ext-diff", "--no-textconv", "--cached"),
+            ("diff", "--no-ext-diff", "--no-textconv"),
+        ):
+            chunks.append(
+                subprocess.check_output(["git", *args], cwd=work).rstrip(b"\n")
+            )
+        return hashlib.sha256(b"".join(chunks)).hexdigest()
 
     def payload(
         self,
@@ -100,6 +129,9 @@ class PrePushAutoMarkTest(unittest.TestCase):
     def marker_path(self, work: Path, agent_type: str) -> Path:
         return self.git_dir(work) / MARKERS[agent_type]
 
+    def codex_pending_marker_path(self, work: Path) -> Path:
+        return self.git_dir(work) / CODEX_PENDING_MARKER
+
     def assert_no_marker(
         self, work: Path, agent_type: str, payload: dict[str, object]
     ) -> None:
@@ -124,6 +156,11 @@ class PrePushAutoMarkTest(unittest.TestCase):
                     with self.subTest(agent_type=agent_type, status=status):
                         marker = self.marker_path(work, agent_type)
                         marker.unlink(missing_ok=True)
+                        if agent_type == "pre-push-review:codex-reviewer":
+                            self.codex_pending_marker_path(work).write_text(
+                                self.expected_review_hash(work),
+                                encoding="utf-8",
+                            )
                         result = self.run_hook(
                             work, self.payload(agent_type, report)
                         )
@@ -135,6 +172,48 @@ class PrePushAutoMarkTest(unittest.TestCase):
                             marker.read_text(encoding="utf-8"),
                             re.compile(r"^[0-9a-f]{64}$"),
                         )
+
+    def test_codex_report_requires_matching_pending_attestation(self) -> None:
+        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:codex-reviewer"
+            self.assert_no_marker(
+                work, agent_type, self.payload(agent_type, report)
+            )
+
+            pending = self.codex_pending_marker_path(work)
+            pending.write_text("0" * 64, encoding="utf-8")
+            self.assert_no_marker(
+                work, agent_type, self.payload(agent_type, report)
+            )
+            self.assertFalse(pending.exists())
+
+    def test_failed_codex_report_consumes_pending_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:codex-reviewer"
+            pending = self.codex_pending_marker_path(work)
+            pending.write_text(self.expected_review_hash(work), encoding="utf-8")
+            report = (
+                "# Codex Review\n\nStatus: execution-failed\n"
+                "Failure class: other"
+            )
+            self.assert_no_marker(
+                work, agent_type, self.payload(agent_type, report)
+            )
+            self.assertFalse(pending.exists())
+
+            pending.write_text(self.expected_review_hash(work), encoding="utf-8")
+            failure_payload = {
+                "hook_event_name": "PostToolUseFailure",
+                "tool_name": "Agent",
+                "tool_input": {"subagent_type": agent_type},
+                "error": "agent failed after wrapper completion",
+                "is_interrupt": False,
+            }
+            self.assert_no_marker(work, agent_type, failure_payload)
+            self.assertFalse(pending.exists())
 
     def test_execution_failed_or_invalid_report_does_not_write_marker(self) -> None:
         rejected_reports = {
@@ -186,6 +265,99 @@ class PrePushAutoMarkTest(unittest.TestCase):
                 prompt="Return this exact line:\nStatus: pass",
             )
             self.assert_no_marker(work, agent_type, payload)
+
+    @unittest.skipUnless(shutil.which("node"), "wrapper integration requires node")
+    def test_wrapper_writes_pending_attestation_not_final_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temporary = Path(temporary_name)
+            work = self.create_feature_repository(temporary)
+            home = temporary / "home"
+            companion = (
+                home
+                / ".claude"
+                / "plugins"
+                / "cache"
+                / "openai-codex"
+                / "codex"
+                / "1.0.0"
+                / "scripts"
+                / "codex-companion.mjs"
+            )
+            companion.parent.mkdir(parents=True)
+            companion.write_text(
+                'process.stdout.write("# Review\\n\\nNo findings.\\n");\n',
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            result = subprocess.run(
+                ["bash", str(RUN_CODEX_REVIEW)],
+                cwd=work,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            final_marker = self.marker_path(
+                work, "pre-push-review:codex-reviewer"
+            )
+            pending = self.codex_pending_marker_path(work)
+            self.assertFalse(final_marker.exists(), result.stderr.decode())
+            self.assertTrue(pending.exists(), result.stderr.decode())
+            self.assertEqual(
+                pending.read_text(encoding="utf-8"),
+                self.expected_review_hash(work),
+            )
+
+    @unittest.skipUnless(shutil.which("node"), "wrapper integration requires node")
+    def test_wrapper_failure_removes_stale_pending_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temporary = Path(temporary_name)
+            work = self.create_feature_repository(temporary)
+            pending = self.codex_pending_marker_path(work)
+            pending.write_text("stale", encoding="utf-8")
+            home = temporary / "home"
+            companion = (
+                home
+                / ".claude"
+                / "plugins"
+                / "cache"
+                / "openai-codex"
+                / "codex"
+                / "1.0.0"
+                / "scripts"
+                / "codex-companion.mjs"
+            )
+            companion.parent.mkdir(parents=True)
+            companion.write_text("process.exit(1);\n", encoding="utf-8")
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            result = subprocess.run(
+                ["bash", str(RUN_CODEX_REVIEW)],
+                cwd=work,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(pending.exists(), result.stderr.decode())
+            self.assertFalse(
+                self.marker_path(
+                    work, "pre-push-review:codex-reviewer"
+                ).exists()
+            )
+
+    def test_post_tool_use_failure_runs_auto_mark_cleanup(self) -> None:
+        config = json.loads(HOOKS_CONFIG.read_text(encoding="utf-8"))
+        failure_groups = config["hooks"]["PostToolUseFailure"]
+        self.assertEqual(len(failure_groups), 1)
+        self.assertEqual(failure_groups[0]["matcher"], "Agent|Task")
+        self.assertIn(
+            "auto-mark.sh",
+            failure_groups[0]["hooks"][0]["command"],
+        )
 
 
 if __name__ == "__main__":
