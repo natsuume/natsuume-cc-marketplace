@@ -95,7 +95,10 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             temporary = Path(temporary_name)
             work = self.create_feature_repository(temporary)
 
-            result = self.run_push_hook(work, self.claude_env())
+            result = self.run_push_hook(
+                work,
+                self.claude_env(temporary / "claude-plugin-data"),
+            )
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             response = json.loads(result.stdout)
             reason = response["hookSpecificOutput"]["permissionDecisionReason"]
@@ -140,28 +143,38 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             / self.expected_repo_key(work)
         )
 
-    def claude_env(self, *, empty_plugin_root: bool = False) -> dict[str, str]:
+    def claude_env(self, plugin_data: Path) -> dict[str, str]:
         env = os.environ.copy()
-        if empty_plugin_root:
-            env["PLUGIN_ROOT"] = ""
-        else:
-            env.pop("PLUGIN_ROOT", None)
+        env.pop("PLUGIN_ROOT", None)
         env.pop("PLUGIN_DATA", None)
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_DIR)
+        env["CLAUDE_PLUGIN_DATA"] = str(plugin_data)
         return env
 
-    def codex_env(self, plugin_data: Path) -> dict[str, str]:
+    def codex_env(
+        self,
+        plugin_data: Path,
+        *,
+        bare_plugin_data: Path | None = None,
+    ) -> dict[str, str]:
         env = os.environ.copy()
-        env["PLUGIN_ROOT"] = str(PLUGIN_DIR)
-        env["PLUGIN_DATA"] = str(plugin_data)
+        env.pop("PLUGIN_ROOT", None)
+        env.pop("PLUGIN_DATA", None)
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_DIR)
+        env["CLAUDE_PLUGIN_DATA"] = str(plugin_data)
+        if bare_plugin_data is not None:
+            env["PLUGIN_DATA"] = str(bare_plugin_data)
         return env
 
     def codex_missing_data_env(self, value: str | None) -> dict[str, str]:
         env = os.environ.copy()
-        env["PLUGIN_ROOT"] = str(PLUGIN_DIR)
+        env.pop("PLUGIN_ROOT", None)
+        env.pop("PLUGIN_DATA", None)
+        env["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN_DIR)
         if value is None:
-            env.pop("PLUGIN_DATA", None)
+            env.pop("CLAUDE_PLUGIN_DATA", None)
         else:
-            env["PLUGIN_DATA"] = value
+            env["CLAUDE_PLUGIN_DATA"] = value
         return env
 
     def write_git_markers(self, work: Path, review_hash: str) -> None:
@@ -215,13 +228,19 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
         )
 
     def run_push_hook(
-        self, work: Path, env: dict[str, str]
+        self,
+        work: Path,
+        env: dict[str, str],
+        *,
+        turn_id: str | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         payload = {
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {"command": "git push origin HEAD"},
         }
+        if turn_id is not None:
+            payload["turn_id"] = turn_id
         return subprocess.run(
             ["bash", str(HOOK)],
             cwd=work,
@@ -263,14 +282,16 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
                 {path.name for path in marker_dir.iterdir()}, set(MARKER_NAMES)
             )
 
-            allowed = self.run_push_hook(work, env)
+            allowed = self.run_push_hook(work, env, turn_id="turn-test")
             self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
             self.assertEqual(allowed.stdout, b"")
 
             (work / "example.txt").write_text("changed again\n", encoding="utf-8")
             self.git(work, "add", "example.txt")
             self.git(work, "commit", "-m", "change state")
-            self.assert_push_denied(self.run_push_hook(work, env))
+            self.assert_push_denied(
+                self.run_push_hook(work, env, turn_id="turn-test")
+            )
 
     def test_subagent_stop_rejects_bad_footer_unknown_agent_reentry_and_claude(self) -> None:
         marker_name = ".claude-pre-push-code-reviewed"
@@ -320,7 +341,11 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
                 "correctness",
             )
             payload.pop("turn_id")
-            result = self.run_codex_auto_mark(work, payload, env)
+            result = self.run_codex_auto_mark(
+                work,
+                payload,
+                self.claude_env(plugin_data),
+            )
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertEqual(result.stdout, b"")
             self.assertEqual(result.stderr, b"")
@@ -405,20 +430,57 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
                 result = self.run_push_hook(
                     work,
                     self.codex_missing_data_env(plugin_data),
+                    turn_id="turn-test",
                 )
                 self.assert_push_denied(result)
 
     def test_claude_surface_uses_git_markers(self) -> None:
-        for label, empty_root in (("unset", False), ("empty", True)):
-            with self.subTest(plugin_root=label), tempfile.TemporaryDirectory() as name:
-                work = self.create_feature_repository(Path(name))
-                self.write_git_markers(work, self.expected_review_hash(work))
-                result = self.run_push_hook(
-                    work,
-                    self.claude_env(empty_plugin_root=empty_root),
-                )
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(result.stdout, b"")
+        with tempfile.TemporaryDirectory() as name:
+            temporary = Path(name)
+            work = self.create_feature_repository(temporary)
+            plugin_data = temporary / "claude-plugin-data"
+            self.write_git_markers(work, self.expected_review_hash(work))
+            result = self.run_push_hook(work, self.claude_env(plugin_data))
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(result.stdout, b"")
+            self.assertFalse(
+                (self.codex_marker_dir(work, plugin_data) / MARKER_NAMES[0]).exists()
+            )
+
+    def test_codex_prefers_bare_plugin_data_over_compatibility_name(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            temporary = Path(name)
+            work = self.create_feature_repository(temporary)
+            compatibility_data = temporary / "compatibility-plugin-data"
+            bare_data = temporary / "bare-plugin-data"
+            env = self.codex_env(
+                compatibility_data,
+                bare_plugin_data=bare_data,
+            )
+            payload = self.subagent_payload(
+                work,
+                "pre_push_correctness_reviewer",
+                "# Correctness Review",
+                "correctness",
+            )
+
+            result = self.run_codex_auto_mark(work, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            bare_marker = self.codex_marker_dir(work, bare_data) / MARKER_NAMES[0]
+            self.assertTrue(bare_marker.exists(), result.stderr.decode())
+            self.assertFalse(
+                (
+                    self.codex_marker_dir(work, compatibility_data)
+                    / MARKER_NAMES[0]
+                ).exists()
+            )
+            self.assertFalse(
+                (self.absolute_git_dir(work) / MARKER_NAMES[0]).exists()
+            )
+
+            allowed = self.run_push_hook(work, env, turn_id="turn-test")
+            self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
+            self.assertEqual(allowed.stdout, b"")
 
 
 class SetupCodexAgentsTest(unittest.TestCase):
