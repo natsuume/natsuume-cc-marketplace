@@ -40,7 +40,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [git-guardrails](#git-guardrails) | 0.5.0 | 0.5.0 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.3.0 | 0.3.0 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.5.0 | 0.5.0 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 3.1.4 | — | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-review](#pre-push-review) | 4.0.0 | — | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
 | [update-default-branch](#update-default-branch) | 0.3.0 | 0.3.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.9.0 | 0.9.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.17.1 | 0.17.2 | 作業規律を runtime 別の SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知する。Codex は GPT-5.6 Sol / Luna native prompt、provider/privacy 明示 opt-in、明示 follow-through Skill を提供 |
@@ -172,7 +172,7 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 
 #### Codex 配布状態
 
-pre-push-review は Codex marketplace の配布対象外です。現行 Codex runtime の `spawn_agent` schema に `agent_type` selector がなく、`agent_type=default` の generic agent は reviewer identity を認証できません。heading/footer は任意の agent が生成できるため marker の権限根拠にせず、Codex entry、manifest、Skill、hook を生成しない fail-closed の配布契約とします。Claude Code 版 v3.1.4 は引き続き利用できます。
+pre-push-review は Codex marketplace の配布対象外です。現行 Codex runtime の `spawn_agent` schema に `agent_type` selector がなく、`agent_type=default` の generic agent は reviewer identity を認証できません。heading/footer は任意の agent が生成できるため marker の権限根拠にせず、Codex entry、manifest、Skill、hook を生成しない fail-closed の配布契約とします。Claude Code 版は引き続き利用できます。
 
 Codex 版 v3.1.4 以前をインストール済みの場合、marketplace からの除外だけでは local config と cache は削除されません。`codex plugin remove pre-push-review@natsuume-plugins` を実行してから新しい Codex thread を開始してください。旧 thread や残存 cache の `default` fallback を使い続けないでください。
 
