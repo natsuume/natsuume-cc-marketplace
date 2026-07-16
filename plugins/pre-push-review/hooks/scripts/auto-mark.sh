@@ -1,24 +1,80 @@
 #!/bin/bash
 # auto-mark.sh
-# pre-push-review の 3 reviewer subagent の
-# 実行完了を PostToolUse で検知し、対応するレビューマーカーを更新する。
+# pre-push-review の 3 reviewer subagent の実行完了を subagent lifecycle hook
+# (SubagentStart / SubagentStop) で検知し、対応するレビューマーカーを更新する。
+#
+# ============================================================================
+# 設計契約 (issue #285 Phase A — 本ヘッダが契約の正本。実装本体は Phase B で
+# 本契約へ更新される。受入テスト: tests/test_pre_push_auto_mark.py)
+# ============================================================================
+#
+# 背景 (#285): Claude Code v2.1.198 以降、Agent tool は既定で background 起動に
+# なり、PostToolUse は起動受理時 (tool_response.status="async_launched") に
+# 1 回発火するのみで、subagent 完了時には発火しない。v4.0.x までの本 hook は
+# PostToolUse の completed payload を検証していたため、async 起動 harness では
+# marker が永遠に書かれず push gate が恒久 deny になっていた。v4.1.0 で
+# completion 検知を SubagentStop へ完全移行し、SubagentStart の launch
+# attestation で「レビューがこの差分に対して開始された」ことを束縛する。
+#
+# イベント別契約:
+#
+# - SubagentStart (hooks.json matcher: ^pre-push-review:(code|codex|security)-reviewer$):
+#   1. agent_type が 3 reviewer の完全一致でなければ exit 0 (script 側でも再検証。
+#      matcher の regex 解釈には依存しない)
+#   2. agent_id が ^[A-Za-z0-9._-]{1,128}$ に一致しなければ exit 0 (path 混入防止。
+#      filesystem 操作は一切行わない)
+#   3. base 検出不能 / branch 取得不能 / master・main / hash 計算失敗 →
+#      attestation を書かず exit 0 (block-pre-push.sh の pass-through / deny 条件と
+#      整合)
+#   4. 1 日より古い launch attestation (.claude-pre-push-launch-*) を
+#      opportunistic に削除する (stale 掃除、best-effort)
+#   5. 開始時 review hash を launch attestation
+#      (git-dir/.claude-pre-push-launch-<agent_id>) へ temp file + mv で atomic に
+#      書く
+#
+# - SubagentStop (同 matcher):
+#   1. agent_type / agent_id を SubagentStart と同じ基準で検証。不一致は exit 0
+#      (attestation に触れない)
+#   2. stop_hook_active が boolean false でなければ、attestation を消費せず exit 0
+#      (stop hook 継続中の中間 stop。最終 stop で改めて検証する)
+#   3. launch attestation が無ければ exit 0 (SendMessage resume 後の再 stop・
+#      移行前起動・main session からの偽装 stop はここで遮断される)
+#   4. attestation は最初の SubagentStop で必ず消費する (読み取り後に削除。
+#      one-shot。以降の検証が失敗しても再 stop で marker を書ける経路を残さない)
+#   5. last_assistant_message (string) 全体を行分割し、
+#      ^Status: (pass|findings|execution-failed)$ に一致する行がちょうど 1 つ、
+#      かつ値が pass|findings のときのみ有効な report とみなす。execution-failed /
+#      欠落 / 重複 / 未知値 / 非 string は fail-closed に skip
+#   6. base / branch / master・main / 現在 hash の計算は従来どおり (失敗は skip)
+#   7. launch attestation の開始時 hash と現在 hash が一致するときのみ marker を
+#      書く (レビュー開始後の差分変更を fail-closed に遮断)
+#   8. codex-reviewer はさらに wrapper (run-codex-review.sh) の pending
+#      attestation が symlink でない regular file かつ内容が現在 hash と一致する
+#      場合のみ、同一 filesystem 内 rename で final marker へ昇格する。不一致・
+#      symlink・欠落は pending を消費 (削除) して skip
+#
+# - PostToolUseFailure (hooks.json matcher: Agent|Task):
+#   Agent tool 呼び出し自体の失敗時に codex pending attestation を破棄する
+#   best-effort の補助掃除経路。async harness では tool call は起動受理で成功する
+#   ため主経路にはならない (失敗した subagent は Status 行の無い stop として
+#   SubagentStop 側 4-5 で遮断される)
+#
+# - 旧 PostToolUse completion payload (status="completed" + final text) では
+#   marker を書かない (完全移行。hooks.json の PostToolUse 配線も撤去する)
 #
 # policy: environment errors are fail-open, review completion is fail-closed
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を
 #   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh は fail-closed。
 #   同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
-#   ただし Agent の completion 証明は fail-closed: tool_response.status が completed で、
-#   final text に単一の正規 Status (`pass` / `findings`) がある場合だけ marker を書く。
-#   async_launched / execution-failed / status 欠落・重複・未知値はすべて skip する。
+#   ただし completion 証明は fail-closed: 上記 SubagentStop 契約の 1〜8 を
+#   すべて満たす場合だけ marker を書く。
 #
-# 検知対象 (3 マーカー構成 / v3.0.0):
-#   - Agent/Task で `pre-push-review:code-reviewer` が foreground 完了し、
-#     parent-safe report が pass/findings → code-reviewed marker
-#   - Agent/Task で `pre-push-review:security-reviewer` が foreground 完了し、
-#     parent-safe report が pass/findings → security-reviewed marker
-#   - Agent/Task で `pre-push-review:codex-reviewer` が foreground 完了し、
-#     parent-safe report が pass/findings、かつ wrapper の pending attestation が現在 hash と
-#     一致 → codex-reviewed marker
+# 検知対象 (3 マーカー構成 / v3.0.0、v4.1.0 で lifecycle hook へ移行):
+#   - `pre-push-review:code-reviewer` の SubagentStop
+#     (launch attestation + parent-safe report pass/findings) → code-reviewed marker
+#   - `pre-push-review:security-reviewer` の SubagentStop (同上) → security-reviewed marker
+#   - `pre-push-review:codex-reviewer` の SubagentStop (同上 + wrapper pending
+#     attestation の現在 hash 一致) → codex-reviewed marker
 #
 # **v3.0.0 で Skill 検知を全廃**: v2.x までは `/code-review` / `/security-review` 標準 skill を
 # Skill tool 経由で直接呼ぶケースも検知して marker を書いていた (後方互換 + ユーザの誤起動
