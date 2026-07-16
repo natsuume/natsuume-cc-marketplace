@@ -269,6 +269,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         expected = (
             "gh pr create --draft --title \"t\" --body-file - <<'EOF'"
@@ -276,6 +278,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
@@ -286,6 +290,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         expected = (
             'gh pr create --draft --title "t" --body-file - <<"EOF"'
@@ -293,6 +299,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
@@ -305,6 +313,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         expected = (
             'gh pr create --draft --title "t" --body-file - <<'
@@ -314,6 +324,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
@@ -324,6 +336,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         expected = (
             'gh pr create --draft --title "t" --body-file - << EOF'
@@ -331,6 +345,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
@@ -343,6 +359,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + NL
             + TAB
             + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         expected = (
             'gh pr create --draft --title "t" --body-file - <<-EOF'
@@ -352,6 +370,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + NL
             + TAB
             + "EOF"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
@@ -366,6 +386,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "bodyB; gh pr create fakeB"
             + NL
             + "B"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         expected = (
             'cat <<A <<B; gh pr create --draft --title "t" --body "b"'
@@ -377,6 +399,8 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "bodyB; gh pr create fakeB"
             + NL
             + "B"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
@@ -554,14 +578,34 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assert_rewrite(command, expected)
 
     def test_a02_command_position_double_paren_arithmetic(self) -> None:
-        command = '(( n << 2 )); gh pr create --title "t" --body "b"'
-        expected = '(( n << 2 )); gh pr create --draft --title "t" --body "b"'
+        # `<< 2` を heredoc delimiter `2` として誤登録する実装では、2 行目が
+        # heredoc 本文扱いになり挿入が欠落して fail する。
+        command = (
+            '(( n << 2 )); gh pr create --title "t" --body "b"'
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
+        expected = (
+            '(( n << 2 )); gh pr create --draft --title "t" --body "b"'
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
+        )
         self.assert_rewrite(command, expected)
 
     def test_a03_nested_parens_inside_arithmetic(self) -> None:
-        command = 'v=$(( (a+b) << 1 )); gh pr create --title "t" --body "b"'
+        # 最初の `))` で算術式を終了する深度非追跡実装では、内側 `((a+b))` の
+        # 直後の `))` で `$((...))` が閉じたと誤認し、残る `<< 1 ))` の `<< 1` を
+        # heredoc delimiter `1` として誤登録して 2 行目への挿入が欠落し fail する。
+        # 式は bash 実測で valid ($(( ((a+b)) << 1 )) は a=1, b=2 で 6)。
+        command = (
+            'v=$(( ((a+b)) << 1 )); gh pr create --title "t" --body "b"'
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
         expected = (
-            'v=$(( (a+b) << 1 )); gh pr create --draft --title "t" --body "b"'
+            'v=$(( ((a+b)) << 1 )); gh pr create --draft --title "t" --body "b"'
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
@@ -736,6 +780,33 @@ class EnforceDraftPrTest(unittest.TestCase):
             + "EOF"
             + NL
             + ':; gh pr create --draft --title "t2" --body "b2"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_l08_line_continuation_in_heredoc_declaration(self) -> None:
+        # bash 実測 (5.2.21): 行継続で結合された論理行上の `EOF` トークンは
+        # terminator ではなくコマンド引数となり、本文は論理行終端 (実改行) から
+        # 始まる。エスケープ改行を本文モード開始と誤認する実装は 2 行目 `EOF` を
+        # terminator と誤認し、fake への挿入で fail する。
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF '
+            + BS
+            + NL
+            + "EOF"
+            + NL
+            + "still body; gh pr create fake"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF '
+            + BS
+            + NL
+            + "EOF"
+            + NL
+            + "still body; gh pr create fake"
+            + NL
+            + "EOF"
         )
         self.assert_rewrite(command, expected)
 
