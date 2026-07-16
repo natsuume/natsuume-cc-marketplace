@@ -16,7 +16,13 @@
 
 ## バージョン
 
-v4.0.1 (前身: `pre-commit-review` v0.4.0)
+v4.1.0 (前身: `pre-commit-review` v0.4.0)
+
+### v4.0.1 → v4.1.0 の変更点 (issue #285)
+
+- レビュー完了検知を PostToolUse から subagent lifecycle hook (SubagentStart / SubagentStop) へ完全移行した。Claude Code v2.1.198 以降は Agent tool が既定で background 起動になり、PostToolUse は起動受理時 (`status: "async_launched"`) に 1 回発火するのみで完了時には発火しないため、v4.0.x の completion 検証は async 起動 harness で marker を永遠に書けず push gate が恒久 deny になっていた
+- SubagentStart で「agent_id + 開始時 review hash」の launch attestation を one-shot 記録し、SubagentStop で (a) attestation の存在と一回限りの消費 (b) 開始時 hash と現在 hash の一致 (c) `last_assistant_message` 内の単一 `Status: pass|findings` 行 (d) `stop_hook_active == false` をすべて検証した場合のみ marker を書く。SendMessage resume 後の再 stop・レビュー開始後の差分変更・重複 stop は fail-closed に遮断する (codex-reviewer は従来どおり wrapper pending attestation の現在 hash 一致も要求)
+- 旧 PostToolUse completion 経路と hooks.json の PostToolUse 配線を撤去した (PostToolUseFailure による codex pending 破棄は補助掃除経路として維持)
 
 ### v4.0.0 → v4.0.1 の変更点 (issue #281)
 

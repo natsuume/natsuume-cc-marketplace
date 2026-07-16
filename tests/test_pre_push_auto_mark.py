@@ -449,7 +449,7 @@ class PrePushAutoMarkTest(unittest.TestCase):
             self.assert_no_marker(
                 work, agent_type, self.stop_payload(agent_type, report)
             )
-            self.assertFalse(pending.exists(follow_symlinks=False))
+            self.assertFalse(os.path.lexists(pending))
 
     # ------------------------------------------------------------------
     # 旧経路・補助経路
