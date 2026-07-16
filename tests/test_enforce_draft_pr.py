@@ -643,11 +643,19 @@ class EnforceDraftPrTest(unittest.TestCase):
     def test_h17_mixed_mode_heredocs_per_entry_state(self) -> None:
         # 全 entry に単一 mode を共有する誤実装 (例: 全部 quoted 扱い / 全部
         # タブ除去なし) では B の終端を誤り、後続行の挿入欠落または fake への
-        # 挿入で fail する。
+        # 挿入で fail する。さらに A 本文末尾に行末 backslash の行を追加する:
+        # quoted delimiter A は行継続を処理しないため `linecont\` の直後の `A`
+        # 行は terminator として有効 (期待値の終端位置は変わらない)。mode を
+        # 単一変数で保持し後続 entry B (unquoted・tab-strip) が上書きする実装
+        # では、A 本文の行継続が結合されて terminator `A` を見失い、以降の
+        # 解釈がずれて後続行の挿入欠落で fail する。
         command = (
             "cat <<'A' <<-B; gh pr create --title \"t\" --body \"b\""
             + NL
             + "bodyA; gh pr create fakeA"
+            + NL
+            + "linecont"
+            + BS
             + NL
             + "A"
             + NL
@@ -664,6 +672,9 @@ class EnforceDraftPrTest(unittest.TestCase):
             + NL
             + "bodyA; gh pr create fakeA"
             + NL
+            + "linecont"
+            + BS
+            + NL
             + "A"
             + NL
             + TAB
@@ -677,25 +688,52 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assert_rewrite(command, expected)
 
     def test_h18_delimiter_with_digit_and_underscore(self) -> None:
-        # 英字のみ受理する誤実装は EOF_1 を fallback 扱いして後続の挿入欠落で
-        # fail する。
+        # 契約の文字クラスは [A-Za-z0-9_]+ で先頭位置の制限は無い。先頭を英字
+        # や識別子開始文字に限定する誤実装は fallback に落ちて後続の挿入欠落
+        # で fail する。
+        delimiters = ("EOF_1", "1EOF", "_EOF")
+        for delimiter in delimiters:
+            with self.subTest(delimiter=delimiter):
+                command = (
+                    'gh pr create --title "t" --body-file - <<'
+                    + delimiter
+                    + NL
+                    + "body; gh pr create fake"
+                    + NL
+                    + delimiter
+                    + NL
+                    + ':; gh pr create --title "t2" --body "b2"'
+                )
+                expected = (
+                    'gh pr create --draft --title "t" --body-file - <<'
+                    + delimiter
+                    + NL
+                    + "body; gh pr create fake"
+                    + NL
+                    + delimiter
+                    + NL
+                    + ':; gh pr create --draft --title "t2" --body "b2"'
+                )
+                self.assert_rewrite(command, expected)
+
+    def test_h19_opaque_fallback_suppresses_flag_scan(self) -> None:
+        # 不透明化は total であり、fallback 後のテキストは挿入追跡にも falsy
+        # 判定にも使われない。fallback 後も flag スキャンを継続する誤実装は
+        # ここで誤 deny して fail する (H15 の対: fallback 前の falsy は deny、
+        # fallback 後の falsy は不可視)。
         command = (
-            'gh pr create --title "t" --body-file - <<EOF_1'
+            'gh pr create --title "t" --body-file - <<E"OF"'
             + NL
-            + "body; gh pr create fake"
+            + "--draft=false"
             + NL
-            + "EOF_1"
-            + NL
-            + ':; gh pr create --title "t2" --body "b2"'
+            + "EOF"
         )
         expected = (
-            'gh pr create --draft --title "t" --body-file - <<EOF_1'
+            'gh pr create --draft --title "t" --body-file - <<E"OF"'
             + NL
-            + "body; gh pr create fake"
+            + "--draft=false"
             + NL
-            + "EOF_1"
-            + NL
-            + ':; gh pr create --draft --title "t2" --body "b2"'
+            + "EOF"
         )
         self.assert_rewrite(command, expected)
 
