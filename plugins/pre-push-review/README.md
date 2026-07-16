@@ -24,8 +24,9 @@ v4.0.1 (前身: `pre-commit-review` v0.4.0)
 - `codex-reviewer` が wrapper の stdout / stderr を verbatim relay する挙動を廃止した。raw output は subagent context / transcript に留め、親へは各 finding を抽象化した summary、または正規化した execution failure だけを返す
 - `code-reviewer` / `security-reviewer` も、内部では具体的な failure / attack scenario を検証しつつ、実行可能な command、再利用可能な payload、具体的な環境値、段階的な再現・回避手順を final report へ含めない
 - exact detail を使った追加検証は、親へ raw detail を返す代わりに同一 reviewer subagent を resume して行い、結果だけを parent-safe report で返す
-- `/pre-push-review:review` の 3 delegation prompt も parent-safe report を明示的に要求し、codex wrapper の stdout / stderr をまとめて返す旧指示を削除した
-- agent 定義と command の contract test を追加し、必須 field と raw detail relay 禁止規律を固定した
+- `/pre-push-review:review` の 3 delegation prompt も parent-safe report を明示的に要求し、codex wrapper の stdout / stderr をまとめて返す旧指示を削除した。3 Agent call は `run_in_background: false` を明記し、Claude Code の background-default 時にも launch を review 完了と誤認しない
+- `auto-mark.sh` は Agent PostToolUse の `tool_response.status=completed` と final `content[].text` の単一 `Status: pass|findings` を両方確認した場合だけ code/security marker を書くようにした。`async_launched`、`Status: execution-failed`、status 欠落・重複・未知値は marker を書かず、push gate を deny のまま維持する
+- agent 定義・command・auto-mark の contract / integration test を追加し、必須 field、raw detail relay 禁止規律、foreground completion の fail-closed 判定を固定した
 
 ### v3.1.4 → v4.0.0 の変更点 (互換破壊あり / issue #267)
 
@@ -221,12 +222,12 @@ hooks.json の matcher は `"*"` (wildcard) で、 すべての tool 完了時�
 
 | 検知対象                                                | tool 名 | 判定                                                                                                                                                                            | 書き込むマーカー                              |
 | ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `pre-push-review:code-reviewer` subagent の完了 | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:code-reviewer` (**namespace prefix 必須** / v3.0.0 で name-only 受理を廃止) | `<git-dir>/.claude-pre-push-code-reviewed`    |
-| `pre-push-review:security-reviewer` subagent の完了 | `Agent` / `Task` | `tool_input.subagent_type` が `pre-push-review:security-reviewer` (**namespace prefix 必須** / v3.0.0 で name-only 受理を廃止) | `<git-dir>/.claude-pre-push-security-reviewed` |
+| `pre-push-review:code-reviewer` subagent の完了 | `Agent` / `Task` | namespace 付き `subagent_type` + `tool_response.status=completed` + final report の単一 `Status: pass\|findings` | `<git-dir>/.claude-pre-push-code-reviewed`    |
+| `pre-push-review:security-reviewer` subagent の完了 | `Agent` / `Task` | namespace 付き `subagent_type` + `tool_response.status=completed` + final report の単一 `Status: pass\|findings` | `<git-dir>/.claude-pre-push-security-reviewed` |
 
 **subagent を completion タイミングで検知する理由**:
 
-各 subagent は内部で標準 skill を呼ばずに self-contained でレビューを実行します。 PostToolUse hook が Agent / Task 完了で発火するように倒すことで、 subagent が **実際にレビューを完了させた** ことを確認した上でマーカーを書きます。 subagent が途中で失敗した場合 (`tool_response.is_error` / `interrupted`) はマーカーが書かれないため、 push gate がそのまま deny を返してループが続きます (silent-pass しない設計)。
+各 subagent は内部で標準 skill を呼ばずに self-contained でレビューを実行します。 PostToolUse の発火だけでは background Agent の launch や、内部失敗を `Status: execution-failed` で報告した正常 return も含まれるため、auto-mark は `tool_response.status=completed` と final report の正規 Status を併せて検証します。`pass` / `findings` だけが完遂扱いで、外側の `is_error` / `interrupted`、`async_launched`、`execution-failed`、report 不正ではマーカーを書きません。push gate が deny のまま残るため silent-pass しない設計です。
 
 **codex-reviewer subagent が検知対象外な理由**:
 
@@ -235,6 +236,8 @@ codex-reviewer subagent は wrapper script (`run-codex-review.sh`) を foregroun
 **書き込みをスキップする条件**:
 
 - `tool_response.is_error` または `tool_response.interrupted` が `true` (失敗した review 結果でマーカーを書かない)
+- `tool_response.status` が `completed` 以外 (`async_launched` を含む)
+- final `tool_response.content[].text` に単一の `Status: pass` / `Status: findings` が無い (`execution-failed`、欠落、重複、未知値、content shape 不正)
 - `tool_input.subagent_type` が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` 以外 (別の subagent 起動 / name-only 形式 / namespace ミスマッチはマーカー対象外。 codex-reviewer もここで弾かれる)
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)
@@ -264,7 +267,7 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 - tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/code-review` skill を invoke できないようにしている (理由は security-reviewer と同じ; 下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため
 - subagent body には logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリと exclusion ルール (style / docs / perf / refactor / security / pre-existing bug 等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
-- PostToolUse hook (auto-mark.sh) は subagent **完了時** に発火する Agent / Task tool 検知ロジックで code-reviewed マーカーを更新する
+- PostToolUse hook (auto-mark.sh) は foreground subagent の `status=completed` と final report の `Status: pass|findings` を確認して code-reviewed マーカーを更新する
 - model は `inherit` で親 session と同じモデルを使用
 
 #### `pre-push-review:codex-reviewer` (subagent / v3.0.0 で追加)
@@ -294,7 +297,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 - tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/security-review` skill を invoke できないようにしている (理由は下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため
 - subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
-- PostToolUse hook (auto-mark.sh) は subagent **完了時** に発火する Agent / Task tool 検知ロジックで security マーカーを更新する (launch 時点ではなく completion で書くことで、 subagent 失敗時の silent-pass を防ぐ)
+- PostToolUse hook (auto-mark.sh) は foreground subagent の `status=completed` と final report の `Status: pass|findings` を確認して security マーカーを更新する (`async_launched` / `execution-failed` は書かず、silent-pass を防ぐ)
 - model は `inherit` で親 session と同じモデルを使用
 
 #### code-reviewer / security-reviewer subagent が標準 skill を invoke しない理由 (共通)
@@ -303,7 +306,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 (2) subagent 内から invoke しても、 標準 skill 本体は内部で sub-task (Task tool) を spawn する設計だが、 Claude Code は **subagent 内での nested subagent 起動を禁止** している (公式ドキュメント `subagents cannot spawn other subagents`)。 sub-task が動かないため degraded mode で実行される。 v2.x では PostToolUse が Skill launch 時点で発火するためマーカーは書かれてしまい silent-pass の経路があったが、 v3.0.0 で Skill 検知を全廃したのでこの経路は閉じている。
 (3) このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
 
-**呼び出しタイミング (3 subagent 共通)**: `/pre-push-review:review` slash command の指示で 3 並列 `Agent` / `Task` tool calls として起動する。 deny メッセージにも個別起動のフォールバック手順を案内している。
+**呼び出しタイミング (3 subagent 共通)**: `/pre-push-review:review` slash command の指示で `run_in_background: false` の 3 並列 `Agent` / `Task` tool calls として起動する。 deny メッセージにも個別起動のフォールバック手順を案内している。
 
 ## 関連プラグイン
 

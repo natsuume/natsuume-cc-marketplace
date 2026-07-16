@@ -3,14 +3,19 @@
 # pre-push-review:code-reviewer / pre-push-review:security-reviewer subagent の
 # 実行完了を PostToolUse で検知し、対応するレビューマーカーを更新する。
 #
-# policy: fail-open (PostToolUse / 正常完了後の marker 書き込み)
+# policy: environment errors are fail-open, review completion is fail-closed
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を
 #   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh は fail-closed。
 #   同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
+#   ただし Agent の completion 証明は fail-closed: tool_response.status が completed で、
+#   final text に単一の正規 Status (`pass` / `findings`) がある場合だけ marker を書く。
+#   async_launched / execution-failed / status 欠落・重複・未知値はすべて skip する。
 #
 # 検知対象 (3 マーカー構成 / v3.0.0):
-#   - Agent/Task で `pre-push-review:code-reviewer` 完了 → code-reviewed marker
-#   - Agent/Task で `pre-push-review:security-reviewer` 完了 → security-reviewed marker
+#   - Agent/Task で `pre-push-review:code-reviewer` が foreground 完了し、
+#     parent-safe report が pass/findings → code-reviewed marker
+#   - Agent/Task で `pre-push-review:security-reviewer` が foreground 完了し、
+#     parent-safe report が pass/findings → security-reviewed marker
 #
 # codex review は wrapper script (run-codex-review.sh) が自身で marker を書く設計のため
 # 本 hook の対象外 (codex-reviewer subagent も wrapper を内部で foreground 起動するだけで、
@@ -37,10 +42,12 @@
 #     実走完了を hook が捕捉しハッシュを書き込むことで、 すべてが「現在のブランチ全差分」
 #     に対して直近で走ったことを保証する。 codex review だけは wrapper が直接書く
 #     例外設計 (= Claude が wrapper の中身を編集しない限り偽装できない範囲)。
-#   - 「subagent の完了」を Task / Agent 終了で検知するのは、 subagent が
-#     実際にレビュー本体を完了させたタイミングを捉えるため。 launch 時点ではなく
-#     完了時点でマーカーを書くことで、 subagent が途中で失敗した場合に marker が
-#     書かれない (= push gate がそのまま deny) を担保する。
+#   - 「subagent の完了」は Task / Agent の PostToolUse 発火だけでは証明にならない。
+#     Claude Code の Agent は background 起動時にも `async_launched` で正常 return し、
+#     subagent が内部失敗を parent-safe report の `Status: execution-failed` として返した場合も
+#     外側の tool call 自体は成功する。そこで tool_response.status と final report の Status
+#     を併せて検証し、 launch 時点や内部失敗時には marker を書かない
+#     (= push gate がそのまま deny) ことを担保する。
 #
 # レビュー対象 repo の前提 (block-pre-push.sh との非対称について):
 #   本 hook は dirty 判定 / base 検出 / branch / ハッシュ計算 / marker パスを **すべて
@@ -60,8 +67,9 @@
 #   存在しないため)。
 
 # 予期せぬエラー時の診断 trap を install (実装は lib/exit-trap.sh)。
-# 本 hook の通常パスは「対象ツールでない → exit 0」「対象ツールだがエラー / 中断 → exit 0」
-# 「対象ツール完了 → marker 書き込み → exit 0」 のいずれも exit 0 で抜ける silent skip 設計。
+# 本 hook の通常パスは「対象ツールでない → exit 0」「対象ツールだが未完了 / エラー /
+# execution-failed / report 不正 → exit 0」「対象ツール完了 + report 正常 → marker 書き込み
+# → exit 0」 のいずれも exit 0 で抜ける silent skip 設計。
 # 想定外の非ゼロ終了が発生した場合のみ stderr に診断ログを出してユーザに知らせる。
 _PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/exit-trap.sh
@@ -164,18 +172,58 @@ case "$TOOL_NAME" in
     ;;
 esac
 
-# ツール実行が失敗 / 中断した場合はレビューが完遂していないためマーカーを更新しない
-# (失敗した review で marker を書くと、その後別の tool の成功と組み合わさって push が
-# 通ってしまう抜け穴になる)。v3.0.0 では Agent / Task 分岐のみ (Skill 分岐は廃止)。
-{ read -r IS_ERROR; read -r INTERRUPTED; } < <(
+# Agent tool の正常 return だけでは review 完遂を証明できない:
+#   - background 起動は `status: async_launched` で正常 return する
+#   - subagent 内部の command / diff 取得失敗は、outer tool error ではなく
+#     parent-safe report の `Status: execution-failed` として返りうる
+# そのため outer error flags に加え、Claude Code 公式の Agent PostToolUse response
+# (`status` + `content[].text`) から final report の Status を検証する。
+#
+# 受理条件は `status: completed` かつ、全 text block を通じて完全一致する Status 行が
+# ちょうど 1 個で、その値が pass / findings のいずれかであること。execution-failed、
+# Status 欠落・重複・未知値、content shape 不正は fail-closed に marker を skip する。
+# tool_input.prompt は検査対象に含めないため、prompt 内の偽 Status 行では spoof できない。
+{ read -r IS_ERROR; read -r INTERRUPTED; read -r REPORT_STATUS; } < <(
   printf '%s' "$INPUT" | jq -r '
-    (.tool_response.is_error // .tool_response.isError // false),
-    (.tool_response.interrupted // false)
+    def normalized_report_status:
+      if ((.status // "") != "completed") or ((.content | type) != "array") then
+        "invalid"
+      else
+        [
+          .content[]
+          | select(
+              (type == "object")
+              and (.type == "text")
+              and ((.text | type) == "string")
+            )
+          | .text
+          | gsub("\r\n"; "\n")
+          | split("\n")[]
+          | select(test("^Status: (pass|findings|execution-failed)$"))
+          | capture(
+              "^Status: (?<status>pass|findings|execution-failed)$"
+            ).status
+        ] as $statuses
+        | if ($statuses | length) == 1 then $statuses[0] else "invalid" end
+      end;
+
+    .tool_response as $response
+    | if ($response | type) != "object" then
+        true, false, "invalid"
+      else
+        ($response.is_error // $response.isError // false),
+        ($response.interrupted // false),
+        ($response | normalized_report_status)
+      end
   '
 )
 if [ "$IS_ERROR" = "true" ] || [ "$INTERRUPTED" = "true" ]; then
   exit 0
 fi
+case "$REPORT_STATUS" in
+  pass|findings) ;;
+  *) exit 0 ;;
+esac
 
 GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 

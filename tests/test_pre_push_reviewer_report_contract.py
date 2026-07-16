@@ -84,6 +84,7 @@ class ReviewerParentSafeReportContractTest(unittest.TestCase):
         body = self.read(COMMAND)
         self.assertIn("parent-safe", body)
         self.assertIn("実行可能な詳細を親 session に返さない", body)
+        self.assertGreaterEqual(body.count("run_in_background: false"), 3)
         self.assertNotIn(
             "stdout / stderr をまとめた markdown report を返してください", body
         )

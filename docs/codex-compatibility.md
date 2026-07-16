@@ -52,7 +52,7 @@ Claude Code marketplace を version 以外の共有 metadata の正本とし、S
 
 | Plugin | Claude component | Source SHA-256 | Disposition | Codex replacement | Reason |
 |---|---|---|---|---|---|
-| `pre-push-review` | `commands/review.md` | `8c63cb9fe56a…` | `surface-unavailable` | — | 現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。 |
+| `pre-push-review` | `commands/review.md` | `0fab204c7819…` | `surface-unavailable` | — | 現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。 |
 | `pre-push-review` | `agents/code-reviewer.md` | `477c89164f05…` | `surface-unavailable` | — | 現行 Codex runtime では correctness reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。 |
 | `pre-push-review` | `agents/codex-reviewer.md` | `48647cc55221…` | `surface-unavailable` | — | 現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。 |
 | `pre-push-review` | `agents/security-reviewer.md` | `f243518b30af…` | `surface-unavailable` | — | 現行 Codex runtime では security reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。 |
