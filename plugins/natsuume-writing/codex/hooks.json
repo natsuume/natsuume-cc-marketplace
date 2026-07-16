@@ -1,0 +1,15 @@
+{
+  "description": "Codex 向けの natsuume-writing 執筆ルール要点を SessionStart で配送します。",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/codex/scripts/inject-session.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

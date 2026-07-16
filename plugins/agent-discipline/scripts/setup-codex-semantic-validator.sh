@@ -60,7 +60,7 @@ fi
 agent_discipline_codex_opt_in_classify
 
 # shellcheck disable=SC2016 # backticks are user-facing literal command notation
-DISCLOSURE='有効化後、この worktree の gh issue/pr create/edit payload（inline body を含む）と、canonical prompt が参照して読み取る --body-file 内容は、親 session とは別の nested `codex exec --ignore-user-config` に送られます。nested process は親と異なる default provider/model を選ぶ可能性があります。この同意は disable するまで当該 Git worktree に永続します。'
+DISCLOSURE='有効化後、この worktree の gh issue/pr create/edit payload（inline body を含む）、shell adapter が明示参照から読み取った --body-file 内容、current branch は、親 session とは別の nested `codex exec` provider へ送られます。nested process は repository 外の一時 cwd で AGENTS.md・project/user config・hooks・rules・web search・shell/search tool を無効化し、既定で gpt-5.6-sol（AGENT_DISCIPLINE_CODEX_MODEL の明示設定時だけ gpt-5.6-luna）を使います。provider identity と親 session との verdict equality は保証しません。この同意は disable するまで当該 Git worktree に永続します。'
 
 inspect() {
   _agent_discipline_enable_token=''

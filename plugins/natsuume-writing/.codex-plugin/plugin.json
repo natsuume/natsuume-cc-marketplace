@@ -1,6 +1,6 @@
 {
   "name": "natsuume-writing",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。",
   "author": {
     "name": "natsuume",
@@ -19,10 +19,11 @@
     "skill"
   ],
   "skills": "./skills/",
+  "hooks": "./codex/hooks.json",
   "interface": {
     "displayName": "Natsuume Writing",
     "shortDescription": "natsuume の文体規則で outline・draft・review を支援",
-    "longDescription": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。 Codex 互換性: 執筆ルール、3 Skills、SessionStart hook を同じファイルから共有します。",
+    "longDescription": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。 Codex 互換性: 共有の執筆規則と 3 Skills は維持し、SessionStart だけを GPT-5.6 Sol/Luna 向けの短い Codex prompt と `$plugin:skill` 呼び出し表記へ適応します。",
     "developerName": "natsuume",
     "category": "Productivity",
     "capabilities": [
