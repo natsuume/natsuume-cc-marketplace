@@ -15,7 +15,8 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
     `.hookSpecificOutput.updatedInput.command` に書き換え後コマンド
   - deny: JSON。`.hookSpecificOutput.permissionDecision == "deny"`、`updatedInput` なし
 - 挿入規則 (新仕様でも不変): 対象 `gh ... pr create` invocation の `create` トークン末尾
-  直後に ` --draft` (半角スペース + `--draft`) を挿入する。挿入以外は 1 バイトも変更しない。
+  直後に ` --draft` (半角スペース + `--draft`) を挿入する。末尾 LF を含めて挿入以外は
+  1 バイトも変更しない。
 
 ## 新仕様の契約 (heredoc / 行継続 / 性能)
 
@@ -23,18 +24,23 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
    積む。次の生改行から heredoc 本文モードに入り、delimiter 単独行 (`<<-` は行頭タブ除去後
    に完全一致) が来るまで本文全体を不透明データとして扱う (トークン化・command-start 設定・
    引数スキャンの対象にしない)。同一行に複数 heredoc があれば出現順に本文を消費する。fd
-   番号付き `3<<EOF` も heredoc。`<<<` (herestring) は heredoc ではない。
+   番号付き `3<<EOF` も heredoc。`<<<` (herestring) は heredoc ではない。unquoted
+   delimiter の本文では、行末の連続 backslash が奇数個の行の直後行は terminator と
+   判定しない (bash の行継続結合が terminator 判定に先行する)。偶数個なら terminator
+   は有効。
 2. **対応 delimiter 形式**: `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` /
    `<<\\WORD` (WORD は `[A-Za-z0-9_]+`)。該当しない構文を検出したら opaque fallback:
    それ以降のコマンド文字列を一切解析せず、それまでに確定したトークンのみで通常判定する
-   (誤りは「draft 付与漏れ」方向にのみ倒れ、本文改変は構造的に起きない)。
+   (誤りは「draft 付与漏れ」方向にのみ倒れ、本文改変は構造的に起きない)。`<<'WORD'` /
+   `<<"WORD"` / `<<\\WORD` はいずれも quoted delimiter であり、本文で行継続処理を行わない。
 3. **算術式スキップ**: `$((...))` / コマンド位置の `((...))` は対応する `))` まで (内部括弧
    の深度追跡込み) を不透明に取り込み、内部の `<<` (ビットシフト) を heredoc と誤認しない。
 4. **行継続のスキャナ内処理**: 解析前の一括削除 (normalize) を廃止し、スキャナが文脈依存で
    処理する。quote 外・double quote 内の `\\<LF>` は行継続 (トークンを連結し、行境界にしな
    い)。single quote 内・quoted heredoc 本文内の `\\<LF>` は literal データ。出力コマンド
    文字列はどのケースでも原文保持 (挿入のみ)。
-5. **性能**: 数十 KB の body を持つコマンドでも実用時間内 (5 秒以内) に完了する。
+5. **性能**: 数十 KB の body を持つコマンドは、入力パターン (通常 quoted body / escape
+   密集) に依らず 5 秒以内に完了する。
 
 ## テストグループ
 
@@ -43,6 +49,7 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
 - グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との複合
   パターンのため現行実装では fail (red) するはず)
 - グループ L: 行継続の原文保持 (現行実装で fail するはず)
+- グループ B: 末尾 LF を含むバイト保持契約 (現行実装で fail するはず)
 - グループ P: 性能 (現行実装で fail するはず)
 """
 
@@ -194,18 +201,45 @@ class EnforceDraftPrTest(unittest.TestCase):
     # (現行実装で fail するはず — H5/H6/H9 など一部は現行でも pass しうる)
     # ------------------------------------------------------------------
 
-    def test_h01_heredoc_body_semicolon_not_intervened(self) -> None:
+    def test_h01_heredoc_body_separators_not_intervened(self) -> None:
+        # 対応範囲は scanner が command-start に影響させる現行 5 種
+        # (`;` `&&` `||` `|` `&`)。bash 全 control operator の網羅ではない。
+        separators = (";", " &&", " ||", " |", " &")
+        for separator in separators:
+            with self.subTest(separator=separator):
+                body_line = (
+                    "Run tests first"
+                    + separator
+                    + " gh pr create --title x --body y is the old way"
+                )
+                command = (
+                    'gh pr create --title "t" --body-file - <<EOF'
+                    + NL
+                    + body_line
+                    + NL
+                    + "EOF"
+                )
+                expected = (
+                    'gh pr create --draft --title "t" --body-file - <<EOF'
+                    + NL
+                    + body_line
+                    + NL
+                    + "EOF"
+                )
+                self.assert_rewrite(command, expected)
+
+    def test_h01b_heredoc_body_parenthesis_not_intervened(self) -> None:
         command = (
             'gh pr create --title "t" --body-file - <<EOF'
             + NL
-            + "Run tests first; gh pr create --title x --body y is the old way"
+            + "see (gh pr create --title x --body y) usage"
             + NL
             + "EOF"
         )
         expected = (
             'gh pr create --draft --title "t" --body-file - <<EOF'
             + NL
-            + "Run tests first; gh pr create --title x --body y is the old way"
+            + "see (gh pr create --title x --body y) usage"
             + NL
             + "EOF"
         )
@@ -476,6 +510,38 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_rewrite(command, expected)
 
+    def test_h13_heredoc_body_line_starting_with_invocation(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF'
+            + NL
+            + "gh pr create --title x --body y"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF'
+            + NL
+            + "gh pr create --title x --body y"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h14_quoted_literal_double_less_not_heredoc(self) -> None:
+        cases = (
+            (
+                "echo 'a << b'; gh pr create --title \"t\" --body \"b\"",
+                "echo 'a << b'; gh pr create --draft --title \"t\" --body \"b\"",
+            ),
+            (
+                'echo "shift << here"; gh pr create --title "t" --body "b"',
+                'echo "shift << here"; gh pr create --draft --title "t" --body "b"',
+            ),
+        )
+        for command, expected in cases:
+            with self.subTest(command=command):
+                self.assert_rewrite(command, expected)
+
     # ------------------------------------------------------------------
     # グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との
     # 複合パターンのため現行実装では fail (red) するはず — `<<` 内の `1` を heredoc
@@ -592,6 +658,99 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_rewrite(command, expected)
 
+    def test_l05_unquoted_heredoc_odd_backslash_defers_terminator(
+        self,
+    ) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF'
+            + NL
+            + "line1"
+            + BS
+            + NL
+            + "EOF"
+            + NL
+            + "still body; gh pr create fake"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF'
+            + NL
+            + "line1"
+            + BS
+            + NL
+            + "EOF"
+            + NL
+            + "still body; gh pr create fake"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_l06_quoted_heredoc_backslash_line_terminator_still_ends(
+        self,
+    ) -> None:
+        command = (
+            "gh pr create --title \"t\" --body-file - <<'EOF'"
+            + NL
+            + "line1"
+            + BS
+            + NL
+            + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
+        expected = (
+            "gh pr create --draft --title \"t\" --body-file - <<'EOF'"
+            + NL
+            + "line1"
+            + BS
+            + NL
+            + "EOF"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_l07_unquoted_heredoc_even_backslash_terminator_ends(
+        self,
+    ) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF'
+            + NL
+            + "line1"
+            + BS
+            + BS
+            + NL
+            + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF'
+            + NL
+            + "line1"
+            + BS
+            + BS
+            + NL
+            + "EOF"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
+        )
+        self.assert_rewrite(command, expected)
+
+    # ------------------------------------------------------------------
+    # グループ B: 末尾 LF を含むバイト保持契約 (現行実装で fail するはず)
+    # ------------------------------------------------------------------
+
+    def test_b01_trailing_newline_preserved(self) -> None:
+        # 現行実装は `COMMAND=$(... | jq -r ...)` の `$()` が末尾改行を trim するため、
+        # 単純な末尾 LF (直前が backslash でない) は復元されず fail する。「挿入以外は
+        # 1 バイトも変更しない」契約は末尾 LF を含む。
+        command = 'gh pr create --title "t" --body "b"' + NL
+        expected = 'gh pr create --draft --title "t" --body "b"' + NL
+        self.assert_rewrite(command, expected)
+
     # ------------------------------------------------------------------
     # グループ P: 性能 (現行実装で fail するはず)
     # ------------------------------------------------------------------
@@ -626,7 +785,7 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assertEqual(
             hook_output["updatedInput"]["command"], expected, stdout
         )
-        self.assertLess(elapsed, 10.0)
+        self.assertLess(elapsed, 5.0)
 
 
 if __name__ == "__main__":
