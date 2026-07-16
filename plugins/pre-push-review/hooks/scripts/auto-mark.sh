@@ -195,7 +195,17 @@ skip_marker() {
 # ちょうど 1 個で、その値が pass / findings のいずれかであること。execution-failed、
 # Status 欠落・重複・未知値、content shape 不正は fail-closed に marker を skip する。
 # tool_input.prompt は検査対象に含めないため、prompt 内の偽 Status 行では spoof できない。
-{ read -r IS_ERROR; read -r INTERRUPTED; read -r REPORT_STATUS; } < <(
+#
+# `tool_response.status` が無い PostToolUse payload は旧 Claude Code / 未知の schema を示す
+# 可能性が高い。marker は従来どおり書かないが、何度 review しても未実行に見える silent
+# failure を避けるため、その場合だけ stderr に互換性診断を出す。PostToolUseFailure は
+# tool_response を持たない正規 payload なので診断対象外。
+{
+  read -r IS_ERROR
+  read -r INTERRUPTED
+  read -r MISSING_COMPLETION_STATUS
+  read -r REPORT_STATUS
+} < <(
   printf '%s' "$INPUT" | jq -r '
     def normalized_report_status:
       if ((.status // "") != "completed") or ((.content | type) != "array") then
@@ -221,14 +231,26 @@ skip_marker() {
 
     .tool_response as $response
     | if ($response | type) != "object" then
-        true, false, "invalid"
+        true,
+        false,
+        (.hook_event_name == "PostToolUse"),
+        "invalid"
       else
         ($response.is_error // $response.isError // false),
         ($response.interrupted // false),
+        (
+          (.hook_event_name == "PostToolUse")
+          and ($response | has("status") | not)
+        ),
         ($response | normalized_report_status)
       end
   '
 )
+if [ "$MISSING_COMPLETION_STATUS" = "true" ]; then
+  printf '%s\n' \
+    "[pre-push-review/auto-mark] Agent completion payload に必須の tool_response.status がありません。Claude Code 2.1.211 で本 schema を実機検証済みです。marker は更新しないため、Claude Code を 2.1.211 以上へ更新して reviewer を再実行してください。" \
+    >&2
+fi
 if [ "$IS_ERROR" = "true" ] || [ "$INTERRUPTED" = "true" ]; then
   skip_marker
 fi

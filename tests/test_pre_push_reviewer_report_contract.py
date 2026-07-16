@@ -22,6 +22,8 @@ AGENTS = {
     "Security": PLUGIN / "agents" / "security-reviewer.md",
 }
 COMMAND = PLUGIN / "commands" / "review.md"
+PLUGIN_README = PLUGIN / "README.md"
+ROOT_README = ROOT / "README.md"
 
 REQUIRED_REPORT_FIELDS = (
     "Status: pass | findings | execution-failed",
@@ -100,6 +102,27 @@ class ReviewerParentSafeReportContractTest(unittest.TestCase):
         self.assertIn("raw tool metadata", body)
         self.assertNotIn(
             "stdout / stderr をまとめた markdown report を返してください", body
+        )
+
+    def test_documentation_states_parent_safe_guarantee_boundary(self) -> None:
+        for path in (PLUGIN_README, ROOT_README):
+            with self.subTest(path=path):
+                body = self.read(path)
+                self.assertIn("instruction contract", body)
+                self.assertIn("hard security boundary", body)
+
+    def test_documentation_states_verified_completion_payload_version(
+        self,
+    ) -> None:
+        body = self.read(PLUGIN_README)
+        self.assertIn(
+            "auto-mark の completion payload は Claude Code 2.1.211 "
+            "で実機検証済み",
+            body,
+        )
+        self.assertIn(
+            "`tool_response.status` がない場合は marker を書かず",
+            body,
         )
 
 

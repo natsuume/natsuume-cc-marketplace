@@ -10,7 +10,7 @@
 
 > **v3.0.0 で 3 レビューすべてを subagent 経由に統一** (互換破壊あり): v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、 それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しました。 設計のメリット:
 >
-> - **context isolation**: raw stdout / stderr、実行可能な command、具体的な再現手順は subagent context に閉じ込められます。 親 session に返るのは severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけです。
+> - **context isolation**: reviewer は raw stdout / stderr、実行可能な command、具体的な再現手順を subagent context に留め、親 session には severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけを返します。これは agent prompt と contract test で固定する **instruction contract** であり、auto-mark が report 本文を機械検査して情報流出を遮断する **hard security boundary** ではありません。
 > - **起動・marker 発行経路の単一化**: 親 session は 3 軸とも同じ `Agent` / `Task` tool で起動し、3 marker とも auto-mark.sh が foreground completion と parent-safe report を検証して発行します。Codex wrapper は review 開始時点の hash を pending attestation に束縛し、auto-mark が report 成功後に final marker へ昇格します。
 > - **`/pre-push-review:review` slash command を 3 subagent 並列発出に書き換え**: deny メッセージとともに案内されます。 wall-clock は最遅レビュー 1 本の時間で完了します。
 
@@ -28,6 +28,7 @@ v4.0.1 (前身: `pre-commit-review` v0.4.0)
 - `/pre-push-review:review` の 3 delegation prompt も parent-safe report を明示的に要求し、codex wrapper の stdout / stderr をまとめて返す旧指示を削除した。3 Agent call は `run_in_background: false` を明記し、Claude Code の background-default 時にも launch を review 完了と誤認しない
 - 親の user-facing summary から agent ID、output file、transcript path、raw tool metadata を除外し、review の方針判断に不要な orchestration detail も context isolation の対象にした
 - `auto-mark.sh` は Agent PostToolUse の `tool_response.status=completed` と final `content[].text` の単一 `Status: pass|findings` を両方確認した場合だけ 3 reviewer の marker を書くようにした。`async_launched`、`Status: execution-failed`、status 欠落・重複・未知値は marker を書かず、push gate を deny のまま維持する
+- auto-mark の completion payload は Claude Code 2.1.211 で実機検証済み。`tool_response.status` がない場合は marker を書かず、旧 version / 未知 schema による恒久 deny と判別できる stderr 診断を出す
 - Codex wrapper の final marker 直書きを廃止し、review 開始時点の hash を atomic な pending attestation に保存する方式へ変更した。auto-mark は attestation と current hash の一致を確認し、codex-reviewer の parent-safe report 成功後にのみ final marker へ atomic rename する。report 失敗・PostToolUseFailure・hash mismatch では pending を破棄する
 - agent 定義・command・auto-mark の contract / integration test を追加し、必須 field、raw detail relay 禁止規律、foreground completion の fail-closed 判定を固定した
 
@@ -232,6 +233,8 @@ hooks.json の matcher は `"*"` (wildcard) で、 すべての tool 完了時�
 **subagent を completion タイミングで検知する理由**:
 
 各 subagent は内部で標準 skill を呼ばずに self-contained でレビューを実行します。 PostToolUse の発火だけでは background Agent の launch や、内部失敗を `Status: execution-failed` で報告した正常 return も含まれるため、auto-mark は `tool_response.status=completed` と final report の正規 Status を併せて検証します。`pass` / `findings` だけが完遂扱いで、外側の `is_error` / `interrupted`、`async_launched`、`execution-failed`、report 不正ではマーカーを書きません。push gate が deny のまま残るため silent-pass しない設計です。
+
+auto-mark の completion payload は Claude Code 2.1.211 で実機検証済みです。`tool_response.status` がない場合は marker を書かず、stderr に互換性診断を出します。2.1.211 より古い version、または `status` / `content[]` を同じ形で送らない runtime では review が成功しても marker を発行できないため、Claude Code を更新してから reviewer を再実行してください。
 
 **Codex pending attestation を挟む理由**:
 

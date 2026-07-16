@@ -212,8 +212,17 @@ class PrePushAutoMarkTest(unittest.TestCase):
                 "error": "agent failed after wrapper completion",
                 "is_interrupt": False,
             }
-            self.assert_no_marker(work, agent_type, failure_payload)
+            result = self.run_hook(work, failure_payload)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(
+                self.marker_path(work, agent_type).exists(),
+                result.stderr.decode(),
+            )
             self.assertFalse(pending.exists())
+            self.assertNotIn(
+                "tool_response.status",
+                result.stderr.decode(),
+            )
 
     def test_execution_failed_or_invalid_report_does_not_write_marker(self) -> None:
         rejected_reports = {
@@ -254,6 +263,26 @@ class PrePushAutoMarkTest(unittest.TestCase):
             for case, payload in payloads.items():
                 with self.subTest(case=case):
                     self.assert_no_marker(work, agent_type, payload)
+
+    def test_missing_tool_response_status_reports_compatibility_diagnostic(
+        self,
+    ) -> None:
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:code-reviewer"
+            payload = self.payload(agent_type, report)
+            tool_response = payload["tool_response"]
+            self.assertIsInstance(tool_response, dict)
+            del tool_response["status"]
+
+            result = self.run_hook(work, payload)
+
+            self.assertEqual(result.returncode, 0)
+            self.assertFalse(self.marker_path(work, agent_type).exists())
+            diagnostic = result.stderr.decode()
+            self.assertIn("tool_response.status", diagnostic)
+            self.assertIn("Claude Code 2.1.211", diagnostic)
 
     def test_status_text_in_tool_input_cannot_spoof_completion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:

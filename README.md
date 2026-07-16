@@ -136,7 +136,7 @@ ignore コメント挿入を編集時に禁止し、 `git commit` 直前に stag
 
 **v3.0.0 で 3 レビューすべてを subagent 経由に統一**しました (互換破壊あり)。v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しています。これにより:
 
-- **context isolation**: raw stdout / stderr、実行可能な command、具体的な再現手順は subagent context に閉じ込められます。親 session に返るのは severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけです。追加検証が必要な場合は同じ subagent を resume し、raw detail を親へ流さず結果だけを再要約します。
+- **context isolation**: reviewer は raw stdout / stderr、実行可能な command、具体的な再現手順を subagent context に留め、親 session には severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけを返します。追加検証が必要な場合は同じ subagent を resume し、raw detail を親へ流さず結果だけを再要約します。これは agent prompt と contract test で固定する **instruction contract** であり、report 本文を機械検査して情報流出を遮断する **hard security boundary** ではありません。
 - **起動・marker 発行経路の単一化**: 3 軸とも `Agent` / `Task` tool で起動し、`auto-mark.sh` が foreground completion と parent-safe report を検証して marker を発行します。Codex wrapper は review 開始時点の hash を pending attestation に束縛し、正規 report 完了後にだけ final marker へ昇格します。
 - **`auto-mark.sh` の簡略化と namespace prefix 必須化**: PRECHECK_RE / case 文は subagent_type が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` (**namespace prefix 必須**) の完全一致のみを検知する形に縮みました。v2.x の name-only 受理は廃止 (他 plugin の同名 subagent が push gate marker を誤って書く bypass 経路を構造排除)。Skill 検知も全廃。
 - **`/pre-push-review:review` slash command は 3 subagent 並列発出に書き換え**: deny メッセージとともに案内され、Claude はコマンド本文に固定された 3 `Agent` / `Task` tool call を 1 つのアシスタントメッセージ内で並列発出するだけです。順序揺れや起動漏れによる無駄ループが構造的に排除されます。wall-clock は最遅レビュー 1 本の時間で完了します。
