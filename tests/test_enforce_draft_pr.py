@@ -40,7 +40,8 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
 
 - グループ R: 既存挙動 regression (現行実装で pass するはず)
 - グループ H: heredoc 新仕様 (現行実装で fail するはず。一部は現行でも pass しうる)
-- グループ A: 算術式 (現行実装で pass するはず。heredoc 実装後の regression 防止)
+- グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との複合
+  パターンのため現行実装では fail (red) するはず)
 - グループ L: 行継続の原文保持 (現行実装で fail するはず)
 - グループ P: 性能 (現行実装で fail するはず)
 """
@@ -227,7 +228,7 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_rewrite(command, expected)
 
-    def test_h03_quoted_delimiter(self) -> None:
+    def test_h03a_single_quoted_delimiter(self) -> None:
         command = (
             "gh pr create --title \"t\" --body-file - <<'EOF'"
             + NL
@@ -237,6 +238,61 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         expected = (
             "gh pr create --draft --title \"t\" --body-file - <<'EOF'"
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h03b_double_quoted_delimiter(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<"EOF"'
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<"EOF"'
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h03c_backslash_escaped_delimiter(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<'
+            + BS
+            + "EOF"
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<'
+            + BS
+            + "EOF"
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h03d_space_separated_delimiter(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - << EOF'
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - << EOF'
             + NL
             + "Run tests first; gh pr create --title x --body y is the old way"
             + NL
@@ -371,8 +427,59 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_rewrite(command, expected)
 
+    def test_h11_near_miss_terminator_lines_do_not_end_heredoc_body(
+        self,
+    ) -> None:
+        near_miss_lines = ("EOF ", " EOF", "EOFX")
+        for near_miss in near_miss_lines:
+            with self.subTest(near_miss=near_miss):
+                command = (
+                    'gh pr create --title "t" --body-file - <<EOF'
+                    + NL
+                    + near_miss
+                    + NL
+                    + "note; gh pr create fake"
+                    + NL
+                    + "EOF"
+                )
+                expected = (
+                    'gh pr create --draft --title "t" --body-file - <<EOF'
+                    + NL
+                    + near_miss
+                    + NL
+                    + "note; gh pr create fake"
+                    + NL
+                    + "EOF"
+                )
+                self.assert_rewrite(command, expected)
+
+    def test_h12_dash_heredoc_strips_only_tabs_not_spaces(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<-EOF'
+            + NL
+            + " EOF"
+            + NL
+            + "note; gh pr create fake"
+            + NL
+            + TAB
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<-EOF'
+            + NL
+            + " EOF"
+            + NL
+            + "note; gh pr create fake"
+            + NL
+            + TAB
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
     # ------------------------------------------------------------------
-    # グループ A: 算術式 (現行実装で pass するはず。heredoc 実装後の regression 防止)
+    # グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との
+    # 複合パターンのため現行実装では fail (red) するはず — `<<` 内の `1` を heredoc
+    # delimiter として誤登録すると pending キューが崩れ、最終行の挿入が欠落する)
     # ------------------------------------------------------------------
 
     def test_a01_dollar_double_paren_arithmetic(self) -> None:
@@ -389,6 +496,35 @@ class EnforceDraftPrTest(unittest.TestCase):
         command = 'v=$(( (a+b) << 1 )); gh pr create --title "t" --body "b"'
         expected = (
             'v=$(( (a+b) << 1 )); gh pr create --draft --title "t" --body "b"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_a04_arithmetic_heredoc_composite_trailing_invocation(
+        self,
+    ) -> None:
+        # 算術式内の `<< 1` を heredoc delimiter `1` として誤登録する実装では、
+        # pending キューが `[1, EOF]` のまま崩れ、実終端 `EOF` 行で本文モードが
+        # 解除されず最終行の `gh pr create` への挿入が欠落する。最終行の `gh` は
+        # `:;` の後 (行頭ではない) なので「2 行目以降の行頭コマンドは検出対象外」
+        # という既存 limitation とは無関係。
+        command = (
+            'v=$(( (a+b) << 1 )); gh pr create --title "t" --body-file - <<EOF'
+            + NL
+            + "body; gh pr create fake"
+            + NL
+            + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
+        expected = (
+            'v=$(( (a+b) << 1 )); gh pr create --draft --title "t" '
+            '--body-file - <<EOF'
+            + NL
+            + "body; gh pr create fake"
+            + NL
+            + "EOF"
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
