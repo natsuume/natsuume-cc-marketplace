@@ -38,7 +38,8 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
 4. **行継続のスキャナ内処理**: 解析前の一括削除 (normalize) を廃止し、スキャナが文脈依存で
    処理する。quote 外・double quote 内の `\\<LF>` は行継続 (トークンを連結し、行境界にしな
    い)。single quote 内・quoted heredoc 本文内の `\\<LF>` は literal データ。出力コマンド
-   文字列はどのケースでも原文保持 (挿入のみ)。
+   文字列はどのケースでも原文保持 (挿入のみ)。double quote 内の行継続はトークン値の解釈にも
+   適用され、`--draft=` 値の falsy 判定は行継続除去後の値で行う。
 5. **性能**: 数十 KB の body を持つコマンドは、入力パターン (通常 quoted body / escape
    密集) に依らず 5 秒以内に完了する。
 
@@ -48,7 +49,8 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
 - グループ H: heredoc 新仕様 (現行実装で fail するはず。一部は現行でも pass しうる)
 - グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との複合
   パターンのため現行実装では fail (red) するはず)
-- グループ L: 行継続の原文保持 (現行実装で fail するはず)
+- グループ L: 行継続の原文保持 (L01〜L08 は現行実装で fail するはず。L09 は現行でも
+  pass する退行防止ケース)
 - グループ B: 末尾 LF を含むバイト保持契約 (現行実装で fail するはず)
 - グループ P: 性能 (現行実装で fail するはず)
 """
@@ -376,8 +378,14 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assert_rewrite(command, expected)
 
     def test_h05_multiple_heredocs_same_line(self) -> None:
+        # bodyA の先頭に delimiter B と同じテキストの行を交差させる。B を先に
+        # 探す (出現順を無視する) 誤実装はこの行で B 本文を終端したと誤認し、
+        # 後続の `bodyA; gh pr create fakeA` 行がコマンド行化して fakeA への
+        # 挿入で fail する。
         command = (
             'cat <<A <<B; gh pr create --title "t" --body "b"'
+            + NL
+            + "B"
             + NL
             + "bodyA; gh pr create fakeA"
             + NL
@@ -391,6 +399,8 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         expected = (
             'cat <<A <<B; gh pr create --draft --title "t" --body "b"'
+            + NL
+            + "B"
             + NL
             + "bodyA; gh pr create fakeA"
             + NL
@@ -425,14 +435,14 @@ class EnforceDraftPrTest(unittest.TestCase):
         command = (
             'cat <<EOF | gh pr create --title "t" --body-file -'
             + NL
-            + "body text"
+            + "body text; gh pr create fake"
             + NL
             + "EOF"
         )
         expected = (
             'cat <<EOF | gh pr create --draft --title "t" --body-file -'
             + NL
-            + "body text"
+            + "body text; gh pr create fake"
             + NL
             + "EOF"
         )
@@ -452,36 +462,54 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assert_rewrite(command, expected)
 
     def test_h09_herestring_not_misdetected_as_heredoc(self) -> None:
-        command = 'grep x <<<"data here"; gh pr create --title "t" --body "b"'
+        command = (
+            'grep x <<<"data here"; gh pr create --title "t" --body "b"'
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
         expected = (
             'grep x <<<"data here"; gh pr create --draft --title "t" --body "b"'
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
     def test_h10a_opaque_fallback_no_intervention(self) -> None:
+        # opaque fallback は宣言以降全域で解析を停止する。宣言行のみ抑制する
+        # 誤実装は本文の fake に、EOF 後に解析を再開する誤実装は後続行に
+        # 挿入して非空になり fail する。
         command = (
             'cat <<E"OF"; gh pr create --title "t" --body "b"'
             + NL
-            + "body"
+            + "body; gh pr create fake"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         self.assert_no_intervention(command)
 
     def test_h10b_opaque_fallback_confirmed_tokens_judged(self) -> None:
+        # opaque fallback は `<<E"OF"` 以降を一切解析しない。fallback 前に
+        # 確定した先頭 create のみが挿入対象であり、本文の fake・後続行の
+        # 素の invocation はいずれも挿入されない (byte 不変)。
         command = (
             'gh pr create --title "t" --body-file - <<E"OF"'
             + NL
-            + "body"
+            + "body; gh pr create fake"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         expected = (
             'gh pr create --draft --title "t" --body-file - <<E"OF"'
             + NL
-            + "body"
+            + "body; gh pr create fake"
             + NL
             + "EOF"
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
         )
         self.assert_rewrite(command, expected)
 
@@ -554,12 +582,20 @@ class EnforceDraftPrTest(unittest.TestCase):
     def test_h14_quoted_literal_double_less_not_heredoc(self) -> None:
         cases = (
             (
-                "echo 'a << b'; gh pr create --title \"t\" --body \"b\"",
-                "echo 'a << b'; gh pr create --draft --title \"t\" --body \"b\"",
+                "echo 'a << b'; gh pr create --title \"t\" --body \"b\""
+                + NL
+                + ':; gh pr create --title "t2" --body "b2"',
+                "echo 'a << b'; gh pr create --draft --title \"t\" --body \"b\""
+                + NL
+                + ':; gh pr create --draft --title "t2" --body "b2"',
             ),
             (
-                'echo "shift << here"; gh pr create --title "t" --body "b"',
-                'echo "shift << here"; gh pr create --draft --title "t" --body "b"',
+                'echo "shift << here"; gh pr create --title "t" --body "b"'
+                + NL
+                + ':; gh pr create --title "t2" --body "b2"',
+                'echo "shift << here"; gh pr create --draft --title "t" --body "b"'
+                + NL
+                + ':; gh pr create --draft --title "t2" --body "b2"',
             ),
         )
         for command, expected in cases:
@@ -810,6 +846,17 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_rewrite(command, expected)
 
+    def test_l09_double_quoted_continuation_in_draft_value_denied(
+        self,
+    ) -> None:
+        # このケースは現行実装でも pass する (normalize が行継続を一括削除する
+        # ため)。red ではなく「normalize 廃止後の新スキャナが dq 内行継続を
+        # トークン値の解釈で除去し、falsy 判定を維持すること」の退行防止テスト。
+        command = (
+            'gh pr create --draft="fal' + BS + NL + 'se" --title "t" --body "b"'
+        )
+        self.assert_denied(command)
+
     # ------------------------------------------------------------------
     # グループ B: 末尾 LF を含むバイト保持契約 (現行実装で fail するはず)
     # ------------------------------------------------------------------
@@ -820,6 +867,11 @@ class EnforceDraftPrTest(unittest.TestCase):
         # 1 バイトも変更しない」契約は末尾 LF を含む。
         command = 'gh pr create --title "t" --body "b"' + NL
         expected = 'gh pr create --draft --title "t" --body "b"' + NL
+        self.assert_rewrite(command, expected)
+
+    def test_b02_multiple_trailing_newlines_preserved(self) -> None:
+        command = 'gh pr create --title "t" --body "b"' + NL + NL
+        expected = 'gh pr create --draft --title "t" --body "b"' + NL + NL
         self.assert_rewrite(command, expected)
 
     # ------------------------------------------------------------------
