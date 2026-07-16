@@ -6,7 +6,7 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-CODEX_DIR=$(CDPATH= cd "$(dirname "$0")/.." 2>/dev/null && pwd)
+CODEX_DIR=$(CDPATH='' cd "$(dirname "$0")/.." 2>/dev/null && pwd)
 if [ -z "$CODEX_DIR" ]; then
   exit 0
 fi

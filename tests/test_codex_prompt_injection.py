@@ -94,7 +94,7 @@ class CodexPromptInjectionTest(unittest.TestCase):
                     path = ROOT / "plugins" / plugin / "codex" / "scripts" / script
                     source = path.read_text(encoding="utf-8")
                     self.assertTrue(source.startswith("#!/bin/sh\n"))
-                    self.assertIn("CDPATH= cd", source)
+                    self.assertIn("CDPATH='' cd", source)
                     self.assertIn("|| exit 0", source)
                     self.assertTrue(os.access(path, os.X_OK), path)
                     syntax = subprocess.run(

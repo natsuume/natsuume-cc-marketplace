@@ -71,7 +71,7 @@ if [ -z "$CWD" ] || [ ! -d "$CWD" ]; then
   deny "agent-discipline: Codex semantic validator が hook input の cwd を確認できませんでした。検証不能のため対象の gh issue/pr 操作を fail-closed でブロックしました。"
 fi
 
-SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" 2>/dev/null && pwd)
+SCRIPT_DIR=$(CDPATH='' cd "$(dirname "$0")" 2>/dev/null && pwd)
 SCHEMA_FILE="$SCRIPT_DIR/../schemas/codex-semantic-validator-output.schema.json"
 OPT_IN_LIBRARY="$SCRIPT_DIR/lib/codex-semantic-opt-in.sh"
 SETUP_HELPER="$SCRIPT_DIR/../../scripts/setup-codex-semantic-validator.sh"

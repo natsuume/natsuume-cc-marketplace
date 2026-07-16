@@ -385,7 +385,7 @@
             "sourceDigest": "a23b1862a7921dd2daad8ae5ff3addf9ed5fd71b7994ed6a746c788dc4fe1345"
           }
         ],
-        "sourceTreeDigest": "6ccff96373f00fdd7309a9a33fdb93c2655e52668f0d0048174b026058e91647"
+        "sourceTreeDigest": "cbb00072e7739e170b834d9231f612a132e8e9f3088fcd65d12d2e155afd31b8"
       }
     },
     "ui-discipline": {
@@ -428,7 +428,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "cd639b15cb77e292e40ea8e7ef600fa09f3878d97e78584aca5753bf71ad83d6"
+        "sourceTreeDigest": "983f5ab37e02f8c7444983c3c8829e3e06497026fd85c2eea9e5fdf46c4bab06"
       }
     },
     "natsuume-writing": {
@@ -471,7 +471,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "33e9216f1957e0854389b8e2894c4413d41d9a83ca89f057111f22c7fc5e7d41"
+        "sourceTreeDigest": "29dd98af4d35f6e4d32d9960ddbb08d96c07ea6e50c380c1ccdc1ed991476934"
       }
     },
     "codex-advisor": {
