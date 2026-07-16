@@ -26,6 +26,7 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
 - subagent (`pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` / `pre-push-review:security-reviewer`) が見つからない → プラグインの install を確認してください (`claude plugin install pre-push-review@natsuume-plugins`)
 - codex review wrapper が「codex プラグインが見つかりません」 で失敗 → 公式 codex プラグインを install (`claude plugin install codex@openai-codex`) してから codex-reviewer subagent を再起動
 - 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ 3 subagent を順次起動しても push gate の構造的保証は同じ (= 3 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。 順次起動する場合は **code-reviewer → security-reviewer → codex-reviewer** の順を推奨します (codex-reviewer は wrapper が codex CLI を foreground で hold するため最長になりやすく、 後段に置くと前段の review 結果を主 session が並行確認できる)。
+- 一部の marker のみ失効している場合は、 3 subagent 全部を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします)。 3 subagent 並列発出が既定であることは変わりません (= 初回実行や複数 marker が失効した場合は引き続き並列 3 起動を使う)。
 
 ## レビュー指摘の修正フロー (3 subagent 完了後)
 

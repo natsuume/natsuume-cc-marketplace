@@ -1,8 +1,9 @@
 #!/bin/bash
 # run-codex-review.sh
-# pre-push-review v1.1.0 で導入された **codex review の定型実行 wrapper**。 deny メッセージ
-# で Claude に `bash <plugin>/hooks/scripts/run-codex-review.sh` を案内し、 Skill (`/codex:review`)
-# 経由ではなく本 wrapper 経由で codex review を実行させる。
+# pre-push-review v1.1.0 で導入された **codex review の定型実行 wrapper**。 v3.0.0 以降は
+# `pre-push-review:codex-reviewer` subagent が本 wrapper を foreground 起動する設計に統一
+# されている。 v4.0.0 では block-bg-codex-wrapper.sh の agent_type gate により、 同 subagent
+# 以外 (メインセッションの直接 Bash 実行等) からの起動は deny される。
 #
 # ## なぜ wrapper を介すか (v1.0.0 → v1.1.0 の設計変更背景)
 #

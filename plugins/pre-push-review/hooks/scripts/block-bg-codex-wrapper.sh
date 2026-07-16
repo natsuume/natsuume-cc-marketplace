@@ -1,13 +1,17 @@
 #!/bin/bash
 # block-bg-codex-wrapper.sh
-# `run-codex-review.sh` wrapper を background で起動しようとする操作を deny する PreToolUse フック。
+# `run-codex-review.sh` wrapper の background 起動、 および `pre-push-review:codex-reviewer`
+# subagent 以外からの起動を deny する PreToolUse フック。
 #
-# policy: fail-open (PreToolUse / defense-in-depth 補助)
+# policy: 本 hook 全体は fail-open (PreToolUse / defense-in-depth 補助) / agent_type gate は fail-closed
 #   本 hook は補助的な regression 防御で、 真の push gate は block-pre-push.sh (= fail-closed)
 #   が担う。 そのため jq 不在等の環境失敗時は silent に exit 0 で抜けて allow に倒す
 #   (= 環境失敗で「合法な wrapper 起動」 が deny される false positive を避ける)。
 #   検知ロジックに該当した場合のみ deny を返す。 真の保証は block-pre-push.sh が
 #   marker hash check で行うため、 本 hook が抜けても未レビュー push は通らない。
+#   ただし issue #267 で追加した agent_type gate (下記) 自体は fail-closed (agent_type 欠落 =
+#   deny) で判定する。 jq 不在等の環境失敗時のみ本 hook 全体としての fail-open (= 上の
+#   `command -v jq` チェック) に従う。
 #
 # ## なぜ必要か
 #
@@ -28,13 +32,30 @@
 # 削除した。 しかし wrapper を bg で起動するという新経路に対する gate が欠如していたため、
 # 本 hook を再導入する。
 #
+# v3.0.0 で codex review は `pre-push-review:codex-reviewer` subagent 経由の起動に統一されたが、
+# **メインセッションが wrapper を直接 Bash 実行しても同じく marker が書かれてしまい**、
+# subagent 経由での起動は agents/codex-reviewer.md の指示文という prompt 規律だけで担保されて
+# いた (issue #267)。 メインセッションによる直接実行は subagent が持つ context isolation
+# (詳細出力を subagent context に閉じ込め、 親 session には report だけを返す設計) を毀損する。
+# さらに marker は wrapper 自身が書き込む (= tool 呼び出し元を区別しない) ため、 **呼び出し元
+# (caller) の検証こそが本 gate の唯一の防御層**になる。 v4.0.0 で agent_type gate (下記) を
+# 追加し、 `pre-push-review:codex-reviewer` subagent 以外からの wrapper 起動を fail-closed に
+# deny するようにした。
+#
 # ## 検知ロジック
 #
-# Bash tool の `command` 文字列に `run-codex-review.sh` substring を含み、 かつ `tool_input
-# .run_in_background == true` の場合に deny する。 wrapper の起動は通常 `bash <abs-path>/run
-# -codex-review.sh` の形 (deny メッセージで案内) なので、 path のどこかに `run-codex-review.sh`
-# が現れる前提。 substring match なので、 ユーザ独自の wrapper alias (例: `bash my-codex.sh`)
-# は対象外 (= cooperative 利用前提)。
+# 1. **agent_type gate** (v4.0.0 / issue #267 / fail-closed): command に `run-codex-review.sh`
+#    substring を含む場合、 hook payload のトップレベル `agent_type` が
+#    `pre-push-review:codex-reviewer` に完全一致しなければ deny する (欠落・別値いずれも deny)。
+#    一致した場合のみ後続の bg / pipeline 判定へ進む。 **実機検証済み (Claude Code 2.1.211)**:
+#    メインセッションの Bash では `agent_type` がペイロードに含まれず、 plugin subagent の
+#    Bash では namespace 付き `pre-push-review:codex-reviewer` が届くことを確認した。
+# 2. **bg / pipeline 検知** (従来ロジック): Bash tool の `command` 文字列に `run-codex-review.sh`
+#    substring を含み、 かつ `tool_input.run_in_background == true` の場合、 または shell-level
+#    の `&` / `|` で wrapper を連結している場合に deny する。 wrapper の起動は通常
+#    `bash <abs-path>/run-codex-review.sh` の形 (deny メッセージで案内) なので、 path のどこかに
+#    `run-codex-review.sh` が現れる前提。 substring match なので、 ユーザ独自の wrapper alias
+#    (例: `bash my-codex.sh`) は対象外 (= cooperative 利用前提)。
 
 # 予期せぬエラー時の診断 trap を install (実装は lib/exit-trap.sh)。
 _PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -74,6 +95,48 @@ case "$COMMAND" in
   *run-codex-review.sh*) ;;
   *) exit 0 ;;
 esac
+
+# agent_type 検証 gate (fail-closed): wrapper 起動を許可する呼び出し元は
+# `pre-push-review:codex-reviewer` subagent のみ。 hook payload のトップレベル `agent_type`
+# が完全一致しない場合 (欠落含む) は deny する。 一致した場合のみ後続の bg / pipeline 判定
+# (下記 sed strip 以降) へ進む。 jq 不在時は既に上の `command -v jq` チェックで fail-open
+# 済みのため、 ここに到達する時点で jq は利用可能。
+AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
+if [ "$AGENT_TYPE" != "pre-push-review:codex-reviewer" ]; then
+  if [ -z "$AGENT_TYPE" ]; then
+    REASON=$(cat <<'EOF'
+プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper は `pre-push-review:codex-reviewer` subagent 経由でのみ起動できます。
+
+理由: 本 hook の payload に `agent_type` が含まれていません (欠落)。 これはメインセッションが wrapper を直接 Bash 実行した場合、 または `agent_type` を hook payload に含めない旧 Claude Code を使用している場合に発生します。
+
+対応:
+  - `/pre-push-review:review` で 3 レビューを並列起動してください (推奨)
+  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動してください
+  - 上記を行っても `agent_type` 欠落が解消しない場合は、 Claude Code を 2.1.211 以上へ更新してください (本 gate は Claude Code 2.1.211 で実機検証済みです)
+EOF
+)
+  else
+    REASON=$(cat <<EOF
+プッシュ前レビューをブロックしました。 \`run-codex-review.sh\` wrapper は \`pre-push-review:codex-reviewer\` subagent 経由でのみ起動できます。
+
+理由: 検出された \`agent_type\` は \`${AGENT_TYPE}\` で、 \`pre-push-review:codex-reviewer\` と一致しません。 メインセッションが wrapper を直接 Bash 実行した場合や、 \`agent_type\` を hook payload に含めない旧 Claude Code を使用している場合にも同様の deny になります。
+
+対応:
+  - \`/pre-push-review:review\` で 3 レビューを並列起動してください (推奨)
+  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動してください
+  - お使いの Claude Code が \`agent_type\` を正しく送信しない場合は 2.1.211 以上へ更新してください (本 gate は Claude Code 2.1.211 で実機検証済みです)
+EOF
+)
+  fi
+  jq -n --arg reason "$REASON" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $reason
+    }
+  }'
+  exit 0
+fi
 
 # `&` を含む shell redirection (`2>&1` / `&>file` / `<<EOF` 等) を空白に置換する。
 # cmd-parser は `&` を一律 separator として扱うため、 redirection 内の `&` を parallel
@@ -139,7 +202,7 @@ if [ "$RUN_IN_BG" = "true" ]; then
 
 理由: wrapper 自身は foreground で codex review を実行して marker を書きますが、 Bash tool の `run_in_background: true` で起動すると **主 Claude session は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しません**。 主 session は marker の存在だけで push gate を通過してしまうため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。
 
-対応: Bash tool 呼び出しから `run_in_background: true` を **外して** (デフォルト false で) 再実行してください。 wrapper は内部で codex companion を `--wait` で foreground 起動するため、 Bash 呼び出し自体が review 完了まで block しますが、 これが本プラグインの想定する正しい使い方です (= review 結果を主 session で観察してから push 判断する)。
+対応: `run_in_background: true` を使わず、 wrapper を plain foreground の単独コマンドとして再実行してください。 wrapper は内部で codex companion を `--wait` で foreground 起動するため、 Bash 呼び出し自体が review 完了まで block しますが、 これが本プラグインの想定する正しい使い方です (= review 結果を観察してから push 判断する)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent を再起動してください。
 EOF
 )
 else
@@ -148,7 +211,7 @@ else
 
 理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動するため、 **主 Claude session は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しない / 途中でしか観察しない** 経路ができます。 主 session は marker の存在だけで push gate を通過してしまうため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。
 
-対応: `&` / `|` を **外して** wrapper を単独実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に主 session が file を読めば review 結果を観察可能)。
+対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent を再起動してください。
 EOF
 )
 fi

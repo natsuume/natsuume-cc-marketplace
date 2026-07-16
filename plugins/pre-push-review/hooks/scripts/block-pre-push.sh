@@ -733,13 +733,15 @@ target: ${TARGET_CWD}
   - Claude Code: **\`/pre-push-review:review\`** (3 namespaced custom agent を並列起動)
   - Codex: 現行 runtime の \`spawn_agent\` に \`agent_type\` selector が無く、generic agent の reviewer identity を認証できないため marketplace 配布対象外。Codex から generic agent で代行したり marker helper を直接実行したりしない
 
+一部のマーカーのみ「未実行」 / 「失効」 の場合は、 該当レビューの subagent だけを Agent / Task tool で単独再起動してもかまいません (全 3 subagent の再走も可)。 マーカーと subagent_type の対応:
+  - correctness review (code-reviewed)  → subagent_type="pre-push-review:code-reviewer"
+  - independent review (codex-reviewed) → subagent_type="pre-push-review:codex-reviewer"
+  - security review (security-reviewed) → subagent_type="pre-push-review:security-reviewer"
+
+codex review を \`run-codex-review.sh\` wrapper の直接実行で代行することはできません (block-bg-codex-wrapper.sh の agent_type 検証 gate が \`pre-push-review:codex-reviewer\` subagent 以外からの起動を deny します)。
+
 修正後に branch 差分が変わるとマーカーは自動失効します。同じ正規フローで再走させ、
 全マーカーが ✓ になったら \`git push\` を再試行してください。
-
-Claude Code で slash command が動かない場合のみ、次の手動 fallback を使えます:
-  - Agent / Task tool で subagent_type="pre-push-review:code-reviewer" を起動
-  - Agent / Task tool で subagent_type="pre-push-review:security-reviewer" を起動
-  - Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動
 
 Codex 用に保存している adapter は、runtime が \`agent_type\` selector を公開し、named reviewer identity を SubagentStop event へ引き継げる将来の実行面だけを想定しています。現行 runtime では marker を生成せずfail-closed に停止してください。
 EOF

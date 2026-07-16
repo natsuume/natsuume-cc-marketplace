@@ -1,6 +1,6 @@
 ---
 name: codex-reviewer
-description: pre-push-review の codex review 専用 subagent。 `git push` 前のレビューループで block-pre-push.sh の deny メッセージが「codex review (OpenAI バグ検出)」 のマーカーを「未実行」 または「失効」 と指摘したときに呼び出す。 内部で `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-codex-review.sh` wrapper を foreground で 1 回起動し、 wrapper の stdout (codex review の verdict / findings) と stderr (wrapper status) を組み立てた markdown report として親 session に返す。 wrapper 自身が codex review 完了時に codex-reviewed marker を atomic rename で書く (= verdict 非依存、 dirty tree のとき early-exit) 設計のため、 marker 書き込みは subagent 完了タイミングではなく wrapper 内部で完結する。 wrapper 経由なのは codex review の `--wait --scope branch` を hardcode して background 起動による silent failure 経路を構造排除しているため (v1.1.0 で `/codex:review` slash command 経由から切替えた背景は run-codex-review.sh のヘッダ参照)。
+description: pre-push-review の codex review 専用 subagent。 `git push` 前のレビューループで block-pre-push.sh の deny メッセージが「independent review」 (codex review) のマーカーを「未実行」 または「失効」 と指摘したときに、 Agent / Task tool の subagent_type="pre-push-review:codex-reviewer" で呼び出す。 codex review の実行手順と report 形式は本 subagent の body に定義されている。 完了すると codex-reviewed marker が更新され、 markdown report が親 session に返る。
 tools: Bash
 model: inherit
 color: blue

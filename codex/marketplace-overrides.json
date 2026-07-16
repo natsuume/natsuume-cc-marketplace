@@ -119,7 +119,7 @@
         "limitations": [
           "Codex marketplace では pre-push-review の entry、manifest、Skill、hook を公開しないため、Codex から workflow を install・選択できません。",
           "Codex 版 v3.1.4 以前の既存 install は marketplace からの除外だけでは local config/cache から削除されません。codex plugin remove pre-push-review@natsuume-plugins を実行し、新しい Codex thread を開始する必要があります。",
-          "Claude Code marketplace の plugin、command、agent、hook は v3.1.4 として引き続き利用できます。"
+          "Claude Code marketplace の plugin、command、agent、hook は引き続き利用できます。"
         ],
         "guaranteeDifferences": [
           "Codex 版の意図等価 adapter は提供しません。agent_type selector が実装され、runtime が named reviewer identity を lifecycle event で保証できるまで fail-closed の除外を維持します。"
@@ -135,7 +135,7 @@
             "source": "commands/review.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
-            "sourceDigest": "9c198f8efa22e720e6831345f47e791a60119e37cd838a86c6dd6a88d69d5b94"
+            "sourceDigest": "52063061b6b7a003012d2bc04a42d9de89cb137588950acb60c129381fc46360"
           },
           {
             "source": "agents/code-reviewer.md",
@@ -147,7 +147,7 @@
             "source": "agents/codex-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "be1278a1aedb15163e10ba146375959f87d66524458bc21c16252a94c862a65a"
+            "sourceDigest": "8ae039ce5932182a9dbe6c75a23ade8a560c005158e3e69e6ffe7f3abb88018a"
           },
           {
             "source": "agents/security-reviewer.md",
@@ -156,7 +156,7 @@
             "sourceDigest": "0289c10ef0bedf84fd47ad2cf97ef85959e008492c716a96794de5d1b4410c17"
           }
         ],
-        "sourceTreeDigest": "574e5a28bd0f4420253d83f0942c1595ae5f74b7d8316d6faf322832dec19db5"
+        "sourceTreeDigest": "9125883f3cdb66f2d127fd1d2834b1e76a0e9fcbf5744ae45809cf41e8dcdaaa"
       }
     },
     "update-default-branch": {

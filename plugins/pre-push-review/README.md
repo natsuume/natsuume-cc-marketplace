@@ -16,7 +16,15 @@
 
 ## バージョン
 
-v3.1.4 (前身: `pre-commit-review` v0.4.0)
+v4.0.0 (前身: `pre-commit-review` v0.4.0)
+
+### v3.1.4 → v4.0.0 の変更点 (互換破壊あり / issue #267)
+
+- **agent_type 検証 gate を追加 (fail-closed)**: `block-bg-codex-wrapper.sh` が hook payload トップレベルの `agent_type` を検証し、 `pre-push-review:codex-reviewer` (namespace 付き完全一致) 以外からの `run-codex-review.sh` wrapper 起動を deny するようにした。 **互換破壊**: hook payload に `agent_type` を含めない旧 Claude Code では、 正規フロー経由の wrapper 起動も deny される。 本 gate は Claude Code 2.1.211 で実機検証済み (= 動作要件の検証済み最低 version)
+- bg / pipeline deny の文言を、 gate 通過後にのみ到達する codex-reviewer subagent 向けに更新し、 直接実行の再実行を案内する文言 (「デフォルト false で再実行してください」等) を廃止した
+- `agents/codex-reviewer.md` の frontmatter `description` から wrapper のパスと marker 実装詳細を削除し、 起動条件 (呼び出しタイミングと subagent_type) 中心の記述に縮小した (手順詳細は body のみに保持)
+- `block-pre-push.sh` の deny メッセージで、 一部マーカーのみ失効している場合の該当 subagent 単独再起動を正規案内化した (`commands/review.md` も同じ案内で整合)
+- `run-codex-review.sh` ヘッダの stale な記述 (v1.1.0 時代の「deny メッセージで wrapper 直接実行を案内する」という記述) を、 v3.0.0 以降の subagent 経由起動 + v4.0.0 の agent_type gate という現行実態に更新した (実行コードの変更なし)
 
 ### v3.1.3 → v3.1.4 の変更点
 
@@ -101,7 +109,7 @@ claude plugin install codex@openai-codex
 
 pre-push-review は現在 Codex marketplace の配布対象外です。Codex 0.144.4 の `spawn_agent` schema は `agent_type` selector を公開せず、project custom agent を起動しても `SubagentStop` には `agent_type=default` が届きます。generic agent が role 固有の heading/footer を生成できる以上、その文字列を marker 更新の権限根拠にすることはできません。
 
-このため Codex version 4.0.0 で distribution を `excluded` にし、Codex marketplace entry、`.codex-plugin/plugin.json`、Skill、hook を生成しません。repository 直下の `.codex/agents/pre-push-*.toml` も配布対象 adapter と誤認させないため配置しません。Claude Code 版 v3.1.4 の command、agent、hook、marker 契約に変更はありません。
+このため Codex version 4.0.0 で distribution を `excluded` にし、Codex marketplace entry、`.codex-plugin/plugin.json`、Skill、hook を生成しません。repository 直下の `.codex/agents/pre-push-*.toml` も配布対象 adapter と誤認させないため配置しません。この除外により当時の Claude Code 版 (v3.1.4) の command、agent、hook、marker 契約が変わることはありませんでした。
 
 Codex 版 v3.1.4 以前をインストール済みの場合、marketplace entry の削除だけでは local config と cache は自動削除されません。次を実行して旧 plugin を削除し、新しい Codex thread を開始してください。旧 thread や残存 cache の `default` fallback は使用しないでください。
 
@@ -124,6 +132,8 @@ Codex 用の named profile template、setup script、`review-codex` Skill source
 push 前 3 レビューを **同じアシスタントメッセージで並列に** 3 subagent として起動する確定的フローです。 deny メッセージから案内されたら、 Claude はこのコマンドを実行し、 3 subagent (`pre-push-review:code-reviewer` + `pre-push-review:codex-reviewer` + `pre-push-review:security-reviewer`) を 1 つの assistant message 内で並列 `Agent` / `Task` tool call として発出します。 順序や引数の自律判断は構造的に排除されています。
 
 並列発出が技術的に成立しない / 一部のレビューが失敗した場合は、 3 subagent を順次起動しても push gate の構造的保証は同じ (3 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。
+
+一部の marker のみ「未実行」 / 「失効」 の場合は、 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (v4.0.0 で正規化。 block-pre-push.sh の deny メッセージも同じ案内をします)。 3 subagent 並列発出が既定であることは変わりません。
 
 ### Hooks
 
@@ -175,12 +185,14 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 
 **ファイル**: `hooks/scripts/block-bg-codex-wrapper.sh`
 
-`run-codex-review.sh` wrapper を background で起動しようとする操作を deny します。 検知対象は次の 2 経路:
+`run-codex-review.sh` wrapper の起動を検証する PreToolUse hook です。 **v4.0.0 で agent_type 検証 gate を追加** (issue #267): wrapper を含む Bash 実行の hook payload トップレベル `agent_type` が `pre-push-review:codex-reviewer` (namespace 付き完全一致) でなければ **fail-closed に deny** します。 `agent_type` 欠落はメインセッションからの直接実行、 または `agent_type` を hook payload に含めない旧 Claude Code を意味します。 本 gate は **Claude Code 2.1.211 で実機検証済み** (= 動作要件の検証済み最低 version) で、 それより古く `agent_type` を送らない Claude Code では、 正規フロー (`/pre-push-review:review` や codex-reviewer subagent 経由起動) からの wrapper 起動も deny されるため、 2.1.211 以上への更新が必要です。
+
+agent_type gate を通過した後は、 従来どおり次の 2 経路の background 起動を検知します:
 
 - Bash tool option `run_in_background: true` で wrapper を起動
 - shell-level の `&` (background) や `|` (pipeline) で wrapper を連結
 
-理由: wrapper 自身は foreground で codex review を実行して marker を書きますが、 上記経路で起動すると **主 Claude session は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しません**。 主 session は marker の存在だけで push gate を通過するため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。 v2.0.0 でも v1.1.0 と同じ regression 防御を継続しています。
+理由: wrapper 自身は foreground で codex review を実行して marker を書きますが、 上記経路で起動すると **codex-reviewer subagent (ひいては親 session) は wrapper の stdout / stderr (= codex review の verdict / findings) を観察しません**。 marker の存在だけで push gate を通過するため、 review 指摘が修正されないまま push が成立する **foreground review 要件の regression** になります。 v2.0.0 でも v1.1.0 と同じ regression 防御を継続しています。 jq 不在等の環境失敗時は本 hook 全体として fail-open に倒れますが、 agent_type gate 自体は fail-closed です。
 
 #### 3. auto-mark (PostToolUse, matcher: `*` — wildcard)
 
@@ -253,6 +265,7 @@ codex review wrapper (`hooks/scripts/run-codex-review.sh`) を foreground で 1 
 - 親 session は subagent の return として markdown report を受け取る (codex review の詳細出力は subagent context に閉じ込められる)
 - codex-reviewed marker は wrapper 自身が exit 0 完了時に atomic rename で書き込む設計を維持。 subagent 完了タイミングでは marker を書かない (silent-pass 防止 / 詳細は auto-mark の節を参照)
 - model は `inherit` で親 session と同じモデルを使用
+- **v4.0.0 で frontmatter `description` を起動条件中心に縮小**: 呼び出しタイミング (deny メッセージがどのマーカーを指摘したときか) と `subagent_type="pre-push-review:codex-reviewer"` の呼び出し方だけを記載し、 wrapper のパス (`run-codex-review.sh` / `${CLAUDE_PLUGIN_ROOT}` 等) や「wrapper 自身が marker を書く」 という実装詳細はメインセッションへ直接開示しなくなった (実行手順・report 形式は引き続き body に定義)
 
 #### `pre-push-review:security-reviewer` (subagent)
 
