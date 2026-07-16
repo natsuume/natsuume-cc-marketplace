@@ -84,33 +84,6 @@ case "$AGENT_TYPE" in
     EXPECTED_HEADING="# Security Review"
     MARKER_FN="security_marker_path"
     ;;
-  default)
-    # Codex 0.144.4 の spawn_agent は agent_type selector を公開せず、project
-    # custom agent を起動しても SubagentStop の agent_type が default になる。
-    # この互換経路だけは、role template が規定する report の先頭 heading と
-    # 最終 footer の完全一致ペアから role を確定する。heading 単独や部分一致、
-    # footer の role mismatch では marker を書かない。
-    case "$FIRST_NONEMPTY:$LAST_NONEMPTY" in
-      '# Correctness Review:<!-- pre-push-review:completed correctness -->')
-        ROLE="correctness"
-        EXPECTED_HEADING="# Correctness Review"
-        MARKER_FN="code_reviewed_marker_path"
-        ;;
-      '# Independent Review:<!-- pre-push-review:completed independent -->')
-        ROLE="independent"
-        EXPECTED_HEADING="# Independent Review"
-        MARKER_FN="codex_marker_path"
-        ;;
-      '# Security Review:<!-- pre-push-review:completed security -->')
-        ROLE="security"
-        EXPECTED_HEADING="# Security Review"
-        MARKER_FN="security_marker_path"
-        ;;
-      *)
-        exit 0
-        ;;
-    esac
-    ;;
   *)
     exit 0
     ;;

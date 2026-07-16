@@ -90,7 +90,7 @@ class GitRepositoryMixin:
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
-    def test_deny_message_names_claude_and_codex_recovery_flows(self) -> None:
+    def test_deny_message_names_claude_flow_and_codex_exclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             temporary = Path(temporary_name)
             work = self.create_feature_repository(temporary)
@@ -103,9 +103,10 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             response = json.loads(result.stdout)
             reason = response["hookSpecificOutput"]["permissionDecisionReason"]
             self.assertIn("/pre-push-review:review", reason)
-            self.assertIn("$pre-push-review:review-codex", reason)
-            self.assertIn("$pre-push-review:setup-pre-push-agents", reason)
-            self.assertIn("SubagentStop hook が自動更新", reason)
+            self.assertIn("marketplace 配布対象外", reason)
+            self.assertIn("agent_type", reason)
+            self.assertNotIn("$pre-push-review:review-codex", reason)
+            self.assertNotIn("$pre-push-review:setup-pre-push-agents", reason)
 
     def expected_review_hash(self, work: Path) -> str:
         head = self.git_output(work, "rev-parse", "HEAD^{commit}").decode().strip()
@@ -540,7 +541,26 @@ class SetupCodexAgentsTest(unittest.TestCase):
         )
         plugin = overrides["plugins"]["pre-push-review"]
         self.assertEqual(plugin["distribution"]["status"], "excluded")
+        self.assertEqual(plugin["version"], "4.0.0")
         self.assertIn("agent_type", plugin["distribution"]["reason"])
+        self.assertEqual(plugin["compatibility"]["level"], "metadata-only")
+        components = plugin["compatibility"]["components"]
+        self.assertEqual(len(components), 4)
+        self.assertEqual(
+            {component["disposition"] for component in components},
+            {"surface-unavailable"},
+        )
+        uninstall_command = (
+            "codex plugin remove pre-push-review@natsuume-plugins"
+        )
+        self.assertTrue(
+            any(
+                uninstall_command in limitation
+                for limitation in plugin["compatibility"]["limitations"]
+            )
+        )
+        plugin_readme = (PLUGIN_DIR / "README.md").read_text(encoding="utf-8")
+        self.assertIn(uninstall_command, plugin_readme)
 
         marketplace = json.loads(
             (ROOT / ".agents" / "plugins" / "marketplace.json").read_text(
@@ -550,6 +570,12 @@ class SetupCodexAgentsTest(unittest.TestCase):
         names = {entry["name"] for entry in marketplace["plugins"]}
         self.assertNotIn("pre-push-review", names)
         self.assertFalse((PLUGIN_DIR / ".codex-plugin" / "plugin.json").exists())
+        for profile in (
+            "pre-push-correctness-reviewer.toml",
+            "pre-push-independent-reviewer.toml",
+            "pre-push-security-reviewer.toml",
+        ):
+            self.assertFalse((ROOT / ".codex" / "agents" / profile).exists())
 
     def run_setup(
         self, repo: Path, mode: str, *args: str

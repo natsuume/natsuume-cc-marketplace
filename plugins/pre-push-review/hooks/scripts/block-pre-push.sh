@@ -617,7 +617,7 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C "${TARGET_CWD}" status\` で変更を確認して commit し、Claude Code では \`/pre-push-review:review\`、Codex では \`\$pre-push-review:review-codex\` Skill で 3 review を再走させてから push してください。
+\`git -C "${TARGET_CWD}" status\` で変更を確認して commit し、Claude Code の \`/pre-push-review:review\` で 3 review を再走させてから push してください。現行 Codex runtime は \`spawn_agent\` に \`agent_type\` selector を公開しないため、Codex 版は marketplace 配布対象外です。
 EOF
 )
   deny "$REASON"
@@ -731,8 +731,7 @@ target: ${TARGET_CWD}
 
 実行 surface に応じて、次の正規フローを使ってください:
   - Claude Code: **\`/pre-push-review:review\`** (3 namespaced custom agent を並列起動)
-  - Codex: **\`\$pre-push-review:review-codex\`** Skill (3 project-scoped agent を並列起動。agent type selector 不在時は byte-identical template に従う default fallback)
-    初回または agent template 更新後は先に **\`\$pre-push-review:setup-pre-push-agents\`** を実行
+  - Codex: 現行 runtime の \`spawn_agent\` に \`agent_type\` selector が無く、generic agent の reviewer identity を認証できないため marketplace 配布対象外。Codex から generic agent で代行したり marker helper を直接実行したりしない
 
 修正後に branch 差分が変わるとマーカーは自動失効します。同じ正規フローで再走させ、
 全マーカーが ✓ になったら \`git push\` を再試行してください。
@@ -742,8 +741,7 @@ Claude Code で slash command が動かない場合のみ、次の手動 fallbac
   - Agent / Task tool で subagent_type="pre-push-review:security-reviewer" を起動
   - Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動
 
-Codex の marker は許可した named/default agent の SubagentStop hook が自動更新します。helper を直接呼ばず、
-必ず \`\$pre-push-review:review-codex\` Skill から実行してください。
+Codex 用に保存している adapter は、runtime が \`agent_type\` selector を公開し、named reviewer identity を SubagentStop event へ引き継げる将来の実行面だけを想定しています。現行 runtime では marker を生成せずfail-closed に停止してください。
 EOF
 )
 

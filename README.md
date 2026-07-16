@@ -40,7 +40,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [git-guardrails](#git-guardrails) | 0.5.0 | 0.5.0 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.3.0 | 0.3.0 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.5.0 | 0.5.0 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 3.1.4 | 3.1.4 | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-review](#pre-push-review) | 3.1.4 | — | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
 | [update-default-branch](#update-default-branch) | 0.3.0 | 0.3.0 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.9.0 | 0.9.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.17.1 | 0.17.1 | 作業規律を SessionStart / SubagentStart hook で配送し、gh issue/pr body の未承認推奨表現を PreToolUse で検知する。Codex では semantic validator の provider/privacy 明示 opt-in と、Auto 検出不能を補う明示 follow-through Skill を提供 |
@@ -158,7 +158,7 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、3 マーカーが commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。deny メッセージは Claude Code の `/pre-push-review:review` と Codex の `$pre-push-review:review-codex` の両方を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
+| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、3 マーカーが commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。deny メッセージは Claude Code の `/pre-push-review:review` を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
 | `block-bg-codex-wrapper` | PreToolUse (`Bash`) | `run-codex-review.sh` wrapper を Bash tool option `run_in_background: true` または shell-level `&` / `|` で起動する経路を deny する。v3.0.0 では wrapper は通常 `pre-push-review:codex-reviewer` subagent 内から foreground 起動されるが、subagent 内 Bash でも本 hook は発火するため bg 起動防御は引き続き有効 |
 | `auto-mark` | PostToolUse (`*` wildcard) | `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` subagent の Agent / Task tool 完了を自動検知し、対応するマーカーに commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを書き込む。codex マーカーは wrapper script (`run-codex-review.sh`) が直接書き込む設計のため本 hook は codex-reviewer subagent を検知しない (wrapper の non-zero exit と subagent 完了タイミングが乖離する silent-pass 経路を作らないため)。各マーカーは subagent **完了時** に書く (launch ではない) ことで、subagent 失敗時に silent-pass しない |
 
@@ -170,14 +170,11 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 | `codex-reviewer` | `git push` 前のレビューループの codex review ステップで起動する最小 subagent (v3.0.0 で追加)。 内部で `hooks/scripts/run-codex-review.sh` wrapper を foreground で 1 回起動し、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。 codex-reviewed marker は wrapper 自身が atomic rename で書く設計を維持。 v2.x までの Bash 直接起動を置換 |
 | `security-reviewer` | `git push` 前のレビューループの security review ステップで起動する self-contained subagent。 input validation / authn / crypto / injection / data exposure の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す。 標準 `/security-review` skill を invoke しないのは、 直接呼ぶと主 session の turn が終了し、 subagent 内から呼んでも標準 skill が要求する nested subagent (Task tool) が Claude Code の制約で動かないため |
 
-#### Codex Skills
+#### Codex 配布状態
 
-| スキル名 | 説明 |
-|---------|------|
-| `setup-pre-push-agents` | correctness・independent・security の project-scoped read-only custom agent 3 本を、差分確認と明示承認を経て `.codex/agents` に導入する |
-| `review-codex` | 上記 custom agent 3 本を並列実行し、Codex の `SubagentStop` hook に role ごとの共有 hash marker を自動更新させる。agent type selector が無い runtime では byte-identical template を読む `default` agent に限定して互換 fallback する |
+pre-push-review は Codex marketplace の配布対象外です。現行 Codex runtime の `spawn_agent` schema に `agent_type` selector がなく、`agent_type=default` の generic agent は reviewer identity を認証できません。heading/footer は任意の agent が生成できるため marker の権限根拠にせず、Codex entry、manifest、Skill、hook を生成しない fail-closed の配布契約とします。Claude Code 版 v3.1.4 は引き続き利用できます。
 
-Codex では最初に `$pre-push-review:setup-pre-push-agents` を実行し、新しい thread で `$pre-push-review:review-codex` を使います。marker hook は `agent_type`・`agent_id`・`turn_id`・model・report heading/footer と同一 diff hash を検証します。agent type selector が無い場合の `default` fallback は template の developer instructions による instruction-enforced read-only であり、custom profile の sandbox 強制とは保証が異なります。これは runtime lifecycle の完了証跡ですが暗号署名ではなく、レビュー内容の意味的な正しさまでは証明しません。marker helper を直接実行しないでください。
+Codex 版 v3.1.4 以前をインストール済みの場合、marketplace からの除外だけでは local config と cache は削除されません。`codex plugin remove pre-push-review@natsuume-plugins` を実行してから新しい Codex thread を開始してください。旧 thread や残存 cache の `default` fallback を使い続けないでください。
 
 ### キーワード
 

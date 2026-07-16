@@ -100,9 +100,10 @@
     },
     "pre-push-review": {
       "distribution": {
-        "status": "available"
+        "status": "excluded",
+        "reason": "現行 Codex runtime の spawn_agent に agent_type selector が無く、agent_type=default の unauthenticated default agents を 3 reviewer として安全に識別できないため、fail-closed で marketplace 配布対象から除外します。"
       },
-      "version": "3.1.4",
+      "version": "4.0.0",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -113,57 +114,49 @@
         "push 前に 3 観点の branch review を実行してください。"
       ],
       "compatibility": {
-        "level": "partial",
-        "summary": "push gate・hash・marker filename は共有し、Codex では agent type selector がある runtime の named custom agents、または byte-identical template に従う限定的な default fallback と SubagentStop lifecycle hook が、writable plugin data の physical git-dir scoped storageへ 3 review を記録します。",
+        "level": "metadata-only",
+        "summary": "現行 Codex runtime では reviewer identity を認証できないため、Codex marketplace に pre-push-review の entry、manifest、Skill、hook を配布しません。Claude Code 版は従来どおり配布します。",
         "limitations": [
-          "Codex plugin manifest は custom agent profile を直接有効化しないため、setup-pre-push-agents Skill による project-scoped .codex/agents への明示的な導入と新しい session が必要です。",
-          "Codex の marker storage は runtime が提供する absolute PLUGIN_DATA を優先し、未設定時は absolute CLAUDE_PLUGIN_DATA を互換 fallback として使います。選択した path が利用できない場合は .git へ fallback せず push gate を fail-closed に deny します。",
-          "Claude agent の tools allowlist は完全再現しません。named custom agent では read-only sandbox と専用 instructions を使いますが、agent type selector が無い runtime の default fallback は template と task による instruction-enforced read-only であり、sandbox 強制ではありません。",
-          "Codex PreToolUse は対応する Bash 経路の guardrail であり、同等の push を行う全 shell 経路の完全な security boundary ではありません。"
+          "Codex marketplace では pre-push-review の entry、manifest、Skill、hook を公開しないため、Codex から workflow を install・選択できません。",
+          "Codex 版 v3.1.4 以前の既存 install は marketplace からの除外だけでは local config/cache から削除されません。codex plugin remove pre-push-review@natsuume-plugins を実行し、新しい Codex thread を開始する必要があります。",
+          "Claude Code marketplace の plugin、command、agent、hook は v3.1.4 として引き続き利用できます。"
         ],
         "guaranteeDifferences": [
-          "custom agent profile は plugin install だけでは有効にならず、利用対象 repository ごとの setup 完了を前提とします。agent type selector が無い runtime では、setup で byte-identical と確認した template を default agent が全文読取して遵守する互換 fallback を使います。",
-          "Codex marker は PLUGIN_DATA (未設定時は CLAUDE_PLUGIN_DATA) 配下の pre-push-review/markers/<physical-git-dir-sha256>/ に保存され、Claude Code の .git marker とは storage location が異なります。",
-          "SubagentStop marker は agent_type・agent_id・終了応答と同一 diff hash の lifecycle 完了を示しますが、レビュー内容の意味的正しさまでは証明しません。",
-          "push gate の強制範囲は現行 Codex PreToolUse が捕捉する Bash invocation に限定されます。"
+          "Codex 版の意図等価 adapter は提供しません。agent_type selector が実装され、runtime が named reviewer identity を lifecycle event で保証できるまで fail-closed の除外を維持します。"
         ],
         "verificationTests": [
           {
             "path": "tests/test_pre_push_codex_adapter.py",
-            "covers": "custom-agent setup、named/default SubagentStop の exact report 契約、turn_id による runtime 識別、PLUGIN_DATA / CLAUDE_PLUGIN_DATA の repo/worktree-scoped marker、欠落時 fail-closed、Claude .git 維持、push deny recovery の Codex adapter 契約"
+            "covers": "Codex marketplace からの除外、generic agent_type=default の marker 生成拒否、named agent type に限定した fail-closed 契約"
           }
         ],
         "components": [
           {
             "source": "commands/review.md",
-            "disposition": "adapted",
-            "codexReplacement": "skills/review-codex/SKILL.md",
-            "reason": "Claude slash command を Codex Skill の orchestration に変換します。",
+            "disposition": "surface-unavailable",
+            "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
             "sourceDigest": "9c198f8efa22e720e6831345f47e791a60119e37cd838a86c6dd6a88d69d5b94"
           },
           {
             "source": "agents/code-reviewer.md",
-            "disposition": "adapted",
-            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-correctness-reviewer.toml",
-            "reason": "Claude agent の correctness 規約を project-scoped read-only custom agent profile に意訳します。",
+            "disposition": "surface-unavailable",
+            "reason": "現行 Codex runtime では correctness reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
             "sourceDigest": "8ce957a5ff3a0e86b4aee0a4ed074f007bc80073e532da163b3eda826e061bf7"
           },
           {
             "source": "agents/codex-reviewer.md",
-            "disposition": "adapted",
-            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-independent-reviewer.toml",
-            "reason": "外部 Codex companion による独立性を、別 context の named Codex custom agent による独立 review として近似します。",
+            "disposition": "surface-unavailable",
+            "reason": "現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
             "sourceDigest": "be1278a1aedb15163e10ba146375959f87d66524458bc21c16252a94c862a65a"
           },
           {
             "source": "agents/security-reviewer.md",
-            "disposition": "adapted",
-            "codexReplacement": "skills/setup-pre-push-agents/assets/agents/pre-push-security-reviewer.toml",
-            "reason": "Claude agent の security 規約を project-scoped read-only custom agent profile に意訳します。",
+            "disposition": "surface-unavailable",
+            "reason": "現行 Codex runtime では security reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
             "sourceDigest": "0289c10ef0bedf84fd47ad2cf97ef85959e008492c716a96794de5d1b4410c17"
           }
         ],
-        "sourceTreeDigest": "d443cd02e82abf22d5e86bc6ad8e740ccedcd276983e0f86a485f89c1b77b847"
+        "sourceTreeDigest": "574e5a28bd0f4420253d83f0942c1595ae5f74b7d8316d6faf322832dec19db5"
       }
     },
     "update-default-branch": {
@@ -441,7 +434,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "7f15aabae17485302f273bd5919ca90a7325c0dff288df7b950901ba199af670"
+        "sourceTreeDigest": "6df9414cf20d50fbc27855d5af882b369c6e79aa1297b82286579833461cd87e"
       }
     },
     "codex-advisor": {
@@ -480,7 +473,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "a5ad6bc2ac70e07b6a170878e28c0997203ef4fe98f411ab0d03d61edc3faa10"
+        "sourceTreeDigest": "564ae9db0dfb01cffa9f56db699fcbb5f9e98efd8eab64cd26a707e89972acfe"
       }
     },
     "rate-limit": {

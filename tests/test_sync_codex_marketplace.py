@@ -112,8 +112,10 @@ class MarketplaceSyncTest(unittest.TestCase):
         self.assertEqual([plugin.name for plugin in self.state.plugins], expected)
         self.assertEqual(len(expected), 12)
         codex_plugins = json.loads(sync.render_codex_marketplace(self.state))["plugins"]
-        self.assertEqual(len(codex_plugins), 11)
-        self.assertNotIn("codex-advisor", [entry["name"] for entry in codex_plugins])
+        codex_names = [entry["name"] for entry in codex_plugins]
+        self.assertEqual(len(codex_plugins), 10)
+        self.assertNotIn("codex-advisor", codex_names)
+        self.assertNotIn("pre-push-review", codex_names)
 
     def test_generated_files_are_current(self) -> None:
         for path, expected in sync.expected_files(self.state).items():
