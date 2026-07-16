@@ -44,4 +44,6 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
 4. parent-safe report だけでは追加検証が必要な場合は、 raw detail を親へ要求せず、 対象の同一 reviewer subagent を resume して focused question を渡す。 reviewer は自分の context / transcript に残る詳細で検証し、 結果だけを parent-safe report で返す。
 5. 修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 `/pre-push-review:review` を実行して 3 subagent を再走させる。
 
+親 session の user-facing summary には agent ID、output file、transcript path、raw tool metadata を含めないでください。これらは review の方針判断に不要な orchestration detail であり、parent-safe report の外へ relay しません。同一 reviewer を resume する場合も、内部の Agent tool state をそのまま使い、ID や path をユーザ向け本文へ表示しません。
+
 3 マーカーすべてが「✓ 最新の差分でレビュー済み」 になったら `git push` を実行してください。

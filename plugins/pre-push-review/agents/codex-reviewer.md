@@ -46,6 +46,7 @@ Status: findings
 ## Finding <ID>
 
 - Severity: P1 | P2 | P3
+- Source severity: P0 | P1 | P2 | P3 | not-applicable | unknown
 - Confidence: high | medium | low
 - Location: <file>:<line-or-range>
 - Cause class: <conceptual cause>
@@ -57,6 +58,14 @@ Status: findings
 ```
 
 Use a finding ID supplied by Codex when it is safe and stable. Otherwise derive a deterministic ID from `CODEX`, the normalized location, and a non-sensitive cause-class slug. Never derive the ID from a command, payload, secret, or environment value.
+
+`Severity` is the repository-normalized priority used for decisions and labels.
+`Source severity` preserves Codex's original label before normalization. If a
+source finding is P0, normalize it to `Severity: P1`, retain
+`Source severity: P0`, and set `Disposition: must-fix-before-push`. Never map
+source P0 to P2/P3 or omit its source severity. For source P1/P2/P3, preserve
+the same value in both fields; use `unknown` only when Codex did not provide a
+severity and the value cannot be inferred without inventing detail.
 
 Map each source finding to one section. Preserve criticality: never delete, downgrade, or mark a critical source finding as deferrable merely because its mechanics must be abstracted. If a required value cannot be determined without exposing executable detail, write `unknown` and state the non-sensitive reason.
 

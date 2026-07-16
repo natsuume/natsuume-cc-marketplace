@@ -135,28 +135,28 @@
             "source": "commands/review.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
-            "sourceDigest": "0fab204c78192db5877d3fd51857820c3410e6da76baf9ceaab6b835d8d7b6cc"
+            "sourceDigest": "82cebd354f0f595804780b96c432823605277235568979354bc0de389c1e0882"
           },
           {
             "source": "agents/code-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では correctness reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "477c89164f05714f8bdbbf819f7d80115ca96438b250297422a506ed1d12e413"
+            "sourceDigest": "6c7fce451c3c77d64f19cdfbb337c937ca12fa177674285d77fa3bf192f043c4"
           },
           {
             "source": "agents/codex-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "48647cc5522152392b1727fe32de4284da3f9eda959165452e395c3ba063f760"
+            "sourceDigest": "7dcbf01aa1159d4b7dde153634721b35b84b1e389b0e93cdcbb7167f61cb3234"
           },
           {
             "source": "agents/security-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では security reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "f243518b30af859903e26621015fe3b6e5dbd9c7e35197f922531aebebc60191"
+            "sourceDigest": "d003e58913f6093b3aef9279e4fd0d2ef209d53e33e422930fa1580e9548f5ad"
           }
         ],
-        "sourceTreeDigest": "fa3beedab0baa582a28afa6dae1c6a5a7ac6a47d82ca838f65443b69f79e597d"
+        "sourceTreeDigest": "ab212ba7c71ef3e8ad3fa6dc4b6d1cbd20083f1851146df4ad391b7a2be1134c"
       }
     },
     "update-default-branch": {

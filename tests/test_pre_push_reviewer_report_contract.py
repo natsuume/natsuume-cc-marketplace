@@ -26,6 +26,7 @@ COMMAND = PLUGIN / "commands" / "review.md"
 REQUIRED_REPORT_FIELDS = (
     "Status: pass | findings | execution-failed",
     "Severity: P1 | P2 | P3",
+    "Source severity: P0 | P1 | P2 | P3 | not-applicable | unknown",
     "Confidence: high | medium | low",
     "Location:",
     "Cause class:",
@@ -66,6 +67,14 @@ class ReviewerParentSafeReportContractTest(unittest.TestCase):
                 for rule in REQUIRED_SAFETY_RULES:
                     self.assertIn(rule, body)
 
+    def test_all_reviewers_preserve_upstream_p0_without_local_downgrade(self) -> None:
+        for reviewer, path in AGENTS.items():
+            with self.subTest(reviewer=reviewer):
+                body = self.read(path)
+                self.assertIn("Source severity: P0", body)
+                self.assertIn("normalize it to `Severity: P1`", body)
+                self.assertIn("Disposition: must-fix-before-push", body)
+
     def test_codex_reviewer_no_longer_relays_wrapper_output_verbatim(self) -> None:
         body = self.read(AGENTS["Codex"])
         forbidden = (
@@ -85,6 +94,9 @@ class ReviewerParentSafeReportContractTest(unittest.TestCase):
         self.assertIn("parent-safe", body)
         self.assertIn("実行可能な詳細を親 session に返さない", body)
         self.assertGreaterEqual(body.count("run_in_background: false"), 3)
+        self.assertIn("agent ID", body)
+        self.assertIn("transcript path", body)
+        self.assertIn("raw tool metadata", body)
         self.assertNotIn(
             "stdout / stderr をまとめた markdown report を返してください", body
         )

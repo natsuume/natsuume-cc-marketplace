@@ -23,8 +23,10 @@ v4.0.1 (前身: `pre-commit-review` v0.4.0)
 - 3 reviewer に共通の parent-safe report 契約を追加し、 finding ID、priority、confidence、location、cause class、violated invariant、impact、verification、fix direction、disposition を親 session へ返す形式に統一した
 - `codex-reviewer` が wrapper の stdout / stderr を verbatim relay する挙動を廃止した。raw output は subagent context / transcript に留め、親へは各 finding を抽象化した summary、または正規化した execution failure だけを返す
 - `code-reviewer` / `security-reviewer` も、内部では具体的な failure / attack scenario を検証しつつ、実行可能な command、再利用可能な payload、具体的な環境値、段階的な再現・回避手順を final report へ含めない
+- repository-normalized `Severity: P1|P2|P3` と upstream の `Source severity` を分離した。source P0 は `Severity: P1` + `Source severity: P0` + `must-fix-before-push` に無損失写像し、ローカル label 体系に P0 が無くても criticality を落とさない
 - exact detail を使った追加検証は、親へ raw detail を返す代わりに同一 reviewer subagent を resume して行い、結果だけを parent-safe report で返す
 - `/pre-push-review:review` の 3 delegation prompt も parent-safe report を明示的に要求し、codex wrapper の stdout / stderr をまとめて返す旧指示を削除した。3 Agent call は `run_in_background: false` を明記し、Claude Code の background-default 時にも launch を review 完了と誤認しない
+- 親の user-facing summary から agent ID、output file、transcript path、raw tool metadata を除外し、review の方針判断に不要な orchestration detail も context isolation の対象にした
 - `auto-mark.sh` は Agent PostToolUse の `tool_response.status=completed` と final `content[].text` の単一 `Status: pass|findings` を両方確認した場合だけ code/security marker を書くようにした。`async_launched`、`Status: execution-failed`、status 欠落・重複・未知値は marker を書かず、push gate を deny のまま維持する
 - agent 定義・command・auto-mark の contract / integration test を追加し、必須 field、raw detail relay 禁止規律、foreground completion の fail-closed 判定を固定した
 

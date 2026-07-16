@@ -76,6 +76,7 @@ Status: findings
 ## Finding <ID>
 
 - Severity: P1 | P2 | P3
+- Source severity: P0 | P1 | P2 | P3 | not-applicable | unknown
 - Confidence: high | medium | low
 - Location: <file>:<line-or-range>
 - Cause class: <conceptual cause>
@@ -93,6 +94,14 @@ Assign priority using the repository definitions:
 - **P1**: breaks a normal operation, has broad impact, stops autonomous work, or compromises safety
 - **P2**: causes real harm under constrained conditions
 - **P3**: low-impact but real defect; do not use it for style or cleanup
+
+`Severity` is the repository-normalized priority used for decisions and labels.
+`Source severity` preserves the upstream label before normalization. For this
+self-contained reviewer, use `not-applicable` unless you are carrying forward
+an externally supplied severity. If any source finding is P0, normalize it to `Severity: P1`,
+retain `Source severity: P0`, and set
+`Disposition: must-fix-before-push`. Never map source P0 to P2/P3 or omit its
+source severity.
 
 Never delete, downgrade, or mark a critical finding as deferrable merely because its mechanics must be abstracted. If a required value cannot be determined without exposing executable detail, write `unknown` and state the non-sensitive reason.
 
