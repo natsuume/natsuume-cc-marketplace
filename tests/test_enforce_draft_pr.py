@@ -1,0 +1,497 @@
+"""enforce-draft-pr hook (plugins/enforce-draft-pr) の受入テスト。
+
+spec-first Phase A: これから修正する issue #144 / #143 の新仕様を「契約」として固定する
+テストである。フックの実装 (hook 本体) はまだ新仕様に対応していないため、下記グループ H /
+L / P の一部は現行実装では **fail するのが正しい (red)**。fail するテストの期待値は
+新仕様が正であり、現行挙動に合わせて書き換えない。
+
+## 対象 hook のプロトコル
+
+- `bash <script>` に stdin で JSON `{"tool_input": {"command": "<bash コマンド文字列>"}}`
+  を渡して起動する。
+- stdout の契約:
+  - 不介入: 空出力、exit 0
+  - 書き換え: JSON。`.hookSpecificOutput.permissionDecision == "allow"` かつ
+    `.hookSpecificOutput.updatedInput.command` に書き換え後コマンド
+  - deny: JSON。`.hookSpecificOutput.permissionDecision == "deny"`、`updatedInput` なし
+- 挿入規則 (新仕様でも不変): 対象 `gh ... pr create` invocation の `create` トークン末尾
+  直後に ` --draft` (半角スペース + `--draft`) を挿入する。挿入以外は 1 バイトも変更しない。
+
+## 新仕様の契約 (heredoc / 行継続 / 性能)
+
+1. **heredoc 認識**: quote 外で `<<` を検出したら delimiter を読み取り pending キューに
+   積む。次の生改行から heredoc 本文モードに入り、delimiter 単独行 (`<<-` は行頭タブ除去後
+   に完全一致) が来るまで本文全体を不透明データとして扱う (トークン化・command-start 設定・
+   引数スキャンの対象にしない)。同一行に複数 heredoc があれば出現順に本文を消費する。fd
+   番号付き `3<<EOF` も heredoc。`<<<` (herestring) は heredoc ではない。
+2. **対応 delimiter 形式**: `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` /
+   `<<\\WORD` (WORD は `[A-Za-z0-9_]+`)。該当しない構文を検出したら opaque fallback:
+   それ以降のコマンド文字列を一切解析せず、それまでに確定したトークンのみで通常判定する
+   (誤りは「draft 付与漏れ」方向にのみ倒れ、本文改変は構造的に起きない)。
+3. **算術式スキップ**: `$((...))` / コマンド位置の `((...))` は対応する `))` まで (内部括弧
+   の深度追跡込み) を不透明に取り込み、内部の `<<` (ビットシフト) を heredoc と誤認しない。
+4. **行継続のスキャナ内処理**: 解析前の一括削除 (normalize) を廃止し、スキャナが文脈依存で
+   処理する。quote 外・double quote 内の `\\<LF>` は行継続 (トークンを連結し、行境界にしな
+   い)。single quote 内・quoted heredoc 本文内の `\\<LF>` は literal データ。出力コマンド
+   文字列はどのケースでも原文保持 (挿入のみ)。
+5. **性能**: 数十 KB の body を持つコマンドでも実用時間内 (5 秒以内) に完了する。
+
+## テストグループ
+
+- グループ R: 既存挙動 regression (現行実装で pass するはず)
+- グループ H: heredoc 新仕様 (現行実装で fail するはず。一部は現行でも pass しうる)
+- グループ A: 算術式 (現行実装で pass するはず。heredoc 実装後の regression 防止)
+- グループ L: 行継続の原文保持 (現行実装で fail するはず)
+- グループ P: 性能 (現行実装で fail するはず)
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import time
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+HOOK = (
+    ROOT
+    / "plugins"
+    / "enforce-draft-pr"
+    / "hooks"
+    / "scripts"
+    / "enforce-draft-pr.sh"
+)
+
+NL = "\n"
+TAB = "\t"
+BS = "\\"
+
+
+def run_hook(command: str, timeout: float = 30.0) -> tuple[int, str]:
+    """enforce-draft-pr.sh を起動し (returncode, stdout) を返す。"""
+    payload = json.dumps({"tool_input": {"command": command}})
+    result = subprocess.run(
+        ["bash", str(HOOK)],
+        input=payload.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+    return result.returncode, result.stdout.decode("utf-8")
+
+
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+class EnforceDraftPrTest(unittest.TestCase):
+    def assert_rewrite(self, command: str, expected_command: str) -> None:
+        """allow で書き換えられ、updatedInput.command が期待値と完全一致することを確認する。"""
+        returncode, stdout = run_hook(command)
+        self.assertEqual(returncode, 0, stdout)
+        payload = json.loads(stdout)
+        hook_output = payload["hookSpecificOutput"]
+        self.assertEqual(hook_output["permissionDecision"], "allow", stdout)
+        self.assertEqual(
+            hook_output["updatedInput"]["command"], expected_command, stdout
+        )
+
+    def assert_no_intervention(self, command: str) -> None:
+        """不介入 (空出力、exit 0) であることを確認する。"""
+        returncode, stdout = run_hook(command)
+        self.assertEqual(returncode, 0, stdout)
+        self.assertEqual(stdout, "")
+
+    def assert_denied(self, command: str) -> None:
+        """deny (permissionDecision == "deny"、updatedInput なし) であることを確認する。"""
+        returncode, stdout = run_hook(command)
+        self.assertEqual(returncode, 0, stdout)
+        payload = json.loads(stdout)
+        hook_output = payload["hookSpecificOutput"]
+        self.assertEqual(hook_output["permissionDecision"], "deny", stdout)
+        self.assertNotIn("updatedInput", hook_output)
+
+    # ------------------------------------------------------------------
+    # グループ R: 既存挙動 regression (現行実装で pass するはず)
+    # ------------------------------------------------------------------
+
+    def test_r01_normal_insertion(self) -> None:
+        command = 'gh pr create --title "t" --body "b"'
+        expected = 'gh pr create --draft --title "t" --body "b"'
+        self.assert_rewrite(command, expected)
+
+    def test_r02_existing_draft_passthrough(self) -> None:
+        command = 'gh pr create --draft --title "t" --body "b"'
+        self.assert_no_intervention(command)
+
+    def test_r03_short_flag_passthrough(self) -> None:
+        command = 'gh pr create -d --title "t" --body "b"'
+        self.assert_no_intervention(command)
+
+    def test_r04_explicit_non_draft_denied(self) -> None:
+        command = 'gh pr create --draft=false --title "t" --body "b"'
+        self.assert_denied(command)
+
+    def test_r05_quoted_falsy_value_denied(self) -> None:
+        command = 'gh pr create --draft="false" --title "t" --body "b"'
+        self.assert_denied(command)
+
+    def test_r06_multiple_invocations_each_inserted(self) -> None:
+        command = (
+            'gh pr create --title "a" --body "b"; '
+            'gh pr create --title "c" --body "d"'
+        )
+        expected = (
+            'gh pr create --draft --title "a" --body "b"; '
+            'gh pr create --draft --title "c" --body "d"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_r07_quoted_body_contains_gh_pr_create_not_intervened(self) -> None:
+        command = (
+            'gh pr create --title "t" '
+            '--body "see: gh pr create --draft=false example"'
+        )
+        expected = (
+            'gh pr create --draft --title "t" '
+            '--body "see: gh pr create --draft=false example"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_r08_env_prefix(self) -> None:
+        command = 'GH_TOKEN=x gh pr create --title "t" --body "b"'
+        expected = 'GH_TOKEN=x gh pr create --draft --title "t" --body "b"'
+        self.assert_rewrite(command, expected)
+
+    def test_r09_global_repo_option(self) -> None:
+        command = 'gh -R owner/repo pr create --title "t" --body "b"'
+        expected = 'gh -R owner/repo pr create --draft --title "t" --body "b"'
+        self.assert_rewrite(command, expected)
+
+    def test_r10_cd_chain(self) -> None:
+        command = 'cd repo && gh pr create --title "t" --body "b"'
+        expected = 'cd repo && gh pr create --draft --title "t" --body "b"'
+        self.assert_rewrite(command, expected)
+
+    def test_r11_non_target_command(self) -> None:
+        command = "echo hello"
+        self.assert_no_intervention(command)
+
+    def test_r12_pipe_right_hand_side(self) -> None:
+        command = 'cat notes.md | gh pr create --title "t" --body-file -'
+        expected = 'cat notes.md | gh pr create --draft --title "t" --body-file -'
+        self.assert_rewrite(command, expected)
+
+    def test_r13_leading_comment_line(self) -> None:
+        command = "# prepare" + NL + 'gh pr create --title "t" --body "b"'
+        expected = (
+            "# prepare" + NL + 'gh pr create --draft --title "t" --body "b"'
+        )
+        self.assert_rewrite(command, expected)
+
+    # ------------------------------------------------------------------
+    # グループ H: heredoc 新仕様
+    # (現行実装で fail するはず — H5/H6/H9 など一部は現行でも pass しうる)
+    # ------------------------------------------------------------------
+
+    def test_h01_heredoc_body_semicolon_not_intervened(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF'
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF'
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h02_heredoc_body_draft_false_not_denied(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF'
+            + NL
+            + "note; gh pr create --draft=false was the old way"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF'
+            + NL
+            + "note; gh pr create --draft=false was the old way"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h03_quoted_delimiter(self) -> None:
+        command = (
+            "gh pr create --title \"t\" --body-file - <<'EOF'"
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            "gh pr create --draft --title \"t\" --body-file - <<'EOF'"
+            + NL
+            + "Run tests first; gh pr create --title x --body y is the old way"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h04_dash_heredoc_strips_leading_tabs(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<-EOF'
+            + NL
+            + TAB
+            + "body; gh pr create fake"
+            + NL
+            + TAB
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<-EOF'
+            + NL
+            + TAB
+            + "body; gh pr create fake"
+            + NL
+            + TAB
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h05_multiple_heredocs_same_line(self) -> None:
+        command = (
+            'cat <<A <<B; gh pr create --title "t" --body "b"'
+            + NL
+            + "bodyA; gh pr create fakeA"
+            + NL
+            + "A"
+            + NL
+            + "bodyB; gh pr create fakeB"
+            + NL
+            + "B"
+        )
+        expected = (
+            'cat <<A <<B; gh pr create --draft --title "t" --body "b"'
+            + NL
+            + "bodyA; gh pr create fakeA"
+            + NL
+            + "A"
+            + NL
+            + "bodyB; gh pr create fakeB"
+            + NL
+            + "B"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h06_fd_numbered_heredoc(self) -> None:
+        command = (
+            'exec 3<<EOF; gh pr create --title "t" --body "b"'
+            + NL
+            + "fd body; gh pr create fake"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'exec 3<<EOF; gh pr create --draft --title "t" --body "b"'
+            + NL
+            + "fd body; gh pr create fake"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h07_heredoc_followed_by_pipe_same_line(self) -> None:
+        command = (
+            'cat <<EOF | gh pr create --title "t" --body-file -'
+            + NL
+            + "body text"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'cat <<EOF | gh pr create --draft --title "t" --body-file -'
+            + NL
+            + "body text"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h08_unterminated_heredoc(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF'
+            + NL
+            + "unterminated body; gh pr create fake"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<EOF'
+            + NL
+            + "unterminated body; gh pr create fake"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h09_herestring_not_misdetected_as_heredoc(self) -> None:
+        command = 'grep x <<<"data here"; gh pr create --title "t" --body "b"'
+        expected = (
+            'grep x <<<"data here"; gh pr create --draft --title "t" --body "b"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h10a_opaque_fallback_no_intervention(self) -> None:
+        command = (
+            'cat <<E"OF"; gh pr create --title "t" --body "b"'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_no_intervention(command)
+
+    def test_h10b_opaque_fallback_confirmed_tokens_judged(self) -> None:
+        command = (
+            'gh pr create --title "t" --body-file - <<E"OF"'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body-file - <<E"OF"'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    # ------------------------------------------------------------------
+    # グループ A: 算術式 (現行実装で pass するはず。heredoc 実装後の regression 防止)
+    # ------------------------------------------------------------------
+
+    def test_a01_dollar_double_paren_arithmetic(self) -> None:
+        command = 's=$((x << 1)); gh pr create --title "t" --body "b"'
+        expected = 's=$((x << 1)); gh pr create --draft --title "t" --body "b"'
+        self.assert_rewrite(command, expected)
+
+    def test_a02_command_position_double_paren_arithmetic(self) -> None:
+        command = '(( n << 2 )); gh pr create --title "t" --body "b"'
+        expected = '(( n << 2 )); gh pr create --draft --title "t" --body "b"'
+        self.assert_rewrite(command, expected)
+
+    def test_a03_nested_parens_inside_arithmetic(self) -> None:
+        command = 'v=$(( (a+b) << 1 )); gh pr create --title "t" --body "b"'
+        expected = (
+            'v=$(( (a+b) << 1 )); gh pr create --draft --title "t" --body "b"'
+        )
+        self.assert_rewrite(command, expected)
+
+    # ------------------------------------------------------------------
+    # グループ L: 行継続の原文保持 (現行実装で fail するはず)
+    # ------------------------------------------------------------------
+
+    def test_l01_token_boundary_line_continuation_preserved(self) -> None:
+        # `pr` の直後に空白を置いた「トークン間」の行継続。bash はこれを
+        # `gh pr create` と等価に扱う (空白なしの `pr\<LF>create` は `prcreate`
+        # に連結されるため invocation にならず、このテストの対象外)。
+        command = "gh pr " + BS + NL + 'create --title "t" --body "b"'
+        expected = (
+            "gh pr " + BS + NL + 'create --draft --title "t" --body "b"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_l02_single_quote_backslash_newline_literal_preserved(self) -> None:
+        command = (
+            'gh pr create --title "t" --body \'keep '
+            + BS
+            + NL
+            + " literal'"
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body \'keep '
+            + BS
+            + NL
+            + " literal'"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_l03_double_quote_backslash_newline_preserved(self) -> None:
+        command = (
+            'gh pr create --title "t" --body "wrapped ' + BS + NL + 'line"'
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body "wrapped '
+            + BS
+            + NL
+            + 'line"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_l04_quoted_heredoc_body_backslash_newline_preserved(self) -> None:
+        command = (
+            "gh pr create --title \"t\" --body-file - <<'EOF'"
+            + NL
+            + "line with "
+            + BS
+            + NL
+            + "continuation"
+            + NL
+            + "EOF"
+        )
+        expected = (
+            "gh pr create --draft --title \"t\" --body-file - <<'EOF'"
+            + NL
+            + "line with "
+            + BS
+            + NL
+            + "continuation"
+            + NL
+            + "EOF"
+        )
+        self.assert_rewrite(command, expected)
+
+    # ------------------------------------------------------------------
+    # グループ P: 性能 (現行実装で fail するはず)
+    # ------------------------------------------------------------------
+
+    def test_p01_fifty_kb_quoted_body_performance(self) -> None:
+        body = "a" * 50_000
+        command = f'gh pr create --title "t" --body "{body}"'
+        expected = f'gh pr create --draft --title "t" --body "{body}"'
+        start = time.monotonic()
+        returncode, stdout = run_hook(command)
+        elapsed = time.monotonic() - start
+        self.assertEqual(returncode, 0, stdout)
+        payload = json.loads(stdout)
+        hook_output = payload["hookSpecificOutput"]
+        self.assertEqual(hook_output["permissionDecision"], "allow", stdout)
+        self.assertEqual(
+            hook_output["updatedInput"]["command"], expected, stdout
+        )
+        self.assertLess(elapsed, 5.0)
+
+    def test_p02_backslash_dense_twenty_kb_performance(self) -> None:
+        body = (BS + "a") * 10_000
+        command = f'gh pr create --title "t" --body "{body}"'
+        expected = f'gh pr create --draft --title "t" --body "{body}"'
+        start = time.monotonic()
+        returncode, stdout = run_hook(command)
+        elapsed = time.monotonic() - start
+        self.assertEqual(returncode, 0, stdout)
+        payload = json.loads(stdout)
+        hook_output = payload["hookSpecificOutput"]
+        self.assertEqual(hook_output["permissionDecision"], "allow", stdout)
+        self.assertEqual(
+            hook_output["updatedInput"]["command"], expected, stdout
+        )
+        self.assertLess(elapsed, 10.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
