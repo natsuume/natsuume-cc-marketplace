@@ -13,7 +13,7 @@
 # 現状 caller は run-codex-review.sh の 1 つのみだが、 path 解決ロジック (versioned cache
 # の semver 降順探索 + marketplace clone へのフォールバック + 環境差吸収) は run-codex-review.sh
 # 本体の review 実行責務とは独立した concern。 named unit として lib に切り出すことで、
-# run-codex-review.sh 本体が「companion を呼んで marker を書く」 という主目的に集中でき
+# run-codex-review.sh 本体が「companion を呼んで pending attestation を書く」 という主目的に集中でき
 # 可読性が上がる (= 「現時点で責務が明確に分かれている」 ことが lib 化の根拠であり、 「将来
 # の柔軟性のために」 ではない)。
 #

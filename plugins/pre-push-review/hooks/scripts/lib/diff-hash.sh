@@ -89,8 +89,9 @@
 #   - block-pre-push.sh: dirty-tree gate 通過後・ハッシュ計算前に is_empty_push_in で
 #     空 push を skip し、それ以外は compute_review_hash_in で 3 マーカーを検証する
 #   - run-codex-review.sh: is_empty_push で空 push を skip し、それ以外は
-#     compute_review_hash のハッシュで codex マーカーを書く
-#   - auto-mark.sh: compute_review_hash のハッシュで code / security マーカーを書く
+#     compute_review_hash のハッシュで Codex pending attestation を書く
+#   - auto-mark.sh: compute_review_hash のハッシュで code / security marker を書き、
+#     Codex pending attestation の一致を検証して final marker へ昇格する
 
 # detect_base_branch [<target_cwd>]
 # 出力: default branch 名 (master/main 等)、検出失敗時は空文字列を返し非ゼロで exit

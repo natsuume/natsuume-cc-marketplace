@@ -128,6 +128,10 @@
           {
             "path": "tests/test_pre_push_codex_adapter.py",
             "covers": "Codex marketplace からの除外、generic agent_type=default の marker 生成拒否、named agent type に限定した fail-closed 契約"
+          },
+          {
+            "path": "tests/test_pre_push_auto_mark.py",
+            "covers": "Claude Code の foreground Agent completion と parent-safe report 検証、Codex pending attestation の final marker 昇格・失敗時破棄"
           }
         ],
         "components": [
@@ -135,28 +139,34 @@
             "source": "commands/review.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
-            "sourceDigest": "52063061b6b7a003012d2bc04a42d9de89cb137588950acb60c129381fc46360"
+            "sourceDigest": "7b8dead21e3f81b24b5a2b6a02129114034e88448977c33159ff578418f19f42"
           },
           {
             "source": "agents/code-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では correctness reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "8ce957a5ff3a0e86b4aee0a4ed074f007bc80073e532da163b3eda826e061bf7"
+            "sourceDigest": "9420845734ab82c56c2a804ede529487e1ff150b2c5440a479c277a11f70fdf0"
           },
           {
             "source": "agents/codex-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "8ae039ce5932182a9dbe6c75a23ade8a560c005158e3e69e6ffe7f3abb88018a"
+            "sourceDigest": "4849120008e515705bd730997e222108bbb7b19a1f7ecd30f78f9a0b38c298ae"
           },
           {
             "source": "agents/security-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では security reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "0289c10ef0bedf84fd47ad2cf97ef85959e008492c716a96794de5d1b4410c17"
+            "sourceDigest": "eab7f7185a5bed6dfe3a6a4cede98b76286299247819678971a444d4bfe0d7d0"
+          },
+          {
+            "source": "hooks/hooks.json#/hooks/PostToolUseFailure/0/hooks/0",
+            "disposition": "surface-unavailable",
+            "reason": "Claude Code の Agent / Task failure payload に残る Codex pending attestation を破棄する lifecycle hook であり、plugin 自体を Codex distribution から除外しているため Codex surface は公開しません。",
+            "sourceDigest": "be236d7412a9db67d9f5e0f36383515bbac7e179a628d39d96b19405d7f0cd72"
           }
         ],
-        "sourceTreeDigest": "6f8be21d7ed2a19675d34303521554c5cb8c6485c5e50f1d9f90967cb785eddc"
+        "sourceTreeDigest": "4b78371e69e0371b6754083b4e3f238fb198e340bd6eb59498e9853e4d16f73f"
       }
     },
     "update-default-branch": {

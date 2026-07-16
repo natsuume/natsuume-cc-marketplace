@@ -2,8 +2,10 @@
 # markers.sh
 # pre-push-review プラグインのレビューマーカーファイル名を単一ソース化する。
 #
-# block-pre-push.sh が読み (3 マーカーのハッシュ検証)、 auto-mark.sh / run-codex-review.sh
-# が書き込む (各 review 完了時のハッシュ書き込み)。 両者でファイル名が 1 文字でも乖離すると
+# block-pre-push.sh が読み (3 マーカーのハッシュ検証)、 auto-mark.sh が final marker を
+# 書き込む。run-codex-review.sh は Codex review 完了時の pending attestation を書き、
+# auto-mark.sh が parent-safe report の正常完了後に final marker へ昇格する。各 path が
+# 1 文字でも乖離すると
 # マーカーは永遠に一致せず push が通らなくなる致命バグになるため、 ここに集約する。
 #
 # ## v2.0.0: 3 マーカー構成
@@ -19,6 +21,7 @@
 
 CODE_REVIEWED_MARKER_NAME=".claude-pre-push-code-reviewed"
 CODEX_MARKER_NAME=".claude-pre-push-codex-reviewed"
+CODEX_PENDING_MARKER_NAME=".claude-pre-push-codex-reviewed.pending"
 SECURITY_MARKER_NAME=".claude-pre-push-security-reviewed"
 
 # 引数: <git-dir> [runtime]
@@ -104,6 +107,13 @@ code_reviewed_marker_path() {
 # 出力: codex-reviewed マーカーの path
 codex_marker_path() {
   marker_path "$1" "$CODEX_MARKER_NAME" "${2:-claude}"
+}
+
+# 引数: <git-dir>
+# 出力: codex review wrapper が書く pending attestation の path。
+# Claude Code の auto-mark.sh が parent-safe report 成功後にのみ final marker へ昇格する。
+codex_pending_marker_path() {
+  marker_path "$1" "$CODEX_PENDING_MARKER_NAME" "${2:-claude}"
 }
 
 # 引数: <git-dir>
