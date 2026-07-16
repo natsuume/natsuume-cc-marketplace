@@ -457,26 +457,21 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
                 compatibility_data,
                 bare_plugin_data=bare_data,
             )
-            payload = self.subagent_payload(
-                work,
-                "pre_push_correctness_reviewer",
-                "# Correctness Review",
-                "correctness",
-            )
-
-            result = self.run_codex_auto_mark(work, payload, env)
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
-            bare_marker = self.codex_marker_dir(work, bare_data) / MARKER_NAMES[0]
-            self.assertTrue(bare_marker.exists(), result.stderr.decode())
-            self.assertFalse(
-                (
-                    self.codex_marker_dir(work, compatibility_data)
-                    / MARKER_NAMES[0]
-                ).exists()
-            )
-            self.assertFalse(
-                (self.absolute_git_dir(work) / MARKER_NAMES[0]).exists()
-            )
+            for agent_type, heading, role, marker_name in REVIEW_CASES:
+                payload = self.subagent_payload(work, agent_type, heading, role)
+                result = self.run_codex_auto_mark(work, payload, env)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                bare_marker = self.codex_marker_dir(work, bare_data) / marker_name
+                self.assertTrue(bare_marker.exists(), result.stderr.decode())
+                self.assertFalse(
+                    (
+                        self.codex_marker_dir(work, compatibility_data)
+                        / marker_name
+                    ).exists()
+                )
+                self.assertFalse(
+                    (self.absolute_git_dir(work) / marker_name).exists()
+                )
 
             allowed = self.run_push_hook(work, env, turn_id="turn-test")
             self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())

@@ -62,6 +62,9 @@ AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type')
 AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id')
 HOOK_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd')
 LAST_MESSAGE=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message')
+# marker runtime は plugin env ではなく、上で検証済みの Codex 固有 turn_id で
+# 選択する。Claude Code も互換用 plugin env を持つため env 推測はしない。
+MARKER_RUNTIME="codex"
 
 case "$AGENT_TYPE" in
   pre_push_correctness_reviewer)
@@ -112,10 +115,10 @@ case "$BRANCH" in
   master|main) exit 0 ;;
 esac
 HASH=$(compute_review_hash "$BASE") || exit 0
-MARKER_PATH=$("$MARKER_FN" "$GIT_DIR") || exit 0
+MARKER_PATH=$("$MARKER_FN" "$GIT_DIR" "$MARKER_RUNTIME") || exit 0
 
 umask 077
-if [ -n "${PLUGIN_ROOT:-}" ]; then
+if [ "$MARKER_RUNTIME" = "codex" ]; then
   MARKER_DIR=${MARKER_PATH%/*}
   if ! mkdir -p "$MARKER_DIR"; then
     printf '[pre-push-review] Codex marker storage directory を作成できません: %s\n' \

@@ -16,7 +16,11 @@
 
 ## バージョン
 
-v3.1.2 (前身: `pre-commit-review` v0.4.0)
+v3.1.3 (前身: `pre-commit-review` v0.4.0)
+
+### v3.1.2 → v3.1.3 の変更点
+
+- Claude Code も `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` を持つため、plugin env の存在で Codex を識別する方式を廃止し、hook payload の非空 `turn_id` で runtime を識別するよう修正した。Codex marker storage は `PLUGIN_DATA` を優先し、未設定時は `CLAUDE_PLUGIN_DATA` を互換 fallback として使う。選択した path が空・relative path なら `.git` へ fallback せず fail-closed を維持する
 
 ### v3.1.1 → v3.1.2 の変更点
 
@@ -99,7 +103,7 @@ Codex では `$pre-push-review:setup-pre-push-agents` で対象 repository の `
 
 各 template は `sandbox_mode = "read-only"` と role 固有 `developer_instructions` を持ちます。setup は最初に `inspect` で target、3 ファイルの状態、plan token を表示し、ユーザーが作成・上書きを明示承認した後だけ token 付き `write` を実行します。inspect 後に destination が変化した場合は token mismatch で書き込みを中止します。symlink / 非通常ファイルも上書きしません。custom agent は project config なので、導入後は新しい Codex thread で有効化します。
 
-Codex の既定 sandbox では `.git` が常に read-only なので、marker は hook に渡される writable な `PLUGIN_DATA` の `pre-push-review/markers/<repo-key>/` に保存します。`repo-key` は physical git-dir の絶対 path bytes だけを SHA-256 にした lowercase hex で、同じ `PLUGIN_DATA` を共有する repository と linked worktree を分離します。Claude Code は従来どおり対象 `.git` を使います。両 runtime で marker filename、review hash、push gate の判定は共通です。Codex で `PLUGIN_DATA` が空・未設定・relative path の場合は `.git` へ fallback せず、marker 更新を skip して push gate を fail-closed に deny します。
+Codex の既定 sandbox では `.git` が常に read-only なので、marker は hook に渡される writable な plugin data の `pre-push-review/markers/<repo-key>/` に保存します。`PLUGIN_DATA` が設定されていればそれを優先し、未設定の runtime では `CLAUDE_PLUGIN_DATA` を互換 fallback として使います。`repo-key` は physical git-dir の絶対 path bytes だけを SHA-256 にした lowercase hex で、同じ plugin data を共有する repository と linked worktree を分離します。Claude Code は従来どおり対象 `.git` を使います。両 runtime で marker filename、review hash、push gate の判定は共通です。Codex の runtime 識別は plugin env の存在ではなく hook payload の非空 `turn_id` で行います。選択した plugin data path が空・relative path の場合は `.git` へ fallback せず、marker 更新を skip して push gate を fail-closed に deny します。
 
 Codex plugin hook は `SubagentStop` の matcher を上記 3 agent type に限定し、さらに script 内で次を検証します。
 
@@ -108,7 +112,7 @@ Codex plugin hook は `SubagentStop` の matcher を上記 3 agent type に限�
 - report の先頭 heading と、role 固有の最終 completion footer が template の出力契約と一致すること
 - hook payload の `cwd` で default branch、HEAD、merge-base、branch / staged / unstaged diff の hash を計算できること
 
-検証成功時だけ role に対応する `PLUGIN_DATA` marker を同じ directory 内の atomic rename で更新します。3 agent が並列停止する間に repository state が外部から変わった場合、marker hash が揃わず push gate が deny するため、変更後の状態で 3 本を再実行する必要があります。`$pre-push-review:review-codex` は `mark-review.sh` を直接呼びません。Codex では `.git` marker の存在や mtime ではなく、SubagentStop hook の update output と同じ state に対する push gate で完了を確認します。
+検証成功時だけ role に対応する plugin data marker を同じ directory 内の atomic rename で更新します。3 agent が並列停止する間に repository state が外部から変わった場合、marker hash が揃わず push gate が deny するため、変更後の状態で 3 本を再実行する必要があります。`$pre-push-review:review-codex` は `mark-review.sh` を直接呼びません。Codex では `.git` marker の存在や mtime ではなく、SubagentStop hook の update output と同じ state に対する push gate で完了を確認します。
 
 ### 保証差
 
@@ -116,7 +120,7 @@ Codex 代替が保証するのは、**指定した named agent の Codex runtime
 
 - SubagentStop payload は Codex runtime 由来の構造化 event ですが、暗号署名ではありません。hook は review の意味的な正しさや finding の完全性を証明せず、agent が出力契約まで完走したことを検証します。Claude Code の Agent/Task completion hook も review 内容そのものを証明するものではありません
 - Codex plugin manifest は project custom agent を install 時に `.codex/agents` へ自動配置しません。明示承認を伴う `$pre-push-review:setup-pre-push-agents` が一度必要で、`$pre-push-review:review-codex` は template が byte-identical でないとき generic agent へ fallback しません
-- Codex marker は runtime が提供する writable な `PLUGIN_DATA` に依存します。欠落・空・relative path、storage 作成失敗、SHA-256 command 不在時は marker を書かず push gate を deny します
+- Codex marker は runtime が提供する writable な `PLUGIN_DATA` (未設定時は互換用 `CLAUDE_PLUGIN_DATA`) に依存します。選択した path の欠落・空・relative path、storage 作成失敗、SHA-256 command 不在時は marker を書かず push gate を deny します
 - Codex custom agent は Claude agent の `tools:` allowlist と同じ粒度の tool 制限を持たないため、read-only sandbox で mutation を防ぎます。親 turn の live sandbox / permission override が子へ再適用される surface では、その override が profile より優先されます
 - Claude 側の 3 軸は Anthropic correctness + OpenAI Codex + security ですが、Codex 側は 3 本とも Codex runtime 上です。`pre_push_independent_reviewer` は別 context で他 report を渡さない独立性を持つ一方、provider/model 実装の独立性までは再現しません
 - plugin hook はユーザーの trust 後にだけ動作し、hooks feature の無効化、marker の直接改変、Codex 外の terminal / clone からの push を防ぐ adversarial security boundary ではありません。Claude Code 版と同じく cooperative agent workflow の push gate です
@@ -132,7 +136,7 @@ python3 /path/to/skill-creator/scripts/quick_validate.py plugins/pre-push-review
 python3 scripts/sync_codex_marketplace.py --check
 ```
 
-`tests.test_pre_push_codex_adapter` は、setup の inspect → 承認 token 付き atomic install、stale token / symlink 拒否、3 TOML の必須 field と read-only 設定、3 agent type の正常な SubagentStop からの `PLUGIN_DATA` marker 更新、physical git-dir key による repository / worktree 分離、`PLUGIN_DATA` 欠落時の no-fallback / fail-closed、Claude `.git` marker の維持、marker hash と push gate の共有を検証します。
+`tests.test_pre_push_codex_adapter` は、setup の inspect → 承認 token 付き atomic install、stale token / symlink 拒否、3 TOML の必須 field と read-only 設定、`turn_id` による runtime 識別、3 agent type の正常な SubagentStop からの `PLUGIN_DATA` / `CLAUDE_PLUGIN_DATA` marker 更新、physical git-dir key による repository / worktree 分離、plugin data 欠落時の no-fallback / fail-closed、Claude `.git` marker の維持、marker hash と push gate の共有を検証します。
 
 実機 E2E では次を確認します。
 
@@ -197,7 +201,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 - GitHub サーバ側で実施される操作 (Web UI のマージ / rebase 等) も Claude Code hook 範囲外
 - **default branch (master/main) 上での push は本プラグイン単独では gate されない**: 本プラグインは `git-guardrails` の `block-default-branch-push.sh` が default branch push を deny する前提で gate を skip する。 `git-guardrails` を併用していない環境では default branch 上の push が review なしで通る経路が残る
 
-> **target-mismatch の構造的解決**: 本プラグインは独自の bash command parser (`lib/cmd-parser.sh`) と target resolver (`lib/target-resolver.sh`) で `cd dir && git push` / `git -C dir push` / `GIT_DIR=path/.git git push` の **実 push target を決定的に解決** し、解決した target cwd の runtime 別 storage (Claude Code は `.git`、Codex は physical git-dir key で分離した `PLUGIN_DATA`) に対して markers / hash 比較を行います。解析不能な形式 (subshell `(...)`, brace group `{...}`, `bash -c "..."`, `pushd`/`popd`, `export GIT_DIR=...`, `--work-tree=...`, `time` / `env` 等の未対応 wrapper) は **保守的に deny** します。
+> **target-mismatch の構造的解決**: 本プラグインは独自の bash command parser (`lib/cmd-parser.sh`) と target resolver (`lib/target-resolver.sh`) で `cd dir && git push` / `git -C dir push` / `GIT_DIR=path/.git git push` の **実 push target を決定的に解決** し、解決した target cwd の runtime 別 storage (Claude Code は `.git`、Codex は physical git-dir key で分離した `PLUGIN_DATA` / `CLAUDE_PLUGIN_DATA`) に対して markers / hash 比較を行います。解析不能な形式 (subshell `(...)`, brace group `{...}`, `bash -c "..."`, `pushd`/`popd`, `export GIT_DIR=...`, `--work-tree=...`, `time` / `env` 等の未対応 wrapper) は **保守的に deny** します。
 
 #### 2. block-bg-codex-wrapper (PreToolUse, matcher: `Bash`)
 

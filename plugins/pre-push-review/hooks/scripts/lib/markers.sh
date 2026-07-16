@@ -21,18 +21,22 @@ CODE_REVIEWED_MARKER_NAME=".claude-pre-push-code-reviewed"
 CODEX_MARKER_NAME=".claude-pre-push-codex-reviewed"
 SECURITY_MARKER_NAME=".claude-pre-push-security-reviewed"
 
-# 引数: <git-dir>
+# 引数: <git-dir> [runtime]
 # 出力: runtime に対応する marker storage directory
 #
-# Codex plugin hook は PLUGIN_ROOT を非空で受け取り、既定 sandbox では .git が
-# read-only のため writable な PLUGIN_DATA を使う。repo / worktree ごとの衝突を避ける
-# key は physical git-dir の絶対 path bytes だけを SHA-256 に入力して求める。
-# PLUGIN_DATA が使えない Codex runtime では .git へ fallback せず non-zero を返す。
+# runtime は hook payload を検証した caller が明示的に `codex` を渡す。
+# Claude Code も CLAUDE_PLUGIN_ROOT / CLAUDE_PLUGIN_DATA を持つため、plugin env の存在で
+# runtime を推測しない。Codex の既定 sandbox では .git が read-only のため、
+# PLUGIN_DATA を優先し、未設定時は CLAUDE_PLUGIN_DATA を互換 fallback として使う。
+# repo / worktree ごとの衝突を避ける key は physical git-dir の絶対 path bytes
+# だけを SHA-256 に入力して求める。選択した plugin data path が使えない Codex
+# runtime では .git へ fallback せず non-zero を返す。
 marker_storage_dir() {
   local git_dir="$1"
-  local canonical_git_dir digest repo_key
+  local runtime="${2:-claude}"
+  local plugin_data canonical_git_dir digest repo_key
 
-  if [ -z "${PLUGIN_ROOT:-}" ]; then
+  if [ "$runtime" != "codex" ]; then
     if [ -z "$git_dir" ]; then
       printf '%s\n' '[pre-push-review] git-dir が空のため marker path を解決できません。' >&2
       return 1
@@ -41,10 +45,16 @@ marker_storage_dir() {
     return 0
   fi
 
-  case "${PLUGIN_DATA:-}" in
+  if [ "${PLUGIN_DATA+x}" = "x" ]; then
+    plugin_data="$PLUGIN_DATA"
+  else
+    plugin_data="${CLAUDE_PLUGIN_DATA:-}"
+  fi
+
+  case "$plugin_data" in
     /*) ;;
     *)
-      printf '%s\n' '[pre-push-review] Codex PLUGIN_DATA が空、未設定、または絶対 path でないため marker path を解決できません。' >&2
+      printf '%s\n' '[pre-push-review] Codex plugin data path (PLUGIN_DATA / CLAUDE_PLUGIN_DATA) が空、未設定、または絶対 path でないため marker path を解決できません。' >&2
       return 1
       ;;
   esac
@@ -75,29 +85,29 @@ marker_storage_dir() {
       ;;
   esac
 
-  printf '%s/pre-push-review/markers/%s' "${PLUGIN_DATA%/}" "$repo_key"
+  printf '%s/pre-push-review/markers/%s' "${plugin_data%/}" "$repo_key"
 }
 
 marker_path() {
   local storage_dir
-  storage_dir=$(marker_storage_dir "$1") || return 1
+  storage_dir=$(marker_storage_dir "$1" "${3:-claude}") || return 1
   printf '%s/%s' "$storage_dir" "$2"
 }
 
 # 引数: <git-dir>
 # 出力: code-reviewed マーカー (/code-review = read-only バグ検出) の path
 code_reviewed_marker_path() {
-  marker_path "$1" "$CODE_REVIEWED_MARKER_NAME"
+  marker_path "$1" "$CODE_REVIEWED_MARKER_NAME" "${2:-claude}"
 }
 
 # 引数: <git-dir>
 # 出力: codex-reviewed マーカーの path
 codex_marker_path() {
-  marker_path "$1" "$CODEX_MARKER_NAME"
+  marker_path "$1" "$CODEX_MARKER_NAME" "${2:-claude}"
 }
 
 # 引数: <git-dir>
 # 出力: security-reviewed マーカーの path
 security_marker_path() {
-  marker_path "$1" "$SECURITY_MARKER_NAME"
+  marker_path "$1" "$SECURITY_MARKER_NAME" "${2:-claude}"
 }

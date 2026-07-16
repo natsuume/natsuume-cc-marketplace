@@ -71,6 +71,15 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
+# Codex PreToolUse payload の非空 string turn_id だけを runtime discriminator にする。
+# Claude Code も CLAUDE_PLUGIN_ROOT / CLAUDE_PLUGIN_DATA を持つため env 推測はしない。
+MARKER_RUNTIME="claude"
+if printf '%s' "$INPUT" | jq -e '
+  (.turn_id | type == "string" and length > 0)
+' >/dev/null 2>&1; then
+  MARKER_RUNTIME="codex"
+fi
+
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 if [ -z "$COMMAND" ]; then
   exit 0
@@ -615,15 +624,16 @@ EOF
   exit 0
 fi
 
-if CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR") &&
-  CODEX_MARKER=$(codex_marker_path "$GIT_DIR") &&
-  SECURITY_MARKER=$(security_marker_path "$GIT_DIR"); then
+if CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR" "$MARKER_RUNTIME") &&
+  CODEX_MARKER=$(codex_marker_path "$GIT_DIR" "$MARKER_RUNTIME") &&
+  SECURITY_MARKER=$(security_marker_path "$GIT_DIR" "$MARKER_RUNTIME"); then
   CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
   CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
   SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
 else
-  # Codex で PLUGIN_DATA が使えない場合を含め、storage 解決不能時は .git へ
-  # fallback せず全 marker を missing として後段の gate を fail-closed にする。
+  # Codex で PLUGIN_DATA / CLAUDE_PLUGIN_DATA が使えない場合を含め、
+  # storage 解決不能時は .git へ fallback せず全 marker を missing として
+  # 後段の gate を fail-closed にする。
   CODE_REVIEWED_HASH=""
   CODEX_HASH=""
   SECURITY_HASH=""
