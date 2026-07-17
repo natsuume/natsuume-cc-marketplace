@@ -21,41 +21,31 @@
 #   - export GIT_DIR=... のような prefix 命令
 #
 # 提供する関数:
-#   - resolve_push_target <cmd> : 成功時 stdout に target cwd を出力。 失敗時 return 1。
+#   - resolve_push_target <push_segment_index> <segment>...
+#     成功時 stdout に target cwd を出力。失敗時 return 1。
 
-# 引数: <cmd>
+# 引数: <push_segment_index> <segment>...
+#   push_segment_index は caller が token ベースで確定した、0 始まりの segment index。
+#   resolver は push segment を再探索せず、この index を唯一の真実源として使う。
 # stdout: target cwd (絶対パス)
 # return: 0 = 解決成功、1 = 解決不能 (呼び出し側で deny 推奨)
 resolve_push_target() {
-  local cmd="$1"
+  [ "$#" -ge 1 ] || return 1
+  local push_index="$1"
+  shift
+  local segments=("$@")
+
+  # 算術評価の前に canonical decimal へ限定し、負値・先頭ゼロ・式展開を拒否する。
+  [[ "$push_index" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  [ "$push_index" -lt "${#segments[@]}" ] || return 1
+
   local cwd="$PWD"
 
-  # cmd-parser.sh から split_command / tokenize_segment / unquote_token を読み込む
+  # cmd-parser.sh から tokenize_segment / unquote_token を読み込む。
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   # shellcheck source=cmd-parser.sh
   source "$script_dir/cmd-parser.sh"
-
-  # コマンドを segment に分割し、 push を含む segment を見つける
-  local segments=()
-  local push_index=-1
-  local i=0
-  while IFS= read -r line; do
-    if [[ "$line" == SEP:* ]]; then
-      continue
-    fi
-    segments+=("$line")
-    if [ "$push_index" -lt 0 ]; then
-      # 先頭が `git ... push` (option を許容、 path-qualified `/usr/bin/git` も許容) かを
-      # 軽量判定。 boundary は空白 / 行頭 / `/` (path 前段からの遷移)。
-      if [[ "$line" =~ (^|[[:space:]/])git([[:space:]]+[^[:space:]]+)*[[:space:]]+push([[:space:]]|$) ]]; then
-        push_index=$i
-      fi
-    fi
-    i=$((i+1))
-  done < <(split_command "$cmd")
-
-  [ "$push_index" -lt 0 ] && return 1
 
   # push の前にある segment 群を順次処理して cwd を更新する。
   # サブシェル / ブレースグループ / pushd / popd 等を見つけたら return 1 (保守的 deny)。
@@ -265,6 +255,13 @@ _process_push_segment() {
     esac
     idx=$((idx+1))
   done
+
+  # caller が渡した index が実際に push segment を指すことを防御的に確認する。
+  # これは segment の再探索ではなく、単一 segment に対する契約 assertion。
+  [ "$idx" -lt "$n" ] || return 1
+  local subcommand
+  subcommand="$(unquote_token "${tokens[$idx]}")"
+  [ "$subcommand" = "push" ] || return 1
 
   # GIT_DIR= や --git-dir= が指定されていた場合、 その親ディレクトリを cwd として採用
   # (work tree は通常 .git の親)

@@ -16,7 +16,12 @@
 
 ## バージョン
 
-v4.1.1 (前身: `pre-commit-review` v0.4.0)
+v4.1.2 (前身: `pre-commit-review` v0.4.0)
+
+### v4.1.1 → v4.1.2 の変更点 (issue #127)
+
+- `block-pre-push.sh` が quote-aware な token 解析で確定した push segment の 0 始まり index と全 segment を `resolve_push_target` へ渡すようにし、resolver 内の quote 非対応 regex による push segment 再探索を撤廃した
+- `git commit -m "let's push it" && cd sub && git push` のように、手前の quote 内へ `push` という語を含むコマンドでも、実際の push target である `sub` を解決するようにした。index の形式・範囲が不正な場合や非-push segment を指す場合は fail-closed に解析失敗とする
 
 ### v4.1.0 → v4.1.1 の変更点 (issue #128)
 
