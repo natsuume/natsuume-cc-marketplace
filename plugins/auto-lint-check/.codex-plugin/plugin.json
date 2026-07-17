@@ -1,6 +1,6 @@
 {
   "name": "auto-lint-check",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する。",
   "author": {
     "name": "natsuume",

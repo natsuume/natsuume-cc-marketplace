@@ -77,7 +77,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.5.0",
+      "version": "0.5.1",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -96,10 +96,14 @@
           {
             "path": "tests/test_auto_lint_codex_adapter.py",
             "covers": "apply_patch path 抽出、ignore 検知、Codex deny JSON の adapter 契約"
+          },
+          {
+            "path": "tests/test_auto_lint_commit_parser.py",
+            "covers": "commit と cd の実行順に応じた repo override 判定契約"
           }
         ],
         "components": [],
-        "sourceTreeDigest": "d53f3740bcbb57886978c8fdefbd7b304da2feed2baa95896ea6c2862f7bdeb0"
+        "sourceTreeDigest": "03f385ab8a4254bd338da080d5d392c6885e28985d9bca6f96f370b28c876d18"
       }
     },
     "pre-push-review": {
