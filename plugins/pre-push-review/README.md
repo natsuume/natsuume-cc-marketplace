@@ -16,7 +16,12 @@
 
 ## バージョン
 
-v4.1.0 (前身: `pre-commit-review` v0.4.0)
+v4.1.1 (前身: `pre-commit-review` v0.4.0)
+
+### v4.1.0 → v4.1.1 の変更点 (issue #128)
+
+- `block-pre-push.sh` が `jq` を見つけられない場合に無条件で pass-through していた経路を修正し、`git push` を valid な deny JSON で fail-closed にブロックするようにした。push と無関係な Bash 呼び出しは、従来どおり `jq` を要求せず通過する
+- deny メッセージで `jq` のインストールと `git push` の再実行を案内し、環境依存の失敗から復旧できるようにした
 
 ### v4.0.1 → v4.1.0 の変更点 (issue #285)
 
@@ -129,6 +134,10 @@ claude plugin install pre-push-review@natsuume-plugins
 ```bash
 claude plugin install codex@openai-codex
 ```
+
+### 依存コマンド
+
+`jq` は push gate の必須依存です。`jq` が見つからない環境では、未レビューの push を通さないため `block-pre-push.sh` が `git push` を fail-closed に deny し、インストール後の再実行を案内します。push と無関係な Bash 呼び出しは影響を受けません。
 
 ## Codex 配布状態
 
