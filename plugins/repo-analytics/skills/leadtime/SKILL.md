@@ -14,7 +14,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - 対象: 省略時はカレントの git リポジトリ (origin remote から `owner/repo` を解決)。ディレクトリパスが与えられた場合は配下の git リポジトリを再帰探索する。`owner/repo` のカンマ区切りリストも受け付ける。
 - `since=YYYY-MM-DD` (省略可)。省略時は全期間を対象にする。
 - remote が GitHub でない、remote が存在しない、owner/repo の識別子が charset 不正 (明示指定エントリを含む)、またはパスに危険文字を含む (次項) リポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
-- **コマンド template への置換値の共通規律**: 本 skill の bash コマンド例は、エージェントがコマンド文字列へ値を文字列置換して実行する。パス値 (対象ディレクトリ・再帰探索で発見した checkout パス) に `"`・`$`・バッククォート・`\`・改行のいずれかが含まれる場合、その値をコマンドに使用せず fail-closed で扱う: 対象ディレクトリ自体なら中断してユーザーに報告し、発見した checkout パスなら `{"repo": "<パス文字列>", "reason": "unsafe_path"}` を `skippedRepos` に追記してスキップする (これらの文字はディレクトリ名として合法だが、双引用符付き template への文字列置換では quoting を破って任意コマンド実行に到達しうるため)。owner/name (手順 4・5) と default branch 名 (第 6 章) には別途の charset 検証を適用しており、この規律はパス値を対象とする。`<work>` / `<plugin-root>` はエージェント自身が生成・解決する値のためこの検査の対象外とする。
+- **コマンド template への置換値の共通規律**: 本 skill の bash コマンド例は、エージェントがコマンド文字列へ値を文字列置換して実行する。パス値 (対象ディレクトリ・再帰探索で発見した checkout パス) に `"`・`$`・バッククォート・`\`・改行のいずれかが含まれる場合、その値をコマンドに使用せず fail-closed で扱う: 対象ディレクトリ自体なら中断してユーザーに報告し、発見した checkout パスなら `{"repo": "<パス文字列>", "reason": "unsafe_path"}` を `skippedRepos` に追記してスキップする (これらの文字はディレクトリ名として合法だが、双引用符付き template への文字列置換では quoting を破って任意コマンド実行に到達しうるため)。owner/name (手順 4・5) と default branch 名 (第 6 章) には別途の charset 検証を適用しており、この規律はパス値を対象とする。`<work>` / `<plugin-root>` は harness / エージェント自身が解決・生成する値であり、provenance が操作者と harness の信頼境界内に閉じる (第三者が内容を制御しうる経路が無い) ため、この規律 — 第三者制御でありうる値への adversarial-input 検査 — の対象外とする。
 - すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。この重複排除は 2 段階の契約である。第 1 段はここで述べる、収集キー (owner/repo の入力文字列) を小文字化して比較する case-insensitive dedup である。第 2 段はセクション 3 の収集ループ冒頭で、API が解決した canonical 名 (nameWithOwner) を基準に行う dedup であり、リネーム・移管によって収集キー上は別名に見えるが実体が同一リポジトリであるケースを捕捉する。JSONL レコードに書く repo 値はこの正規化キー (第 1 段のキー) ではなく、API が返す canonical な nameWithOwner を使う。各収集キー (owner/repo) に、解決に使ったローカル checkout パスを optional として保持する。owner/repo 直接指定と発見済み checkout が同一リポジトリに重複した場合も checkout の関連付けを失わない。同一リポジトリに複数の checkout がある場合は最初に発見したものを代表として選ぶ。保持した checkout はセクション 6 のリポジトリイベント抽出で使う。
 
 ### 手順
@@ -25,12 +25,14 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 3. ディレクトリパスが与えられた場合、まず与えられたパスを絶対パスへ解決する (解決できない場合は中断してユーザーに報告する)。`find` は第 1 引数が `-` で始まる文字列だと探索パスではなく式 (action) として解釈する — 例えば `-delete` という名前のディレクトリをそのまま渡すと、GNU find は starting point 未指定として `.` を走査し、式の左から右への評価により `-name` の絞り込み前に削除が実行されうる。この経路を閉じるため、`find` には必ず解決済みの絶対パスだけを渡す。そのうえで配下の git リポジトリを次のように再帰探索する (探索深さの上限で暴走を防ぐ)。
 
    ```bash
-   find "<absolute-dir>" -maxdepth 4 -name .git
+   find -P "<absolute-dir>" -maxdepth 4 \
+     \( -name $'*\n*' -exec printf '%s\n' REPO_ANALYTICS_UNSAFE_NEWLINE_NAME \; -quit \) \
+     -o -name .git -print
    ```
 
-   なお、`-maxdepth` は POSIX の規定外だが、本 Skill の対象環境である GNU find (Linux / WSL2) と macOS の `/usr/bin/find` はともにサポートしている。
+   改行を名前に含むエントリの検査を同一走査に組み込んでいる: `find` の改行区切り出力は、名前に改行を含むディレクトリ配下のパスを複数行に分断し、2 行目以降を別の (ツリー外の) パスと誤認させうる。pre-order 走査では改行入りの祖先エントリが配下の `.git` より先に評価されるため、sentinel 行 `REPO_ANALYTICS_UNSAFE_NEWLINE_NAME` が出力に含まれる場合、またはコマンドが非 0 で終了した場合は、**出力全体を破棄して**中断しユーザーに報告する (fail-closed)。symlink を辿らない既定動作を固定するため `-P` を明示しており、このコマンドに `-L` / `-H` を追加してはならない。なお、`-maxdepth` は POSIX の規定外だが、本 Skill の対象環境である GNU find (Linux / WSL2) と macOS の `/usr/bin/find` はともにサポートしている (`-print0` / `-quit` も同様)。
 
-   ヒットした各 `.git` (ディレクトリまたは worktree の gitdir ファイル) の親ディレクトリを checkout パスとして扱う。
+   sentinel が無く正常終了した場合、ヒットした各 `.git` (ディレクトリまたは worktree の gitdir ファイル) の親ディレクトリを checkout パスとして扱う。
 4. 各 checkout パス (カレントディレクトリを含む) について origin remote から owner/repo を解決する。
 
    ```bash
