@@ -481,7 +481,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "70845e90cf42cb8270d6eb8f3b0754fb95ed08471a4cef05d98ecd6fd8a8b37b"
+        "sourceTreeDigest": "84235778876ae2455521defc2a4e2f2d0d1fff3873ac7ce7b11e7d5b04b21d7e"
       }
     },
     "codex-advisor": {
@@ -549,7 +549,7 @@
             "sourceDigest": "f5e61eb80fba1870f28d16e6d2757235e422cce3a7168f45e7262c720c47f20a"
           }
         ],
-        "sourceTreeDigest": "0035ba01ccc6f13bc733dfa770c85840554567ce04fbdeb109031b85f2b1223c"
+        "sourceTreeDigest": "ff20ba949d3d4cf3eb124e782892c53198eb3a4c0feda4f127d8a998be8e7d9a"
       }
     },
     "rate-limit": {
@@ -682,6 +682,45 @@
         ],
         "components": [],
         "sourceTreeDigest": "f84a1f109e99745523d1b8c38f1b1db7d5615c250bcfa76c63a76a88fed732d5"
+      }
+    },
+    "repo-analytics": {
+      "distribution": {
+        "status": "excluded",
+        "reason": "レポート出力の中核である Artifact レポートと dataviz / artifact-design skill のロードが Claude Code 固有機能であり、Codex runtime では skill の必須出力を提供できないため、marketplace 配布対象から除外します。"
+      },
+      "version": "0.1.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": []
+      },
+      "displayName": "Repo Analytics",
+      "shortDescription": "GitHub issue/PR タイムラインから AI タスクのリードタイムを分析",
+      "defaultPrompt": [
+        "対象リポジトリの AI タスクリードタイム (着手→PR ready) の推移を分析してください。"
+      ],
+      "compatibility": {
+        "level": "metadata-only",
+        "summary": "leadtime skill は Artifact レポート生成 (Claude Code 固有 surface) を必須出力とするため、Codex marketplace には install surface を配布しません。Claude Code 版は従来どおり配布します。",
+        "limitations": [
+          "Codex marketplace に repo-analytics の entry と manifest を生成しないため、Codex から $repo-analytics:leadtime を選択・install できません。",
+          "Claude Code marketplace と Claude Code 版 skill は従来どおり利用できます。"
+        ],
+        "guaranteeDifferences": [
+          "Codex 版としての意図等価 adapter は提供せず、リードタイム分析は Claude Code セッションでのみ実行できます。"
+        ],
+        "verificationTests": [
+          {
+            "path": "tests/test_sync_codex_marketplace.py",
+            "covers": "repo-analytics が Codex marketplace と生成 manifest から除外され、Claude plugin 一覧には残ること"
+          },
+          {
+            "path": "tests/test_repo_analytics_leadtime.py",
+            "covers": "leadtime 集計スクリプトの公開契約 (指標定義・境界挙動・fail-closed 終了コード) が runtime に依存せず検証されること"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "ce1fee43229e6362c938432becdbd553a3c8cff67aaf4f9a0771ddfd07c7d423"
       }
     }
   }

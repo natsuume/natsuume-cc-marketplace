@@ -110,13 +110,14 @@ class MarketplaceSyncTest(unittest.TestCase):
     def test_plugin_order_matches_claude_marketplace_and_codex_filters_exclusions(self) -> None:
         expected = [entry["name"] for entry in self.state.marketplace["plugins"]]
         self.assertEqual([plugin.name for plugin in self.state.plugins], expected)
-        self.assertEqual(len(expected), 13)
+        self.assertEqual(len(expected), 14)
         codex_plugins = json.loads(sync.render_codex_marketplace(self.state))["plugins"]
         codex_names = [entry["name"] for entry in codex_plugins]
         self.assertEqual(len(codex_plugins), 11)
         self.assertIn("fable-risk-labeler", codex_names)
         self.assertNotIn("codex-advisor", codex_names)
         self.assertNotIn("pre-push-review", codex_names)
+        self.assertNotIn("repo-analytics", codex_names)
 
     def test_generated_files_are_current(self) -> None:
         for path, expected in sync.expected_files(self.state).items():
