@@ -48,7 +48,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.4.0",
+      "version": "0.4.1",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -65,12 +65,16 @@
         "guaranteeDifferences": [],
         "verificationTests": [
           {
+            "path": "tests/test_enforce_draft_pr.py",
+            "covers": "draft 自動付与・明示的 non-draft deny、heredoc / opaque shell scope / redirection 境界、原文保持、性能契約"
+          },
+          {
             "path": "scripts/smoke_codex_marketplace.sh",
             "covers": "生成 marketplace から plugin と共有 hook を Codex に install できること"
           }
         ],
         "components": [],
-        "sourceTreeDigest": "44b863dd0adcc839bc5b58973ed544feda697f9ec3945e62305de3d2ef83f078"
+        "sourceTreeDigest": "34d0e620af55d7c94af4a76caae588cbcdfcd8276e7cff2564afdf79f1dfa43a"
       }
     },
     "auto-lint-check": {
