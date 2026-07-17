@@ -1,24 +1,117 @@
 #!/bin/bash
 # auto-mark.sh
-# pre-push-review の 3 reviewer subagent の
-# 実行完了を PostToolUse で検知し、対応するレビューマーカーを更新する。
+# pre-push-review の 3 reviewer subagent の実行完了を subagent lifecycle hook
+# (SubagentStart / SubagentStop) で検知し、対応するレビューマーカーを更新する。
+#
+# ============================================================================
+# 設計契約 (issue #285 — 本ヘッダが契約の正本。実装済み。
+# 受入テスト: tests/test_pre_push_auto_mark.py)
+# ============================================================================
+#
+# 背景 (#285): Claude Code v2.1.198 以降、Agent tool は既定で background 起動に
+# なり、PostToolUse は起動受理時 (tool_response.status="async_launched") に
+# 1 回発火するのみで、subagent 完了時には発火しない。v4.0.x までの本 hook は
+# PostToolUse の completed payload を検証していたため、async 起動 harness では
+# marker が永遠に書かれず push gate が恒久 deny になっていた。v4.1.0 で
+# completion 検知を SubagentStop へ完全移行し、SubagentStart の launch
+# attestation で「レビューがこの差分に対して開始された」ことを束縛する。
+#
+# イベント別契約:
+#
+# - SubagentStart (hooks.json matcher: ^pre-push-review:(code|codex|security)-reviewer$):
+#   1. agent_type が 3 reviewer の完全一致でなければ exit 0 (script 側でも再検証。
+#      matcher の regex 解釈には依存しない)
+#   2. agent_id が ^[A-Za-z0-9._-]{1,128}$ に一致しなければ exit 0 (path 混入防止。
+#      filesystem 操作は一切行わない)
+#   3. launch tombstone (.claude-pre-push-done-<agent_id>) が存在すれば exit 0
+#      (同一 agent_id はフル review 1 回のみ。 resume での SubagentStart 再発火に
+#      よる attestation 再鋳造を遮断する。 issue #285 codex review P1 指摘)
+#   4. 既存 launch attestation が存在する場合も exit 0 (上書き禁止。 中間 stop を
+#      挟む重複 Start で開始 hash が更新される経路を塞ぐ)
+#   5. base 検出不能 / branch 取得不能 / master・main / hash 計算失敗 →
+#      attestation を書かず exit 0 (block-pre-push.sh の pass-through / deny 条件と
+#      整合)
+#   6. 1 日より古い launch attestation (.claude-pre-push-launch-*) を opportunistic
+#      に削除する (stale 掃除、best-effort)。 launch tombstone
+#      (.claude-pre-push-done-*) は prune せず無期限に保持する — resume の成立期間は
+#      transcript の保持期間に従い、 それは cleanupPeriodDays 設定で任意に延長
+#      できるため、 期限付き prune では設定次第で再鋳造の穴が復活する。 1 件
+#      64 byte の hash file なので恒久保持しても実害がない
+#   7. 開始時 review hash を launch attestation
+#      (git-dir/.claude-pre-push-launch-<agent_id>) へ、 同一ディレクトリ内 temp
+#      file + 排他 `ln` (create-if-absent。 既存なら失敗) で atomic に書く
+#
+# **resume での再レビューは意図的に拒否する** (issue #285 codex review P1 指摘):
+# 一度 SubagentStop まで到達した agent_id で SubagentStart が再発火しても
+# (SendMessage resume 等)、 その再発火は branch 全差分に対する自律的なフル review の
+# 実行を証明しない (resume は既存の subagent context を継続するだけ)。 再レビューが
+# 必要な場合は新規 subagent の spawn (= 新しい agent_id での launch attestation) で
+# 行う。
+#
+# - SubagentStop (同 matcher):
+#   1. agent_type / agent_id を SubagentStart と同じ基準で検証。不一致は exit 0
+#      (attestation に触れない)
+#   2. stop_hook_active が boolean false でなければ、attestation を消費せず exit 0
+#      (stop hook 継続中の中間 stop。最終 stop で改めて検証する)
+#   3. launch attestation が無ければ exit 0 (SendMessage resume 後の再 stop・
+#      移行前起動・main session からの偽装 stop はここで遮断される)。なお別の
+#      SubagentStop hook が stop を block して subagent が継続する環境でも、本 hook は
+#      stop_hook_active == false の最初の有効 report で marker を書き、以降の再 stop は
+#      attestation 消費済みのため marker を更新しない (「最終 stop」ではなく
+#      「初回有効 report」を採用する意図的なセマンティクス)。launch tombstone が
+#      既に存在する場合も、attestation の残存有無に関わらず marker を書かずに
+#      skip する (過去の stop で attestation の rm に失敗して残存した場合に、その
+#      残存 attestation を resume 再 stop が再利用する経路の遮断。残存 attestation の
+#      掃除だけを再試行する)。これら 2 つの terminal な拒否経路 (attestation 無し /
+#      既存 tombstone) では、codex-reviewer の場合に git-dir 共有の pending
+#      attestation も破棄する (resume が wrapper を再実行して書き直した pending を
+#      放置すると、後続の別 stop がそれを昇格できてしまう。skip_marker と対称の
+#      掃除)。中間 stop (2) と遷移保留 (4 の ln 失敗) は次の stop で完結する
+#      non-terminal 経路のため pending を保持する
+#   4. attestation は最初の SubagentStop (stop_hook_active=false) で tombstone へ
+#      不可逆遷移させて消費する: 以降の検証 (5〜8) の成否に関わらず、 まず launch
+#      tombstone (.claude-pre-push-done-<agent_id>) を排他 `ln` で作り (中身は
+#      attestation の hash。 既存なら失敗を無視)、 tombstone の存在を確認できた
+#      場合のみ attestation を rm する (読み取り後に削除。 one-shot)。 tombstone が
+#      存在しない (ストレージ障害等で ln が失敗した) 場合は attestation を消費せず
+#      exit 0 し、 遷移を次の stop まで保留する (tombstone 無しで attestation だけが
+#      消えると、 同一 agent_id の SubagentStart 再発火を拒否する記録が残らない)。
+#      遷移が完了した stop 以降は、 検証が失敗しても再 stop で marker を書ける
+#      経路も、 同一 agent_id での SubagentStart 再発火も残らない
+#   5. last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行が
+#      ちょうど 1 つ、かつその行が ^Status: (pass|findings)$ に一致するときのみ
+#      有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 / 非 string は
+#      fail-closed に skip (収集を許可値に限定すると未知値との併存を受理してしまう)
+#   6. base / branch / master・main / 現在 hash の計算は従来どおり (失敗は skip)
+#   7. launch attestation の開始時 hash と現在 hash が一致するときのみ marker を
+#      書く (レビュー開始後の差分変更を fail-closed に遮断)
+#   8. codex-reviewer はさらに wrapper (run-codex-review.sh) の pending
+#      attestation が symlink でない regular file かつ内容が現在 hash と一致する
+#      場合のみ、同一 filesystem 内 rename で final marker へ昇格する。不一致・
+#      symlink・欠落は pending を消費 (削除) して skip
+#
+# - PostToolUseFailure (hooks.json matcher: Agent|Task):
+#   Agent tool 呼び出し自体の失敗時に codex pending attestation を破棄する
+#   best-effort の補助掃除経路。async harness では tool call は起動受理で成功する
+#   ため主経路にはならない (失敗した subagent は Status 行の無い stop として
+#   SubagentStop 側 4-5 で遮断される)
+#
+# - 旧 PostToolUse completion payload (status="completed" + final text) では
+#   marker を書かない (完全移行。hooks.json の PostToolUse 配線も撤去する)
 #
 # policy: environment errors are fail-open, review completion is fail-closed
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を
 #   阻害しない設計判断)。対照: PreToolUse 側の block-pre-push.sh は fail-closed。
 #   同じ失敗が Pre=deny / Post=skip という非対称は意図的 (#90)。
-#   ただし Agent の completion 証明は fail-closed: tool_response.status が completed で、
-#   final text に単一の正規 Status (`pass` / `findings`) がある場合だけ marker を書く。
-#   async_launched / execution-failed / status 欠落・重複・未知値はすべて skip する。
+#   ただし completion 証明は fail-closed: 上記 SubagentStop 契約の 1〜8 を
+#   すべて満たす場合だけ marker を書く。
 #
-# 検知対象 (3 マーカー構成 / v3.0.0):
-#   - Agent/Task で `pre-push-review:code-reviewer` が foreground 完了し、
-#     parent-safe report が pass/findings → code-reviewed marker
-#   - Agent/Task で `pre-push-review:security-reviewer` が foreground 完了し、
-#     parent-safe report が pass/findings → security-reviewed marker
-#   - Agent/Task で `pre-push-review:codex-reviewer` が foreground 完了し、
-#     parent-safe report が pass/findings、かつ wrapper の pending attestation が現在 hash と
-#     一致 → codex-reviewed marker
+# 検知対象 (3 マーカー構成 / v3.0.0、v4.1.0 で lifecycle hook へ移行):
+#   - `pre-push-review:code-reviewer` の SubagentStop
+#     (launch attestation + parent-safe report pass/findings) → code-reviewed marker
+#   - `pre-push-review:security-reviewer` の SubagentStop (同上) → security-reviewed marker
+#   - `pre-push-review:codex-reviewer` の SubagentStop (同上 + wrapper pending
+#     attestation の現在 hash 一致) → codex-reviewed marker
 #
 # **v3.0.0 で Skill 検知を全廃**: v2.x までは `/code-review` / `/security-review` 標準 skill を
 # Skill tool 経由で直接呼ぶケースも検知して marker を書いていた (後方互換 + ユーザの誤起動
@@ -38,16 +131,17 @@
 #     実走完了を hook が捕捉しハッシュを書き込むことで、 すべてが「現在のブランチ全差分」
 #     に対して直近で走ったことを保証する。codex review は wrapper が review 開始時点の hash
 #     を pending attestation に束縛し、本 hook が report 正常完了後に final marker へ昇格する。
-#   - 「subagent の完了」は Task / Agent の PostToolUse 発火だけでは証明にならない。
+#   - 「subagent の完了」は Task / Agent の tool call 成功だけでは証明にならない。
 #     Claude Code の Agent は background 起動時にも `async_launched` で正常 return し、
 #     subagent が内部失敗を parent-safe report の `Status: execution-failed` として返した場合も
-#     外側の tool call 自体は成功する。そこで tool_response.status と final report の Status
-#     を併せて検証し、 launch 時点や内部失敗時には marker を書かない
-#     (= push gate がそのまま deny) ことを担保する。
+#     外側の tool call 自体は成功する。そこで SubagentStop (subagent 自身の応答完了に
+#     紐づく lifecycle event) の last_assistant_message にある Status と launch
+#     attestation の hash 束縛を併せて検証し、 launch 時点・内部失敗・resume 再 stop では
+#     marker を書かない (= push gate がそのまま deny) ことを担保する。
 #
 # レビュー対象 repo の前提 (block-pre-push.sh との非対称について):
 #   本 hook は dirty 判定 / base 検出 / branch / ハッシュ計算 / marker パスを **すべて
-#   PostToolUse 発火時の cwd** で行う (= 「いま居る repo を review した」と記録する)。
+#   hook 発火時の cwd** で行う (= 「いま居る repo を review した」と記録する)。
 #   一方 block-pre-push.sh は `git push` コマンド引数から実 push target を解決し、 その
 #   target cwd でハッシュ・marker パスを決める。 この非対称は意図的かつ安全:
 #     - review は通常メイン session の cwd (= push 対象 repo) で実行されるため、
@@ -63,10 +157,11 @@
 #   存在しないため)。
 
 # 予期せぬエラー時の診断 trap を install (実装は lib/exit-trap.sh)。
-# 本 hook の通常パスは「対象ツールでない → exit 0」「対象ツールだが未完了 / エラー /
-# execution-failed / report 不正 → exit 0」「対象ツール完了 + report 正常 → marker 書き込み
-# → exit 0」 のいずれも exit 0 で抜ける silent skip 設計。
-# 想定外の非ゼロ終了が発生した場合のみ stderr に診断ログを出してユーザに知らせる。
+# 本 hook の通常パスは「対象 event / agent_type でない → exit 0」「対象だが未完了 /
+# エラー / execution-failed / report 不正 / hash 不一致 → exit 0」「対象完了 +
+# report 正常 + hash 一致 → marker 書き込み → exit 0」のいずれも exit 0 で抜ける
+# silent skip 設計。想定外の非ゼロ終了が発生した場合のみ stderr に診断ログを出して
+# ユーザに知らせる。
 _PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/exit-trap.sh
 source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
@@ -74,56 +169,16 @@ install_exit_trap "auto-mark" "レビュー marker の書き込みが skip さ�
 
 INPUT=$(cat)
 
-# 本 hook は hooks.json で matcher: "*" (wildcard) を指定しており、すべての tool 完了で
-# 発火する。tool 名に依存させない理由は、Claude Code 公式ドキュメントで Agent/Task matcher の
-# 挙動が tool 名リストに明示されておらず、特定の tool 名 (`Agent` / `Task` など) を信頼できる
-# matcher にできないため。代わりに本スクリプト側で bash 内蔵の正規表現マッチを唯一の
-# ゲートにする。
-#
-# `grep` を呼ぶと hot path 上で毎回 fork が走るため、bash の `[[ =~ ]]` を使って
-# subprocess を立てずに済ませる (Read/Edit/Write 等の対象外 tool 完了でも本 hook が
-# 呼ばれるが、ここで即離脱できればフォーク無しで通り抜けられる)。
-#
-# **コスト注記 (#90)**: matcher "*" で全 tool 完了に発火するため、巨大な tool_response が
-# INPUT に乗ると毎回 INPUT サイズに比例した ERE 評価が走る (fork は無いが in-process コスト)。
-# `case "$INPUT" in *'"subagent_type"'*) ;; *) exit 0 ;; esac` の substring pre-filter で
-# 大半を弾く設計 (この substring は下記 PRECHECK_RE の全 match の superset なので false
-# negative を生まない)。
-#
-# PRECHECK_RE は subagent_type が **本プラグインの namespace prefix 付き**
-# `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` /
-# `pre-push-review:security-reviewer` の完全一致のみを粗フィルタする。 v3.0.0 で 3 レビューすべてを
-# subagent 経由に統一したため Skill 検知は全廃した。 **後段 case 文と必ず同期させること** (片方のみ
-# 更新だと silent skip 経路ができる)。
-#
-# **v3.0.0 で name-only 受理を廃止**: v2.x までの auto-mark は `code-reviewer` / `security-reviewer`
-# の name-only 形式も受理していた (PRECHECK_RE prefix が `[^"]*` で任意 namespace を吸収していた)。
-# しかし他 plugin (pr-review-toolkit / feature-dev) が同名 `code-reviewer` subagent を提供する場合、
-# ユーザが name-only で別 plugin の subagent を呼ぶと PostToolUse の subagent_type が name-only 文字列
-# で届き、 本 hook が pre-push-review:code-reviewer の marker を誤って書く push gate bypass 経路に
-# なる。 v3.0.0 では namespace prefix `pre-push-review:` を必須として構造的に塞ぐ。 `/pre-push-review:review`
-# slash command と block-pre-push.sh の deny メッセージは v2.x から namespace 付きで案内している
-# ため、 正常運用パスへの影響は無い。
-#
-# hook payload の JSON 整形 (`"subagent_type":"pre-push-review:code-reviewer"` / `"subagent_type": "pre-push-review:code-reviewer"`
-# 等) に左右されないよう whitespace を寛容に許容する。 false negative (= 本来通すべき payload を
-# 弾く) はマーカー未生成 → 永久 push ブロックの致命経路になるため、 フィルタは寛容に倒す
-# (false positive は jq 後段の名前一致判定で正しく弾かれるので無害)。
-#
-# **substring pre-filter** (v2.0.1 で導入 / v3.0.0 で `"skill"` substring を削除): PRECHECK_RE
-# は ERE 評価で INPUT 全文を走査する hot path コストがある (matcher: "*" で全 tool 完了に発火
-# するため)。 PRECHECK_RE の全 match の superset となる `"subagent_type"` substring が無いなら
-# ERE を走らせず即抜ける。 substring case 評価は ERE よりかなり軽量なので、 PostToolUse 多発時
-# (slash command で 3 並列発火するため 3 倍) のオーバヘッド削減になる。 superset 関係なので
-# false negative は構造的に発生しない。
+# substring pre-filter: SubagentStart / SubagentStop の payload は top-level
+# `agent_type` を、 PostToolUseFailure の payload は `tool_input.subagent_type` を
+# 含む (旧 PostToolUse completion payload も同フィールドを持つが、後段の
+# hook_event_name 分岐で構造的に除外される)。 この 2 つの substring を superset として
+# 弾くことで、 対象外の event / payload では jq を一切起動せず即離脱する
+# (hot path コスト対策。 false negative を生まない superset 関係)。
 case "$INPUT" in
-  *'"subagent_type"'*) ;;
+  *'"agent_type"'*|*'"subagent_type"'*) ;;
   *) exit 0 ;;
 esac
-PRECHECK_RE='"subagent_type"[[:space:]]*:[[:space:]]*"pre-push-review:(code|codex|security)-reviewer"'
-if ! [[ "$INPUT" =~ $PRECHECK_RE ]]; then
-  exit 0
-fi
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -136,22 +191,86 @@ source "$SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
 
-TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
+# agent_id の validation 正規表現 (SubagentStart / SubagentStop 共通)。 path 混入防止の
+# ため、 マッチしない agent_id は filesystem 操作を一切行わずに exit 0 する。
+AGENT_ID_RE='^[A-Za-z0-9._-]{1,128}$'
 
-case "$TOOL_NAME" in
-  Agent|Task)
-    # Claude Code の Agent tool は内部的に "Agent" / "Task" 2 つの名前で公開されている。
-    # PostToolUse の tool_name はそのどちらかが入りうるので両方 match させる。
-    SUBAGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // empty')
-    # subagent 名は namespace 付き (`pre-push-review:code-reviewer` /
-    # `pre-push-review:codex-reviewer` / `pre-push-review:security-reviewer`) のみを
-    # 受け付ける。 v2.x までの name-only 受理は v3.0.0 で廃止 (他 plugin の同名 subagent
-    # との衝突で push gate bypass する経路を塞ぐため。 詳細は PRECHECK_RE のコメント参照)。
-    #
-    # **PRECHECK_RE (上の subagent_type alternation) と同期させること**: 片方だけ更新すると、
-    # PRECHECK_RE で通過するが case で `*) exit 0 ;;` に落ちる silent skip を作りうる。
-    #
-    case "$SUBAGENT_TYPE" in
+HOOK_EVENT_NAME=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty')
+
+case "$HOOK_EVENT_NAME" in
+  SubagentStart)
+    # ------------------------------------------------------------------
+    # SubagentStart: 開始時 review hash を launch attestation として one-shot 記録する。
+    # ------------------------------------------------------------------
+    AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
+    case "$AGENT_TYPE" in
+      pre-push-review:code-reviewer|pre-push-review:codex-reviewer|pre-push-review:security-reviewer) ;;
+      *) exit 0 ;;
+    esac
+
+    AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty')
+    [[ "$AGENT_ID" =~ $AGENT_ID_RE ]] || exit 0
+
+    GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+
+    # tombstone (この agent_id は一度 SubagentStop まで到達した) が存在すれば exit 0。
+    # 同一 agent_id はフル review 1 回のみ許す (resume で SubagentStart が再発火する
+    # 環境での attestation 再鋳造を遮断する。 issue #285 codex review P1 指摘)。
+    TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    if [ -e "$TOMBSTONE_PATH" ]; then
+      exit 0
+    fi
+
+    # 既存 attestation が存在する場合も exit 0 (上書き禁止。 中間 stop を挟む重複
+    # Start で開始 hash が更新される経路を塞ぐ)。
+    ATTESTATION_PATH=$(launch_attestation_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    if [ -e "$ATTESTATION_PATH" ]; then
+      exit 0
+    fi
+
+    # base 検出不能 / branch 取得不能 / master・main / hash 計算失敗では、いずれも
+    # attestation を書かず exit 0 (block-pre-push.sh の pass-through / deny 条件と整合)。
+    BASE=$(detect_base_branch) || exit 0
+    BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+    case "$BRANCH" in
+      master|main) exit 0 ;;
+    esac
+    HASH=$(compute_review_hash "$BASE") || exit 0
+
+    STORAGE_DIR=$(marker_storage_dir "$GIT_DIR") || exit 0
+    # 1 日 (1440 分) より古い launch attestation を opportunistic に削除する
+    # (stale 掃除、best-effort)。 find の失敗 (権限不足等) は無視する。
+    find "$STORAGE_DIR" -maxdepth 1 -name "${LAUNCH_ATTESTATION_PREFIX}*" -type f -mmin +1440 -delete 2>/dev/null || true
+    # tombstone は prune せず無期限に保持する。 resume の成立期間は transcript の
+    # 保持期間に従い、 それは cleanupPeriodDays 設定で任意に延長できるため、 期限付き
+    # prune では設定次第で attestation 再鋳造の穴が復活する。 1 件 64 byte の
+    # hash file なので恒久保持しても実害がない。
+
+    # 同一ディレクトリ内 temp file (mktemp) → 排他 `ln` (create-if-absent。 既存なら
+    # 失敗) → tmp を rm、の atomic 書き込み。 `mv` ではなく `ln` を使うのは、 上の
+    # 存在チェックと実書き込みの間に別プロセスが attestation を作る TOCTOU を
+    # filesystem レベルでも防ぐため (`ln` は target が既存なら常に失敗する)。
+    # 書き込み失敗 (tmp 作成失敗・書き込み失敗・ln 失敗) はいずれも silent exit 0。
+    ATTESTATION_TMP=$(mktemp "${STORAGE_DIR}/${LAUNCH_ATTESTATION_PREFIX}tmp.XXXXXX" 2>/dev/null) || exit 0
+    if ! printf '%s' "$HASH" > "$ATTESTATION_TMP" 2>/dev/null; then
+      rm -f "$ATTESTATION_TMP" 2>/dev/null
+      exit 0
+    fi
+    if ! ln "$ATTESTATION_TMP" "$ATTESTATION_PATH" 2>/dev/null; then
+      rm -f "$ATTESTATION_TMP" 2>/dev/null
+      exit 0
+    fi
+    rm -f "$ATTESTATION_TMP" 2>/dev/null
+    exit 0
+    ;;
+
+  SubagentStop)
+    # ------------------------------------------------------------------
+    # SubagentStop: launch attestation を one-shot 消費し、report / hash 検証を経て
+    # marker を書く。
+    # ------------------------------------------------------------------
+    AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
+    case "$AGENT_TYPE" in
       pre-push-review:code-reviewer)
         MARKER_FN=code_reviewed_marker_path
         IS_CODEX_REVIEW=false ;;
@@ -164,136 +283,194 @@ case "$TOOL_NAME" in
       *)
         exit 0 ;;
     esac
+
+    AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty')
+    [[ "$AGENT_ID" =~ $AGENT_ID_RE ]] || exit 0
+
+    # stop_hook_active が boolean false でなければ、 stop hook による継続中の中間 stop
+    # とみなし、 attestation を消費せず exit 0 (最終 stop で改めて検証する)。
+    STOP_HOOK_ACTIVE_IS_FALSE=$(printf '%s' "$INPUT" | jq -r '
+      if (.stop_hook_active | type) == "boolean" and (.stop_hook_active == false)
+      then "true" else "false" end
+    ')
+    if [ "$STOP_HOOK_ACTIVE_IS_FALSE" != "true" ]; then
+      exit 0
+    fi
+
+    GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+    ATTESTATION_PATH=$(launch_attestation_path "$GIT_DIR" "$AGENT_ID") || exit 0
+
+    # codex-reviewer の terminal な拒否経路 (この agent_id の review cycle が既に
+    # 終わっていると判明した経路) では、 git-dir 共有の pending attestation を
+    # 破棄してから exit する。 resume された subagent が wrapper を再実行して
+    # pending を書き直した後、 その stop が pending を放置すると、 後続の別の
+    # codex-reviewer stop が orphan 化した pending を昇格できてしまう (skip_marker
+    # と対称の掃除)。 中間 stop (stop_hook_active) と遷移保留 (tombstone ln 失敗)
+    # は次の stop で完結する non-terminal 経路のため、 pending を保持する。
+    discard_codex_pending() {
+      if [ "$IS_CODEX_REVIEW" = "true" ]; then
+        local pending_path
+        pending_path=$(codex_pending_marker_path "$GIT_DIR" 2>/dev/null) || return 0
+        rm -f "$pending_path" 2>/dev/null || true
+      fi
+    }
+
+    # launch attestation が無ければ exit 0 (SendMessage resume 後の再 stop・移行前起動・
+    # main session からの偽装 stop はここで遮断される)。 symlink は regular file
+    # 扱いしない (= 「無い」と同じ経路で exit 0)。
+    if [ -L "$ATTESTATION_PATH" ] || [ ! -f "$ATTESTATION_PATH" ]; then
+      discard_codex_pending
+      exit 0
+    fi
+
+    ATTESTED_HASH=$(cat "$ATTESTATION_PATH" 2>/dev/null)
+    # 既存 tombstone は「この agent_id は過去の stop で attestation を消費済み」の
+    # 永続的な証拠。 通常は attestation 側の遮断 (上の存在チェック) で到達しないが、
+    # 過去の stop で attestation の rm に失敗して残存した場合 (immutable file・
+    # 一時的 I/O 障害等)、 その残存 attestation を resume 再 stop が再利用して
+    # marker を書ける経路が開く。 既存 tombstone を検出したら残存 attestation の
+    # 掃除だけを再試行し、 marker を書かずに skip する (one-shot 消費の保証を
+    # rm の成否ではなく tombstone の存在という永続的事実に束縛する)。
+    TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    if [ -e "$TOMBSTONE_PATH" ]; then
+      rm -f "$ATTESTATION_PATH" 2>/dev/null || true
+      discard_codex_pending
+      exit 0
+    fi
+    # attestation → tombstone の不可逆遷移: 最初の (stop_hook_active=false の)
+    # SubagentStop で、 以降の検証 (Status / hash 一致等) の成否に関わらず、 常に
+    # tombstone を作り attestation を消費する。 tombstone は同一 agent_id での
+    # SubagentStart 再発火 (resume 等) を恒久的に拒否するため、 検証結果を問わず
+    # 「この agent_id は一度ここまで到達した」事実だけを記録する。 排他 `ln`
+    # (create-if-absent) を使うため、 既存 tombstone の内容が上書きされることはない。
+    TOMBSTONE_TMP=$(mktemp "$(dirname "$TOMBSTONE_PATH")/${LAUNCH_TOMBSTONE_PREFIX}tmp.XXXXXX" 2>/dev/null) || true
+    if [ -n "$TOMBSTONE_TMP" ]; then
+      if printf '%s' "$ATTESTED_HASH" > "$TOMBSTONE_TMP" 2>/dev/null; then
+        ln "$TOMBSTONE_TMP" "$TOMBSTONE_PATH" 2>/dev/null || true
+      fi
+      rm -f "$TOMBSTONE_TMP" 2>/dev/null || true
+    fi
+    # tombstone の存在を確認できた場合のみ attestation を消費する (読み取り後に
+    # 削除。one-shot。以降の検証が失敗しても再 stop で marker を書ける経路を
+    # 残さない)。 tombstone が存在しない (ストレージ障害等で ln が失敗した) 場合は
+    # attestation を rm せず exit 0 し、 遷移を次の stop まで保留する — tombstone
+    # 無しで attestation だけが消えると、 同一 agent_id の SubagentStart 再発火を
+    # 拒否する記録が残らず、 resume 再鋳造ガードが失われるため。
+    if [ ! -e "$TOMBSTONE_PATH" ]; then
+      exit 0
+    fi
+    rm -f "$ATTESTATION_PATH" 2>/dev/null || true
+
+    CODEX_PENDING_PATH=""
+    if [ "$IS_CODEX_REVIEW" = "true" ]; then
+      CODEX_PENDING_PATH=$(codex_pending_marker_path "$GIT_DIR") || exit 0
+    fi
+
+    skip_marker() {
+      if [ -n "$CODEX_PENDING_PATH" ]; then
+        rm -f "$CODEX_PENDING_PATH" 2>/dev/null || true
+      fi
+      exit 0
+    }
+
+    # last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行を
+    # 全件収集する。ちょうど 1 行で、かつその行が ^Status: (pass|findings)$ に一致する
+    # ときのみ有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 /
+    # 非 string は fail-closed に skip する (許可値の行だけを数えると
+    # 「Status: pass + Status: unknown」の併存を pass として受理してしまうため、
+    # 収集は許可値に限定しない)。
+    REPORT_STATUS=$(printf '%s' "$INPUT" | jq -r '
+      if ((.last_assistant_message | type) != "string") then
+        "invalid"
+      else
+        ([
+          .last_assistant_message
+          | gsub("\r\n"; "\n")
+          | split("\n")[]
+          | select(test("^Status: "))
+        ]) as $status_lines
+        | if ($status_lines | length) != 1 then
+            "invalid"
+          elif ($status_lines[0] | test("^Status: (pass|findings)$")) then
+            ($status_lines[0] | capture("^Status: (?<status>pass|findings)$").status)
+          else
+            "invalid"
+          end
+      end
+    ')
+    case "$REPORT_STATUS" in
+      pass|findings) ;;
+      *) skip_marker ;;
+    esac
+
+    # default branch が検出できない場合は skip (block-pre-push.sh も同条件で
+    # pass-through するため整合性が保たれる)。
+    BASE=$(detect_base_branch) || skip_marker
+
+    # detached HEAD などで現在ブランチが取れない場合も skip。
+    BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || skip_marker
+
+    # default branch (master/main) では gate しない (= block-pre-push.sh も skip する
+    # ため、こちらでも markers を書く必要がない)。
+    case "$BRANCH" in
+      master|main) skip_marker ;;
+    esac
+
+    # branch diff 計算失敗時は markers を書かない。
+    HASH=$(compute_review_hash "$BASE") || skip_marker
+
+    # 開始時 hash (launch attestation) と stop 時点の現在 hash が一致するときのみ
+    # marker を書く (レビュー開始後の差分変更を fail-closed に遮断する)。
+    if [ "$ATTESTED_HASH" != "$HASH" ]; then
+      skip_marker
+    fi
+
+    if [ "$IS_CODEX_REVIEW" = "true" ]; then
+      # wrapper が review 開始時点の hash を pending attestation に書く。regular file
+      # かつ現在 hash と一致する場合だけ、同一 filesystem 内 rename で final marker へ
+      # 昇格する。不一致・symlink・欠落は pending を消費して fail-closed に skip。
+      if [ ! -f "$CODEX_PENDING_PATH" ] || [ -L "$CODEX_PENDING_PATH" ]; then
+        skip_marker
+      fi
+      PENDING_HASH=$(cat "$CODEX_PENDING_PATH" 2>/dev/null) || skip_marker
+      if [ "$PENDING_HASH" != "$HASH" ]; then
+        skip_marker
+      fi
+      MARKER_PATH=$("$MARKER_FN" "$GIT_DIR") || skip_marker
+      mv "$CODEX_PENDING_PATH" "$MARKER_PATH" 2>/dev/null || skip_marker
+      CODEX_PENDING_PATH=""
+      exit 0
+    fi
+
+    MARKER_PATH=$("$MARKER_FN" "$GIT_DIR") || skip_marker
+    printf '%s' "$HASH" > "$MARKER_PATH"
+    exit 0
     ;;
+
+  PostToolUseFailure)
+    # ------------------------------------------------------------------
+    # Agent tool 呼び出し自体の失敗時、codex pending attestation を best-effort で
+    # 破棄する補助掃除経路。async harness では tool call は起動受理で成功するため
+    # 主経路にはならない (失敗した subagent は Status 行の無い stop として
+    # SubagentStop 側で遮断される)。
+    # ------------------------------------------------------------------
+    TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
+    case "$TOOL_NAME" in
+      Agent|Task) ;;
+      *) exit 0 ;;
+    esac
+    SUBAGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // empty')
+    if [ "$SUBAGENT_TYPE" = "pre-push-review:codex-reviewer" ]; then
+      GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+      CODEX_PENDING_PATH=$(codex_pending_marker_path "$GIT_DIR") || exit 0
+      rm -f "$CODEX_PENDING_PATH" 2>/dev/null || true
+    fi
+    exit 0
+    ;;
+
   *)
+    # 旧 PostToolUse completion payload を含む未知 / 対象外 event はすべて exit 0
+    # (marker を書かない。完全移行の回帰方向ガード)。
     exit 0
     ;;
 esac
-
-GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-
-CODEX_PENDING_PATH=""
-if [ "$IS_CODEX_REVIEW" = "true" ]; then
-  CODEX_PENDING_PATH=$(codex_pending_marker_path "$GIT_DIR") || exit 0
-fi
-
-skip_marker() {
-  if [ -n "$CODEX_PENDING_PATH" ]; then
-    rm -f "$CODEX_PENDING_PATH" 2>/dev/null || true
-  fi
-  exit 0
-}
-
-# Agent tool の正常 return だけでは review 完遂を証明できない:
-#   - background 起動は `status: async_launched` で正常 return する
-#   - subagent 内部の command / diff 取得失敗は、outer tool error ではなく
-#     parent-safe report の `Status: execution-failed` として返りうる
-# そのため outer error flags に加え、Claude Code 公式の Agent PostToolUse response
-# (`status` + `content[].text`) から final report の Status を検証する。
-#
-# 受理条件は `status: completed` かつ、全 text block を通じて完全一致する Status 行が
-# ちょうど 1 個で、その値が pass / findings のいずれかであること。execution-failed、
-# Status 欠落・重複・未知値、content shape 不正は fail-closed に marker を skip する。
-# tool_input.prompt は検査対象に含めないため、prompt 内の偽 Status 行では spoof できない。
-#
-# `tool_response.status` が無い PostToolUse payload は旧 Claude Code / 未知の schema を示す
-# 可能性が高い。marker は従来どおり書かないが、何度 review しても未実行に見える silent
-# failure を避けるため、その場合だけ stderr に互換性診断を出す。PostToolUseFailure は
-# tool_response を持たない正規 payload なので診断対象外。
-{
-  read -r IS_ERROR
-  read -r INTERRUPTED
-  read -r MISSING_COMPLETION_STATUS
-  read -r REPORT_STATUS
-} < <(
-  printf '%s' "$INPUT" | jq -r '
-    def normalized_report_status:
-      if ((.status // "") != "completed") or ((.content | type) != "array") then
-        "invalid"
-      else
-        [
-          .content[]
-          | select(
-              (type == "object")
-              and (.type == "text")
-              and ((.text | type) == "string")
-            )
-          | .text
-          | gsub("\r\n"; "\n")
-          | split("\n")[]
-          | select(test("^Status: (pass|findings|execution-failed)$"))
-          | capture(
-              "^Status: (?<status>pass|findings|execution-failed)$"
-            ).status
-        ] as $statuses
-        | if ($statuses | length) == 1 then $statuses[0] else "invalid" end
-      end;
-
-    .tool_response as $response
-    | if ($response | type) != "object" then
-        true,
-        false,
-        (.hook_event_name == "PostToolUse"),
-        "invalid"
-      else
-        ($response.is_error // $response.isError // false),
-        ($response.interrupted // false),
-        (
-          (.hook_event_name == "PostToolUse")
-          and ($response | has("status") | not)
-        ),
-        ($response | normalized_report_status)
-      end
-  '
-)
-if [ "$MISSING_COMPLETION_STATUS" = "true" ]; then
-  printf '%s\n' \
-    "[pre-push-review/auto-mark] Agent completion payload に必須の tool_response.status がありません。Claude Code 2.1.211 で本 schema を実機検証済みです。marker は更新しないため、Claude Code を 2.1.211 以上へ更新して reviewer を再実行してください。" \
-    >&2
-fi
-if [ "$IS_ERROR" = "true" ] || [ "$INTERRUPTED" = "true" ]; then
-  skip_marker
-fi
-case "$REPORT_STATUS" in
-  pass|findings) ;;
-  *) skip_marker ;;
-esac
-
-# default branch が検出できない場合はマーカー更新を skip (block-pre-push.sh も同条件で
-# pass-through するため、整合性が保たれる)。
-BASE=$(detect_base_branch) || skip_marker
-
-# detached HEAD などで現在ブランチが取れない場合も skip。
-BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || skip_marker
-
-# default branch (master/main) では gate しない (= block-pre-push.sh も skip するため、
-# こちらでも markers を書く必要がない)。
-case "$BRANCH" in
-  master|main) skip_marker ;;
-esac
-
-# branch diff 計算失敗時は markers を書かない (block-pre-push.sh は失敗を deny に倒すため、
-# こちらでも書かないことで整合性を保つ。中途半端なハッシュ値で marker 書き込みを許すと、
-# 後続 push で誤判定の元になる)。
-if ! HASH=$(compute_review_hash "$BASE"); then
-  skip_marker
-fi
-
-if [ "$IS_CODEX_REVIEW" = "true" ]; then
-  # wrapper が review 開始時点の hash を pending attestation に書く。regular file かつ
-  # 現在 hash と一致する場合だけ、同一 filesystem 内 rename で final marker へ昇格する。
-  # report failure / hash mismatch / stale・symlink pending は消費して fail-closed に skip。
-  if [ ! -f "$CODEX_PENDING_PATH" ] || [ -L "$CODEX_PENDING_PATH" ]; then
-    skip_marker
-  fi
-  PENDING_HASH=$(cat "$CODEX_PENDING_PATH" 2>/dev/null) || skip_marker
-  if [ "$PENDING_HASH" != "$HASH" ]; then
-    skip_marker
-  fi
-  MARKER_PATH=$("$MARKER_FN" "$GIT_DIR") || skip_marker
-  mv "$CODEX_PENDING_PATH" "$MARKER_PATH" 2>/dev/null || skip_marker
-  CODEX_PENDING_PATH=""
-  exit 0
-fi
-
-printf '%s' "$HASH" > "$("$MARKER_FN" "$GIT_DIR")"
