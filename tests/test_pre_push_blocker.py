@@ -1,4 +1,4 @@
-"""block-pre-push.sh の fail-closed push gate 契約テスト (issue #128)。
+"""block-pre-push.sh の fail-closed push gate 契約テスト (issue #128 / #129)。
 
 Phase A の公開 seam は Claude Code の PreToolUse hook 入出力です。jq が PATH に無い
 環境でも、git push を含む payload は valid な deny JSON を返し、push と無関係な payload
@@ -83,6 +83,55 @@ class BlockPrePushMissingJqTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(result.stdout, b"")
+
+
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+class BlockPrePushShapeFilterTest(unittest.TestCase):
+    """Shape check は token-level の実 push だけを保守的 deny する。"""
+
+    def run_hook(self, command: str) -> subprocess.CompletedProcess[bytes]:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        with tempfile.TemporaryDirectory() as name:
+            return subprocess.run(
+                ["bash", str(HOOK)],
+                cwd=name,
+                input=json.dumps(payload).encode("utf-8"),
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+    def assert_wrapper_push_is_denied(self, command: str) -> None:
+        result = self.run_hook(command)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        response = json.loads(result.stdout)
+        output = response["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn("シェルラッパー", output["permissionDecisionReason"])
+
+    def test_script_path_containing_push_is_allowed(self) -> None:
+        result = self.run_hook(
+            "git status && "
+            "bash ./scripts/push-deploy-notifications.sh --env prod"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout, b"")
+
+    def test_token_level_env_wrapper_push_is_still_denied(self) -> None:
+        self.assert_wrapper_push_is_denied(
+            "git status && env git push origin feature"
+        )
+
+    def test_quoted_shell_wrapper_push_is_still_denied(self) -> None:
+        self.assert_wrapper_push_is_denied(
+            'git status && bash -c "git push origin feature"'
+        )
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
