@@ -157,7 +157,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 
 並列発出が技術的に成立しない / 一部のレビューが失敗した場合は、 3 subagent を順次起動しても push gate の構造的保証は同じ (3 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。
 
-一部の marker のみ「未実行」 / 「失効」 の場合は、 該当 subagent だけを Agent / Task tool で `run_in_background: false` を明示して単独再起動するのが正規経路です (v4.0.0 で正規化。 block-pre-push.sh の deny メッセージも同じ案内をします)。 3 subagent 並列発出が既定であることは変わりません。
+一部の marker のみ「未実行」 / 「失効」 の場合は、 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (v4.0.0 で正規化。 block-pre-push.sh の deny メッセージも同じ案内をします。 完了は SubagentStop で検知されるため起動 mode は問いません)。 3 subagent 並列発出が既定であることは変わりません。
 
 ### Hooks
 
@@ -264,6 +264,7 @@ wrapper exit 0 だけで final marker を書くと、その後の report 正規�
 | `.claude-pre-push-codex-reviewed` | codex review + parent-safe report 完了時の commit 列 + branch 全差分のハッシュ。wrapper pending を auto-mark が昇格する | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-codex-reviewed.pending` | wrapper が束縛した review 対象 hash。final report 成功時だけ marker へ rename | report 失敗・hash mismatch・次回 wrapper 起動で削除 |
 | `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の commit 列 + branch 全差分のハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
+| `.claude-pre-push-launch-<agent_id>` | SubagentStart が one-shot 記録するレビュー開始時の hash (launch attestation、v4.1.0 新設)。SubagentStop が開始時 hash と現在 hash の一致検証に使う | 最初の SubagentStop で消費 (削除)。1 日より古い残存分は次回 SubagentStart が掃除 |
 
 > **v2.x → v3.0.0 アップグレード時の注意**: v2.x で実行済みの 3 マーカー (code-reviewed / codex-reviewed / security-reviewed) は v3.0.0 でも hash が一致する限り有効です。 marker file 名と hash 計算式は不変なので追加の cleanup は不要です。
 
@@ -319,7 +320,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 (2) subagent 内から invoke しても、 標準 skill 本体は内部で sub-task (Task tool) を spawn する設計だが、 Claude Code は **subagent 内での nested subagent 起動を禁止** している (公式ドキュメント `subagents cannot spawn other subagents`)。 sub-task が動かないため degraded mode で実行される。 v2.x では PostToolUse が Skill launch 時点で発火するためマーカーは書かれてしまい silent-pass の経路があったが、 v3.0.0 で Skill 検知を全廃したのでこの経路は閉じている。
 (3) このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
 
-**呼び出しタイミング (3 subagent 共通)**: `/pre-push-review:review` slash command の指示で `run_in_background: false` の 3 並列 `Agent` / `Task` tool calls として起動する。 deny メッセージにも個別起動のフォールバック手順を案内している。
+**呼び出しタイミング (3 subagent 共通)**: `/pre-push-review:review` slash command の指示で 3 並列 `Agent` / `Task` tool calls として起動する (完了は SubagentStop で検知されるため起動 mode は問わない)。 deny メッセージにも個別起動のフォールバック手順を案内している。
 
 ## 関連プラグイン
 

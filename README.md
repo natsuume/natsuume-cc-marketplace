@@ -137,7 +137,7 @@ ignore コメント挿入を編集時に禁止し、 `git commit` 直前に stag
 **v3.0.0 で 3 レビューすべてを subagent 経由に統一**しました (互換破壊あり)。v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しています。これにより:
 
 - **context isolation**: reviewer は raw stdout / stderr、実行可能な command、具体的な再現手順を subagent context に留め、親 session には severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけを返します。追加検証が必要な場合は同じ subagent を resume し、raw detail を親へ流さず結果だけを再要約します。これは agent prompt と contract test で固定する **instruction contract** であり、report 本文を機械検査して情報流出を遮断する **hard security boundary** ではありません。
-- **起動・marker 発行経路の単一化**: 3 軸とも `Agent` / `Task` tool で起動し、`auto-mark.sh` が foreground completion と parent-safe report を検証して marker を発行します。Codex wrapper は review 開始時点の hash を pending attestation に束縛し、正規 report 完了後にだけ final marker へ昇格します。
+- **起動・marker 発行経路の単一化**: 3 軸とも `Agent` / `Task` tool で起動し、`auto-mark.sh` が SubagentStart の launch attestation (開始時 hash の one-shot 記録) と SubagentStop の parent-safe report・hash 束縛を検証して marker を発行します (v4.1.0 で PostToolUse 検知から移行。background 起動でも完了を捕捉)。Codex wrapper は review 開始時点の hash を pending attestation に束縛し、正規 report 完了後にだけ final marker へ昇格します。
 - **`auto-mark.sh` の簡略化と namespace prefix 必須化**: PRECHECK_RE / case 文は subagent_type が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` (**namespace prefix 必須**) の完全一致のみを検知する形に縮みました。v2.x の name-only 受理は廃止 (他 plugin の同名 subagent が push gate marker を誤って書く bypass 経路を構造排除)。Skill 検知も全廃。
 - **`/pre-push-review:review` slash command は 3 subagent 並列発出に書き換え**: deny メッセージとともに案内され、Claude はコマンド本文に固定された 3 `Agent` / `Task` tool call を 1 つのアシスタントメッセージ内で並列発出するだけです。順序揺れや起動漏れによる無駄ループが構造的に排除されます。wall-clock は最遅レビュー 1 本の時間で完了します。
 
@@ -160,7 +160,7 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 |---------|---------|------|
 | `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、3 マーカーが commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。deny メッセージは Claude Code の `/pre-push-review:review` を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
 | `block-bg-codex-wrapper` | PreToolUse (`Bash`) | `run-codex-review.sh` wrapper を Bash tool option `run_in_background: true` または shell-level `&` / `|` で起動する経路を deny する。v3.0.0 では wrapper は通常 `pre-push-review:codex-reviewer` subagent 内から foreground 起動されるが、subagent 内 Bash でも本 hook は発火するため bg 起動防御は引き続き有効 |
-| `auto-mark` | PostToolUse (`*` wildcard) | `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` subagent の Agent / Task tool 完了を自動検知し、対応するマーカーに commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを書き込む。codex マーカーは wrapper script (`run-codex-review.sh`) が直接書き込む設計のため本 hook は codex-reviewer subagent を検知しない (wrapper の non-zero exit と subagent 完了タイミングが乖離する silent-pass 経路を作らないため)。各マーカーは subagent **完了時** に書く (launch ではない) ことで、subagent 失敗時に silent-pass しない |
+| `auto-mark` | SubagentStart / SubagentStop (reviewer matcher) + PostToolUseFailure (`Agent\|Task`) | 3 reviewer subagent の開始時に launch attestation (開始時 hash の one-shot 記録) を書き、完了時 (SubagentStop) に agent_type・attestation の一回限りの消費・parent-safe report の単一 `Status: pass\|findings` 行・開始時 hash と現在 hash の一致をすべて検証して対応するマーカーへハッシュを書き込む (v4.1.0 で PostToolUse 検知から移行。background 起動でも完了を捕捉し、resume 後の再 stop・レビュー開始後の差分変更は fail-closed に遮断)。codex マーカーは wrapper の pending attestation の一致も要求して final marker へ昇格。PostToolUseFailure では残った codex pending を破棄する |
 
 #### Agents
 

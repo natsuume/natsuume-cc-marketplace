@@ -38,13 +38,17 @@
 #   2. stop_hook_active が boolean false でなければ、attestation を消費せず exit 0
 #      (stop hook 継続中の中間 stop。最終 stop で改めて検証する)
 #   3. launch attestation が無ければ exit 0 (SendMessage resume 後の再 stop・
-#      移行前起動・main session からの偽装 stop はここで遮断される)
+#      移行前起動・main session からの偽装 stop はここで遮断される)。なお別の
+#      SubagentStop hook が stop を block して subagent が継続する環境でも、本 hook は
+#      stop_hook_active == false の最初の有効 report で marker を書き、以降の再 stop は
+#      attestation 消費済みのため marker を更新しない (「最終 stop」ではなく
+#      「初回有効 report」を採用する意図的なセマンティクス)
 #   4. attestation は最初の SubagentStop で必ず消費する (読み取り後に削除。
 #      one-shot。以降の検証が失敗しても再 stop で marker を書ける経路を残さない)
-#   5. last_assistant_message (string) 全体を行分割し、
-#      ^Status: (pass|findings|execution-failed)$ に一致する行がちょうど 1 つ、
-#      かつ値が pass|findings のときのみ有効な report とみなす。execution-failed /
-#      欠落 / 重複 / 未知値 / 非 string は fail-closed に skip
+#   5. last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行が
+#      ちょうど 1 つ、かつその行が ^Status: (pass|findings)$ に一致するときのみ
+#      有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 / 非 string は
+#      fail-closed に skip (収集を許可値に限定すると未知値との併存を受理してしまう)
 #   6. base / branch / master・main / 現在 hash の計算は従来どおり (失敗は skip)
 #   7. launch attestation の開始時 hash と現在 hash が一致するときのみ marker を
 #      書く (レビュー開始後の差分変更を fail-closed に遮断)
@@ -262,10 +266,12 @@ case "$HOOK_EVENT_NAME" in
       exit 0
     }
 
-    # last_assistant_message (string) 全体を行分割し、
-    # ^Status: (pass|findings|execution-failed)$ に一致する行がちょうど 1 つ、かつ
-    # 値が pass|findings のときのみ有効な report とみなす。execution-failed / 欠落 /
-    # 重複 / 未知値 / 非 string は fail-closed に skip する。
+    # last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行を
+    # 全件収集する。ちょうど 1 行で、かつその行が ^Status: (pass|findings)$ に一致する
+    # ときのみ有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 /
+    # 非 string は fail-closed に skip する (許可値の行だけを数えると
+    # 「Status: pass + Status: unknown」の併存を pass として受理してしまうため、
+    # 収集は許可値に限定しない)。
     REPORT_STATUS=$(printf '%s' "$INPUT" | jq -r '
       if ((.last_assistant_message | type) != "string") then
         "invalid"
@@ -274,10 +280,15 @@ case "$HOOK_EVENT_NAME" in
           .last_assistant_message
           | gsub("\r\n"; "\n")
           | split("\n")[]
-          | select(test("^Status: (pass|findings|execution-failed)$"))
-          | capture("^Status: (?<status>pass|findings|execution-failed)$").status
-        ]) as $statuses
-        | if ($statuses | length) == 1 then $statuses[0] else "invalid" end
+          | select(test("^Status: "))
+        ]) as $status_lines
+        | if ($status_lines | length) != 1 then
+            "invalid"
+          elif ($status_lines[0] | test("^Status: (pass|findings)$")) then
+            ($status_lines[0] | capture("^Status: (?<status>pass|findings)$").status)
+          else
+            "invalid"
+          end
       end
     ')
     case "$REPORT_STATUS" in

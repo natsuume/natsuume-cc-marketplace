@@ -354,6 +354,9 @@ class PrePushAutoMarkTest(unittest.TestCase):
             "ambiguous-status": (
                 "# Code Review\n\nStatus: pass\n\nStatus: execution-failed"
             ),
+            "pass-plus-unknown": (
+                "# Code Review\n\nStatus: pass\n\nStatus: unknown"
+            ),
             "empty-message": "",
             "missing-message": None,
         }
