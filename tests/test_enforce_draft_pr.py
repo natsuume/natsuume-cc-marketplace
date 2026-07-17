@@ -29,9 +29,15 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
    判定しない (bash の行継続結合が terminator 判定に先行する)。偶数個なら terminator
    は有効。
 2. **対応 delimiter 形式**: `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` /
-   `<<\\WORD` (WORD は `[A-Za-z0-9_]+`)。該当しない構文を検出したら opaque fallback:
-   それ以降のコマンド文字列を一切解析せず、それまでに確定したトークンのみで通常判定する
-   (誤りは「draft 付与漏れ」方向にのみ倒れ、本文改変は構造的に起きない)。`<<'WORD'` /
+   `<<\\WORD` (WORD は `[A-Za-z0-9_]+`)。該当しない構文を検出したら opaque fallback: それ
+   以降のコマンド文字列を一切解析しない。fallback 発動時点の command 境界内 (separator で
+   区切られた現在のコマンド) に対象 invocation (`gh pr create`) が確定している場合、
+   truthy draft 確定なら素通し (不介入)、falsy 確定なら deny、**draft 未確定なら deny**
+   (宣言行残余に隠れた `--draft=false` は opaque 領域内で不可視だが gh の実引数としては
+   有効なため、fallback 前のトークンにのみ挿入すると後着の false が勝ち非 draft PR が
+   作られる bypass が成立する。安全側は「付与漏れ」ではなく deny に倒して塞ぐ)。現在の
+   command が対象 invocation でない場合は不介入 (opaque 領域内の invocation は検出不能)。
+   fallback より前に separator で完結した別 invocation への挿入は有効。`<<'WORD'` /
    `<<"WORD"` / `<<\\WORD` はいずれも quoted delimiter であり、本文で行継続処理を行わない。
 3. **算術式スキップ**: `$((...))` / コマンド位置の `((...))` は対応する `))` まで (内部括弧
    の深度追跡込み) を不透明に取り込み、内部の `<<` (ビットシフト) を heredoc と誤認しない。
@@ -98,6 +104,7 @@ class EnforceDraftPrTest(unittest.TestCase):
         """allow で書き換えられ、updatedInput.command が期待値と完全一致することを確認する。"""
         returncode, stdout = run_hook(command)
         self.assertEqual(returncode, 0, stdout)
+        self.assertNotEqual(stdout, "", "書き換え (allow) を期待したが hook は不介入 (空出力) だった")
         payload = json.loads(stdout)
         hook_output = payload["hookSpecificOutput"]
         self.assertEqual(hook_output["permissionDecision"], "allow", stdout)
@@ -115,6 +122,7 @@ class EnforceDraftPrTest(unittest.TestCase):
         """deny (permissionDecision == "deny"、updatedInput なし) であることを確認する。"""
         returncode, stdout = run_hook(command)
         self.assertEqual(returncode, 0, stdout)
+        self.assertNotEqual(stdout, "", "deny を期待したが hook は不介入 (空出力) だった")
         payload = json.loads(stdout)
         hook_output = payload["hookSpecificOutput"]
         self.assertEqual(hook_output["permissionDecision"], "deny", stdout)
@@ -477,9 +485,17 @@ class EnforceDraftPrTest(unittest.TestCase):
     def test_h10a_opaque_fallback_no_intervention(self) -> None:
         # opaque fallback は宣言以降全域で解析を停止する。宣言行のみ抑制する
         # 誤実装は本文の fake に、EOF 後に解析を再開する誤実装は後続行に
-        # 挿入して非空になり fail する。
+        # 挿入して非空になり fail する。本文先頭に unsupported delimiter
+        # `E"OF"` の prefix `E` に見える単独行を追加する: delimiter の prefix
+        # 一致で本文モードを早期 resume する誤実装は以降の fake に挿入して
+        # 非空になり fail する。この invocation は fallback を起こす `cat` と
+        # 別 command (`;` 区切り) だが、`cat <<E"OF"` より後ろの opaque 領域内
+        # にあるため検出不能で不介入のまま (H22 の「fallback より前に完結した
+        # invocation」とは対照的なケース)。
         command = (
             'cat <<E"OF"; gh pr create --title "t" --body "b"'
+            + NL
+            + "E"
             + NL
             + "body; gh pr create fake"
             + NL
@@ -490,9 +506,12 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assert_no_intervention(command)
 
     def test_h10b_opaque_fallback_confirmed_tokens_judged(self) -> None:
-        # opaque fallback は `<<E"OF"` 以降を一切解析しない。fallback 前に
-        # 確定した先頭 create のみが挿入対象であり、本文の fake・後続行の
-        # 素の invocation はいずれも挿入されない (byte 不変)。
+        # opaque fallback は `<<E"OF"` 以降を一切解析しない。この invocation
+        # (宣言行の `gh pr create`) 自身の draft 状態は fallback 発動時点で
+        # 未確定 (宣言行に `--draft` も `--draft=false` も無い) であり、新契約
+        # (未確定 → deny) により deny する。fallback 前に確定した情報が無い
+        # まま素通しで挿入する実装は、宣言行残余に隠れた `--draft=false` に
+        # よる bypass (H20) を防げず fail する。
         command = (
             'gh pr create --title "t" --body-file - <<E"OF"'
             + NL
@@ -502,16 +521,7 @@ class EnforceDraftPrTest(unittest.TestCase):
             + NL
             + ':; gh pr create --title "t2" --body "b2"'
         )
-        expected = (
-            'gh pr create --draft --title "t" --body-file - <<E"OF"'
-            + NL
-            + "body; gh pr create fake"
-            + NL
-            + "EOF"
-            + NL
-            + ':; gh pr create --title "t2" --body "b2"'
-        )
-        self.assert_rewrite(command, expected)
+        self.assert_denied(command)
 
     def test_h11_near_miss_terminator_lines_do_not_end_heredoc_body(
         self,
@@ -717,21 +727,65 @@ class EnforceDraftPrTest(unittest.TestCase):
                 self.assert_rewrite(command, expected)
 
     def test_h19_opaque_fallback_suppresses_flag_scan(self) -> None:
-        # 不透明化は total であり、fallback 後のテキストは挿入追跡にも falsy
-        # 判定にも使われない。fallback 後も flag スキャンを継続する誤実装は
-        # ここで誤 deny して fail する (H15 の対: fallback 前の falsy は deny、
-        # fallback 後の falsy は不可視)。
+        # 宣言行残余の `--draft` (truthy) は opaque 領域内で hook から不可視。
+        # fallback 後も宣言行のスキャンを継続する誤実装は宣言行上の truthy
+        # `--draft` を見て素通しするため fail する (正実装は不可視 → 未確定
+        # → deny)。物理行境界を尊重しつつ宣言行だけスキャン継続する誤実装
+        # との識別のため、truthy は次行ではなく宣言行上に置く。
         command = (
-            'gh pr create --title "t" --body-file - <<E"OF"'
+            'gh pr create --title "t" --body-file - <<E"OF" --draft'
             + NL
-            + "--draft=false"
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
+
+    def test_h20_declaration_tail_draft_false_after_fallback_denied(
+        self,
+    ) -> None:
+        # bypass 経路の直接 witness: 宣言行残余の `--draft=false` は opaque
+        # 領域内で hook から不可視だが gh の実引数としては有効なため、
+        # fallback 前のトークンにのみ挿入すると後着の false が勝ち非 draft
+        # PR が作られてしまう。未確定として deny することでこの bypass を
+        # 塞ぐ。
+        command = (
+            'gh pr create --title "t" --body-file - <<E"OF" --draft=false'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
+
+    def test_h21_confirmed_truthy_before_fallback_passthrough(self) -> None:
+        # fallback 前に truthy が確定していれば素通し (既に draft 指定あり)。
+        command = (
+            'gh pr create --draft --title "t" --body-file - <<E"OF"'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_no_intervention(command)
+
+    def test_h22_completed_invocation_before_fallback_still_rewritten(
+        self,
+    ) -> None:
+        # fallback より前に separator (`;`) で完結した invocation への挿入は
+        # 有効。fallback 発動で全体を不介入・deny にする実装は正当な draft
+        # 強制を失い fail する。
+        command = (
+            'gh pr create --title "t" --body "b"; cat <<E"OF"'
+            + NL
+            + "body; gh pr create fake"
             + NL
             + "EOF"
         )
         expected = (
-            'gh pr create --draft --title "t" --body-file - <<E"OF"'
+            'gh pr create --draft --title "t" --body "b"; cat <<E"OF"'
             + NL
-            + "--draft=false"
+            + "body; gh pr create fake"
             + NL
             + "EOF"
         )
