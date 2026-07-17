@@ -85,6 +85,70 @@ class BlockPrePushMissingJqTest(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
 
 
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("git") and shutil.which("jq"),
+    "hook integration requires bash, git, and jq",
+)
+class BlockPrePushBundledDeleteOptionTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temporary.name)
+        self.git("init")
+        self.git("config", "user.name", "Marketplace Test")
+        self.git("config", "user.email", "marketplace@example.invalid")
+        (self.repo / "file.txt").write_text("base\n", encoding="utf-8")
+        self.git("add", "file.txt")
+        self.git("commit", "-m", "base")
+        self.git("switch", "-c", "feature")
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def git(self, *args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=self.repo,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def run_hook(self, command: str) -> subprocess.CompletedProcess[bytes]:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        return subprocess.run(
+            ["bash", str(HOOK)],
+            cwd=self.repo,
+            input=json.dumps(payload).encode("utf-8"),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def assert_allowed(self, command: str) -> None:
+        result = self.run_hook(command)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout, b"")
+
+    def test_delete_force_cluster_is_allowed(self) -> None:
+        self.assert_allowed("git push -df origin other-branch")
+
+    def test_force_delete_cluster_is_allowed(self) -> None:
+        self.assert_allowed("git push -fd origin other-branch")
+
+    def test_force_without_delete_keeps_refspec_mismatch_deny(self) -> None:
+        result = self.run_hook("git push -f origin other-branch")
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        response = json.loads(result.stdout)
+        output = response["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn("別ブランチ", output["permissionDecisionReason"])
+
+
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class BlockPrePushShapeFilterTest(unittest.TestCase):
     """Shape check は token-level の実 push だけを保守的 deny する。"""
