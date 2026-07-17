@@ -31,11 +31,12 @@
 #   5. base 検出不能 / branch 取得不能 / master・main / hash 計算失敗 →
 #      attestation を書かず exit 0 (block-pre-push.sh の pass-through / deny 条件と
 #      整合)
-#   6. 1 日より古い launch attestation (.claude-pre-push-launch-*) と 30 日より
-#      古い launch tombstone (.claude-pre-push-done-*) をそれぞれ opportunistic に
-#      削除する (stale 掃除、best-effort。 tombstone の保持期間は Claude Code の
-#      transcript 既定保持 30 日に合わせる — resume は transcript が生きている間
-#      だけ成立しうるため、 それより長く tombstone を残す必要がない)
+#   6. 1 日より古い launch attestation (.claude-pre-push-launch-*) を opportunistic
+#      に削除する (stale 掃除、best-effort)。 launch tombstone
+#      (.claude-pre-push-done-*) は prune せず無期限に保持する — resume の成立期間は
+#      transcript の保持期間に従い、 それは cleanupPeriodDays 設定で任意に延長
+#      できるため、 期限付き prune では設定次第で再鋳造の穴が復活する。 1 件
+#      64 byte の hash file なので恒久保持しても実害がない
 #   7. 開始時 review hash を launch attestation
 #      (git-dir/.claude-pre-push-launch-<agent_id>) へ、 同一ディレクトリ内 temp
 #      file + 排他 `ln` (create-if-absent。 既存なら失敗) で atomic に書く
@@ -58,14 +59,16 @@
 #      stop_hook_active == false の最初の有効 report で marker を書き、以降の再 stop は
 #      attestation 消費済みのため marker を更新しない (「最終 stop」ではなく
 #      「初回有効 report」を採用する意図的なセマンティクス)
-#   4. attestation は最初の SubagentStop (stop_hook_active=false) で必ず消費する:
-#      以降の検証 (5〜8) の成否に関わらず、 まず launch tombstone
-#      (.claude-pre-push-done-<agent_id>) を排他 `ln` で作り (中身は attestation の
-#      hash。 作成失敗 = 既存なら無視して続行)、 続けて attestation を rm する
-#      (読み取り後に削除。 one-shot。 「最初の false stop で成否に関わらず
-#      attestation→tombstone へ不可逆遷移する」ことで、 以降の検証が失敗しても
-#      再 stop で marker を書ける経路も、 同一 agent_id での SubagentStart 再発火も
-#      残さない)
+#   4. attestation は最初の SubagentStop (stop_hook_active=false) で tombstone へ
+#      不可逆遷移させて消費する: 以降の検証 (5〜8) の成否に関わらず、 まず launch
+#      tombstone (.claude-pre-push-done-<agent_id>) を排他 `ln` で作り (中身は
+#      attestation の hash。 既存なら失敗を無視)、 tombstone の存在を確認できた
+#      場合のみ attestation を rm する (読み取り後に削除。 one-shot)。 tombstone が
+#      存在しない (ストレージ障害等で ln が失敗した) 場合は attestation を消費せず
+#      exit 0 し、 遷移を次の stop まで保留する (tombstone 無しで attestation だけが
+#      消えると、 同一 agent_id の SubagentStart 再発火を拒否する記録が残らない)。
+#      遷移が完了した stop 以降は、 検証が失敗しても再 stop で marker を書ける
+#      経路も、 同一 agent_id での SubagentStart 再発火も残らない
 #   5. last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行が
 #      ちょうど 1 つ、かつその行が ^Status: (pass|findings)$ に一致するときのみ
 #      有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 / 非 string は
@@ -229,11 +232,10 @@ case "$HOOK_EVENT_NAME" in
     # 1 日 (1440 分) より古い launch attestation を opportunistic に削除する
     # (stale 掃除、best-effort)。 find の失敗 (権限不足等) は無視する。
     find "$STORAGE_DIR" -maxdepth 1 -name "${LAUNCH_ATTESTATION_PREFIX}*" -type f -mmin +1440 -delete 2>/dev/null || true
-    # tombstone は 30 日 (43200 分) より古いものを opportunistic に削除する。
-    # Claude Code の transcript 既定保持期間 (30 日) に合わせている: resume は
-    # transcript が生きている間だけ成立しうるため、 それより長く tombstone を残す
-    # 必要がない。
-    find "$STORAGE_DIR" -maxdepth 1 -name "${LAUNCH_TOMBSTONE_PREFIX}*" -type f -mmin +43200 -delete 2>/dev/null || true
+    # tombstone は prune せず無期限に保持する。 resume の成立期間は transcript の
+    # 保持期間に従い、 それは cleanupPeriodDays 設定で任意に延長できるため、 期限付き
+    # prune では設定次第で attestation 再鋳造の穴が復活する。 1 件 64 byte の
+    # hash file なので恒久保持しても実害がない。
 
     # 同一ディレクトリ内 temp file (mktemp) → 排他 `ln` (create-if-absent。 既存なら
     # 失敗) → tmp を rm、の atomic 書き込み。 `mv` ではなく `ln` を使うのは、 上の
@@ -312,8 +314,15 @@ case "$HOOK_EVENT_NAME" in
       fi
       rm -f "$TOMBSTONE_TMP" 2>/dev/null || true
     fi
-    # attestation は最初の SubagentStop で必ず消費する (読み取り後に削除。one-shot。
-    # 以降の検証が失敗しても再 stop で marker を書ける経路を残さない)。
+    # tombstone の存在を確認できた場合のみ attestation を消費する (読み取り後に
+    # 削除。one-shot。以降の検証が失敗しても再 stop で marker を書ける経路を
+    # 残さない)。 tombstone が存在しない (ストレージ障害等で ln が失敗した) 場合は
+    # attestation を rm せず exit 0 し、 遷移を次の stop まで保留する — tombstone
+    # 無しで attestation だけが消えると、 同一 agent_id の SubagentStart 再発火を
+    # 拒否する記録が残らず、 resume 再鋳造ガードが失われるため。
+    if [ ! -e "$TOMBSTONE_PATH" ]; then
+      exit 0
+    fi
     rm -f "$ATTESTATION_PATH" 2>/dev/null || true
 
     CODEX_PENDING_PATH=""

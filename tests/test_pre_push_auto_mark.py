@@ -296,7 +296,10 @@ class PrePushAutoMarkTest(unittest.TestCase):
                 attestation.read_text(encoding="utf-8"), original_content
             )
 
-    def test_subagent_start_prunes_stale_tombstones(self) -> None:
+    def test_subagent_start_keeps_stale_tombstones(self) -> None:
+        # tombstone は期限付き prune の対象にしない (無期限保持)。 resume の成立
+        # 期間は transcript 保持期間 (cleanupPeriodDays 設定で任意に延長可能) に
+        # 従うため、 期限付き prune では設定次第で attestation 再鋳造の穴が復活する。
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
             stale_tombstone = self.launch_tombstone_path(work, "staletombstone")
@@ -308,7 +311,7 @@ class PrePushAutoMarkTest(unittest.TestCase):
             one_hour_ago = time.time() - 3600
             os.utime(fresh_tombstone, (one_hour_ago, one_hour_ago))
             self.run_start(work, "pre-push-review:code-reviewer")
-            self.assertFalse(stale_tombstone.exists())
+            self.assertTrue(stale_tombstone.exists())
             self.assertTrue(fresh_tombstone.exists())
 
     # ------------------------------------------------------------------
