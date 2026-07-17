@@ -732,9 +732,11 @@ def compute(
              (timeline 不完全な PR の ready 時刻は信頼できないため)。
           4. 候補が 1 件以上あれば、issue の `state` (OPEN/CLOSED) を問わず
              `readyAt` が最も早い候補 PR を採用し `mainSeries` に編入する。
-             候補が複数あった場合は該当 issue 件数を
-             `dataQuality.multipleReadyPrIssues` に計上する (選択 PR の状態や
-             `completionBasis` は問わずカウントする)。`completionBasis` は
+             候補が複数あった場合、この issue は `since` フィルタ適用後も
+             `mainSeries` に残っていれば `dataQuality.multipleReadyPrIssues`
+             に計上する (選択 PR の状態や `completionBasis` は問わずカウント
+             する。計上方法の詳細は `dataQuality` の docstring を参照)。
+             `completionBasis` は
              選択した PR の**実状態**で決める — 選択 PR が `state ==
              "MERGED"` なら `completionBasis = "merged"` とし `mergedAt` /
              `phaseHours.readyToMerge` を実データで埋める (issue 自体が
@@ -955,16 +957,19 @@ def compute(
           着手マーカーが無かった (`first_start is None`) issue の件数
           (`since` フィルタは適用しない。`exclusions.timelineOverflow` の
           issue は timeline 不完全から「着手マーカー無し」と断定できない
-          ため分母から除外する)。`multipleReadyPrIssues` は、`mainSeries`
-          対象決定パイプラインのステップ 3 で構築した qualifying PR 候補
-          集合が複数件あったため `readyAt` 最小の PR を採用した issue の
-          件数 (issue の `state` が OPEN/CLOSED いずれでも、また選択された
-          PR の状態や `completionBasis` によらずカウントする)。
+          ため分母から除外する)。`multipleReadyPrIssues` は、`since` フィルタ
+          適用後の `mainSeries` に残った issue のうち、`mainSeries` 対象決定
+          パイプラインのステップ 3 で構築した qualifying PR 候補集合が複数件
+          だった (= `readyAt` 最小の PR を採用した) ものの件数 (issue の
+          `state` が OPEN/CLOSED いずれでも、また選択された PR の状態や
+          `completionBasis` によらずカウントする)。
 
     境界:
         - `since` の inclusive filter は `firstStartAt` (UTC date 部分)
           `>= since` で判定し、`mainSeries` / `censored` / `auxiliarySeries` /
           `weeklyCohorts` に適用する (`weeklyCohorts` はフィルタ後の
+          `mainSeries` から算出されるため間接的に適用される。
+          `dataQuality.multipleReadyPrIssues` も同様にフィルタ後の
           `mainSeries` から算出されるため間接的に適用される)。
         - 数値の丸めはすべて時間 (hours) 単位・小数第 2 位まで
           (Python 組み込み `round`、round half-even)。丸めは最終出力時に
@@ -1014,7 +1019,6 @@ def compute(
     strict_issue_count = 0
     loose_only_entries: list[dict] = []
     not_started_closed_issues = 0
-    multiple_ready_pr_issues = 0
 
     main_records_all: list[_MainSeriesRecord] = []
     censored_all: list[tuple[datetime, dict]] = []
@@ -1105,8 +1109,6 @@ def compute(
             candidates.add(candidate_key)
 
         if candidates:
-            if len(candidates) > 1:
-                multiple_ready_pr_issues += 1
             chosen_key = min(
                 candidates,
                 key=lambda key: (pr_ready_info[key].ready_at, key[0], key[1]),
@@ -1118,6 +1120,7 @@ def compute(
                 start_week,
                 prs_by_key[chosen_key],
                 pr_ready_info[chosen_key],
+                len(candidates) > 1,
             )
             main_records_all.append(record)
         elif issue["state"] == "OPEN":
@@ -1177,6 +1180,9 @@ def compute(
         1 for record in main_records if record.output["negativeInterval"]
     )
     redraft_pr_count = sum(1 for entry in pr_series if entry["redraftCount"] > 0)
+    multiple_ready_pr_issues = sum(
+        1 for record in main_records if record.multiple_candidates
+    )
 
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -1248,7 +1254,12 @@ def _aux_entry(
 
 @dataclass(frozen=True)
 class _MainSeriesRecord:
-    """`mainSeries` 1 要素の出力 dict と、集計に必要な丸め前 (raw) の値を束ねる内部表現。"""
+    """`mainSeries` 1 要素の出力 dict と、集計に必要な丸め前 (raw) の値を束ねる内部表現。
+
+    `multiple_candidates` は `dataQuality.multipleReadyPrIssues` を `since`
+    フィルタ後の `mainSeries` から算出するための内部専用フラグであり、公開
+    出力 (`output`、`mainSeries` の要素 dict) には含めない。
+    """
 
     output: dict
     raw_first_start: datetime
@@ -1256,6 +1267,7 @@ class _MainSeriesRecord:
     raw_start_to_pr_created: float
     raw_pr_created_to_ready: float
     raw_ready_to_merge: float | None
+    multiple_candidates: bool
 
 
 def _build_main_record(
@@ -1265,8 +1277,17 @@ def _build_main_record(
     start_week: str,
     pr: dict,
     ready_resolution: ReadyResolution,
+    multiple_candidates: bool,
 ) -> _MainSeriesRecord:
-    """選択された qualifying completion PR から `mainSeries` 1 要素を組み立てる。"""
+    """選択された qualifying completion PR から `mainSeries` 1 要素を組み立てる。
+
+    Args:
+        multiple_candidates: 呼び出し側が構築した qualifying PR 候補集合が
+            複数件だったかどうか (`len(candidates) > 1`)。公開出力には
+            含めず、`dataQuality.multipleReadyPrIssues` を `since` フィルタ
+            後の `mainSeries` から算出するための内部専用フラグとして
+            `_MainSeriesRecord.multiple_candidates` に転記する。
+    """
     pr_created_at = _parse_datetime(pr["createdAt"])
     ready_at = ready_resolution.ready_at
     assert ready_at is not None
@@ -1330,6 +1351,7 @@ def _build_main_record(
         raw_start_to_pr_created=raw_start_to_pr_created,
         raw_pr_created_to_ready=raw_pr_created_to_ready,
         raw_ready_to_merge=raw_ready_to_merge,
+        multiple_candidates=multiple_candidates,
     )
 
 

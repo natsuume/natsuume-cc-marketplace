@@ -11,10 +11,12 @@ Phase A (spec-first) の位置づけ:
   8 件に対応する T43〜T47、Phase B 後の codex review 指摘 6 件
   (rescue 壁打ちで精密化済み) に対応する T48〜T50、draft PR #293 への
   codex review 指摘 4 件 (rescue 壁打ちで精密化済み) のうち中央値計算の
-  丸め順序に対応する T51、および draft PR #293 への pre-push review 指摘
+  丸め順序に対応する T51、draft PR #293 への pre-push review 指摘
   3 件 (rescue 壁打ちで精密化済み) のうち load_claim_patterns の非 UTF-8
   patterns file 検出と resolve_close_linkage の同時刻 ClosedEvent tie-break
-  に対応する T52〜T53 を全件実装する。各テスト
+  に対応する T52〜T53、および issue #288 実装後の pre-push review で検出
+  された `dataQuality.multipleReadyPrIssues` の `since` フィルタ適用前加算
+  バグの回帰に対応する T54 を全件実装する。各テスト
   メソッド名・コメントに `T<n>` を付与し対応関係を明示する (T42: 収集範囲外
   リポジトリの merged PR を closer とする issue が `resolve_close_linkage` で
   `"merged_pr_external"` に分類され、`compute` の出力で
@@ -45,7 +47,11 @@ Phase A (spec-first) の位置づけ:
   を持つ複数の `ClosedEvent` が timeline 中に存在する場合、
   `resolve_close_linkage` が `timelineItems.nodes` 配列内で後方の
   `ClosedEvent` を採用し (`category` が `"merged_pr"` になり)、`compute`
-  でも該当 issue が `mainSeries` に編入されることの検証。
+  でも該当 issue が `mainSeries` に編入されることの検証。T54: qualifying PR
+  候補集合が複数件だった issue について、`dataQuality.multipleReadyPrIssues`
+  が `since` フィルタ適用後の `mainSeries` から算出され、フィルタで当該
+  issue が除外されれば 0 になることの検証 (`since` フィルタ適用前に加算して
+  いた旧実装のバグの回帰)。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -1871,6 +1877,84 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(len(result["mainSeries"]), 1)
         self.assertEqual(result["mainSeries"][0]["issue"], issue_number)
         self.assertEqual(result["mainSeries"][0]["completionBasis"], "merged")
+
+    def test_t54_multiple_ready_pr_candidates_counted_when_since_unset(self):
+        # T54 (pre-push review 指摘の確定対応): mainSeries 対象決定パイプライン
+        # のステップ 3 で構築される qualifying PR 候補集合が 2 件になる issue
+        # (候補は (1) 最終 ClosedEvent の merged PR closer である pr1 と、
+        # (2) closingIssuesReferences 逆引きで見つかる別の qualifying
+        # completion PR である pr2、の 2 経路から集まる) について、since 未
+        # 指定 (全期間) のときは issue が mainSeries に 1 件編入され、
+        # dataQuality.multipleReadyPrIssues が 1 になることを検証する。
+        repo = "owner/name"
+        issue_number = 5401
+        issue, pr1 = make_started_case(
+            issue_number=issue_number,
+            pr_number=5401,
+            repo=repo,
+            start_at="2026-07-10T00:00:00Z",
+            pr_created_at="2026-07-10T01:00:00Z",
+            ready_at="2026-07-10T02:00:00Z",
+            merged_at="2026-07-10T03:00:00Z",
+        )
+        pr2 = make_pr(
+            repo=repo,
+            number=5402,
+            state="MERGED",
+            created_at="2026-07-10T01:30:00Z",
+            merged_at="2026-07-10T04:00:00Z",
+            timeline_nodes=[ready_event("2026-07-10T02:30:00Z")],
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr1, pr2], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(len(result["mainSeries"]), 1)
+        self.assertEqual(result["mainSeries"][0]["issue"], issue_number)
+        self.assertEqual(result["dataQuality"]["multipleReadyPrIssues"], 1)
+
+    def test_t54_multiple_ready_pr_issues_excluded_when_since_filters_out_issue(self):
+        # T54: 上と同一 fixture (qualifying PR 候補 2 件の issue) に対し、
+        # since を issue の firstStartAt (2026-07-10) より後の 2026-07-11 に
+        # 設定すると mainSeries は空になり、dataQuality.multipleReadyPrIssues
+        # は since フィルタ適用後の mainSeries から算出されるため 0 になる。
+        # 旧実装は候補集合を構築した時点 (since フィルタ適用前) で加算して
+        # いたため、この issue が since フィルタで除外されても 1 のまま
+        # 残ってしまう契約違反があった (本テストは「since フィルタ適用前に
+        # 加算し常に非 0 を返す」誤実装を検出する回帰)。
+        repo = "owner/name"
+        issue_number = 5401
+        issue, pr1 = make_started_case(
+            issue_number=issue_number,
+            pr_number=5401,
+            repo=repo,
+            start_at="2026-07-10T00:00:00Z",
+            pr_created_at="2026-07-10T01:00:00Z",
+            ready_at="2026-07-10T02:00:00Z",
+            merged_at="2026-07-10T03:00:00Z",
+        )
+        pr2 = make_pr(
+            repo=repo,
+            number=5402,
+            state="MERGED",
+            created_at="2026-07-10T01:30:00Z",
+            merged_at="2026-07-10T04:00:00Z",
+            timeline_nodes=[ready_event("2026-07-10T02:30:00Z")],
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr1, pr2], self.patterns, as_of, date(2026, 7, 11), None
+        )
+
+        self.assertEqual(result["mainSeries"], [])
+        self.assertEqual(result["dataQuality"]["multipleReadyPrIssues"], 0)
 
 
 # ---------------------------------------------------------------------------
