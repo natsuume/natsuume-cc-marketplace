@@ -60,7 +60,7 @@ class ResolvePushTargetIndexContractTest(unittest.TestCase):
             result = self.run_resolver(work, push_index, *segments)
 
             self.assertEqual(result.returncode, 0, result.stderr.decode())
-            self.assertEqual(result.stdout.decode(), str(expected))
+            self.assertEqual(result.stdout.decode(), str(expected.resolve()))
 
     def test_quoted_push_reference_before_real_push_uses_caller_index(self) -> None:
         self.assert_resolves_to_subdirectory(
