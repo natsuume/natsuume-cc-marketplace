@@ -21,10 +21,10 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 0. 作業ディレクトリを次のとおり定義する。`<work-root>` = セッション scratchpad 配下の `repo-analytics-leadtime/` (`<scratchpad>/repo-analytics-leadtime/`。`<scratchpad>` はセッションの scratchpad ディレクトリ)。`<work>` = `<work-root>/<一意な実行 ID>/` (例: `date -u +%Y%m%dT%H%M%SZ` 等で採番) を **新規作成** する (既存ディレクトリの再利用・`mkdir -p` による黙認は禁止。ディレクトリ作成が既存パスと衝突したら別の実行 ID を採番し、必ず新規作成できたディレクトリを `<work>` として使う)。収集診断 (`collection-diagnostics.json`) を含むこの実行のすべての中間ファイルは `<work>` 配下にのみ書く: `issues.jsonl` / `prs.jsonl` / `patterns.json` / `boundaries.json` / `collection-diagnostics.json` / `result.json`。`collection-diagnostics.json` を `{"skippedRepos": [], "webSearchSkipped": false, "repoEventCollection": []}` で初期化する (Write ツール)。続けて `issues.jsonl` / `prs.jsonl` を空 (0 バイト) で先行作成する (Write ツールで空内容を書き込む)。収集キーが 0 件でも第 5 章の集計が入力欠落 (exit 2) にならず、skip 件数を明記した空レポート経路が成立する (第 3 章での書き込みは追記 `>>` のため、この先行作成と矛盾しない)。リトライ時は新しい `<work>` を作成してこのセクションからやり直し、過去の実行 (別の `<work>`) の部分成果物を再利用しない。
 1. 呼び出し引数の文字列を分割し、`since=YYYY-MM-DD` に一致するトークンを期間指定として取り出す (複数あれば最後の値を採用し、その旨を記録する)。残りのトークンを対象指定として扱う。対象指定・期間指定のいずれも無ければ対象は「カレントディレクトリの git リポジトリ」、期間は「全期間」とみなす。
 2. 対象指定が既存ディレクトリのパスであれば手順 3 の再帰探索、それ以外 (存在しないパス、またはカンマを含む文字列) であれば `owner/repo` のカンマ区切りリストとして手順 4 に進む。
-3. ディレクトリパスが与えられた場合、配下の git リポジトリを次のように再帰探索する (探索深さの上限で暴走を防ぐ)。
+3. ディレクトリパスが与えられた場合、まず与えられたパスを絶対パスへ解決する (解決できない場合は中断してユーザーに報告する)。`find` は第 1 引数が `-` で始まる文字列だと探索パスではなく式 (action) として解釈する — 例えば `-delete` という名前のディレクトリをそのまま渡すと、GNU find は starting point 未指定として `.` を走査し、式の左から右への評価により `-name` の絞り込み前に削除が実行されうる。この経路を閉じるため、`find` には必ず解決済みの絶対パスだけを渡す。そのうえで配下の git リポジトリを次のように再帰探索する (探索深さの上限で暴走を防ぐ)。
 
    ```bash
-   find "<dir>" -maxdepth 4 -name .git
+   find "<absolute-dir>" -maxdepth 4 -name .git
    ```
 
    なお、`-maxdepth` は POSIX の規定外だが、本 Skill の対象環境である GNU find (Linux / WSL2) と macOS の `/usr/bin/find` はともにサポートしている。
