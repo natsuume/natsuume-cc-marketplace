@@ -18,7 +18,12 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v4.2.0 (前身: `pre-commit-review` v0.4.0)
+v4.2.1 (前身: `pre-commit-review` v0.4.0)
+
+### v4.2.0 → v4.2.1 の変更点 (issue #134)
+
+- command keyword 内の quote / escape、`git -c alias.*`、wrapper file 名の quote 分断が cooperative gate の検出対象外であることを明文化した
+- 本 plugin は Claude が生成する通常形の push をレビュー gate に通すための規律であり、意図的な難読化や alias 展開までを扱う security sandbox ではないという保証境界を追記した
 
 ### v4.1.6 → v4.2.0 の変更点 (issue #279)
 
@@ -243,6 +248,11 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 
 **サポート外 (本プラグインの範囲外で別レイヤーが必要)**:
 
+- **意図的に command token を難読化した push / wrapper 起動**は cooperative 利用前提の範囲外 (#134)。本 plugin は Claude が通常生成する direct command の誤操作を防ぐ review gate であり、任意の shell 入力を解析・封じ込める security sandbox ではない。bash 実行時には通常形と等価でも、次の形は粗フィルタまたは token 比較より前で対象 command として認識されず、gate が介入しない:
+  - command keyword 内の quote fragment / escape (`git pu"sh"` / `g\it push` / `$'git' push`)
+  - command line 内で注入した git alias (`git -c alias.p=push p`)。hook は実行時の git config / alias を展開しない
+  - Codex wrapper file 名を quote fragment で分断する形 (`bash run-cod"e"x-review.sh &`)。wrapper gate の対象判定は実 command line に連続した `run-codex-review.sh` を要求する
+  これらは「引用符で囲まれた `git push` 例文をテキスト参照として介入しない」仕様や、認識済み `git push` の未知 wrapper / quote 付き引数を保守的に deny する仕様とは別の境界である
 - 別端末・別 clone から行われる `git push` は Claude Code hook の原理的範囲外で gate できない (本気で塞ぐなら `.git/hooks/pre-push` real git hook を別レイヤーで併設)
 - GitHub サーバ側で実施される操作 (Web UI のマージ / rebase 等) も Claude Code hook 範囲外
 - **default branch (master/main) 上での push は本プラグイン単独では gate されない**: 本プラグインは `git-guardrails` の `block-default-branch-push.sh` が default branch push を deny する前提で gate を skip する。 `git-guardrails` を併用していない環境では default branch 上の push が review なしで通る経路が残る
