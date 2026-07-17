@@ -6,7 +6,15 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v1.0.0
+v1.1.0
+
+### v1.0.0 → v1.1.0 の変更点
+
+- `pre-push-review:codex-reviewer` の `Status: pass|findings` と、成功した `codex-advisor:review-runner` を同じ session cadence へ加算し、前回の根本方針 checkpoint から 5 サイクル完了すると main session の Stop と次の一般 / pre-push Codex review 起動を block する gate を追加した
+- cadence 用 advisor request に、元の Goal / 受入基準・制約、直近 5 サイクルの findings / 修正 / 反復傾向、現在の仮説・アプローチ、根本方針を変えるべきかという 1 問を必須化した
+- `advisor-runner` の予約 metadata (`Codex-Advisor-Review-Cadence`) で qualifying consultation の成功だけを証明し、通常の advisor 相談ではカウンターを reset しない。外部 service が利用不能な qualifying attempt は既存の fail-open 方針に従って block を解除し、報告を必須とする
+
+後方互換のある機能追加なので Claude Code version を minor bump しました。本 plugin は Codex marketplace では excluded のため、Codex version は変更していません。
 
 ### v0.3.0 → v1.0.0 の変更点
 
@@ -24,9 +32,9 @@ v0.2.0 でプラグインのスコープを「advisor 相談規律」から「co
 
 | 構成要素 | 役割 |
 |---|---|
-| SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 5 ルール (下記) を `additionalContext` として常時注入する |
+| SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 6 ルール (下記) を `additionalContext` として常時注入する |
 | SubagentStart hook (`inject-advisor-rules-subagent`) | 通常 subagent に advisor の許可境界を注入する。通常 subagent は wrapper を直接起動せず、self-contained な相談 request を親へ返す |
-| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、SubagentStart / SubagentStop の active・bounded retry、Stop の reroute / completion 回収要求、SessionStart / SessionEnd cleanup を管理する。state は UID + session ID で分離し、prompt / Codex 出力を保存しない |
+| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、SubagentStart / SubagentStop の active・bounded retry、Stop の reroute / completion 回収要求、一般 review と pre-push Codex review を合算する 5 review ごとの cadence checkpoint を管理する。runner state と cadence state は UID + session ID で分離し、prompt / Codex 出力を保存しない |
 | role 固有 runner agents | rescue / review / advisor の model 起動・job tracking・terminal output を subagent context に閉じ込める。全 runner は foreground Agent として起動する |
 | `/codex-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では `codex-advisor:advisor-runner` を起動する。Codex host の source 契約は PTY stdin wrapper を維持する |
 | `scripts/run-codex-job.sh` | official companion v1.0.6 の task / review / status / result / cancel を runner 向けの path-only command に限定して公開する。status wait は単発 status の短い poll で構成する |
@@ -37,8 +45,9 @@ v0.2.0 でプラグインのスコープを「advisor 相談規律」から「co
 | rule ID | 内容 |
 |---|---|
 | `rule:advisor-timing` | いつ相談するか: 実質的な作業前 (オリエンテーションは含まない) / 完了宣言前 (成果物を durable にしてから) / 行き詰まり / 方針転換の検討時。短い反応的タスクでは相談しない |
+| `rule:review-cadence` | `pre-push-review:codex-reviewer` の正常終了と成功した一般 Codex review を session ごとに合算し、5 サイクル完了後は次の review / 完了宣言より先に advisor へ根本方針・問題設定・設計境界・検証戦略を相談する。Stop と両 review model gate で強制し、qualifying attestation だけが reset する |
 | `rule:advisor-weight` | 助言はフラットに扱う (独立した第二視点として自分の証拠・推論と同じ土俵で採否を判断し、採否と理由を明示する。黙って無視しない)。証拠と助言が衝突し自分で判断できないときは reconcile call (衝突を明示した再相談) で解消する |
-| `rule:advisor-boundary` | 設計/仕様の決定はユーザ専権 (助言は AskUserQuestion の代替でない)。レビュー用途は pre-push-review が担当。advisor 不通時は相談なしで続行しユーザ報告 |
+| `rule:advisor-boundary` | 設計/仕様の決定はユーザ専権 (助言は AskUserQuestion の代替でない)。差分 finding は pre-push-review が担当し、review cadence は根本方針の course-correction だけを相談する。advisor 不通時は相談なしで続行しユーザ報告 |
 | `rule:rescue-thread` | `/codex:rescue` 起動時は `--resume` / `--fresh` を常に Claude が自律決定して付与し、thread 選択の AskUserQuestion を発行しない。`--resume` は「直前の rescue と同一論点の続き + 対象 rescue がセッション内で最新の再開可能 task (terminal 状態かつ threadId あり) と確実に分かる場合」のみで、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先 |
 | `rule:codex-runner` | rescue / review / advisor は完全修飾 runner を `run_in_background: false` で起動する。Agent が async 受理されても completion notification / TaskOutput と terminal report を回収するまで turn を終了しない |
 
@@ -71,6 +80,7 @@ v0.2.0 でプラグインのスコープを「advisor 相談規律」から「co
 
 ## 既知の制約
 
+- review cadence は同一 Claude Code session 内の `pre-push-review:codex-reviewer` (`Status: pass|findings`) と、成功した `codex-advisor:review-runner` を数える。失敗・cancel・不正 report、別 session、pre-push の code-reviewer / security-reviewer は対象外である。advisor が利用不能な場合は qualifying attempt で gate を解除するため、助言取得そのものではなく「5 サイクル以内に根本方針相談を試行すること」が外部障害時の保証上限になる
 - `rule:rescue-thread` は openai-codex plugin (v1.0.6 で確認) の rescue.md の「`--resume` / `--fresh` 指定時は thread 選択を質問しない」挙動を前提とします。外部 plugin の将来更新でこの前提が壊れた場合は規律の見直しが必要です
 - ユーザが `/codex:rescue` の本文を直接指定し、かつ対象の rescue がセッション内で最新の再開可能 task でなくなっている場合 (間に consult 等の Codex task が terminal 状態になった場合)、規律は安全側の degraded mode (`--fresh` + 本文無改変転送、thread 文脈の連続性なし) に倒れます。誤 thread 再開の防止と rescue.md の verbatim 転送契約を文脈の連続性より優先するためで、継続文脈が必要な場合は再依頼時に本文へ含めてください
 
@@ -80,7 +90,7 @@ Codex host の `$codex-advisor:consult` は、別 context・read-only sandbox・
 
 Codex transport は受信中の PTY を echo 無効・raw/noncanonical mode にし、連続する 2 byte の EOT (`0x04 0x04`) を EOF 操作ではなく明示 frame terminator として扱います。2 byte により正常な delimiter と delimiter 前の切断を区別します。このため canonical PTY の行長上限と CR 変換を避けられますが、prompt 本文自体に `0x04` は含められません。direct process は `--sandbox read-only --ephemeral --disable hooks --skip-git-repo-check --color never -c 'model_reasoning_effort="xhigh"' -` で固定し、git repository 外でも相談できます。既定 600 秒を超えた独立 process group は TERM、grace period 後の KILL、leader の `wait` の順で descendant ごと終了・回収します。descendant が stdout / stderr の pipe FD を保持して foreground session を残す経路も同じ group signal で閉じます。
 
-`tests/test_codex_advisor_subagent_runner.py` は direct gate の agent type matrix、実行形 / audit 言及の分類、session state、retry 上限、stale cleanup、3 runner / Skill / hook artifact を検証します。`tests/test_codex_advisor_adapter.py` は v0.3.0 から維持する PTY / file-stdin adapter と process-group cleanup を検証します。いずれも外部 service・認証・rate limit の可用性や Codex 出力品質までは保証しません。
+`tests/test_codex_advisor_subagent_runner.py` は direct gate の agent type matrix、実行形 / audit 言及の分類、session state、retry 上限、一般 / pre-push 共通 5 review cadence の Stop / next-review block、失敗 report 非加算、attestation reset、stale cleanup、3 runner / Skill / hook artifact を検証します。`tests/test_codex_advisor_adapter.py` は v0.3.0 から維持する PTY / file-stdin adapter と process-group cleanup を検証します。いずれも外部 service・認証・rate limit の可用性や Codex 出力品質までは保証しません。
 
 ## トラブルシュート
 

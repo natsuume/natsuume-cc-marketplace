@@ -8,7 +8,7 @@
 
 # codex-advisor: Codex 利用規律
 
-このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は相談規律 (セクション 1〜3)、`/codex:rescue` の thread 選択 (セクション 4)、全 Codex 実行を追跡可能な subagent に閉じ込める runner 規律 (セクション 5) である。
+このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は相談規律 (セクション 1〜4)、`/codex:rescue` の thread 選択 (セクション 5)、全 Codex 実行を追跡可能な subagent に閉じ込める runner 規律 (セクション 6) である。
 
 <!-- rule:advisor-timing -->
 ## 1. いつ相談するか
@@ -24,10 +24,26 @@
 
 数ステップを超えるタスクでは、方針にコミットする前に 1 回 + 完了を宣言する前に 1 回を目安とする。
 
-**境界**: 直前のツール結果が次の一手を一意に決める短い反応的タスクでは相談しない。相談は岐路のたびに機械的に呼ぶチェックポイントではなく、方針への確信が持てない場面で使う判断基準である。助言の価値は方針が結晶化する前の最初の 1 回が最も高い。
+**境界**: 直前のツール結果が次の一手を一意に決める短い反応的タスクでは相談しない。セクション 2 の review cadence を除き、相談は岐路のたびに機械的に呼ぶチェックポイントではなく、方針への確信が持てない場面で使う判断基準である。助言の価値は方針が結晶化する前の最初の 1 回が最も高い。
+
+<!-- rule:review-cadence -->
+## 2. Codex review が長期化したときの根本方針 checkpoint
+
+**なぜ**: 同じ方針のまま局所修正と Codex review を反復すると、個別 finding は減っても問題設定・設計境界・検証戦略の誤りを温存し、20 サイクル規模まで収束しないことがある。5 サイクルごとに review とは独立した advisor へ根本方針を問い直せば、局所最適化を続ける前に course-correction を判断できる。
+
+**指示**: `pre-push-review:codex-reviewer` が `Status: pass|findings` で完了した Codex review、または `codex-advisor:review-runner` が成功した native review / adversarial review を 1 サイクルと数える。前回の根本方針 checkpoint から合計 5 サイクル完了したら、次の review または完了宣言より先に `/codex-advisor:consult` の review cadence mode で `codex-advisor:advisor-runner` を foreground 起動する。相談の `<review_cycle_checkpoint>` には次を含める。
+
+- 元の Goal、受入基準、変えてはならない制約
+- 直近 5 サイクルの主要 findings、施した修正、反復している傾向
+- 現在の問題設定・仮説・アプローチと、残っている不確実性
+- 「局所修正を続けるべきか、根本方針・設計境界・検証戦略を変えるべきか」という 1 つの質問
+
+助言はセクション 3 に従って採否を判断し、採用する course-correction または現方針を維持する根拠を記録してから review cycle を再開する。lifecycle hook は session ごとに両経路の成功 review を同じカウンターへ加算し、5 回目の完了後は main session の Stop と次の一般 review / pre-push Codex review 起動を block する。advisor runner が qualifying request と Codex の成功を `Codex-Advisor-Review-Cadence: satisfied` で証明したときだけカウンターを reset する。
+
+**境界**: 通常の advisor 相談、review runner の失敗・cancel、pre-push Codex review の `execution-failed` / 不正 report はカウンターを reset / increment しない。code-reviewer / security-reviewer は Codex review サイクルではないため数えない。advisor が未 install・未認証・timeout 等で利用不能な場合は、qualifying checkpoint の試行を `unavailable` として記録すれば block を解除して続行できるが、相談できなかったことを作業報告に含める。入力不備・cancel・通常相談で bypass しない。
 
 <!-- rule:advisor-weight -->
-## 2. 助言の扱い
+## 3. 助言の扱い
 
 **なぜ**: advisor の価値は知能差ではなく、別モデル系統からの独立した第二視点にある (呼び出し元が advisor と同等以上のモデルのこともある)。盲従すれば自分が集めた一次証拠と推論を捨てることになり、軽視すれば相談のコストが無駄になる。
 
@@ -38,19 +54,19 @@
 **境界**: reconcile call は同じ論点につき 1 回とする。それでも解消しない場合は、両論とそれぞれの根拠を添えてユーザに判断を仰ぐ。
 
 <!-- rule:advisor-boundary -->
-## 3. 境界
+## 4. 境界
 
 **なぜ**: advisor は Claude の判断品質を上げる道具であり、意思決定の主体や既存のレビュー機構を置き換えるものではない。
 
 **指示**:
 
 - 設計 / 仕様レベルの決定はユーザの専権事項である。助言はユーザに提示する推奨案を練るための判断材料として使い、`AskUserQuestion` によるユーザ確認の代替にしない
-- コードレビュー用途には使わない (pre-push-review の codex review が担当する)
+- コード差分の finding を得る用途には使わない (pre-push-review の codex review が担当する)。セクション 2 の checkpoint は review findings を再判定せず、根本方針を問い直す course-correction 相談である
 - subagent に相談させてよい場合は、委任指示に codex-advisor の使用許可を明示する (相談は課金を伴う外部呼び出しのため、許可の無い subagent は相談しない)
 - advisor が不通のとき (openai-codex plugin 未 install・codex CLI 未認証・タイムアウト) は、相談なしで作業を続行してよい。ただしその旨を作業報告に含める
 
 <!-- rule:rescue-thread -->
-## 4. rescue の thread 選択
+## 5. rescue の thread 選択
 
 **なぜ**: openai-codex plugin の `/codex:rescue` は、`--resume` / `--fresh` のどちらも指定されず再開可能な thread があると、継続か新規かを AskUserQuestion で必ず 1 回質問する。この質問は auto mode の自走を毎回ブロックする一方、回答は高度に予測可能である (実測でほぼ常に新規、継続はいずれも直前の rescue と同一論点の続きだった)。フラグ指定時は質問しない設計のため、常に自分でフラグを決めて付与すれば、外部 plugin を変更せずに質問分岐へ到達させずに済む。
 
@@ -60,10 +76,10 @@
 - ユーザがフラグを文字どおり指定した場合はそれを尊重する。自然言語で継続を依頼された場合は継続の意図を尊重しつつ、対象 thread を安全に特定できなければ `--fresh` とする
 - `--fresh` 時の文脈は task 本文の所有者で扱いが分かれる: 自分が rescue の本文を作成する場合は、呼び出し前に必要な文脈を含む self-contained な本文を作る。ユーザが本文を直接指定した場合は routing flag 以外を変更せずそのまま転送し、Codex 出力以外の説明を同じ rescue 応答に追加しない
 
-**境界**: この規律の対象は thread 選択の質問のみである。rescue を使うかどうかの判断や、設計 / 仕様レベルの決定に関する `AskUserQuestion` (セクション 3) は変更しない。
+**境界**: この規律の対象は thread 選択の質問のみである。rescue を使うかどうかの判断や、設計 / 仕様レベルの決定に関する `AskUserQuestion` (セクション 4) は変更しない。
 
 <!-- rule:codex-runner -->
-## 5. Codex 実行は role 固有 runner に閉じ込める
+## 6. Codex 実行は role 固有 runner に閉じ込める
 
 **なぜ**: Codex companion の長時間 Bash を main session または通常 subagent で待つと、大量出力が親 context に入り、Claude の background task tracking と companion の永続 job state が分離して処理が停止しうる。role 固有 runner と lifecycle hook を併用すれば、tracking を失っても job ID / job 集合差分から結果を回収できる。
 
@@ -77,4 +93,4 @@ Agent call は `run_in_background: false` を明示し、request 本文・thread
 
 PreToolUse gate は `codex-companion.mjs task|review|adversarial-review` と `run-codex-advisor.sh` の実行形を、対応 runner 以外では deny する。ユーザが旧 `/codex:rescue` / `/codex:review` を明示した場合も deny と Stop hook の案内に従い、追加質問をせず runner へ reroute する。runner が tracking failure を報告した場合は lifecycle hook が 1 回だけ新規 runner で retry を要求する。2 回目の失敗、cancel、未 install / 未認証、入力不正は terminal failure として明示報告する。
 
-**境界**: `status` / `result` / `cancel` 等の管理操作と、`pre-push-review:codex-reviewer` の正規 review 経路は遮断しない。通常 subagent が advisor を必要とする場合、wrapper を直接実行せず相談 request を親へ返す。親は委任時に外部呼び出しを許可した範囲で `codex-advisor:advisor-runner` を起動する。
+**境界**: `status` / `result` / `cancel` 等の管理操作は遮断しない。`pre-push-review:codex-reviewer` の正規 review 経路も通常は維持するが、セクション 2 の cadence が 5 回に達した後だけ、次の wrapper 起動を根本方針 checkpoint まで block する。通常 subagent が advisor を必要とする場合、wrapper を直接実行せず相談 request を親へ返す。親は委任時に外部呼び出しを許可した範囲で `codex-advisor:advisor-runner` を起動する。
