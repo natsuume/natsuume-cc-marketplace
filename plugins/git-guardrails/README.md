@@ -4,7 +4,12 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.5.0
+v0.5.1
+
+### v0.5.0 → v0.5.1 の変更点 (#140)
+
+- target-mismatch の `git -C <dir>` 検出を token ベースの global option walk に変更し、`git blame -C` / `git log -C` / `git diff -C` のような subcommand-local option を repo 切替と誤認して後続の commit / push / PR 作成を deny する false positive を解消
+- global `-C`、引用付き `"-C"`、`-c <name=value>` 後の `-C`、`--git-dir` / `--work-tree` は引き続き target-mismatch として fail-closed に deny
 
 ### v0.4.2 → v0.5.0 の変更点
 

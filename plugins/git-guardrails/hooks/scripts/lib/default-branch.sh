@@ -44,6 +44,66 @@ strip_shell_quotes() {
   printf '%s' "$s"
 }
 
+# 引数: <shell-word-token>
+# 出力: shell が単一 word を組み立てる際に除去する quote / escape syntax を反映した文字列
+#
+# tokenize_segment は quote 内の空白を 1 token に保つ一方、quote / backslash 自体も残す。
+# 完全一致比較だけで `--git-dir` 等を判定すると、shell 上は同じ word になる
+# `--git-'dir'=/other/.git` / `--git-dir\=/other/.git` を見逃す。変数展開・command
+# substitution は評価せず、静的に確定する quote 結合と escape だけを Bash の規則に沿って
+# 正規化する。macOS 標準 Bash 3.2 互換の文字 walk 実装。
+normalize_shell_word_syntax() {
+  local s="$1"
+  local i=0 len=${#s}
+  local in_squote=0 in_dquote=0
+  local result=""
+
+  while [ "$i" -lt "$len" ]; do
+    local c="${s:$i:1}"
+
+    if [ "$in_squote" -eq 1 ]; then
+      if [ "$c" = "'" ]; then
+        in_squote=0
+      else
+        result+="$c"
+      fi
+      i=$((i+1)); continue
+    fi
+
+    if [ "$in_dquote" -eq 1 ]; then
+      if [ "$c" = '"' ]; then
+        in_dquote=0
+        i=$((i+1)); continue
+      fi
+      if [ "$c" = "\\" ]; then
+        local nc="${s:$((i+1)):1}"
+        case "$nc" in
+          '$'|'`'|'"'|\\) result+="$nc"; i=$((i+2)); continue ;;
+        esac
+      fi
+      result+="$c"
+      i=$((i+1)); continue
+    fi
+
+    case "$c" in
+      "'") in_squote=1; i=$((i+1)) ;;
+      '"') in_dquote=1; i=$((i+1)) ;;
+      \\)
+        if [ $((i+1)) -lt "$len" ]; then
+          result+="${s:$((i+1)):1}"
+          i=$((i+2))
+        else
+          result+="$c"
+          i=$((i+1))
+        fi
+        ;;
+      *) result+="$c"; i=$((i+1)) ;;
+    esac
+  done
+
+  printf '%s' "$result"
+}
+
 # 引数: <refspec-part>
 # 出力: refspec の片側 (左/右) を branch name として完全一致比較するための正規化形
 #
@@ -234,6 +294,72 @@ emit_deny() {
   }'
 }
 
+# command 内の各 `git` token から subcommand より前だけを global option として走査し、
+# repo target を切り替える option があれば 0 を返す。
+#
+# raw regex で `git` より後の任意 token を許すと、`git blame -C` / `git log -C` のような
+# subcommand-local option まで global `git -C <dir>` と誤認する。git CLI の構文上、最初の
+# non-option token が subcommand なので、そこで当該 invocation の走査を打ち切る。
+#
+# `-c <name=value>` / `--config-env <name>=<envvar>` は値を別 token に取る global option。
+# 値を subcommand と誤認しないよう 1 token skip する。その他の target 非変更 option は
+# `-p` / `--no-pager` / `--config-env=...` のような単一 token 形式として読み進める。
+#
+# cmd-parser.sh は 3 hook すべてで default-branch.sh より先に source 済み。配列・算術を
+# 含めて macOS 標準 Bash 3.2 で動く実装だけを使う。
+has_git_repo_target_option_before_subcommand() {
+  local command="$1"
+  local segment
+  while IFS= read -r segment; do
+    case "$segment" in
+      SEP:*) continue ;;
+    esac
+
+    local -a _target_toks=()
+    tokenize_segment "$segment" _target_toks
+    local _target_i=0
+    local _target_n=${#_target_toks[@]}
+    while [ "$_target_i" -lt "$_target_n" ]; do
+      local _target_tok
+      _target_tok="$(normalize_shell_word_syntax "${_target_toks[$_target_i]}")"
+      case "$_target_tok" in
+        git|*/git) ;;
+        *)
+          _target_i=$((_target_i+1))
+          continue
+          ;;
+      esac
+
+      local _target_j=$((_target_i+1))
+      while [ "$_target_j" -lt "$_target_n" ]; do
+        _target_tok="$(normalize_shell_word_syntax "${_target_toks[$_target_j]}")"
+        case "$_target_tok" in
+          -C|--git-dir|--work-tree|-C?*|--git-dir=*|--work-tree=*)
+            return 0
+            ;;
+          -c|--config-env)
+            _target_j=$((_target_j+2))
+            ;;
+          --)
+            break
+            ;;
+          -*)
+            _target_j=$((_target_j+1))
+            ;;
+          *)
+            # 最初の non-option token は subcommand。これより後の同名 option は local。
+            break
+            ;;
+        esac
+      done
+
+      # 同一 segment に wrapper 等で別の `git` token が続く場合も確認する。
+      _target_i=$((_target_i+1))
+    done
+  done < <(split_command "$command")
+  return 1
+}
+
 # 引数: <command-string>
 # 戻り値: 0 = target-mismatch を起こす可能性ありの prefix を含む / 1 = 含まない
 #
@@ -289,8 +415,10 @@ has_target_mismatch_prefix() {
     return 0
   fi
   # git -C <dir> / git --git-dir=... / git --work-tree=...
-  if printf '%s' "$cmd" \
-    | grep -qE '(^|[;&|[:space:]])git[[:space:]]+([^[:space:];&|]+[[:space:]]+)*(-C|--git-dir|--work-tree)([[:space:]=;&|]|$)'; then
+  # subcommand-local の同名 option を除外するため、token 単位で global option 部分だけを
+  # 調べる。引用符も構文として扱う必要があるため、strip 済みの cmd ではなく raw 入力を
+  # helper に渡す。
+  if has_git_repo_target_option_before_subcommand "$1"; then
     return 0
   fi
   # git switch master / git checkout master / git switch -c master / git checkout -b master 等。
