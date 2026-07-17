@@ -4,7 +4,14 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.5.1
+v0.5.2
+
+### v0.5.1 → v0.5.2 の変更点 (#139)
+
+- 3 hook の jq parse error を明示的に非ゼロ終了へ伝播し、共有 EXIT trap の診断が確実に stderr へ出るよう修正
+- 最初の `exit-trap.sh` 読み込み前にも caller 内の最小 bootstrap trap を設置し、同 library 自体の欠損・構文エラーも無音の exit 0 に戻さないよう修正
+- `cmd-parser.sh` / `default-branch.sh` の source status と必須関数 API を読み込み直後に検証し、配布欠損や不完全な更新による command not found が後続の正常分岐で隠れないよう修正
+- jq / library / 必須関数の異常系 18 ケースと正常系 6 ケースを process boundary から検証する受入テストを追加
 
 ### v0.5.0 → v0.5.1 の変更点 (#140)
 

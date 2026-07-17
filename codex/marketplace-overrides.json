@@ -15,7 +15,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.5.1",
+      "version": "0.5.2",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -38,10 +38,14 @@
           {
             "path": "tests/test_git_guardrails_target_mismatch.py",
             "covers": "git global option と subcommand-local option を区別しつつ target-mismatch を fail-closed に deny すること"
+          },
+          {
+            "path": "tests/test_git_guardrails.py",
+            "covers": "3 hook が jq・library・必須関数の異常を非ゼロ終了と stderr 診断で可視化し、正常系では診断しないこと"
           }
         ],
         "components": [],
-        "sourceTreeDigest": "78f0add8e4f9a3e7c4783c860d82b1ae4c807c8695ddb4b6a83383e374d07695"
+        "sourceTreeDigest": "e6f7c58825cc653e7a8f98881a9063b3a65d95a7ba2e5d7604cc6f655310c268"
       }
     },
     "enforce-draft-pr": {

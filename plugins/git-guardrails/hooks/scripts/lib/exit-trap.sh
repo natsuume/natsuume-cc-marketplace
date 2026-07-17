@@ -20,8 +20,9 @@
 #
 # 構造 (exit code チェック → 非ゼロなら stderr に 2 行 printf) は sibling の
 # pre-push-review/lib/exit-trap.sh と同型。 hook ごとに違うのは「タグ名」 と「壊れた
-# 場合の影響説明」 だけなので、 各 hook では `install_exit_trap "<tag>" "<impact>"` の
-# 1 行で済む。 caller の冒頭 (`INPUT=$(cat)` の前) で 1 度だけ呼ぶ。
+# 場合の影響説明」だけなので、各 hook では `install_exit_trap "<tag>" "<impact>"` の
+# 1 行で共有 handler へ移行する。caller は本 file 自体の読み込み失敗も可視化するため、
+# source より前に最小 bootstrap trap を設置する。
 
 # 共通の EXIT handler 本体。 install_exit_trap 経由で trap される。
 _git_guardrails_exit_handler_dispatch() {
@@ -49,4 +50,23 @@ install_exit_trap() {
   impact_q=$(printf '%q' "$2")
   # shellcheck disable=SC2064
   trap "_git_guardrails_exit_handler_dispatch $tag_q $impact_q" EXIT
+}
+
+# require_git_guardrails_functions <tag> <function>...
+#
+# source 自体が成功しても、配布欠損や不完全な更新で必須関数が定義されていない場合が
+# ある。実際の呼び出し地点まで進むと command not found (127) の後に別の正常分岐へ流れ、
+# script 全体が exit 0 に戻り得るため、library 読み込み直後に API の完全性を検査する。
+require_git_guardrails_functions() {
+  local tag="$1"
+  local function_name
+  shift
+
+  for function_name in "$@"; do
+    if ! declare -F "$function_name" >/dev/null 2>&1; then
+      printf '[git-guardrails/%s] 必須関数 %s が読み込まれていません。\n' \
+        "$tag" "$function_name" >&2
+      return 127
+    fi
+  done
 }

@@ -28,13 +28,28 @@
 # level invocation 検出 → target-mismatch 判定、という同一パイプラインを commit 用に
 # 適用している)。
 
-# 予期せぬ非ゼロ終了 (jq クラッシュ / signal / シェル展開失敗等) を stderr に可視化する
-# 診断 trap を最初に install する。jq 呼び出しより前に張ることで jq クラッシュも捕捉できる。
-# trap は exit code を変えないため deny/allow 挙動は不変 (#61; 詳細は lib/exit-trap.sh)。
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 予期せぬ非ゼロ終了 (jq クラッシュ / library 読み込み失敗 / signal 等) を stderr に
+# 可視化する。最初の library 自体が欠損していても診断できるよう、caller 内の最小
+# bootstrap trap を先に張り、exit-trap.sh の読み込み成功後に共有 handler へ置き換える。
+_GIT_GUARDRAILS_HOOK_TAG="block-default-branch-commit"
+_GIT_GUARDRAILS_HOOK_IMPACT="デフォルトブランチ上での commit を deny できず default branch 保護が外れた可能性があります。"
+_git_guardrails_bootstrap_exit_handler() {
+  local exit_code=$?
+  if [ "$exit_code" -ne 0 ]; then
+    printf '[git-guardrails/%s] 予期せぬエラーで hook が exit %s で終了しました。\n' \
+      "$_GIT_GUARDRAILS_HOOK_TAG" "$exit_code" >&2
+    printf '[git-guardrails/%s] %s marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' \
+      "$_GIT_GUARDRAILS_HOOK_TAG" "$_GIT_GUARDRAILS_HOOK_IMPACT" >&2
+  fi
+}
+trap _git_guardrails_bootstrap_exit_handler EXIT
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit $?
 # shellcheck source=lib/exit-trap.sh
-source "$SCRIPT_DIR/lib/exit-trap.sh"
-install_exit_trap "block-default-branch-commit" "デフォルトブランチ上での commit を deny できず default branch 保護が外れた可能性があります。"
+source "$SCRIPT_DIR/lib/exit-trap.sh" || exit $?
+declare -F install_exit_trap >/dev/null 2>&1 || exit 127
+declare -F require_git_guardrails_functions >/dev/null 2>&1 || exit 127
+install_exit_trap "$_GIT_GUARDRAILS_HOOK_TAG" "$_GIT_GUARDRAILS_HOOK_IMPACT" || exit $?
 
 INPUT=$(cat)
 
@@ -49,6 +64,8 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+_jq_status=$?
+[ "$_jq_status" -eq 0 ] || exit "$_jq_status"
 [ -n "$COMMAND" ] || exit 0
 
 # bash `$(...)` の trailing-LF trim で消えた `\<LF>` を復元 (詳細は pre-push-review の
@@ -60,7 +77,10 @@ case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 # sed fallback 実装に委譲する。
 # (SCRIPT_DIR は冒頭の exit-trap install 時に定義済み。)
 # shellcheck source=lib/cmd-parser.sh
-source "$SCRIPT_DIR/lib/cmd-parser.sh"
+source "$SCRIPT_DIR/lib/cmd-parser.sh" || exit $?
+require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
+  normalize_line_continuations normalize_line_continuations_to_space \
+  split_command unquote_token skip_env_assignments tokenize_segment || exit $?
 # fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。
 case "$COMMAND" in
   *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
@@ -74,7 +94,11 @@ COMMAND=$(printf '%s' "$COMMAND" \
   | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')
 
 # shellcheck source=lib/default-branch.sh
-source "$SCRIPT_DIR/lib/default-branch.sh"
+source "$SCRIPT_DIR/lib/default-branch.sh" || exit $?
+require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
+  is_default_branch current_branch strip_shell_quotes normalize_refspec_part \
+  strip_quoted_text strip_squoted_text find_group_close emit_deny \
+  has_target_mismatch_prefix || exit $?
 
 # コマンドを segment (top-level `;`/`&&`/`||`/`&`/`|`/改行区切り) に分割する。
 # SEPARATORS は本 hook では使わないため配列化せず読み捨てる。
