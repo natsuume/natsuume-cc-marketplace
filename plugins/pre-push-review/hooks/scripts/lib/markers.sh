@@ -152,8 +152,9 @@ launch_attestation_path() {
 # 出力: SubagentStop が作る launch tombstone (git-dir/.claude-pre-push-done-<agent_id>) の path
 #
 # agent_id の validation は launch_attestation_path と同様に呼び出し側 (auto-mark.sh) の
-# 責務。 tombstone は一度作られたら (30 日の opportunistic prune までは) 恒久的に残り、
-# 同一 agent_id での SubagentStart 再発火 (resume 等) を拒否するために使う。
+# 責務。 tombstone は一度作られたら恒久的に残り (prune しない。 理由は auto-mark.sh の
+# ヘッダ契約を参照)、 同一 agent_id での SubagentStart 再発火 (resume 等) を拒否する
+# ために使う。
 launch_tombstone_path() {
   local git_dir="$1"
   local agent_id="$2"
