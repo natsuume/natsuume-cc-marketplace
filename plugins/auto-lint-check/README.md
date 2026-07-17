@@ -4,7 +4,12 @@
 
 ## バージョン
 
-v0.5.0
+v0.5.1
+
+### v0.5.0 → v0.5.1 の変更点 (#146)
+
+- commit parser の `cd` state を各 git invocation の検出時点で固定し、commit より後に現れる `cd` が先行 commit を repo override と誤判定して block-commit-lint を deny / post-commit-lint を skip する問題を修正
+- commit より前の `cd` と、2 つの commit の間にある `cd` は、後続 commit に対する repo override として引き続き fail-closed に扱う
 
 ### v0.4.1 → v0.5.0 の変更点
 

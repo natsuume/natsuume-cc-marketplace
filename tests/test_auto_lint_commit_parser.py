@@ -58,6 +58,53 @@ class AutoLintCommitParserCdOrderTest(unittest.TestCase):
             3,
         )
 
+    def test_staging_commit_before_cd_does_not_hide_later_override(self) -> None:
+        self.assertEqual(
+            self.classify(
+                'git commit -am "first" && cd /tmp && git commit -m "second"'
+            ),
+            3,
+        )
+
+    def test_overridden_add_does_not_mark_cwd_commit_as_staging(self) -> None:
+        self.assertEqual(
+            self.classify(
+                'git -C /tmp/other add file.py && git commit -m "change"'
+            ),
+            5,
+        )
+
+    def test_later_overridden_non_commit_does_not_hide_cwd_add(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "git add file.py && git commit -m change "
+                "&& git -C /tmp/other status"
+            ),
+            0,
+        )
+
+    def test_dry_run_after_cd_does_not_override_prior_commit(self) -> None:
+        self.assertEqual(
+            self.classify(
+                'git commit -m "first" && cd /tmp && git commit --dry-run'
+            ),
+            5,
+        )
+
+    def test_help_after_cd_does_not_override_prior_staging_commit(self) -> None:
+        self.assertEqual(
+            self.classify(
+                'git commit -am "first" && cd /tmp && git commit --help'
+            ),
+            0,
+        )
+
+    def test_cd_before_only_dry_run_has_no_mutating_commit(self) -> None:
+        self.assertEqual(
+            self.classify("cd /tmp && git commit --dry-run"),
+            4,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -556,7 +556,7 @@ def _classify(command: str) -> int:
         return 2
 
     # Phase 1: コマンド全体を走査し、各 git invocation の (subcommand, index,
-    # has_repo_override) を抽出する。`git` は command position (コマンド先頭、
+    # has_repo_override_at_invocation) を抽出する。`git` は command position (コマンド先頭、
     # SEPARATORS の直後、または env-var assignment 列の直後) でのみ意味を持つ
     # ため、`echo git commit` のような他コマンドの引数として現れる `git` は
     # 無視する。env override (`GIT_DIR=...` 等) は次の simple command にのみ
@@ -640,6 +640,10 @@ def _classify(command: str) -> int:
         sub_idx, sub, has_override = result
         if pending_env_override:
             has_override = True
+        # `cd` は以後の simple command の cwd を変えるが、既に抽出済みの invocation
+        # へ遡及してはならない。各 invocation を見つけた時点の state に焼き込む。
+        if sticky_cd:
+            has_override = True
         pending_env_override = False
         invocations.append((sub, sub_idx, has_override))
         i = sub_idx + 1
@@ -649,22 +653,31 @@ def _classify(command: str) -> int:
     # は cwd repo の staging trigger としてフラグ立て (後続の cwd commit で
     # 取り込まれる)。最初の cwd commit invocation を見つけたら、その commit
     # の引数を見て staging trigger を判定し、結論を返す。
-    cwd_add_seen = False
-    saw_cwd_commit = False
+    #
+    # repo override commit は先に全件確認する。先行する cwd commit が `-a` 等で
+    # return 0 しても、後続の `cd ... && git commit` を見落としてはならない。
     for sub, sub_idx, has_override in invocations:
-        if sub in ("add", "stage"):
-            if not has_override:
-                cwd_add_seen = True
-            continue
-        if sub != "commit":
-            continue
-        if has_override or sticky_cd:
+        if (
+            sub == "commit"
+            and has_override
+            and not _commit_is_non_mutating(toks, sub_idx)
+        ):
             # 別 repo に対する commit (`-C` / `--git-dir` / `--work-tree` /
             # `GIT_DIR=` 等) または同一 Bash 内で先行 `cd` で cwd を切り替えた
             # 状態での commit。本 hook は元の cwd を見るため、いずれも
             # silent に間違った repo を lint する経路になる。fail closed (deny)
             # を要求する (bash 側で exit 3 を受け取って emit_deny する)。
             return 3
+
+    cwd_add_seen = False
+    saw_cwd_commit = False
+    for sub, sub_idx, _has_override in invocations:
+        if sub in ("add", "stage"):
+            if not _has_override:
+                cwd_add_seen = True
+            continue
+        if sub != "commit":
+            continue
         if _commit_is_non_mutating(toks, sub_idx):
             # `--dry-run` / `--help` / `-h`: 実 commit は走らない → skip して
             # 次の invocation の解析を続ける。
