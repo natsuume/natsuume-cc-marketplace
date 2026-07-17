@@ -373,6 +373,27 @@ case "$HOOK_EVENT_NAME" in
       exit 0
     }
 
+    # code / security marker は完成した hash を同一ディレクトリの一時 file へ
+    # 書き切ってから rename する。final marker への直接 redirection は、途中終了や
+    # disk full で空・部分書き込みを公開し、次の正規 push を不要に deny し得る。
+    # rename 失敗時は既存 marker を保持し、一時 file だけを best-effort で掃除する。
+    write_final_marker_atomically() {
+      local marker_path="$1"
+      local marker_hash="$2"
+      local marker_tmp
+
+      marker_tmp=$(mktemp "${marker_path}.tmp.XXXXXX" 2>/dev/null) || return 1
+      if ! printf '%s' "$marker_hash" > "$marker_tmp" 2>/dev/null; then
+        rm -f "$marker_tmp" 2>/dev/null || true
+        return 1
+      fi
+      if ! mv "$marker_tmp" "$marker_path" 2>/dev/null; then
+        rm -f "$marker_tmp" 2>/dev/null || true
+        return 1
+      fi
+      return 0
+    }
+
     # last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行を
     # 全件収集する。ちょうど 1 行で、かつその行が ^Status: (pass|findings)$ に一致する
     # ときのみ有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 /
@@ -443,7 +464,7 @@ case "$HOOK_EVENT_NAME" in
     fi
 
     MARKER_PATH=$("$MARKER_FN" "$GIT_DIR") || skip_marker
-    printf '%s' "$HASH" > "$MARKER_PATH"
+    write_final_marker_atomically "$MARKER_PATH" "$HASH" || skip_marker
     exit 0
     ;;
 

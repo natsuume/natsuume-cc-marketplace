@@ -27,6 +27,8 @@ SubagentStart / SubagentStop へ完全移行する。
   - codex-reviewer はさらに wrapper の pending attestation が regular file
     かつ現在 hash と一致する場合のみ final marker へ昇格。不一致・symlink は
     pending を消費して skip
+  - code / security reviewer の final marker は同一ディレクトリの一時 file へ
+    完全に書いてから atomic rename で公開し、rename 失敗時は既存 marker を保つ
 - PostToolUseFailure (Agent|Task): codex pending attestation の best-effort
   破棄のみ (補助的な掃除経路)
 - 旧 PostToolUse completion payload (status="completed" + report) では
@@ -159,7 +161,11 @@ class PrePushAutoMarkTest(unittest.TestCase):
         return payload
 
     def run_hook(
-        self, work: Path, payload: dict[str, object]
+        self,
+        work: Path,
+        payload: dict[str, object],
+        *,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
             ["bash", str(AUTO_MARK)],
@@ -168,6 +174,7 @@ class PrePushAutoMarkTest(unittest.TestCase):
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=env,
         )
 
     def run_start(
@@ -418,6 +425,43 @@ class PrePushAutoMarkTest(unittest.TestCase):
                                 work, agent_id
                             ).exists()
                         )
+
+    def test_stop_marker_publish_is_atomic_when_rename_fails(self) -> None:
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temporary = Path(temporary_name)
+            work = self.create_feature_repository(temporary)
+            agent_type = "pre-push-review:code-reviewer"
+            marker = self.marker_path(work, agent_type)
+
+            self.run_start(work, agent_type)
+            marker.write_text("previous-valid-marker", encoding="utf-8")
+
+            fake_bin = temporary / "fake-bin"
+            fake_bin.mkdir()
+            fake_mv = fake_bin / "mv"
+            fake_mv.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            fake_mv.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+
+            result = self.run_hook(
+                work,
+                self.stop_payload(agent_type, report),
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(
+                marker.read_text(encoding="utf-8"),
+                "previous-valid-marker",
+                "rename 失敗時に公開済み marker を直接上書きしてはならない",
+            )
+            self.assertEqual(
+                list(marker.parent.glob(f"{marker.name}.tmp.*")),
+                [],
+                "rename 失敗時の一時 marker は best-effort で掃除する",
+            )
 
     def test_stop_creates_tombstone_and_blocks_restart(self) -> None:
         report = "# Code Review\n\nStatus: pass\nFindings: 0"

@@ -18,7 +18,12 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v4.1.5 (前身: `pre-commit-review` v0.4.0)
+v4.1.6 (前身: `pre-commit-review` v0.4.0)
+
+### v4.1.5 → v4.1.6 の変更点 (issue #131)
+
+- `auto-mark.sh` の code / security marker を、同一ディレクトリの一時 file へ hash を書き切ってから atomic rename で公開する方式に変更した。途中終了・disk full・rename 失敗時に空または部分書き込みの final marker を公開せず、既存 marker を保持して不要な再レビュー要求を防ぐ
+- rename 失敗を fault injection した integration test で、既存 marker の保持と一時 file の best-effort cleanup を固定した。Codex marker は従来どおり review wrapper の pending attestation を final marker へ atomic rename する
 
 ### v4.1.4 → v4.1.5 の変更点 (issue #130)
 
