@@ -7,11 +7,20 @@ Phase A (spec-first) の位置づけ:
   `resolve_start` / `resolve_ready` / `resolve_close_linkage` / `compute` /
   `main` の処理本体は `NotImplementedError` を送出する (Phase B で実装する)。
 - このファイルは issue #288 Phase A 契約ドキュメント セクション 8 の
-  test matrix T1〜T42 を全件実装する。各テストメソッド名・コメントに
-  `T<n>` を付与し対応関係を明示する (T42: 収集範囲外リポジトリの merged PR
-  を closer とする issue が `resolve_close_linkage` で `"merged_pr_external"`
-  に分類され、`compute` の出力で `auxiliarySeries["externalMergedClose"]`
-  に入ることの検証)。
+  test matrix T1〜T42、および Phase B 着手前に rescue 壁打ちで精密化された
+  契約改訂 8 件に対応する T43〜T47 を全件実装する。各テストメソッド名・
+  コメントに `T<n>` を付与し対応関係を明示する (T42: 収集範囲外リポジトリの
+  merged PR を closer とする issue が `resolve_close_linkage` で
+  `"merged_pr_external"` に分類され、`compute` の出力で
+  `auxiliarySeries["externalMergedClose"]` に入ることの検証。T43:
+  negativeInterval が丸め前の各 phase / leadTimeHours のいずれかの負符号で
+  判定され、中央値からの除外が metric 単位であることの検証。T44:
+  `exclusions.prTimelineOverflow[].linkedIssues` が `(repo, issue)` の
+  複合キーで重複排除されることの検証。T45: closingIssuesReferences 逆引きで
+  見つかる qualifying completion PR が manual close より優先して
+  `mainSeries` に編入されることの検証。T46: `--boundaries-file` の検証失敗が
+  `main` を exit code 2 にすることの検証。T47 (任意): 同一 `at` を持つ
+  boundaries が `(at, id)` で安定に区間化されることの検証)。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -732,6 +741,13 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(result["prSeries"][0]["pr"], 50)
 
     def test_t21_timeline_overflow_excludes_from_main_series(self):
+        # T21 (拡張): timeline overflow の issue は mainSeries だけでなく
+        # markerCoverage (unknownTimeline に計上・coverage 分母から除外)・
+        # claimDetection・dataQuality.notStartedClosedIssues からも除外される。
+        # このテストの repo・月は overflow issue 2 件 (issue 5: マーカーあり、
+        # issue 6: マーカーなし) だけがクローズ済み issue であるため、
+        # markerCoverage の coverage は「overflow issue しか無い repo×月」の
+        # ケースとして None になる。
         issue, pr = make_started_case(
             issue_number=5,
             pr_number=60,
@@ -740,16 +756,46 @@ class ComputeTests(unittest.TestCase):
         )
         fetched = len(issue["timelineItems"]["nodes"])
         issue["timelineItems"]["totalCount"] = fetched + 500
+
+        issue_no_marker = make_issue(
+            repo="owner/name",
+            number=6,
+            state="CLOSED",
+            state_reason="COMPLETED",
+            created_at="2026-07-01T00:00:00Z",
+            closed_at="2026-07-02T00:00:00Z",
+            timeline_nodes=[closed_event("2026-07-02T00:00:00Z", None)],
+        )
+        fetched_no_marker = len(issue_no_marker["timelineItems"]["nodes"])
+        issue_no_marker["timelineItems"]["totalCount"] = fetched_no_marker + 500
+
         as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
         result = compute_leadtime.compute(
-            [issue], [pr], self.patterns, as_of, None, None
+            [issue, issue_no_marker], [pr], self.patterns, as_of, None, None
         )
         self.assertEqual(result["mainSeries"], [])
         overflow = result["exclusions"]["timelineOverflow"]
-        self.assertEqual(len(overflow), 1)
-        self.assertEqual(overflow[0]["issue"], 5)
-        self.assertEqual(overflow[0]["totalCount"], fetched + 500)
-        self.assertEqual(overflow[0]["fetched"], fetched)
+        self.assertEqual(len(overflow), 2)
+        overflow_by_issue = {entry["issue"]: entry for entry in overflow}
+        self.assertEqual(overflow_by_issue[5]["totalCount"], fetched + 500)
+        self.assertEqual(overflow_by_issue[5]["fetched"], fetched)
+        self.assertEqual(overflow_by_issue[6]["totalCount"], fetched_no_marker + 500)
+        self.assertEqual(overflow_by_issue[6]["fetched"], fetched_no_marker)
+
+        coverage_entries = [
+            row for row in result["markerCoverage"] if row["repo"] == "owner/name"
+        ]
+        self.assertEqual(len(coverage_entries), 1)
+        coverage_entry = coverage_entries[0]
+        self.assertEqual(coverage_entry["month"], "2026-07")
+        self.assertEqual(coverage_entry["closedIssues"], 0)
+        self.assertEqual(coverage_entry["withMarker"], 0)
+        self.assertEqual(coverage_entry["unknownTimeline"], 2)
+        self.assertIsNone(coverage_entry["coverage"])
+
+        self.assertEqual(result["claimDetection"]["strictIssues"], 0)
+        self.assertEqual(result["claimDetection"]["looseOnlyIssues"], [])
+        self.assertEqual(result["dataQuality"]["notStartedClosedIssues"], 0)
 
     def test_t22_since_boundary_is_inclusive_on_first_start_date(self):
         issue_included, pr_included = make_started_case(
@@ -795,11 +841,16 @@ class ComputeTests(unittest.TestCase):
         self.assertIn(start_week, weeks)
         self.assertNotIn(closed_week, weeks)
 
-    def test_t24_negative_interval_kept_in_main_series_but_excluded_from_median(self):
-        # T24 (拡張): boundaries を渡し、negativeInterval な要素だけが割り当て
-        # られた区間で medianLeadTimeHours が None になる一方、n /
-        # medianSizeLines は negativeInterval を除外せず保持されることを
-        # weeklyCohorts 側の既存検証と合わせて確認する。
+    def test_t24_negative_interval_excluded_from_median_per_metric(self):
+        # T24 (metric 単位除外の契約に更新): このレコードは
+        # prCreatedToReady (-3h) と leadTimeHours (-2h) が丸め前で負のため
+        # negativeInterval == True になるが、startToPrCreated (+1h) と
+        # readyToMerge (+4h) はそれぞれ正であり、「レコード全体を全中央値
+        # から除外する」のではなく metric 単位で除外することを検証する:
+        # medianLeadTimeHours (leadTimeHours < 0 のため除外) と
+        # phaseMedians.prCreatedToReady (自身が負のため除外) は None になる
+        # 一方、phaseMedians.startToPrCreated / phaseMedians.readyToMerge は
+        # 自身が非負のためこのレコードを含めて計算される。
         issue, pr = make_started_case(
             issue_number=1,
             pr_number=301,
@@ -825,7 +876,11 @@ class ComputeTests(unittest.TestCase):
         self.assertTrue(result["mainSeries"][0]["negativeInterval"])
         self.assertEqual(result["dataQuality"]["negativeIntervalCount"], 1)
         self.assertEqual(len(result["weeklyCohorts"]), 1)
-        self.assertIsNone(result["weeklyCohorts"][0]["medianLeadTimeHours"])
+        cohort = result["weeklyCohorts"][0]
+        self.assertIsNone(cohort["medianLeadTimeHours"])
+        self.assertEqual(cohort["phaseMedians"]["startToPrCreated"], 1.0)
+        self.assertIsNone(cohort["phaseMedians"]["prCreatedToReady"])
+        self.assertEqual(cohort["phaseMedians"]["readyToMerge"], 4.0)
 
         self.assertEqual(len(result["intervalStats"]), 2)
         bucket = result["intervalStats"][1]
@@ -834,6 +889,80 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(bucket["n"], 1)
         self.assertIsNone(bucket["medianLeadTimeHours"])
         self.assertEqual(bucket["medianSizeLines"], 30)
+
+    def test_t43_negative_interval_when_start_after_pr_created(self):
+        # T43 (時系列逆転 1/3): firstStartAt (05:00) が prCreatedAt (01:00)
+        # より後ろ (startToPrCreated が丸め前で負) でも leadTimeHours
+        # (firstStartAt → readyAt) 自体は正になりうる。negativeInterval は
+        # leadTimeHours の符号だけでなく各 phase の符号も見て判定することを
+        # 確認する。
+        issue, pr = make_started_case(
+            issue_number=1,
+            pr_number=1001,
+            start_at="2026-07-10T05:00:00Z",
+            pr_created_at="2026-07-10T01:00:00Z",
+            ready_at="2026-07-10T06:00:00Z",
+            merged_at="2026-07-10T07:00:00Z",
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+        entry = result["mainSeries"][0]
+        self.assertTrue(entry["negativeInterval"])
+        self.assertEqual(entry["phaseHours"]["startToPrCreated"], -4.0)
+        self.assertEqual(entry["leadTimeHours"], 1.0)
+
+    def test_t43_negative_interval_when_pr_created_after_ready(self):
+        # T43 (時系列逆転 2/3): prCreatedAt (05:00) が readyAt (02:00) より
+        # 後ろ (prCreatedToReady が丸め前で負)。
+        issue, pr = make_started_case(
+            issue_number=1,
+            pr_number=1002,
+            start_at="2026-07-10T00:00:00Z",
+            pr_created_at="2026-07-10T05:00:00Z",
+            ready_at="2026-07-10T02:00:00Z",
+            merged_at="2026-07-10T06:00:00Z",
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+        entry = result["mainSeries"][0]
+        self.assertTrue(entry["negativeInterval"])
+        self.assertEqual(entry["phaseHours"]["prCreatedToReady"], -3.0)
+        self.assertEqual(entry["leadTimeHours"], 2.0)
+
+    def test_t43_ready_to_merge_negative_excluded_from_phase_median_only(self):
+        # T43 (時系列逆転 3/3、正式な T43): readyAt (02:00) が mergedAt
+        # (01:30) より後ろ (readyToMerge が丸め前で負) だが、leadTimeHours
+        # (firstStartAt → readyAt) は正。medianLeadTimeHours (metric 単位)
+        # にはこのレコードの leadTimeHours が含まれる一方、
+        # phaseMedians.readyToMerge の中央値からはこの 1 件だけが除外され
+        # null になる (該当週に他の readyToMerge 値が無いため)。
+        issue, pr = make_started_case(
+            issue_number=1,
+            pr_number=1003,
+            start_at="2026-07-10T00:00:00Z",
+            pr_created_at="2026-07-10T01:00:00Z",
+            ready_at="2026-07-10T02:00:00Z",
+            merged_at="2026-07-10T01:30:00Z",
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+        entry = result["mainSeries"][0]
+        self.assertTrue(entry["negativeInterval"])
+        self.assertEqual(entry["leadTimeHours"], 2.0)
+        self.assertEqual(entry["phaseHours"]["readyToMerge"], -0.5)
+
+        self.assertEqual(len(result["weeklyCohorts"]), 1)
+        cohort = result["weeklyCohorts"][0]
+        self.assertEqual(cohort["medianLeadTimeHours"], 2.0)
+        self.assertIsNone(cohort["phaseMedians"]["readyToMerge"])
+        self.assertEqual(cohort["phaseMedians"]["startToPrCreated"], 1.0)
+        self.assertEqual(cohort["phaseMedians"]["prCreatedToReady"], 1.0)
 
     def test_t25_size_band_boundaries(self):
         cases = [
@@ -928,6 +1057,35 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(result["intervalStats"][0]["label"], "〜 event 1")
         self.assertEqual(result["intervalStats"][1]["label"], "event 1 〜 event 2")
         self.assertEqual(result["intervalStats"][2]["label"], "event 2 〜")
+
+    def test_t47_boundaries_with_equal_at_are_tie_broken_by_id(self):
+        # T47 (任意): compute レベルで、同一 at を持つ 2 つの boundary が
+        # (at, id) の辞書順で安定に区間化されることを検証する (入力順は
+        # 意図的に id 降順で渡す。並び替え後は "alpha" が "zeta" より先に
+        # 来る)。
+        boundaries = [
+            {
+                "id": "zeta",
+                "label": "Z",
+                "at": datetime(2026, 7, 5, tzinfo=timezone.utc),
+            },
+            {
+                "id": "alpha",
+                "label": "A",
+                "at": datetime(2026, 7, 5, tzinfo=timezone.utc),
+            },
+        ]
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [], [], self.patterns, as_of, None, boundaries
+        )
+        self.assertEqual(len(result["intervalStats"]), 3)
+        self.assertIsNone(result["intervalStats"][0]["from"])
+        self.assertEqual(result["intervalStats"][0]["to"], "alpha")
+        self.assertEqual(result["intervalStats"][1]["from"], "alpha")
+        self.assertEqual(result["intervalStats"][1]["to"], "zeta")
+        self.assertEqual(result["intervalStats"][2]["from"], "zeta")
+        self.assertIsNone(result["intervalStats"][2]["to"])
 
     def test_t27_median_of_even_count_is_average_of_middle_two(self):
         issue1, pr1 = make_started_case(
@@ -1124,7 +1282,68 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(entry["pr"], pr_number)
         self.assertEqual(entry["totalCount"], 150)
         self.assertEqual(entry["fetched"], 2)
-        self.assertEqual(entry["linkedIssues"], [issue_number])
+        self.assertEqual(entry["linkedIssues"], [{"repo": repo, "issue": issue_number}])
+
+    def test_t44_linked_issues_same_number_different_repos_kept_separate(self):
+        # T44: 1 件の overflow PR の closingIssuesReferences が、同じ issue
+        # 番号 (5) を持つ別リポジトリの 2 issue (owner/repo-a, owner/repo-b)
+        # を指す場合、linkedIssues は (repo, issue) の複合キーで両方を別
+        # レコードとして列挙する (issue 番号だけで重複排除すると片方が
+        # 失われる回帰の防止)。着手マーカー付きだが qualifying 候補が
+        # overflow PR しか無い issue は OPEN のまま censored に入る。
+        repo = "owner/name"
+        pr_number = 950
+        issue_a = make_issue(
+            repo="owner/repo-a",
+            number=5,
+            state="OPEN",
+            created_at="2026-07-01T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        issue_b = make_issue(
+            repo="owner/repo-b",
+            number=5,
+            state="OPEN",
+            created_at="2026-07-01T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        pr = make_pr(
+            repo=repo,
+            number=pr_number,
+            created_at="2026-07-02T00:00:00Z",
+            merged_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[ready_event("2026-07-03T00:00:00Z")],
+            total_count=150,
+            closing_issues=[
+                {"number": 5, "repository": {"nameWithOwner": "owner/repo-a"}},
+                {"number": 5, "repository": {"nameWithOwner": "owner/repo-b"}},
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue_a, issue_b], [pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(result["mainSeries"], [])
+        censored_keys = {
+            (entry["repo"], entry["issue"]) for entry in result["censored"]
+        }
+        self.assertIn(("owner/repo-a", 5), censored_keys)
+        self.assertIn(("owner/repo-b", 5), censored_keys)
+
+        overflow = result["exclusions"]["prTimelineOverflow"]
+        self.assertEqual(len(overflow), 1)
+        self.assertEqual(
+            overflow[0]["linkedIssues"],
+            [
+                {"repo": "owner/repo-a", "issue": 5},
+                {"repo": "owner/repo-b", "issue": 5},
+            ],
+        )
 
     def test_t36_open_ready_pr_links_issue_into_main_series(self):
         # T36 (改訂 1): OPEN + isDraft=False の PR (ReadyForReviewEvent 1 件、
@@ -1333,6 +1552,64 @@ class ComputeTests(unittest.TestCase):
         }
         self.assertIn(issue_number, external_issue_numbers)
 
+    def test_t45_manual_close_with_qualifying_ready_pr_joins_main_series(self):
+        # T45: issue の最終 ClosedEvent の closer が無い (closer=None、単体
+        # なら resolve_close_linkage は "manual" に分類する) が、別の PR の
+        # closingIssuesReferences 経由でこの issue を指す qualifying
+        # completion PR (MERGED) が存在する。qualifying 候補集合パイプライン
+        # のステップ 3 (closingIssuesReferences 逆引き) がこの PR を候補として
+        # 見つけるため、issue は mainSeries に編入され、
+        # auxiliarySeries.manualClose には入らない (T42 の「候補なし」ケースと
+        # 対照的な回帰)。
+        repo = "owner/name"
+        issue_number = 600
+        pr_number = 1100
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="CLOSED",
+            state_reason="COMPLETED",
+            created_at="2026-07-01T00:00:00Z",
+            closed_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x"),
+                closed_event("2026-07-05T00:00:00Z", None),
+            ],
+        )
+
+        # resolve_close_linkage 単体では、この issue は closer が無いため
+        # "manual" に分類されることを確認しておく (mainSeries 編入は
+        # closingIssuesReferences 側の候補が優先するためであり、
+        # resolve_close_linkage 自体の判定を変えるわけではない)。
+        linkage = compute_leadtime.resolve_close_linkage(issue, {})
+        self.assertEqual(linkage.category, "manual")
+
+        pr = make_pr(
+            repo=repo,
+            number=pr_number,
+            state="MERGED",
+            created_at="2026-07-02T00:00:00Z",
+            merged_at="2026-07-04T00:00:00Z",
+            timeline_nodes=[ready_event("2026-07-03T00:00:00Z")],
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(len(result["mainSeries"]), 1)
+        entry = result["mainSeries"][0]
+        self.assertEqual(entry["issue"], issue_number)
+        self.assertEqual(entry["completionBasis"], "merged")
+
+        manual_close_issue_numbers = {
+            e["issue"] for e in result["auxiliarySeries"]["manualClose"]
+        }
+        self.assertNotIn(issue_number, manual_close_issue_numbers)
+
 
 # ---------------------------------------------------------------------------
 # T28〜T30: main (tempfile 経由。subprocess は使わない)
@@ -1422,6 +1699,54 @@ class MainTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(exit_code, 2)
+
+    def test_t46_invalid_boundaries_file_exits_two(self):
+        # T46: --boundaries-file の内容が契約 (id/label の必須・at の
+        # ISO8601 UTC・id の一意性等) に違反する代表的な 2 ケース (id の
+        # 重複、naive datetime の at) のいずれでも main は exit code 2 を
+        # 返す (fail-closed)。
+        cases = {
+            "duplicate_id": [
+                {"id": "evt-1", "label": "event 1", "at": "2026-07-01T00:00:00Z"},
+                {
+                    "id": "evt-1",
+                    "label": "event 1 (dup)",
+                    "at": "2026-07-02T00:00:00Z",
+                },
+            ],
+            "naive_at": [
+                {"id": "evt-1", "label": "event 1", "at": "2026-07-01T00:00:00"},
+            ],
+        }
+        for case_name, boundaries_payload in cases.items():
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = Path(tmp)
+                    issues_path = tmp_path / "issues.jsonl"
+                    prs_path = tmp_path / "prs.jsonl"
+                    patterns_path = tmp_path / "patterns.json"
+                    boundaries_path = tmp_path / "boundaries.json"
+                    issues_path.write_text("", encoding="utf-8")
+                    prs_path.write_text("", encoding="utf-8")
+                    write_claim_patterns_file(patterns_path, DEFAULT_PATTERNS_DICT)
+                    boundaries_path.write_text(
+                        json.dumps(boundaries_payload), encoding="utf-8"
+                    )
+                    exit_code = compute_leadtime.main(
+                        [
+                            "--issues",
+                            str(issues_path),
+                            "--prs",
+                            str(prs_path),
+                            "--claim-patterns-file",
+                            str(patterns_path),
+                            "--as-of",
+                            "2026-07-17T04:00:00Z",
+                            "--boundaries-file",
+                            str(boundaries_path),
+                        ]
+                    )
+                    self.assertEqual(exit_code, 2)
 
 
 if __name__ == "__main__":

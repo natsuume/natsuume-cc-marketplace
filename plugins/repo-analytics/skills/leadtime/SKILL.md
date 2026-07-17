@@ -34,6 +34,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
 - `prs.jsonl` の各行で `closingIssuesReferences.totalCount > len(nodes)` の PR は `fetch-pr-closing-issues.graphql` で当該 PR の closingIssuesReferences を先頭から全ページ取得し、一覧クエリ由来の closingIssuesReferences を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の closingIssuesReferences は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する (集計スクリプトは不完全な行を入力エラーとして中断する)。
+- 収集段階の診断 (第 1 章のリポジトリスキップ件数・理由、第 6 章の WebSearch 省略の有無等) は、判明した時点で scratchpad の固定 shape JSON (例: `{"skippedRepos": [{"repo": str, "reason": str}], "webSearchSkipped": bool}`) に追記して記録する。第 9 章のターミナルサマリと Artifact レポートは、この記録された値をそのまま参照し独自に再集計しない。
 
 (手順詳細は Phase B で全文化する)
 
@@ -75,7 +76,7 @@ python3 compute_leadtime.py \
 
 - `--issues` / `--prs` / `--claim-patterns-file` / `--as-of` は必須。`--as-of` にはデータ収集完了時刻 (UTC) を渡す。
 - stdout に結果 JSON (`schemaVersion` を含む) のみを出力する。診断メッセージはすべて stderr に出る。
-- exit code: `0` = 成功 (空データ含む)。`2` = 入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`--as-of`/`--since` の形式不正)。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
+- exit code: `0` = 成功 (空データ含む)。`2` = 入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`--as-of`/`--since` の形式不正・`--boundaries-file` の検証失敗 (ファイル不存在・JSON parse 失敗・形状不正・`at` の ISO8601/UTC 不正または naive 時刻・`id`/`label` の欠落または空文字列・`id` の重複))。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
 - ターミナルサマリで提示する数値は、この stdout JSON の**決定的な投影**とする。Claude はここで得た JSON の数値を再計算・改変・丸め直ししない (中央値・件数などはすべて JSON の値をそのまま転記する)。
 
 (手順詳細は Phase B で全文化する)
@@ -92,6 +93,8 @@ python3 compute_leadtime.py \
 
 - チャートを作成する前に dataviz skill を、Artifact を発行する前に artifact-design skill を必ずロードし、palette validator を実行する。
 - 含めるチャート: 散布図 (対数軸・打ち切りを◇マーカー・イベント境界の縦線)、区間分解 (start→PR作成→ready→merge) のグループ棒、サイズ帯×週のヒートマップ、draft 経由率の週次系列、イベント年表、区間統計テーブル、全件テーブル (折りたたみ)。
+- 散布図の縦軸は対数スケールを既定とし、描画する y 値が 0 以下のレコードは軸下端の「≤0」専用バンドに別マーカー (×) で表示する (対数変換から除外するのであって、データから除外しない)。× の凡例は「対数軸に直接配置できない値」と定義する。negativeInterval だが y 値が正のレコードは正しい数値位置に置く。値は clamp せず JSON の値を表示し、hover と keyboard focus の双方で実値と理由に到達可能にする。全件テーブルにも同じ値とフラグを残す。
+- 週次・区間の中央値を提示するすべてのチャート・テーブルに「完了タスクのみの記述的中央値 (censor 非調整)」の注記を付け、n と censoredN を隣接表示する。ターミナルサマリや結論文で同じ中央値を引用する場合も同じ限定を省略しない。
 - ライト/ダーク両テーマに対応し、外部ライブラリを使用しない。
 
 (手順詳細は Phase B で全文化する)
@@ -109,6 +112,7 @@ python3 compute_leadtime.py \
 
 ## 9. ターミナルサマリ
 
-- 結論、主要数値 (第 5 章の stdout JSON の決定的投影)、測定上の限界、発行した Artifact の URL を簡潔に報告する。
+- 結論、主要数値、測定上の限界、発行した Artifact の URL を簡潔に報告する。
+- 数値の根拠は二源泉に分ける: 集計数値 (中央値・件数等) は compute_leadtime.py の stdout JSON の決定的投影とする。収集段階の診断 (remote が GitHub でない等でスキップしたリポジトリ数と理由、WebSearch 省略の有無) は収集手順中に scratchpad へ固定 shape (JSON) で記録した値を用い、Artifact とターミナルの双方が同じ記録を参照する。
 
 (手順詳細は Phase B で全文化する)

@@ -64,7 +64,8 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
 - `--since` (省略可): `YYYY-MM-DD`。`firstStartAt` (UTC 日付) がこの日付以上の
   タスクのみを主系列・打ち切り系列・週次集計に含める inclusive filter。
 - `--boundaries-file` (省略可): `[{"id": str, "label": str, "at": ISO8601}]`。
-  `intervalStats` の区間境界。
+  `intervalStats` の区間境界。検証規則・正規化後の並び順は次の
+  「exit code 契約」セクションを参照。
 
 ## 出力 JSON 契約 (stdout, 詳細は各関数 docstring および issue #288 Phase A
 契約ドキュメント セクション 5 が正本)
@@ -80,7 +81,14 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
 - `2`: 入力エラー (`--issues` / `--prs` のファイル不存在・JSONL parse 失敗・
   必須フィールド欠落・`--as-of` / `--since` の形式不正・`--prs` の行に
   `closingIssuesReferences.totalCount > len(closingIssuesReferences.nodes)`
-  が 1 件でも存在する場合)。
+  が 1 件でも存在する場合・`--boundaries-file` の検証失敗)。
+  `--boundaries-file` の検証失敗とは、ファイル不存在・JSON parse 失敗・
+  形状不正 (トップレベルが `[{"id": str, "label": str, "at": str}, ...]`
+  の形を満たさない)・各要素の `at` が ISO8601 UTC の aware datetime として
+  parse できない (naive datetime を含む)・`id` / `label` の欠落または
+  空文字列・`id` の重複、のいずれかを指す。入力配列の並び順は問わない —
+  検証を通過した boundaries は `(at, id)` の辞書順 (`at` 昇順、同一 `at`
+  は `id` の辞書順で tie-break) に正規化してから `compute` へ渡す。
 - `3`: claim patterns file (`--claim-patterns-file`) の契約違反 (必須キー欠落・
   regex compile 失敗)。`ClaimPatternsError` を捕捉して変換する。
 
@@ -447,81 +455,117 @@ def compute(
           `state == "CLOSED"` の数、`mergedPrs` はその repo の merged PR 数
           (従来どおり)、`openReadyPrs` はその repo の `state == "OPEN"` かつ
           ready 到達済み (`isDraft == False`) の PR 数。
-        - `mainSeries` (list[dict]): 着手マーカーあり (`first_start is not None`)
-          かつ次のいずれかを満たす issue を 1 件 1 要素で列挙する。
+        - `mainSeries` / `censored` / `auxiliarySeries` の対象決定は、
+          着手マーカーあり (`first_start is not None`) の issue に対して
+          次の分類パイプラインを適用する (マーカーの無い issue はいずれの
+          系列にも含めない)。
 
-          - (a) CLOSED issue で最終クローズが `category == "merged_pr"`
-            (従来どおり。選択される PR は常に MERGED のため
-            `completionBasis = "merged"`)。
-          - (b) OPEN issue で、`closingIssuesReferences` にその issue を
-            含む qualifying completion PR (モジュール docstring 「完了根拠
-            (qualifying completion) の一般規則」を参照。`state ==
-            "MERGED"` の PR、または現在 `state == "OPEN"` かつ
-            `isDraft == False` の PR。`resolve_ready` の `ready_at` が
-            非 `None` であることと同値) が 1 件以上存在する。
-            qualifying completion PR が複数存在する場合は `readyAt` が
-            最も早い PR を採用し、該当した issue 件数を
-            `dataQuality.multipleReadyPrIssues` に計上する (選択された
-            PR の状態や `completionBasis` は問わずカウントする)。
+          1. `exclusions.timelineOverflow` に列挙される issue (自身の
+             `timelineItems` が不完全) はこの時点で除外し、以降の判定を
+             行わない。
+          2. `issue["stateReason"] == "NOT_PLANNED"` の issue は、closer の
+             種別や qualifying PR 候補の有無を問わず、明示的な「対応しない」
+             判断として無条件に `auxiliarySeries.notPlanned` に固定する。
+          3. (1)(2) のいずれにも該当しない issue について、qualifying PR
+             候補集合を次の 2 種の和集合として構築する。
 
-          `completionBasis` は (a) (b) いずれの経路でも、選択された PR
-          (= (a) では最終クローズの merged PR、(b) では上記で選択した
-          qualifying completion PR) の**実状態**で決める。選択 PR が
-          `state == "MERGED"` なら `completionBasis = "merged"` とし
-          `mergedAt` / `phaseHours.readyToMerge` を実データで埋める
-          (issue 自体がまだ `state == "OPEN"` であっても — 例えば (b)
-          経路で選択された PR が MERGED である場合に起こりうる)。選択
-          PR が `state == "OPEN"` かつ `isDraft == False` なら
-          `completionBasis = "ready_unmerged"` で `mergedAt = None` /
-          `phaseHours.readyToMerge = None` とする。
+             - 最終 `ClosedEvent` の closer が `merged == True` の
+               `PullRequest` であり、かつその PR が `prs_by_key` に存在する
+               もの (`resolve_close_linkage` の `category == "merged_pr"` で
+               特定される PR と同じもの)。
+             - `closingIssuesReferences` の逆引きでこの issue を指す PR の
+               うち、qualifying completion PR (モジュール docstring 「完了
+               根拠 (qualifying completion) の一般規則」を参照。`state ==
+               "MERGED"` の PR、または現在 `state == "OPEN"` かつ
+               `isDraft == False` の PR。`resolve_ready(...).ready_at` が
+               非 `None` であることと同値) であるもの。
 
-          各要素は `{"repo", "issue", "firstStartAt", "lastStartAt",
-          "startWeek", "pr", "prCreatedAt", "readyAt", "mergedAt",
-          "completionBasis", "leadTimeHours", "phaseHours": {"startToPrCreated",
-          "prCreatedToReady", "readyToMerge"}, "sizeBand", "sizeLines",
-          "viaDraft", "redraftCount", "negativeInterval"}`。`completionBasis`
-          は `"merged" | "ready_unmerged"`。`completionBasis ==
-          "ready_unmerged"` の要素は `mergedAt` が `None`、
-          `phaseHours.readyToMerge` が `None` (ready から先の区間が未確定
-          のため)。`leadTimeHours` は `firstStartAt` → `readyAt`
-          の経過時間 (`lastStartAt` ではない。複数着手の解釈が必要な場合に
-          備えて `lastStartAt` 自体は保持する)。丸め前の値では
+             候補には overflow PR (`exclusions.prTimelineOverflow`) を含めない
+             (timeline 不完全な PR の ready 時刻は信頼できないため)。
+          4. 候補が 1 件以上あれば、issue の `state` (OPEN/CLOSED) を問わず
+             `readyAt` が最も早い候補 PR を採用し `mainSeries` に編入する。
+             候補が複数あった場合は該当 issue 件数を
+             `dataQuality.multipleReadyPrIssues` に計上する (選択 PR の状態や
+             `completionBasis` は問わずカウントする)。`completionBasis` は
+             選択した PR の**実状態**で決める — 選択 PR が `state ==
+             "MERGED"` なら `completionBasis = "merged"` とし `mergedAt` /
+             `phaseHours.readyToMerge` を実データで埋める (issue 自体が
+             `state == "OPEN"` のままでも、選択 PR が MERGED であればこの
+             ケースになりうる)。選択 PR が `state == "OPEN"` かつ
+             `isDraft == False` なら `completionBasis = "ready_unmerged"` で
+             `mergedAt = None` / `phaseHours.readyToMerge = None` とする。
+          5. 候補が無く issue が `state == "OPEN"` なら `censored` に入れる。
+             これにより `censored` の経過時間は常に「着手→ready」の下限値
+             として解釈できる。
+          6. 候補が無く issue が `state == "CLOSED"` なら、
+             `resolve_close_linkage(issue, prs_by_key).category` に応じて
+             `auxiliarySeries` の該当キー (`"manual"` → `manualClose`,
+             `"commit"` → `commitClose`, `"unmerged_pr"` → `unmergedPr`,
+             `"merged_pr_external"` → `externalMergedClose`) へ振り分ける
+             (`category == "merged_pr"` はこの時点では起こりえない —
+             候補集合の 1 つ目の情報源と同じ判定であり、候補が無いことは
+             `category != "merged_pr"` を含意するため)。
+
+          境界: ステップ 3 の 1 つ目の情報源 (最終 `ClosedEvent` の merged
+          closer) が `exclusions.prTimelineOverflow` の overflow PR と
+          一致する場合、その PR は候補にならない (ステップ 3 で除外)。
+          この場合 `resolve_close_linkage` を呼び直すと `category ==
+          "merged_pr"` に見えることがあるが、ステップ 6 は `"manual"` /
+          `"commit"` / `"unmerged_pr"` / `"merged_pr_external"` の
+          4 category しか `auxiliarySeries` に対応付けないため、この issue
+          はどの `auxiliarySeries` にも該当せず、除外されたまま
+          (`mainSeries` にも `censored` にも `auxiliarySeries` にも入らない)
+          となる。除外された issue は overflow PR 側の
+          `exclusions.prTimelineOverflow[].linkedIssues` に列挙される。
+
+          `mainSeries` の各要素は `{"repo", "issue", "firstStartAt",
+          "lastStartAt", "startWeek", "pr", "prCreatedAt", "readyAt",
+          "mergedAt", "completionBasis", "leadTimeHours", "phaseHours":
+          {"startToPrCreated", "prCreatedToReady", "readyToMerge"},
+          "sizeBand", "sizeLines", "viaDraft", "redraftCount",
+          "negativeInterval"}`。`completionBasis` は `"merged" |
+          "ready_unmerged"`。`completionBasis == "ready_unmerged"` の要素は
+          `mergedAt` が `None`、`phaseHours.readyToMerge` が `None` (ready
+          から先の区間が未確定のため)。`leadTimeHours` は `firstStartAt` →
+          `readyAt` の経過時間 (`lastStartAt` ではない。複数着手の解釈が
+          必要な場合に備えて `lastStartAt` 自体は保持する)。丸め前の値では
           `startToPrCreated + prCreatedToReady` が `leadTimeHours` に、
           それに `readyToMerge` を加えた値が着手→merge の総時間に一致する。
           出力値は各フィールドを独立に小数第 2 位へ丸めるため、丸め後の
           `startToPrCreated + prCreatedToReady` は `leadTimeHours` と最大
           ±0.01 時間ずれうる (許容誤差であり、Phase B 実装は丸め後の等式を
           強制しない。`readyToMerge` は両辺に同じ丸め済み値が現れるため
-          誤差上限に影響しない)。`since` フィルタ適用対象。
-        - `censored` (list[dict]): 着手マーカーがあり `category == "open"`
-          (まだクローズしていない) issue のうち、qualifying completion PR
-          (`closingIssuesReferences` にその issue を含む、`state ==
-          "MERGED"` または `state == "OPEN"` かつ `isDraft == False` の
-          PR。`mainSeries` (b) の qualifying completion PR の定義と同じ)
-          がリンクされていないもの。これにより `censored` の経過時間は
-          常に「着手→ready」の下限値として解釈できる。`censored` の
-          適用範囲は `category == "open"` の issue に限られる — CLOSED
-          issue で `mainSeries` のいずれにも該当しないものは `censored`
-          には含めず `auxiliarySeries` 側で分類する。
-          各要素は `{"repo", "issue", "firstStartAt", "startWeek",
-          "elapsedHoursLowerBound"}`。`elapsedHoursLowerBound` は
-          `as_of - firstStartAt` (時間)。`since` フィルタ適用対象。
-        - `auxiliarySeries` (dict): 着手マーカーはあるが `category` が
-          `merged_pr` でも `open` でもない issue を category 別に振り分けた、
-          次の 5 キー固定 shape の dict — `{"manualClose": [...],
-          "commitClose": [...], "notPlanned": [...], "unmergedPr": [...],
-          "externalMergedClose": [...]}`。該当 issue が 0 件のカテゴリでも
-          キー自体は省略せず空リストを出力する。各要素は少なくとも `repo` /
-          `issue` / `firstStartAt` / `lastStartAt` / `startWeek` を含む
-          (確定契約)。category 固有の追加フィールド (例: `unmergedPr` の PR
-          番号) は Phase B 実装時に後方互換な追加として拡張しうる。
-          `externalMergedClose` は `resolve_close_linkage(...).category ==
-          "merged_pr_external"` (最終クローズの closer が `merged == true` の
-          `PullRequest` だが `prs_by_key` に存在しない、収集範囲外リポジトリの
-          merged PR 等) だった着手済み issue を列挙する。この分離により、
-          収集範囲外リポジトリの merged PR で close された issue は ready
-          到達時刻が得られず、`mainSeries` にも `censored` にも入らない。
-          `since` フィルタ適用対象 (mainSeries と揃える)。
+          誤差上限に影響しない)。`negativeInterval` は、丸め前の値で
+          `startToPrCreated` / `prCreatedToReady` / `readyToMerge`
+          (non-null なもののみ判定対象) のいずれか、または `leadTimeHours`
+          が負であれば `True` (複数の区間が同時に負でもフラグは 1 つの
+          ままであり、負だった区間ごとの内訳は持たない)。中央値計算からの
+          除外は metric 単位で行う (`dataQuality` / `weeklyCohorts` /
+          `intervalStats` の各項目 docstring を参照。「レコード全体を全
+          中央値から除外する」規則ではない)。`since` フィルタ適用対象。
+        - `censored` (list[dict]): 上記パイプラインのステップ 5 で
+          `censored` に入れられた issue の一覧。各要素は `{"repo", "issue",
+          "firstStartAt", "startWeek", "elapsedHoursLowerBound"}`。
+          `elapsedHoursLowerBound` は `as_of - firstStartAt` (時間)。
+          `since` フィルタ適用対象。
+        - `auxiliarySeries` (dict): 上記パイプラインのステップ 2
+          (`notPlanned`) およびステップ 6 で振り分けられた issue を
+          category 別にまとめた、次の 5 キー固定 shape の dict —
+          `{"manualClose": [...], "commitClose": [...], "notPlanned": [...],
+          "unmergedPr": [...], "externalMergedClose": [...]}`。該当 issue が
+          0 件のカテゴリでもキー自体は省略せず空リストを出力する。各要素は
+          少なくとも `repo` / `issue` / `firstStartAt` / `lastStartAt` /
+          `startWeek` を含む (確定契約)。category 固有の追加フィールド
+          (例: `unmergedPr` の PR 番号) は Phase B 実装時に後方互換な追加
+          として拡張しうる。`externalMergedClose` (`category ==
+          "merged_pr_external"`) は、最終クローズの closer が `merged ==
+          true` の `PullRequest` だが `prs_by_key` に存在しない (収集範囲外
+          リポジトリの merged PR 等) ために ready 到達時刻を計測できず、
+          かつステップ 3 の `closingIssuesReferences` 逆引きでも qualifying
+          candidate が見つからなかった issue を列挙する。この分離により、
+          収集範囲外リポジトリの merged PR で close された issue は
+          `mainSeries` にも `censored` にも入らない。`since` フィルタ適用
+          対象 (mainSeries と揃える)。
         - `prSeries` (list[dict]): ready 到達済み PR (`state == "MERGED"`、
           または `state == "OPEN"` かつ `isDraft == False`) を 1 件 1 要素
           で列挙する。ready 未到達 (`state == "OPEN"` かつ
@@ -547,14 +591,20 @@ def compute(
           が 0 件で `censored` のみの週は `n: 0`、`medianLeadTimeHours: None`、
           `phaseMedians` 各値 `None`、`bySizeBand: {}`、`viaDraftRate: None`、
           `medianSizeLines: None`、`censoredN` はその週の `censored` 件数、
-          とする。中央値系 (`medianLeadTimeHours` / `phaseMedians` /
-          `bySizeBand` 内の中央値) は `negativeInterval == True` の要素を
-          除外して計算する (該当週の全要素が `negativeInterval` なら
-          中央値は `null`)。`phaseMedians.readyToMerge` はさらに
+          とする。`medianLeadTimeHours` および `bySizeBand` 内の
+          `medianLeadTimeHours` は、丸め前の `leadTimeHours` が負の要素を
+          除外して計算する (metric 単位の除外 — `phaseHours` のいずれかが
+          負でも `leadTimeHours` 自体が非負なら計算対象に含める。該当週の
+          対象要素が 0 件なら中央値は `null`)。`phaseMedians` の各 phase
+          (`startToPrCreated` / `prCreatedToReady` / `readyToMerge`) の
+          中央値は、それぞれ自身の丸め前の値が負の要素のみを除外して
+          計算する (他の phase や `leadTimeHours` が負でも、その phase
+          自身が非負なら含める)。`phaseMedians.readyToMerge` はさらに
           `completionBasis == "ready_unmerged"` (= `phaseHours.readyToMerge
-          is None`) の要素を除外して計算する (該当週に merge 済みの要素が
-          1 件も無ければ `null`)。`bySizeBand` は当該週に 1 件以上存在した
-          帯のみをキーとして含める (0 件の帯は省略する疎な dict)。
+          is None`) の要素を除外して計算する (該当週に merge 済みかつ
+          `readyToMerge` が非負の要素が 1 件も無ければ `null`)。
+          `bySizeBand` は当該週に 1 件以上存在した帯のみをキーとして
+          含める (0 件の帯は省略する疎な dict)。
           `censoredN` はその週に割り当てられた `censored` 要素数。
           `viaDraftRate` / `medianSizeLines` は `negativeInterval` を
           除外せず `n` 全体で計算する (`n == 0` の週は前述のとおり
@@ -564,11 +614,21 @@ def compute(
           は行わない。解釈は `censoredN` と併せて行う。
         - `markerCoverage` (list[dict]): repo × 月 (`issue["closedAt"]` を
           `YYYY-MM` に truncate、UTC) 別の `{"repo", "month", "closedIssues",
-          "withMarker", "coverage"}`。`closedIssues` はその repo・月に
-          クローズした issue 数、`withMarker` はそのうち着手マーカーが
-          あった数、`coverage = withMarker / closedIssues` (`closedIssues == 0`
-          のときは `0.0`)。`since` によるフィルタは適用しない (全期間。
-          比較可能な coverage 期間の判定材料とするため意図的に除外する)。
+          "withMarker", "unknownTimeline", "coverage"}`。`closedIssues` は
+          その repo・月にクローズした issue のうち timeline が完全
+          (`exclusions.timelineOverflow` に含まれない) だった数 (=
+          `coverage` の分母)、`withMarker` はそのうち着手マーカーがあった数、
+          `unknownTimeline` は timeline 不完全 (`exclusions.timelineOverflow`)
+          により除外されたその repo・月のクローズ issue 数。`coverage` は
+          `closedIssues > 0` のとき `withMarker / closedIssues`、
+          `closedIssues == 0` のとき `None` (「マーカーが 1 件も無かった
+          (観測済み 0%)」と「timeline 不完全等により観測不能」を区別する。
+          timeline が完全な既知 issue が存在し着手マーカーが 0 件のときは
+          従来どおり `0.0` になる)。overflow issue しか存在しない repo × 月
+          でも行を省略せず出力する (`closedIssues: 0`、`unknownTimeline` は
+          その件数、`coverage: None`)。`since` によるフィルタは適用しない
+          (全期間。比較可能な coverage 期間の判定材料とするため意図的に
+          除外する)。
         - `claimDetection` (dict): `{"strictIssues": int, "looseOnlyIssues":
           list[dict]}`。`strictIssues` は `strict_sources` が 1 件以上ある
           (= `first_start is not None`) issue の件数 (issue 単位で重複排除)。
@@ -576,6 +636,9 @@ def compute(
           列挙した `{"repo", "issue", "commentCreatedAt"}` のリスト
           (comment 単位。同一 issue に複数の loose-only comment があれば
           複数エントリになる。当該 issue が strict でも判定済みかどうかは問わない)。
+          `exclusions.timelineOverflow` に列挙される issue (timeline 不完全)
+          は、部分的な timeline から着手判定を行うと誤判定になりうるため、
+          `strictIssues` の分母にも `looseOnlyIssues` の列挙対象にも含めない。
         - `exclusions` (dict): `{"timelineOverflow": list[dict],
           "prTimelineOverflow": list[dict]}`。
           `timelineOverflow` は `timelineItems.totalCount > len(timelineItems.nodes)`
@@ -585,18 +648,24 @@ def compute(
           `prTimelineOverflow` は `timelineItems.totalCount > len(timelineItems.nodes)`
           だった **PR** を `{"repo", "pr", "totalCount", "fetched", "linkedIssues"}`
           で列挙する (`fetched == len(nodes)`。`linkedIssues` はこの除外により
-          `mainSeries` から除外された issue 番号の昇順リスト。該当なしなら空リスト)。
+          `mainSeries` の候補から除外された issue を `{"repo": str, "issue":
+          int}` の複合キーで列挙したリスト — `closingIssuesReferences` は
+          他 repo の issue を指しうるため issue 番号だけでは一意に特定
+          できない。`(repo, issue)` の組で重複排除し、`repo` の辞書順→
+          `issue` の昇順で決定的に並べる。該当なしなら空リスト)。
           この判定は PR の `state` (OPEN / MERGED) を問わず同様に適用する
           (OPEN PR も `timelineItems.totalCount > len(nodes)` なら同じ扱いで
-          除外する)。overflow した PR は `prSeries` から除外し、`mainSeries`
-          (b) の ready 到達済みリンク PR としても採用しない (timeline 不完全な
-          PR の ready 時刻は信頼できないため)。
-          `resolve_close_linkage(...).linked_pr` が overflow PR と一致する issue は
-          `mainSeries` から除外し、`auxiliarySeries` のいずれのカテゴリにも
-          再分類しない (timeline 不完全な PR の ready 時刻は信頼できないため)。
-          除外された issue 番号は当該 PR の `linkedIssues` に列挙する。
-        - `intervalStats` (list[dict]): `boundaries` を createdAt 昇順
-          (= `at` 昇順) に並べ、`[開始, b1)`, `[b1, b2)`, ..., `[bn, 終端]` の
+          除外する)。overflow した PR は `prSeries` から除外し、qualifying PR
+          候補 (`mainSeries` 対象決定パイプラインのステップ 3 参照) としても
+          採用しない (timeline 不完全な PR の ready 時刻は信頼できないため)。
+          最終 `ClosedEvent` の closer が overflow PR と一致する issue も、
+          同じ理由でステップ 3 の候補集合の情報源として使わない (`mainSeries`
+          に入らず、`auxiliarySeries` のいずれのカテゴリにも再分類しない。
+          詳細は `mainSeries` docstring の「境界」を参照)。除外された issue は
+          `{repo, issue}` として当該 PR の `linkedIssues` に列挙する。
+        - `intervalStats` (list[dict]): `boundaries` を `(at, id)` の辞書順
+          (`at` 昇順、同一 `at` は `id` の辞書順で tie-break) に並べ、
+          `[開始, b1)`, `[b1, b2)`, ..., `[bn, 終端]` の
           各区間に `mainSeries` と `censored` を `firstStartAt` で割り当てた
           集計。各要素は `{"from": str | None, "to": str | None, "label", "n",
           "medianLeadTimeHours", "medianSizeLines", "smallOnlyMedianLeadTimeHours",
@@ -608,23 +677,28 @@ def compute(
           `<from の label> 〜`。`smallOnly*` は `sizeBand == "S"` の要素のみに絞った
           集計。`censoredN` はその区間に `firstStartAt` で割り当てられた
           `censored` 要素数。`medianLeadTimeHours` / `smallOnlyMedianLeadTimeHours`
-          は `negativeInterval == True` の要素を除外して計算する (該当区間の
-          有効要素が 0 件なら中央値は `null`)。`n` / `smallOnlyN` /
+          は、丸め前の `leadTimeHours` が負の要素を除外して計算する
+          (metric 単位の除外。`smallOnlyMedianLeadTimeHours` は `sizeBand ==
+          "S"` に絞ったうえで同じ規則を適用する。該当区間の対象要素が
+          0 件なら中央値は `null`)。`n` / `smallOnlyN` /
           `medianSizeLines` は `negativeInterval` を除外せず区間内の全
           `mainSeries` (該当帯) 要素で計算する (`weeklyCohorts` と同じ規約)。
           `boundaries` が `None` または空のとき `intervalStats == []`。
         - `dataQuality` (dict): `{"negativeIntervalCount": int, "redraftPrCount":
           int, "notStartedClosedIssues": int, "multipleReadyPrIssues": int}`。
-          `negativeIntervalCount` は `mainSeries` 中で `readyAt < firstStartAt`
-          (`negativeInterval == True`) だった件数。`redraftPrCount` は
-          `prSeries` 中で `redraftCount > 0` だった PR 件数。
-          `notStartedClosedIssues` は `state == "CLOSED"` かつ着手マーカーが
-          無かった (`first_start is None`) issue の件数 (`since` フィルタは
-          適用しない)。`multipleReadyPrIssues` は `mainSeries` の (b) 経路
-          (OPEN issue で qualifying completion PR をリンクして
-          `mainSeries` に入った issue) において、qualifying completion PR
-          が複数存在したため `readyAt` 最小の PR を採用した issue の件数
-          (選択された PR の状態や `completionBasis` は問わずカウントする)。
+          `negativeIntervalCount` は `mainSeries` 中で `negativeInterval ==
+          True` だったレコード件数 (複数区間が同時に負でも 1 件として数える。
+          `negativeInterval` の判定規則は `mainSeries` 要素の docstring を
+          参照)。`redraftPrCount` は `prSeries` 中で `redraftCount > 0` だった
+          PR 件数。`notStartedClosedIssues` は `state == "CLOSED"` かつ
+          着手マーカーが無かった (`first_start is None`) issue の件数
+          (`since` フィルタは適用しない。`exclusions.timelineOverflow` の
+          issue は timeline 不完全から「着手マーカー無し」と断定できない
+          ため分母から除外する)。`multipleReadyPrIssues` は、`mainSeries`
+          対象決定パイプラインのステップ 3 で構築した qualifying PR 候補
+          集合が複数件あったため `readyAt` 最小の PR を採用した issue の
+          件数 (issue の `state` が OPEN/CLOSED いずれでも、また選択された
+          PR の状態や `completionBasis` によらずカウントする)。
 
     境界:
         - `since` の inclusive filter は `firstStartAt` (UTC date 部分)
@@ -738,7 +812,9 @@ def main(argv: list[str] | None = None) -> int:
             - `2`: 入力エラー (`--issues` / `--prs` のファイル不存在・JSONL
               parse 失敗・必須フィールド欠落・`--as-of` / `--since` の形式不正・
               `--prs` の行に `closingIssuesReferences.totalCount >
-              len(closingIssuesReferences.nodes)` が 1 件でも存在する場合)。
+              len(closingIssuesReferences.nodes)` が 1 件でも存在する場合・
+              `--boundaries-file` の検証失敗。詳細はモジュール docstring
+              「exit code 契約」セクションを参照)。
             - `3`: `--claim-patterns-file` の契約違反
               (`load_claim_patterns` が `ClaimPatternsError` を送出した場合)。
 
