@@ -29,6 +29,9 @@ Phase B (issue #288 実装本体) で実装するため、現時点では `NotIm
 ## 入力 JSONL 契約 (詳細は SKILL.md セクション 4 「claim 判定パターン」および
 issue #288 Phase A 契約ドキュメント セクション 4 が正本)
 
+- 共通: `repo` は GitHub API が返す canonical な `nameWithOwner` であり、
+  issues.jsonl / prs.jsonl / closer / closingIssuesReferences のすべてで
+  同一の canonical 形が使われる前提 (`(repo, number)` join のキー)。
 - `--issues`: 1 行 1 issue (OPEN + CLOSED 全件) の JSONL。各行は少なくとも
   `repo`, `number`, `title`, `state`, `stateReason`, `createdAt`, `closedAt`,
   `timelineItems.totalCount`, `timelineItems.nodes` を持つ。`nodes` は
@@ -599,7 +602,10 @@ def compute(
           "medianLeadTimeHours", "medianSizeLines", "smallOnlyMedianLeadTimeHours",
           "smallOnlyN", "censoredN"}`。`from` / `to` は区間端の
           `boundaries[].id` (開始側端が無ければ `from=None`、終端側端が無ければ
-          `to=None`)。`smallOnly*` は `sizeBand == "S"` の要素のみに絞った
+          `to=None`)。`label` は区間端の `boundaries[].label` から導出する:
+          先頭区間 (`from=None`) は `〜 <to の label>`、内部区間は
+          `<from の label> 〜 <to の label>`、末尾区間 (`to=None`) は
+          `<from の label> 〜`。`smallOnly*` は `sizeBand == "S"` の要素のみに絞った
           集計。`censoredN` はその区間に `firstStartAt` で割り当てられた
           `censored` 要素数。`medianLeadTimeHours` / `smallOnlyMedianLeadTimeHours`
           は `negativeInterval == True` の要素を除外して計算する (該当区間の

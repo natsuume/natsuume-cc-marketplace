@@ -1,5 +1,6 @@
 query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
+    nameWithOwner
     pullRequests(first: 50, after: $endCursor, states: [OPEN, MERGED]) {
       pageInfo {
         hasNextPage

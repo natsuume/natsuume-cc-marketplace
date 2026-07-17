@@ -922,6 +922,12 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(
             [bucket["censoredN"] for bucket in result["intervalStats"]], [0, 1, 0]
         )
+        # label は boundaries[].label (evt-1="event 1", evt-2="event 2") から
+        # 先頭区間 "〜 <label>"、内部区間 "<label> 〜 <label>"、末尾区間
+        # "<label> 〜" の 3 形式で導出される。
+        self.assertEqual(result["intervalStats"][0]["label"], "〜 event 1")
+        self.assertEqual(result["intervalStats"][1]["label"], "event 1 〜 event 2")
+        self.assertEqual(result["intervalStats"][2]["label"], "event 2 〜")
 
     def test_t27_median_of_even_count_is_average_of_middle_two(self):
         issue1, pr1 = make_started_case(

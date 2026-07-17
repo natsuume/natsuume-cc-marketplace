@@ -14,6 +14,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - 対象: 省略時はカレントの git リポジトリ (origin remote から `owner/repo` を解決)。ディレクトリパスが与えられた場合は配下の git リポジトリを再帰探索する。`owner/repo` のカンマ区切りリストも受け付ける。
 - `since=YYYY-MM-DD` (省略可)。省略時は全期間を対象にする。
 - remote が GitHub でない、または remote が存在しないリポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
+- すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。JSONL レコードに書く repo 値はこの正規化キーではなく、API が返す canonical な nameWithOwner を使う。
 
 (手順詳細は Phase B で全文化する)
 
@@ -27,11 +28,12 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 ## 3. データ収集
 
 - `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 4 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql`) を `gh api graphql` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
+- 各行の repo フィールドには API が返す canonical な nameWithOwner を使う (ユーザ入力の owner/repo 文字列を使わない。closer や closingIssuesReferences が返す nameWithOwner と join キーのケーシングを一致させるため)。
 - 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (`fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` の `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --paginate -f owner=<owner> -f name=<name> -F query=@<file>`。
-- `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を追加ページングし、取得済み nodes とマージする。
+- `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を先頭から全ページ取得し、一覧クエリ由来の timelineItems を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の timelineItems は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する。
 - `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
-- `prs.jsonl` の各行で `closingIssuesReferences.totalCount > len(nodes)` の PR は `fetch-pr-closing-issues.graphql` で追加ページングして nodes を完全化する (集計スクリプトは不完全な行を入力エラーとして中断する)。
+- `prs.jsonl` の各行で `closingIssuesReferences.totalCount > len(nodes)` の PR は `fetch-pr-closing-issues.graphql` で当該 PR の closingIssuesReferences を先頭から全ページ取得し、一覧クエリ由来の closingIssuesReferences を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の closingIssuesReferences は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する (集計スクリプトは不完全な行を入力エラーとして中断する)。
 
 (手順詳細は Phase B で全文化する)
 
