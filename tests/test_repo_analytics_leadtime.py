@@ -7,10 +7,11 @@ Phase A (spec-first) の位置づけ:
   `resolve_start` / `resolve_ready` / `resolve_close_linkage` / `compute` /
   `main` の処理本体は `NotImplementedError` を送出する (Phase B で実装する)。
 - このファイルは issue #288 Phase A 契約ドキュメント セクション 8 の
-  test matrix T1〜T42、および Phase B 着手前に rescue 壁打ちで精密化された
-  契約改訂 8 件に対応する T43〜T47 を全件実装する。各テストメソッド名・
-  コメントに `T<n>` を付与し対応関係を明示する (T42: 収集範囲外リポジトリの
-  merged PR を closer とする issue が `resolve_close_linkage` で
+  test matrix T1〜T42、Phase B 着手前に rescue 壁打ちで精密化された契約改訂
+  8 件に対応する T43〜T47、および Phase B 後の codex review 指摘 6 件
+  (rescue 壁打ちで精密化済み) に対応する T48〜T50 を全件実装する。各テスト
+  メソッド名・コメントに `T<n>` を付与し対応関係を明示する (T42: 収集範囲外
+  リポジトリの merged PR を closer とする issue が `resolve_close_linkage` で
   `"merged_pr_external"` に分類され、`compute` の出力で
   `auxiliarySeries["externalMergedClose"]` に入ることの検証。T43:
   negativeInterval が丸め前の各 phase / leadTimeHours のいずれかの負符号で
@@ -20,7 +21,15 @@ Phase A (spec-first) の位置づけ:
   見つかる qualifying completion PR が manual close より優先して
   `mainSeries` に編入されることの検証。T46: `--boundaries-file` の検証失敗が
   `main` を exit code 2 にすることの検証。T47 (任意): 同一 `at` を持つ
-  boundaries が `(at, id)` で安定に区間化されることの検証)。
+  boundaries が `(at, id)` で安定に区間化されることの検証。T48: `boundaries`
+  未指定時に出力の `boundaries` が `[]` になること、および順不同の
+  boundaries 入力が `(at, id)` 順に正規化されて `id`/`label`/`at` (UTC `Z`
+  文字列) のみを持つ要素として echo されることの検証。T49: issue と選択
+  qualifying PR が別リポジトリ (cross-repo closing reference) のとき、
+  `mainSeries` レコードの `repo` が issue 側、`prRepo` が選択 PR 側の
+  canonical repo になることの検証。T50: JSONL 入力 (comment / PR の
+  createdAt 等) に tz 情報の無い naive timestamp が含まれる行があると
+  `main` が exit code 2 を返し、stdout に結果 JSON を出力しないことの検証)。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -31,7 +40,9 @@ Phase A (spec-first) の位置づけ:
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import tempfile
@@ -1087,6 +1098,100 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(result["intervalStats"][2]["from"], "zeta")
         self.assertIsNone(result["intervalStats"][2]["to"])
 
+    def test_t48_boundaries_echo_defaults_empty_and_normalizes_unordered_input(self):
+        # T48 (契約改訂): (i) --boundaries-file 未指定 (boundaries=None) の
+        # compute は出力の boundaries == [] を返す。(ii) 順不同の boundaries
+        # 入力は (at, id) の辞書順に正規化されて echo され、各要素は
+        # id / label / at (UTC "Z" 文字列) のみを持つ。
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+
+        result_without = compute_leadtime.compute(
+            [], [], self.patterns, as_of, None, None
+        )
+        self.assertEqual(result_without["boundaries"], [])
+
+        # 入力順は意図的に (at 降順・id 降順) で渡し、正規化されることを検証する。
+        boundaries = [
+            {
+                "id": "evt-2",
+                "label": "event 2",
+                "at": datetime(2026, 7, 15, tzinfo=timezone.utc),
+            },
+            {
+                "id": "evt-1",
+                "label": "event 1",
+                "at": datetime(2026, 7, 5, tzinfo=timezone.utc),
+            },
+        ]
+        result_with = compute_leadtime.compute(
+            [], [], self.patterns, as_of, None, boundaries
+        )
+        self.assertEqual(
+            result_with["boundaries"],
+            [
+                {"id": "evt-1", "label": "event 1", "at": "2026-07-05T00:00:00Z"},
+                {"id": "evt-2", "label": "event 2", "at": "2026-07-15T00:00:00Z"},
+            ],
+        )
+        for entry in result_with["boundaries"]:
+            self.assertEqual(set(entry.keys()), {"id", "label", "at"})
+
+    def test_t49_cross_repo_qualifying_pr_sets_prrepo_distinct_from_repo(self):
+        # T49 (契約改訂): issue の repo ("a/x") と選択された qualifying
+        # completion PR の repo ("b/y") が異なる (cross-repo closing
+        # reference)。mainSeries レコードの repo は issue 側 ("a/x")、prRepo
+        # は選択 PR 側 ("b/y") になる。同じ PR 番号を持つ "a/x" 側の無関係な
+        # PR (この issue を close しない) も fixture に含め、(repo, number) の
+        # 複合キーで正しく判別されることを合わせて検証する。
+        issue_repo = "a/x"
+        pr_repo = "b/y"
+        issue_number = 700
+        pr_number = 700  # issue 番号と同じ値をあえて使い、number 単独ではなく
+        # (repo, number) で判別されることを確認する。
+        issue = make_issue(
+            repo=issue_repo,
+            number=issue_number,
+            state="OPEN",
+            created_at="2026-07-01T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        qualifying_pr = make_pr(
+            repo=pr_repo,
+            number=pr_number,
+            state="MERGED",
+            is_draft=False,
+            created_at="2026-07-02T00:00:00Z",
+            merged_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[ready_event("2026-07-03T00:00:00Z")],
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": issue_repo}}
+            ],
+        )
+        # "a/x" 側の同番号 PR。この issue を closingIssuesReferences で
+        # 指さないため qualifying 候補にならない (無関係な decoy)。
+        unrelated_pr = make_pr(
+            repo=issue_repo,
+            number=pr_number,
+            state="MERGED",
+            is_draft=False,
+            created_at="2026-06-01T00:00:00Z",
+            merged_at="2026-06-02T00:00:00Z",
+            timeline_nodes=[ready_event("2026-06-01T12:00:00Z")],
+            closing_issues=[],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [qualifying_pr, unrelated_pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(len(result["mainSeries"]), 1)
+        entry = result["mainSeries"][0]
+        self.assertEqual(entry["repo"], issue_repo)
+        self.assertEqual(entry["prRepo"], pr_repo)
+        self.assertEqual(entry["pr"], pr_number)
+
     def test_t27_median_of_even_count_is_average_of_middle_two(self):
         issue1, pr1 = make_started_case(
             issue_number=1,
@@ -1387,6 +1492,9 @@ class ComputeTests(unittest.TestCase):
         self.assertIsNone(entry["mergedAt"])
         self.assertIsNone(entry["phaseHours"]["readyToMerge"])
         self.assertEqual(result["censored"], [])
+        # prRepo (契約改訂): 同一 repo ケースでは repo == prRepo になる
+        # (cross-repo ケースは T49 で別途検証する)。
+        self.assertEqual(entry["prRepo"], repo)
 
         self.assertEqual(len(result["prSeries"]), 1)
         pr_entry = result["prSeries"][0]
@@ -1498,6 +1606,9 @@ class ComputeTests(unittest.TestCase):
         entry = result["mainSeries"][0]
         self.assertEqual(entry["issue"], issue_number)
         self.assertEqual(entry["completionBasis"], "merged")
+        # prRepo (契約改訂): 同一 repo ケースでは repo == prRepo になる
+        # (cross-repo ケースは T49 で別途検証する)。
+        self.assertEqual(entry["prRepo"], repo)
         self.assertIsNotNone(entry["mergedAt"])
         merged_at = datetime.fromisoformat(
             str(entry["mergedAt"]).replace("Z", "+00:00")
@@ -1747,6 +1858,62 @@ class MainTests(unittest.TestCase):
                         ]
                     )
                     self.assertEqual(exit_code, 2)
+
+    def test_t50_naive_input_timestamp_exits_two_without_stdout_json(self):
+        # T50 (契約改訂): --issues / --prs の JSONL 行のうち実際に処理される
+        # 日時フィールド (IssueComment.createdAt または PR createdAt) が tz
+        # 情報の無い naive timestamp のとき、main は exit code 2 を返し、
+        # stdout には結果 JSON を一切出力しない (fail-closed。診断メッセージは
+        # stderr のみに出る想定であり、本テストは stdout の空を検証する)。
+        naive_comment_issue = make_issue(
+            number=1,
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00", "🔒 ai:claim branch=x")
+            ],
+        )
+        naive_created_at_pr = make_pr(
+            number=930,
+            state="OPEN",
+            is_draft=False,
+            created_at="2026-07-01T00:00:00",
+        )
+
+        cases = {
+            "issue_comment_created_at": ([naive_comment_issue], []),
+            "pr_created_at": ([], [naive_created_at_pr]),
+        }
+        for case_name, (issues, prs) in cases.items():
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp_path = Path(tmp)
+                    issues_path = tmp_path / "issues.jsonl"
+                    prs_path = tmp_path / "prs.jsonl"
+                    patterns_path = tmp_path / "patterns.json"
+                    issues_path.write_text(
+                        "".join(json.dumps(issue) + "\n" for issue in issues),
+                        encoding="utf-8",
+                    )
+                    prs_path.write_text(
+                        "".join(json.dumps(pr) + "\n" for pr in prs),
+                        encoding="utf-8",
+                    )
+                    write_claim_patterns_file(patterns_path, DEFAULT_PATTERNS_DICT)
+                    captured_stdout = io.StringIO()
+                    with contextlib.redirect_stdout(captured_stdout):
+                        exit_code = compute_leadtime.main(
+                            [
+                                "--issues",
+                                str(issues_path),
+                                "--prs",
+                                str(prs_path),
+                                "--claim-patterns-file",
+                                str(patterns_path),
+                                "--as-of",
+                                "2026-07-17T04:00:00Z",
+                            ]
+                        )
+                    self.assertEqual(exit_code, 2)
+                    self.assertEqual(captured_stdout.getvalue(), "")
 
 
 if __name__ == "__main__":

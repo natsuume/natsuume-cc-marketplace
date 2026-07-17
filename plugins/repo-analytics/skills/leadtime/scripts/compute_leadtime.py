@@ -72,16 +72,23 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
 
 トップレベルキー: `schemaVersion`, `asOf`, `since`, `sizeBands`, `repos`,
 `mainSeries`, `censored`, `auxiliarySeries`, `prSeries`, `weeklyCohorts`,
-`markerCoverage`, `claimDetection`, `exclusions`, `intervalStats`,
-`dataQuality`。フィールドの意味は `compute()` の docstring を正本とする。
+`markerCoverage`, `claimDetection`, `exclusions`, `boundaries`,
+`intervalStats`, `dataQuality`。フィールドの意味は `compute()` の docstring を
+正本とする。
 
 ## exit code 契約
 
 - `0`: 成功 (集計対象が 0 件の空データも含む)。
 - `2`: 入力エラー (`--issues` / `--prs` のファイル不存在・JSONL parse 失敗・
-  必須フィールド欠落・`--as-of` / `--since` の形式不正・`--prs` の行に
+  必須フィールド欠落・実際に処理される日時フィールド (`IssueComment.createdAt`
+  / `LabeledEvent.createdAt` / `ClosedEvent.createdAt` / PR の `createdAt` /
+  `mergedAt` / `ReadyForReviewEvent.createdAt` 等) が tz 情報の無い naive
+  datetime 文字列である場合・`--as-of` / `--since` の形式不正・`--prs` の行に
   `closingIssuesReferences.totalCount > len(closingIssuesReferences.nodes)`
-  が 1 件でも存在する場合・`--boundaries-file` の検証失敗)。
+  が 1 件でも存在する場合・`--boundaries-file` の検証失敗)。日時 parser は
+  `_parse_datetime` に一本化されており、この関数が naive datetime を検出した
+  箇所 (`--issues` / `--prs` / `--boundaries-file` / `--as-of` のいずれでも)
+  で `ValueError` を送出し、`main` が exit code `2` へ変換する。
   `--boundaries-file` の検証失敗とは、ファイル不存在・JSON parse 失敗・
   形状不正 (トップレベルが `[{"id": str, "label": str, "at": str}, ...]`
   の形を満たさない)・各要素の `at` が ISO8601 UTC の aware datetime として
@@ -288,8 +295,18 @@ class CloseLinkage:
 
 
 def _parse_datetime(value: str) -> datetime:
-    """UTC の ISO8601 文字列 (`Z` サフィックス許容) を aware `datetime` へ変換する。"""
-    return datetime.fromisoformat(value)
+    """UTC の ISO8601 文字列 (`Z` サフィックス許容) を aware `datetime` へ変換する。
+
+    このモジュール内で日時文字列を parse する唯一の関数であり
+    (`--issues` / `--prs` / `--claim-patterns-file` の comment・event
+    timestamp、`--as-of`、`--boundaries-file` の `at` を含む全経路がこれを
+    経由する)、tz 情報の無い (naive) datetime 文字列は `ValueError` を送出する
+    (モジュール docstring 「タイムゾーン」節の fail-closed 規則の実装)。
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError(f"aware (timezone 付き) datetime ではありません: {value}")
+    return parsed
 
 
 def _format_datetime(value: datetime) -> str:
@@ -661,7 +678,10 @@ def compute(
             inclusive filter。`None` のときは全期間を対象にする。
         boundaries: `[{"id": str, "label": str, "at": datetime}]` (`intervalStats`
             の区間境界、時刻は事前に aware datetime へ parse済みとする)。
-            `None` または空リストのとき `intervalStats` は `[]`。
+            `None` または空リストのとき出力の `boundaries` は `[]`、
+            `intervalStats` も `[]`。非空のときは `(at, id)` の辞書順に
+            正規化してから出力の `boundaries` キーと `intervalStats` の
+            区間分割の両方に使う (`compute` 内で正規化を一度だけ行う)。
 
     Returns:
         dict: 次のトップレベルキーを持つ、JSON 直列化可能な dict。
@@ -741,11 +761,17 @@ def compute(
           `exclusions.prTimelineOverflow[].linkedIssues` に列挙される。
 
           `mainSeries` の各要素は `{"repo", "issue", "firstStartAt",
-          "lastStartAt", "startWeek", "pr", "prCreatedAt", "readyAt",
+          "lastStartAt", "startWeek", "pr", "prRepo", "prCreatedAt", "readyAt",
           "mergedAt", "completionBasis", "leadTimeHours", "phaseHours":
           {"startToPrCreated", "prCreatedToReady", "readyToMerge"},
           "sizeBand", "sizeLines", "viaDraft", "redraftCount",
-          "negativeInterval"}`。`completionBasis` は `"merged" |
+          "negativeInterval"}`。`repo` は issue 側の canonical repo
+          (nameWithOwner)、`prRepo` は選択された qualifying completion PR の
+          canonical repo であり、全レコード必須 (`None` を許容しない)。
+          両者は同じ値になることが多いが、`closingIssuesReferences` 逆引きで
+          見つかる cross-repo closing reference (issue と別リポジトリの PR が
+          その issue を close する場合) では `prRepo != repo` になりうる。
+          `completionBasis` は `"merged" |
           "ready_unmerged"`。`completionBasis == "ready_unmerged"` の要素は
           `mergedAt` が `None`、`phaseHours.readyToMerge` が `None` (ready
           から先の区間が未確定のため)。`leadTimeHours` は `firstStartAt` →
@@ -885,8 +911,15 @@ def compute(
           に入らず、`auxiliarySeries` のいずれのカテゴリにも再分類しない。
           詳細は `mainSeries` docstring の「境界」を参照)。除外された issue は
           `{repo, issue}` として当該 PR の `linkedIssues` に列挙する。
-        - `intervalStats` (list[dict]): `boundaries` を `(at, id)` の辞書順
-          (`at` 昇順、同一 `at` は `id` の辞書順で tie-break) に並べ、
+        - `boundaries` (list[dict]): 引数 `boundaries` を `(at, id)` の辞書順
+          (`at` 昇順、同一 `at` は `id` の辞書順で tie-break) に正規化した
+          `[{"id": str, "label": str, "at": str}]` をそのまま echo したもの
+          (`at` は UTC `Z` サフィックス付き ISO8601 文字列に変換する)。
+          `boundaries` 引数が `None` または空リストのとき `[]`。正規化は
+          `_normalize_boundaries()` を `compute` 内で一度だけ適用し、この
+          `boundaries` キーと次の `intervalStats` の区間境界の両方に同じ
+          正規化結果を使う (二重に正規化しない・順序がずれない)。
+        - `intervalStats` (list[dict]): 上記で正規化した `boundaries` を用い、
           `[開始, b1)`, `[b1, b2)`, ..., `[bn, 終端]` の
           各区間に `mainSeries` と `censored` を `firstStartAt` で割り当てた
           集計。各要素は `{"from": str | None, "to": str | None, "label", "n",
@@ -1119,7 +1152,18 @@ def compute(
     repos_out = _build_repos(issues, prs)
     marker_coverage_out = _build_marker_coverage(coverage_counts)
     weekly_cohorts_out = _build_weekly_cohorts(main_records, censored_out)
-    interval_stats_out = _build_interval_stats(boundaries, main_records, censored_out)
+    normalized_boundaries = _normalize_boundaries(boundaries)
+    boundaries_out = [
+        {
+            "id": boundary["id"],
+            "label": boundary["label"],
+            "at": _format_datetime(boundary["at"]),
+        }
+        for boundary in normalized_boundaries
+    ]
+    interval_stats_out = _build_interval_stats(
+        normalized_boundaries, main_records, censored_out
+    )
 
     negative_interval_count = sum(
         1 for record in main_records if record.output["negativeInterval"]
@@ -1149,6 +1193,7 @@ def compute(
             "timelineOverflow": timeline_overflow_out,
             "prTimelineOverflow": pr_timeline_overflow_out,
         },
+        "boundaries": boundaries_out,
         "intervalStats": interval_stats_out,
         "dataQuality": {
             "negativeIntervalCount": negative_interval_count,
@@ -1251,6 +1296,7 @@ def _build_main_record(
         "lastStartAt": _format_datetime(last_start),
         "startWeek": start_week,
         "pr": pr["number"],
+        "prRepo": pr["repo"],
         "prCreatedAt": _format_datetime(pr_created_at),
         "readyAt": _format_datetime(ready_at),
         "mergedAt": _format_datetime(merged_at) if merged_at is not None else None,
@@ -1515,12 +1561,14 @@ def _normalize_boundaries(boundaries: list[dict] | None) -> list[dict]:
 
 
 def _build_interval_stats(
-    boundaries: list[dict] | None,
+    sorted_boundaries: list[dict],
     main_records: list[_MainSeriesRecord],
     censored_out: list[dict],
 ) -> list[dict]:
-    """`boundaries` から `intervalStats` (区間別集計) を組み立てる。"""
-    sorted_boundaries = _normalize_boundaries(boundaries)
+    """正規化済み `boundaries` (呼び出し側で `_normalize_boundaries` 適用済み。
+    `compute` は `boundaries` 出力キーと本関数とで同じ正規化結果を共有する)
+    から `intervalStats` (区間別集計) を組み立てる。
+    """
     if not sorted_boundaries:
         return []
 
@@ -1714,7 +1762,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     try:
-        as_of = _parse_aware_datetime(args.as_of)
+        as_of = _parse_datetime(args.as_of)
     except ValueError as exc:
         print(f"--as-of の形式が不正です: {exc}", file=sys.stderr)
         return 2
@@ -1751,14 +1799,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print(json.dumps(result))
     return 0
-
-
-def _parse_aware_datetime(value: str) -> datetime:
-    """ISO8601 文字列を aware `datetime` へ変換する (naive datetime は `ValueError`)。"""
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        raise ValueError(f"aware (timezone 付き) datetime ではありません: {value}")
-    return parsed
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -1815,7 +1855,7 @@ def _load_boundaries_file(path: Path) -> list[dict]:
         if not isinstance(at_raw, str):
             raise ValueError("boundaries の at は文字列である必要があります")
         try:
-            at = _parse_aware_datetime(at_raw)
+            at = _parse_datetime(at_raw)
         except ValueError as exc:
             raise ValueError(f"boundaries の at が不正です ({at_raw}): {exc}") from exc
         if boundary_id in seen_ids:

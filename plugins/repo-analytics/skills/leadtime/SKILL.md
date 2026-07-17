@@ -18,7 +18,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ### 手順
 
-0. 作業ディレクトリ `<scratchpad>/repo-analytics-leadtime/` を作成し (`mkdir -p`。`<scratchpad>` はセッションの scratchpad ディレクトリ)、`collection-diagnostics.json` を `{"skippedRepos": [], "webSearchSkipped": false}` で初期化する (Write ツール)。以降このディレクトリを `<work>` と表記する。このスキルが scratchpad に書く中間ファイルはすべて `<work>` 配下に置く: `issues.jsonl` / `prs.jsonl` / `patterns.json` / `boundaries.json` / `collection-diagnostics.json` / `result.json`。
+0. 作業ディレクトリを次のとおり定義する。`<work-root>` = セッション scratchpad 配下の `repo-analytics-leadtime/` (`<scratchpad>/repo-analytics-leadtime/`。`<scratchpad>` はセッションの scratchpad ディレクトリ)。`<work>` = `<work-root>/<一意な実行 ID>/` (例: `date -u +%Y%m%dT%H%M%SZ` 等で採番) を **新規作成** する (既存ディレクトリの再利用・`mkdir -p` による黙認は禁止。ディレクトリ作成が既存パスと衝突したら別の実行 ID を採番し、必ず新規作成できたディレクトリを `<work>` として使う)。収集診断 (`collection-diagnostics.json`) を含むこの実行のすべての中間ファイルは `<work>` 配下にのみ書く: `issues.jsonl` / `prs.jsonl` / `patterns.json` / `boundaries.json` / `collection-diagnostics.json` / `result.json`。`collection-diagnostics.json` を `{"skippedRepos": [], "webSearchSkipped": false}` で初期化する (Write ツール)。リトライ時は新しい `<work>` を作成してこのセクションからやり直し、過去の実行 (別の `<work>`) の部分成果物を再利用しない。
 1. 呼び出し引数の文字列を分割し、`since=YYYY-MM-DD` に一致するトークンを期間指定として取り出す (複数あれば最後の値を採用し、その旨を記録する)。残りのトークンを対象指定として扱う。対象指定・期間指定のいずれも無ければ対象は「カレントディレクトリの git リポジトリ」、期間は「全期間」とみなす。
 2. 対象指定が既存ディレクトリのパスであれば手順 3 の再帰探索、それ以外 (存在しないパス、またはカンマを含む文字列) であれば `owner/repo` のカンマ区切りリストとして手順 4 に進む。
 3. ディレクトリパスが与えられた場合、配下の git リポジトリを次のように再帰探索する (探索深さの上限で暴走を防ぐ)。
@@ -75,7 +75,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ### 手順
 
-0. 第 1 章で作成済みの `<work>` (`<scratchpad>/repo-analytics-leadtime/`) をそのまま使う。
+0. 第 1 章で新規作成済みの `<work>` (`<work-root>/<一意な実行 ID>/`) をそのまま使う。
 1. 第 1 章で重複排除した収集キー (owner/repo) それぞれについて、次の a〜d を順に実行する。
 
    **a. issues 収集**
@@ -99,6 +99,8 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```
 
    いずれも `--jq` で `repository.nameWithOwner` (canonical 形) を各行の `repo` に注入し、1 行 1 レコードの JSONL として追記する (ユーザ入力の owner/repo 文字列は使わない)。
+
+   手順 c・d で使う `<owner>`/`<name>`/`<owner>/<name>` は、この収集キー (手順 1 の重複排除後のキー。caller 指定や再帰探索由来の casing をそのまま保持しうる) ではなく、a・b で `issues.jsonl` / `prs.jsonl` に書き込み済みの canonical `repo` 値 (nameWithOwner) を `/` で分解して得た owner/name を使う。overflow 検知の `select(.repo == ...)`、再取得 API 呼び出しの `-f owner=... -f name=...`、再取得後の置換対象特定 (`.repo == ... and .number == ...`) はすべてこの canonical 値で統一し、収集キーの casing を使わない (同一リポジトリでも収集キーと canonical の casing が食い違いうるため、caller 指定の casing のまま突合すると一致しない場合がある)。
 
    **c. issue timeline overflow の検知と置換**
 
@@ -255,6 +257,7 @@ python3 compute_leadtime.py \
 - 含めるチャート: 散布図 (対数軸・打ち切りを◇マーカー・イベント境界の縦線)、区間分解 (start→PR作成→ready→merge) のグループ棒、サイズ帯×週のヒートマップ、draft 経由率の週次系列、イベント年表、区間統計テーブル、全件テーブル (折りたたみ)。
 - 散布図の縦軸は対数スケールを既定とし、描画する y 値が 0 以下のレコードは軸下端の「≤0」専用バンドに別マーカー (×) で表示する (対数変換から除外するのであって、データから除外しない)。× の凡例は「対数軸に直接配置できない値」と定義する。negativeInterval だが y 値が正のレコードは正しい数値位置に置く。値は clamp せず JSON の値を表示し、hover と keyboard focus の双方で実値と理由に到達可能にする。全件テーブルにも同じ値とフラグを残す。
 - 週次・区間の中央値を提示するすべてのチャート・テーブルに「完了タスクのみの記述的中央値 (censor 非調整)」の注記を付け、n と censoredN を隣接表示する。ターミナルサマリや結論文で同じ中央値を引用する場合も同じ限定を省略しない。
+- 全件テーブル・hover・PR リンクは常に `(prRepo, pr)` の組を使う (`pr` 番号単独で表示・リンクしない。cross-repo close では issue の repo と PR の repo が異なるため、`pr` 番号だけでは対象 PR を一意に特定できない)。
 - ライト/ダーク両テーマに対応し、外部ライブラリを使用しない。
 
 ### 実行順序
@@ -264,11 +267,11 @@ python3 compute_leadtime.py \
 
    | チャート | 読む JSON キー |
    |---|---|
-   | 散布図 (対数軸・打ち切り◇・イベント縦線) | `mainSeries` + `censored` (縦線は `boundaries` があれば併用) |
+   | 散布図 (対数軸・打ち切り◇・イベント縦線) | `mainSeries` + `censored` (縦線は result.json の `boundaries` が非空であれば併用) |
    | 区間分解 (start→PR作成→ready→merge) のグループ棒 | `weeklyCohorts[].phaseMedians` |
    | サイズ帯×週のヒートマップ | `weeklyCohorts[].bySizeBand` |
    | draft 経由率の週次系列 | `weeklyCohorts[].viaDraftRate` |
-   | イベント年表 | `boundaries` |
+   | イベント年表 | result.json の `boundaries` |
    | 区間統計テーブル | `intervalStats` |
    | 全件テーブル (折りたたみ) | `mainSeries` / `censored` / `auxiliarySeries` |
 
@@ -301,7 +304,7 @@ python3 compute_leadtime.py \
 
 ### 個別の実行時挙動への対応
 
-- `repos[].closedIssues == 0` のリポジトリは主系列 (`mainSeries`) の対象外である旨を明記し、`repos[].mergedPrs` / `repos[].openReadyPrs` (merged PR 系の補助指標) のみで報告する。エラーとして扱わない。
+- `repos[].closedIssues == 0` のリポジトリでも、OPEN issue が ready 到達済みの qualifying PR を持てば `mainSeries` に `completionBasis == "ready_unmerged"` として編入されうる (mainSeries への編入は issue の `state` を問わないため、closedIssues の値だけでは mainSeries 対象外と断定できない)。レポート・サマリで「ready 済み・未 merge」のタスクがあると記載してよいかどうかは、`mainSeries` に `completionBasis == "ready_unmerged"` のレコードが 1 件以上存在するかで判定する (実メンバーシップ判定。派生カウンタ `repos[].openReadyPrs` による判定は廃止する — `openReadyPrs` は issue との紐付けを問わない repo 単位の PR 集計であり、mainSeries への編入有無と一致しない)。該当レコードが無いにもかかわらず `closedIssues == 0` の repo は、`repos[].mergedPrs` / `repos[].openReadyPrs` (merged PR 系の補助指標) のみで報告し、主系列 (`mainSeries`) の対象外である旨を明記する。エラーとして扱わない。
 - `markerCoverage[].coverage == 0.0` (該当 repo × 月に着手マーカーが 1 件も無い) はエラーにせず「marker coverage 0%」としてそのまま報告する。`coverage == null` (`closedIssues == 0`、観測不能) とは区別して報告する。
 - draft を経ていない PR は `resolve_ready` の契約により ready 時刻 = PR `createdAt` として `compute_leadtime.py` が解決済みである。SKILL.md 側で追加の判定は行わず、`result.json` の値をそのまま使う。
 - 再 draft 化された PR (`redraftCount > 0`) は `dataQuality.redraftPrCount` の件数をそのまま「測定上の限界」チェックリストで開示する (上記チェックリスト参照)。
