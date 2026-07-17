@@ -208,6 +208,19 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_rewrite(command, expected)
 
+    def test_r14_draft_state_reset_between_invocations(self) -> None:
+        # truthy 状態を invocation 間でリセットしない誤実装は 2 個目への挿入
+        # を欠落させ、非 draft PR が作られるため fail する。
+        command = (
+            'gh pr create --draft --title "a" --body "b"; '
+            'gh pr create --title "c" --body "d"'
+        )
+        expected = (
+            'gh pr create --draft --title "a" --body "b"; '
+            'gh pr create --draft --title "c" --body "d"'
+        )
+        self.assert_rewrite(command, expected)
+
     # ------------------------------------------------------------------
     # グループ H: heredoc 新仕様
     # (現行実装で fail するはず — H5/H6/H9 など一部は現行でも pass しうる)
@@ -812,6 +825,36 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_rewrite(command, expected)
 
+    def test_h24_supported_heredoc_declaration_tail_falsy_denied(self) -> None:
+        # supported delimiter では宣言行の後続 flag はスキャナから可視であり
+        # falsy 判定が働く (宣言行スキャンを heredoc 演算子で打ち切る誤実装は
+        # falsy を見逃して挿入し、実行時に後着 falsy が勝つ bypass になる)。
+        command = (
+            'gh pr create --title "t" --body-file - <<EOF --draft=false'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
+
+    def test_h25_insertion_then_unsafe_fallback_denies_whole_command(
+        self,
+    ) -> None:
+        # 後続 invocation の引数領域内 fallback による deny は先行 invocation
+        # の書き換えより優先する。1 個目の rewrite を先に返して 2 個目の
+        # unsafe を無視する誤実装は fail する (H22 との対比: H22 は fallback
+        # 側が非対象コマンド cat のため挿入が有効)。
+        command = (
+            'gh pr create --title "a" --body "b"; '
+            'gh pr create --title "c" --body-file - <<E"OF"'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
+
     # ------------------------------------------------------------------
     # グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との
     # 複合パターンのため現行実装では fail (red) するはず — `<<` 内の `1` を heredoc
@@ -1080,6 +1123,14 @@ class EnforceDraftPrTest(unittest.TestCase):
             "gh pr create --title \"t\" --body 'multi"
             + NL
             + "line' --draft=false"
+        )
+        self.assert_denied(command)
+
+    def test_l11_unquoted_continuation_in_draft_value_denied(self) -> None:
+        # quote 外の行継続はトークン連結され、falsy 判定は連結後の値
+        # (--draft=false) で行う (L09 の quote 外対称ケース)。
+        command = (
+            "gh pr create --draft=fal" + BS + NL + 'se --title "t" --body "b"'
         )
         self.assert_denied(command)
 
