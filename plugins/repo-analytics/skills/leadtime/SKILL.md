@@ -13,7 +13,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 - 対象: 省略時はカレントの git リポジトリ (origin remote から `owner/repo` を解決)。ディレクトリパスが与えられた場合は配下の git リポジトリを再帰探索する。`owner/repo` のカンマ区切りリストも受け付ける。
 - `since=YYYY-MM-DD` (省略可)。省略時は全期間を対象にする。
-- remote が GitHub でない、または remote が存在しないリポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
+- remote が GitHub でない、remote が存在しない、または owner/repo の識別子が charset 不正 (明示指定エントリを含む) なリポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
 - すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。この重複排除は 2 段階の契約である。第 1 段はここで述べる、収集キー (owner/repo の入力文字列) を小文字化して比較する case-insensitive dedup である。第 2 段はセクション 3 の収集ループ冒頭で、API が解決した canonical 名 (nameWithOwner) を基準に行う dedup であり、リネーム・移管によって収集キー上は別名に見えるが実体が同一リポジトリであるケースを捕捉する。JSONL レコードに書く repo 値はこの正規化キー (第 1 段のキー) ではなく、API が返す canonical な nameWithOwner を使う。各収集キー (owner/repo) に、解決に使ったローカル checkout パスを optional として保持する。owner/repo 直接指定と発見済み checkout が同一リポジトリに重複した場合も checkout の関連付けを失わない。同一リポジトリに複数の checkout がある場合は最初に発見したものを代表として選ぶ。保持した checkout はセクション 6 のリポジトリイベント抽出で使う。
 
 ### 手順
@@ -42,7 +42,8 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
      (`https://github.com/owner/repo(.git)?` / `ssh://git@github.com/owner/repo(.git)?`)
      の場合、パス部分から `owner/repo` を取り出し末尾の `.git` を除去する。
    - 上記いずれの形式にも一致しない、またはホストが `github.com` でない場合: 「remote が GitHub でない」としてスキップし、`{"repo": "<解決できた範囲の文字列>", "reason": "non_github_remote"}` を同じく `skippedRepos` に追記する。
-5. 明示指定の `owner/repo` エントリ (カンマ区切りリストの各要素、前後の空白を trim) はそのまま収集キー候補として採用する (この段階では GitHub への到達性を検証しない。存在しない owner/repo は第 3 章の `gh api graphql` 実行時にエラーとして判明し、第 2 章の fail-closed 規則に従って扱う)。
+   - 上記で `owner/repo` を切り出せた場合、続けて `owner` が `^[A-Za-z0-9-]+$`、`repo` (name) が `^[A-Za-z0-9._-]+$` にそれぞれ一致することを確認する (GitHub の owner / repository 命名規則に基づく保守的 charset)。分析対象ディレクトリ配下の `.git/config` は非信頼データであり、切り出した owner/name は本 skill のコマンド template へ文字列置換されるため、第 6 章の default branch 名と同様に保守的 charset で検証してから使う (注入の余地を fail-closed で排除する)。いずれかが charset に一致しない場合: 「識別子が不正」としてスキップし、`{"repo": "<解決できた範囲の文字列>", "reason": "invalid_identifier"}` を同じく `skippedRepos` に追記する。
+5. 明示指定の `owner/repo` エントリ (カンマ区切りリストの各要素、前後の空白を trim) は、`/` で `owner` と `repo` (name) に分解したうえで、手順 4 と同じ charset 検証 (`owner` は `^[A-Za-z0-9-]+$`、name は `^[A-Za-z0-9._-]+$`) を通してから収集キー候補として採用する (この段階では GitHub への到達性を検証しない。文字種のみを検証する。存在しない owner/repo は第 3 章の `gh api graphql` 実行時にエラーとして判明し、第 2 章の fail-closed 規則に従って扱う)。charset に一致しないエントリは「識別子が不正」としてスキップし、`{"repo": "<エントリ文字列>", "reason": "invalid_identifier"}` を `skippedRepos` に追記する。
 6. 手順 4・5 で得た収集キー候補全体を、`owner/repo` を小文字化した文字列をキーとして重複排除する (case-insensitive)。重複した場合、由来 (再帰探索 / 明示指定) を問わず 1 回だけ収集対象に残す。重複排除後のキー一覧が第 3 章のデータ収集ループの対象になる。
 
 ## 2. 前提確認 (fail-closed)
@@ -80,7 +81,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 - `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 4 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql`) を `gh api graphql` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
 - 各行の repo フィールドには API が返す canonical な nameWithOwner を使う (ユーザ入力の owner/repo 文字列を使わない。closer や closingIssuesReferences が返す nameWithOwner と join キーのケーシングを一致させるため)。
-- 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (`fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` の `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --paginate -f owner=<owner> -f name=<name> -F query=@<file>`。
+- 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (`fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` の `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --paginate -f owner="<owner>" -f name="<name>" -F query=@<file>`。
 - `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を先頭から全ページ取得し、一覧クエリ由来の timelineItems を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の timelineItems は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する。
 - `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
@@ -97,7 +98,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    リポジトリごとの収集開始時、issues / PR の取得より前に、canonical 名を独立に解決する。
 
    ```bash
-   gh api repos/<owner>/<name> --jq .full_name
+   gh api "repos/<owner>/<name>" --jq .full_name
    ```
 
    (issue / PR が 0 件のリポジトリでも取得できる)。小文字化した canonical 名を「canonical → (ターゲット, checkout パス)」の対応表と突合する。
@@ -111,7 +112,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
    ```bash
    gh api graphql --paginate \
-     -f owner=<owner> -f name=<name> \
+     -f owner="<owner>" -f name="<name>" \
      -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issues.graphql" \
      --jq '.data.repository as $r | $r.issues.nodes[] | . + {repo: $r.nameWithOwner}' \
      >> "<work>/issues.jsonl"
@@ -121,7 +122,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
    ```bash
    gh api graphql --paginate \
-     -f owner=<owner> -f name=<name> \
+     -f owner="<owner>" -f name="<name>" \
      -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-prs.graphql" \
      --jq '.data.repository as $r | $r.pullRequests.nodes[] | . + {repo: $r.nameWithOwner}' \
      >> "<work>/prs.jsonl"
@@ -141,7 +142,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
    ```bash
    gh api graphql --paginate \
-     -f owner=<owner> -f name=<name> -F number=<issue_number> \
+     -f owner="<owner>" -f name="<name>" -F number=<issue_number> \
      -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issue-timeline.graphql" \
      --jq '.data.repository.issue.timelineItems' \
      > "<work>/_overflow-issue-timeline.pages.jsonl"
@@ -177,7 +178,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
    ```bash
    gh api graphql --paginate \
-     -f owner=<owner> -f name=<name> -F number=<pr_number> \
+     -f owner="<owner>" -f name="<name>" -F number=<pr_number> \
      -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-pr-closing-issues.graphql" \
      --jq '.data.repository.pullRequest.closingIssuesReferences' \
      > "<work>/_overflow-pr-closing-issues.pages.jsonl"
@@ -285,7 +286,7 @@ python3 compute_leadtime.py \
 
    ```bash
    gh api graphql \
-     -f owner=<owner> -f name=<name> \
+     -f owner="<owner>" -f name="<name>" \
      -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name target { oid } } } }' \
      --jq '.data.repository.defaultBranchRef'
    ```
