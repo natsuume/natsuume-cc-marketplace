@@ -248,12 +248,14 @@ done
 
 PUSH_SEGMENT=""
 PUSH_SEGMENT_COUNT=0
+PUSH_SEGMENT_INDEX=-1
 # caller の変数名は cmd-parser.sh の `skip_env_assignments` ローカル変数
 # (`_toks_name` / `_idx_name` / `_n` / `_idx` / `_t` / `_t_raw`) と衝突しない prefix を
 # 使う必要がある (bash 3.2 で macOS デフォルト)。 caller で `_idx` / `_n` を使うと
 # `local _idx` / `local _n` 宣言で shadow され、 eval 経由の間接展開が空文字を読み
 # `[: : integer expression expected` 警告を吐く (macOS で確認済)。 ここでは `_pidx`
 # (push idx) / `_pn` (push n) を使う。
+_psidx=0
 for line in "${SEGMENTS[@]}"; do
   # token level で `git ... push` を確認 (text reference を排除)
   declare -a _toks
@@ -282,6 +284,7 @@ for line in "${SEGMENTS[@]}"; do
             PUSH_SEGMENT_COUNT=$((PUSH_SEGMENT_COUNT+1))
             if [ -z "$PUSH_SEGMENT" ]; then
               PUSH_SEGMENT="$line"
+              PUSH_SEGMENT_INDEX=$_psidx
             fi
             break ;;
           *) break ;;
@@ -290,6 +293,7 @@ for line in "${SEGMENTS[@]}"; do
     fi
   fi
   unset _toks
+  _psidx=$((_psidx+1))
 done
 
 # `git push` を一つも含まないなら本 hook 対象外。
@@ -369,7 +373,7 @@ done
 
 # target cwd を resolve。 解析不能な形式 (subshell / pushd / wrapper 等) は保守的 deny。
 TARGET_CWD=""
-if ! TARGET_CWD=$(resolve_push_target "$COMMAND"); then
+if ! TARGET_CWD=$(resolve_push_target "$PUSH_SEGMENT_INDEX" "${SEGMENTS[@]}"); then
   REASON=$(cat <<'EOF'
 プッシュをブロックしました。本フックの parser では target cwd を決定的に解析できない形式が含まれています。
 
