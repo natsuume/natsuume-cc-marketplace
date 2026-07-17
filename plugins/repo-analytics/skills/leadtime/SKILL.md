@@ -45,22 +45,34 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ## 2. 前提確認 (fail-closed)
 
+- `command -v jq` と `jq --version` で jq の有無とバージョンを確認する。不在、または 1.5 未満の場合は GitHub API 呼び出し前に fail-closed で中断し、必要バージョン (jq 1.5+) を報告する。
 - `gh auth status` で認証状態を確認する。
 - 未認証、または後続の GraphQL クエリがエラーを返した場合は、部分データのまま分析を進めず中断し、原因をユーザーに報告する。
 
 ### 手順
 
-1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで認証状態を確認する。
+1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで jq の有無とバージョンを確認する。
+
+   ```bash
+   command -v jq
+   jq --version
+   ```
+
+   `command -v jq` が非 0 の exit code で終了する (jq が見つからない)、または `jq --version` が報告するバージョンが 1.5 未満の場合、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+   - jq が不在、またはバージョンが 1.5 未満であったこと (コマンドの出力を含める)
+   - 必要バージョン (jq 1.5+) であること、および対応方法 (jq のインストール・更新)
+   - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
+2. jq の前提を満たしていれば、続けて必ず次のコマンドで認証状態を確認する。
 
    ```bash
    gh auth status
    ```
 
-2. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+3. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
    - `gh auth status` が未認証を示したこと (コマンドの出力を含める)
    - 対応方法 (`gh auth login` を実行してから再実行する)
    - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
-3. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
+4. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
 
 ## 3. データ収集
 
@@ -119,11 +131,11 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
      > <work>/_overflow-issue-timeline.json
    ```
 
-   得られた `{totalCount, nodes}` で `totalCount == (nodes | length)` になっていることを確認したうえで、`issues.jsonl` 中の該当行の `timelineItems` を丸ごと置き換える (部分結果とのマージはしない)。
+   得られた `{totalCount, nodes}` で `totalCount == (nodes | length)` になっていることを確認したうえで、`issues.jsonl` 中の該当行の `timelineItems` を丸ごと置き換える (部分結果とのマージはしない)。置換コマンドは `--argjson` (コマンドライン引数として展開するため ARG_MAX の上限にかかりうる) ではなく `--slurpfile` (ファイルから直接読み込むため ARG_MAX の制約を受けない) でファイルベースに渡す。
 
    ```bash
-   jq -c --argjson repl "$(cat <work>/_overflow-issue-timeline.json)" \
-     'if .repo == "<owner>/<name>" and .number == <issue_number> then .timelineItems = $repl else . end' \
+   jq -c --slurpfile repl <work>/_overflow-issue-timeline.json \
+     'if .repo == "<owner>/<name>" and .number == <issue_number> then .timelineItems = $repl[0] else . end' \
      <work>/issues.jsonl > <work>/issues.jsonl.tmp && mv <work>/issues.jsonl.tmp <work>/issues.jsonl
    ```
 
@@ -135,7 +147,26 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    jq -c 'select(.repo == "<owner>/<name>" and (.closingIssuesReferences.totalCount > (.closingIssuesReferences.nodes | length)))' <work>/prs.jsonl
    ```
 
-   該当した各 PR (`repo`, `number` の組) について `fetch-pr-closing-issues.graphql` で全ページを取得し直し、`closingIssuesReferences` を丸ごと置き換える (issue timeline の置換と同じ要領: `--paginate` → `jq -s` で `nodes` を結合 → `totalCount == (nodes | length)` を確認 → `prs.jsonl` の該当行を置換)。PR 側の `timelineItems` (`ReadyForReviewEvent` / `ConvertToDraftEvent`) は overflow しても追加ページングテンプレートが無いため置換せず、既存の bullet のとおり集計スクリプトの除外に委ねる。
+   該当した各 PR (`repo`, `number` の組) について、`fetch-pr-closing-issues.graphql` で先頭ページから全ページを取得し直す。
+
+   ```bash
+   gh api graphql --paginate \
+     -f owner=<owner> -f name=<name> -F number=<pr_number> \
+     -F query=@<plugin-root>/skills/leadtime/scripts/fetch-pr-closing-issues.graphql \
+     --jq '.data.repository.pullRequest.closingIssuesReferences' \
+     | jq -s '{totalCount: .[0].totalCount, nodes: (map(.nodes) | add)}' \
+     > <work>/_overflow-pr-closing-issues.json
+   ```
+
+   得られた `{totalCount, nodes}` で `totalCount == (nodes | length)` になっていることを確認したうえで、`prs.jsonl` 中の該当行の `closingIssuesReferences` を丸ごと置き換える (部分結果とのマージはしない)。issue timeline の置換と同じ理由で `--argjson` ではなく `--slurpfile` を使う。
+
+   ```bash
+   jq -c --slurpfile repl <work>/_overflow-pr-closing-issues.json \
+     'if .repo == "<owner>/<name>" and .number == <pr_number> then .closingIssuesReferences = $repl[0] else . end' \
+     <work>/prs.jsonl > <work>/prs.jsonl.tmp && mv <work>/prs.jsonl.tmp <work>/prs.jsonl
+   ```
+
+   PR 側の `timelineItems` (`ReadyForReviewEvent` / `ConvertToDraftEvent`) は overflow しても追加ページングテンプレートが無いため置換せず、既存の bullet のとおり集計スクリプトの除外に委ねる。
 2. 全リポジトリの収集が終わったら、`date -u +%Y-%m-%dT%H:%M:%SZ` 等で収集完了時刻 (UTC ISO8601) を記録する。この値を第 5 章の `--as-of` に渡す。
 3. 収集中に判明した診断 (スキップしたリポジトリの最終件数など) を `<work>/collection-diagnostics.json` へ反映する (Write ツールで上書き)。第 9 章のターミナルサマリと Artifact レポートはこのファイルの値をそのまま参照し、独自に再集計しない。
 
@@ -244,10 +275,14 @@ python3 compute_leadtime.py \
    - `Claude Code CLI major update <期間>`
 
    検索結果から判明した候補イベント (リリース日・GA 日・デフォルトモデル変更等) を一旦リストアップする。
-2. ローカル痕跡で「ユーザー環境への適用日」を補正する。
-   - `~/.codex/config.toml` の更新日時: Linux は `stat -c '%y' ~/.codex/config.toml`、macOS は `stat -f '%Sm' ~/.codex/config.toml`。
-   - `~/.claude/plugins/cache` / `~/.codex/plugins/cache` 配下の更新日時: 各ディレクトリに対して同様に `stat` (上記いずれかの形式) を実行する。
-3. 適用日の補正規則: WebSearch で判明したリリース日とローカル痕跡の更新日の両方が得られた場合、ユーザー環境に実際に効果が及んだのはローカル痕跡の日付以降であるため、`boundaries.json` の `at` にはローカル痕跡の日付を採用し、`label` に「(適用日は推定、根拠: <ローカル痕跡のパス>)」等、推定であることを明記する。ローカル痕跡が得られない場合はリリース日をそのまま `at` に採用し、`label` に「(ローカル適用日不明、リリース日で代用)」と明記する。
+2. ローカル痕跡の mtime を取得する。locale 依存の表記 (`%y` / `%Sm` 等) は環境によって曜日・月名の表記が変わり比較を誤らせるため使わず、epoch 秒で取得してから ISO8601 (UTC) に変換する。
+   - `~/.codex/config.toml` の mtime (epoch 秒): Linux は `stat -c '%Y' ~/.codex/config.toml`、macOS は `stat -f '%m' ~/.codex/config.toml`。
+   - `~/.claude/plugins/cache` / `~/.codex/plugins/cache` 配下の mtime (epoch 秒): 各ディレクトリに対して同様に `stat` (上記いずれかの形式) を実行する。
+   - epoch 秒から ISO8601 (UTC) への変換: Linux は `date -u -d @<epoch 秒> +%Y-%m-%dT%H:%M:%SZ`、macOS は `date -u -r <epoch 秒> +%Y-%m-%dT%H:%M:%SZ`。
+3. mtime の採用規則。次の (1)〜(3) をこの順に適用する。
+   1. ローカル痕跡が対象イベントと意味的に結び付くこと (該当モデル・ツールの設定/キャッシュであること) を確認する。無関係な設定変更等、関連性を確認できない mtime は候補にしない。
+   2. `リリース日時 <= mtime <= --as-of` の場合に限り、その mtime を推定適用日として `boundaries.json` の `at` に採用する。`label` には「(適用日は推定、根拠: <ローカル痕跡のパス>)」等、推定であることを明記する。
+   3. リリース日より前・`--as-of` より後・関連性を確認できない mtime は採用しない。ローカル痕跡が全く得られない場合も同様に扱う。これらの場合はリリース日をそのまま `at` に採用し、`label` に「(ローカル適用日不明、リリース日で代用)」と明記する。
 4. WebSearch が使えない場合は本節 (b) の収集をまるごと省略して続行する。`<work>/collection-diagnostics.json` の `webSearchSkipped` を `true` に更新し (Write ツールで上書き)、省略した旨を Artifact レポート (第 7・8 章) とターミナルサマリ (第 9 章) の両方に明記する。
 5. (a)(b) で集めたイベントを `boundaries.json` の契約 (`[{"id": str, "label": str, "at": ISO8601}]`) に整形し、Write ツールで `<work>/boundaries.json` に書き出す。`id` は重複しない短い識別子 (例: `repo-plugin-repo-analytics-added`, `model-anthropic-202607`) を付ける。1 件も収集できなかった場合 (a も b も候補が無い、または b を丸ごと省略しかつ a も 0 件) は `boundaries.json` を作成せず、第 5 章手順 4 の再実行を省略する。
 

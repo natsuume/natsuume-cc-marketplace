@@ -961,7 +961,9 @@ def compute(
           `weeklyCohorts` に適用する (`weeklyCohorts` はフィルタ後の
           `mainSeries` から算出されるため間接的に適用される)。
         - 数値の丸めはすべて時間 (hours) 単位・小数第 2 位まで
-          (Python 組み込み `round`、round half-even)。
+          (Python 組み込み `round`、round half-even)。丸めは最終出力時に
+          1 回だけ適用する (中央値は丸め済みの出力値ではなく未丸めの raw 値
+          から計算し、その中央値自体を最後に 1 回だけ丸める)。
         - `n = 0` の集計オブジェクトでも、そのキー自体は出力から省略しない
           (値を `null` にする。例: 該当週の全件が `negativeInterval` のときの
           `medianLeadTimeHours`)。
@@ -1487,7 +1489,7 @@ def _build_weekly_cohorts(
 
         median_lead_time = _median_rounded(
             [
-                record.output["leadTimeHours"]
+                record.raw_lead_time_hours
                 for record in week_records
                 if record.raw_lead_time_hours >= 0
             ]
@@ -1495,21 +1497,21 @@ def _build_weekly_cohorts(
         phase_medians = {
             "startToPrCreated": _median_rounded(
                 [
-                    record.output["phaseHours"]["startToPrCreated"]
+                    record.raw_start_to_pr_created
                     for record in week_records
                     if record.raw_start_to_pr_created >= 0
                 ]
             ),
             "prCreatedToReady": _median_rounded(
                 [
-                    record.output["phaseHours"]["prCreatedToReady"]
+                    record.raw_pr_created_to_ready
                     for record in week_records
                     if record.raw_pr_created_to_ready >= 0
                 ]
             ),
             "readyToMerge": _median_rounded(
                 [
-                    record.output["phaseHours"]["readyToMerge"]
+                    record.raw_ready_to_merge
                     for record in week_records
                     if record.raw_ready_to_merge is not None
                     and record.raw_ready_to_merge >= 0
@@ -1525,7 +1527,7 @@ def _build_weekly_cohorts(
                 "n": len(band_records),
                 "medianLeadTimeHours": _median_rounded(
                     [
-                        record.output["leadTimeHours"]
+                        record.raw_lead_time_hours
                         for record in band_records
                         if record.raw_lead_time_hours >= 0
                     ]
@@ -1613,7 +1615,7 @@ def _build_interval_stats(
                 "n": len(bucket_records),
                 "medianLeadTimeHours": _median_rounded(
                     [
-                        record.output["leadTimeHours"]
+                        record.raw_lead_time_hours
                         for record in bucket_records
                         if record.raw_lead_time_hours >= 0
                     ]
@@ -1627,7 +1629,7 @@ def _build_interval_stats(
                 ),
                 "smallOnlyMedianLeadTimeHours": _median_rounded(
                     [
-                        record.output["leadTimeHours"]
+                        record.raw_lead_time_hours
                         for record in small_only_records
                         if record.raw_lead_time_hours >= 0
                     ]

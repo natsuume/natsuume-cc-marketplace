@@ -59,4 +59,5 @@ repo-analytics/
 
 - `gh` CLI (認証済み: `gh auth status` が通ること)
 - Python 3.11+ (標準ライブラリのみで動作)
+- `jq 1.5+` (SKILL.md の収集手順で JSONL の overflow 検知・置換に使用)
 - Claude Code (Artifact 発行・WebSearch が利用可能なセッション)

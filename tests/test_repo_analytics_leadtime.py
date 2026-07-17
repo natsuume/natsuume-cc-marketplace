@@ -8,8 +8,10 @@ Phase A (spec-first) の位置づけ:
   `main` の処理本体は `NotImplementedError` を送出する (Phase B で実装する)。
 - このファイルは issue #288 Phase A 契約ドキュメント セクション 8 の
   test matrix T1〜T42、Phase B 着手前に rescue 壁打ちで精密化された契約改訂
-  8 件に対応する T43〜T47、および Phase B 後の codex review 指摘 6 件
-  (rescue 壁打ちで精密化済み) に対応する T48〜T50 を全件実装する。各テスト
+  8 件に対応する T43〜T47、Phase B 後の codex review 指摘 6 件
+  (rescue 壁打ちで精密化済み) に対応する T48〜T50、および draft PR #293 への
+  codex review 指摘 4 件 (rescue 壁打ちで精密化済み) のうち中央値計算の
+  丸め順序に対応する T51 を全件実装する。各テスト
   メソッド名・コメントに `T<n>` を付与し対応関係を明示する (T42: 収集範囲外
   リポジトリの merged PR を closer とする issue が `resolve_close_linkage` で
   `"merged_pr_external"` に分類され、`compute` の出力で
@@ -29,7 +31,11 @@ Phase A (spec-first) の位置づけ:
   `mainSeries` レコードの `repo` が issue 側、`prRepo` が選択 PR 側の
   canonical repo になることの検証。T50: JSONL 入力 (comment / PR の
   createdAt 等) に tz 情報の無い naive timestamp が含まれる行があると
-  `main` が exit code 2 を返し、stdout に結果 JSON を出力しないことの検証)。
+  `main` が exit code 2 を返し、stdout に結果 JSON を出力しないことの検証。
+  T51: 中央値が丸め済みの出力値ではなく丸め前の raw 値から計算され、最後に
+  1 回だけ丸められることの回帰検証 (`weeklyCohorts[].medianLeadTimeHours` /
+  `phaseMedians.prCreatedToReady` / `bySizeBand.S.medianLeadTimeHours`、
+  `intervalStats[].medianLeadTimeHours` / `smallOnlyMedianLeadTimeHours`)。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -1720,6 +1726,91 @@ class ComputeTests(unittest.TestCase):
             e["issue"] for e in result["auxiliarySeries"]["manualClose"]
         }
         self.assertNotIn(issue_number, manual_close_issue_numbers)
+
+    def test_t51_median_is_computed_from_raw_values_not_rounded_output(self):
+        # T51 (draft PR #293 への codex review 指摘): 中央値は各レコードの
+        # 丸め済み出力値 (leadTimeHours 等、小数第 2 位丸め) からではなく、
+        # 丸め前の raw duration から計算し、中央値そのものを最後に 1 回だけ
+        # 丸めなければならない。
+        #
+        # fixture は同じ週・同じ S サイズ帯・同じ interval (区間) に入る 2 件の
+        # mainSeries レコードで、leadTimeHours (= firstStartAt → readyAt) と
+        # prCreatedToReady (= prCreatedAt → readyAt) が厳密に同じ raw 値になる
+        # よう prCreatedAt == firstStartAt (startToPrCreated == 0) に設定する。
+        #
+        # record 1: raw = 3618 秒 = 1.005 時間ちょうど。
+        #   round(1.005, 2) は浮動小数点表現の都合で 1.0 になる
+        #   (Python の round は round-half-even だが、1.005 は 2 進浮動小数点で
+        #   厳密な 1.005 より僅かに小さい値として表現されるため 1.0 側に丸まる)。
+        # record 2: raw = 3650.4 秒 = 1.014 時間ちょうど。round(1.014, 2) = 1.01
+        #   (1.014 は 1.01 と 1.02 の中間 1.015 未満のため、この丸めは
+        #   浮動小数点表現に依存しない通常の丸め)。
+        #
+        # 丸め済み出力値 {1.0, 1.01} からの中央値は (1.0 + 1.01) / 2 = 1.005
+        # → round(1.005, 2) は上と同じ理由で 1.0 になる (現行実装のバグ)。
+        # raw 値 {1.005, 1.014} からの中央値は (1.005 + 1.014) / 2 = 1.0095
+        # → round(1.0095, 2) = 1.01 (raw 化後の正しい挙動)。
+        # 実際に Python で検証済み (round(1.005, 2) == 1.0、
+        # round(1.014, 2) == 1.01、round(1.0095, 2) == 1.01)。
+        repo = "owner/name"
+        issue1, pr1 = make_started_case(
+            issue_number=5101,
+            pr_number=5101,
+            repo=repo,
+            start_at="2026-07-13T10:00:00Z",
+            ready_at="2026-07-13T11:00:18Z",  # +3618s = 1.005h ちょうど
+            additions=10,
+            deletions=0,
+        )
+        issue2, pr2 = make_started_case(
+            issue_number=5102,
+            pr_number=5102,
+            repo=repo,
+            start_at="2026-07-13T10:00:00Z",
+            ready_at="2026-07-13T11:00:50.400000Z",  # +3650.4s = 1.014h ちょうど
+            additions=10,
+            deletions=0,
+        )
+
+        # 個別レコードの公開値 (round 後) が期待どおり {1.0, 1.01} になっている
+        # ことを前提として確認する (この前提が崩れると本テストの red→green
+        # 判別が成立しない)。
+        self.assertEqual(round(3618 / 3600, 2), 1.0)
+        self.assertEqual(round(3650.4 / 3600, 2), 1.01)
+
+        boundaries = [
+            {
+                "id": "evt-1",
+                "label": "event 1",
+                "at": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            }
+        ]
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue1, issue2], [pr1, pr2], self.patterns, as_of, None, boundaries
+        )
+
+        self.assertEqual(len(result["mainSeries"]), 2)
+        published_lead_times = sorted(
+            entry["leadTimeHours"] for entry in result["mainSeries"]
+        )
+        self.assertEqual(published_lead_times, [1.0, 1.01])
+
+        self.assertEqual(len(result["weeklyCohorts"]), 1)
+        cohort = result["weeklyCohorts"][0]
+        self.assertEqual(cohort["n"], 2)
+        self.assertEqual(cohort["medianLeadTimeHours"], 1.01)
+        self.assertEqual(cohort["phaseMedians"]["prCreatedToReady"], 1.01)
+        self.assertEqual(cohort["bySizeBand"]["S"]["medianLeadTimeHours"], 1.01)
+
+        self.assertEqual(len(result["intervalStats"]), 2)
+        bucket = result["intervalStats"][1]
+        self.assertEqual(bucket["from"], "evt-1")
+        self.assertIsNone(bucket["to"])
+        self.assertEqual(bucket["n"], 2)
+        self.assertEqual(bucket["medianLeadTimeHours"], 1.01)
+        self.assertEqual(bucket["smallOnlyN"], 2)
+        self.assertEqual(bucket["smallOnlyMedianLeadTimeHours"], 1.01)
 
 
 # ---------------------------------------------------------------------------
