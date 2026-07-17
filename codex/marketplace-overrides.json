@@ -159,7 +159,7 @@
             "source": "commands/review.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
-            "sourceDigest": "6a48c2e7a16deeda24b8bd3c1ceecea9fa34c256285f0c2cc12ccdc5d7276438"
+            "sourceDigest": "d934cb0041930281ef44733f2110ab1e47acbc1be4cc1fbf70ab13639d992df5"
           },
           {
             "source": "agents/code-reviewer.md",
@@ -186,7 +186,7 @@
             "sourceDigest": "be236d7412a9db67d9f5e0f36383515bbac7e179a628d39d96b19405d7f0cd72"
           }
         ],
-        "sourceTreeDigest": "10745ced97d37e9d54aa8169c200743d3773124a3ab726a08d4b8ea6dc4bafc5"
+        "sourceTreeDigest": "84eb7a22e6c05a44322ca4c44a2c0113432a8bdd6a7c04061bf9456db60bc5b9"
       }
     },
     "update-default-branch": {
