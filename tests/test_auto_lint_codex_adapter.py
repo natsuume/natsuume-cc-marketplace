@@ -29,6 +29,7 @@ paths_module = load_module("extract_edit_paths", LIB / "extract-edit-paths.py")
 DETECT_SCRIPT = LIB / "detect-new-ignores.py"
 BLOCK_SCRIPT = LIB.parent / "block-ignore-lint-comment.sh"
 FIND_CONFIG_ROOT = LIB / "find-config-root.sh"
+CODE_FORMAT = LIB.parent / "code-format.sh"
 
 
 class EditPathAdapterTest(unittest.TestCase):
@@ -237,6 +238,65 @@ class ConfigRootResolutionTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), str(repository.resolve()))
 
+
+class CodeFormatRepositoryBoundaryTest(unittest.TestCase):
+    def run_hook(self, file_path: Path, marker: Path) -> subprocess.CompletedProcess[bytes]:
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": str(file_path)}}
+        env = os.environ.copy()
+        env["FORMAT_MARKER"] = str(marker)
+        return subprocess.run(
+            ["bash", str(CODE_FORMAT)],
+            input=json.dumps(payload).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            check=False,
+        )
+
+    def make_eslint_fixture(self, root: Path) -> Path:
+        source = root / "src"
+        source.mkdir(parents=True)
+        (root / "eslint.config.js").write_text("export default [];\n", encoding="utf-8")
+        eslint = root / "node_modules" / ".bin" / "eslint"
+        eslint.parent.mkdir(parents=True)
+        eslint.write_text('#!/bin/sh\n: > "$FORMAT_MARKER"\n', encoding="utf-8")
+        eslint.chmod(0o755)
+        file_path = source / "scratch.js"
+        file_path.write_text("const value = 1;\n", encoding="utf-8")
+        return file_path
+
+    @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+    def test_file_outside_git_repository_is_not_formatted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "outside-project"
+            file_path = self.make_eslint_fixture(root)
+            marker = Path(tmp) / "formatter-ran"
+
+            result = self.run_hook(file_path, marker)
+
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(
+        shutil.which("jq") and shutil.which("git"),
+        "hook integration requires jq and git",
+    )
+    def test_untracked_file_inside_git_repository_is_still_formatted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp) / "repo"
+            file_path = self.make_eslint_fixture(repository)
+            subprocess.run(
+                ["git", "init", "-q", str(repository)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+            marker = Path(tmp) / "formatter-ran"
+
+            result = self.run_hook(file_path, marker)
+
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertTrue(marker.exists())
 
 if __name__ == "__main__":
     unittest.main()
