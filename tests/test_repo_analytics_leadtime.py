@@ -9,9 +9,12 @@ Phase A (spec-first) の位置づけ:
 - このファイルは issue #288 Phase A 契約ドキュメント セクション 8 の
   test matrix T1〜T42、Phase B 着手前に rescue 壁打ちで精密化された契約改訂
   8 件に対応する T43〜T47、Phase B 後の codex review 指摘 6 件
-  (rescue 壁打ちで精密化済み) に対応する T48〜T50、および draft PR #293 への
+  (rescue 壁打ちで精密化済み) に対応する T48〜T50、draft PR #293 への
   codex review 指摘 4 件 (rescue 壁打ちで精密化済み) のうち中央値計算の
-  丸め順序に対応する T51 を全件実装する。各テスト
+  丸め順序に対応する T51、および draft PR #293 への pre-push review 指摘
+  3 件 (rescue 壁打ちで精密化済み) のうち load_claim_patterns の非 UTF-8
+  patterns file 検出と resolve_close_linkage の同時刻 ClosedEvent tie-break
+  に対応する T52〜T53 を全件実装する。各テスト
   メソッド名・コメントに `T<n>` を付与し対応関係を明示する (T42: 収集範囲外
   リポジトリの merged PR を closer とする issue が `resolve_close_linkage` で
   `"merged_pr_external"` に分類され、`compute` の出力で
@@ -36,6 +39,13 @@ Phase A (spec-first) の位置づけ:
   1 回だけ丸められることの回帰検証 (`weeklyCohorts[].medianLeadTimeHours` /
   `phaseMedians.prCreatedToReady` / `bySizeBand.S.medianLeadTimeHours`、
   `intervalStats[].medianLeadTimeHours` / `smallOnlyMedianLeadTimeHours`)。
+  T52: `--claim-patterns-file` が UTF-8 として decode できないバイト列を
+  含む場合、`main` が exit code 3 を返し、stdout が空で、stderr に (生の
+  traceback ではなく) 診断メッセージが出ることの検証。T53: 同一 createdAt
+  を持つ複数の `ClosedEvent` が timeline 中に存在する場合、
+  `resolve_close_linkage` が `timelineItems.nodes` 配列内で後方の
+  `ClosedEvent` を採用し (`category` が `"merged_pr"` になり)、`compute`
+  でも該当 issue が `mainSeries` に編入されることの検証。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -691,7 +701,7 @@ class ResolveCloseLinkageTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# T18〜T27, T31〜T34: compute
+# T18〜T27, T31〜T34, T53: compute
 # ---------------------------------------------------------------------------
 
 
@@ -1812,9 +1822,59 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(bucket["smallOnlyN"], 2)
         self.assertEqual(bucket["smallOnlyMedianLeadTimeHours"], 1.01)
 
+    def test_t53_same_timestamp_closed_events_use_last_in_timeline(self):
+        # T53 (pre-push review 指摘の確定対応): 同一 createdAt を持つ複数の
+        # ClosedEvent が timeline 中に存在する場合 (close → reopen → close
+        # 相当の 3 イベント)、resolve_close_linkage は timelineItems.nodes
+        # 配列内で後方に出現した ClosedEvent を採用しなければならない。
+        # 旧実装の max(..., key=createdAt) は同値タイの場合に先頭要素を返す
+        # ため、前方 (closer なし = manual) を選んでしまう契約違反があった
+        # (このケースでは後方が merged PR closer)。
+        repo = "owner/name"
+        issue_number = 5301
+        pr_number = 5301
+        same_time = "2026-01-10T00:00:00Z"
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="CLOSED",
+            state_reason="COMPLETED",
+            created_at="2026-01-01T00:00:00Z",
+            closed_at=same_time,
+            timeline_nodes=[
+                issue_comment("2026-01-01T00:00:00Z", "🔒 ai:claim branch=x"),
+                closed_event(same_time, None),  # 前方: closer なし (manual 相当)
+                reopened_event(same_time),
+                closed_event(
+                    same_time, pr_closer(pr_number, repo=repo, merged=True)
+                ),  # 後方: merged PR closer
+            ],
+        )
+        pr = make_pr(
+            repo=repo,
+            number=pr_number,
+            state="MERGED",
+            created_at="2026-01-02T00:00:00Z",
+            merged_at=same_time,
+            timeline_nodes=[ready_event("2026-01-02T00:00:00Z")],
+        )
+        prs_by_key = {(repo, pr_number): pr}
+
+        linkage = compute_leadtime.resolve_close_linkage(issue, prs_by_key)
+        self.assertEqual(linkage.category, "merged_pr")
+        self.assertEqual(linkage.linked_pr, {"repo": repo, "number": pr_number})
+
+        as_of = datetime(2026, 1, 20, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+        self.assertEqual(len(result["mainSeries"]), 1)
+        self.assertEqual(result["mainSeries"][0]["issue"], issue_number)
+        self.assertEqual(result["mainSeries"][0]["completionBasis"], "merged")
+
 
 # ---------------------------------------------------------------------------
-# T28〜T30: main (tempfile 経由。subprocess は使わない)
+# T28〜T30, T52: main (tempfile 経由。subprocess は使わない)
 # ---------------------------------------------------------------------------
 
 
@@ -2005,6 +2065,46 @@ class MainTests(unittest.TestCase):
                         )
                     self.assertEqual(exit_code, 2)
                     self.assertEqual(captured_stdout.getvalue(), "")
+
+    def test_t52_non_utf8_patterns_file_exits_three(self):
+        # T52 (pre-push review 指摘の確定対応): --claim-patterns-file が
+        # UTF-8 として decode できないバイト列を含む場合、load_claim_patterns
+        # は UnicodeDecodeError を ClaimPatternsError に変換し、main は
+        # exit code 3 を返す。stdout には結果 JSON を出力せず、stderr には
+        # (生の traceback ではなく) 診断メッセージが出る。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            issues_path = tmp_path / "issues.jsonl"
+            prs_path = tmp_path / "prs.jsonl"
+            patterns_path = tmp_path / "patterns.json"
+            issues_path.write_text("", encoding="utf-8")
+            prs_path.write_text("", encoding="utf-8")
+            patterns_path.write_bytes(b"\x80\x81")
+
+            captured_stdout = io.StringIO()
+            captured_stderr = io.StringIO()
+            with (
+                contextlib.redirect_stdout(captured_stdout),
+                contextlib.redirect_stderr(captured_stderr),
+            ):
+                exit_code = compute_leadtime.main(
+                    [
+                        "--issues",
+                        str(issues_path),
+                        "--prs",
+                        str(prs_path),
+                        "--claim-patterns-file",
+                        str(patterns_path),
+                        "--as-of",
+                        "2026-07-17T04:00:00Z",
+                    ]
+                )
+
+            self.assertEqual(exit_code, 3)
+            self.assertEqual(captured_stdout.getvalue(), "")
+            stderr_output = captured_stderr.getvalue()
+            self.assertNotEqual(stderr_output.strip(), "")
+            self.assertNotIn("Traceback", stderr_output)
 
 
 if __name__ == "__main__":

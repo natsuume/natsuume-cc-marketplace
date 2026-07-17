@@ -14,7 +14,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - 対象: 省略時はカレントの git リポジトリ (origin remote から `owner/repo` を解決)。ディレクトリパスが与えられた場合は配下の git リポジトリを再帰探索する。`owner/repo` のカンマ区切りリストも受け付ける。
 - `since=YYYY-MM-DD` (省略可)。省略時は全期間を対象にする。
 - remote が GitHub でない、または remote が存在しないリポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
-- すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。JSONL レコードに書く repo 値はこの正規化キーではなく、API が返す canonical な nameWithOwner を使う。各収集キー (owner/repo) に、解決に使ったローカル checkout パスを optional として保持する。owner/repo 直接指定と発見済み checkout が同一リポジトリに重複した場合も checkout の関連付けを失わない。同一リポジトリに複数の checkout がある場合は最初に発見したものを代表として選ぶ。保持した checkout はセクション 6 のリポジトリイベント抽出で使う。
+- すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。この重複排除は 2 段階の契約である。第 1 段はここで述べる、収集キー (owner/repo の入力文字列) を小文字化して比較する case-insensitive dedup である。第 2 段はセクション 3 の収集ループ冒頭で、API が解決した canonical 名 (nameWithOwner) を基準に行う dedup であり、リネーム・移管によって収集キー上は別名に見えるが実体が同一リポジトリであるケースを捕捉する。JSONL レコードに書く repo 値はこの正規化キー (第 1 段のキー) ではなく、API が返す canonical な nameWithOwner を使う。各収集キー (owner/repo) に、解決に使ったローカル checkout パスを optional として保持する。owner/repo 直接指定と発見済み checkout が同一リポジトリに重複した場合も checkout の関連付けを失わない。同一リポジトリに複数の checkout がある場合は最初に発見したものを代表として選ぶ。保持した checkout はセクション 6 のリポジトリイベント抽出で使う。
 
 ### 手順
 
@@ -90,7 +90,22 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 ### 手順
 
 0. 第 1 章で新規作成済みの `<work>` (`<work-root>/<一意な実行 ID>/`) をそのまま使う。
-1. 第 1 章で重複排除した収集キー (owner/repo) それぞれについて、次の a〜d を順に実行する。
+1. 第 1 章で重複排除した収集キー (owner/repo) それぞれについて、次の canonical 名解決 (第 2 段の重複排除) を先に行ったうえで a〜d を順に実行する。
+
+   **canonical 名の解決と収集時 dedup (第 2 段)**
+
+   リポジトリごとの収集開始時、issues / PR の取得より前に、canonical 名を独立に解決する。
+
+   ```bash
+   gh api repos/<owner>/<name> --jq .full_name
+   ```
+
+   (issue / PR が 0 件のリポジトリでも取得できる)。小文字化した canonical 名を「canonical → (ターゲット, checkout パス)」の対応表と突合する。
+
+   - (i) 既出なら `duplicate_canonical` として収集診断 `skippedRepos` (`{"repo": "<canonical の nameWithOwner>", "reason": "duplicate_canonical"}`) に記録し、そのターゲットの issues / PR 収集をスキップして次の収集キーに進む (この収集キーについては a〜d を実行しない)。既存エントリに checkout パスが無く今回のターゲットが checkout を持つ場合は、既存エントリへ checkout を補完する。
+   - (ii) 新規なら対応表に登録し、以降の収集 (a〜d) はこの canonical の owner/name を使う。
+
+   `issues.jsonl` / `prs.jsonl` への追記は、この canonical dedup 判定の後にのみ行う (判定前に書き込まない)。
 
    **a. issues 収集**
 

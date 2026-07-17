@@ -287,7 +287,8 @@ class CloseLinkage:
         「最終 ClosedEvent」は `timelineItems.nodes` を createdAt 昇順に見て、
         `ReopenedEvent` を挟んで複数回 CLOSED になっている場合は最後に出現した
         `ClosedEvent` を採用する (close → reopen → close なら 2 番目の
-        `ClosedEvent`)。
+        `ClosedEvent`)。createdAt が同値の複数 `ClosedEvent` は
+        `timelineItems.nodes` 配列内で後方のものを採用する。
     """
 
     category: str
@@ -338,6 +339,7 @@ def load_claim_patterns(path: Path) -> ClaimPatterns:
         ClaimPatternsError: 次のいずれかに該当する場合に送出する
             (`main` はこれを捕捉し exit code `3` に変換する)。
             - ファイルが存在しない、または JSON として parse できない。
+            - ファイルを UTF-8 として decode できない場合。
             - トップレベルキー `inProgressLabel` / `strict` / `loose` のいずれかが
               欠落している、または型が不一致 (`inProgressLabel` は非空文字列、
               `strict` / `loose` はリスト)。
@@ -356,7 +358,7 @@ def load_claim_patterns(path: Path) -> ClaimPatterns:
     """
     try:
         raw_text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise ClaimPatternsError(
             f"claim patterns file を読み込めません ({path}): {exc}"
         ) from exc
@@ -614,16 +616,20 @@ def resolve_close_linkage(issue: dict, prs_by_key: dict) -> CloseLinkage:
     if issue.get("stateReason") == "NOT_PLANNED":
         return CloseLinkage(category="not_planned", linked_pr=None)
 
-    closed_events = [
-        node
-        for node in issue["timelineItems"]["nodes"]
+    closed_events_with_index = [
+        (index, node)
+        for index, node in enumerate(issue["timelineItems"]["nodes"])
         if node.get("__typename") == "ClosedEvent"
     ]
-    if not closed_events:
+    if not closed_events_with_index:
         return CloseLinkage(category="manual", linked_pr=None)
 
-    final_event = max(
-        closed_events, key=lambda node: _parse_datetime(node["createdAt"])
+    # (createdAt, index) の全順序で選ぶ。createdAt が同値の場合は
+    # timelineItems.nodes 配列内で後方の要素を優先する (CloseLinkage の
+    # docstring 「境界」参照)。
+    _, final_event = max(
+        closed_events_with_index,
+        key=lambda item: (_parse_datetime(item[1]["createdAt"]), item[0]),
     )
     closer = final_event.get("closer")
     if closer is None:
