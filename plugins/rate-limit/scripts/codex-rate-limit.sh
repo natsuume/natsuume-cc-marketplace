@@ -260,7 +260,7 @@ send_rpc() {
   printf '%s\n' "$1" >&3 2>/dev/null
 }
 
-INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"rate-limit-plugin","version":"0.3.0"}}}'
+INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"rate-limit-plugin","version":"0.4.0"}}}'
 
 send_rpc "$INIT_MSG" || fail "initialize リクエストの送信に失敗しました (writer fd への書き込みエラー)。"
 send_rpc '{"jsonrpc":"2.0","method":"initialized"}' || fail "initialized 通知の送信に失敗しました (writer fd への書き込みエラー)。"

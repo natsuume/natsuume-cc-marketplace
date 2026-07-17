@@ -173,11 +173,13 @@ extract_oauth_window() {
   normalize_window_values "$pct" "$resets_at"
 }
 
-# extras は allowlist (seven_day_opus / seven_day_sonnet / extra_usage) の非 null のみ。
+# extras は allowlist (seven_day_opus / seven_day_sonnet / extra_usage / limits) の非 null のみ。
+# limits は model-scoped limit を含む配列の raw passthrough (issue #307。検証しない方針は
+# ヘッダの公開契約を参照)。
 build_extras() {
   local resp_file="$1"
   jq -c '
-    {seven_day_opus, seven_day_sonnet, extra_usage}
+    {seven_day_opus, seven_day_sonnet, extra_usage, limits}
     | with_entries(select(.value != null))
   ' "$resp_file" 2>/dev/null
 }

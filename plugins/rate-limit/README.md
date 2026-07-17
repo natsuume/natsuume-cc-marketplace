@@ -4,7 +4,11 @@ Claude (エージェント自身) が、セッション内でサブスクリプ�
 
 ## バージョン
 
-v0.3.0
+v0.4.0
+
+### v0.3.0 → v0.4.0 の変更点
+
+- `/rate-limit:status` (経路② oauth-endpoint) の出力 `extras` に `limits` を追加 (#307)。endpoint の `limits` 配列 (Fable 等の model-scoped weekly limit を含む) を raw passthrough で報告し、`SKILL.md` に読み方と報告手順 (severity が normal 以外・is_active な entry の強調) を定義
 
 ### v0.2.0 → v0.3.0 の変更点
 
