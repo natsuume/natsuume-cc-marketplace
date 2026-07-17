@@ -30,15 +30,17 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
    は有効。
 2. **対応 delimiter 形式**: `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` /
    `<<\\WORD` (WORD は `[A-Za-z0-9_]+`)。該当しない構文を検出したら opaque fallback: それ
-   以降のコマンド文字列を一切解析しない。fallback 発動時点の command 境界内 (separator で
-   区切られた現在のコマンド) に対象 invocation (`gh pr create`) が確定している場合、
-   truthy draft 確定なら素通し (不介入)、falsy 確定なら deny、**draft 未確定なら deny**
-   (宣言行残余に隠れた `--draft=false` は opaque 領域内で不可視だが gh の実引数としては
-   有効なため、fallback 前のトークンにのみ挿入すると後着の false が勝ち非 draft PR が
-   作られる bypass が成立する。安全側は「付与漏れ」ではなく deny に倒して塞ぐ)。現在の
-   command が対象 invocation でない場合は不介入 (opaque 領域内の invocation は検出不能)。
-   fallback より前に separator で完結した別 invocation への挿入は有効。`<<'WORD'` /
-   `<<"WORD"` / `<<\\WORD` はいずれも quoted delimiter であり、本文で行継続処理を行わない。
+   以降のコマンド文字列を一切解析しない。判定は 2 分岐:
+     - fallback が対象 invocation (`gh pr create`) の引数領域内で発動 → draft 指定の
+       確定状態 (truthy / falsy / 未確定) に関係なく **常に deny** する。確認済み truthy
+       (`--draft`) であっても、不可視の宣言行残余 (opaque 領域) に conflicting な後着
+       `--draft=false` が隠れうるため信頼できない (gh は後着 falsy を優先するため、
+       truthy を根拠に素通しすると非 draft PR が作られる bypass が成立する)。
+     - fallback が別コマンドの領域で発動 (現在の command 境界が対象 invocation でない) →
+       不介入 (opaque 領域内の invocation は検出不能)。fallback より前に separator で
+       完結した別 invocation への挿入は有効。
+   `<<'WORD'` / `<<"WORD"` / `<<\\WORD` はいずれも quoted delimiter であり、本文で
+   行継続処理を行わない。
 3. **算術式スキップ**: `$((...))` / コマンド位置の `((...))` は対応する `))` まで (内部括弧
    の深度追跡込み) を不透明に取り込み、内部の `<<` (ビットシフト) を heredoc と誤認しない。
 4. **行継続のスキャナ内処理**: 解析前の一括削除 (normalize) を廃止し、スキャナが文脈依存で
@@ -758,8 +760,12 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_denied(command)
 
-    def test_h21_confirmed_truthy_before_fallback_passthrough(self) -> None:
-        # fallback 前に truthy が確定していれば素通し (既に draft 指定あり)。
+    def test_h21_confirmed_truthy_before_fallback_denied(self) -> None:
+        # 第 8 巡での訂正: fallback 前に truthy (--draft) が確定していても、
+        # 不可視の宣言行残余 (opaque 領域) に conflicting な後着 --draft=false
+        # が隠れうるため、確認済み truthy も信頼できない。fallback が対象
+        # invocation の引数領域内で発動した以上、draft 指定の確定状態に関係
+        # なく常に deny する。
         command = (
             'gh pr create --draft --title "t" --body-file - <<E"OF"'
             + NL
@@ -767,7 +773,22 @@ class EnforceDraftPrTest(unittest.TestCase):
             + NL
             + "EOF"
         )
-        self.assert_no_intervention(command)
+        self.assert_denied(command)
+
+    def test_h23_truthy_then_declaration_tail_falsy_denied(self) -> None:
+        # 第 8 巡指摘の迂回経路 (truthy 素通し + 宣言行残余の後着 falsy) の
+        # 直接 witness。truthy `--draft` 確認後に opaque 領域へ入り、宣言行
+        # 残余に `--draft=false` が隠れている。素通しする実装は gh が後着
+        # falsy を優先し非 draft PR を作ってしまう bypass を再現できず fail
+        # する。
+        command = (
+            'gh pr create --draft --title "t" --body-file - <<E"OF" --draft=false'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
 
     def test_h22_completed_invocation_before_fallback_still_rewritten(
         self,
