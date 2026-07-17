@@ -15,6 +15,17 @@ Phase B (issue #288 実装本体) で実装するため、現時点では `NotIm
 を送出する。`SCHEMA_VERSION` / `SIZE_BANDS` / 各 dataclass / `ClaimPatternsError`
 / `parse_args` はデータ・CLI 引数の設計そのものであり、Phase A で実体を持つ。
 
+## 完了根拠 (qualifying completion) の一般規則
+
+主指標 (`mainSeries`) の完了根拠 (qualifying completion) と見なす PR は、
+`state == "MERGED"` の PR、または現在 `state == "OPEN"` かつ
+`isDraft == False` の PR に限る。merge されず close された PR
+(closed-unmerged PR) は破棄された試行であり完了根拠にしない —
+破棄試行をタスク完了と数えると、放棄されたタスクが速く完了したように
+見えるバイアスを生むため。`--prs` の収集契約 (`states: [OPEN, MERGED]`、
+`fetch-prs.graphql` 参照) はこの規則の実装であり、closed-unmerged PR は
+そもそも収集対象そのものに含まれない。
+
 ## 入力 JSONL 契約 (詳細は SKILL.md セクション 4 「claim 判定パターン」および
 issue #288 Phase A 契約ドキュメント セクション 4 が正本)
 
@@ -29,7 +40,14 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
   JSONL。各行は `repo`, `number`, `state` (`"OPEN" | "MERGED"`), `isDraft`
   (bool), `createdAt`, `mergedAt` (`state == "OPEN"` の行は `null` を許容
   する), `additions`, `deletions`, `timelineItems` (`ReadyForReviewEvent` /
-  `ConvertToDraftEvent` の配列), `closingIssuesReferences.nodes` を持つ。
+  `ConvertToDraftEvent` の配列), `closingIssuesReferences.totalCount` /
+  `closingIssuesReferences.nodes` を持つ。`closingIssuesReferences.totalCount
+  > len(closingIssuesReferences.nodes)` の行が 1 件でも存在する場合、skill の
+  収集手順 (`fetch-pr-closing-issues.graphql` による追加ページング) が
+  `closingIssuesReferences` を完全化している前提が破れているとみなし、
+  `main` は入力エラー (exit code `2`) として fail-closed に中断する
+  (不完全な closing references は issue↔PR 結合を欠落させ、該当 issue を
+  誤って `censored` に分類するため部分継続しない)。
 - `--claim-patterns-file`: claim 判定パターン (SKILL.md 「claim 判定パターン
   (正本)」セクションの JSON block をそのまま書き出したファイル)。
   `inProgressLabel: str`, `strict: [{"id", "regex"}]`, `loose: [{"id", "regex"}]`
@@ -53,7 +71,9 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
 
 - `0`: 成功 (集計対象が 0 件の空データも含む)。
 - `2`: 入力エラー (`--issues` / `--prs` のファイル不存在・JSONL parse 失敗・
-  必須フィールド欠落・`--as-of` / `--since` の形式不正)。
+  必須フィールド欠落・`--as-of` / `--since` の形式不正・`--prs` の行に
+  `closingIssuesReferences.totalCount > len(closingIssuesReferences.nodes)`
+  が 1 件でも存在する場合)。
 - `3`: claim patterns file (`--claim-patterns-file`) の契約違反 (必須キー欠落・
   regex compile 失敗)。`ClaimPatternsError` を捕捉して変換する。
 
@@ -409,15 +429,29 @@ def compute(
           かつ次のいずれかを満たす issue を 1 件 1 要素で列挙する。
 
           - (a) CLOSED issue で最終クローズが `category == "merged_pr"`
-            (従来どおり。`completionBasis = "merged"`)。
+            (従来どおり。選択される PR は常に MERGED のため
+            `completionBasis = "merged"`)。
           - (b) OPEN issue で、`closingIssuesReferences` にその issue を
-            含む ready 到達済み PR (`resolve_ready` の `ready_at` が
-            非 `None`。すなわち `state == "MERGED"`、または
-            `state == "OPEN"` かつ `isDraft == False`) が存在する
-            (`completionBasis = "ready_unmerged"`)。(b) に該当する
-            ready 到達済み PR が複数存在する場合は `readyAt` が最も早い
-            PR を採用し、該当した issue 件数を
-            `dataQuality.multipleReadyPrIssues` に計上する。
+            含む qualifying completion PR (モジュール docstring 「完了根拠
+            (qualifying completion) の一般規則」を参照。`state ==
+            "MERGED"` の PR、または現在 `state == "OPEN"` かつ
+            `isDraft == False` の PR。`resolve_ready` の `ready_at` が
+            非 `None` であることと同値) が 1 件以上存在する。
+            qualifying completion PR が複数存在する場合は `readyAt` が
+            最も早い PR を採用し、該当した issue 件数を
+            `dataQuality.multipleReadyPrIssues` に計上する (選択された
+            PR の状態や `completionBasis` は問わずカウントする)。
+
+          `completionBasis` は (a) (b) いずれの経路でも、選択された PR
+          (= (a) では最終クローズの merged PR、(b) では上記で選択した
+          qualifying completion PR) の**実状態**で決める。選択 PR が
+          `state == "MERGED"` なら `completionBasis = "merged"` とし
+          `mergedAt` / `phaseHours.readyToMerge` を実データで埋める
+          (issue 自体がまだ `state == "OPEN"` であっても — 例えば (b)
+          経路で選択された PR が MERGED である場合に起こりうる)。選択
+          PR が `state == "OPEN"` かつ `isDraft == False` なら
+          `completionBasis = "ready_unmerged"` で `mergedAt = None` /
+          `phaseHours.readyToMerge = None` とする。
 
           各要素は `{"repo", "issue", "firstStartAt", "lastStartAt",
           "startWeek", "pr", "prCreatedAt", "readyAt", "mergedAt",
@@ -435,10 +469,16 @@ def compute(
           (`completionBasis == "ready_unmerged"` では `readyToMerge` を
           除いた 2 区間の合計が `leadTimeHours` に一致する)。`since`
           フィルタ適用対象。
-        - `censored` (list[dict]): 着手マーカーはあるが `category == "open"`
-          (まだクローズしていない) issue のうち、`mainSeries` の (b) に該当
-          しない (ready 到達済みのリンク PR が存在しない) もの。これにより
-          `censored` の経過時間は常に「着手→ready」の下限値として解釈できる。
+        - `censored` (list[dict]): 着手マーカーがあり `category == "open"`
+          (まだクローズしていない) issue のうち、qualifying completion PR
+          (`closingIssuesReferences` にその issue を含む、`state ==
+          "MERGED"` または `state == "OPEN"` かつ `isDraft == False` の
+          PR。`mainSeries` (b) の qualifying completion PR の定義と同じ)
+          がリンクされていないもの。これにより `censored` の経過時間は
+          常に「着手→ready」の下限値として解釈できる。`censored` の
+          適用範囲は `category == "open"` の issue に限られる — CLOSED
+          issue で `mainSeries` のいずれにも該当しないものは `censored`
+          には含めず `auxiliarySeries` 側で分類する。
           各要素は `{"repo", "issue", "firstStartAt", "startWeek",
           "elapsedHoursLowerBound"}`。`elapsedHoursLowerBound` は
           `as_of - firstStartAt` (時間)。`since` フィルタ適用対象。
@@ -525,12 +565,18 @@ def compute(
           除外された issue 番号は当該 PR の `linkedIssues` に列挙する。
         - `intervalStats` (list[dict]): `boundaries` を createdAt 昇順
           (= `at` 昇順) に並べ、`[開始, b1)`, `[b1, b2)`, ..., `[bn, 終端]` の
-          各区間に `mainSeries` を `firstStartAt` で割り当てた集計。各要素は
-          `{"from": str | None, "to": str | None, "label", "n",
+          各区間に `mainSeries` と `censored` を `firstStartAt` で割り当てた
+          集計。各要素は `{"from": str | None, "to": str | None, "label", "n",
           "medianLeadTimeHours", "medianSizeLines", "smallOnlyMedianLeadTimeHours",
-          "smallOnlyN"}`。`from` / `to` は区間端の `boundaries[].id`
-          (開始側端が無ければ `from=None`、終端側端が無ければ `to=None`)。
-          `smallOnly*` は `sizeBand == "S"` の要素のみに絞った集計。
+          "smallOnlyN", "censoredN"}`。`from` / `to` は区間端の
+          `boundaries[].id` (開始側端が無ければ `from=None`、終端側端が無ければ
+          `to=None`)。`smallOnly*` は `sizeBand == "S"` の要素のみに絞った
+          集計。`censoredN` はその区間に `firstStartAt` で割り当てられた
+          `censored` 要素数。`medianLeadTimeHours` / `smallOnlyMedianLeadTimeHours`
+          は `negativeInterval == True` の要素を除外して計算する (該当区間の
+          有効要素が 0 件なら中央値は `null`)。`n` / `smallOnlyN` /
+          `medianSizeLines` は `negativeInterval` を除外せず区間内の全
+          `mainSeries` (該当帯) 要素で計算する (`weeklyCohorts` と同じ規約)。
           `boundaries` が `None` または空のとき `intervalStats == []`。
         - `dataQuality` (dict): `{"negativeIntervalCount": int, "redraftPrCount":
           int, "notStartedClosedIssues": int, "multipleReadyPrIssues": int}`。
@@ -539,10 +585,11 @@ def compute(
           `prSeries` 中で `redraftCount > 0` だった PR 件数。
           `notStartedClosedIssues` は `state == "CLOSED"` かつ着手マーカーが
           無かった (`first_start is None`) issue の件数 (`since` フィルタは
-          適用しない)。`multipleReadyPrIssues` は `mainSeries` の (b)
-          (`completionBasis == "ready_unmerged"`) において、ready 到達済み
-          リンク PR が複数存在したため `readyAt` 最小の PR を採用した issue
-          の件数。
+          適用しない)。`multipleReadyPrIssues` は `mainSeries` の (b) 経路
+          (OPEN issue で qualifying completion PR をリンクして
+          `mainSeries` に入った issue) において、qualifying completion PR
+          が複数存在したため `readyAt` 最小の PR を採用した issue の件数
+          (選択された PR の状態や `completionBasis` は問わずカウントする)。
 
     境界:
         - `since` の inclusive filter は `firstStartAt` (UTC date 部分)
@@ -654,7 +701,9 @@ def main(argv: list[str] | None = None) -> int:
             - `0`: 成功 (集計対象が 0 件の空データも含む)。結果 JSON を
               stdout に書き出す。
             - `2`: 入力エラー (`--issues` / `--prs` のファイル不存在・JSONL
-              parse 失敗・必須フィールド欠落・`--as-of` / `--since` の形式不正)。
+              parse 失敗・必須フィールド欠落・`--as-of` / `--since` の形式不正・
+              `--prs` の行に `closingIssuesReferences.totalCount >
+              len(closingIssuesReferences.nodes)` が 1 件でも存在する場合)。
             - `3`: `--claim-patterns-file` の契約違反
               (`load_claim_patterns` が `ClaimPatternsError` を送出した場合)。
 

@@ -7,7 +7,7 @@ Phase A (spec-first) の位置づけ:
   `resolve_start` / `resolve_ready` / `resolve_close_linkage` / `compute` /
   `main` の処理本体は `NotImplementedError` を送出する (Phase B で実装する)。
 - このファイルは issue #288 Phase A 契約ドキュメント セクション 8 の
-  test matrix T1〜T39 を全件実装する。各テストメソッド名・コメントに
+  test matrix T1〜T41 を全件実装する。各テストメソッド名・コメントに
   `T<n>` を付与し対応関係を明示する。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
@@ -108,8 +108,10 @@ def make_pr(
     timeline_nodes=None,
     closing_issues=None,
     total_count=None,
+    closing_issues_total_count=None,
 ):
     nodes = timeline_nodes or []
+    closing_issue_nodes = closing_issues or []
     return {
         "repo": repo,
         "number": number,
@@ -123,7 +125,14 @@ def make_pr(
             "totalCount": total_count if total_count is not None else len(nodes),
             "nodes": nodes,
         },
-        "closingIssuesReferences": {"nodes": closing_issues or []},
+        "closingIssuesReferences": {
+            "totalCount": (
+                closing_issues_total_count
+                if closing_issues_total_count is not None
+                else len(closing_issue_nodes)
+            ),
+            "nodes": closing_issue_nodes,
+        },
     }
 
 
@@ -784,6 +793,10 @@ class ComputeTests(unittest.TestCase):
         self.assertNotIn(closed_week, weeks)
 
     def test_t24_negative_interval_kept_in_main_series_but_excluded_from_median(self):
+        # T24 (拡張): boundaries を渡し、negativeInterval な要素だけが割り当て
+        # られた区間で medianLeadTimeHours が None になる一方、n /
+        # medianSizeLines は negativeInterval を除外せず保持されることを
+        # weeklyCohorts 側の既存検証と合わせて確認する。
         issue, pr = make_started_case(
             issue_number=1,
             pr_number=301,
@@ -791,16 +804,33 @@ class ComputeTests(unittest.TestCase):
             pr_created_at="2026-07-10T13:00:00Z",
             ready_at="2026-07-10T10:00:00Z",  # firstStartAt より前 (異常データ)
             merged_at="2026-07-10T14:00:00Z",
+            additions=30,
+            deletions=0,
         )
+        boundaries = [
+            {
+                "id": "evt-1",
+                "label": "event 1",
+                "at": datetime(2026, 7, 5, tzinfo=timezone.utc),
+            },
+        ]
         as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
         result = compute_leadtime.compute(
-            [issue], [pr], self.patterns, as_of, None, None
+            [issue], [pr], self.patterns, as_of, None, boundaries
         )
         self.assertEqual(len(result["mainSeries"]), 1)
         self.assertTrue(result["mainSeries"][0]["negativeInterval"])
         self.assertEqual(result["dataQuality"]["negativeIntervalCount"], 1)
         self.assertEqual(len(result["weeklyCohorts"]), 1)
         self.assertIsNone(result["weeklyCohorts"][0]["medianLeadTimeHours"])
+
+        self.assertEqual(len(result["intervalStats"]), 2)
+        bucket = result["intervalStats"][1]
+        self.assertEqual(bucket["from"], "evt-1")
+        self.assertIsNone(bucket["to"])
+        self.assertEqual(bucket["n"], 1)
+        self.assertIsNone(bucket["medianLeadTimeHours"])
+        self.assertEqual(bucket["medianSizeLines"], 30)
 
     def test_t25_size_band_boundaries(self):
         cases = [
@@ -849,6 +879,19 @@ class ComputeTests(unittest.TestCase):
             )
             issues.append(issue)
             prs.append(pr)
+        # T26 (拡張): censored な着手済み open issue を 1 件、2 番目の区間
+        # ([evt-1, evt-2)) の週に追加し、その区間だけ censoredN == 1、他の
+        # 区間は 0 になることを検証する。
+        censored_issue = make_issue(
+            repo="owner/name",
+            number=99,
+            state="OPEN",
+            created_at="2026-07-12T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-12T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        issues.append(censored_issue)
         boundaries = [
             {
                 "id": "evt-1",
@@ -873,6 +916,9 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(result["intervalStats"][1]["to"], "evt-2")
         self.assertEqual(result["intervalStats"][2]["from"], "evt-2")
         self.assertIsNone(result["intervalStats"][2]["to"])
+        self.assertEqual(
+            [bucket["censoredN"] for bucket in result["intervalStats"]], [0, 1, 0]
+        )
 
     def test_t27_median_of_even_count_is_average_of_middle_two(self):
         issue1, pr1 = make_started_case(
@@ -1179,6 +1225,53 @@ class ComputeTests(unittest.TestCase):
         self.assertIsNone(cohort["medianLeadTimeHours"])
         self.assertGreaterEqual(cohort["censoredN"], 1)
 
+    def test_t40_open_issue_with_merged_pr_keeps_merge_data(self):
+        # T40: OPEN issue に MERGED PR が closingIssuesReferences でリンク
+        # されている (issue 自体は何らかの理由でまだ OPEN のまま)。選択された
+        # PR (qualifying completion PR) の実状態が MERGED であるため、
+        # mainSeries (b) 経路でも completionBasis="merged" とし、mergedAt /
+        # phaseHours.readyToMerge を実データで埋める。
+        repo = "owner/name"
+        issue_number = 410
+        pr_number = 910
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="OPEN",
+            created_at="2026-07-01T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        pr = make_pr(
+            repo=repo,
+            number=pr_number,
+            state="MERGED",
+            is_draft=False,
+            created_at="2026-07-02T00:00:00Z",
+            merged_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[ready_event("2026-07-03T00:00:00Z")],
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(len(result["mainSeries"]), 1)
+        entry = result["mainSeries"][0]
+        self.assertEqual(entry["issue"], issue_number)
+        self.assertEqual(entry["completionBasis"], "merged")
+        self.assertIsNotNone(entry["mergedAt"])
+        merged_at = datetime.fromisoformat(
+            str(entry["mergedAt"]).replace("Z", "+00:00")
+        )
+        self.assertEqual(merged_at, datetime(2026, 7, 5, tzinfo=timezone.utc))
+        self.assertEqual(entry["phaseHours"]["readyToMerge"], 48.0)
+        self.assertEqual(result["censored"], [])
+
 
 # ---------------------------------------------------------------------------
 # T28〜T30: main (tempfile 経由。subprocess は使わない)
@@ -1235,6 +1328,39 @@ class MainTests(unittest.TestCase):
                 Path(tmp), issues_content="", patterns_dict=broken_patterns
             )
             self.assertEqual(exit_code, 3)
+
+    def test_t41_closing_refs_overflow_exits_two(self):
+        # T41: prs.jsonl の 1 行が closingIssuesReferences.totalCount (25) >
+        # len(nodes) (1) を持つ (ページング未完了)。この行が存在する限り
+        # main は入力エラーとして fail-closed に exit code 2 を返す。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            issues_path = tmp_path / "issues.jsonl"
+            prs_path = tmp_path / "prs.jsonl"
+            patterns_path = tmp_path / "patterns.json"
+            issues_path.write_text("", encoding="utf-8")
+            pr = make_pr(
+                number=920,
+                closing_issues=[
+                    {"number": 1, "repository": {"nameWithOwner": "owner/name"}}
+                ],
+                closing_issues_total_count=25,
+            )
+            prs_path.write_text(json.dumps(pr) + "\n", encoding="utf-8")
+            write_claim_patterns_file(patterns_path, DEFAULT_PATTERNS_DICT)
+            exit_code = compute_leadtime.main(
+                [
+                    "--issues",
+                    str(issues_path),
+                    "--prs",
+                    str(prs_path),
+                    "--claim-patterns-file",
+                    str(patterns_path),
+                    "--as-of",
+                    "2026-07-17T04:00:00Z",
+                ]
+            )
+            self.assertEqual(exit_code, 2)
 
 
 if __name__ == "__main__":
