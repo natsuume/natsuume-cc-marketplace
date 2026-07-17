@@ -58,7 +58,11 @@
 #      SubagentStop hook が stop を block して subagent が継続する環境でも、本 hook は
 #      stop_hook_active == false の最初の有効 report で marker を書き、以降の再 stop は
 #      attestation 消費済みのため marker を更新しない (「最終 stop」ではなく
-#      「初回有効 report」を採用する意図的なセマンティクス)
+#      「初回有効 report」を採用する意図的なセマンティクス)。launch tombstone が
+#      既に存在する場合も、attestation の残存有無に関わらず marker を書かずに
+#      skip する (過去の stop で attestation の rm に失敗して残存した場合に、その
+#      残存 attestation を resume 再 stop が再利用する経路の遮断。残存 attestation の
+#      掃除だけを再試行する)
 #   4. attestation は最初の SubagentStop (stop_hook_active=false) で tombstone へ
 #      不可逆遷移させて消費する: 以降の検証 (5〜8) の成否に関わらず、 まず launch
 #      tombstone (.claude-pre-push-done-<agent_id>) を排他 `ln` で作り (中身は
@@ -299,14 +303,24 @@ case "$HOOK_EVENT_NAME" in
     fi
 
     ATTESTED_HASH=$(cat "$ATTESTATION_PATH" 2>/dev/null)
+    # 既存 tombstone は「この agent_id は過去の stop で attestation を消費済み」の
+    # 永続的な証拠。 通常は attestation 側の遮断 (上の存在チェック) で到達しないが、
+    # 過去の stop で attestation の rm に失敗して残存した場合 (immutable file・
+    # 一時的 I/O 障害等)、 その残存 attestation を resume 再 stop が再利用して
+    # marker を書ける経路が開く。 既存 tombstone を検出したら残存 attestation の
+    # 掃除だけを再試行し、 marker を書かずに skip する (one-shot 消費の保証を
+    # rm の成否ではなく tombstone の存在という永続的事実に束縛する)。
+    TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    if [ -e "$TOMBSTONE_PATH" ]; then
+      rm -f "$ATTESTATION_PATH" 2>/dev/null || true
+      exit 0
+    fi
     # attestation → tombstone の不可逆遷移: 最初の (stop_hook_active=false の)
     # SubagentStop で、 以降の検証 (Status / hash 一致等) の成否に関わらず、 常に
     # tombstone を作り attestation を消費する。 tombstone は同一 agent_id での
     # SubagentStart 再発火 (resume 等) を恒久的に拒否するため、 検証結果を問わず
-    # 「この agent_id は一度ここまで到達した」事実だけを記録する。
-    # 排他 `ln` (create-if-absent) を使う: 既に tombstone がある場合 (通常発生しない
-    # はずだが二重 stop 等の異常系) は失敗を無視して続行する (best-effort)。
-    TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    # 「この agent_id は一度ここまで到達した」事実だけを記録する。 排他 `ln`
+    # (create-if-absent) を使うため、 既存 tombstone の内容が上書きされることはない。
     TOMBSTONE_TMP=$(mktemp "$(dirname "$TOMBSTONE_PATH")/${LAUNCH_TOMBSTONE_PREFIX}tmp.XXXXXX" 2>/dev/null) || true
     if [ -n "$TOMBSTONE_TMP" ]; then
       if printf '%s' "$ATTESTED_HASH" > "$TOMBSTONE_TMP" 2>/dev/null; then

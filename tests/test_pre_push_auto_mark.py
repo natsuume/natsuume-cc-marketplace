@@ -390,6 +390,32 @@ class PrePushAutoMarkTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertFalse(marker.exists(), result.stderr.decode())
 
+    def test_stop_with_existing_tombstone_rejects_surviving_attestation(
+        self,
+    ) -> None:
+        # 過去の stop で tombstone は作れたが attestation の rm に失敗して残存した
+        # 状態 (immutable file・一時的 I/O 障害等) をモデルする: 既存 tombstone を
+        # 検出した stop は、残存 attestation を再利用して marker を書かず、
+        # attestation の掃除だけを再試行する (one-shot 消費の保証は rm の成否では
+        # なく tombstone の存在に束縛される)。
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:code-reviewer"
+            marker = self.marker_path(work, agent_type)
+            self.run_start(work, agent_type)
+            attestation = self.launch_attestation_path(work)
+            self.assertTrue(attestation.exists())
+            tombstone = self.launch_tombstone_path(work)
+            tombstone.write_text(
+                attestation.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            result = self.run_hook(work, self.stop_payload(agent_type, report))
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(marker.exists(), result.stderr.decode())
+            self.assertFalse(attestation.exists())
+            self.assertTrue(tombstone.exists())
+
     def test_stop_without_attestation_does_not_write_marker(self) -> None:
         report = "# Code Review\n\nStatus: pass\nFindings: 0"
         with tempfile.TemporaryDirectory() as temporary_name:
