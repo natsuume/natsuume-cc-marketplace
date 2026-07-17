@@ -7,10 +7,10 @@ Phase A (spec-first) の位置づけ:
   `resolve_start` / `resolve_ready` / `resolve_close_linkage` / `compute` /
   `main` の処理本体は `NotImplementedError` を送出する (Phase B で実装する)。
 - このファイルは issue #288 Phase A 契約ドキュメント セクション 8 の
-  test matrix T1〜T34 を全件実装する。各テストメソッド名・コメントに
+  test matrix T1〜T35 を全件実装する。各テストメソッド名・コメントに
   `T<n>` を付与し対応関係を明示する。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
-  pass する。挙動を検証するテスト (T1〜T34) は本物の期待値アサーションを
+  pass する。挙動を検証するテスト (T1〜T35) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
   くるまない)。そのため Phase A では `NotImplementedError` が捕捉されずに
   伝播し、unittest 上は ERROR として報告される。これは意図した red 状態であり、
@@ -517,18 +517,21 @@ class ResolveReadyTests(unittest.TestCase):
         self.assertTrue(result.via_draft)
         self.assertEqual(result.redraft_count, 0)
 
-    def test_t10_ready_draft_ready_sets_redraft_count(self):
+    def test_t10_ready_at_creation_then_draft_then_ready_counts_redraft(self):
+        # T10: PR 作成時点で ready → ConvertToDraftEvent (1 件) → ReadyForReviewEvent
+        # (1 件、CTD の createdAt < RFR の createdAt)。旧定義 (RFR 数 - 1 = 0) と
+        # 新定義 (CTD 数 = 1) で結果が異なるため、新定義 (redraft_count は
+        # ConvertToDraftEvent の件数) の回帰テストとして機能する。
         pr = make_pr(
             number=10,
             created_at="2026-01-01T00:00:00Z",
             timeline_nodes=[
-                ready_event("2026-01-02T00:00:00Z"),
-                draft_event("2026-01-03T00:00:00Z"),
-                ready_event("2026-01-04T00:00:00Z"),
+                draft_event("2026-01-02T00:00:00Z"),
+                ready_event("2026-01-03T00:00:00Z"),
             ],
         )
         result = compute_leadtime.resolve_ready(pr)
-        self.assertEqual(result.ready_at, datetime(2026, 1, 4, tzinfo=timezone.utc))
+        self.assertEqual(result.ready_at, datetime(2026, 1, 3, tzinfo=timezone.utc))
         self.assertEqual(result.redraft_count, 1)
         self.assertTrue(result.via_draft)
 
@@ -981,6 +984,68 @@ class ComputeTests(unittest.TestCase):
             {row["repo"] for row in result["markerCoverage"]},
             {"owner/repo-a", "owner/repo-b"},
         )
+
+    def test_t35_pr_timeline_overflow_excludes_pr_and_linked_issue(self):
+        # T35: PR の timelineItems.totalCount (150) > len(nodes) (2) で timeline
+        # 取得が不完全な merged PR。この PR を closer とする最終 ClosedEvent を
+        # 持つ、着手マーカー付き closed issue も ready 時刻を信頼できないため、
+        # mainSeries / auxiliarySeries いずれのカテゴリにも再分類されず
+        # exclusions.prTimelineOverflow にのみ列挙される。
+        repo = "owner/name"
+        issue_number = 70
+        pr_number = 900
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="CLOSED",
+            state_reason="COMPLETED",
+            created_at="2026-07-01T00:00:00Z",
+            closed_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x"),
+                closed_event(
+                    "2026-07-05T00:00:00Z",
+                    pr_closer(pr_number, repo=repo, merged=True),
+                ),
+            ],
+        )
+        pr = make_pr(
+            repo=repo,
+            number=pr_number,
+            created_at="2026-07-02T00:00:00Z",
+            merged_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[
+                ready_event("2026-07-03T00:00:00Z"),
+                draft_event("2026-07-04T00:00:00Z"),
+            ],
+            total_count=150,
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(result["prSeries"], [])
+        self.assertEqual(result["mainSeries"], [])
+        aux = result["auxiliarySeries"]
+        for category in ("manualClose", "commitClose", "notPlanned", "unmergedPr"):
+            issue_numbers = {entry["issue"] for entry in aux[category]}
+            self.assertNotIn(issue_number, issue_numbers)
+
+        overflow = result["exclusions"]["prTimelineOverflow"]
+        self.assertEqual(len(overflow), 1)
+        entry = overflow[0]
+        self.assertEqual(
+            set(entry.keys()), {"repo", "pr", "totalCount", "fetched", "linkedIssues"}
+        )
+        self.assertEqual(entry["repo"], repo)
+        self.assertEqual(entry["pr"], pr_number)
+        self.assertEqual(entry["totalCount"], 150)
+        self.assertEqual(entry["fetched"], 2)
+        self.assertEqual(entry["linkedIssues"], [issue_number])
 
 
 # ---------------------------------------------------------------------------

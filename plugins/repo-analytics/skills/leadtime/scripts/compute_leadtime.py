@@ -173,10 +173,10 @@ class ReadyResolution:
     Attributes:
         ready_at: 最後 (createdAt が最大) の `ReadyForReviewEvent.createdAt`。
             `ReadyForReviewEvent` が 1 件も無ければ `pr["createdAt"]` にフォールバックする。
-        redraft_count: `ReadyForReviewEvent` が複数回発生した回数から 1 を引いた値
-            (0 未満にはならない)。例えば ready → draft → ready のように
-            `ReadyForReviewEvent` が 2 回出現した場合は `redraft_count == 1`。
-            `ReadyForReviewEvent` が 0 件のときは `0`。
+        redraft_count: `ConvertToDraftEvent` の件数 (= draft に戻された回数)。
+            例えば draft で作成 → ready → draft → ready は 1、**ready で作成 →
+            draft 化 → ready 化も 1** (`ConvertToDraftEvent` が 1 件のため)。
+            イベントが無ければ 0。
         via_draft: `ReadyForReviewEvent` が 1 件以上存在すれば `True`
             (= 実際に draft から ready 化した実績がある)。存在しなければ `False`
             (この場合 `ready_at` は `pr["createdAt"]` へのフォールバック)。
@@ -303,8 +303,9 @@ def resolve_ready(pr: dict) -> ReadyResolution:
         `ReadyResolution` の docstring を参照。
 
     境界:
-        - `ConvertToDraftEvent` 自体は `ready_at` の計算に使わない
-          (`redraft_count` / `via_draft` を導出するための文脈情報としてのみ扱う)。
+        - `ConvertToDraftEvent` は `ready_at` の計算に使わず、`redraft_count`
+          の算出にのみ使う (`via_draft` は `ReadyForReviewEvent` の有無だけで
+          判定する)。
         - イベントの並び順は `timelineItems.nodes` の配列順を信頼せず、
           各イベントの `createdAt` の最大値・件数に基づいて判定する。
     """
@@ -441,11 +442,21 @@ def compute(
           列挙した `{"repo", "issue", "commentCreatedAt"}` のリスト
           (comment 単位。同一 issue に複数の loose-only comment があれば
           複数エントリになる。当該 issue が strict でも判定済みかどうかは問わない)。
-        - `exclusions` (dict): `{"timelineOverflow": list[dict]}`。
-          `timelineItems.totalCount > len(timelineItems.nodes)` だった issue を
-          `{"repo", "issue", "totalCount", "fetched"}` で列挙する
+        - `exclusions` (dict): `{"timelineOverflow": list[dict],
+          "prTimelineOverflow": list[dict]}`。
+          `timelineOverflow` は `timelineItems.totalCount > len(timelineItems.nodes)`
+          だった issue を `{"repo", "issue", "totalCount", "fetched"}` で列挙する
           (`fetched == len(nodes)`)。これらの issue は `mainSeries` /
           `censored` / `auxiliarySeries` のいずれにも含めない。
+          `prTimelineOverflow` は `timelineItems.totalCount > len(timelineItems.nodes)`
+          だった **PR** を `{"repo", "pr", "totalCount", "fetched", "linkedIssues"}`
+          で列挙する (`fetched == len(nodes)`。`linkedIssues` はこの除外により
+          `mainSeries` から除外された issue 番号の昇順リスト。該当なしなら空リスト)。
+          overflow した PR は `prSeries` から除外する。
+          `resolve_close_linkage(...).linked_pr` が overflow PR と一致する issue は
+          `mainSeries` から除外し、`auxiliarySeries` のいずれのカテゴリにも
+          再分類しない (timeline 不完全な PR の ready 時刻は信頼できないため)。
+          除外された issue 番号は当該 PR の `linkedIssues` に列挙する。
         - `intervalStats` (list[dict]): `boundaries` を createdAt 昇順
           (= `at` 昇順) に並べ、`[開始, b1)`, `[b1, b2)`, ..., `[bn, 終端]` の
           各区間に `mainSeries` を `firstStartAt` で割り当てた集計。各要素は

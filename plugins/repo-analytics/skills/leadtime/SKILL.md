@@ -26,8 +26,9 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ## 3. データ収集
 
-- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 3 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql`) を `gh api graphql --paginate -F owner=... -F name=... -f query=@<file>` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
+- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 3 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql`) を `gh api graphql --paginate -F owner=... -F name=... -F query=@<file>` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
 - `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を追加ページングし、取得済み nodes とマージする。
+- `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
 
 (手順詳細は Phase B で全文化する)
 
