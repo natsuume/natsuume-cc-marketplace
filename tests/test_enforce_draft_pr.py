@@ -55,6 +55,7 @@ regression suite である。テストの期待値は hook の公開契約であ
 ## テストグループ
 
 - グループ R: 既存挙動 regression と redirection 境界
+- グループ S: command substitution / backtick / subshell の不介入境界
 - グループ H: heredoc 認識・opaque fallback
 - グループ A: 算術式と heredoc の識別
 - グループ L: 行継続の原文保持と論理 token 値
@@ -298,6 +299,69 @@ class EnforceDraftPrTest(unittest.TestCase):
             with self.subTest(command=command):
                 expected = command.replace("create", "create --draft", 1)
                 self.assert_rewrite(command, expected)
+
+    # ------------------------------------------------------------------
+    # グループ S: command substitution / backtick / subshell の不介入境界
+    # ------------------------------------------------------------------
+
+    def test_s01_command_substitution_with_semicolon_is_not_intervened(self) -> None:
+        command = 'NOTES=$(echo hi; gh pr create --title t --body b)'
+        self.assert_no_intervention(command)
+
+    def test_s02_command_substitution_with_and_chain_is_not_intervened(self) -> None:
+        command = (
+            'PR_URL=$(cd worktree && gh pr create --title t --body b) '
+            '&& printf "%s\\n" "$PR_URL"'
+        )
+        self.assert_no_intervention(command)
+
+    def test_s03_backtick_with_separator_is_not_intervened(self) -> None:
+        command = 'PR_URL=`echo hi; gh pr create --title t --body b`'
+        self.assert_no_intervention(command)
+
+    def test_s04_subshell_with_separator_is_not_intervened(self) -> None:
+        command = '(echo hi; gh pr create --title t --body b)'
+        self.assert_no_intervention(command)
+
+    def test_s05_only_top_level_after_command_substitution_is_rewritten(self) -> None:
+        command = (
+            'NOTES=$(echo hi; gh pr create --title inner --body b); '
+            'gh pr create --title outer --body b'
+        )
+        expected = (
+            'NOTES=$(echo hi; gh pr create --title inner --body b); '
+            'gh pr create --draft --title outer --body b'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s06_only_top_level_after_backtick_is_rewritten(self) -> None:
+        command = (
+            'NOTES=`echo hi; gh pr create --title inner --body b`; '
+            'gh pr create --title outer --body b'
+        )
+        expected = (
+            'NOTES=`echo hi; gh pr create --title inner --body b`; '
+            'gh pr create --draft --title outer --body b'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s07_only_top_level_after_subshell_is_rewritten(self) -> None:
+        command = (
+            '(echo hi; gh pr create --title inner --body b); '
+            'gh pr create --title outer --body b'
+        )
+        expected = (
+            '(echo hi; gh pr create --title inner --body b); '
+            'gh pr create --draft --title outer --body b'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s08_nested_quotes_and_parens_stay_inside_substitution(self) -> None:
+        command = (
+            'NOTES=$(printf "%s" "$(printf \')\')"; '
+            'gh pr create --title inner --body b)'
+        )
+        self.assert_no_intervention(command)
 
     # ------------------------------------------------------------------
     # グループ H: heredoc 認識・opaque fallback
