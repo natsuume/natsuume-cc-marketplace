@@ -461,18 +461,12 @@ BASE=$(detect_base_branch "$TARGET_CWD") || BASE=""
 
 # refspec / オプションを再走査して deny 判定を行う。
 HAS_DELETE_FLAG=0
-for tok in "${PUSH_TOKENS[@]}"; do
-  t="$(unquote_token "$tok")"
-  case "$t" in
-    --delete|-d) HAS_DELETE_FLAG=1; break ;;
-  esac
-done
-
 SAW_REMOTE=0
 REFSPEC_COUNT=0
 HAS_REAL_PUSH=0  # 1 if any refspec sends commits (= HEAD or current branch)
 SAW_GIT=0
 SAW_PUSH=0
+PUSH_OPTIONS_ENDED=0
 _SKIP_NEXT=0  # `-C dir` / `--git-dir dir` / `-c key=val` のような separate-arg option の
               # 引数を次イテレーションで skip するためのフラグ。 ループ先頭で必ず消費する
               # ことで SAW_PUSH 遷移を跨いでも leak しない (各 phase で消費漏れすると後段
@@ -503,27 +497,55 @@ for tok in "${PUSH_TOKENS[@]}"; do
       *) continue ;;
     esac
   fi
-  # push の `--repo=<repo>` / `--repo <repo>` は remote を option 経由で指定する形式。
-  # 後続の非オプション token は **refspec** として扱う必要があるため、 SAW_REMOTE=1 に
-  # 倒して以降を refspec としてパースする (こうしないと `git push --repo=origin HEAD:main`
-  # が refspec を remote 名として食って destination-override check を素通りする)。
-  case "$t" in
-    --repo=*) SAW_REMOTE=1; continue ;;
-    --repo) _SKIP_NEXT=1; SAW_REMOTE=1; continue ;;
-  esac
-  # 値を次 token に取る push オプションは、 その値 token を remote / refspec と誤認しないよう
-  # 引数ごと skip する。 `-o` / `--push-option` (push option), `--receive-pack` / `--exec`
-  # (receive-pack path)。 これを欠くと `git push -o ci.skip origin <branch>` の `ci.skip` を
-  # remote、 `origin` を refspec と誤読し、 現在ブランチへの正当な push を false-positive で
-  # deny してしまう。 連結形 (`--push-option=*` / `--receive-pack=*` / `--exec=*` や短縮連結
-  # `-o<val>`) は単一 token なので後段の `-*) continue` が吸収する (値消費は不要)。
-  case "$t" in
-    -o|--push-option|--receive-pack|--exec) _SKIP_NEXT=1; continue ;;
-  esac
-  # その他 push のオプションを skip (`-u`, `--force`, `--delete` 等)。
-  case "$t" in
-    -*) continue ;;
-  esac
+  # `--` 以降は、`-d` のように dash で始まる token も remote / refspec
+  # として扱う。ここを状態管理しないと `git push -- origin -d` の
+  # `-d` refspec を delete option と誤認し、未レビューの push を allow する。
+  if [ "$PUSH_OPTIONS_ENDED" -eq 0 ] && [ "$t" = "--" ]; then
+    PUSH_OPTIONS_ENDED=1
+    continue
+  fi
+  if [ "$PUSH_OPTIONS_ENDED" -eq 0 ]; then
+    # push の `--repo=<repo>` / `--repo <repo>` は remote を option 経由で指定する形式。
+    # 後続の非オプション token は **refspec** として扱う必要があるため、 SAW_REMOTE=1 に
+    # 倒して以降を refspec としてパースする (こうしないと `git push --repo=origin HEAD:main`
+    # が refspec を remote 名として食って destination-override check を素通りする)。
+    case "$t" in
+      --repo=*) SAW_REMOTE=1; continue ;;
+      --repo) _SKIP_NEXT=1; SAW_REMOTE=1; continue ;;
+    esac
+    # delete flag は push option の位置でだけ認識する。事前に全 token を走査すると
+    # `git push -o -d ...` / `--push-option -d` の **値 token** を delete と誤認し、
+    # 実際には commit を送る別 branch push を gate が allow する。値 token は loop
+    # 冒頭の _SKIP_NEXT で既に消費されるため、この位置で判定すれば混同しない。
+    case "$t" in
+      --delete|-d) HAS_DELETE_FLAG=1; continue ;;
+      --*) ;;
+      -*)
+        # single-dash short option は bundle 可能 (`-df` / `-fd`)。ただし `-o<value>`
+        # は最初の `o` より後ろ全体が push-option の値なので、`-odeploy=1` の値中の
+        # `d` を delete flag と誤認してはならない。value-taking `o` より前の cluster
+        # だけを検査する。
+        _short_flags="${t#-}"
+        _short_flags="${_short_flags%%o*}"
+        case "$_short_flags" in
+          *d*) HAS_DELETE_FLAG=1 ;;
+        esac
+        ;;
+    esac
+    # 値を次 token に取る push オプションは、 その値 token を remote / refspec と誤認しないよう
+    # 引数ごと skip する。 `-o` / `--push-option` (push option), `--receive-pack` / `--exec`
+    # (receive-pack path)。 これを欠くと `git push -o ci.skip origin <branch>` の `ci.skip` を
+    # remote、 `origin` を refspec と誤読し、 現在ブランチへの正当な push を false-positive で
+    # deny してしまう。 連結形 (`--push-option=*` / `--receive-pack=*` / `--exec=*` や短縮連結
+    # `-o<val>`) は単一 token なので後段の `-*) continue` が吸収する (値消費は不要)。
+    case "$t" in
+      -o|--push-option|--receive-pack|--exec) _SKIP_NEXT=1; continue ;;
+    esac
+    # その他 push のオプションを skip (`-u`, `--force`, `--delete` 等)。
+    case "$t" in
+      -*) continue ;;
+    esac
+  fi
   # 最初の非オプションは remote 名と仮定
   if [ "$SAW_REMOTE" -eq 0 ]; then
     SAW_REMOTE=1

@@ -18,7 +18,12 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v4.1.4 (前身: `pre-commit-review` v0.4.0)
+v4.1.5 (前身: `pre-commit-review` v0.4.0)
+
+### v4.1.4 → v4.1.5 の変更点 (issue #130)
+
+- `git push -df` / `git push -fd` のような bundled short option 内の `-d` を delete push として認識し、remote branch 削除を別 branch commit の push と誤認して deny する false positive を解消した
+- value-taking `-o` / `--push-option` の値、long option 内の `d`、および `--` 以降の `-d` refspec は delete flag と扱わず、別 branch refspec の fail-closed deny を維持した
 
 ### v4.1.3 → v4.1.4 の変更点 (issue #129)
 
