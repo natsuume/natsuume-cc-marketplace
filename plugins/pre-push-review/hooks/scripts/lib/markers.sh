@@ -23,6 +23,9 @@ CODE_REVIEWED_MARKER_NAME=".claude-pre-push-code-reviewed"
 CODEX_MARKER_NAME=".claude-pre-push-codex-reviewed"
 CODEX_PENDING_MARKER_NAME=".claude-pre-push-codex-reviewed.pending"
 SECURITY_MARKER_NAME=".claude-pre-push-security-reviewed"
+# issue #285: SubagentStart が書く launch attestation (agent_id ごとに 1 ファイル) の prefix。
+# auto-mark.sh の SubagentStart/SubagentStop 契約が「開始時 review hash」を束縛するために使う。
+LAUNCH_ATTESTATION_PREFIX=".claude-pre-push-launch-"
 
 # 引数: <git-dir> [runtime]
 # 出力: runtime に対応する marker storage directory
@@ -120,4 +123,18 @@ codex_pending_marker_path() {
 # 出力: security-reviewed マーカーの path
 security_marker_path() {
   marker_path "$1" "$SECURITY_MARKER_NAME" "${2:-claude}"
+}
+
+# 引数: <git-dir> <agent_id> [runtime]
+# 出力: SubagentStart が書く launch attestation (git-dir/.claude-pre-push-launch-<agent_id>) の path
+#
+# agent_id の validation (path 混入防止: ^[A-Za-z0-9._-]{1,128}$ 等) は呼び出し側
+# (auto-mark.sh) の責務。 本関数は既存の marker_path (= 単一ソース化された storage
+# resolution) を再利用して agent_id を prefix に連結するだけで、 それ自身は agent_id の
+# 形状を検証しない。
+launch_attestation_path() {
+  local git_dir="$1"
+  local agent_id="$2"
+  local runtime="${3:-claude}"
+  marker_path "$git_dir" "${LAUNCH_ATTESTATION_PREFIX}${agent_id}" "$runtime"
 }

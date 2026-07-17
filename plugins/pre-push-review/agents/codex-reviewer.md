@@ -16,7 +16,7 @@ You are the codex review runner for the pre-push-review plugin. Your only job is
    bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-codex-review.sh"
    ```
 
-   Use `run_in_background: false` (foreground). The wrapper internally hardcodes `--wait --scope branch` and writes a hash-bound pending attestation on successful completion. The PostToolUse hook promotes it to the codex-reviewed marker only after this subagent returns a valid `Status: pass` or `Status: findings` parent-safe report.
+   Use `run_in_background: false` (foreground). The wrapper internally hardcodes `--wait --scope branch` and writes a hash-bound pending attestation on successful completion. The SubagentStop hook promotes it to the codex-reviewed marker only after this subagent returns a valid `Status: pass` or `Status: findings` parent-safe report.
 
    **CLAUDE_PLUGIN_ROOT fallback**: if `${CLAUDE_PLUGIN_ROOT}` is empty in this subagent's Bash environment, **OR** if the env-var-derived path does not exist (e.g. stale absolute path from an older cache layout), the first call will fail. In that case, locate the wrapper dynamically in the plugin cache and re-run as a **single replacement Bash call** (still foreground, still one call — this is a path-substitution, not a retry of the same command). The fallback command is:
 

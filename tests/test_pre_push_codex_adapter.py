@@ -105,7 +105,7 @@ class PrePushCodexAdapterTest(GitRepositoryMixin, unittest.TestCase):
             self.assertIn("/pre-push-review:review", reason)
             self.assertIn("marketplace 配布対象外", reason)
             self.assertIn("agent_type", reason)
-            self.assertGreaterEqual(reason.count("run_in_background: false"), 3)
+            self.assertNotIn("run_in_background: false", reason)
             self.assertNotIn("$pre-push-review:review-codex", reason)
             self.assertNotIn("$pre-push-review:setup-pre-push-agents", reason)
 
@@ -515,15 +515,31 @@ class SetupCodexAgentsTest(unittest.TestCase):
             (PLUGIN_DIR / "hooks" / "hooks.json").read_text(encoding="utf-8")
         )
         groups = config["hooks"]["SubagentStop"]
-        self.assertEqual(len(groups), 1)
-        self.assertEqual(
-            groups[0]["matcher"],
-            "^pre_push_(correctness|independent|security)_reviewer$",
-        )
-        handlers = groups[0]["hooks"]
+        self.assertEqual(len(groups), 2)
+
+        codex_groups = [
+            group
+            for group in groups
+            if group.get("matcher")
+            == "^pre_push_(correctness|independent|security)_reviewer$"
+        ]
+        self.assertEqual(len(codex_groups), 1)
+        handlers = codex_groups[0]["hooks"]
         self.assertEqual(len(handlers), 1)
         self.assertEqual(handlers[0]["type"], "command")
         self.assertIn("codex-auto-mark.sh", handlers[0]["command"])
+
+        claude_groups = [
+            group
+            for group in groups
+            if group.get("matcher")
+            == "^pre-push-review:(code|codex|security)-reviewer$"
+        ]
+        self.assertEqual(len(claude_groups), 1)
+        claude_handlers = claude_groups[0]["hooks"]
+        self.assertEqual(len(claude_handlers), 1)
+        self.assertEqual(claude_handlers[0]["type"], "command")
+        self.assertIn("auto-mark.sh", claude_handlers[0]["command"])
 
     def test_review_skill_fails_closed_without_agent_type_selector(self) -> None:
         skill = (PLUGIN_DIR / "skills" / "review-codex" / "SKILL.md").read_text(

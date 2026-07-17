@@ -96,7 +96,10 @@ class ReviewerParentSafeReportContractTest(unittest.TestCase):
         body = self.read(COMMAND)
         self.assertIn("parent-safe", body)
         self.assertIn("実行可能な詳細を親 session に返さない", body)
-        self.assertGreaterEqual(body.count("run_in_background: false"), 3)
+        # issue #285: completion 検知が subagent lifecycle hook (SubagentStart /
+        # SubagentStop) へ移行し、background 起動でも成立するため、3 Agent call の
+        # `run_in_background: false` 明記は不要になった。
+        self.assertNotIn("run_in_background: false", body)
         self.assertIn("agent ID", body)
         self.assertIn("transcript path", body)
         self.assertIn("raw tool metadata", body)

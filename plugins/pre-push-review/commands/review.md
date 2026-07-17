@@ -10,14 +10,14 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
 
 次のアシスタントメッセージ (= このコマンドへの最初の応答) で、 **以下 3 つの Agent / Task tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
 
-1. **Agent / Task tool**: `subagent_type: "pre-push-review:code-reviewer"`、 `run_in_background: false`、 prompt: "branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review"
-2. **Agent / Task tool**: `subagent_type: "pre-push-review:security-reviewer"`、 `run_in_background: false`、 prompt: "branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review"
-3. **Agent / Task tool**: `subagent_type: "pre-push-review:codex-reviewer"`、 `run_in_background: false`、 prompt: "codex review wrapper を foreground で 1 回起動し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "codex review wrapper の foreground 実行"
+1. **Agent / Task tool**: `subagent_type: "pre-push-review:code-reviewer"`、 prompt: "branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review"
+2. **Agent / Task tool**: `subagent_type: "pre-push-review:security-reviewer"`、 prompt: "branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review"
+3. **Agent / Task tool**: `subagent_type: "pre-push-review:codex-reviewer"`、 prompt: "codex review wrapper を foreground で 1 回起動し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "codex review wrapper の foreground 実行"
 
 ## 確定的フローの理由
 
 - **順次起動ではなく並列起動**: wall-clock が最遅レビュー 1 本の時間で完了します (順次より大幅に高速)。 3 レビューは互いに独立しているため並列化に乗ります。
-- **Skill / Bash ではなく foreground subagent**: 3 レビューを `run_in_background: false` の subagent に統一することで、 (1) raw output・具体的な再現手順・実行可能な詳細は subagent context に閉じ込められ、 (2) 親 session に返るのは severity / location / impact / fix direction 等を保った parent-safe report だけになり、 (3) `async_launched` をレビュー完了と誤認せず、final report の `Status` を親と hook が確認できます。 v3.0.0 で Skill (code-review) と Bash (codex wrapper の直接起動) を subagent 経由に移行し、 v4.0.1 で返却 report の context isolation と foreground completion 検証を契約化しました。
+- **Skill / Bash ではなく foreground subagent**: 3 レビューを subagent 呼び出しに統一することで、 (1) raw output・具体的な再現手順・実行可能な詳細は subagent context に閉じ込められ、 (2) 親 session に返るのは severity / location / impact / fix direction 等を保った parent-safe report だけになり、 (3) v4.1.0 の lifecycle 検知 (SubagentStart が発行する launch attestation + SubagentStop での report 検証) が subagent の完了を捕捉するため、 background 起動でも launch をレビュー完了と誤認せず final report の `Status` を親と hook が確認できます。 v3.0.0 で Skill (code-review) と Bash (codex wrapper の直接起動) を subagent 経由に移行し、 v4.0.1 で返却 report の context isolation と completion 検証を契約化し、 v4.1.0 で completion 検証を subagent lifecycle hook (SubagentStart / SubagentStop) へ完全移行しました。
 - **Claude による自律判断ではなく確定的実行**: Claude は「どのレビューを走らせるか / どの順番で / 引数は何か」 を判断しません。 上記 3 つを **そのまま** 並列発出するだけです。 これによりレビューの抜けや順序揺れによる無駄ループが構造的に排除されます。
 - **`/code-review` / `/codex:review` / `/security-review` 標準 skill を直接呼ばない理由**: いずれの標準 skill も末尾で「最終応答をマークダウンレポートだけにする」 ことを Claude に指示するか、 内部で sub-task (Task tool) を spawn する設計です。 主 session の Claude が直接呼ぶと turn が終了して push まで進めず、 subagent 内から呼んでも nested subagent 制約で sub-task が動かない degraded mode に倒れます。 `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` / `pre-push-review:security-reviewer` の 3 subagent はそれぞれ同等のレビュー内容を self-contained に持つか、 wrapper を foreground 起動するだけの最小実装で、 親 session の turn を止めずに report を返します。
 
@@ -26,7 +26,7 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
 - subagent (`pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` / `pre-push-review:security-reviewer`) が見つからない → プラグインの install を確認してください (`claude plugin install pre-push-review@natsuume-plugins`)
 - codex review wrapper が「codex プラグインが見つかりません」 で失敗 → 公式 codex プラグインを install (`claude plugin install codex@openai-codex`) してから codex-reviewer subagent を再起動
 - 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ 3 subagent を順次起動しても push gate の構造的保証は同じ (= 3 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。 順次起動する場合は **code-reviewer → security-reviewer → codex-reviewer** の順を推奨します (codex-reviewer は wrapper が codex CLI を foreground で hold するため最長になりやすく、 後段に置くと前段の review 結果を主 session が並行確認できる)。
-- 一部の marker のみ失効している場合は、 3 subagent 全部を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で `run_in_background: false` を明示して単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします)。 3 subagent 並列発出が既定であることは変わりません (= 初回実行や複数 marker が失効した場合は引き続き並列 3 起動を使う)。
+- 一部の marker のみ失効している場合は、 3 subagent 全部を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします)。 3 subagent 並列発出が既定であることは変わりません (= 初回実行や複数 marker が失効した場合は引き続き並列 3 起動を使う)。
 
 ## レビュー指摘の修正フロー (3 subagent 完了後)
 
@@ -41,7 +41,7 @@ description: pre-push gate を通すための 3 レビューを同じアシス�
    - `kill <pid>` で終了させ、 同じ入力で `/codex:rescue --wait` をやり直す
    - rescue 自体はマーカー対象外なので、 何回やり直しても push gate には影響しません。
 3. **code-reviewer / security-reviewer subagent からの指摘** は通常具体的な対処 (バグ修正 / input validation / 秘匿情報削除 / injection 対策) なので `/codex:rescue` 壁打ちは optional。 ただし設計判断が絡む修正では rescue 推奨。
-4. parent-safe report だけでは追加検証が必要な場合は、 raw detail を親へ要求せず、 対象の同一 reviewer subagent を resume して focused question を渡す。 reviewer は自分の context / transcript に残る詳細で検証し、 結果だけを parent-safe report で返す。
+4. parent-safe report だけでは追加検証が必要な場合は、 raw detail を親へ要求せず、 対象の同一 reviewer subagent を resume して focused question を渡す。 reviewer は自分の context / transcript に残る詳細で検証し、 結果だけを parent-safe report で返す。 resume 後の再 stop では launch attestation が消費済みのため marker は更新されない (marker 更新には該当 reviewer の新規起動が必要)。
 5. 修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 `/pre-push-review:review` を実行して 3 subagent を再走させる。
 
 親 session の user-facing summary には agent ID、output file、transcript path、raw tool metadata を含めないでください。これらは review の方針判断に不要な orchestration detail であり、parent-safe report の外へ relay しません。同一 reviewer を resume する場合も、内部の Agent tool state をそのまま使い、ID や path をユーザ向け本文へ表示しません。
