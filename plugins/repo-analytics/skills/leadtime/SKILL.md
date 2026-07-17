@@ -16,14 +16,51 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - remote が GitHub でない、または remote が存在しないリポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
 - すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。JSONL レコードに書く repo 値はこの正規化キーではなく、API が返す canonical な nameWithOwner を使う。
 
-(手順詳細は Phase B で全文化する)
+### 手順
+
+0. 作業ディレクトリ `<scratchpad>/repo-analytics-leadtime/` を作成し (`mkdir -p`。`<scratchpad>` はセッションの scratchpad ディレクトリ)、`collection-diagnostics.json` を `{"skippedRepos": [], "webSearchSkipped": false}` で初期化する (Write ツール)。以降このディレクトリを `<work>` と表記する。このスキルが scratchpad に書く中間ファイルはすべて `<work>` 配下に置く: `issues.jsonl` / `prs.jsonl` / `patterns.json` / `boundaries.json` / `collection-diagnostics.json` / `result.json`。
+1. 呼び出し引数の文字列を分割し、`since=YYYY-MM-DD` に一致するトークンを期間指定として取り出す (複数あれば最後の値を採用し、その旨を記録する)。残りのトークンを対象指定として扱う。対象指定・期間指定のいずれも無ければ対象は「カレントディレクトリの git リポジトリ」、期間は「全期間」とみなす。
+2. 対象指定が既存ディレクトリのパスであれば手順 3 の再帰探索、それ以外 (存在しないパス、またはカンマを含む文字列) であれば `owner/repo` のカンマ区切りリストとして手順 4 に進む。
+3. ディレクトリパスが与えられた場合、配下の git リポジトリを次のように再帰探索する (探索深さの上限で暴走を防ぐ)。
+
+   ```bash
+   find <dir> -maxdepth 4 -name .git
+   ```
+
+   ヒットした各 `.git` (ディレクトリまたは worktree の gitdir ファイル) の親ディレクトリを checkout パスとして扱う。
+4. 各 checkout パス (カレントディレクトリを含む) について origin remote から owner/repo を解決する。
+
+   ```bash
+   git -C <path> remote get-url origin
+   ```
+
+   - コマンドが非 0 で終了する (remote 未設定) 場合: 「remote が存在しない」としてスキップし、`{"repo": "<path>", "reason": "no_remote"}` を `<work>/collection-diagnostics.json` の `skippedRepos` に追記する。
+   - URL がホスト `github.com` の SSH 形式 (`git@github.com:owner/repo.git`) の場合、`:` 以降を取り出し末尾の `.git` を除去して `owner/repo` を得る。
+   - URL がホスト `github.com` の HTTPS / `ssh://` 形式
+     (`https://github.com/owner/repo(.git)?` / `ssh://git@github.com/owner/repo(.git)?`)
+     の場合、パス部分から `owner/repo` を取り出し末尾の `.git` を除去する。
+   - 上記いずれの形式にも一致しない、またはホストが `github.com` でない場合: 「remote が GitHub でない」としてスキップし、`{"repo": "<解決できた範囲の文字列>", "reason": "non_github_remote"}` を同じく `skippedRepos` に追記する。
+5. 明示指定の `owner/repo` エントリ (カンマ区切りリストの各要素、前後の空白を trim) はそのまま収集キー候補として採用する (この段階では GitHub への到達性を検証しない。存在しない owner/repo は第 3 章の `gh api graphql` 実行時にエラーとして判明し、第 2 章の fail-closed 規則に従って扱う)。
+6. 手順 4・5 で得た収集キー候補全体を、`owner/repo` を小文字化した文字列をキーとして重複排除する (case-insensitive)。重複した場合、由来 (再帰探索 / 明示指定) を問わず 1 回だけ収集対象に残す。重複排除後のキー一覧が第 3 章のデータ収集ループの対象になる。
 
 ## 2. 前提確認 (fail-closed)
 
 - `gh auth status` で認証状態を確認する。
 - 未認証、または後続の GraphQL クエリがエラーを返した場合は、部分データのまま分析を進めず中断し、原因をユーザーに報告する。
 
-(手順詳細は Phase B で全文化する)
+### 手順
+
+1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで認証状態を確認する。
+
+   ```bash
+   gh auth status
+   ```
+
+2. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+   - `gh auth status` が未認証を示したこと (コマンドの出力を含める)
+   - 対応方法 (`gh auth login` を実行してから再実行する)
+   - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
+3. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
 
 ## 3. データ収集
 
@@ -36,7 +73,69 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - `prs.jsonl` の各行で `closingIssuesReferences.totalCount > len(nodes)` の PR は `fetch-pr-closing-issues.graphql` で当該 PR の closingIssuesReferences を先頭から全ページ取得し、一覧クエリ由来の closingIssuesReferences を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の closingIssuesReferences は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する (集計スクリプトは不完全な行を入力エラーとして中断する)。
 - 収集段階の診断 (第 1 章のリポジトリスキップ件数・理由、第 6 章の WebSearch 省略の有無等) は、判明した時点で scratchpad の固定 shape JSON (例: `{"skippedRepos": [{"repo": str, "reason": str}], "webSearchSkipped": bool}`) に追記して記録する。第 9 章のターミナルサマリと Artifact レポートは、この記録された値をそのまま参照し独自に再集計しない。
 
-(手順詳細は Phase B で全文化する)
+### 手順
+
+0. 第 1 章で作成済みの `<work>` (`<scratchpad>/repo-analytics-leadtime/`) をそのまま使う。
+1. 第 1 章で重複排除した収集キー (owner/repo) それぞれについて、次の a〜d を順に実行する。
+
+   **a. issues 収集**
+
+   ```bash
+   gh api graphql --paginate \
+     -f owner=<owner> -f name=<name> \
+     -F query=@<plugin-root>/skills/leadtime/scripts/fetch-issues.graphql \
+     --jq '.data.repository as $r | $r.issues.nodes[] | . + {repo: $r.nameWithOwner}' \
+     >> <work>/issues.jsonl
+   ```
+
+   **b. prs 収集**
+
+   ```bash
+   gh api graphql --paginate \
+     -f owner=<owner> -f name=<name> \
+     -F query=@<plugin-root>/skills/leadtime/scripts/fetch-prs.graphql \
+     --jq '.data.repository as $r | $r.pullRequests.nodes[] | . + {repo: $r.nameWithOwner}' \
+     >> <work>/prs.jsonl
+   ```
+
+   いずれも `--jq` で `repository.nameWithOwner` (canonical 形) を各行の `repo` に注入し、1 行 1 レコードの JSONL として追記する (ユーザ入力の owner/repo 文字列は使わない)。
+
+   **c. issue timeline overflow の検知と置換**
+
+   ```bash
+   jq -c 'select(.repo == "<owner>/<name>" and (.timelineItems.totalCount > (.timelineItems.nodes | length)))' <work>/issues.jsonl
+   ```
+
+   該当した各 issue (`repo`, `number` の組) について、`fetch-issue-timeline.graphql` で先頭ページから全ページを取得し直す。
+
+   ```bash
+   gh api graphql --paginate \
+     -f owner=<owner> -f name=<name> -F number=<issue_number> \
+     -F query=@<plugin-root>/skills/leadtime/scripts/fetch-issue-timeline.graphql \
+     --jq '.data.repository.issue.timelineItems' \
+     | jq -s '{totalCount: .[0].totalCount, nodes: (map(.nodes) | add)}' \
+     > <work>/_overflow-issue-timeline.json
+   ```
+
+   得られた `{totalCount, nodes}` で `totalCount == (nodes | length)` になっていることを確認したうえで、`issues.jsonl` 中の該当行の `timelineItems` を丸ごと置き換える (部分結果とのマージはしない)。
+
+   ```bash
+   jq -c --argjson repl "$(cat <work>/_overflow-issue-timeline.json)" \
+     'if .repo == "<owner>/<name>" and .number == <issue_number> then .timelineItems = $repl else . end' \
+     <work>/issues.jsonl > <work>/issues.jsonl.tmp && mv <work>/issues.jsonl.tmp <work>/issues.jsonl
+   ```
+
+   **d. PR closingIssuesReferences overflow の検知と置換**
+
+   `prs.jsonl` に対して同様に検知する。
+
+   ```bash
+   jq -c 'select(.repo == "<owner>/<name>" and (.closingIssuesReferences.totalCount > (.closingIssuesReferences.nodes | length)))' <work>/prs.jsonl
+   ```
+
+   該当した各 PR (`repo`, `number` の組) について `fetch-pr-closing-issues.graphql` で全ページを取得し直し、`closingIssuesReferences` を丸ごと置き換える (issue timeline の置換と同じ要領: `--paginate` → `jq -s` で `nodes` を結合 → `totalCount == (nodes | length)` を確認 → `prs.jsonl` の該当行を置換)。PR 側の `timelineItems` (`ReadyForReviewEvent` / `ConvertToDraftEvent`) は overflow しても追加ページングテンプレートが無いため置換せず、既存の bullet のとおり集計スクリプトの除外に委ねる。
+2. 全リポジトリの収集が終わったら、`date -u +%Y-%m-%dT%H:%M:%SZ` 等で収集完了時刻 (UTC ISO8601) を記録する。この値を第 5 章の `--as-of` に渡す。
+3. 収集中に判明した診断 (スキップしたリポジトリの最終件数など) を `<work>/collection-diagnostics.json` へ反映する (Write ツールで上書き)。第 9 章のターミナルサマリと Artifact レポートはこのファイルの値をそのまま参照し、独自に再集計しない。
 
 ## 4. claim 判定パターン (正本)
 
@@ -60,6 +159,8 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - プレースホルダ `{issue_number}` は、判定対象 issue の番号を `re.escape` した文字列に置換してから compile する (同一 issue 番号の一致判定を実現する)。
 - strict にも loose にも一致しない comment は無視する。loose のみ一致し strict に一致しない comment は「取りこぼし候補」として issue 参照 (repo, issue number, comment createdAt) を記録する。
 
+patterns.json への書き出し: 上記 JSON block を一言一句そのまま (プレースホルダ `{issue_number}` を含む) Write ツールで `<work>/patterns.json` に保存する。実行のたびに新規作成 (既存ファイルがあれば上書き) してよい。
+
 ## 5. 集計の実行
 
 `<plugin-root>/skills/leadtime/scripts/compute_leadtime.py` を次の CLI 契約で実行する。
@@ -79,7 +180,26 @@ python3 compute_leadtime.py \
 - exit code: `0` = 成功 (空データ含む)。`2` = 入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`--as-of`/`--since` の形式不正・`--boundaries-file` の検証失敗 (ファイル不存在・JSON parse 失敗・形状不正・`at` の ISO8601/UTC 不正または naive 時刻・`id`/`label` の欠落または空文字列・`id` の重複))。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
 - ターミナルサマリで提示する数値は、この stdout JSON の**決定的な投影**とする。Claude はここで得た JSON の数値を再計算・改変・丸め直ししない (中央値・件数などはすべて JSON の値をそのまま転記する)。
 
-(手順詳細は Phase B で全文化する)
+### 手順
+
+1. 第 4 章で作成した `<work>/patterns.json` と、第 3 章で完成させた `<work>/issues.jsonl` / `<work>/prs.jsonl`、および第 3 章手順 2 で記録した収集完了時刻を用意する。
+2. 初回実行 (この時点では第 6 章のイベント注釈がまだ無いため `--boundaries-file` は付けない)。
+
+   ```bash
+   python3 <plugin-root>/skills/leadtime/scripts/compute_leadtime.py \
+     --issues <work>/issues.jsonl \
+     --prs <work>/prs.jsonl \
+     --claim-patterns-file <work>/patterns.json \
+     --as-of <収集完了時刻> \
+     [--since <第 1 章で取り出した since>] \
+     > <work>/result.json
+   ```
+
+3. exit code に応じて次のように対応する。
+   - `0`: 成功 (対象 0 件の空データを含む)。`<work>/result.json` を後続 (第 6〜9 章) の入力として使い続行する。
+   - `2`: 入力エラー。stderr の診断メッセージを確認し、`issues.jsonl` / `prs.jsonl` の欠落フィールドや overflow 置換漏れ (第 3 章手順 1c/1d)、`--as-of` / `--since` の形式、`--boundaries-file` (再実行時) の形状を点検して修正し、再実行する。原因を特定・修正できない場合は部分データのまま先へ進まず、第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。
+   - `3`: `patterns.json` の契約違反。第 4 章の JSON block と一言一句一致しているか (キー欠落・regex 不正) を確認し、修正して再実行する。修正できない場合は同様に中断してユーザーに報告する。
+4. 第 6 章でイベント注釈 (`boundaries.json`) を作成したら、`--boundaries-file <work>/boundaries.json` を追加して同じコマンドを再実行し、`<work>/result.json` を上書きする。以降の第 7〜9 章はこの (boundaries 込みの) 最終版 `result.json` を正本として使う (`intervalStats` は boundaries 無指定だと常に `[]` になるため、区間統計を含むレポートにはこの再実行が必須)。イベント注釈が 1 件も収集できなかった場合 (第 6 章参照) は再実行を省略し、初回の `result.json` をそのまま最終版として扱う。
 
 ## 6. イベント注釈の収集
 
@@ -87,7 +207,47 @@ python3 compute_leadtime.py \
 - (b) モデル・ツールイベント: WebSearch で Anthropic / OpenAI の主要イベント (特定モデル名をハードコードしない) を検索し、ローカル痕跡 (`~/.codex/config.toml` の更新日、plugin cache の更新日) で適用日を補正する。
 - WebSearch が使えない場合は注釈収集を省略して続行し、省略した旨を Artifact レポートとターミナルサマリの両方に明記する。収集した注釈は `boundaries.json` (契約: `[{"id": ..., "label": ..., "at": ISO8601}]`) に整形し、`--boundaries-file` を付けて集計を再実行する。
 
-(手順詳細は Phase B で全文化する)
+### 手順
+
+**(a) リポジトリイベントの抽出**
+
+対象リポジトリの default branch 上で `git log` を実行する (マージ/squash 済みのコミット時刻 = `%cI` (committer date, ISO8601) をイベント時刻として採用する。フィーチャーブランチ上の元コミット日時 `%aI` ではなく、default branch に反映された時刻を使う)。
+
+- plugin / 機能の新設 (初回追加) の検出例:
+
+  ```bash
+  git log --diff-filter=A --format='%H|%cI|%s' -- 'plugins/*/.claude-plugin/plugin.json'
+  ```
+
+- 破壊的変更 (Conventional Commits の `!:` 記法) の検出例:
+
+  ```bash
+  git log --format='%H|%cI|%s' | grep -E '^[0-9a-f]+\|[^|]+\|[a-z]+(\([^)]+\))?!:'
+  ```
+
+- CI workflow 追加の検出例:
+
+  ```bash
+  git log --diff-filter=A --format='%H|%cI|%s' -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+  ```
+
+各ヒットの `%cI` をイベント時刻として採用し、コミットメッセージ (`%s`) や変更ファイルからラベルを組み立てる (例: 「plugin repo-analytics 新設」)。
+
+**(b) モデル・ツールイベントの収集**
+
+1. WebSearch で対象期間の Anthropic / OpenAI の主要イベントを検索する。特定モデル名をクエリにハードコードせず、次のようなクエリ雛形を対象期間 (収集対象タスクの `firstStartAt` の最小値〜`--as-of`) に差し替えて使う。
+
+   - `Anthropic model releases <期間>`
+   - `OpenAI model releases <期間>`
+   - `Claude Code CLI major update <期間>`
+
+   検索結果から判明した候補イベント (リリース日・GA 日・デフォルトモデル変更等) を一旦リストアップする。
+2. ローカル痕跡で「ユーザー環境への適用日」を補正する。
+   - `~/.codex/config.toml` の更新日時: Linux は `stat -c '%y' ~/.codex/config.toml`、macOS は `stat -f '%Sm' ~/.codex/config.toml`。
+   - `~/.claude/plugins/cache` / `~/.codex/plugins/cache` 配下の更新日時: 各ディレクトリに対して同様に `stat` (上記いずれかの形式) を実行する。
+3. 適用日の補正規則: WebSearch で判明したリリース日とローカル痕跡の更新日の両方が得られた場合、ユーザー環境に実際に効果が及んだのはローカル痕跡の日付以降であるため、`boundaries.json` の `at` にはローカル痕跡の日付を採用し、`label` に「(適用日は推定、根拠: <ローカル痕跡のパス>)」等、推定であることを明記する。ローカル痕跡が得られない場合はリリース日をそのまま `at` に採用し、`label` に「(ローカル適用日不明、リリース日で代用)」と明記する。
+4. WebSearch が使えない場合は本節 (b) の収集をまるごと省略して続行する。`<work>/collection-diagnostics.json` の `webSearchSkipped` を `true` に更新し (Write ツールで上書き)、省略した旨を Artifact レポート (第 7・8 章) とターミナルサマリ (第 9 章) の両方に明記する。
+5. (a)(b) で集めたイベントを `boundaries.json` の契約 (`[{"id": str, "label": str, "at": ISO8601}]`) に整形し、Write ツールで `<work>/boundaries.json` に書き出す。`id` は重複しない短い識別子 (例: `repo-plugin-repo-analytics-added`, `model-anthropic-202607`) を付ける。1 件も収集できなかった場合 (a も b も候補が無い、または b を丸ごと省略しかつ a も 0 件) は `boundaries.json` を作成せず、第 5 章手順 4 の再実行を省略する。
 
 ## 7. 可視化と Artifact レポート
 
@@ -97,7 +257,25 @@ python3 compute_leadtime.py \
 - 週次・区間の中央値を提示するすべてのチャート・テーブルに「完了タスクのみの記述的中央値 (censor 非調整)」の注記を付け、n と censoredN を隣接表示する。ターミナルサマリや結論文で同じ中央値を引用する場合も同じ限定を省略しない。
 - ライト/ダーク両テーマに対応し、外部ライブラリを使用しない。
 
-(手順詳細は Phase B で全文化する)
+### 実行順序
+
+1. dataviz skill をロードする (チャートを 1 つでも作成する前に必須)。
+2. 第 5 章で確定した `<work>/result.json` (boundaries 込みの最終版) を基にチャート設計を行う。以下の対応表に従い、各チャートが読む JSON キーを確認する。
+
+   | チャート | 読む JSON キー |
+   |---|---|
+   | 散布図 (対数軸・打ち切り◇・イベント縦線) | `mainSeries` + `censored` (縦線は `boundaries` があれば併用) |
+   | 区間分解 (start→PR作成→ready→merge) のグループ棒 | `weeklyCohorts[].phaseMedians` |
+   | サイズ帯×週のヒートマップ | `weeklyCohorts[].bySizeBand` |
+   | draft 経由率の週次系列 | `weeklyCohorts[].viaDraftRate` |
+   | イベント年表 | `boundaries` |
+   | 区間統計テーブル | `intervalStats` |
+   | 全件テーブル (折りたたみ) | `mainSeries` / `censored` / `auxiliarySeries` |
+
+3. artifact-design skill をロードする (Artifact を発行する前に必須)。
+4. HTML を作成する (自己完結、外部ライブラリ不使用、CSP 制約に従う)。既存の契約 (対数軸・非正値バンド・記述的中央値の注記・ライト/ダーク両対応) をすべて満たすこと。
+5. palette validator を実行し、使用した配色が検証を通ることを確認する。
+6. Artifact ツールで発行し、発行 URL を控える (第 9 章のターミナルサマリで報告するため)。
 
 ## 8. 解釈の規律
 
@@ -108,11 +286,37 @@ python3 compute_leadtime.py \
 - 週次 cohort の中央値は完了タスクのみから計算される記述的統計である (censor 非調整)。censored のみの週も median null + censoredN で行が出るため、censoredN が大きい週の中央値は必ず censoredN と併せて解釈する。
 - 収集範囲外のリポジトリの merged PR で close された issue は `auxiliarySeries.externalMergedClose` として分離集計され、`mainSeries` にも `censored` にも入らない (ready 到達時刻を計測できないため)。
 
-(手順詳細は Phase B で全文化する)
+### 「測定上の限界」チェックリスト
+
+レポートの「測定上の限界」節には、次の項目を毎回すべて含める (該当が無い項目も「該当なし」と明記し、省略しない)。
+
+- [ ] 壁時計時間ベースの計測であること (作業時間・稼働時間ではない旨)
+- [ ] 比較可能な coverage 期間 (`markerCoverage` の repo × 月別 `coverage` を基に、着手マーカーが安定して観測できている期間の範囲)
+- [ ] 各集計の n の小ささ (`weeklyCohorts[].n` / `intervalStats[].n` が小さい週・区間の明示。`n = 0` の週は空欄・線の途切れとして扱い隠さない)
+- [ ] 推定を用いた箇所: 打ち切り (`censored` の `elapsedHoursLowerBound` は下限値であること) と、第 6 章で補正・代用したイベント適用日 (推定である旨のラベルをそのまま引用する)
+- [ ] `exclusions.timelineOverflow` / `exclusions.prTimelineOverflow` の件数
+- [ ] `dataQuality` 各値 (`negativeIntervalCount` / `redraftPrCount` / `notStartedClosedIssues` / `multipleReadyPrIssues`) の件数
+- [ ] `markerCoverage` 中の `unknownTimeline` (timeline 不完全で観測不能だった件数)
+- [ ] `claimDetection.looseOnlyIssues` の件数 (取りこぼし候補)
+
+### 個別の実行時挙動への対応
+
+- `repos[].closedIssues == 0` のリポジトリは主系列 (`mainSeries`) の対象外である旨を明記し、`repos[].mergedPrs` / `repos[].openReadyPrs` (merged PR 系の補助指標) のみで報告する。エラーとして扱わない。
+- `markerCoverage[].coverage == 0.0` (該当 repo × 月に着手マーカーが 1 件も無い) はエラーにせず「marker coverage 0%」としてそのまま報告する。`coverage == null` (`closedIssues == 0`、観測不能) とは区別して報告する。
+- draft を経ていない PR は `resolve_ready` の契約により ready 時刻 = PR `createdAt` として `compute_leadtime.py` が解決済みである。SKILL.md 側で追加の判定は行わず、`result.json` の値をそのまま使う。
+- 再 draft 化された PR (`redraftCount > 0`) は `dataQuality.redraftPrCount` の件数をそのまま「測定上の限界」チェックリストで開示する (上記チェックリスト参照)。
+- reopen された issue は `resolve_close_linkage` の契約により最終 `ClosedEvent` を採用済みである。SKILL.md 側で追加の判定は行わない。
 
 ## 9. ターミナルサマリ
 
 - 結論、主要数値、測定上の限界、発行した Artifact の URL を簡潔に報告する。
 - 数値の根拠は二源泉に分ける: 集計数値 (中央値・件数等) は compute_leadtime.py の stdout JSON の決定的投影とする。収集段階の診断 (remote が GitHub でない等でスキップしたリポジトリ数と理由、WebSearch 省略の有無) は収集手順中に scratchpad へ固定 shape (JSON) で記録した値を用い、Artifact とターミナルの双方が同じ記録を参照する。
 
-(手順詳細は Phase B で全文化する)
+### サマリの構成テンプレート
+
+1. 結論 (1〜3 文): 主指標 (着手→ready) の推移をひとことで要約する。
+2. 主要数値: 代表的な週次・区間の中央値と n を `result.json` の値そのまま転記する (第 5 章の「決定的な投影」規則に従う)。
+3. 測定上の限界: 第 8 章のチェックリストの要点を凝縮して記載する (省略しない項目は Artifact レポート側と揃える)。
+4. 発行した Artifact の URL。
+
+この 4 点の順序でターミナルへ簡潔に報告する。
