@@ -9,7 +9,9 @@
  * - PreToolUse: Codex model の起動を role 固有 runner だけに限定する
  * - SubagentStart / SubagentStop: runner の active / retry / terminal 遷移を記録する
  * - Stop: 未回収の runner がある間は main session の終了を block する
- * - SessionStart / SessionEnd: 同一 session の stale state を掃除する
+ * - review cadence: 一般 / pre-push Codex review の成功 5 回ごとに根本方針 advisor
+ *   checkpoint を要求する
+ * - SessionStart: stale runner state、SessionEnd: runner + cadence state を掃除する
  *
  * state に prompt や Codex 出力は保存しない。既定では UID ごとの /tmp 配下、テストでは
  * CODEX_ADVISOR_STATE_ROOT で差し替えた directory に、session + operation ごとの JSON を
@@ -27,7 +29,15 @@ const RUNNERS = Object.freeze({
   advisor: "codex-advisor:advisor-runner",
 });
 const LEGACY_RESCUE = "codex:codex-rescue";
+const PRE_PUSH_CODEX_REVIEWER = "pre-push-review:codex-reviewer";
 const RETRY_LIMIT = 1;
+const REVIEW_CADENCE_LIMIT = 5;
+const REVIEW_CADENCE_OPERATION = "review-cadence";
+const REVIEW_CADENCE_ATTESTATIONS = new Set([
+  "satisfied",
+  "unavailable",
+  "not-applicable",
+]);
 const VALID_STATUSES = new Set([
   "success",
   "retryable-failure",
@@ -53,6 +63,10 @@ function recordPath(sessionId, operation) {
   return path.join(stateRoot(), `${keyFor(sessionId, operation)}.json`);
 }
 
+function reviewCadencePath(sessionId) {
+  return recordPath(sessionId, REVIEW_CADENCE_OPERATION);
+}
+
 function ensureRoot() {
   fs.mkdirSync(stateRoot(), { recursive: true, mode: 0o700 });
   try {
@@ -71,6 +85,42 @@ function readRecord(sessionId, operation) {
       return null;
     }
     return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function readReviewCadence(sessionId) {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(reviewCadencePath(sessionId), "utf8"),
+    );
+    if (
+      parsed.sessionId !== sessionId ||
+      parsed.operation !== REVIEW_CADENCE_OPERATION ||
+      !Number.isInteger(parsed.completedReviews) ||
+      parsed.completedReviews < 0
+    ) {
+      return null;
+    }
+    const activePrePushAgentIds = Array.isArray(parsed.activePrePushAgentIds)
+      ? [
+          ...new Set(
+            parsed.activePrePushAgentIds.filter(
+              (value) =>
+                typeof value === "string" &&
+                /^[A-Za-z0-9._-]{1,128}$/.test(value),
+            ),
+          ),
+        ]
+      : [];
+    return {
+      ...parsed,
+      activePrePushAgentIds,
+      checkpointRequired:
+        parsed.checkpointRequired === true ||
+        parsed.completedReviews >= REVIEW_CADENCE_LIMIT,
+    };
   } catch {
     return null;
   }
@@ -136,6 +186,54 @@ function writeRecord(record) {
   return normalized;
 }
 
+function writeReviewCadence(
+  sessionId,
+  completedReviews,
+  activePrePushAgentIds = [],
+) {
+  ensureRoot();
+  const destination = reviewCadencePath(sessionId);
+  const temporary = `${destination}.${process.pid}.${crypto
+    .randomBytes(6)
+    .toString("hex")}.tmp`;
+  const normalizedCount = Math.min(
+    REVIEW_CADENCE_LIMIT,
+    Math.max(0, completedReviews),
+  );
+  const normalized = {
+    sessionId,
+    operation: REVIEW_CADENCE_OPERATION,
+    completedReviews: normalizedCount,
+    activePrePushAgentIds: [
+      ...new Set(
+        activePrePushAgentIds.filter(
+          (value) =>
+            typeof value === "string" &&
+            /^[A-Za-z0-9._-]{1,128}$/.test(value),
+        ),
+      ),
+    ],
+    checkpointRequired: normalizedCount >= REVIEW_CADENCE_LIMIT,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(normalized)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    fs.renameSync(temporary, destination);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporary);
+    } catch {
+      // Nothing to clean up.
+    }
+    throw error;
+  }
+  return normalized;
+}
+
 function removeRecord(sessionId, operation) {
   try {
     fs.unlinkSync(recordPath(sessionId, operation));
@@ -144,13 +242,30 @@ function removeRecord(sessionId, operation) {
   }
 }
 
-function clearSession(sessionId) {
+function removeReviewCadence(sessionId) {
+  try {
+    fs.unlinkSync(reviewCadencePath(sessionId));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+function clearRunnerState(sessionId) {
   for (const record of listRecords(sessionId)) {
     try {
       removeRecord(sessionId, record.operation);
     } catch {
       // Cleanup is best-effort; a later SessionStart can try again.
     }
+  }
+}
+
+function clearSession(sessionId) {
+  clearRunnerState(sessionId);
+  try {
+    removeReviewCadence(sessionId);
+  } catch {
+    // Cleanup is best-effort; a later SessionEnd can try again.
   }
 }
 
@@ -323,6 +438,13 @@ function classifyModelLaunch(command) {
     if (script === "run-codex-advisor.sh") {
       return { operation: "advisor", entrypoint: "run-codex-advisor.sh" };
     }
+    if (script === "run-codex-review.sh") {
+      return {
+        operation: "review",
+        entrypoint: "pre-push-review run-codex-review.sh",
+        cadenceOnly: true,
+      };
+    }
     if (script === "run-codex-job.sh") {
       const action = words[scriptIndex + 1];
       if (["rescue", "review", "advisor"].includes(action)) {
@@ -354,6 +476,16 @@ function handlePreToolUse(input) {
   if (!launch) return null;
 
   const expectedRunner = RUNNERS[launch.operation];
+  const cadence =
+    launch.operation === "review" && typeof input.session_id === "string"
+      ? readReviewCadence(input.session_id)
+      : null;
+  if (cadence?.checkpointRequired) {
+    return denyResponse(
+      `codex-advisor: 前回の根本方針 checkpoint から Codex review が ${REVIEW_CADENCE_LIMIT} 回完了しています。次の review より先に ${RUNNERS.advisor} を foreground 起動し、元の Goal・制約・反復 findings・現在のアプローチを材料に根本方針を壁打ちしてください。通常の advisor 相談では review cadence は解除されません。`,
+    );
+  }
+  if (launch.cadenceOnly === true) return null;
   const agentType = typeof input.agent_type === "string" ? input.agent_type : "";
   const requestedBackground = input.tool_input?.run_in_background === true;
   const unsafeShellShape = hasTopLevelBackgroundOrPipeline(command);
@@ -386,6 +518,26 @@ function handlePreToolUse(input) {
 }
 
 function handleSubagentStart(input) {
+  if (input.agent_type === PRE_PUSH_CODEX_REVIEWER) {
+    if (
+      typeof input.session_id !== "string" ||
+      typeof input.agent_id !== "string" ||
+      !/^[A-Za-z0-9._-]{1,128}$/.test(input.agent_id)
+    ) {
+      return null;
+    }
+    const cadence = readReviewCadence(input.session_id);
+    const activePrePushAgentIds = cadence?.activePrePushAgentIds ?? [];
+    if (!activePrePushAgentIds.includes(input.agent_id)) {
+      activePrePushAgentIds.push(input.agent_id);
+    }
+    writeReviewCadence(
+      input.session_id,
+      cadence?.completedReviews ?? 0,
+      activePrePushAgentIds,
+    );
+    return null;
+  }
   const operation = operationForAgentType(input.agent_type);
   if (!operation || typeof input.session_id !== "string") return null;
   const previous = readRecord(input.session_id, operation);
@@ -418,6 +570,17 @@ function parseRunnerFooter(message) {
   return { operation: values[0], status: values[1], jobId: values[2] };
 }
 
+function parseReviewCadenceAttestation(message) {
+  if (typeof message !== "string") return null;
+  const lines = message.replace(/\s+$/, "").split(/\r?\n/);
+  if (lines.length < 4) return null;
+  const prefix = "Codex-Advisor-Review-Cadence: ";
+  const line = lines.at(-4);
+  if (!line?.startsWith(prefix)) return null;
+  const value = line.slice(prefix.length).trim();
+  return REVIEW_CADENCE_ATTESTATIONS.has(value) ? value : null;
+}
+
 function scheduleRetryOrFinish(input, operation, jobId) {
   const previous = readRecord(input.session_id, operation);
   const retryCount = previous?.retryCount ?? 0;
@@ -434,9 +597,53 @@ function scheduleRetryOrFinish(input, operation, jobId) {
   }
 }
 
+function parsePrePushReviewStatus(message) {
+  if (typeof message !== "string") return null;
+  const statusLines = message
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter((line) => line.startsWith("Status: "));
+  if (statusLines.length !== 1) return null;
+  const match = statusLines[0].match(/^Status: (pass|findings)$/);
+  return match?.[1] ?? null;
+}
+
+function handlePrePushSubagentStop(input) {
+  if (
+    input.stop_hook_active !== false ||
+    typeof input.session_id !== "string" ||
+    typeof input.agent_id !== "string"
+  ) {
+    return null;
+  }
+  const cadence = readReviewCadence(input.session_id);
+  if (!cadence?.activePrePushAgentIds.includes(input.agent_id)) return null;
+
+  const activePrePushAgentIds = cadence.activePrePushAgentIds.filter(
+    (agentId) => agentId !== input.agent_id,
+  );
+  const completedReviews =
+    cadence.completedReviews +
+    (parsePrePushReviewStatus(input.last_assistant_message) === null ? 0 : 1);
+  if (completedReviews === 0 && activePrePushAgentIds.length === 0) {
+    removeReviewCadence(input.session_id);
+  } else {
+    writeReviewCadence(
+      input.session_id,
+      completedReviews,
+      activePrePushAgentIds,
+    );
+  }
+  return null;
+}
+
 function handleSubagentStop(input) {
   if (input.stop_hook_active !== false || typeof input.session_id !== "string") {
     return null;
+  }
+
+  if (input.agent_type === PRE_PUSH_CODEX_REVIEWER) {
+    return handlePrePushSubagentStop(input);
   }
 
   if (input.agent_type === LEGACY_RESCUE) {
@@ -463,12 +670,16 @@ function handleSubagentStop(input) {
   }
 
   const footer = parseRunnerFooter(input.last_assistant_message);
+  const reviewCadenceAttestation = parseReviewCadenceAttestation(
+    input.last_assistant_message,
+  );
   const reportedOperation = footer?.operation ?? null;
   const status = footer?.status ?? null;
   const jobId = footer?.jobId ?? null;
   if (
     reportedOperation !== operation ||
-    !VALID_STATUSES.has(status)
+    !VALID_STATUSES.has(status) ||
+    (operation === "advisor" && reviewCadenceAttestation === null)
   ) {
     scheduleRetryOrFinish(input, operation, jobId);
     return null;
@@ -479,6 +690,23 @@ function handleSubagentStop(input) {
   } else {
     removeRecord(input.session_id, operation);
   }
+
+  if (operation === "review" && status === "success") {
+    const cadence = readReviewCadence(input.session_id);
+    writeReviewCadence(
+      input.session_id,
+      (cadence?.completedReviews ?? 0) + 1,
+      cadence?.activePrePushAgentIds ?? [],
+    );
+  }
+  if (
+    operation === "advisor" &&
+    ((status === "success" && reviewCadenceAttestation === "satisfied") ||
+      (status === "terminal-failure" &&
+        reviewCadenceAttestation === "unavailable"))
+  ) {
+    removeReviewCadence(input.session_id);
+  }
   return null;
 }
 
@@ -487,7 +715,8 @@ function handleStop(input) {
     return null;
   }
   const records = listRecords(input.session_id);
-  if (records.length === 0) return null;
+  const cadence = readReviewCadence(input.session_id);
+  if (records.length === 0 && !cadence?.checkpointRequired) return null;
   const instructions = records.map((record) => {
     const runner = RUNNERS[record.operation];
     if (record.phase === "active") {
@@ -496,15 +725,22 @@ function handleStop(input) {
     const retry = record.phase === "retry-required" ? "自動 retry (残り 1 回)" : "reroute";
     return `${runner} を Agent tool の subagent_type に指定し、run_in_background: false で ${retry} してください。起動受理だけをユーザーへ返さず、terminal report まで待ってください。`;
   });
+  if (cadence?.checkpointRequired) {
+    instructions.push(
+      `Codex review が前回の checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。次の review または完了宣言より先に ${RUNNERS.advisor} を foreground 起動してください。相談 request は <review_cycle_checkpoint> に元の Goal / 受入基準・制約、${REVIEW_CADENCE_LIMIT} 回の findings と修正の傾向、現在の仮説とアプローチを含め、「局所修正を続ける前に根本方針・問題設定・設計境界を変えるべきか」を質問します。通常の相談ではこの state は解除されません。`,
+    );
+  }
   return {
     decision: "block",
-    reason: `codex-advisor runner の未回収 state があるため main session の停止を拒否します。${instructions.join(" ")}`,
+    reason: `codex-advisor の未完了 runner または review cadence state があるため main session の停止を拒否します。${instructions.join(" ")}`,
   };
 }
 
 function dispatch(input) {
   switch (input.hook_event_name) {
     case "SessionStart":
+      if (typeof input.session_id === "string") clearRunnerState(input.session_id);
+      return null;
     case "SessionEnd":
       if (typeof input.session_id === "string") clearSession(input.session_id);
       return null;

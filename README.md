@@ -46,7 +46,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [agent-discipline](#agent-discipline) | 0.18.0 | 0.18.0 | 作業規律を runtime 別の SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知する。Codex は GPT-5.6 Sol / Luna native prompt、provider/privacy 明示 opt-in、明示 follow-through Skill を提供 |
 | [ui-discipline](#ui-discipline) | 0.3.0 | 0.3.1 | UI 実装の 10 規律を runtime 別の SessionStart / SubagentStart prompt で常時注入するプラグイン。Codex は GPT-5.6 Sol / Luna の質問・subagent semantics へ適応し、具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.5.1 | 0.5.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン。Codex は GPT-5.6 Sol / Luna native prompt と `$plugin:skill` 表記を使い、outline / draft / review の共有 Skills へ接続する |
-| [codex-advisor](#codex-advisor) | 1.0.0 | — | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、companion job ID と lifecycle hook で追跡喪失から復旧する。相談タイミング・助言の扱い・rescue thread 選択規律も常時注入する (要 openai-codex plugin + Codex CLI) |
+| [codex-advisor](#codex-advisor) | 1.1.0 | — | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧する。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.3.0 | 0.3.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.2.0 | 0.2.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [fable-risk-labeler](#fable-risk-labeler) | 0.1.0 | 0.1.0 | GitHub issue と関連実装を Codex で調査し、Fable が正規操作を誤ブロックする可能性が高い作業へ `model:prefer-gpt-5.6-sol` label を安全に付与する Skill を提供する |
@@ -356,7 +356,9 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) パターン (実行役のモデルが戦略的な岐路で別の高知能モデルに相談し、plan / course-correction の助言を受け取って続行する構成) を Claude Code に移植し、OpenAI Codex を助言役として利用するプラグインです。本家は Anthropic API のサーバーサイド機能で advisor が Claude モデル限定のため、hook + skill + wrapper script として再構成しています。
 
-Codex は read-only sandbox でリポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコードレビューへ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-review](#pre-push-review) が担当します。
+Codex は read-only sandbox でリポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコード差分の finding 取得へ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-review](#pre-push-review) が担当します。
+
+v1.1.0 では `pre-push-review:codex-reviewer` の正常終了と成功した一般 Codex review を session ごとに合算し、5 サイクル完了後は main session の Stop と次の一般 / pre-push Codex review 起動を block します。解除には、元の Goal / 制約、5 サイクルの findings と修正の傾向、現在の仮説を材料に根本方針・問題設定・設計境界・検証戦略を問い直す advisor checkpoint が必要です。通常の advisor 相談ではカウンターを解除しません。
 
 v1.0.0 では rescue / review / advisor を `codex-advisor:rescue-runner` / `review-runner` / `advisor-runner` の role 固有 foreground subagent に統一しました。main session や通常 subagent から companion / wrapper を直接実行すると PreToolUse hook が deny し、Stop hook が対応 runner への reroute、active Agent の completion 回収、1 回だけの retry を要求します。
 
@@ -376,7 +378,7 @@ Claude Code からの利用には [公式 codex plugin](https://github.com/opena
 |---------|---------|------|
 | `inject-advisor-rules` | SessionStart | メインセッション向けの相談・rescue thread・role 固有 runner 規律を `additionalContext` として常時注入する |
 | `inject-advisor-rules-subagent` | SubagentStart | 通常 subagent 向けの許可境界と、直接 wrapper ではなく相談 request を親へ返す規律を注入する |
-| `manage-codex-runners` | SessionStart / SessionEnd / PreToolUse / SubagentStart / SubagentStop / Stop | 直接実行 gate、UID + session-scoped state、active 回収、bounded retry、stale cleanup を管理する |
+| `manage-codex-runners` | SessionStart / SessionEnd / PreToolUse / SubagentStart / SubagentStop / Stop | 直接実行 gate、UID + session-scoped state、active 回収、bounded retry、一般 / pre-push共通の5 reviewごとの根本方針 checkpoint、stale cleanupを管理する |
 
 #### Skills
 

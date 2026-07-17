@@ -1,6 +1,6 @@
 ---
 name: consult
-description: OpenAI Codex を advisor として相談し、実質的な作業前・完了宣言前・行き詰まり・方針転換・reconcile 時の plan / course-correction 助言を受け取る。「Codex に相談」「セカンドオピニオン」「Codex の意見」依頼でも使う
+description: OpenAI Codex を advisor として相談し、実質的な作業前・完了宣言前・行き詰まり・方針転換・reconcile・pre-pushを含むCodex review 5サイクルごとの根本方針 checkpointで plan / course-correction助言を受け取る。「Codex に相談」「セカンドオピニオン」「Codex の意見」依頼でも使う
 ---
 
 # /codex-advisor:consult — Codex への相談
@@ -37,6 +37,24 @@ OpenAI Codex に相談プロンプトを渡し、助言テキストを受け取�
 - 1 相談 1 質問。複数の論点があるときは別々の相談に分ける
 - reconcile call (助言と証拠の衝突解消) では `<context>` に前回助言の要点と、それと衝突する証拠を明記し、`<question>` を「どの制約が決め手か」の形にする。Codex 側の thread 継続 (resume) には依存しない — 毎回 self-contained な新規相談として発行する
 
+### Codex review 5 サイクルごとの根本方針 checkpoint
+
+lifecycle hook が一般reviewと`pre-push-review:codex-reviewer`の共有cadenceに基づいて
+checkpointを要求した場合は、通常の `<context>` に要約を散在させず、次のblockを追加する。
+
+```xml
+<review_cycle_checkpoint>
+  <goal_and_acceptance>元の Goal と受入基準。</goal_and_acceptance>
+  <constraints>変えてはならない制約。</constraints>
+  <review_history>直近 5 サイクルの主要 findings、修正、反復傾向。</review_history>
+  <current_strategy>現在の問題設定・仮説・アプローチと残る不確実性。</current_strategy>
+  <question>局所修正を続けるべきか、根本方針・設計境界・検証戦略を変えるべきか。</question>
+</review_cycle_checkpoint>
+```
+
+この block は review finding の再レビュー依頼ではなく、反復の前提を問い直す course-correction
+相談である。4 項目を省略しない。通常相談を checkpoint と称してカウンターを解除しない。
+
 ## 2. host ごとの起動
 
 プロンプト本文を Bash の command 文字列に一切載せない (heredoc・引数直渡しは使わない)。Claude Code では role 固有 runner が prompt file transport と detached job tracking を所有する。Codex host では従来どおり分離された PTY stdin channel を使う。
@@ -50,7 +68,7 @@ OpenAI Codex に相談プロンプトを渡し、助言テキストを受け取�
 
 main session で wrapper / companion を Bash 実行しない。advisor runner が Write tool で session scratchpad の一意な prompt file を作成し、companion の detached job ID を `status` / `result` で追跡する。Claude Code が Agent call を `async_launched` として受理した場合も、completion notification または `TaskOutput` を回収し、runner の terminal report を受け取るまで turn を終了しない。
 
-runner report の助言本文をそのまま受け取り、末尾の `Codex-Runner-Operation` / `Codex-Runner-Status` / `Codex-Runner-Job-ID` は lifecycle metadata として扱う。`retryable-failure` では Stop hook の指示に従って 1 回だけ同じ request を新しい advisor runner へ渡す。`terminal-failure` / `cancelled` は無限 retry しない。
+runner report の助言本文をそのまま受け取り、末尾の `Codex-Runner-Operation` / `Codex-Runner-Status` / `Codex-Runner-Job-ID` は lifecycle metadata として扱う。review cadence request では、その直前の `Codex-Advisor-Review-Cadence: satisfied|unavailable` も hook 用 metadata として扱う。`retryable-failure` では Stop hook の指示に従って 1 回だけ同じ request を新しい advisor runner へ渡す。`terminal-failure` / `cancelled` は無限 retry しない。
 
 ### Codex host
 

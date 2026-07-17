@@ -73,8 +73,8 @@
     {
       "name": "codex-advisor",
       "source": "./plugins/codex-advisor",
-      "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、companion job ID と lifecycle hook で追跡喪失から復旧するプラグイン。相談タイミング・助言の扱い・rescue thread 選択規律も常時注入する (要 openai-codex plugin + Codex CLI)。",
-      "version": "1.0.0",
+      "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧するプラグイン。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI)。",
+      "version": "1.1.0",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {

@@ -1,6 +1,6 @@
 ---
 name: advisor-runner
-description: codex-advisor の read-only 相談を main session から切り離し、detached companion job の ID を status / result で追跡して助言を返す専用 runner
+description: codex-advisor の read-only 相談を main session から切り離し、detached companion job を追跡して助言と5 reviewごとの根本方針 checkpoint attestationを返す専用 runner
 tools: Bash, Write, TaskOutput
 model: inherit
 color: cyan
@@ -61,6 +61,36 @@ find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.
 5. Codex の助言を欠落なく親へ返す。progress / raw shell log / snapshot は subagent context
    に留め、末尾へ lifecycle footer を 1 組だけ付ける。助言の採否と reconcile は親が既存の
    advisor rules に従って判断する。
+
+## review cadence attestation
+
+親の request に `<review_cycle_checkpoint>` がある場合は、model 起動前に次の 4 項目が
+self-contained に含まれるか確認する。
+
+1. 元の Goal、受入基準、変えてはならない制約
+2. 直近 5 review サイクルの主要 findings、施した修正、反復傾向
+3. 現在の問題設定・仮説・アプローチ、残る不確実性
+4. 局所修正を続けるか、根本方針・設計境界・検証戦略を変えるかを問う 1 つの質問
+
+通常の 3 行 footer の**直前**には、Codex の助言本文と lifecycle metadata の境界を固定する
+ため、すべての report で次の予約行を 1 行付ける。通常相談、retryable failure、cancel、
+入力不正では値を `not-applicable` とする。不足があれば model を起動せず入力不正の terminal
+failure とし、同じ `not-applicable` を使う。
+
+```text
+Codex-Advisor-Review-Cadence: not-applicable
+```
+
+4 項目を満たす相談が成功した場合だけ値を次に変える。
+
+```text
+Codex-Advisor-Review-Cadence: satisfied
+```
+
+qualifying request だが plugin / Node 未 install、未認証、timeout 等で Codex を利用できず
+terminal failure になった場合は、既存の fail-open 境界を deadlock させないため直前行を
+`Codex-Advisor-Review-Cadence: unavailable` とする。通常相談が偶然方針に触れても
+カウンター解除を自己判断しない。この予約行がない report は lifecycle hook が不正と扱う。
 
 ## failure と footer
 

@@ -33,6 +33,7 @@ RUNNERS = {
     "review": "codex-advisor:review-runner",
     "advisor": "codex-advisor:advisor-runner",
 }
+PRE_PUSH_CODEX_REVIEWER = "pre-push-review:codex-reviewer"
 
 COMMANDS = {
     "rescue": (
@@ -165,15 +166,23 @@ class HookHarness(unittest.TestCase):
         session_id: str = "session-a",
         agent_id: str = "agent-a",
         job_id: str = "task-example",
+        review_cadence: str | None = None,
     ) -> dict[str, object] | None:
-        report = "\n".join(
+        report_lines = ["Codex runner report"]
+        if review_cadence is None and operation == "advisor":
+            review_cadence = "not-applicable"
+        if review_cadence is not None:
+            report_lines.append(
+                f"Codex-Advisor-Review-Cadence: {review_cadence}"
+            )
+        report_lines.extend(
             [
-                "Codex runner report",
                 f"Codex-Runner-Operation: {operation}",
                 f"Codex-Runner-Status: {status}",
                 f"Codex-Runner-Job-ID: {job_id}",
             ]
         )
+        report = "\n".join(report_lines)
         return self.hook_response(
             {
                 "hook_event_name": "SubagentStop",
@@ -190,6 +199,45 @@ class HookHarness(unittest.TestCase):
             {
                 "hook_event_name": "Stop",
                 "session_id": session_id,
+                "stop_hook_active": False,
+            }
+        )
+
+    def pre_push_codex_start(
+        self,
+        *,
+        session_id: str,
+        agent_id: str,
+    ) -> dict[str, object] | None:
+        return self.hook_response(
+            {
+                "hook_event_name": "SubagentStart",
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "agent_type": PRE_PUSH_CODEX_REVIEWER,
+            }
+        )
+
+    def pre_push_codex_stop(
+        self,
+        status: str,
+        *,
+        session_id: str,
+        agent_id: str,
+        extra_status: str | None = None,
+    ) -> dict[str, object] | None:
+        lines = ["# Codex Review", "", f"Status: {status}"]
+        if extra_status is not None:
+            lines.extend(["", f"Status: {extra_status}"])
+        if status == "pass":
+            lines.append("Findings: 0")
+        return self.hook_response(
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "agent_type": PRE_PUSH_CODEX_REVIEWER,
+                "last_assistant_message": "\n".join(lines),
                 "stop_hook_active": False,
             }
         )
@@ -386,6 +434,30 @@ class CodexRunnerLifecycleTest(HookHarness):
         self.hook_response(payload)
         self.assertEqual([], self.state_records())
 
+    def test_advisor_report_requires_reserved_cadence_metadata_line(self) -> None:
+        self.subagent_start("advisor")
+        report = "\n".join(
+            [
+                "advisor report without reserved metadata",
+                "Codex-Runner-Operation: advisor",
+                "Codex-Runner-Status: success",
+                "Codex-Runner-Job-ID: task-advisor",
+            ]
+        )
+        self.hook_response(
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": "session-a",
+                "agent_id": "agent-a",
+                "agent_type": RUNNERS["advisor"],
+                "last_assistant_message": report,
+                "stop_hook_active": False,
+            }
+        )
+        records = self.state_records()
+        self.assertEqual(1, len(records))
+        self.assertEqual("retry-required", records[0]["phase"])
+
     def test_codex_output_may_contain_footer_words_before_final_footer(self) -> None:
         self.subagent_start("rescue")
         report = "\n".join(
@@ -441,6 +513,222 @@ class CodexRunnerLifecycleTest(HookHarness):
             self.main_stop("session-legacy"), RUNNERS["rescue"]
         )
 
+    def complete_review_cycle(
+        self,
+        cycle: int,
+        *,
+        session_id: str = "session-cadence",
+    ) -> None:
+        agent_id = f"review-{cycle}"
+        self.subagent_start(
+            "review", session_id=session_id, agent_id=agent_id
+        )
+        self.subagent_stop(
+            "review",
+            "success",
+            session_id=session_id,
+            agent_id=agent_id,
+            job_id=f"review-job-{cycle}",
+        )
+
+    def complete_pre_push_review_cycle(
+        self,
+        cycle: int,
+        *,
+        session_id: str = "session-pre-push-cadence",
+        status: str = "pass",
+    ) -> None:
+        agent_id = f"pre-push-codex-{cycle}"
+        self.pre_push_codex_start(
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+        self.pre_push_codex_stop(
+            status,
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+
+    def test_five_pre_push_codex_reviews_require_root_strategy_advisor(self) -> None:
+        session_id = "session-pre-push-cadence"
+        for cycle in range(1, 5):
+            self.complete_pre_push_review_cycle(
+                cycle,
+                session_id=session_id,
+                status="findings" if cycle < 4 else "pass",
+            )
+            self.assertIsNone(self.main_stop(session_id))
+
+        self.complete_pre_push_review_cycle(5, session_id=session_id)
+        self.assert_stop_blocked(
+            self.main_stop(session_id), RUNNERS["advisor"]
+        )
+
+        sixth_agent = "pre-push-codex-sixth"
+        self.pre_push_codex_start(
+            session_id=session_id,
+            agent_id=sixth_agent,
+        )
+        denied = self.hook_response(
+            self.bash_payload(
+                'bash "/opt/pre-push-review/hooks/scripts/run-codex-review.sh"',
+                session_id=session_id,
+                agent_type=PRE_PUSH_CODEX_REVIEWER,
+            )
+        )
+        self.assert_denied(denied, RUNNERS["advisor"])
+
+    def test_failed_or_invalid_pre_push_review_does_not_increment_cadence(self) -> None:
+        session_id = "session-pre-push-failed"
+        for cycle in range(1, 6):
+            agent_id = f"failed-pre-push-{cycle}"
+            self.pre_push_codex_start(
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+            self.pre_push_codex_stop(
+                "execution-failed",
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+        self.assertIsNone(self.main_stop(session_id))
+
+        agent_id = "invalid-pre-push-status"
+        self.pre_push_codex_start(
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+        self.pre_push_codex_stop(
+            "pass",
+            session_id=session_id,
+            agent_id=agent_id,
+            extra_status="findings",
+        )
+        self.assertIsNone(self.main_stop(session_id))
+
+    def test_general_and_pre_push_reviews_share_the_same_cadence(self) -> None:
+        session_id = "session-mixed-cadence"
+        for cycle in range(1, 5):
+            self.complete_pre_push_review_cycle(cycle, session_id=session_id)
+        self.complete_review_cycle(5, session_id=session_id)
+        self.assert_stop_blocked(
+            self.main_stop(session_id), RUNNERS["advisor"]
+        )
+
+    def test_five_successful_reviews_require_root_strategy_advisor(self) -> None:
+        session_id = "session-cadence"
+        for cycle in range(1, 5):
+            self.complete_review_cycle(cycle, session_id=session_id)
+            self.assertIsNone(self.main_stop(session_id))
+
+        self.complete_review_cycle(5, session_id=session_id)
+        response = self.main_stop(session_id)
+        self.assert_stop_blocked(response, RUNNERS["advisor"])
+        assert response is not None
+        self.assertIn("5 回", response["reason"])
+        self.assertIn("根本方針", response["reason"])
+
+        self.subagent_start(
+            "review", session_id=session_id, agent_id="review-sixth"
+        )
+        denied = self.hook_response(
+            self.bash_payload(
+                COMMANDS["review"],
+                session_id=session_id,
+                agent_type=RUNNERS["review"],
+            )
+        )
+        self.assert_denied(denied, RUNNERS["advisor"])
+
+    def test_only_attested_cadence_advice_resets_review_count(self) -> None:
+        session_id = "session-cadence-attestation"
+        for cycle in range(1, 6):
+            self.complete_review_cycle(cycle, session_id=session_id)
+
+        self.subagent_start(
+            "advisor", session_id=session_id, agent_id="ordinary-advisor"
+        )
+        self.subagent_stop(
+            "advisor",
+            "success",
+            session_id=session_id,
+            agent_id="ordinary-advisor",
+        )
+        self.assert_stop_blocked(
+            self.main_stop(session_id), RUNNERS["advisor"]
+        )
+
+        self.subagent_start(
+            "advisor", session_id=session_id, agent_id="cadence-advisor"
+        )
+        self.subagent_stop(
+            "advisor",
+            "success",
+            session_id=session_id,
+            agent_id="cadence-advisor",
+            review_cadence="satisfied",
+        )
+        self.assertIsNone(self.main_stop(session_id))
+
+        for cycle in range(6, 10):
+            self.complete_review_cycle(cycle, session_id=session_id)
+            self.assertIsNone(self.main_stop(session_id))
+        self.complete_review_cycle(10, session_id=session_id)
+        self.assert_stop_blocked(
+            self.main_stop(session_id), RUNNERS["advisor"]
+        )
+
+    def test_unavailable_attested_cadence_attempt_does_not_deadlock(self) -> None:
+        session_id = "session-cadence-unavailable"
+        for cycle in range(1, 6):
+            self.complete_review_cycle(cycle, session_id=session_id)
+
+        self.subagent_start(
+            "advisor", session_id=session_id, agent_id="advisor-unavailable"
+        )
+        self.subagent_stop(
+            "advisor",
+            "terminal-failure",
+            session_id=session_id,
+            agent_id="advisor-unavailable",
+            review_cadence="unavailable",
+        )
+        self.assertIsNone(self.main_stop(session_id))
+
+    def test_session_end_cleans_review_cadence_state(self) -> None:
+        session_id = "session-cadence-cleanup"
+        self.complete_review_cycle(1, session_id=session_id)
+        self.assertNotEqual([], self.state_records())
+        self.hook_response(
+            {
+                "hook_event_name": "SessionEnd",
+                "session_id": session_id,
+            }
+        )
+        records = [
+            record
+            for record in self.state_records()
+            if record["sessionId"] == session_id
+        ]
+        self.assertEqual([], records)
+
+    def test_session_start_preserves_review_cadence_across_resume(self) -> None:
+        session_id = "session-cadence-resume"
+        for cycle in range(1, 5):
+            self.complete_review_cycle(cycle, session_id=session_id)
+
+        self.hook_response(
+            {
+                "hook_event_name": "SessionStart",
+                "session_id": session_id,
+                "source": "resume",
+            }
+        )
+        self.complete_review_cycle(5, session_id=session_id)
+        self.assert_stop_blocked(
+            self.main_stop(session_id), RUNNERS["advisor"]
+        )
+
 
 class CodexRunnerArtifactContractTest(unittest.TestCase):
     def test_three_role_specific_runner_agents_are_declared(self) -> None:
@@ -481,6 +769,30 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
         self.assertIn("複数", contents)
         self.assertIn("推測", contents)
 
+    def test_review_cadence_contract_requires_root_strategy_checkpoint(self) -> None:
+        review_runner = (PLUGIN / "agents" / "review-runner.md").read_text(
+            encoding="utf-8"
+        )
+        advisor_runner = (PLUGIN / "agents" / "advisor-runner.md").read_text(
+            encoding="utf-8"
+        )
+        rules = RULES.read_text(encoding="utf-8")
+        consult = CONSULT.read_text(encoding="utf-8")
+
+        self.assertIn("5", rules)
+        self.assertIn("根本方針", rules)
+        self.assertIn("次の review", rules)
+        self.assertIn("Codex-Advisor-Review-Cadence", advisor_runner)
+        self.assertIn("review_cycle_checkpoint", advisor_runner)
+        self.assertIn("review_cycle_checkpoint", consult)
+        self.assertIn("5 回", review_runner)
+        self.assertIn(PRE_PUSH_CODEX_REVIEWER, rules)
+
+    def test_injected_advisor_rules_stay_below_inline_size_limit(self) -> None:
+        contents = RULES.read_text(encoding="utf-8")
+        utf16_code_units = len(contents.encode("utf-16-le")) // 2
+        self.assertLessEqual(utf16_code_units, 8_000)
+
     def test_consult_routes_through_advisor_runner(self) -> None:
         contents = CONSULT.read_text(encoding="utf-8")
         self.assertIn(RUNNERS["advisor"], contents)
@@ -512,6 +824,8 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
                     any("manage-codex-runners.mjs" in command for command in commands),
                     commands,
                 )
+        serialized = json.dumps(hooks, ensure_ascii=False)
+        self.assertIn(PRE_PUSH_CODEX_REVIEWER, serialized)
 
 
 class CodexJobHelperTest(unittest.TestCase):

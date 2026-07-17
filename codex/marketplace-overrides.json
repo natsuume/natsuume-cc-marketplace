@@ -481,7 +481,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "786a093fe0f601fb67659f3d95b3ebedabe951535a0ed52695bb6f46abe309ea"
+        "sourceTreeDigest": "70845e90cf42cb8270d6eb8f3b0754fb95ed08471a4cef05d98ecd6fd8a8b37b"
       }
     },
     "codex-advisor": {
@@ -504,7 +504,7 @@
         "summary": "Claude Code から Codex へ相談するための plugin なので、Codex marketplace には install surface を配布しません。",
         "limitations": [
           "Codex marketplace では codex-advisor の entry、manifest、Skill、hook を公開しないため、Codex から $codex-advisor:consult を選択・install できません。",
-          "Claude Code marketplace では rescue / review / advisor を role 固有 runner に閉じ込め、main session の companion / wrapper 直接実行を許可しません。"
+          "Claude Code marketplace では rescue / review / advisor を role 固有 runner に閉じ込め、main session の companion / wrapper 直接実行を許可しません。pre-push-review:codex-reviewer と一般 Codex review の合計が5回に達すると、根本方針 advisor checkpoint まで Stop と次の両 review も block します。"
         ],
         "guaranteeDifferences": [
           "Codex 版としての意図等価 adapter は提供せず、Claude Code が異種モデルの Codex を advisor にする本来の利用境界を維持します。"
@@ -516,7 +516,7 @@
           },
           {
             "path": "tests/test_codex_advisor_subagent_runner.py",
-            "covers": "Claude Code 固有の runner agents、direct gate、session lifecycle state、bounded retry、consult routing 契約"
+            "covers": "Claude Code 固有の runner agents、direct gate、session lifecycle state、bounded retry、一般 / pre-push 共通の5 reviewごとの根本方針 advisor checkpoint、consult routing契約"
           },
           {
             "path": "tests/test_sync_codex_marketplace.py",
@@ -527,8 +527,8 @@
           {
             "source": "agents/advisor-runner.md",
             "disposition": "surface-unavailable",
-            "reason": "Claude Code の Agent tool と companion job を接続する role 固有 runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
-            "sourceDigest": "3ea42ebffb4da600b853ad105ab115913ed53fdc878cc43bdebc867f81d87cd6"
+            "reason": "Claude Code の Agent tool と companion job を接続し、5 review ごとの根本方針 checkpoint attestation も返す role 固有 runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
+            "sourceDigest": "cd7fd21b6568ad967cc46a0a5b9ef3f079bad63870b79ceb264a881a2ffedefe"
           },
           {
             "source": "agents/rescue-runner.md",
@@ -539,8 +539,8 @@
           {
             "source": "agents/review-runner.md",
             "disposition": "surface-unavailable",
-            "reason": "Claude Code の Bash / TaskOutput tracking 喪失を companion job 集合差分から復旧する runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
-            "sourceDigest": "e4b5c6a52ef4d4ea03377ff35f7e71da474e42ed8b2522440804b657bdb0fb1d"
+            "reason": "Claude Code の Bash / TaskOutput tracking 喪失を companion job 集合差分から復旧し、成功 review を pre-push Codex review と共有する cadence counter へ接続する runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
+            "sourceDigest": "c69fca238b9a025091672fdabfcc62e28041f18833c99c933dc0908f1d34a660"
           },
           {
             "source": "hooks/hooks.json#/hooks/SessionEnd/0/hooks/0",
@@ -549,7 +549,7 @@
             "sourceDigest": "f5e61eb80fba1870f28d16e6d2757235e422cce3a7168f45e7262c720c47f20a"
           }
         ],
-        "sourceTreeDigest": "32d7873c99bd6902c18d227caa951b7853db1f7672ff883f2b38d395750d05c5"
+        "sourceTreeDigest": "0035ba01ccc6f13bc733dfa770c85840554567ce04fbdeb109031b85f2b1223c"
       }
     },
     "rate-limit": {
