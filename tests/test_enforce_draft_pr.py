@@ -232,6 +232,14 @@ class EnforceDraftPrTest(unittest.TestCase):
         expected = 'gh pr create --draft --title --draft --body "b"'
         self.assert_rewrite(command, expected)
 
+    def test_r16_falsy_after_truthy_denied(self) -> None:
+        # falsy は truthy より優先して deny する (出現順に依らない)。truthy を
+        # 見た時点で flag 追跡を打ち切る実装は後着の --draft=false を見逃して
+        # 素通しし、実行時に gh が後着 falsy を優先して非 draft PR が作られる
+        # ため fail する。
+        command = 'gh pr create --draft --draft=false --title "t" --body "b"'
+        self.assert_denied(command)
+
     # ------------------------------------------------------------------
     # グループ H: heredoc 新仕様
     # (現行実装で fail するはず — H5/H6/H9 など一部は現行でも pass しうる)
