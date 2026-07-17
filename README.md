@@ -46,7 +46,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [agent-discipline](#agent-discipline) | 0.18.0 | 0.18.0 | 作業規律を runtime 別の SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知する。Codex は GPT-5.6 Sol / Luna native prompt、provider/privacy 明示 opt-in、明示 follow-through Skill を提供 |
 | [ui-discipline](#ui-discipline) | 0.3.0 | 0.3.1 | UI 実装の 10 規律を runtime 別の SessionStart / SubagentStart prompt で常時注入するプラグイン。Codex は GPT-5.6 Sol / Luna の質問・subagent semantics へ適応し、具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.5.1 | 0.5.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン。Codex は GPT-5.6 Sol / Luna native prompt と `$plugin:skill` 表記を使い、outline / draft / review の共有 Skills へ接続する |
-| [codex-advisor](#codex-advisor) | 0.3.0 | — | Anthropic の Advisor tool パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグイン。相談タイミング・助言の扱い・`/codex:rescue` の thread 選択自律化 (迷ったら `--fresh`) を含む codex 利用規律を hook で常時注入し、`/codex-advisor:consult` skill で Codex に read-only 相談して plan / course-correction の助言を受け取る (要 openai-codex plugin + Codex CLI) |
+| [codex-advisor](#codex-advisor) | 1.0.0 | — | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、companion job ID と lifecycle hook で追跡喪失から復旧する。相談タイミング・助言の扱い・rescue thread 選択規律も常時注入する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.3.0 | 0.3.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.2.0 | 0.2.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 
@@ -355,9 +355,13 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) パターン (実行役のモデルが戦略的な岐路で別の高知能モデルに相談し、plan / course-correction の助言を受け取って続行する構成) を Claude Code に移植し、OpenAI Codex を助言役として利用するプラグインです。本家は Anthropic API のサーバーサイド機能で advisor が Claude モデル限定のため、hook + skill + wrapper script として再構成しています。
 
-Codex は read-only sandbox でリポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。コードレビュー用途は [pre-push-review](#pre-push-review) が担当するため対象外です。
+Codex は read-only sandbox でリポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコードレビューへ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-review](#pre-push-review) が担当します。
 
-メインセッションに加えて subagent からも相談できます (SubagentStart hook で簡約版規律を配送)。ただし注入は規律の配送であって許可の付与ではなく、subagent が相談できるのは委任指示が codex-advisor の使用を明示的に許可している場合のみです (相談は課金を伴う外部呼び出しのため)。
+v1.0.0 では rescue / review / advisor を `codex-advisor:rescue-runner` / `review-runner` / `advisor-runner` の role 固有 foreground subagent に統一しました。main session や通常 subagent から companion / wrapper を直接実行すると PreToolUse hook が deny し、Stop hook が対応 runner への reroute、active Agent の completion 回収、1 回だけの retry を要求します。
+
+runner は Codex 起動前の companion job 集合を保持します。rescue / advisor は detached task の job ID を追跡し、review は長時間 Bash の tracking を失った場合に起動前後の job 集合差分から review job を一意に特定します。いずれも `status` / `result` で terminal output を回収するため、Claude の Bash / TaskOutput tracking が失われても companion の永続 state から復旧できます。候補が 0 件または複数件なら別 job を推測しません。
+
+通常 subagent が相談を必要とする場合、wrapper を直接実行せず self-contained な request を親へ返します。親が advisor runner を起動できるのは、委任指示が codex-advisor の使用を明示的に許可した場合だけです (相談は課金を伴う外部呼び出しのため)。
 
 v0.2.0 からは相談規律に加えて `/codex:rescue` の thread 選択規律 (`rule:rescue-thread`) も注入します。rescue 起動時の `--resume` / `--fresh` を Claude が自律決定して常に付与し、thread 選択の質問で自走を止めません (`--resume` は「直前の rescue と同一論点の続き + 対象がセッション内最新の再開可能 task と確実に分かる場合」のみ、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先)。openai-codex plugin の「フラグ指定時は質問しない」挙動 (v1.0.6) を前提とするため、外部 plugin 側は無変更です。
 
@@ -369,14 +373,15 @@ Claude Code からの利用には [公式 codex plugin](https://github.com/opena
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-advisor-rules` | SessionStart | メインセッション向けの利用規律 4 ルール (`rule:advisor-timing` いつ相談するか / `rule:advisor-weight` 助言のフラットな扱いと reconcile call / `rule:advisor-boundary` ユーザ専権・レビュー用途除外・subagent への許可明示・不通時継続 / `rule:rescue-thread` rescue の thread 選択自律化) を `additionalContext` として常時注入する |
-| `inject-advisor-rules-subagent` | SubagentStart | subagent 向けの簡約版規律 (委任指示の明示許可がある場合のみ相談・タイミング・wrapper 絶対パス入りの実行方法・フラットな扱い・エスカレーション読み替え) を全 subagent 起動時に注入する (Claude Code 2.0.43+) |
+| `inject-advisor-rules` | SessionStart | メインセッション向けの相談・rescue thread・role 固有 runner 規律を `additionalContext` として常時注入する |
+| `inject-advisor-rules-subagent` | SubagentStart | 通常 subagent 向けの許可境界と、直接 wrapper ではなく相談 request を親へ返す規律を注入する |
+| `manage-codex-runners` | SessionStart / SessionEnd / PreToolUse / SubagentStart / SubagentStop / Stop | 直接実行 gate、UID + session-scoped state、active 回収、bounded retry、stale cleanup を管理する |
 
 #### Skills
 
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
-| consult | Claude: `/codex-advisor:consult` | self-contained な相談プロンプトを組み立て、companion または direct read-only process を foreground 起動して助言を受け取る |
+| consult | Claude: `/codex-advisor:consult` | self-contained な相談プロンプトを組み立て、`codex-advisor:advisor-runner` を foreground 起動して助言を回収する |
 
 ### キーワード
 

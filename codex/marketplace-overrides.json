@@ -481,7 +481,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "29dd98af4d35f6e4d32d9960ddbb08d96c07ea6e50c380c1ccdc1ed991476934"
+        "sourceTreeDigest": "a5e837dad8f0819c95d52f9d69ad03b2d95183bb82c91bb301eedc565fe2a40f"
       }
     },
     "codex-advisor": {
@@ -504,7 +504,7 @@
         "summary": "Claude Code から Codex へ相談するための plugin なので、Codex marketplace には install surface を配布しません。",
         "limitations": [
           "Codex marketplace では codex-advisor の entry、manifest、Skill、hook を公開しないため、Codex から $codex-advisor:consult を選択・install できません。",
-          "Claude Code marketplace の plugin、hook、Skill、wrapper は従来どおり利用できます。"
+          "Claude Code marketplace では rescue / review / advisor を role 固有 runner に閉じ込め、main session の companion / wrapper 直接実行を許可しません。"
         ],
         "guaranteeDifferences": [
           "Codex 版としての意図等価 adapter は提供せず、Claude Code が異種モデルの Codex を advisor にする本来の利用境界を維持します。"
@@ -515,12 +515,41 @@
             "covers": "Claude Code から利用する advisor wrapper の file-stdin companion、direct fallback、安全引数、deadline cleanup 契約"
           },
           {
+            "path": "tests/test_codex_advisor_subagent_runner.py",
+            "covers": "Claude Code 固有の runner agents、direct gate、session lifecycle state、bounded retry、consult routing 契約"
+          },
+          {
             "path": "tests/test_sync_codex_marketplace.py",
             "covers": "codex-advisor が Codex marketplace と生成 manifest から除外され、Claude plugin 一覧には残ること"
           }
         ],
-        "components": [],
-        "sourceTreeDigest": "564ae9db0dfb01cffa9f56db699fcbb5f9e98efd8eab64cd26a707e89972acfe"
+        "components": [
+          {
+            "source": "agents/advisor-runner.md",
+            "disposition": "surface-unavailable",
+            "reason": "Claude Code の Agent tool と companion job を接続する role 固有 runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
+            "sourceDigest": "3ea42ebffb4da600b853ad105ab115913ed53fdc878cc43bdebc867f81d87cd6"
+          },
+          {
+            "source": "agents/rescue-runner.md",
+            "disposition": "surface-unavailable",
+            "reason": "Claude Code の legacy rescue 経路を named Agent へ reroute する runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
+            "sourceDigest": "684a9495ec11e1a528d7e917352ea5f4d5060cb226d83bbe9fe916eb522bb7f6"
+          },
+          {
+            "source": "agents/review-runner.md",
+            "disposition": "surface-unavailable",
+            "reason": "Claude Code の Bash / TaskOutput tracking 喪失を companion job 集合差分から復旧する runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
+            "sourceDigest": "e4b5c6a52ef4d4ea03377ff35f7e71da474e42ed8b2522440804b657bdb0fb1d"
+          },
+          {
+            "source": "hooks/hooks.json#/hooks/SessionEnd/0/hooks/0",
+            "disposition": "surface-unavailable",
+            "reason": "Claude Code session の runner state を終了時に掃除する hook であり、plugin 自体を Codex distribution から除外しているため公開しません。",
+            "sourceDigest": "f5e61eb80fba1870f28d16e6d2757235e422cce3a7168f45e7262c720c47f20a"
+          }
+        ],
+        "sourceTreeDigest": "b0f1010311c32795b456ac62e8291cc4079dbfc4f970682c6da03d69fd05a98d"
       }
     },
     "rate-limit": {
