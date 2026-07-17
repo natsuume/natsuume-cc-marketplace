@@ -17,13 +17,13 @@ if [ -z "$FILE_PATH" ] || [ -z "$LINTER" ]; then
   exit 0
 fi
 
-# `realpath -m` は GNU coreutils 限定なので、可搬性のため python3 で
-# 同等の正規化 (os.path.abspath) を行う。ただし呼び出し側 (common.sh の
-# extract_file_path) で既に絶対パスに正規化されているため、ここでは
-# dirname の結果を再度正規化するだけで通常は何も変化しない。
+# `realpath -m` は GNU coreutils 限定なので、Linux / macOS で共通利用できる
+# python3 の os.path.realpath で絶対化と symlink 解決を同時に行う。呼び出し側
+# (common.sh の extract_file_path) は os.path.abspath までしか行わないため、
+# config 探索を始めるここで実ディレクトリ階層へ正規化する。
 PARENT_DIR="$(dirname "$FILE_PATH")"
 if command -v python3 >/dev/null 2>&1; then
-  DIR=$(python3 -c 'import os, sys; sys.stdout.write(os.path.abspath(sys.argv[1]))' "$PARENT_DIR" 2>/dev/null)
+  DIR=$(python3 -c 'import os, sys; sys.stdout.write(os.path.realpath(sys.argv[1]))' "$PARENT_DIR" 2>/dev/null)
 else
   DIR="$PARENT_DIR"
 fi
