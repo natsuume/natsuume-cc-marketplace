@@ -139,8 +139,64 @@ class BlockPrePushBundledDeleteOptionTest(unittest.TestCase):
     def test_force_delete_cluster_is_allowed(self) -> None:
         self.assert_allowed("git push -fd origin other-branch")
 
+    def test_long_delete_remains_allowed(self) -> None:
+        self.assert_allowed("git push --delete origin other-branch")
+
     def test_force_without_delete_keeps_refspec_mismatch_deny(self) -> None:
         result = self.run_hook("git push -f origin other-branch")
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        response = json.loads(result.stdout)
+        output = response["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn("別ブランチ", output["permissionDecisionReason"])
+
+    def test_attached_push_option_value_containing_d_is_not_delete(self) -> None:
+        result = self.run_hook(
+            "git push -odeploy=1 origin other-branch"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        response = json.loads(result.stdout)
+        self.assertEqual(
+            response["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+
+    def test_signed_long_option_is_not_delete(self) -> None:
+        result = self.run_hook(
+            "git push --signed=false origin other-branch"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        response = json.loads(result.stdout)
+        self.assertEqual(
+            response["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+
+    def test_separate_short_push_option_value_is_not_delete(self) -> None:
+        result = self.run_hook(
+            "git push -o -d origin other-branch"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        response = json.loads(result.stdout)
+        self.assertEqual(
+            response["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+
+    def test_separate_long_push_option_value_is_not_delete(self) -> None:
+        result = self.run_hook(
+            'git push "--push-option" "-d" origin other-branch'
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        response = json.loads(result.stdout)
+        self.assertEqual(
+            response["hookSpecificOutput"]["permissionDecision"], "deny"
+        )
+
+    def test_dash_d_refspec_after_end_of_options_is_not_delete(self) -> None:
+        result = self.run_hook("git push -- origin -d")
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         response = json.loads(result.stdout)

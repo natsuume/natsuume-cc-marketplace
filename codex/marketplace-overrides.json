@@ -148,6 +148,10 @@
           {
             "path": "tests/test_pre_push_auto_mark.py",
             "covers": "Claude Code の SubagentStart launch attestation と SubagentStop での parent-safe report・hash 束縛検証、Codex pending attestation の final marker 昇格・失敗時破棄"
+          },
+          {
+            "path": "tests/test_pre_push_blocker.py",
+            "covers": "push gate の fail-closed 入出力、worktree 診断、delete option 判定契約"
           }
         ],
         "components": [
@@ -182,7 +186,7 @@
             "sourceDigest": "be236d7412a9db67d9f5e0f36383515bbac7e179a628d39d96b19405d7f0cd72"
           }
         ],
-        "sourceTreeDigest": "8719ee502b1d386a7efc68b490836f0ae585050e8855776e71d66607e6d0f87e"
+        "sourceTreeDigest": "4f7660235932ca0c044ed89cdb11a7110a3d85ff4e3d5380ba1299bbcf304cab"
       }
     },
     "update-default-branch": {
