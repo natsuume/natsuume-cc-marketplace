@@ -73,17 +73,17 @@
 # heredoc 宣言が対応構文 (上記 5 形式) に一致しない場合 (部分 quote 連結 `E"OF"` 等、
 # 英数字・アンダースコア以外を含む unquoted word、 word 直後が区切り文字以外など) は
 # **それ以降のコマンド文字列を一切解析しない** (opaque fallback、 スキャンループを break)。
-# fallback 発生位置の判定は 2 分岐:
-#   - fallback が対象 invocation (`gh ... pr create`) の **引数領域内** で発動した場合
-#     (= 走査が打ち切られた時点で開いていた最後のコマンドが `gh ... pr create` に一致する
-#     場合) → draft 指定の確定状態 (truthy / falsy / 未確定) に関係なく **常に deny** する。
-#     fallback 前に確認済みの truthy (`--draft`) であっても、 不可視の宣言行残余 (opaque
-#     領域) に conflicting な後着 `--draft=false` が隠れている可能性があり (gh は後着
-#     falsy を優先する)、 truthy を根拠に素通しすると非 draft PR が作られる bypass が
-#     成立するため。
-#   - fallback が **別コマンドの領域** で発動した場合 → 不介入。 fallback より前に
-#     separator (`;`/`&&`/`||`/`|`/`&`) で完結した別 invocation への挿入は有効。 opaque
-#     領域内 (fallback 発生位置より後ろ) の invocation は検出不能。
+# fallback 発動後は、 発動位置 (対象 invocation (`gh ... pr create`) の引数領域内か、
+# 別コマンドの領域か) に **依らず常に deny** する (契約 1 本化。 security レビューで
+# 「別コマンドの領域で発動 → 不介入」 という旧 2 分岐の一方が bypass と指摘されたため)。
+# fallback 以降は解析不能 (opaque) であり、 残余文字列への部分文字列判定による救済は、
+# 行継続 (`cre\<改行>ate`) や quote 分断 (`cre""ate`) といった bash の語結合を使う難読化
+# で bypass できるため、 解析できない領域が生じた時点で fail-closed に倒す。 冒頭の粗
+# フィルタ (`*gh*pr*create*`) を通過した入力のみがこのスキャナに到達するため、
+# `gh pr create` 風の文字列を全く含まない無関係コマンドがこの deny に到達することはない。
+# fallback より前に separator (`;`/`&&`/`||`/`|`/`&`) で完結した invocation があっても、
+# deny が全体に優先するため ` --draft` 挿入は行わない (旧契約の 「完結済み invocation
+# への挿入は有効」 は廃止)。
 #
 # ## 行継続のスキャナ内処理
 #
@@ -117,8 +117,8 @@
 #   以上 cooperative 利用前提の制約 (意図的難読化による bypass は対象外)。
 # - 未対応の heredoc delimiter 構文 (部分 quote 連結 `E"OF"` 等、 英数字・アンダースコア
 #   以外を含む unquoted word 等) を検出したら、 それ以降は一切解析しない (opaque
-#   fallback)。 fallback が対象 invocation の引数領域内で発動した場合は draft 指定の
-#   確定状態に関係なく deny する (draft 付与漏れ方向の fail-safe)。
+#   fallback)。 fallback 発動時は発動位置 (対象 invocation の引数領域内か、 別コマンドの
+#   領域か) に依らず deny する (draft 付与漏れ方向の fail-safe)。
 
 INPUT=$(cat)
 
@@ -590,15 +590,13 @@ analyze_and_rewrite() {
                     esac
                     j=$((j+1))
                   done
-                  # opaque fallback (#144) がこの invocation の引数領域内で発動した場合
-                  # (= 引数走査が境界に遭遇せず配列末尾まで到達 = スキャン打ち切り時点で
-                  # 開いていたのがこの invocation)、 draft 指定の確定状態に関係なく常に
-                  # deny する (不可視の宣言行残余に conflicting な後着 flag が隠れうるため)。
                   # `--draft=false` 等の明示的 非 draft は enforce 方針違反として deny する
                   # (truthy / 未指定より優先)。 README『PR は必ず draft で起こす』に合わせる。
-                  if [ "$OPAQUE" -eq 1 ] && [ "$j" -eq "$ntok" ]; then
-                    RW_DENY=1
-                  elif [ "$off" -eq 1 ]; then
+                  # opaque fallback (#144) の deny 判定はここでは行わない: fallback は発動
+                  # 位置に依らず常に deny する契約のため、 ループ終了後に OPAQUE を 1 回
+                  # 全体判定する (このループ内で per-invocation に判定すると、 fallback が
+                  # 対象 invocation の外側で発動したケースを見逃す)。
+                  if [ "$off" -eq 1 ]; then
                     RW_DENY=1
                   elif [ "$on" -eq 0 ]; then
                     INS+=("${TEND[$cidx]}")
@@ -612,6 +610,16 @@ analyze_and_rewrite() {
     fi
     t=$((t+1))
   done
+
+  # opaque fallback (#144) が発動していたら、 発動位置 (対象 invocation の引数領域内か、
+  # 別コマンドの領域か) に依らず常に deny する (契約 1 本化。 fallback 以降は解析不能な
+  # ため、 挿入対象があっても書き換えを返さず、 コマンド文字列は原文のまま返す)。
+  if [ "$OPAQUE" -eq 1 ]; then
+    RW_DENY=1
+    RW_CHANGED=0
+    RW_OUT="$cmd"
+    return
+  fi
 
   local m=${#INS[@]}
   if [ "$m" -eq 0 ]; then RW_CHANGED=0; RW_OUT="$cmd"; return; fi
@@ -628,8 +636,7 @@ analyze_and_rewrite() {
 analyze_and_rewrite "$COMMAND"
 
 # `--draft=false` 等の明示的 非 draft 指定、 または未対応 heredoc delimiter 構文による
-# opaque fallback (対象 invocation の引数領域内で発動した場合) は enforce 方針違反 /
-# 解析不能として deny する。
+# opaque fallback (発動位置に依らず) は enforce 方針違反 / 解析不能として deny する。
 if [ "$RW_DENY" -eq 1 ]; then
   jq -n '{
     "hookSpecificOutput": {

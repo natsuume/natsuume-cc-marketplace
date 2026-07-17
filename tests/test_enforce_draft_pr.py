@@ -33,15 +33,15 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
    pending 登録後も quote 外の生改行までは宣言行の引数走査を継続する。
 2. **対応 delimiter 形式**: `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` /
    `<<\\WORD` (WORD は `[A-Za-z0-9_]+`)。該当しない構文を検出したら opaque fallback: それ
-   以降のコマンド文字列を一切解析しない。判定は 2 分岐:
-     - fallback が対象 invocation (`gh pr create`) の引数領域内で発動 → draft 指定の
-       確定状態 (truthy / falsy / 未確定) に関係なく **常に deny** する。確認済み truthy
-       (`--draft`) であっても、不可視の宣言行残余 (opaque 領域) に conflicting な後着
-       `--draft=false` が隠れうるため信頼できない (gh は後着 falsy を優先するため、
-       truthy を根拠に素通しすると非 draft PR が作られる bypass が成立する)。
-     - fallback が別コマンドの領域で発動 (現在の command 境界が対象 invocation でない) →
-       不介入 (opaque 領域内の invocation は検出不能)。fallback より前に separator で
-       完結した別 invocation への挿入は有効。
+   以降のコマンド文字列を一切解析しない。fallback 発動後は、発動位置 (対象 invocation
+   (`gh pr create`) の引数領域内か、別コマンドの領域か) に依らず **常に deny** する。
+   fallback 以降は解析不能 (opaque) であり、残余文字列への部分文字列判定による救済は、
+   行継続 (`cre\\` + 改行 + `ate`) や quote 分断 (`cre""ate`) といった bash の語結合を
+   使う難読化で bypass できるため、解析できない領域が生じた時点で fail-closed に倒す。
+   冒頭の粗フィルタ (`*gh*pr*create*`) を通過した入力のみがスキャナに到達するため、
+   `gh pr create` 風文字列を全く含まない無関係コマンドがこの deny に到達することはない。
+   fallback より前に separator で完結した invocation への ` --draft` 挿入も行わない
+   (deny が全体に優先する)。
    `<<'WORD'` / `<<"WORD"` / `<<\\WORD` はいずれも quoted delimiter であり、本文で
    行継続処理を行わない。
 3. **算術式スキップ**: `$((...))` / コマンド位置の `((...))` は対応する `))` まで (内部括弧
@@ -516,16 +516,20 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_rewrite(command, expected)
 
-    def test_h10a_opaque_fallback_no_intervention(self) -> None:
-        # opaque fallback は宣言以降全域で解析を停止する。宣言行のみ抑制する
-        # 誤実装は本文の fake に、EOF 後に解析を再開する誤実装は後続行に
-        # 挿入して非空になり fail する。本文先頭に unsupported delimiter
-        # `E"OF"` の prefix `E` に見える単独行を追加する: delimiter の prefix
-        # 一致で本文モードを早期 resume する誤実装は以降の fake に挿入して
-        # 非空になり fail する。この invocation は fallback を起こす `cat` と
-        # 別 command (`;` 区切り) だが、`cat <<E"OF"` より後ろの opaque 領域内
-        # にあるため検出不能で不介入のまま (H22 の「fallback より前に完結した
-        # invocation」とは対照的なケース)。
+    def test_h10a_opaque_fallback_other_region_denied(self) -> None:
+        # opaque fallback は宣言以降全域で解析を停止する。新契約では発動位置
+        # (対象 invocation の引数領域内か、別コマンドの領域か) に依らず常に
+        # deny する。この invocation は fallback を起こす `cat` と別 command
+        # (`;` 区切り) であり、`cat <<E"OF"` より後ろの opaque 領域内にある
+        # (= 旧契約なら不介入だった) が、opaque 領域内には検出不能な
+        # invocation が隠れうるため fail-closed で deny する。旧契約はここが
+        # 不介入となり、bash 実行時には opaque 領域内の後続コマンドがそのまま
+        # 実行される bypass の穴だった (H28 参照)。宣言行のみ抑制する誤実装は
+        # 本文の fake に、EOF 後に解析を再開する誤実装は後続行に挿入して
+        # allow になり fail する。本文先頭に unsupported delimiter `E"OF"` の
+        # prefix `E` に見える単独行を追加する: delimiter の prefix 一致で本文
+        # モードを早期 resume する誤実装は以降の fake に挿入して allow になり
+        # fail する。
         command = (
             'cat <<E"OF"; gh pr create --title "t" --body "b"'
             + NL
@@ -537,7 +541,7 @@ class EnforceDraftPrTest(unittest.TestCase):
             + NL
             + ':; gh pr create --title "t2" --body "b2"'
         )
-        self.assert_no_intervention(command)
+        self.assert_denied(command)
 
     def test_h10b_opaque_fallback_confirmed_tokens_judged(self) -> None:
         # opaque fallback は `<<E"OF"` 以降を一切解析しない。この invocation
@@ -822,12 +826,13 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_denied(command)
 
-    def test_h22_completed_invocation_before_fallback_still_rewritten(
+    def test_h22_completed_invocation_before_fallback_denied(
         self,
     ) -> None:
-        # fallback より前に separator (`;`) で完結した invocation への挿入は
-        # 有効。fallback 発動で全体を不介入・deny にする実装は正当な draft
-        # 強制を失い fail する。
+        # fallback より前に separator (`;`) で完結した invocation があっても、
+        # 新契約では opaque fallback の deny が全体に優先し、完結済み
+        # invocation への ` --draft` 挿入は行わない。fallback 発動位置に
+        # 依らず常に deny する契約 (H10a と対) の直接 witness。
         command = (
             'gh pr create --title "t" --body "b"; cat <<E"OF"'
             + NL
@@ -835,14 +840,7 @@ class EnforceDraftPrTest(unittest.TestCase):
             + NL
             + "EOF"
         )
-        expected = (
-            'gh pr create --draft --title "t" --body "b"; cat <<E"OF"'
-            + NL
-            + "body; gh pr create fake"
-            + NL
-            + "EOF"
-        )
-        self.assert_rewrite(command, expected)
+        self.assert_denied(command)
 
     def test_h24_supported_heredoc_declaration_tail_falsy_denied(self) -> None:
         # supported delimiter では宣言行の後続 flag はスキャナから可視であり
@@ -862,8 +860,8 @@ class EnforceDraftPrTest(unittest.TestCase):
     ) -> None:
         # 後続 invocation の引数領域内 fallback による deny は先行 invocation
         # の書き換えより優先する。1 個目の rewrite を先に返して 2 個目の
-        # unsafe を無視する誤実装は fail する (H22 との対比: H22 は fallback
-        # 側が非対象コマンド cat のため挿入が有効)。
+        # unsafe を無視する誤実装は fail する (H22 と同じく、fallback が
+        # どの位置で発動しても deny が全体に優先する契約の別 witness)。
         command = (
             'gh pr create --title "a" --body "b"; '
             'gh pr create --title "c" --body-file - <<E"OF"'
@@ -902,6 +900,39 @@ class EnforceDraftPrTest(unittest.TestCase):
             + 'line" --draft=false'
             + NL
             + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
+
+    def test_h28_falsy_invocation_after_foreign_fallback_denied(self) -> None:
+        # security P1 の再現 witness。旧 2 分岐契約 (fallback が別コマンド
+        # (`cat`) の領域で発動 → 不介入) では、この invocation は不介入と
+        # なる。しかし bash 実行時には `<<E"OF"` は delimiter `EOF` として
+        # 解釈され、後続の明示的 falsy invocation (`gh pr create
+        # --draft=false ...`) がそのまま実行されてしまう bypass になっていた
+        # (旧実装 master では deny)。新契約はこれを opaque fallback 発動時の
+        # 常時 deny で塞ぐ。
+        command = (
+            'cat <<E"OF"; gh pr create --draft=false --title t --body b'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
+
+    def test_h29_keyword_split_in_opaque_region_still_denied(self) -> None:
+        # 難読化耐性の witness。opaque 領域の残余文字列への部分文字列判定で
+        # deny を決める誤実装は、`cre\` + 改行 + `ate` という bash の行継続
+        # による keyword 分断 (bash は行継続を除去して `gh pr create
+        # --draft=false` を実行する) を素通しして fail する。粗フィルタは
+        # 先頭の `: 'gh pr create'` (quoted literal) で通過するため、この
+        # コマンドはそもそもスキャナに到達する。
+        command = (
+            ": 'gh pr create'; cat <<E\"OF\"; gh pr cre\\"
+            + NL
+            + "ate --draft=false --title t --body b"
             + NL
             + "EOF"
         )
