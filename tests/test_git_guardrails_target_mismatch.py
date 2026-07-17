@@ -98,6 +98,78 @@ class GitGuardrailsTargetMismatchTest(unittest.TestCase):
 
         self.assert_target_mismatch_denied(result)
 
+    def test_global_c_after_config_option_remains_denied(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            'git -c user.name=test -C /other status && git commit -m "change"',
+        )
+
+        self.assert_target_mismatch_denied(result)
+
+    def test_quoted_global_c_remains_denied(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            'git "-C" "/other" status && git commit -m "change"',
+        )
+
+        self.assert_target_mismatch_denied(result)
+
+    def test_local_c_after_config_option_is_allowed(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            'git -c user.name=test blame -C file.txt && git commit -m "change"',
+        )
+
+        self.assert_allowed(result)
+
+    def test_global_git_dir_before_commit_remains_denied(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            'git --git-dir=/other/.git status && git commit -m "change"',
+        )
+
+        self.assert_target_mismatch_denied(result)
+
+    def test_path_qualified_git_with_global_c_remains_denied(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            '/usr/bin/git -C /other status && /usr/bin/git commit -m "change"',
+        )
+
+        self.assert_target_mismatch_denied(result)
+
+    def test_quoted_path_qualified_git_with_global_c_remains_denied(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            '"/usr/bin/git" -C /other status && git commit -m "change"',
+        )
+
+        self.assert_target_mismatch_denied(result)
+
+    def test_concatenated_global_git_dir_remains_denied(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            "git --git-'dir'=/other/.git status && git commit -m change",
+        )
+
+        self.assert_target_mismatch_denied(result)
+
+    def test_escaped_global_git_dir_remains_denied(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            r"git --git-dir\=/other/.git status && git commit -m change",
+        )
+
+        self.assert_target_mismatch_denied(result)
+
+    def test_path_qualified_git_with_local_c_is_allowed(self) -> None:
+        result = self.run_hook(
+            COMMIT_HOOK,
+            '/usr/bin/git blame -C file.txt && /usr/bin/git commit -m "change"',
+        )
+
+        self.assert_allowed(result)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.5.0",
+      "version": "0.5.1",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -34,10 +34,14 @@
           {
             "path": "scripts/smoke_codex_marketplace.sh",
             "covers": "生成 marketplace から plugin と共有 hook を Codex に install できること"
+          },
+          {
+            "path": "tests/test_git_guardrails_target_mismatch.py",
+            "covers": "git global option と subcommand-local option を区別しつつ target-mismatch を fail-closed に deny すること"
           }
         ],
         "components": [],
-        "sourceTreeDigest": "f057a4ddccbf6cf3c02cdab49da02f469109420f3c271f6fb15981693696f76c"
+        "sourceTreeDigest": "78f0add8e4f9a3e7c4783c860d82b1ae4c807c8695ddb4b6a83383e374d07695"
       }
     },
     "enforce-draft-pr": {
