@@ -50,6 +50,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [rate-limit](#rate-limit) | 0.3.0 | 0.3.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.2.0 | 0.2.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [fable-risk-labeler](#fable-risk-labeler) | 0.1.0 | 0.1.0 | GitHub issue と関連実装を Codex で調査し、Fable が正規操作を誤ブロックする可能性が高い作業へ `model:prefer-gpt-5.6-sol` label を安全に付与する Skill を提供する |
+| [repo-analytics](#repo-analytics) | 0.1.0 | — | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
 
 Codex version が `—` の plugin は Codex marketplace の配布対象外です。Claude Code marketplace と Claude plugin は引き続き提供します。
 
@@ -491,6 +492,28 @@ connected GitHub app または認証済み `gh` CLI、既存の `model:prefer-gp
 ### キーワード
 
 `github` `issue` `triage` `label` `fable` `codex` `gpt-5.6-sol` `risk`
+
+---
+
+## repo-analytics
+
+GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析するプラグインです。`gh` CLI で取得した issue/PR のラベル・コメント・close/reopen イベントから着手時刻・PR ready 時刻・merge 時刻を推定し、まだ着手中・未マージのタスクを打ち切り (censoring) として扱う、PR サイズ (追加+削除行数) を帯分けして交絡を統制する、といった処理を経て、週次推移・区間統計・イベント年表を含む Artifact レポートとターミナルサマリを生成します。
+
+Skill `leadtime` は `/repo-analytics:leadtime` で呼び出します。対象は省略時カレントの git リポジトリ、ディレクトリパス指定で配下リポジトリの再帰探索、`owner/repo` のカンマ区切りリストのいずれかを受け付け、`since=YYYY-MM-DD` で集計開始日を絞り込めます。副作用は `gh` CLI の read-only query のみで、中間ファイルはプロジェクト内に作成せずセッションの scratchpad にのみ保存します。
+
+レポート出力の中核である Artifact レポートと dataviz / artifact-design skill のロードが Claude Code 固有機能であるため、Codex marketplace には配布しません (Claude Code 版は従来どおり利用できます)。
+
+### 機能
+
+#### Skills
+
+| スキル名 | コマンド | 説明 |
+|---------|---------|------|
+| leadtime | `/repo-analytics:leadtime` | GitHub issue/PR のタイムラインを収集し、生存バイアス・サイズ交絡を統制したリードタイム推移レポート (Artifact) とターミナルサマリを生成する |
+
+### キーワード
+
+`analytics` `leadtime` `github` `metrics` `report`
 
 ---
 

@@ -1,0 +1,55 @@
+query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      timelineItems(
+        first: 100
+        after: $endCursor
+        itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ISSUE_COMMENT, CLOSED_EVENT, REOPENED_EVENT]
+      ) {
+        totalCount
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          __typename
+          ... on LabeledEvent {
+            createdAt
+            label {
+              name
+            }
+          }
+          ... on UnlabeledEvent {
+            createdAt
+            label {
+              name
+            }
+          }
+          ... on IssueComment {
+            createdAt
+            body
+          }
+          ... on ClosedEvent {
+            createdAt
+            closer {
+              __typename
+              ... on PullRequest {
+                number
+                repository {
+                  nameWithOwner
+                }
+                merged
+              }
+              ... on Commit {
+                oid
+              }
+            }
+          }
+          ... on ReopenedEvent {
+            createdAt
+          }
+        }
+      }
+    }
+  }
+}
