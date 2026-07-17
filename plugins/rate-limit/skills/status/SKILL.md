@@ -28,7 +28,7 @@ exit 0 のとき、stdout に次の JSON が返る。
 | `cache_age_seconds` | `source` が `"statusline-cache"` のときのみ出現。キャッシュ書き込みからの経過秒 |
 | `five_hour` | 5 時間セッション枠。`{ "used_percentage": <0-100>, "resets_at": "<ISO 8601 UTC>" }`、取得できなければ `null` |
 | `seven_day` | 週次枠。`five_hour` と同じ形式、または `null` |
-| `extras` | `source` が `"oauth-endpoint"` のときのみ出現しうる任意フィールド (endpoint 固有の追加情報) |
+| `extras` | `source` が `"oauth-endpoint"` のときのみ出現しうる任意フィールド (endpoint 固有の追加情報)。`limits` を含みうる (下記参照) |
 
 `source` の値でデータの由来・信頼性が異なる:
 
@@ -37,9 +37,27 @@ exit 0 のとき、stdout に次の JSON が返る。
 
 `used_percentage` は 0〜100 の数値、`resets_at` は ISO 8601 UTC 形式の時刻。
 
+### `extras.limits` — model-scoped limit を含む詳細枠
+
+`extras.limits` は endpoint の `limits` 配列の raw passthrough (script は正規化・検証しない)。各 entry は次のフィールドを持ちうる:
+
+| フィールド | 意味 |
+|---|---|
+| `kind` | 枠の種類 (実測例: `"session"` = 5 時間枠、`"weekly_all"` = 週次・全体、`"weekly_scoped"` = 週次・scope 限定) |
+| `group` | 枠のグループ (実測例: `"session"` / `"weekly"`) |
+| `percent` | 使用率 (0〜100) |
+| `severity` | 逼迫度 (実測例: `"normal"` / `"warning"`) |
+| `resets_at` | リセット時刻 (ISO 8601) |
+| `scope` | 枠の適用範囲。`scope.model.display_name` が対象 model 名 (例: `"Fable"`)。`null` なら全体枠 |
+| `is_active` | その枠が現在アクティブに効いているか |
+
+## 3. ユーザへの報告
+
 ユーザへは、取得できた `five_hour` / `seven_day` の `used_percentage` と `resets_at`、および `source` (データの由来) をそのまま報告する。
 
-## 3. 失敗時 (exit 1)
+`extras.limits` が存在する場合は各 entry (`kind`、`scope.model.display_name`、`percent`、`severity`、`resets_at`、`is_active`) も報告に含め、`severity` が `normal` 以外、または `is_active` が true の entry を明示的に強調する。`extras.limits` が空配列の場合は「scoped limit なし」と報告する。entry に存在しないフィールドは推測で補わない。
+
+## 4. 失敗時 (exit 1)
 
 stderr に経路ごとの失敗理由が列挙される。その内容をそのままユーザに報告する。
 
