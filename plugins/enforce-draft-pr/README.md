@@ -10,12 +10,13 @@ v0.4.0
 
 heredoc 本文への誤介入 (#144) と O(n²) 性能問題 (#143) を修正しました:
 
-- **heredoc 認識を追加**: `<<EOF` 系 5 形式 (`<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` / `<<\WORD`) の delimiter を認識し、本文全体を不透明データとして扱います。これまで本文中の `;` `&&` 等の後の `gh pr create` という説明文に ` --draft` が誤挿入され PR 本文が改変される問題、本文中の `--draft=false` 文字列で誤 deny される問題を解消しました
+- **heredoc 認識を追加**: `<<EOF` 系 6 形式 (`<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` / `<<\WORD`) の delimiter を認識し、本文全体を不透明データとして扱います。WORD には英数字・アンダースコア・ハイフンを使用できます。これまで本文中の `;` `&&` 等の後の `gh pr create` という説明文に ` --draft` が誤挿入され PR 本文が改変される問題、本文中の `--draft=false` 文字列で誤 deny される問題を解消しました
 - **未対応の heredoc delimiter 構文は opaque fallback**: それ以降を解析せず、検出した時点で (発動位置に依らず) 安全側に deny します (不可視の宣言行残余に `--draft=false` が隠れうるため)。deny された場合は `<<EOF` / `<<'EOF'` 等の単純な形に書き直してください
 - **算術式スキップ**: `$((x << 1))` 等のビットシフトを heredoc と誤認しません
-- **O(n) スキャナ化**: 1 文字連結の O(n²) を解消し、50KB の `--body` を持つコマンドの処理時間を約 29 秒 → 約 0.1 秒に短縮しました
+- **O(n) スキャナ化**: 1 文字連結の O(n²) を解消し、50KB の通常 body・短い行が密集する heredoc body・行継続密集 body をいずれも 5 秒以内で処理します (通常 body の実測は約 29 秒 → 約 0.1 秒)
 - **行継続のスキャナ内処理**: 解析前の一括除去を廃止し、単一引用符内・quoted heredoc 本文内の literal な `\<改行>` が byte 保持されるようになりました (旧版の既知の制約を解消)。末尾の改行も保持します
 - `--draft=` 値の falsy 判定は行継続除去後の論理値で行います (`--draft="fal\<改行>se"` は `--draft=false` として deny)
+- 先頭・中間・末尾の redirection、IO number、`>&` / `&>`、process substitution target を argv から除外し、`>--draft` のようなファイル名を draft flag と誤認する付与漏れを解消しました
 
 ### v0.2.3 → v0.3.0 の変更点
 
@@ -73,6 +74,7 @@ claude plugin install enforce-draft-pr@natsuume-plugins
 - draft 指定が無ければ `create` キーワード直後に `--draft` を挿入してコマンドを書き換える
 - `--draft=false` のように **明示的に非 draft を指定** している場合は enforce 方針違反として **deny (ブロック)** し、理由メッセージを返す (指定位置・出現順・行継続や quote による綴りの分割に依らず判定する)
 - 同一コマンドに複数の `gh pr create` があれば各々を独立に処理する (1 つでも `--draft=false` があれば deny)
+- 先頭・中間・末尾の redirect target / IO number / redirection target としての process substitution は gh の argv から除外し、`>--draft` のようなファイル名を既存 flag と誤認しない
 - 未対応の heredoc delimiter 構文を検出した場合は、発動位置に依らず解析不能として **deny** し書き直しを促す
 
 **例**:
@@ -84,13 +86,12 @@ claude plugin install enforce-draft-pr@natsuume-plugins
 
 ## 既知の制約
 
-- このプラグインの hook は **コマンドの書き換え** を行います。`cd repo && gh pr create` / 環境変数 prefix / `;` `&&` `||` `|` チェーン / `-R`・`--repo` global option / 行継続 (`\<改行>`) には追随しますが、シェルラッパー (`bash -c "..."`) / `$(...)` 等のコマンド置換 / バッククォート / subshell `(...)` の **内部** の `gh pr create` には介入しません (parser から隠蔽されるため)。
+- このプラグインの hook は **コマンドの書き換え** を行います。`cd repo && gh pr create` / 環境変数 prefix / `;` `&&` `||` `|` チェーン / `-R`・`--repo` global option / 行継続 (`\<改行>`) には追随しますが、シェルラッパー (`bash -c "..."`) / `$(...)` 等のコマンド置換 / バッククォート / subshell `(...)` / process substitution `<(...)`・`>(...)` の **内部** の `gh pr create` には介入しません (parser から隠蔽されるため)。process substitution 自体は 1 token として保持し、redirection target または gh option の値としては正しく除外します。
 - 検出は **クォート対応** です。`--body "... gh pr create ..."` のように **PR 本文の中に `gh pr create` という文字列** が含まれていても、本文側には `--draft` を挿入しません (本物のコマンドにのみ挿入)。複数行 `--body "..."` の改行・本文・特殊文字 (区切り文字や `#` を含む) も byte 単位で保持します。挿入は `create` トークン直後への ` --draft` 差し込みのみです。
-- **here-doc** (`<<EOF ... EOF`) の本文は data として保持し、本文中の `gh pr create` / 区切り文字 / `--draft=false` 文字列には介入しません。一方 `gh pr create --body-file - <<EOF ... EOF` のように here-doc を本文として渡す正当なケースは、先頭の `gh pr create` に `--draft` を付与しつつ本文を保持します。対応する delimiter 形式は `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` / `<<\WORD` (WORD は英数字とアンダースコア) です。
-- **未対応の heredoc delimiter 構文** (部分 quote 連結 `E"OF"`、英数字・アンダースコア以外を含む unquoted word 等) を検出した場合、それ以降のコマンド文字列は解析しません (opaque fallback)。fallback は発動位置 (`gh pr create` の引数領域内か、別コマンドの領域か) に依らず常に deny します (fallback より前に完結した invocation への `--draft` 付与も行いません。opaque 領域には検出不能な invocation が隠れうるため、fail-closed で全体を deny します)。
+- **here-doc** (`<<EOF ... EOF`) の本文は data として保持し、本文中の `gh pr create` / 区切り文字 / `--draft=false` 文字列には介入しません。一方 `gh pr create --body-file - <<EOF ... EOF` のように here-doc を本文として渡す正当なケースは、先頭の `gh pr create` に `--draft` を付与しつつ本文を保持します。対応する delimiter 形式は `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` / `<<\WORD` (WORD は英数字・アンダースコア・ハイフン) です。
+- **未対応の heredoc delimiter 構文** (部分 quote 連結 `E"OF"`、上記以外の文字を含む unquoted word 等) を検出した場合、それ以降のコマンド文字列は解析しません (opaque fallback)。fallback は発動位置 (`gh pr create` の引数領域内か、別コマンドの領域か) に依らず常に deny します (fallback より前に完結した invocation への `--draft` 付与も行いません。opaque 領域には検出不能な invocation が隠れうるため、fail-closed で全体を deny します)。
 - **literal な改行で区切られた 2 行目以降** (例: `echo x` の次の行に `gh pr create`) は検出しません (here-doc 本文を誤って書き換えないための仕様)。`;` / `&&` 区切り・単一行・別 Bash 呼び出しを使ってください。コメント行だけが先行する場合は、その後の最初の `gh pr create` に付与します。
 - top-level コメント (`# ...`) は保持したまま、同一行 (末尾コメント) や先行コメント行の後の本物の `gh pr create` には `--draft` を付与します。引用符内の `#` (`--body "fix #123"`) はコメント扱いしません。
-- **コマンド名の前に置くリダイレクト** (`>out gh pr create` / `2>/tmp/log gh pr create` 等) は検出しません。通常の末尾リダイレクト (`gh pr create ... > out`) は問題なく付与します。先頭リダイレクトは agent 生成コマンドでは稀なため cooperative 利用前提の既知の制約とします。
 - 行継続 (`\<改行>`) は **トークン間** (`gh pr \<改行>create`) では正しく処理しますが、**キーワードの途中** (`cre\<改行>ate` 等) に挟む難読化は粗フィルタを抜けて検出しません (sibling の git-guardrails と同じ coarse-filter 方針。意図的難読化による bypass は cooperative 利用前提で対象外)。
 - `gh pr create` の代わりに `gh api` で直接 PR を作成するケースでは介入できません。
 - 算術式 `$((x << 1))` / `((x << 1))` 内のビットシフト `<<` は heredoc と誤認しません (深度追跡で式全体をスキップ)。

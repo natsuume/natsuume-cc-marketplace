@@ -1,9 +1,7 @@
 """enforce-draft-pr hook (plugins/enforce-draft-pr) の受入テスト。
 
-spec-first Phase A: これから修正する issue #144 / #143 の新仕様を「契約」として固定する
-テストである。フックの実装 (hook 本体) はまだ新仕様に対応していないため、下記グループ H /
-L / P の一部は現行実装では **fail するのが正しい (red)**。fail するテストの期待値は
-新仕様が正であり、現行挙動に合わせて書き換えない。
+issue #144 / #143 の spec-first Phase A で固定し、Phase B で実装済みの契約を検証する
+regression suite である。テストの期待値は hook の公開契約であり、実装都合で変更しない。
 
 ## 対象 hook のプロトコル
 
@@ -32,7 +30,7 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
    quote 外の生改行に限る。quote 内の改行はデータであり本文モードを開始しない。
    pending 登録後も quote 外の生改行までは宣言行の引数走査を継続する。
 2. **対応 delimiter 形式**: `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` /
-   `<<\\WORD` (WORD は `[A-Za-z0-9_]+`)。該当しない構文を検出したら opaque fallback: それ
+   `<<\\WORD` (WORD は `[A-Za-z0-9_-]+`)。該当しない構文を検出したら opaque fallback: それ
    以降のコマンド文字列を一切解析しない。fallback 発動後は、発動位置 (対象 invocation
    (`gh pr create`) の引数領域内か、別コマンドの領域か) に依らず **常に deny** する。
    fallback 以降は解析不能 (opaque) であり、残余文字列への部分文字列判定による救済は、
@@ -52,18 +50,16 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
    文字列はどのケースでも原文保持 (挿入のみ)。double quote 内の行継続はトークン値の解釈にも
    適用され、`--draft=` 値の falsy 判定は行継続除去後の値で行う。
 5. **性能**: 数十 KB の body を持つコマンドは、入力パターン (通常 quoted body / escape
-   密集) に依らず 5 秒以内に完了する。
+   密集 / 短い行が密集する heredoc / 行継続密集) に依らず 5 秒以内に完了する。
 
 ## テストグループ
 
-- グループ R: 既存挙動 regression (現行実装で pass するはず)
-- グループ H: heredoc 新仕様 (現行実装で fail するはず。一部は現行でも pass しうる)
-- グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との複合
-  パターンのため現行実装では fail (red) するはず)
-- グループ L: 行継続の原文保持 (L01〜L08 は現行実装で fail するはず。L09 は現行でも
-  pass する退行防止ケース)
-- グループ B: 末尾 LF を含むバイト保持契約 (現行実装で fail するはず)
-- グループ P: 性能 (現行実装で fail するはず)
+- グループ R: 既存挙動 regression と redirection 境界
+- グループ H: heredoc 認識・opaque fallback
+- グループ A: 算術式と heredoc の識別
+- グループ L: 行継続の原文保持と論理 token 値
+- グループ B: 末尾 LF を含むバイト保持契約
+- グループ P: 入力パターン別の性能契約
 """
 
 from __future__ import annotations
@@ -134,7 +130,7 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assertNotIn("updatedInput", hook_output)
 
     # ------------------------------------------------------------------
-    # グループ R: 既存挙動 regression (現行実装で pass するはず)
+    # グループ R: 既存挙動 regression と redirection 境界
     # ------------------------------------------------------------------
 
     def test_r01_normal_insertion(self) -> None:
@@ -240,9 +236,71 @@ class EnforceDraftPrTest(unittest.TestCase):
         command = 'gh pr create --draft --draft=false --title "t" --body "b"'
         self.assert_denied(command)
 
+    def test_r17_redirection_target_not_treated_as_draft_flag(self) -> None:
+        # redirection target は gh の引数ではない。`--draft` という名前の出力先を
+        # draft flag と誤認すると挿入が欠落し、非 draft PR が作られる。
+        for redirection in (">--draft", "> --draft", "2>--draft", "2> --draft"):
+            with self.subTest(redirection=redirection):
+                command = f'gh pr create --title "t" --body "b" {redirection}'
+                expected = (
+                    f'gh pr create --draft --title "t" --body "b" {redirection}'
+                )
+                self.assert_rewrite(command, expected)
+
+    def test_r18_draft_false_after_compound_redirection_denied(self) -> None:
+        # `>&` / `&>` を command separator と誤認すると、その後の falsy flag が
+        # 別 command 扱いになって引数走査から外れ、非 draft PR の bypass になる。
+        for redirection in ("2>&1", "&>/tmp/pr.log", "&>>/tmp/pr.log"):
+            with self.subTest(redirection=redirection):
+                command = (
+                    f'gh pr create --title "t" --body "b" {redirection} '
+                    "--draft=false"
+                )
+                self.assert_denied(command)
+
+    def test_r19_interspersed_redirections_do_not_hide_invocation(self) -> None:
+        commands = (
+            "gh >pr.log pr create --title t --body b",
+            "gh pr >pr.log create --title t --body b",
+            "gh 2>pr.log pr create --title t --body b",
+            ">pr.log gh pr create --title t --body b",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                expected = command.replace("create", "create --draft", 1)
+                self.assert_rewrite(command, expected)
+
+    def test_r20_redirection_not_consumed_as_option_value(self) -> None:
+        # shell は redirect と target を argv から除くため、`--draft*` は title の値。
+        # hook 自身の draft flag は別途挿入しなければならない。
+        for title_value in ("--draft", "--draft=false"):
+            with self.subTest(title_value=title_value):
+                command = f"gh pr create --title >pr.log {title_value} --body b"
+                expected = (
+                    f"gh pr create --draft --title >pr.log {title_value} --body b"
+                )
+                self.assert_rewrite(command, expected)
+
+    def test_r21_process_substitution_redirection_keeps_argument_scan(self) -> None:
+        command = "gh pr create < <(printf body) --draft=false --title t"
+        self.assert_denied(command)
+
+        command = "gh pr create --body-file <(printf body) --title t"
+        expected = "gh pr create --draft --body-file <(printf body) --title t"
+        self.assert_rewrite(command, expected)
+
+    def test_r22_repo_option_value_skips_interspersed_redirection(self) -> None:
+        commands = (
+            "gh -R >pr.log owner/repo pr create --title t",
+            "gh pr -R >pr.log owner/repo create --title t",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                expected = command.replace("create", "create --draft", 1)
+                self.assert_rewrite(command, expected)
+
     # ------------------------------------------------------------------
-    # グループ H: heredoc 新仕様
-    # (現行実装で fail するはず — H5/H6/H9 など一部は現行でも pass しうる)
+    # グループ H: heredoc 認識・opaque fallback
     # ------------------------------------------------------------------
 
     def test_h01_heredoc_body_separators_not_intervened(self) -> None:
@@ -736,7 +794,7 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assert_rewrite(command, expected)
 
     def test_h18_delimiter_with_digit_and_underscore(self) -> None:
-        # 契約の文字クラスは [A-Za-z0-9_]+ で先頭位置の制限は無い。先頭を英字
+        # 契約の文字クラスは [A-Za-z0-9_-]+ で先頭位置の制限は無い。先頭を英字
         # や識別子開始文字に限定する誤実装は fallback に落ちて後続の挿入欠落
         # で fail する。
         delimiters = ("EOF_1", "1EOF", "_EOF")
@@ -938,10 +996,38 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_denied(command)
 
+    def test_h30_hyphenated_literal_delimiter_supported(self) -> None:
+        body = "Run gh pr create only as an example"
+        command = (
+            "gh pr create --body-file - <<'PR-BODY'"
+            + NL
+            + body
+            + NL
+            + "PR-BODY"
+        )
+        expected = (
+            "gh pr create --draft --body-file - <<'PR-BODY'"
+            + NL
+            + body
+            + NL
+            + "PR-BODY"
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h31_foreign_hyphenated_heredoc_not_denied(self) -> None:
+        # 粗フィルタを通る文字列が本文にあっても、literal delimiter を認識して
+        # 本文を不透明化できる非対象コマンドはブロックしない。
+        command = (
+            "python3 - <<'PY-CODE'"
+            + NL
+            + "print('gh pr create')"
+            + NL
+            + "PY-CODE"
+        )
+        self.assert_no_intervention(command)
+
     # ------------------------------------------------------------------
-    # グループ A: 算術式 (A01〜A03 は現行実装で pass するはず。A04 は heredoc との
-    # 複合パターンのため現行実装では fail (red) するはず — `<<` 内の `1` を heredoc
-    # delimiter として誤登録すると pending キューが崩れ、最終行の挿入が欠落する)
+    # グループ A: 算術式と heredoc の識別
     # ------------------------------------------------------------------
 
     def test_a01_dollar_double_paren_arithmetic(self) -> None:
@@ -1011,7 +1097,7 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assert_rewrite(command, expected)
 
     # ------------------------------------------------------------------
-    # グループ L: 行継続の原文保持 (現行実装で fail するはず)
+    # グループ L: 行継続の原文保持と論理 token 値
     # ------------------------------------------------------------------
 
     def test_l01_token_boundary_line_continuation_preserved(self) -> None:
@@ -1190,9 +1276,8 @@ class EnforceDraftPrTest(unittest.TestCase):
     def test_l09_double_quoted_continuation_in_draft_value_denied(
         self,
     ) -> None:
-        # このケースは現行実装でも pass する (normalize が行継続を一括削除する
-        # ため)。red ではなく「normalize 廃止後の新スキャナが dq 内行継続を
-        # トークン値の解釈で除去し、falsy 判定を維持すること」の退行防止テスト。
+        # 修正前実装でも pass していたが、normalize 廃止後の新スキャナが dq 内
+        # 行継続をトークン値の解釈で除去し、falsy 判定を維持する退行防止テスト。
         command = (
             'gh pr create --draft="fal' + BS + NL + 'se" --title "t" --body "b"'
         )
@@ -1217,12 +1302,25 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_denied(command)
 
+    def test_l12_double_quote_fast_path_escape_guards(self) -> None:
+        # 行継続密集 fast path は、最初の quote が escaped quote の場合と連続
+        # backslash を含む場合に通常 scanner へ戻り、quote 境界を誤認しない。
+        bodies = (
+            "before " + BS + '"quoted' + BS + NL + "gh pr create --draft=false",
+            "before " + BS + BS + NL + "gh pr create --draft=false",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                command = 'gh pr create --body "' + body + '"'
+                expected = 'gh pr create --draft --body "' + body + '"'
+                self.assert_rewrite(command, expected)
+
     # ------------------------------------------------------------------
-    # グループ B: 末尾 LF を含むバイト保持契約 (現行実装で fail するはず)
+    # グループ B: 末尾 LF を含むバイト保持契約
     # ------------------------------------------------------------------
 
     def test_b01_trailing_newline_preserved(self) -> None:
-        # 現行実装は `COMMAND=$(... | jq -r ...)` の `$()` が末尾改行を trim するため、
+        # 修正前実装は `COMMAND=$(... | jq -r ...)` の `$()` が末尾改行を trim するため、
         # 単純な末尾 LF (直前が backslash でない) は復元されず fail する。「挿入以外は
         # 1 バイトも変更しない」契約は末尾 LF を含む。
         command = 'gh pr create --title "t" --body "b"' + NL
@@ -1235,7 +1333,7 @@ class EnforceDraftPrTest(unittest.TestCase):
         self.assert_rewrite(command, expected)
 
     # ------------------------------------------------------------------
-    # グループ P: 性能 (現行実装で fail するはず)
+    # グループ P: 入力パターン別の性能契約
     # ------------------------------------------------------------------
 
     def test_p01_fifty_kb_quoted_body_performance(self) -> None:
@@ -1256,6 +1354,44 @@ class EnforceDraftPrTest(unittest.TestCase):
 
     def test_p02_backslash_dense_twenty_kb_performance(self) -> None:
         body = (BS + "a") * 10_000
+        command = f'gh pr create --title "t" --body "{body}"'
+        expected = f'gh pr create --draft --title "t" --body "{body}"'
+        start = time.monotonic()
+        returncode, stdout = run_hook(command)
+        elapsed = time.monotonic() - start
+        self.assertEqual(returncode, 0, stdout)
+        payload = json.loads(stdout)
+        hook_output = payload["hookSpecificOutput"]
+        self.assertEqual(hook_output["permissionDecision"], "allow", stdout)
+        self.assertEqual(
+            hook_output["updatedInput"]["command"], expected, stdout
+        )
+        self.assertLess(elapsed, 5.0)
+
+    def test_p03_line_dense_fifty_kb_heredoc_performance(self) -> None:
+        # heredoc 本文を行ごとに処理する際、各行で残り全文を substring 化すると
+        # 行数に対して O(n^2) へ劣化する。短い行を多数含む 50KB body で固定する。
+        body = ("x" + NL) * 25_000
+        command = "gh pr create --body-file - <<EOF" + NL + body + "EOF" + NL
+        expected = (
+            "gh pr create --draft --body-file - <<EOF" + NL + body + "EOF" + NL
+        )
+        start = time.monotonic()
+        returncode, stdout = run_hook(command)
+        elapsed = time.monotonic() - start
+        self.assertEqual(returncode, 0, stdout)
+        payload = json.loads(stdout)
+        hook_output = payload["hookSpecificOutput"]
+        self.assertEqual(hook_output["permissionDecision"], "allow", stdout)
+        self.assertEqual(
+            hook_output["updatedInput"]["command"], expected, stdout
+        )
+        self.assertLess(elapsed, 5.0)
+
+    def test_p04_continuation_dense_fifty_kb_performance(self) -> None:
+        # 1 token 内の各行継続で増加中の文字列へ append すると O(n^2) になる。
+        # raw 約 50KB の double-quoted body で区間配列の 1 回連結を固定する。
+        body = ("a" + BS + NL) * 16_667
         command = f'gh pr create --title "t" --body "{body}"'
         expected = f'gh pr create --draft --title "t" --body "{body}"'
         start = time.monotonic()
