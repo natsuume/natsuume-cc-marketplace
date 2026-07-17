@@ -15,7 +15,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.5.2",
+      "version": "0.5.3",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -45,7 +45,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "e6f7c58825cc653e7a8f98881a9063b3a65d95a7ba2e5d7604cc6f655310c268"
+        "sourceTreeDigest": "c94401562726ee1dc4681571e653d72f95e613bccc3ab68678ef06237f0c00cb"
       }
     },
     "enforce-draft-pr": {

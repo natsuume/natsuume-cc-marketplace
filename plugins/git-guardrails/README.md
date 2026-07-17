@@ -4,7 +4,12 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.5.2
+v0.5.3
+
+### v0.5.2 → v0.5.3 の変更点 (#141)
+
+- 隣接 quote で command / refspec を分断する形と git / gh alias が検出対象外であることを既知の制約へ追記
+- 本 hook は cooperative な agent が生成する通常形の誤操作を防ぐものであり、意図的な難読化や alias 展開までを扱う security sandbox ではないという保証境界を明文化
 
 ### v0.5.1 → v0.5.2 の変更点 (#139)
 
@@ -224,6 +229,10 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 
 ## 既知の制約 (cooperative 利用前提)
 
+- **本 plugin は cooperative な agent が生成する通常形の Git / GitHub CLI 操作を対象とする誤操作防止 hook であり、任意の shell 入力を解析・封じ込める security sandbox ではありません**。特に、次の意図的な難読化・間接呼び出しは bash 実行時には通常形と等価でも検出対象外です (#141):
+  - command keyword 内に隣接 quote を挿入する形 (`git pu''sh origin main` / `git commi''t -m x` / `g''h pr create --head main`)。粗フィルタと token 比較は、shell が quote fragment を連結した後の語を復元しません
+  - default branch refspec を隣接 quote で分断する形 (`git push origin 'ma''in'`)。quote 除去は token 全体を囲む 1 組だけを対象とし、token 途中の quote fragment は正規化しません
+  - git / gh のユーザ定義 alias (`git config alias.p push` 後の `git p` 等)。hook は実行時の alias 設定を展開せず、command 文字列に現れた subcommand だけを判定します
 - ブランチ名は `master` と `main` をハードコード対象としています。`develop` 等を保護対象に加えたい場合は `lib/default-branch.sh` の `DEFAULT_BRANCH_NAMES` 配列に追記してください
 - push hook の master/main 検出は push 引数 token を完全一致比較するため、`git push origin origin/master` のように remote-tracking ref を直接引数に書く稀な経路は false negative で通ります (cooperative 利用では発生しにくく、`feature/main` のような working branch 名や `git push ... && git switch main` の連結後段を誤検出しないことを優先)
 - **以下は誤検知 (false-positive deny) として `deny` に倒れます** (#62)。いずれも security gate を「保守側に倒す」方針の結果で、cooperative 利用では実害が小さいため修正せず明記しています。回避するには対象操作を別の方法で行ってください:
