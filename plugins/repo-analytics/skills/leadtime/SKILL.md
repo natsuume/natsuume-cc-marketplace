@@ -24,7 +24,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 3. ディレクトリパスが与えられた場合、配下の git リポジトリを次のように再帰探索する (探索深さの上限で暴走を防ぐ)。
 
    ```bash
-   find <dir> -maxdepth 4 -name .git
+   find "<dir>" -maxdepth 4 -name .git
    ```
 
    なお、`-maxdepth` は POSIX の規定外だが、本 Skill の対象環境である GNU find (Linux / WSL2) と macOS の `/usr/bin/find` はともにサポートしている。
@@ -33,7 +33,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 4. 各 checkout パス (カレントディレクトリを含む) について origin remote から owner/repo を解決する。
 
    ```bash
-   git -C <path> remote get-url origin
+   git -C "<path>" remote get-url origin
    ```
 
    - コマンドが非 0 で終了する (remote 未設定) 場合: 「remote が存在しない」としてスキップし、`{"repo": "<path>", "reason": "no_remote"}` を `<work>/collection-diagnostics.json` の `skippedRepos` に追記する。
@@ -112,9 +112,9 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --paginate \
      -f owner=<owner> -f name=<name> \
-     -F query=@<plugin-root>/skills/leadtime/scripts/fetch-issues.graphql \
+     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issues.graphql" \
      --jq '.data.repository as $r | $r.issues.nodes[] | . + {repo: $r.nameWithOwner}' \
-     >> <work>/issues.jsonl
+     >> "<work>/issues.jsonl"
    ```
 
    **b. prs 収集**
@@ -122,9 +122,9 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --paginate \
      -f owner=<owner> -f name=<name> \
-     -F query=@<plugin-root>/skills/leadtime/scripts/fetch-prs.graphql \
+     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-prs.graphql" \
      --jq '.data.repository as $r | $r.pullRequests.nodes[] | . + {repo: $r.nameWithOwner}' \
-     >> <work>/prs.jsonl
+     >> "<work>/prs.jsonl"
    ```
 
    いずれも `--jq` で `repository.nameWithOwner` (canonical 形) を各行の `repo` に注入し、1 行 1 レコードの JSONL として追記する (ユーザ入力の owner/repo 文字列は使わない)。
@@ -134,7 +134,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    **c. issue timeline overflow の検知と置換**
 
    ```bash
-   jq -c 'select(.repo == "<owner>/<name>" and (.timelineItems.totalCount > (.timelineItems.nodes | length)))' <work>/issues.jsonl
+   jq -c 'select(.repo == "<owner>/<name>" and (.timelineItems.totalCount > (.timelineItems.nodes | length)))' "<work>/issues.jsonl"
    ```
 
    該当した各 issue (`repo`, `number` の組) について、`fetch-issue-timeline.graphql` で先頭ページから全ページを取得し直す。
@@ -142,18 +142,27 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --paginate \
      -f owner=<owner> -f name=<name> -F number=<issue_number> \
-     -F query=@<plugin-root>/skills/leadtime/scripts/fetch-issue-timeline.graphql \
+     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issue-timeline.graphql" \
      --jq '.data.repository.issue.timelineItems' \
-     | jq -s '{totalCount: .[0].totalCount, nodes: (map(.nodes) | add)}' \
-     > <work>/_overflow-issue-timeline.json
+     > "<work>/_overflow-issue-timeline.pages.jsonl"
    ```
 
-   得られた `{totalCount, nodes}` で `totalCount == (nodes | length)` になっていることを確認したうえで、`issues.jsonl` 中の該当行の `timelineItems` を丸ごと置き換える (部分結果とのマージはしない)。置換コマンドは `--argjson` (コマンドライン引数として展開するため ARG_MAX の上限にかかりうる) ではなく `--slurpfile` (ファイルから直接読み込むため ARG_MAX の制約を受けない) でファイルベースに渡す。
+   このコマンドが非 0 で終了した場合 (途中ページの失敗を含む)、置換データを作らず、第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。
+
+   成功した場合、ページ単位の出力を 1 つの `{totalCount, nodes}` に集約する。
 
    ```bash
-   jq -c --slurpfile repl <work>/_overflow-issue-timeline.json \
+   jq -s '{totalCount: .[0].totalCount, nodes: (map(.nodes) | add)}' \
+     "<work>/_overflow-issue-timeline.pages.jsonl" \
+     > "<work>/_overflow-issue-timeline.json"
+   ```
+
+   得られた `{totalCount, nodes}` で `totalCount == (nodes | length)` になっていることを確認する。一致しない場合は置換に進まず (部分結果とのマージや部分置換は行わない)、第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。一致した場合、`issues.jsonl` 中の該当行の `timelineItems` を丸ごと置き換える。置換コマンドは `--argjson` (コマンドライン引数として展開するため ARG_MAX の上限にかかりうる) ではなく `--slurpfile` (ファイルから直接読み込むため ARG_MAX の制約を受けない) でファイルベースに渡す。
+
+   ```bash
+   jq -c --slurpfile repl "<work>/_overflow-issue-timeline.json" \
      'if .repo == "<owner>/<name>" and .number == <issue_number> then .timelineItems = $repl[0] else . end' \
-     <work>/issues.jsonl > <work>/issues.jsonl.tmp && mv <work>/issues.jsonl.tmp <work>/issues.jsonl
+     "<work>/issues.jsonl" > "<work>/issues.jsonl.tmp" && mv "<work>/issues.jsonl.tmp" "<work>/issues.jsonl"
    ```
 
    **d. PR closingIssuesReferences overflow の検知と置換**
@@ -161,7 +170,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    `prs.jsonl` に対して同様に検知する。
 
    ```bash
-   jq -c 'select(.repo == "<owner>/<name>" and (.closingIssuesReferences.totalCount > (.closingIssuesReferences.nodes | length)))' <work>/prs.jsonl
+   jq -c 'select(.repo == "<owner>/<name>" and (.closingIssuesReferences.totalCount > (.closingIssuesReferences.nodes | length)))' "<work>/prs.jsonl"
    ```
 
    該当した各 PR (`repo`, `number` の組) について、`fetch-pr-closing-issues.graphql` で先頭ページから全ページを取得し直す。
@@ -169,18 +178,27 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --paginate \
      -f owner=<owner> -f name=<name> -F number=<pr_number> \
-     -F query=@<plugin-root>/skills/leadtime/scripts/fetch-pr-closing-issues.graphql \
+     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-pr-closing-issues.graphql" \
      --jq '.data.repository.pullRequest.closingIssuesReferences' \
-     | jq -s '{totalCount: .[0].totalCount, nodes: (map(.nodes) | add)}' \
-     > <work>/_overflow-pr-closing-issues.json
+     > "<work>/_overflow-pr-closing-issues.pages.jsonl"
    ```
 
-   得られた `{totalCount, nodes}` で `totalCount == (nodes | length)` になっていることを確認したうえで、`prs.jsonl` 中の該当行の `closingIssuesReferences` を丸ごと置き換える (部分結果とのマージはしない)。issue timeline の置換と同じ理由で `--argjson` ではなく `--slurpfile` を使う。
+   このコマンドが非 0 で終了した場合 (途中ページの失敗を含む)、issue timeline の置換と同じ理由で置換データを作らず、第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。
+
+   成功した場合、issue timeline と同様にページ単位の出力を 1 つの `{totalCount, nodes}` に集約する。
 
    ```bash
-   jq -c --slurpfile repl <work>/_overflow-pr-closing-issues.json \
+   jq -s '{totalCount: .[0].totalCount, nodes: (map(.nodes) | add)}' \
+     "<work>/_overflow-pr-closing-issues.pages.jsonl" \
+     > "<work>/_overflow-pr-closing-issues.json"
+   ```
+
+   得られた `{totalCount, nodes}` で `totalCount == (nodes | length)` になっていることを確認する。一致しない場合は置換に進まず (部分結果とのマージや部分置換は行わない)、issue timeline の置換と同じ理由で第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。一致した場合、`prs.jsonl` 中の該当行の `closingIssuesReferences` を丸ごと置き換える。issue timeline の置換と同じ理由で `--argjson` ではなく `--slurpfile` を使う。
+
+   ```bash
+   jq -c --slurpfile repl "<work>/_overflow-pr-closing-issues.json" \
      'if .repo == "<owner>/<name>" and .number == <pr_number> then .closingIssuesReferences = $repl[0] else . end' \
-     <work>/prs.jsonl > <work>/prs.jsonl.tmp && mv <work>/prs.jsonl.tmp <work>/prs.jsonl
+     "<work>/prs.jsonl" > "<work>/prs.jsonl.tmp" && mv "<work>/prs.jsonl.tmp" "<work>/prs.jsonl"
    ```
 
    PR 側の `timelineItems` (`ReadyForReviewEvent` / `ConvertToDraftEvent`) は overflow しても追加ページングテンプレートが無いため置換せず、既存の bullet のとおり集計スクリプトの除外に委ねる。
@@ -217,12 +235,12 @@ patterns.json への書き出し: 上記 JSON block を一言一句そのまま 
 
 ```
 python3 compute_leadtime.py \
-  --issues <issues.jsonl のパス> \
-  --prs <prs.jsonl のパス> \
-  --claim-patterns-file <patterns.json のパス> \
+  --issues "<issues.jsonl のパス>" \
+  --prs "<prs.jsonl のパス>" \
+  --claim-patterns-file "<patterns.json のパス>" \
   --as-of <ISO8601 UTC 例 2026-07-17T04:00:00Z> \
   [--since <YYYY-MM-DD>] \
-  [--boundaries-file <boundaries.json のパス>]
+  [--boundaries-file "<boundaries.json のパス>"]
 ```
 
 - `--issues` / `--prs` / `--claim-patterns-file` / `--as-of` は必須。`--as-of` にはデータ収集完了時刻 (UTC) を渡す。
@@ -236,13 +254,13 @@ python3 compute_leadtime.py \
 2. 初回実行 (この時点では第 6 章のイベント注釈がまだ無いため `--boundaries-file` は付けない)。
 
    ```bash
-   python3 <plugin-root>/skills/leadtime/scripts/compute_leadtime.py \
-     --issues <work>/issues.jsonl \
-     --prs <work>/prs.jsonl \
-     --claim-patterns-file <work>/patterns.json \
+   python3 "<plugin-root>/skills/leadtime/scripts/compute_leadtime.py" \
+     --issues "<work>/issues.jsonl" \
+     --prs "<work>/prs.jsonl" \
+     --claim-patterns-file "<work>/patterns.json" \
      --as-of <収集完了時刻> \
      [--since <第 1 章で取り出した since>] \
-     > <work>/result.json
+     > "<work>/result.json"
    ```
 
 3. exit code に応じて次のように対応する。
@@ -274,7 +292,7 @@ python3 compute_leadtime.py \
 3. checkout があれば、ローカルの追跡 ref を確認する。
 
    ```bash
-   git -C <checkout> rev-parse --verify refs/remotes/origin/<default-branch>
+   git -C "<checkout>" rev-parse --verify refs/remotes/origin/<default-branch>
    ```
 
    コマンドが非 0 で終了する (追跡 ref が無い) 場合、このリポジトリのイベント抽出をスキップし、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "default_ref_unavailable"}` を追記して手順 4 に進まない。
@@ -282,7 +300,7 @@ python3 compute_leadtime.py \
    - 一致する場合、その ref (`refs/remotes/origin/<default-branch>`) を明示する (`<ref>` はこの ref を指す)。`git log` のコマンド群を実行する前に、shallow clone かどうかを確認する。
 
      ```bash
-     git -C <checkout> rev-parse --is-shallow-repository
+     git -C "<checkout>" rev-parse --is-shallow-repository
      ```
 
      - 出力が `true` の場合: shallow clone は古い履歴を silent に欠落させ boundary イベントが消えるため、このリポジトリのイベント抽出をスキップし、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "shallow_history"}` を追記して以降のコマンド群に進まない。
@@ -292,19 +310,19 @@ python3 compute_leadtime.py \
      - plugin / 機能の新設 (初回追加) の検出例:
 
        ```bash
-       git -C <checkout> log <ref> --first-parent --diff-filter=A --format='%H|%cI|%s' -- 'plugins/*/.claude-plugin/plugin.json'
+       git -C "<checkout>" log <ref> --first-parent --diff-filter=A --format='%H|%cI|%s' -- 'plugins/*/.claude-plugin/plugin.json'
        ```
 
      - 破壊的変更 (Conventional Commits の `!:` 記法) の検出例:
 
        ```bash
-       git -C <checkout> log <ref> --first-parent --format='%H|%cI|%s' | grep -E '^[0-9a-f]+\|[^|]+\|[a-z]+(\([^)]+\))?!:'
+       git -C "<checkout>" log <ref> --first-parent --format='%H|%cI|%s' | grep -E '^[0-9a-f]+\|[^|]+\|[a-z]+(\([^)]+\))?!:'
        ```
 
      - CI workflow 追加の検出例:
 
        ```bash
-       git -C <checkout> log <ref> --first-parent --diff-filter=A --format='%H|%cI|%s' -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+       git -C "<checkout>" log <ref> --first-parent --diff-filter=A --format='%H|%cI|%s' -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
        ```
 
      いずれのコマンドも `<ref>` に `--first-parent` を付与する (`--first-parent` 時は merge commit の diff が first parent との比較になるため、`--diff-filter=A` でファイル初回追加を merge commit でも検出できる)。ただし非 squash の merge topology では、フィーチャーブランチ内にのみ存在する `feat!:` 等の subject が first-parent 走査に現れず検出漏れになりうる。boundary 注釈はヒューリスティックであり、検出漏れ (保守的な欠落) より誤った過去時刻での誤配置の方が区間集計に有害という設計判断で first-parent を採る。
