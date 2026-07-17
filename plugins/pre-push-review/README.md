@@ -18,7 +18,13 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v4.2.1 (前身: `pre-commit-review` v0.4.0)
+v4.2.2 (前身: `pre-commit-review` v0.4.0)
+
+### v4.2.1 → v4.2.2 の変更点 (issue #280)
+
+- `/pre-push-review:review` の呼び出し側が branch 差分を Phase A / Phase B / 判定不能に分類し、code-reviewer と security-reviewer の起動 prompt に現在の Phase を渡すようにした。Phase A のテスト一括先行は spec-first 2 段階の仕様であり、それ自体を finding にしないことを明示した
+- Phase を確信を持って判定できない場合は質問で作業を止めず、従来どおり Phase 文脈なしで起動する。reviewer の選択・順序・引数は従来の確定的フローを維持する
+- Codex CLI と公式 companion を調査し、通常の branch review と custom focus text を同時に渡せないことを確認したため、Phase 文脈は code / security reviewer のみに限定した。codex-reviewer の prompt、agent 定義、`run-codex-review.sh`、marker 仕様は変更していない
 
 ### v4.2.0 → v4.2.1 の変更点 (issue #134)
 

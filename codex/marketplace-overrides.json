@@ -152,6 +152,10 @@
           {
             "path": "tests/test_pre_push_blocker.py",
             "covers": "push gate の fail-closed 入出力、worktree 診断、delete option 判定契約"
+          },
+          {
+            "path": "tests/test_pre_push_review_phase_context.py",
+            "covers": "呼び出し側の Phase A / Phase B / 判定不能分類、Phase A のテスト一括先行除外、code / security reviewer 限定の Phase 文脈伝達"
           }
         ],
         "components": [
@@ -159,7 +163,7 @@
             "source": "commands/review.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
-            "sourceDigest": "d934cb0041930281ef44733f2110ab1e47acbc1be4cc1fbf70ab13639d992df5"
+            "sourceDigest": "511c5af9a53d0943fba7f455fccb01757fe94f73907f30b23a5b689ad8d57f40"
           },
           {
             "source": "agents/code-reviewer.md",
@@ -186,7 +190,7 @@
             "sourceDigest": "be236d7412a9db67d9f5e0f36383515bbac7e179a628d39d96b19405d7f0cd72"
           }
         ],
-        "sourceTreeDigest": "f3642fdc60246d660e33d17a923e7df51001c467e80e9a0f7475e300120d3ea5"
+        "sourceTreeDigest": "4989c6c5e9a6cf2bf5c0abcf92696d1634c16bfdfe81e67d7185b33d55864c5f"
       }
     },
     "update-default-branch": {
