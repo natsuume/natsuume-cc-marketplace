@@ -481,7 +481,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "a5e837dad8f0819c95d52f9d69ad03b2d95183bb82c91bb301eedc565fe2a40f"
+        "sourceTreeDigest": "786a093fe0f601fb67659f3d95b3ebedabe951535a0ed52695bb6f46abe309ea"
       }
     },
     "codex-advisor": {
@@ -549,7 +549,7 @@
             "sourceDigest": "f5e61eb80fba1870f28d16e6d2757235e422cce3a7168f45e7262c720c47f20a"
           }
         ],
-        "sourceTreeDigest": "b0f1010311c32795b456ac62e8291cc4079dbfc4f970682c6da03d69fd05a98d"
+        "sourceTreeDigest": "32d7873c99bd6902c18d227caa951b7853db1f7672ff883f2b38d395750d05c5"
       }
     },
     "rate-limit": {
@@ -645,6 +645,43 @@
         ],
         "components": [],
         "sourceTreeDigest": "957a841dd1de06feeb57df70a80f8d07038538ac7d13ddbe680bb63b0223f15e"
+      }
+    },
+    "fable-risk-labeler": {
+      "distribution": {
+        "status": "available"
+      },
+      "version": "0.1.0",
+      "versioning": {
+        "claudeOnlyPaths": [],
+        "codexOnlyPaths": [
+          "skills/label-issues/agents/"
+        ]
+      },
+      "displayName": "Fable Risk Labeler",
+      "shortDescription": "Fable の誤ブロックリスクが高い issue を判定してラベル付与",
+      "defaultPrompt": [
+        "Fable での作業にリスクがある issue を調査し、該当ラベルを付与してください。"
+      ],
+      "compatibility": {
+        "level": "partial",
+        "summary": "Codex が issue と関連実装を semantic review し、明示依頼時だけ high-confidence target へ additive に model:prefer-gpt-5.6-sol label を付与します。",
+        "limitations": [
+          "Claude marketplace でも共有 Skill は discovery されますが、判定主体を Codex に限定し、Claude / Fable session では write せず Codex での再実行を案内します。",
+          "semantic 判定は issue・repository・外部仕様の取得品質に依存し、将来の Fable 挙動や GitHub service の可用性を保証しません。"
+        ],
+        "guaranteeDifferences": [
+          "Codex-only の判定主体制限、high-confidence rubric、write authorization、additive label API、再取得検証は Skill の instruction contract であり、専用 binary や GitHub policy による hard security boundary ではありません。",
+          "connected GitHub app が利用できない場合は認証済み gh CLI に fallback するため、tool 名・approval surface・認証経路は同一ではありません。"
+        ],
+        "verificationTests": [
+          {
+            "path": "tests/test_fable_risk_labeler.py",
+            "covers": "Codex-only instruction boundary、rubric の strong/non-signal、明示 write authorization、additive label 更新、置換・削除禁止、write 前後の evidence/verification contract"
+          }
+        ],
+        "components": [],
+        "sourceTreeDigest": "f84a1f109e99745523d1b8c38f1b1db7d5615c250bcfa76c63a76a88fed732d5"
       }
     }
   }

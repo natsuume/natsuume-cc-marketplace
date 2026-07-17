@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fable Risk Labeler"
+  short_description: "Fable の誤ブロックリスクが高い issue を判定してラベル付与"
+  default_prompt: "Use $fable-risk-labeler:label-issues to investigate issues and add the Sol-preferred label to high-confidence Fable risks."

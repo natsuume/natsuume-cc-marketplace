@@ -49,6 +49,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [codex-advisor](#codex-advisor) | 1.0.0 | — | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、companion job ID と lifecycle hook で追跡喪失から復旧する。相談タイミング・助言の扱い・rescue thread 選択規律も常時注入する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.3.0 | 0.3.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.2.0 | 0.2.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
+| [fable-risk-labeler](#fable-risk-labeler) | 0.1.0 | 0.1.0 | GitHub issue と関連実装を Codex で調査し、Fable が正規操作を誤ブロックする可能性が高い作業へ `model:prefer-gpt-5.6-sol` label を安全に付与する Skill を提供する |
 
 Codex version が `—` の plugin は Codex marketplace の配布対象外です。Claude Code marketplace と Claude plugin は引き続き提供します。
 
@@ -464,6 +465,30 @@ Claude Code の Stop hook による handoff 作成の強制、transcript のパ�
 ### キーワード
 
 `session-handoff` `context-window` `handoff` `session-start` `statusline` `cache` `hook` `skill`
+
+---
+
+## fable-risk-labeler
+
+GitHub issue と関連実装を Codex で調査し、Claude Fable 5 が正規操作を誤ブロックする可能性が高い作業へ `model:prefer-gpt-5.6-sol` label を付与します。priority や実装規模だけでは判定せず、shell parser、fail-open / fail-closed gate、lifecycle / concurrency、provider / runtime 保証について、具体的な false deny または safety boundary と high-confidence evidence がそろった issue だけを対象にします。
+
+Codex では `$fable-risk-labeler:label-issues` を実行します。connected GitHub app の additive label API を優先し、利用できない場合だけ認証済み `gh issue edit --add-label` へ fallback します。調査だけの依頼では GitHub を変更せず、ラベル付与が明示された場合も candidate table と exact target を write 前に示し、write 後に issue を再取得して既存 labels の保持を確認します。label の新規作成・削除、full label set の置換、priority の変更、PR の分類は行いません。
+
+Claude / Fable session では GitHub write を行わず、Codex での再実行を案内します。これは instruction contract であり hard security boundary ではありません。semantic 判定品質、将来の Fable 挙動、GitHub service の可用性は CI の保証範囲外です。
+
+### 機能
+
+| Skill | Codex invocation | 説明 |
+|---|---|---|
+| label-issues | `$fable-risk-labeler:label-issues` | open issue または明示された issue を調査し、high-confidence target だけへ additive に label を付与する |
+
+### 依存
+
+connected GitHub app または認証済み `gh` CLI、既存の `model:prefer-gpt-5.6-sol` label、label 追加権限が必要です。
+
+### キーワード
+
+`github` `issue` `triage` `label` `fable` `codex` `gpt-5.6-sol` `risk`
 
 ---
 
