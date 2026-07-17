@@ -14,9 +14,12 @@ Phase A (spec-first) の位置づけ:
   丸め順序に対応する T51、draft PR #293 への pre-push review 指摘
   3 件 (rescue 壁打ちで精密化済み) のうち load_claim_patterns の非 UTF-8
   patterns file 検出と resolve_close_linkage の同時刻 ClosedEvent tie-break
-  に対応する T52〜T53、および issue #288 実装後の pre-push review で検出
-  された `dataQuality.multipleReadyPrIssues` の `since` フィルタ適用前加算
-  バグの回帰に対応する T54 を全件実装する。各テスト
+  に対応する T52〜T53、issue #288 実装後の pre-push review で検出された
+  `dataQuality.multipleReadyPrIssues` の `since` フィルタ適用前加算バグの
+  回帰に対応する T54、および同 pre-push review (実装後 4 回目) で検出された
+  mainSeries 対象決定パイプライン 1 つ目の情報源 (merged closer) が stale な
+  PR snapshot に対して安全でない (draft snapshot で AssertionError・複数
+  候補時 TypeError) 問題の修正に対応する T55 を全件実装する。各テスト
   メソッド名・コメントに `T<n>` を付与し対応関係を明示する (T42: 収集範囲外
   リポジトリの merged PR を closer とする issue が `resolve_close_linkage` で
   `"merged_pr_external"` に分類され、`compute` の出力で
@@ -51,7 +54,16 @@ Phase A (spec-first) の位置づけ:
   候補集合が複数件だった issue について、`dataQuality.multipleReadyPrIssues`
   が `since` フィルタ適用後の `mainSeries` から算出され、フィルタで当該
   issue が除外されれば 0 になることの検証 (`since` フィルタ適用前に加算して
-  いた旧実装のバグの回帰)。
+  いた旧実装のバグの回帰)。T55: mainSeries 対象決定パイプラインのステップ 3
+  の 1 つ目の情報源 (最終 ClosedEvent の merged closer) が特定した PR の
+  収集済み snapshot が issue timeline より古い (stale) まま
+  `state == "OPEN"` / `isDraft == True` (ready 未到達) だった場合、
+  compute() が crash せず (旧実装は単独候補で `AssertionError`、複数候補で
+  `TypeError` になっていた)、当該 issue が mainSeries / censored /
+  auxiliarySeries のいずれにも入らず `exclusions.mergedCloserPrNotQualifying`
+  に列挙されることの検証、および同じ stale closer に加えて
+  closingIssuesReferences 逆引きで qualifying な PR が別途見つかる混在
+  ケースでその PR により issue が mainSeries に編入されることの検証。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -1955,6 +1967,149 @@ class ComputeTests(unittest.TestCase):
 
         self.assertEqual(result["mainSeries"], [])
         self.assertEqual(result["dataQuality"]["multipleReadyPrIssues"], 0)
+
+    def test_t55_stale_merged_closer_snapshot_excluded_without_crash(self):
+        # T55 (pre-push review 指摘、実装後): mainSeries 対象決定パイプライン
+        # ステップ 3 の 1 つ目の情報源 (最終 ClosedEvent の merged closer) が
+        # 特定した PR の *収集済み snapshot* (prs.jsonl 側) が issue timeline
+        # より古い (stale) ままで、まだ state == "OPEN" / isDraft == True
+        # (ready 未到達) の場合、旧実装は `_build_main_record` の
+        # `assert ready_at is not None` で crash していた (AssertionError)。
+        # 本テストは、この経路 (候補が stale PR のみで他に候補が無い) では
+        # compute() が crash せず、issue が mainSeries / censored /
+        # auxiliarySeries のいずれにも入らず (mainSeries docstring の
+        # 「境界」参照)、exclusions.mergedCloserPrNotQualifying に
+        # 期待どおりのエントリが 1 件列挙されることを検証する。
+        repo = "owner/name"
+        issue_number = 5501
+        pr_number = 5501
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="CLOSED",
+            state_reason="COMPLETED",
+            created_at="2026-07-01T00:00:00Z",
+            closed_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x"),
+                closed_event(
+                    "2026-07-05T00:00:00Z",
+                    pr_closer(pr_number, repo=repo, merged=True),
+                ),
+            ],
+        )
+        stale_pr = make_pr(
+            repo=repo,
+            number=pr_number,
+            state="OPEN",
+            is_draft=True,
+            created_at="2026-07-02T00:00:00Z",
+            merged_at=None,
+            timeline_nodes=[],  # ReadyForReviewEvent 無し (ready 未到達)
+            closing_issues=[],  # closingIssuesReferences 逆引きも無し
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [stale_pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(result["mainSeries"], [])
+        self.assertEqual(result["censored"], [])
+        for aux_entries in result["auxiliarySeries"].values():
+            self.assertEqual(aux_entries, [])
+
+        exclusions = result["exclusions"]["mergedCloserPrNotQualifying"]
+        self.assertEqual(
+            exclusions,
+            [
+                {
+                    "repo": repo,
+                    "issue": issue_number,
+                    "prRepo": repo,
+                    "pr": pr_number,
+                    "snapshotState": "OPEN",
+                    "snapshotIsDraft": True,
+                }
+            ],
+        )
+
+    def test_t55_stale_merged_closer_with_qualifying_reverse_lookup_candidate(self):
+        # T55: 同じ stale closer (PR X) に加え、closingIssuesReferences 逆引き
+        # で見つかる qualifying completion PR (PR Y) が別途存在する混在
+        # ケース。旧実装は候補集合に X (ready_at == None) と Y
+        # (ready_at != None) の 2 件が入り、`min(candidates, key=...)` の
+        # tuple 比較で `None` と `datetime` を比較しようとして TypeError に
+        # なっていた。本テストは、修正後は X が候補から除外され (qualifying
+        # ではないため) 候補が Y のみになり、TypeError にならず Y で
+        # mainSeries に 1 件編入され、dataQuality.multipleReadyPrIssues が 0
+        # (候補は Y のみ) になり、かつ X の除外エントリは引き続き
+        # exclusions.mergedCloserPrNotQualifying に列挙されることを検証する。
+        repo = "owner/name"
+        issue_number = 5502
+        stale_pr_number = 5511
+        qualifying_pr_number = 5512
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="CLOSED",
+            state_reason="COMPLETED",
+            created_at="2026-07-01T00:00:00Z",
+            closed_at="2026-07-06T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x"),
+                closed_event(
+                    "2026-07-06T00:00:00Z",
+                    pr_closer(stale_pr_number, repo=repo, merged=True),
+                ),
+            ],
+        )
+        stale_pr = make_pr(
+            repo=repo,
+            number=stale_pr_number,
+            state="OPEN",
+            is_draft=True,
+            created_at="2026-07-02T00:00:00Z",
+            merged_at=None,
+            timeline_nodes=[],
+            closing_issues=[],
+        )
+        qualifying_pr = make_pr(
+            repo=repo,
+            number=qualifying_pr_number,
+            state="MERGED",
+            created_at="2026-07-02T12:00:00Z",
+            merged_at="2026-07-04T00:00:00Z",
+            timeline_nodes=[ready_event("2026-07-03T00:00:00Z")],
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [stale_pr, qualifying_pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(len(result["mainSeries"]), 1)
+        record = result["mainSeries"][0]
+        self.assertEqual(record["issue"], issue_number)
+        self.assertEqual(record["pr"], qualifying_pr_number)
+        self.assertEqual(record["completionBasis"], "merged")
+        self.assertEqual(result["dataQuality"]["multipleReadyPrIssues"], 0)
+
+        exclusions = result["exclusions"]["mergedCloserPrNotQualifying"]
+        self.assertEqual(
+            exclusions,
+            [
+                {
+                    "repo": repo,
+                    "issue": issue_number,
+                    "prRepo": repo,
+                    "pr": stale_pr_number,
+                    "snapshotState": "OPEN",
+                    "snapshotIsDraft": True,
+                }
+            ],
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -720,7 +720,17 @@ def compute(
              - 最終 `ClosedEvent` の closer が `merged == True` の
                `PullRequest` であり、かつその PR が `prs_by_key` に存在する
                もの (`resolve_close_linkage` の `category == "merged_pr"` で
-               特定される PR と同じもの)。
+               特定される PR と同じもの)。この経路もモジュール docstring
+               「完了根拠 (qualifying completion) の一般規則」の qualifying
+               要件 (`resolve_ready(...).ready_at` が非 `None`) を満たす
+               ことを要求する — issue timeline 側の closer 情報
+               (`merged == True`) と `--prs` 側で個別収集した PR snapshot は
+               収集時刻が異なりうるため、snapshot 側が issue timeline より
+               古い (stale) ままだと `state == "OPEN"` かつ
+               `isDraft == True` (ready 未到達) でありうる。この場合
+               fail-closed に候補から除外し
+               `exclusions.mergedCloserPrNotQualifying` に列挙する
+               (`pr_overflow_set` による除外とは独立に判定する)。
              - `closingIssuesReferences` の逆引きでこの issue を指す PR の
                うち、qualifying completion PR (モジュール docstring 「完了
                根拠 (qualifying completion) の一般規則」を参照。`state ==
@@ -758,15 +768,20 @@ def compute(
 
           境界: ステップ 3 の 1 つ目の情報源 (最終 `ClosedEvent` の merged
           closer) が `exclusions.prTimelineOverflow` の overflow PR と
-          一致する場合、その PR は候補にならない (ステップ 3 で除外)。
-          この場合 `resolve_close_linkage` を呼び直すと `category ==
+          一致する場合、または収集時点の PR snapshot が非 qualifying
+          (stale、`exclusions.mergedCloserPrNotQualifying` に列挙) の場合、
+          その PR は候補にならない (ステップ 3 で除外)。2 つ目の情報源
+          (`closingIssuesReferences` 逆引き) にも qualifying candidate が
+          見つからなければ、`resolve_close_linkage` を呼び直すと `category ==
           "merged_pr"` に見えることがあるが、ステップ 6 は `"manual"` /
           `"commit"` / `"unmerged_pr"` / `"merged_pr_external"` の
           4 category しか `auxiliarySeries` に対応付けないため、この issue
           はどの `auxiliarySeries` にも該当せず、除外されたまま
           (`mainSeries` にも `censored` にも `auxiliarySeries` にも入らない)
-          となる。除外された issue は overflow PR 側の
-          `exclusions.prTimelineOverflow[].linkedIssues` に列挙される。
+          となる。overflow による除外の場合、除外された issue は overflow
+          PR 側の `exclusions.prTimelineOverflow[].linkedIssues` に列挙
+          される。非 qualifying (stale snapshot) による除外の場合は
+          `exclusions.mergedCloserPrNotQualifying` に列挙される。
 
           `mainSeries` の各要素は `{"repo", "issue", "firstStartAt",
           "lastStartAt", "startWeek", "pr", "prRepo", "prCreatedAt", "readyAt",
@@ -896,7 +911,8 @@ def compute(
           は、部分的な timeline から着手判定を行うと誤判定になりうるため、
           `strictIssues` の分母にも `looseOnlyIssues` の列挙対象にも含めない。
         - `exclusions` (dict): `{"timelineOverflow": list[dict],
-          "prTimelineOverflow": list[dict]}`。
+          "prTimelineOverflow": list[dict], "mergedCloserPrNotQualifying":
+          list[dict]}`。
           `timelineOverflow` は `timelineItems.totalCount > len(timelineItems.nodes)`
           だった issue を `{"repo", "issue", "totalCount", "fetched"}` で列挙する
           (`fetched == len(nodes)`)。これらの issue は `mainSeries` /
@@ -919,6 +935,25 @@ def compute(
           に入らず、`auxiliarySeries` のいずれのカテゴリにも再分類しない。
           詳細は `mainSeries` docstring の「境界」を参照)。除外された issue は
           `{repo, issue}` として当該 PR の `linkedIssues` に列挙する。
+          `mergedCloserPrNotQualifying` は、`mainSeries` 対象決定パイプライン
+          ステップ 3 の 1 つ目の情報源 (最終 `ClosedEvent` の merged closer)
+          で特定された PR が、overflow ではないが qualifying completion PR
+          の要件 (`resolve_ready(...).ready_at` が非 `None`) を満たさない
+          (= 収集時点の PR snapshot が issue timeline より古い、stale) ため
+          候補から除外された issue を `{"repo": str, "issue": int, "prRepo":
+          str, "pr": int, "snapshotState": str, "snapshotIsDraft": bool}` で
+          列挙する。`repo` / `issue` は issue 側の複合キー、`prRepo` / `pr` は
+          除外された候補 PR 側の複合キー、`snapshotState` / `snapshotIsDraft`
+          は `--prs` 側で収集した当該 PR snapshot の `state` / `isDraft` を
+          そのまま転記したもの (fail-closed 判定の根拠を示す)。
+          `prTimelineOverflow` と同じ規約で `since` によるフィルタは適用せず
+          (全期間)、列挙順は `issues` の入力順に対応する issue 走査順とする
+          (repo・issue 番号等でのソートは行わない)。この判定は 2 つ目の情報源
+          (`closingIssuesReferences` 逆引き) に qualifying candidate が別途
+          見つかるかどうかとは独立に行う — stale な merged closer が除外
+          されても、逆引きで別の qualifying PR が見つかればその issue は
+          通常どおり `mainSeries` に編入されうる (この場合も
+          `exclusions.mergedCloserPrNotQualifying` へのエントリ追加は行う)。
         - `boundaries` (list[dict]): 引数 `boundaries` を `(at, id)` の辞書順
           (`at` 昇順、同一 `at` は `id` の辞書順で tie-break) に正規化した
           `[{"id": str, "label": str, "at": str}]` をそのまま echo したもの
@@ -990,6 +1025,11 @@ def compute(
     pr_overflow_info: dict[tuple[str, int], dict] = {}
     pr_ready_info: dict[tuple[str, int], ReadyResolution] = {}
     closing_ref_index: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
+    # overflow で continue しなかった PR のうち ready 到達済み (qualifying) の
+    # ものだけを集めた集合。merged-closer 経路 (下の issue 走査ループ) と
+    # closingIssuesReferences 逆引き経路 (`closing_ref_index` への登録) の
+    # 両方がこの同じ判定を参照するため、qualifying 要件がずれない。
+    qualifying_pr_keys: set[tuple[str, int]] = set()
 
     for pr in prs:
         pr_key = (pr["repo"], pr["number"])
@@ -1003,6 +1043,7 @@ def compute(
         ready_resolution = resolve_ready(pr)
         pr_ready_info[pr_key] = ready_resolution
         if ready_resolution.ready_at is not None:
+            qualifying_pr_keys.add(pr_key)
             for ref in pr["closingIssuesReferences"]["nodes"]:
                 ref_key = (ref["repository"]["nameWithOwner"], ref["number"])
                 closing_ref_index[ref_key].append(pr_key)
@@ -1013,6 +1054,7 @@ def compute(
     )
 
     timeline_overflow_out: list[dict] = []
+    merged_closer_not_qualifying_out: list[dict] = []
     coverage_counts: dict[tuple[str, str], dict] = defaultdict(
         lambda: {"closedIssues": 0, "withMarker": 0, "unknownTimeline": 0}
     )
@@ -1101,8 +1143,25 @@ def compute(
         if linkage.category == "merged_pr":
             assert linkage.linked_pr is not None
             candidate_key = (linkage.linked_pr["repo"], linkage.linked_pr["number"])
-            if candidate_key not in pr_overflow_set:
+            if candidate_key in qualifying_pr_keys:
                 candidates.add(candidate_key)
+            elif candidate_key in pr_overflow_set:
+                pass  # 既存の overflow 除外経路 (mainSeries docstring の「境界」参照)
+            else:
+                # 非 overflow かつ非 qualifying = 収集時点の PR snapshot が
+                # issue timeline より古い (stale)。fail-closed に候補から
+                # 除外し exclusions.mergedCloserPrNotQualifying に列挙する。
+                stale_pr = prs_by_key[candidate_key]
+                merged_closer_not_qualifying_out.append(
+                    {
+                        "repo": issue["repo"],
+                        "issue": issue["number"],
+                        "prRepo": stale_pr["repo"],
+                        "pr": stale_pr["number"],
+                        "snapshotState": stale_pr["state"],
+                        "snapshotIsDraft": stale_pr["isDraft"],
+                    }
+                )
         for candidate_key in closing_ref_index.get(
             (issue["repo"], issue["number"]), []
         ):
@@ -1147,8 +1206,9 @@ def compute(
                 )
             # category == "merged_pr" はここに到達しない限り起こらない
             # (候補集合の 1 つ目の情報源と同じ判定であり、候補が無いことは
-            # category != "merged_pr" を含意する)。overflow PR の除外により
-            # 到達した場合は、どの系列にも含めず除外されたままにする
+            # category != "merged_pr" を含意する)。overflow または非
+            # qualifying (stale snapshot) の除外により到達した場合は、
+            # どの系列にも含めず除外されたままにする
             # (mainSeries docstring の「境界」参照)。
 
     main_records = [
@@ -1206,6 +1266,7 @@ def compute(
         "exclusions": {
             "timelineOverflow": timeline_overflow_out,
             "prTimelineOverflow": pr_timeline_overflow_out,
+            "mergedCloserPrNotQualifying": merged_closer_not_qualifying_out,
         },
         "boundaries": boundaries_out,
         "intervalStats": interval_stats_out,

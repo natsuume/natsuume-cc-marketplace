@@ -381,6 +381,7 @@ python3 compute_leadtime.py \
 - [ ] 各集計の n の小ささ (`weeklyCohorts[].n` / `intervalStats[].n` が小さい週・区間の明示。`n = 0` の週は空欄・線の途切れとして扱い隠さない)
 - [ ] 推定を用いた箇所: 打ち切り (`censored` の `elapsedHoursLowerBound` は下限値であること) と、第 6 章で補正・代用したイベント適用日 (推定である旨のラベルをそのまま引用する)
 - [ ] `exclusions.timelineOverflow` / `exclusions.prTimelineOverflow` の件数
+- [ ] `exclusions.mergedCloserPrNotQualifying` の件数 (merged closer とされた PR の収集 snapshot が非 qualifying だったため除外された件数)
 - [ ] `dataQuality` 各値 (`negativeIntervalCount` / `redraftPrCount` / `notStartedClosedIssues` / `multipleReadyPrIssues`) の件数
 - [ ] `markerCoverage` 中の `unknownTimeline` (timeline 不完全で観測不能だった件数)
 - [ ] `claimDetection.looseOnlyIssues` の件数 (取りこぼし候補)
