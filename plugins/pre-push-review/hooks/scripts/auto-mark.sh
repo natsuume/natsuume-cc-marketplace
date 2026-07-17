@@ -62,7 +62,12 @@
 #      既に存在する場合も、attestation の残存有無に関わらず marker を書かずに
 #      skip する (過去の stop で attestation の rm に失敗して残存した場合に、その
 #      残存 attestation を resume 再 stop が再利用する経路の遮断。残存 attestation の
-#      掃除だけを再試行する)
+#      掃除だけを再試行する)。これら 2 つの terminal な拒否経路 (attestation 無し /
+#      既存 tombstone) では、codex-reviewer の場合に git-dir 共有の pending
+#      attestation も破棄する (resume が wrapper を再実行して書き直した pending を
+#      放置すると、後続の別 stop がそれを昇格できてしまう。skip_marker と対称の
+#      掃除)。中間 stop (2) と遷移保留 (4 の ln 失敗) は次の stop で完結する
+#      non-terminal 経路のため pending を保持する
 #   4. attestation は最初の SubagentStop (stop_hook_active=false) で tombstone へ
 #      不可逆遷移させて消費する: 以降の検証 (5〜8) の成否に関わらず、 まず launch
 #      tombstone (.claude-pre-push-done-<agent_id>) を排他 `ln` で作り (中身は
@@ -295,10 +300,26 @@ case "$HOOK_EVENT_NAME" in
     GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
     ATTESTATION_PATH=$(launch_attestation_path "$GIT_DIR" "$AGENT_ID") || exit 0
 
+    # codex-reviewer の terminal な拒否経路 (この agent_id の review cycle が既に
+    # 終わっていると判明した経路) では、 git-dir 共有の pending attestation を
+    # 破棄してから exit する。 resume された subagent が wrapper を再実行して
+    # pending を書き直した後、 その stop が pending を放置すると、 後続の別の
+    # codex-reviewer stop が orphan 化した pending を昇格できてしまう (skip_marker
+    # と対称の掃除)。 中間 stop (stop_hook_active) と遷移保留 (tombstone ln 失敗)
+    # は次の stop で完結する non-terminal 経路のため、 pending を保持する。
+    discard_codex_pending() {
+      if [ "$IS_CODEX_REVIEW" = "true" ]; then
+        local pending_path
+        pending_path=$(codex_pending_marker_path "$GIT_DIR" 2>/dev/null) || return 0
+        rm -f "$pending_path" 2>/dev/null || true
+      fi
+    }
+
     # launch attestation が無ければ exit 0 (SendMessage resume 後の再 stop・移行前起動・
     # main session からの偽装 stop はここで遮断される)。 symlink は regular file
     # 扱いしない (= 「無い」と同じ経路で exit 0)。
     if [ -L "$ATTESTATION_PATH" ] || [ ! -f "$ATTESTATION_PATH" ]; then
+      discard_codex_pending
       exit 0
     fi
 
@@ -313,6 +334,7 @@ case "$HOOK_EVENT_NAME" in
     TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
     if [ -e "$TOMBSTONE_PATH" ]; then
       rm -f "$ATTESTATION_PATH" 2>/dev/null || true
+      discard_codex_pending
       exit 0
     fi
     # attestation → tombstone の不可逆遷移: 最初の (stop_hook_active=false の)

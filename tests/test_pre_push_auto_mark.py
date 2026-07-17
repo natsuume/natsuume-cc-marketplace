@@ -426,6 +426,49 @@ class PrePushAutoMarkTest(unittest.TestCase):
                 work, agent_type, self.stop_payload(agent_type, report)
             )
 
+    def test_codex_stop_without_attestation_discards_pending(self) -> None:
+        # codex-reviewer の terminal な拒否経路 (attestation 無し = resume 再 stop・
+        # 偽装 stop 等) では、git-dir 共有の pending attestation を破棄する。resume
+        # された subagent が wrapper を再実行して書き直した pending を放置すると、
+        # 後続の別の codex-reviewer stop が orphan 化した pending を昇格できて
+        # しまうため (skip_marker と対称の掃除)。
+        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:codex-reviewer"
+            pending = self.codex_pending_marker_path(work)
+            pending.write_text(
+                self.expected_review_hash(work), encoding="utf-8"
+            )
+            self.assertFalse(self.launch_attestation_path(work).exists())
+            self.assert_no_marker(
+                work, agent_type, self.stop_payload(agent_type, report)
+            )
+            self.assertFalse(pending.exists())
+
+    def test_codex_stop_with_existing_tombstone_discards_pending(self) -> None:
+        # 既存 tombstone の terminal な拒否経路でも pending attestation を破棄する
+        # (attestation 無し経路と同じ orphan 化の遮断)。
+        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:codex-reviewer"
+            self.run_start(work, agent_type)
+            attestation = self.launch_attestation_path(work)
+            tombstone = self.launch_tombstone_path(work)
+            tombstone.write_text(
+                attestation.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            pending = self.codex_pending_marker_path(work)
+            pending.write_text(
+                self.expected_review_hash(work), encoding="utf-8"
+            )
+            self.assert_no_marker(
+                work, agent_type, self.stop_payload(agent_type, report)
+            )
+            self.assertFalse(pending.exists())
+            self.assertFalse(attestation.exists())
+
     def test_stop_consumes_attestation_exactly_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
