@@ -26,6 +26,7 @@ HOOK = PLUGIN / "hooks" / "scripts" / "manage-codex-runners.mjs"
 HOOKS_JSON = PLUGIN / "hooks" / "hooks.json"
 RULES = PLUGIN / "hooks" / "prompts" / "advisor-rules.md"
 CONSULT = PLUGIN / "skills" / "consult" / "SKILL.md"
+JOB_HELPER = PLUGIN / "scripts" / "run-codex-job.sh"
 
 RUNNERS = {
     "rescue": "codex-advisor:rescue-runner",
@@ -286,12 +287,38 @@ class CodexRunnerDirectExecutionGateTest(HookHarness):
             "git diff -- plugins/codex-advisor/scripts/run-codex-advisor.sh",
             "cat plugins/codex-advisor/scripts/run-codex-advisor.sh",
             "grep -n review /opt/codex-companion.mjs | head -5",
+            "echo 'node /opt/codex-companion.mjs task --background'",
         ]
         for command in commands:
             with self.subTest(command=command):
                 self.assertIsNone(
                     self.hook_response(self.bash_payload(command))
                 )
+
+    def test_wrapped_executable_launch_is_still_denied(self) -> None:
+        for command in (
+            "CODEX_MODE=rescue node /opt/codex-companion.mjs task --background",
+            "timeout 600 node /opt/codex-companion.mjs review --wait",
+        ):
+            with self.subTest(command=command):
+                response = self.hook_response(self.bash_payload(command))
+                expected = RUNNERS[
+                    "rescue" if " task " in command else "review"
+                ]
+                self.assert_denied(response, expected)
+
+    def test_state_write_failure_remains_a_deny_and_is_disclosed(self) -> None:
+        self.state_root.parent.mkdir(parents=True, exist_ok=True)
+        self.state_root.write_text("not a directory", encoding="utf-8")
+        response = self.hook_response(self.bash_payload(COMMANDS["rescue"]))
+        self.assert_denied(response, RUNNERS["rescue"])
+        assert response is not None
+        hook_output = response["hookSpecificOutput"]
+        assert isinstance(hook_output, dict)
+        self.assertIn(
+            "自動復旧要求を保存できていません",
+            hook_output["permissionDecisionReason"],
+        )
 
 
 class CodexRunnerLifecycleTest(HookHarness):
@@ -359,6 +386,30 @@ class CodexRunnerLifecycleTest(HookHarness):
         self.hook_response(payload)
         self.assertEqual([], self.state_records())
 
+    def test_codex_output_may_contain_footer_words_before_final_footer(self) -> None:
+        self.subagent_start("rescue")
+        report = "\n".join(
+            [
+                "Codex output quoted this example:",
+                "Codex-Runner-Status: retryable-failure",
+                "but the complete output continues here.",
+                "Codex-Runner-Operation: rescue",
+                "Codex-Runner-Status: success",
+                "Codex-Runner-Job-ID: task-real",
+            ]
+        )
+        self.hook_response(
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": "session-a",
+                "agent_id": "agent-a",
+                "agent_type": RUNNERS["rescue"],
+                "last_assistant_message": report,
+                "stop_hook_active": False,
+            }
+        )
+        self.assertEqual([], self.state_records())
+
     def test_session_end_cleans_only_its_own_state(self) -> None:
         self.subagent_start("rescue", session_id="session-a")
         self.subagent_start("review", session_id="session-b")
@@ -371,6 +422,24 @@ class CodexRunnerLifecycleTest(HookHarness):
         records = self.state_records()
         self.assertEqual(1, len(records))
         self.assertEqual("session-b", records[0]["sessionId"])
+
+    def test_legacy_rescue_stop_requires_named_runner_reroute(self) -> None:
+        self.hook_response(
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": "session-legacy",
+                "agent_id": "legacy-agent",
+                "agent_type": "codex:codex-rescue",
+                "last_assistant_message": "legacy agent could not launch",
+                "stop_hook_active": False,
+            }
+        )
+        records = self.state_records()
+        self.assertEqual(1, len(records))
+        self.assertEqual("reroute-required", records[0]["phase"])
+        self.assert_stop_blocked(
+            self.main_stop("session-legacy"), RUNNERS["rescue"]
+        )
 
 
 class CodexRunnerArtifactContractTest(unittest.TestCase):
@@ -385,6 +454,9 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
                 self.assertIn("TaskOutput", contents)
                 self.assertIn("status", contents)
                 self.assertIn("result", contents)
+                self.assertIn("plugin cache", contents)
+                self.assertIn("literal", contents)
+                self.assertIn("run-codex-job.sh", contents)
                 self.assertIn("Codex-Runner-Operation:", contents)
                 self.assertIn("Codex-Runner-Status:", contents)
                 self.assertIn(scoped_name, RULES.read_text(encoding="utf-8"))
@@ -440,6 +512,125 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
                     any("manage-codex-runners.mjs" in command for command in commands),
                     commands,
                 )
+
+
+class CodexJobHelperTest(unittest.TestCase):
+    def fake_companion_home(self, temp: Path) -> Path:
+        companion = (
+            temp
+            / "home/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts"
+            / "codex-companion.mjs"
+        )
+        companion.parent.mkdir(parents=True)
+        companion.write_text("// fake companion\n", encoding="utf-8")
+        return companion
+
+    def test_rescue_and_advisor_launch_detached_prompt_file_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temp = Path(temporary_name)
+            companion = self.fake_companion_home(temp)
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            args_file = temp / "node-args"
+            fake_node = fake_bin / "node"
+            fake_node.write_text(
+                "#!/bin/bash\n"
+                "printf '%s\\n' \"$@\" > \"$NODE_ARGS_FILE\"\n"
+                "printf '%s\\n' '{\"jobId\":\"task-test\"}'\n",
+                encoding="utf-8",
+            )
+            fake_node.chmod(0o755)
+            prompt = temp / "prompt with spaces.md"
+            prompt.write_text("private prompt body\n", encoding="utf-8")
+            env = os.environ.copy()
+            env.update(
+                {
+                    "HOME": str(temp / "home"),
+                    "PATH": f"{fake_bin}:/usr/bin:/bin",
+                    "NODE_ARGS_FILE": str(args_file),
+                }
+            )
+
+            cases = {
+                "rescue": [
+                    "rescue",
+                    str(prompt),
+                    "--fresh",
+                    "--write",
+                    "--effort",
+                    "xhigh",
+                ],
+                "advisor": ["advisor", str(prompt)],
+            }
+            for operation, arguments in cases.items():
+                with self.subTest(operation=operation):
+                    result = subprocess.run(
+                        ["bash", str(JOB_HELPER), *arguments],
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        cwd=temp,
+                        env=env,
+                        check=False,
+                        timeout=5,
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    invoked = args_file.read_text(encoding="utf-8").splitlines()
+                    self.assertEqual(str(companion), invoked[0])
+                    self.assertEqual("task", invoked[1])
+                    self.assertIn("--background", invoked)
+                    self.assertIn("--json", invoked)
+                    self.assertIn("--prompt-file", invoked)
+                    self.assertIn(str(prompt), invoked)
+                    self.assertNotIn("private prompt body", " ".join(invoked))
+
+    def test_status_wait_polls_the_v106_single_status_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temp = Path(temporary_name)
+            companion = self.fake_companion_home(temp)
+            companion.write_text(
+                "const args = process.argv.slice(2);\n"
+                "if (args[0] !== 'status' || args[1] !== 'task-test' "
+                "|| args[2] !== '--json' || args.length !== 3) process.exit(9);\n"
+                "console.log(JSON.stringify({job:{id:'task-test',status:'completed'}}));\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["HOME"] = str(temp / "home")
+            direct = subprocess.run(
+                ["node", str(companion), "status", "task-test", "--json"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                check=False,
+                timeout=5,
+            )
+            self.assertEqual(0, direct.returncode, direct.stderr)
+            self.assertTrue(direct.stdout, companion.read_text(encoding="utf-8"))
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(JOB_HELPER),
+                    "status",
+                    "task-test",
+                    "--wait",
+                    "--timeout-ms",
+                    "1000",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=temp,
+                env=env,
+                check=False,
+                timeout=5,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(
+                "completed",
+                json.loads(result.stdout)["job"]["status"],
+            )
 
 
 if __name__ == "__main__":

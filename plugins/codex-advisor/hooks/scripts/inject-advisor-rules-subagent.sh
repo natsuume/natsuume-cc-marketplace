@@ -3,17 +3,15 @@
 #
 # I/O 契約 (issue #219):
 #   stdin  : SubagentStart hook input JSON (本 plugin では内容を使用しない)
-#   stdout : {"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": "<advisor-rules-subagent.md 全文 (プレースホルダ置換済み)>"}}
-#   exit   : 常に 0 (テンプレート・wrapper 欠落時は注入をスキップして exit 0。fail-open でセッションを壊さない)
+#   stdout : {"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": "<advisor-rules-subagent.md 全文>"}}
+#   exit   : 常に 0 (テンプレート欠落時は注入をスキップして exit 0。fail-open でセッションを壊さない)
 #
 # 制約 (issue #219):
 #   - Linux (WSL2) / macOS (bash 3.2 環境の /bin/sh) の両方で動作すること
 #   - agent_type による条件分岐を持たない (常に同一内容を注入する)
 #
-# テンプレートの {{WRAPPER_PATH_SH}} は jq の gsub + @sh で shell-quote 済み絶対パスへ
-# 置換する。sed を使わないのは、パスに sed の置換メタ文字 (& / \ / デリミタ) が含まれる
-# install 環境で置換が壊れるため。@sh により $ / バッククォート / 空白 / literal ' を含む
-# パスも安全な単一 shell word として本文に埋め込まれる (codex review P3 指摘への対処)。
+# v1.0.0 以降、通常 subagent は wrapper を直接実行せず相談 request を親へ返すため、
+# install path の template 置換は不要になった。
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -32,28 +30,11 @@ if [ -z "$TEMPLATE" ]; then
   exit 0
 fi
 
-# wrapper (run-codex-advisor.sh) の絶対パスを script 自身の位置から解決する。
-# hooks/scripts/ から見て ../../scripts/run-codex-advisor.sh。
-# cd + pwd で正規化した絶対パスを組み立てる。
-SCRIPTS_DIR=$(cd "$(dirname "$0")/../../scripts" 2>/dev/null && pwd)
-
-if [ -z "$SCRIPTS_DIR" ]; then
-  exit 0
-fi
-
-WRAPPER="$SCRIPTS_DIR/run-codex-advisor.sh"
-
-# 解決したパスにファイルが実在しない場合は fail-open (壊れた注入で誤誘導しない)。
-if [ ! -f "$WRAPPER" ]; then
-  exit 0
-fi
-
-# プレースホルダ置換と JSON 出力を jq 1 回で行う。--arg で渡した値は gsub の置換値
-# として literal に扱われるため、パス中のメタ文字で置換が壊れない (ヘッダコメント参照)。
-# jq が万一失敗しても header の「exit 常に 0」契約を守る (fail-open)。
-jq -n --arg tpl "$TEMPLATE" --arg wrapper "$WRAPPER" '{
+# JSON 出力を jq 1 回で行う。jq が万一失敗しても header の「exit 常に 0」契約を
+# 守る (fail-open)。
+jq -n --arg tpl "$TEMPLATE" '{
   hookSpecificOutput: {
     hookEventName: "SubagentStart",
-    additionalContext: ($tpl | gsub("\\{\\{WRAPPER_PATH_SH\\}\\}"; ($wrapper | @sh)))
+    additionalContext: $tpl
   }
 }' || exit 0

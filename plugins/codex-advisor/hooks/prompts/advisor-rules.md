@@ -1,5 +1,5 @@
 <!--
-  codex-advisor: 利用規律 (issue #219 で相談規律 3 ルール、#241 で rescue thread 選択を追加)
+  codex-advisor: 利用規律 (issue #219、#241、#291)
   各ルールは「意図 (なぜ) + 指示 + 境界」で記述する (agent-discipline / ui-discipline と同形式)。
   配送は SessionStart hook (inject-advisor-rules.sh) が常時行う。
   サイズ制約: 全文で 8,000 文字 (UTF-16 code unit 基準の inline 閾値の安全マージン込み運用値、
@@ -8,7 +8,7 @@
 
 # codex-advisor: Codex 利用規律
 
-このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は「いつ相談するか」「助言をどう扱うか」の相談規律 (セクション 1〜3) と、`/codex:rescue` の thread 選択規律 (セクション 4) である。
+このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/codex-advisor:consult` skill が定義する。以下は相談規律 (セクション 1〜3)、`/codex:rescue` の thread 選択 (セクション 4)、全 Codex 実行を追跡可能な subagent に閉じ込める runner 規律 (セクション 5) である。
 
 <!-- rule:advisor-timing -->
 ## 1. いつ相談するか
@@ -61,3 +61,20 @@
 - `--fresh` 時の文脈は task 本文の所有者で扱いが分かれる: 自分が rescue の本文を作成する場合は、呼び出し前に必要な文脈を含む self-contained な本文を作る。ユーザが本文を直接指定した場合は routing flag 以外を変更せずそのまま転送し、Codex 出力以外の説明を同じ rescue 応答に追加しない
 
 **境界**: この規律の対象は thread 選択の質問のみである。rescue を使うかどうかの判断や、設計 / 仕様レベルの決定に関する `AskUserQuestion` (セクション 3) は変更しない。
+
+<!-- rule:codex-runner -->
+## 5. Codex 実行は role 固有 runner に閉じ込める
+
+**なぜ**: Codex companion の長時間 Bash を main session または通常 subagent で待つと、大量出力が親 context に入り、Claude の background task tracking と companion の永続 job state が分離して処理が停止しうる。role 固有 runner と lifecycle hook を併用すれば、tracking を失っても job ID / job 集合差分から結果を回収できる。
+
+**指示**: Codex model を起動する場合は、公式 Skill / command や companion Bash を直接実行せず、次の完全修飾 agent を Agent tool で起動する。
+
+- rescue: `codex-advisor:rescue-runner`
+- review / adversarial-review: `codex-advisor:review-runner`
+- advisor / consult: `codex-advisor:advisor-runner`
+
+Agent call は `run_in_background: false` を明示し、request 本文・thread flag・review scope 等を self-contained に渡す。Claude Code が Agent を `async_launched` として受理した場合も、completion notification または TaskOutput を回収し、runner の terminal report が返るまで「起動した」とだけユーザへ報告して turn を終了しない。自律的に rescue / review を使うときは `/codex:rescue` / `/codex:review` を再入せず、上記 runner を直接起動する。
+
+PreToolUse gate は `codex-companion.mjs task|review|adversarial-review` と `run-codex-advisor.sh` の実行形を、対応 runner 以外では deny する。ユーザが旧 `/codex:rescue` / `/codex:review` を明示した場合も deny と Stop hook の案内に従い、追加質問をせず runner へ reroute する。runner が tracking failure を報告した場合は lifecycle hook が 1 回だけ新規 runner で retry を要求する。2 回目の失敗、cancel、未 install / 未認証、入力不正は terminal failure として明示報告する。
+
+**境界**: `status` / `result` / `cancel` 等の管理操作と、`pre-push-review:codex-reviewer` の正規 review 経路は遮断しない。通常 subagent が advisor を必要とする場合、wrapper を直接実行せず相談 request を親へ返す。親は委任時に外部呼び出しを許可した範囲で `codex-advisor:advisor-runner` を起動する。

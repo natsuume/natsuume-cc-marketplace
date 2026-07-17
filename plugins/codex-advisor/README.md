@@ -6,14 +6,17 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v0.3.0
+v1.0.0
 
-### v0.2.0 → v0.3.0 の変更点
+### v0.3.0 → v1.0.0 の変更点
 
-- Codex plugin manifest を追加した。wrapper は Claude の openai-codex companion を優先し、利用できない場合は hooks を無効化した独立 read-only / ephemeral `codex exec` process へ fallback する
-- consult Skill の plugin root 解決を SKILL.md の実パス基準にし、hook 専用環境変数への依存を除いた
-- Codex host では Claude Code 固有の Write tool の代わりに、PTY unified exec の分離された stdin channel から prompt を渡す。PTY は受信中だけ raw/noncanonical mode とし、明示 EOT-pair framing (`0x04 0x04`) で 8 KiB を超える単一行や CR も byte-preserving に転送する。本文を shell command、argv、永続 file に載せない
-- direct `codex exec` は read-only / ephemeral / hooks 無効 / `xhigh` に加えて git repository 検査も明示的に skip し、既定 10 分の deadline 超過時は独立 process group 全体を TERM → KILL、leader を `wait` して descendant ごと回収する
+- rescue / review / advisor の role 固有 runner (`codex-advisor:rescue-runner` / `review-runner` / `advisor-runner`) を追加し、Codex model 起動を main session から隔離した
+- PreToolUse gate が `codex-companion.mjs task|review|adversarial-review` と `run-codex-advisor.sh` の直接実行を deny し、対応 runner へ reroute する。公式 legacy rescue agent も例外にしない
+- runner は起動前の companion job 集合を記録する。rescue / advisor は detached task の job ID、review は tracking 喪失時の job 集合差分を使い、`status` / `result` で terminal result を回収する
+- SubagentStart / SubagentStop / Stop の session-scoped state machine を追加した。tracking failure は 1 回だけ retry し、2 回目の失敗、cancel、未 install / 未認証、入力不正は terminal にする。SessionStart / SessionEnd で同じ session の stale state を掃除する
+- `/codex-advisor:consult` の Claude Code 経路を main session の wrapper Bash から `codex-advisor:advisor-runner` Agent へ変更した。この直接実行契約の削除が major bump の理由である
+
+v0.3.0 で追加した Codex host の PTY stdin / direct read-only process は source tree 内に維持しています。ただし本 plugin は Codex marketplace では excluded であり、v1.0.0 の install surface 変更は Claude Code 固有です。
 
 v0.2.0 でプラグインのスコープを「advisor 相談規律」から「codex 利用規律全般」へ拡張し、`/codex:rescue` の thread 選択自律化 (`rule:rescue-thread`、issue #241) を含むようになりました。rescue はレビューループ外の設計相談でも多用されるため、相談規律と同じ SessionStart 注入で配送します。
 
@@ -21,10 +24,13 @@ v0.2.0 でプラグインのスコープを「advisor 相談規律」から「co
 
 | 構成要素 | 役割 |
 |---|---|
-| SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 4 ルール (下記) を `additionalContext` として常時注入する。公式ドキュメントは「tool 定義だけでは advisor は呼ばれない、システムプロンプト側の明示誘導が必須」と明言しており、この注入がそれに相当する |
-| SubagentStart hook (`inject-advisor-rules-subagent`) | subagent 向けの簡約版規律 (許可・タイミング・実行方法・フラットな扱い・失敗時) を全 subagent 起動時に注入する。wrapper の絶対パスは注入時に解決し、jq の `@sh` で shell-quote して埋め込む (subagent の Bash 環境では `${CLAUDE_PLUGIN_ROOT}` が空になりうるため。quote はパスにメタ文字を含む install 環境への防御)。Claude Code 2.0.43 以降で有効 |
-| `/codex-advisor:consult` skill | 相談プロンプトの組み立て方 (self-contained な XML ブロック構成) と wrapper の起動手順を定義する。ユーザによる明示起動も可能 |
-| `scripts/run-codex-advisor.sh` | Claude Code host では公式 codex plugin の companion を優先し、Codex host では明示 EOT pair で framing した PTY stdin を受けて direct `codex exec` を foreground で起動する wrapper。read-only・ephemeral・hooks 無効・git 検査 skip・`xhigh` を固定し、独立 process group を監視する既定 10 分の watchdog を持つ。stdout = 助言、stderr = wrapper 状態 |
+| SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 5 ルール (下記) を `additionalContext` として常時注入する |
+| SubagentStart hook (`inject-advisor-rules-subagent`) | 通常 subagent に advisor の許可境界を注入する。通常 subagent は wrapper を直接起動せず、self-contained な相談 request を親へ返す |
+| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、SubagentStart / SubagentStop の active・bounded retry、Stop の reroute / completion 回収要求、SessionStart / SessionEnd cleanup を管理する。state は UID + session ID で分離し、prompt / Codex 出力を保存しない |
+| role 固有 runner agents | rescue / review / advisor の model 起動・job tracking・terminal output を subagent context に閉じ込める。全 runner は foreground Agent として起動する |
+| `/codex-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では `codex-advisor:advisor-runner` を起動する。Codex host の source 契約は PTY stdin wrapper を維持する |
+| `scripts/run-codex-job.sh` | official companion v1.0.6 の task / review / status / result / cancel を runner 向けの path-only command に限定して公開する。status wait は単発 status の短い poll で構成する |
+| `scripts/run-codex-advisor.sh` | v0.3.0 の adapter 契約と Codex host source を維持する wrapper。Claude Code の通常 Skill は直接呼ばず advisor runner を使う。Codex host では PTY stdin から direct read-only / ephemeral `codex exec` を foreground 起動し、既定 10 分の watchdog で process group を回収する |
 
 ### 注入される規律 (hooks/prompts/advisor-rules.md)
 
@@ -34,16 +40,17 @@ v0.2.0 でプラグインのスコープを「advisor 相談規律」から「co
 | `rule:advisor-weight` | 助言はフラットに扱う (独立した第二視点として自分の証拠・推論と同じ土俵で採否を判断し、採否と理由を明示する。黙って無視しない)。証拠と助言が衝突し自分で判断できないときは reconcile call (衝突を明示した再相談) で解消する |
 | `rule:advisor-boundary` | 設計/仕様の決定はユーザ専権 (助言は AskUserQuestion の代替でない)。レビュー用途は pre-push-review が担当。advisor 不通時は相談なしで続行しユーザ報告 |
 | `rule:rescue-thread` | `/codex:rescue` 起動時は `--resume` / `--fresh` を常に Claude が自律決定して付与し、thread 選択の AskUserQuestion を発行しない。`--resume` は「直前の rescue と同一論点の続き + 対象 rescue がセッション内で最新の再開可能 task (terminal 状態かつ threadId あり) と確実に分かる場合」のみで、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先 |
+| `rule:codex-runner` | rescue / review / advisor は完全修飾 runner を `run_in_background: false` で起動する。Agent が async 受理されても completion notification / TaskOutput と terminal report を回収するまで turn を終了しない |
 
 公式ドキュメントの推奨プロンプト (timing block / advice block) の移植ですが、次の 2 点は意図的に変えています: (1)「最初のファイル変更前に必ず advisor を呼ぶ」型の hard rule は採用していません (公式実測で、強い executor への hard rule 追加は過剰呼び出しを招き純効果がゼロ〜マイナスと報告されているため)。(2) advice block の「助言を重く扱う」も採用せず、フラットな扱いに変更しています (下記の差分参照)。
 
 ### subagent からの利用
 
-subagent も同じ wrapper で相談できる。ただし **SubagentStart の注入は規律の配送であって許可の付与ではない**: 相談は課金を伴う外部サービス呼び出しであり、この環境の委任規律 (明記されていない外部サービス呼び出しは default-deny) と整合させるため、subagent が実際に相談できるのは **委任指示が codex-advisor の使用を明示的に許可している場合のみ**とした。subagent には AskUserQuestion が無いため、助言と証拠の衝突が自力で解消できない場合はエスカレーション (両論併記) に読み替える。
+通常 subagent が相談を必要とする場合も、wrapper / companion を直接実行しません。相談は課金を伴う外部サービス呼び出しなので、委任指示が codex-advisor の使用を明示的に許可している場合だけ self-contained な相談 request を親へ返します。親は `codex-advisor:advisor-runner` を foreground Agent として起動します。subagent には AskUserQuestion が無いため、助言と証拠の衝突が自力で解消できない場合は両論併記で親へエスカレーションします。
 
 委任指示に含める許可の定型文の例:
 
-> 方針にコミットする前または行き詰まったときは、codex-advisor の wrapper (SubagentStart 注入の指示に従う) で Codex に相談してよい。相談は read-only で foreground 実行し、助言の採否と理由を最終報告に含めること。
+> 方針にコミットする前または行き詰まったときは、codex-advisor 用の self-contained な相談 request を親へ返してよい。親が advisor runner で取得した助言の採否と理由を最終報告に含めること。
 
 ### 本家 API 版との意図的な差分
 
@@ -73,14 +80,15 @@ Codex host の `$codex-advisor:consult` は、別 context・read-only sandbox・
 
 Codex transport は受信中の PTY を echo 無効・raw/noncanonical mode にし、連続する 2 byte の EOT (`0x04 0x04`) を EOF 操作ではなく明示 frame terminator として扱います。2 byte により正常な delimiter と delimiter 前の切断を区別します。このため canonical PTY の行長上限と CR 変換を避けられますが、prompt 本文自体に `0x04` は含められません。direct process は `--sandbox read-only --ephemeral --disable hooks --skip-git-repo-check --color never -c 'model_reasoning_effort="xhigh"' -` で固定し、git repository 外でも相談できます。既定 600 秒を超えた独立 process group は TERM、grace period 後の KILL、leader の `wait` の順で descendant ごと終了・回収します。descendant が stdout / stderr の pipe FD を保持して foreground session を残す経路も同じ group signal で閉じます。
 
-`tests/test_codex_advisor_adapter.py` は host 分岐、PTY 必須条件と echo 抑止、8 KiB 超の単一行 + CR の byte-exact round-trip、上記の全安全引数、git repository 外からの起動、deadline 超過時に TERM を無視して pipe FD を保持する長寿命 descendant を含む process-group KILL / leader `wait` cleanup、Claude Code の既存 file-stdin companion 経路を検証します。これは adapter のローカル契約を検証するもので、model family の独立性、外部 service・認証・rate limit の可用性、Codex が返す助言の品質までは保証しません。`scripts/smoke_codex_marketplace.sh` は生成 manifest からの install surface を検証します。保証差の集約表は root の `docs/codex-compatibility.md` にあります。
+`tests/test_codex_advisor_subagent_runner.py` は direct gate の agent type matrix、実行形 / audit 言及の分類、session state、retry 上限、stale cleanup、3 runner / Skill / hook artifact を検証します。`tests/test_codex_advisor_adapter.py` は v0.3.0 から維持する PTY / file-stdin adapter と process-group cleanup を検証します。いずれも外部 service・認証・rate limit の可用性や Codex 出力品質までは保証しません。
 
 ## トラブルシュート
 
 | 症状 | 対処 |
 |---|---|
 | `companion unavailable; running direct codex exec` | Codex CLI への fallback を示す進捗メッセージなので、相談が成功すれば対処不要。Claude companion を優先したい場合だけ `claude plugin install codex@openai-codex` を実行 |
-| `codex companion と codex CLI のどちらも見つかりません` | Codex CLI を導入するか、Claude Code host では公式 codex plugin も導入する |
+| runner が `codex companion が見つかりません` を返す | Claude Code で公式 codex plugin の install を確認し、`/codex:setup` で診断する。main session の direct wrapper へ退避しない |
+| Codex host の wrapper が `codex companion と codex CLI のどちらも見つかりません` を返す | Codex CLI を導入する |
 | 認証エラー | `/codex:setup` で診断し、`codex login` で認証 |
 | 相談が 10 分でタイムアウトする | 相談プロンプトの `<context>` を絞る (参照パスを減らす)。それでも超える場合は相談を分割する |
 

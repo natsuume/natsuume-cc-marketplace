@@ -37,34 +37,20 @@ OpenAI Codex に相談プロンプトを渡し、助言テキストを受け取�
 - 1 相談 1 質問。複数の論点があるときは別々の相談に分ける
 - reconcile call (助言と証拠の衝突解消) では `<context>` に前回助言の要点と、それと衝突する証拠を明記し、`<question>` を「どの制約が決め手か」の形にする。Codex 側の thread 継続 (resume) には依存しない — 毎回 self-contained な新規相談として発行する
 
-## 2. wrapper の起動
+## 2. host ごとの起動
 
-まず、この `SKILL.md` を含む `skills/consult/` の 2 階層上を `<plugin-root>` として解決する。通常の Skill 実行では hook 用の `${CLAUDE_PLUGIN_ROOT}` が設定される保証はないため、SKILL.md の実パスを正本にする。
-
-プロンプト本文を Bash の command 文字列に一切載せない (heredoc・引数直渡しは使わない) — 本文中の語 (例:「push」等) が PreToolUse guardrail hook のパターンマッチに誤反応し、相談自体が deny される事例があるため。受け渡し方法は実行 host ごとに分ける。
+プロンプト本文を Bash の command 文字列に一切載せない (heredoc・引数直渡しは使わない)。Claude Code では role 固有 runner が prompt file transport と detached job tracking を所有する。Codex host では従来どおり分離された PTY stdin channel を使う。
 
 ### Claude Code host
 
-次の 2 ステップに固定する。
+`Agent` tool で `codex-advisor:advisor-runner` を foreground 起動する。request には組み立てた相談プロンプト全文を self-contained に渡し、次の指定を明示する。
 
-1. **Write ツール**で、組み立てた相談プロンプト全文をセッションの scratchpad ディレクトリ配下の新規ファイルに書き出す。プロジェクト内には作成しない
-2. **Bash ツール**で wrapper を foreground 実行し、1. のファイルを stdin リダイレクトで渡す。**timeout パラメータに 600000 (10 分) を明示指定する**。`run_in_background: true` は使わない — 助言を観察しないまま作業を進める経路を作らないため
+- `subagent_type: "codex-advisor:advisor-runner"`
+- `run_in_background: false`
 
-```bash
-bash "<plugin-root>/scripts/run-codex-advisor.sh" < "/absolute/path/to/prompt.md"
-```
+main session で wrapper / companion を Bash 実行しない。advisor runner が Write tool で session scratchpad の一意な prompt file を作成し、companion の detached job ID を `status` / `result` で追跡する。Claude Code が Agent call を `async_launched` として受理した場合も、completion notification または `TaskOutput` を回収し、runner の terminal report を受け取るまで turn を終了しない。
 
-- ファイルパスは**相談ごとに新規の一意なパスを割り当て、他の相談で再利用しない** (本則・fallback・reconcile call のすべてに適用する契約)。並行して走る相談同士が同一ファイルを取り合って上書きし合わないよう、一意性はタイムスタンプ単独に頼らず、主題を表す slug + タイムスタンプ + ランダムサフィックスの組み合わせで確保する (例: `codex-consult-<主題slug>-<timestamp>-<random>.md`)
-- command 文字列に載るのはファイルパスのみで、プロンプト本文 (の断片) は一切含めない
-- stdout に Codex の助言テキストがそのまま返る。stderr は wrapper の状態メッセージ (companion パス・実行開始/終了)
-- 失敗の表面化: ファイルが存在しなければ shell のリダイレクトエラーで Bash が非ゼロ終了する。ファイルが空・空白のみであれば wrapper が「相談プロンプトが空です」を stderr に出して exit 1 する。いずれの場合もファイルの内容・パスを確認し、書き直してから再実行する
-- SKILL.md の実パスを取得できない古い Claude Code surface では、`${CLAUDE_PLUGIN_ROOT}` が既存 directory を指す場合に限り fallback として使う。それも使えない場合だけ plugin cache から最新版を解決して同じ stdin リダイレクトで実行する (置換であって再試行ではない):
-
-```bash
-WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-advisor.sh' -type f 2>/dev/null | awk -F'codex-advisor/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-); if [ -n "$WRAPPER" ]; then bash "$WRAPPER" < "/absolute/path/to/prompt.md"; else echo "[consult] run-codex-advisor.sh が plugin cache に見つかりません" >&2; false; fi
-```
-
-(このコマンドの `sort` 部分を `sort -V` に置き換えない — macOS の BSD sort では動かない。wrapper 不在を無言の exit 1 にせず stderr へ明示するため if/else 形にしている。`$(...)` はパス解決であり background 起動ではない)
+runner report の助言本文をそのまま受け取り、末尾の `Codex-Runner-Operation` / `Codex-Runner-Status` / `Codex-Runner-Job-ID` は lifecycle metadata として扱う。`retryable-failure` では Stop hook の指示に従って 1 回だけ同じ request を新しい advisor runner へ渡す。`terminal-failure` / `cancelled` は無限 retry しない。
 
 ### Codex host
 
@@ -93,12 +79,14 @@ direct process は `--sandbox read-only --ephemeral --disable hooks --skip-git-r
 
 | 失敗の内容 | 対処 |
 |---|---|
-| Claude Code でプロンプトファイルの Write が hook に deny される / 失敗する | Bash によるファイル生成 (`echo` / `printf` / heredoc) に退避しない (プロンプト本文が command 文字列に載るため)。deny 理由を解消できるなら内容を調整して Write を再試行し、できなければ相談なしで作業を続行してその旨をユーザ報告に含める |
+| Claude Code で advisor runner が起動できない | main session の wrapper / companion Bash へ退避しない。起動失敗を明示し、相談なしで作業を続行する |
+| Claude Code で runner 内の prompt file Write が失敗する | runner は terminal failure を返す。Bash (`echo` / `printf` / heredoc) による本文生成へ退避しない |
 | Codex で PTY / stdin session を開始できない | prompt file や command 埋め込みへ退避せず、相談なしで続行し、その旨をユーザ報告に含める |
-| wrapper が plugin cache にも見つからない | codex-advisor plugin の install 状態を確認する。解消できなければ相談なしで作業を続行し、その旨をユーザ報告に含める |
-| codex companion が見つからない | wrapper は direct `codex exec` へ fallback する。両方無い場合は Codex CLI の導入を案内する |
+| Claude Code で codex companion が見つからない | runner の terminal failure として `/codex:setup` による plugin install 確認を案内する |
+| Codex host で companion が見つからない | wrapper は direct `codex exec` へ fallback する。Codex CLI も無い場合は導入を案内する |
 | codex CLI 未インストール / 未認証 | Claude Code では `/codex:setup`、Codex では `codex login` を案内する |
-| Node.js 不在 | companion 経路は使えないが、Codex CLI があれば direct 経路を使う |
-| Claude Code の Bash timeout、または Codex wrapper の deadline (ともに既定 10 分) 超過 | wrapper は nested process group を TERM → KILL、leader を `wait` して descendant ごと回収する。相談なしで作業を続行し、その旨をユーザ報告に含める。リトライはユーザ判断 |
+| Node.js 不在 | Claude Code runner は terminal failure。Codex host は Codex CLI があれば direct 経路を使う |
+| Claude Code の task tracking 喪失 | runner は companion job ID の `status` / `result` で復旧する。復旧不能時だけ lifecycle hook が 1 回 retry する |
+| Codex wrapper の deadline (既定 10 分) 超過 | wrapper は nested process group を TERM → KILL、leader を `wait` して descendant ごと回収する。相談なしで続行し、その旨を報告する |
 
 いずれの失敗でも、相談できなかったこと自体を隠さない (advisor-rules の rule:advisor-boundary)。

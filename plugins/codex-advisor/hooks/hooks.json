@@ -1,5 +1,5 @@
 {
-  "description": "codex-advisor の配送経路: SessionStart でメインセッション向け相談規律 (hooks/prompts/advisor-rules.md) を、SubagentStart (Claude Code 2.0.43+) で subagent 向け簡約版 (hooks/prompts/advisor-rules-subagent.md、wrapper 絶対パスを注入時に解決して埋め込む) を、それぞれ additionalContext として常時注入する。モデル判定・permission_mode 判定・agent_type matcher 等の条件分岐は持たず、常に同一内容を注入する。設計判断の詳細は issue #219 と plugin README を参照。",
+  "description": "codex-advisor の配送・runner 強制経路: SessionStart / SubagentStart で利用規律を additionalContext として注入する。PreToolUse は rescue / review / advisor の Codex model 起動を role 固有 foreground runner だけに限定し、SubagentStart / SubagentStop / Stop が session-scoped lifecycle state と bounded recovery を管理する。SessionStart / SessionEnd は同一 session の stale state を cleanup する。設計判断は issue #219 / #291 と plugin README を参照。",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,31 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules.sh"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
           }
         ]
       }
@@ -17,6 +42,36 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules-subagent.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
           }
         ]
       }
