@@ -18,7 +18,13 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v4.1.6 (前身: `pre-commit-review` v0.4.0)
+v4.2.0 (前身: `pre-commit-review` v0.4.0)
+
+### v4.1.6 → v4.2.0 の変更点 (issue #279)
+
+- `/pre-push-review:review` の finding 対応を「具体的な failure scenario への変換 → 現在の codebase での裏取り → valid / invalid / needs-user-decision の 3 値分類」から始めるフローへ拡張した。invalid は成立しない根拠を記録して修正せず、設計・仕様判断が必要な finding は `AskUserQuestion` 後に扱いを決める
+- failure scenario の不成立を積極的に確認できた場合だけ invalid とし、確信が持てない場合は fail-safe で valid 側に倒す。findings が 0 件なら分類をスキップする
+- marker は「現在の差分に対するレビュー実行と freshness」の証明であり、approve や findings 0 件の証明ではないことを明文化した。codex-reviewer の修正対象 finding に対する既存の rescue 3 観点 approve ゲートは維持する
 
 ### v4.1.5 → v4.1.6 の変更点 (issue #131)
 
@@ -263,6 +269,8 @@ agent_type gate を通過した後は、 従来どおり次の 2 経路の backg
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
 3 reviewer subagent の **実行完了** を subagent lifecycle hook (SubagentStart / SubagentStop) で自動検知し、対応するマーカーファイルに「commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュ」 を書き込みます。v3.0.0 で Skill `/code-review` / `/security-review` の検知は全廃しました。v4.1.0 で completion 検知を PostToolUse から subagent lifecycle hook へ完全移行しました (Claude Code v2.1.198 以降、 Agent tool は既定で background 起動になり、 PostToolUse は起動受理時にしか発火しないため)。Codex は wrapper が review 時 hash の pending attestation を書き、本 hook が parent-safe report 成功後に final marker へ昇格します。PostToolUseFailure でも本 script を呼び、残った Codex pending を破棄します。
+
+マーカーが証明するのは、各 reviewer がマーカーに記録された最新差分に対してレビューを完了したことだけです。変更の approve や findings が 0 件であることは証明しません。`Status: findings` でも正規完了条件を満たせばマーカーは書かれ、finding の妥当性分類と修正判断は `/pre-push-review:review` の親 session が行います。
 
 hooks.json の matcher は SubagentStart / SubagentStop とも `^pre-push-review:(code|codex|security)-reviewer$` で、 3 reviewer subagent 以外では本フックは発火しません。 スクリプト側でも agent_type の完全一致を再検証します (matcher の regex 解釈には依存しない)。
 
