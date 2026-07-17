@@ -197,7 +197,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.3.0",
+      "version": "0.3.1",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -216,10 +216,14 @@
           {
             "path": "scripts/smoke_codex_marketplace.sh",
             "covers": "共有 Skill を含む plugin の Codex install surface"
+          },
+          {
+            "path": "tests/test_update_default_branch_skill.py",
+            "covers": "remote-tracking refs 更新・origin/HEAD 再検出・default branch 読み取りの順序、および stale master から main への実 Git fixture"
           }
         ],
         "components": [],
-        "sourceTreeDigest": "36b642a2cac6621c08f5f32f8a443f0605ce3aa8781185b8b83da5888cd6d61d"
+        "sourceTreeDigest": "d6196a7c9bbffef6ec9f39d263b2697863b1bd8a9a5fb905cf57758dacae42c9"
       }
     },
     "natsuume-statusline": {

@@ -4,7 +4,13 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 ## バージョン
 
-v0.3.0
+v0.3.1
+
+### v0.3.0 → v0.3.1 の変更点 (issue #164)
+
+- default branch 名を読む前に `git fetch --prune origin` → `git remote set-head origin --auto` → `git symbolic-ref refs/remotes/origin/HEAD` を必ず順番に実行し、remote 側の rename 後も stale な local `origin/HEAD` を成功扱いしないようにした
+- fetch / remote HEAD 再検出が失敗した場合は既存の `origin/HEAD` へ fallback せず中断し、旧 default branch を無音で「最新化」する経路を塞いだ
+- remote-tracking ref の prune を default branch 検出前へ移し、後段の重複 fetch を削除した。stale `origin/HEAD` を持つ実 Git fixture で master → main の再検出を固定した
 
 ### v0.2.1 → v0.3.0 の変更点
 
@@ -36,11 +42,10 @@ plugin description (plugin.json / marketplace.json / リポジトリ README の�
 このプラグインは Skill のみで構成されています。Claude が「PR をマージした」旨の発話を検知すると Skill 内の手順に従って以下を実行します:
 
 1. 作業ツリーが clean かを確認
-2. リモートのデフォルトブランチ名を動的に取得
+2. remote-tracking refs と `origin/HEAD` を更新してデフォルトブランチ名を動的に取得
 3. デフォルトブランチへ切り替えて `git pull --ff-only origin <default>`
-4. `git fetch --prune origin` でリモートから削除されたブランチに対応する remote-tracking ref を整理
-5. `[gone]` 状態のローカルブランチを抽出
-6. `git branch -D` で確認なしに削除 (リモートが既に削除済みの branch なので安全。誤削除に気づいた場合は `git reflog` で復旧可能)
+4. `[gone]` 状態のローカルブランチを抽出
+5. `git branch -D` で確認なしに削除 (リモートが既に削除済みの branch なので安全。誤削除に気づいた場合は `git reflog` で復旧可能)
 
 ## インストール
 
@@ -69,17 +74,17 @@ claude plugin install update-default-branch@natsuume-plugins
 
 1. `git status --short` で作業ツリーの clean を確認
 2. `git branch --show-current` で現在のブランチ名を取得し、Claude が会話コンテキストで記憶
-3. `git symbolic-ref refs/remotes/origin/HEAD` でデフォルトブランチを取得 (失敗時は `git remote set-head origin --auto` で再設定)
+3. `git fetch --prune origin` → `git remote set-head origin --auto` → `git symbolic-ref refs/remotes/origin/HEAD` の順で remote の現在値からデフォルトブランチを取得 (いずれかが失敗した場合は stale 値へ fallback せず中断)
 4. `git switch <default>` でデフォルトブランチへ切り替え
 5. `git pull --ff-only origin <default>` で最新化 (fast-forward のみ許容。失敗時は元のブランチへ復帰して中断)
-6. `git fetch --prune origin` でリモートが消えた ref を整理
-7. `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads` の出力から Claude が `[gone]` を抽出
-8. `git branch -D <branch1> <branch2> ...` で一括削除 (リモートが既に消えている branch なので確認ステップなし)
-9. 手順 2 で記憶した元のブランチへ `git switch` で復帰。削除済み or detached の場合はユーザーに新ブランチ名を確認
+6. `git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads` の出力から Claude が `[gone]` を抽出
+7. `git branch -D <branch1> <branch2> ...` で一括削除 (リモートが既に消えている branch なので確認ステップなし)
+8. 手順 2 で記憶した元のブランチへ `git switch` で復帰。削除済み or detached の場合はユーザーに新ブランチ名を確認
 
 ## 設計上の注意
 
 - **他プラグインの hook と共存する「素朴な単一コマンド」設計**: 各手順のコマンド文字列にはコマンド置換 `$(...)` / 連結 (`&&` 等) / シェル変数 / `echo` メッセージを含めません。これらを含む合成スクリプトは、auto-lint-check の block-commit-lint hook (コマンド中に `git` + `commit` の語と `$(...)` が共存すると fail-closed で deny する) 等にブロックされ実行不能になるためです。手順間の状態は Claude が会話コンテキストで保持し、後続コマンドへリテラル値として埋め込みます。
+- **`origin/HEAD` は必ず remote から再検出**: local の symbolic ref は remote の default branch rename に自動追随しません。remote-tracking refs の fetch/prune と `git remote set-head origin --auto` が成功してからだけ `symbolic-ref` を読み、失敗時は stale 値で継続しません。
 - **埋め込むブランチ名は必ず single quote で囲む**: git のブランチ名には `$` / `;` / `&` 等のシェルメタ文字が合法に含まれうるため、クォートなし埋め込みは別コマンド実行や変数展開の事故経路になります。single quote で完全リテラル化し、ブランチ名自体に `'` が含まれる場合は実行を中止してユーザーに確認します。
 - **`[gone]` 削除に確認ステップなし**: 追跡先が消えている branch はリモート側で既に削除済み (PR マージ後の自動削除等) で、ローカル削除は安全な後始末でしかないため、確認ステップは挟みません。
 - **`[gone]` ≠ "merged"**: ただし `[gone]` には PR マージ以外の経路 (リモートでの force-delete / リネーム等) も含まれます。`git branch -D` は merge 検査を skip するため、ローカルにのみ存在するコミットを抱えた `[gone]` branch は誤削除されえます。削除前の SHA は `git branch -D` の出力に表示されるので、誤削除に気づいたら `git checkout -b <name> <sha>` で復活できます (約 30 日は `git reflog` でも遡れます)。「未マージなのに `[gone]` になっている」branch を温存したい場合、本 Skill 実行前に別 branch へ退避するか、Skill 自体を実行しないでください。

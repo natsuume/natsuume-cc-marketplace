@@ -1,6 +1,6 @@
 {
   "name": "update-default-branch",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。",
   "author": {
     "name": "natsuume",
