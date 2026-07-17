@@ -14,11 +14,11 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - 対象: 省略時はカレントの git リポジトリ (origin remote から `owner/repo` を解決)。ディレクトリパスが与えられた場合は配下の git リポジトリを再帰探索する。`owner/repo` のカンマ区切りリストも受け付ける。
 - `since=YYYY-MM-DD` (省略可)。省略時は全期間を対象にする。
 - remote が GitHub でない、または remote が存在しないリポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
-- すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。JSONL レコードに書く repo 値はこの正規化キーではなく、API が返す canonical な nameWithOwner を使う。
+- すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。JSONL レコードに書く repo 値はこの正規化キーではなく、API が返す canonical な nameWithOwner を使う。各収集キー (owner/repo) に、解決に使ったローカル checkout パスを optional として保持する。owner/repo 直接指定と発見済み checkout が同一リポジトリに重複した場合も checkout の関連付けを失わない。同一リポジトリに複数の checkout がある場合は最初に発見したものを代表として選ぶ。保持した checkout はセクション 6 のリポジトリイベント抽出で使う。
 
 ### 手順
 
-0. 作業ディレクトリを次のとおり定義する。`<work-root>` = セッション scratchpad 配下の `repo-analytics-leadtime/` (`<scratchpad>/repo-analytics-leadtime/`。`<scratchpad>` はセッションの scratchpad ディレクトリ)。`<work>` = `<work-root>/<一意な実行 ID>/` (例: `date -u +%Y%m%dT%H%M%SZ` 等で採番) を **新規作成** する (既存ディレクトリの再利用・`mkdir -p` による黙認は禁止。ディレクトリ作成が既存パスと衝突したら別の実行 ID を採番し、必ず新規作成できたディレクトリを `<work>` として使う)。収集診断 (`collection-diagnostics.json`) を含むこの実行のすべての中間ファイルは `<work>` 配下にのみ書く: `issues.jsonl` / `prs.jsonl` / `patterns.json` / `boundaries.json` / `collection-diagnostics.json` / `result.json`。`collection-diagnostics.json` を `{"skippedRepos": [], "webSearchSkipped": false}` で初期化する (Write ツール)。リトライ時は新しい `<work>` を作成してこのセクションからやり直し、過去の実行 (別の `<work>`) の部分成果物を再利用しない。
+0. 作業ディレクトリを次のとおり定義する。`<work-root>` = セッション scratchpad 配下の `repo-analytics-leadtime/` (`<scratchpad>/repo-analytics-leadtime/`。`<scratchpad>` はセッションの scratchpad ディレクトリ)。`<work>` = `<work-root>/<一意な実行 ID>/` (例: `date -u +%Y%m%dT%H%M%SZ` 等で採番) を **新規作成** する (既存ディレクトリの再利用・`mkdir -p` による黙認は禁止。ディレクトリ作成が既存パスと衝突したら別の実行 ID を採番し、必ず新規作成できたディレクトリを `<work>` として使う)。収集診断 (`collection-diagnostics.json`) を含むこの実行のすべての中間ファイルは `<work>` 配下にのみ書く: `issues.jsonl` / `prs.jsonl` / `patterns.json` / `boundaries.json` / `collection-diagnostics.json` / `result.json`。`collection-diagnostics.json` を `{"skippedRepos": [], "webSearchSkipped": false, "repoEventCollection": []}` で初期化する (Write ツール)。リトライ時は新しい `<work>` を作成してこのセクションからやり直し、過去の実行 (別の `<work>`) の部分成果物を再利用しない。
 1. 呼び出し引数の文字列を分割し、`since=YYYY-MM-DD` に一致するトークンを期間指定として取り出す (複数あれば最後の値を採用し、その旨を記録する)。残りのトークンを対象指定として扱う。対象指定・期間指定のいずれも無ければ対象は「カレントディレクトリの git リポジトリ」、期間は「全期間」とみなす。
 2. 対象指定が既存ディレクトリのパスであれば手順 3 の再帰探索、それ以外 (存在しないパス、またはカンマを含む文字列) であれば `owner/repo` のカンマ区切りリストとして手順 4 に進む。
 3. ディレクトリパスが与えられた場合、配下の git リポジトリを次のように再帰探索する (探索深さの上限で暴走を防ぐ)。
@@ -26,6 +26,8 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    find <dir> -maxdepth 4 -name .git
    ```
+
+   なお、`-maxdepth` は POSIX の規定外だが、本 Skill の対象環境である GNU find (Linux / WSL2) と macOS の `/usr/bin/find` はともにサポートしている。
 
    ヒットした各 `.git` (ディレクトリまたは worktree の gitdir ファイル) の親ディレクトリを checkout パスとして扱う。
 4. 各 checkout パス (カレントディレクトリを含む) について origin remote から owner/repo を解決する。
@@ -83,7 +85,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
 - `prs.jsonl` の各行で `closingIssuesReferences.totalCount > len(nodes)` の PR は `fetch-pr-closing-issues.graphql` で当該 PR の closingIssuesReferences を先頭から全ページ取得し、一覧クエリ由来の closingIssuesReferences を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の closingIssuesReferences は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する (集計スクリプトは不完全な行を入力エラーとして中断する)。
-- 収集段階の診断 (第 1 章のリポジトリスキップ件数・理由、第 6 章の WebSearch 省略の有無等) は、判明した時点で scratchpad の固定 shape JSON (例: `{"skippedRepos": [{"repo": str, "reason": str}], "webSearchSkipped": bool}`) に追記して記録する。第 9 章のターミナルサマリと Artifact レポートは、この記録された値をそのまま参照し独自に再集計しない。
+- 収集段階の診断 (第 1 章のリポジトリスキップ件数・理由、第 6 章のリポジトリイベント収集結果・WebSearch 省略の有無等) は、判明した時点で scratchpad の固定 shape JSON (例: `{"skippedRepos": [{"repo": str, "reason": str}], "webSearchSkipped": bool, "repoEventCollection": [{"repo": str, "status": "collected" | "no_checkout" | "default_ref_unavailable" | "default_ref_stale"}]}`) に追記して記録する。第 9 章のターミナルサマリと Artifact レポートは、この記録された値をそのまま参照し独自に再集計しない。
 
 ### 手順
 
@@ -244,27 +246,48 @@ python3 compute_leadtime.py \
 
 **(a) リポジトリイベントの抽出**
 
-対象リポジトリの default branch 上で `git log` を実行する (マージ/squash 済みのコミット時刻 = `%cI` (committer date, ISO8601) をイベント時刻として採用する。フィーチャーブランチ上の元コミット日時 `%aI` ではなく、default branch に反映された時刻を使う)。
+対象リポジトリの default branch 上のコミットのみを対象にする (マージ/squash 済みのコミット時刻 = `%cI` (committer date, ISO8601) をイベント時刻として採用する。フィーチャーブランチ上の元コミット日時 `%aI` ではなく、default branch に反映された時刻を使う)。ローカル checkout の作業ツリーが実際に default branch を指しているとは限らないため、`git log` を無条件に実行せず、次の手順で repo/ref を明示的に束縛してから実行する。`git fetch` は使わない (ローカル git メタデータへの書き込みであり、本 skill の副作用契約「gh read-only query + scratchpad 書き込みのみ」に反するため)。
 
-- plugin / 機能の新設 (初回追加) の検出例:
+1. read-only の GitHub API で対象リポジトリの default branch 名と tip の commit OID を取得する。
 
-  ```bash
-  git log --diff-filter=A --format='%H|%cI|%s' -- 'plugins/*/.claude-plugin/plugin.json'
-  ```
+   ```bash
+   gh api repos/<owner>/<name> --jq .default_branch
+   gh api repos/<owner>/<name>/branches/<default-branch> --jq .commit.sha
+   ```
 
-- 破壊的変更 (Conventional Commits の `!:` 記法) の検出例:
+2. 第 1 章で保持したこのリポジトリの checkout パスを確認する。checkout が無い (第 1 章手順 3 の再帰探索で発見されず、明示指定 owner/repo にも対応する checkout が紐付いていない) 場合、このリポジトリのイベント抽出をスキップし、`<work>/collection-diagnostics.json` の `repoEventCollection` に `{"repo": "<owner>/<name>", "status": "no_checkout"}` を追記して手順 3 以降に進まない。
+3. checkout があれば、ローカルの追跡 ref を確認する。
 
-  ```bash
-  git log --format='%H|%cI|%s' | grep -E '^[0-9a-f]+\|[^|]+\|[a-z]+(\([^)]+\))?!:'
-  ```
+   ```bash
+   git -C <checkout> rev-parse --verify refs/remotes/origin/<default-branch>
+   ```
 
-- CI workflow 追加の検出例:
+   コマンドが非 0 で終了する (追跡 ref が無い) 場合、このリポジトリのイベント抽出をスキップし、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "default_ref_unavailable"}` を追記して手順 4 に進まない。
+4. 手順 1 で取得した tip OID と手順 3 で得たローカル ref の OID を比較する。
+   - 一致する場合、その ref (`refs/remotes/origin/<default-branch>`) を明示して次のコマンド群を実行する (`<ref>` はこの ref を指す)。
 
-  ```bash
-  git log --diff-filter=A --format='%H|%cI|%s' -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
-  ```
+     - plugin / 機能の新設 (初回追加) の検出例:
 
-各ヒットの `%cI` をイベント時刻として採用し、コミットメッセージ (`%s`) や変更ファイルからラベルを組み立てる (例: 「plugin repo-analytics 新設」)。
+       ```bash
+       git -C <checkout> log <ref> --diff-filter=A --format='%H|%cI|%s' -- 'plugins/*/.claude-plugin/plugin.json'
+       ```
+
+     - 破壊的変更 (Conventional Commits の `!:` 記法) の検出例:
+
+       ```bash
+       git -C <checkout> log <ref> --format='%H|%cI|%s' | grep -E '^[0-9a-f]+\|[^|]+\|[a-z]+(\([^)]+\))?!:'
+       ```
+
+     - CI workflow 追加の検出例:
+
+       ```bash
+       git -C <checkout> log <ref> --diff-filter=A --format='%H|%cI|%s' -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+       ```
+
+     各ヒットの `%cI` をイベント時刻として採用し、コミットメッセージ (`%s`) や変更ファイルからラベルを組み立てる (例: 「plugin repo-analytics 新設」)。完了後、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "collected"}` を追記する。
+   - 不一致 (stale) の場合、このリポジトリのイベント抽出をスキップし、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "default_ref_stale"}` を追記する。
+
+いずれかの理由でスキップした対象については、「この対象はローカル checkout が存在しない (または ref が確認できない) ため、当該リポジトリに由来するリポジトリイベント注釈を含まない」という注記を Artifact レポート (第 7・8 章) とターミナルサマリ (第 9 章) に明記する。
 
 **(b) モデル・ツールイベントの収集**
 
@@ -336,6 +359,7 @@ python3 compute_leadtime.py \
 - [ ] `dataQuality` 各値 (`negativeIntervalCount` / `redraftPrCount` / `notStartedClosedIssues` / `multipleReadyPrIssues`) の件数
 - [ ] `markerCoverage` 中の `unknownTimeline` (timeline 不完全で観測不能だった件数)
 - [ ] `claimDetection.looseOnlyIssues` の件数 (取りこぼし候補)
+- [ ] リポジトリイベント注釈をスキップした対象とその理由 (収集診断の `repoEventCollection`)
 
 ### 個別の実行時挙動への対応
 
