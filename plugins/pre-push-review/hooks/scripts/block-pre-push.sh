@@ -68,6 +68,7 @@ case "$INPUT" in
 esac
 
 if ! command -v jq >/dev/null 2>&1; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"プッシュをブロックしました。 jq が見つからないため push gate を検証できません。 jq をインストールしてから、もう一度 git push を実行してください。"}}'
   exit 0
 fi
 
