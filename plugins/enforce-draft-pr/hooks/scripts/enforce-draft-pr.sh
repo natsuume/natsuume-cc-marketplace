@@ -16,7 +16,18 @@
 # 本実装はコマンド全体を **1 回のクォート対応スキャン** でトークン化し、 各 top-level
 # コマンドの先頭が `[env]* gh [global-flags]* pr create` のときだけ、 `create` トークンの
 # 末尾オフセット直後に ` --draft` を挿入する。 挿入以外の文字 (引数 / body / 空白 / タブ /
-# 改行 / 区切り / コメント) は **1 バイトも変更しない** (offset insert)。
+# 改行 / 区切り / コメント / heredoc 本文) は **1 バイトも変更しない** (offset insert)。
+#
+# ## トークン構築 (index ベース、O(n) 保証)
+#
+# トークン値は `cur+="$c"` の 1 文字連結ではなく、 トークン開始オフセット (`tbeg`) から
+# flush 時点の `i` までを `${cmd:$tbeg:$((i-tbeg))}` で 1 回だけ substring 化して得る。
+# quote 内は次の quote / escape 文字までの距離を `${rest%%pattern}` で測って一括ジャンプ
+# する (single quote は次の `'` まで。double quote は `"` と `\` の近い方まで、 candidate
+# 文字列を `CHUNK` 単位の bounded window に区切って測ることで、 backslash が密集する入力
+# でも tail 全体の再切り出しコストを CHUNK 定数に抑える)。 quote 外の行継続 (`\<LF>`) で
+# トークンが分断された場合のみ、 それまでの区間を `frag` バッファへ退避してから連結する
+# (=「行継続を含むトークンだけ」 O(区間数) の追加コストを払う設計)。
 #
 # ## なぜ 1 回スキャンか (コマンド / PR body を壊さないため)
 #
@@ -24,15 +35,65 @@
 # `--body "...gh pr create..."` のように本文内に "gh pr create" を含むケースで本文側に
 # 誤挿入し PR 本文を破壊する。 クォート対応スキャンでは quoted な `--body "..."` は
 # **不透明な単一トークン** になるため、 本文内の "pr create" / 改行 / 区切り文字 / `#` は
-# invocation 検出に一切影響しない。 また segment 分割を中間文字列プロトコルに頼らず
-# offset で直接扱うため、 本文行が偶然区切り文字列に一致しても誤読しない。
+# invocation 検出に一切影響しない。 heredoc 本文も同様に不透明データとして扱う (後述)。
+# また segment 分割を中間文字列プロトコルに頼らず offset で直接扱うため、 本文行が偶然
+# 区切り文字列に一致しても誤読しない。
 #
 # ## top-level コメント
 #
 # `#` が語頭 (= command-start / 空白直後) に現れたら行末までをコメントとして読み飛ばす
 # (bash 準拠)。 これによりコメントは保持しつつ、 同一コマンド内の本物の `gh pr create`
 # には正しく `--draft` を付与できる。 引用符内の `#` (`--body "fix #1"`) はコメント扱い
-# しない。
+# しない。 コメント内の `<<` も heredoc として登録しない (行末までスキップするため
+# `<` ハンドラに到達しない)。
+#
+# ## heredoc 認識 (#144)
+#
+# quote 外で `<<` (herestring `<<<` は除外) を検出したら、 `-` (strip フラグ) → 空白 →
+# delimiter word (`WORD` / `'WORD'` / `"WORD"` / `\WORD`、 WORD = `[A-Za-z0-9_]+`) の順に
+# 読み取り、 pending キュー (`HD_DELIMS`/`HD_STRIPS`/`HD_QUOTED`) へ積む。 delimiter word
+# 自体はトークンに含めない。 宣言行の残りは通常どおり引数として走査を続け、 quote 外の
+# 生改行に到達した時点でキューが非空なら本文モードへ入る。 本文モードはキューの出現順
+# (FIFO) に 1 entry ずつ、 行単位で delimiter 単独行 (`<<-` は行頭タブ除去後に完全一致)
+# を探して消費する。 unquoted delimiter の本文では、 行末の連続 backslash が奇数個の行の
+# 直後行は terminator 判定をしない (bash の行継続結合が terminator 判定に先行するため)。
+# quoted delimiter (`'W'`/`"W"`/`\W` の 3 形式とも) はこの行継続処理をしない。 本文全体は
+# トークン化・command-start 設定・引数スキャンの対象にしない不透明データであり、 未終端
+# (入力末尾まで delimiter が見つからない) の場合はそのまま走査を終了する (opaque
+# fallback ではない — README にも明記)。
+#
+# ## 算術式スキップ (regression 回避)
+#
+# heredoc の `<<` 検出はビットシフト演算子 `<<` を誤認しうるため、 `$((...))` / コマンド
+# 位置の `((...))` を対応する `))` まで (内部括弧の深度追跡込み、 quote は無視) 丸ごと
+# 1 トークンとして取り込み、 内部の `<<` を heredoc 宣言として扱わないようにする。
+#
+# ## opaque fallback (#144)
+#
+# heredoc 宣言が対応構文 (上記 5 形式) に一致しない場合 (部分 quote 連結 `E"OF"` 等、
+# 英数字・アンダースコア以外を含む unquoted word、 word 直後が区切り文字以外など) は
+# **それ以降のコマンド文字列を一切解析しない** (opaque fallback、 スキャンループを break)。
+# fallback 発生位置の判定は 2 分岐:
+#   - fallback が対象 invocation (`gh ... pr create`) の **引数領域内** で発動した場合
+#     (= 走査が打ち切られた時点で開いていた最後のコマンドが `gh ... pr create` に一致する
+#     場合) → draft 指定の確定状態 (truthy / falsy / 未確定) に関係なく **常に deny** する。
+#     fallback 前に確認済みの truthy (`--draft`) であっても、 不可視の宣言行残余 (opaque
+#     領域) に conflicting な後着 `--draft=false` が隠れている可能性があり (gh は後着
+#     falsy を優先する)、 truthy を根拠に素通しすると非 draft PR が作られる bypass が
+#     成立するため。
+#   - fallback が **別コマンドの領域** で発動した場合 → 不介入。 fallback より前に
+#     separator (`;`/`&&`/`||`/`|`/`&`) で完結した別 invocation への挿入は有効。 opaque
+#     領域内 (fallback 発生位置より後ろ) の invocation は検出不能。
+#
+# ## 行継続のスキャナ内処理
+#
+# 解析前の一括 `normalize_line_continuations` 呼び出しは行わない (原文保持を offset
+# insert のみで保証するため)。 quote 外 および double quote 内の `\<LF>` は行継続として
+# 扱う (トークンを連結し、 行境界にしない = command-start / 物理行フラグを立てない)。
+# single quote 内 および quoted heredoc 本文内の `\<LF>` は literal データとして扱う
+# (delimiter 行継続判定を除く)。 出力コマンド文字列は原文保持 (挿入のみ) であり、
+# 行継続の除去は **トークンの論理値** (フラグ名・`--draft=` 値の判定に使う) にのみ適用
+# される。
 #
 # ## --draft=false (明示的 非 draft) の扱い
 #
@@ -54,7 +115,10 @@
 #   トークン **間** の行継続 (`gh pr \<改行>create`) は正しく処理する。 これは sibling の
 #   block-default-branch-pr.sh も用いる同一の coarse-filter 方針で、 substring フィルタである
 #   以上 cooperative 利用前提の制約 (意図的難読化による bypass は対象外)。
-# - 単一引用符 `'...'` 内に literal な `\<改行>` を含む稀なケースでは行継続除去でそれが消える。
+# - 未対応の heredoc delimiter 構文 (部分 quote 連結 `E"OF"` 等、 英数字・アンダースコア
+#   以外を含む unquoted word 等) を検出したら、 それ以降は一切解析しない (opaque
+#   fallback)。 fallback が対象 invocation の引数領域内で発動した場合は draft 指定の
+#   確定状態に関係なく deny する (draft 付与漏れ方向の fail-safe)。
 
 INPUT=$(cat)
 
@@ -68,87 +132,309 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+# bash の `$(...)` は trailing newline を全部 trim するため、 単純に
+# `jq -r '.tool_input.command'` で取得すると末尾 LF (複数可) が失われる。 jq 側で
+# sentinel (SOH = `\x01`。 shell コマンドに現れない制御文字) を値の末尾に付加してから
+# 取得し、 `$(...)` の trim を通過させたあと bash 側でパターン置換により sentinel だけを
+# 剥がすことで、 元の末尾 LF をそのままバイト保持する。 sentinel は `--arg` 経由で渡す
+# ため、 jq プログラム文字列中に制御文字のエスケープ表記を書く必要がない。
+SENTINEL=$'\x01'
+COMMAND=$(printf '%s' "$INPUT" | jq -r --arg sentinel "$SENTINEL" '(.tool_input.command // empty) + $sentinel')
+COMMAND="${COMMAND%$'\x01'}"
 [ -n "$COMMAND" ] || exit 0
-
-# bash の `$(...)` trailing-LF trim で消えた末尾 `\<LF>` を復元
-# (詳細は cmd-parser.sh の「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
-case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/cmd-parser.sh
 source "$SCRIPT_DIR/lib/cmd-parser.sh"
-
-# 行継続 `\<LF>` のみ除去 (bash 実挙動と一致)。 生改行 (body 内など) は温存する。
-# fast-path: `\<LF>` を含まない大多数の入力は subshell fork を回避し原文をそのまま使う。
-case "$COMMAND" in
-  *\\$'\n'*) COMMAND=$(normalize_line_continuations "$COMMAND") ;;
-esac
 
 # コマンド全体を quote 対応で 1 回スキャンし、 本物の `gh ... pr create` の create 直後に
 # ` --draft` を挿入する。 結果は RW_OUT に、 変更があれば RW_CHANGED=1 を設定する。
 RW_OUT="$COMMAND"
 RW_CHANGED=0
 RW_DENY=0
+
+# _flush_token: analyze_and_rewrite のトークン走査ループから呼ばれる内部ヘルパー。
+# bash の関数呼び出しは動的スコープなので、 呼び出し元 (analyze_and_rewrite) が
+# local 宣言した cmd/i/tbeg/frag/started/tcs/tnl/TVAL/TEND/TSTART/TNL を、 本関数が
+# 同名の local を宣言せずに直接読み書きする。 進行中のトークンが無ければ何もしない。
+_flush_token() {
+  [ "$started" -eq 1 ] || return 0
+  local val
+  if [ -n "$frag" ]; then
+    val="$frag${cmd:$tbeg:$((i-tbeg))}"
+  else
+    val="${cmd:$tbeg:$((i-tbeg))}"
+  fi
+  TVAL+=("$val")
+  TEND+=("$i")
+  TSTART+=("$tcs")
+  TNL+=("$tnl")
+  started=0
+  frag=""
+}
+
 analyze_and_rewrite() {
+  local LC_ALL=C
   local cmd="$1"
-  local n=${#cmd} i=0 sq=0 dq=0 cur="" started=0 pend=1 tcs=0 nl=0 tnl=0 c nc
-  # 各トークンの value / 末尾オフセット / command-start フラグ / 物理行頭フラグ (直前に改行が
-  # あったか = here-doc 本文など別行のトークンか) を記録する。
+  local n=${#cmd} i=0
+  local sq=0 dq=0 started=0 pend=1 tcs=0 nl=0 tnl=0
+  local tbeg=0 frag=""
+  local c nc
+  local NL=$'\n' TAB=$'\t'
+  # 各トークンの value / 末尾オフセット / command-start フラグ / 物理行頭フラグ (直前に
+  # 改行があったか = here-doc 本文など別行のトークンか) を記録する。
   local -a TVAL=() TEND=() TSTART=() TNL=()
+  # heredoc pending キュー (出現順 FIFO)。
+  local -a HD_DELIMS=() HD_STRIPS=() HD_QUOTED=()
+  local OPAQUE=0
+  # double quote 内ジャンプの bounded window サイズ。 backslash が密集する入力でも
+  # 1 回の window 抽出コストを定数に抑え、 全体を O(n) に保つ (tail 全体を毎回
+  # 切り出す設計だと、 backslash が 1 文字おきに現れる入力で O(n^2) に劣化する)。
+  local CHUNK=128
+
   while [ "$i" -lt "$n" ]; do
-    c="${cmd:$i:1}"
     if [ "$sq" -eq 1 ]; then
-      cur+="$c"; [ "$c" = "'" ] && sq=0; i=$((i+1)); continue
-    fi
-    if [ "$dq" -eq 1 ]; then
-      if [ "$c" = "\\" ]; then
-        nc="${cmd:$((i+1)):1}"
-        case "$nc" in '$'|'`'|'"'|'\\') cur+="$c$nc"; i=$((i+2)); continue ;; esac
+      local sq_rest sq_chunk
+      sq_rest="${cmd:$i}"
+      sq_chunk="${sq_rest%%\'*}"
+      i=$((i+${#sq_chunk}))
+      if [ "$i" -lt "$n" ]; then
+        i=$((i+1)); sq=0
       fi
-      cur+="$c"; [ "$c" = '"' ] && dq=0; i=$((i+1)); continue
+      continue
     fi
-    case "$c" in
-      "'") [ "$started" -eq 0 ] && { tcs=$pend; pend=0; tnl=$nl; nl=0; }; sq=1; cur+="$c"; started=1; i=$((i+1)) ;;
-      '"') [ "$started" -eq 0 ] && { tcs=$pend; pend=0; tnl=$nl; nl=0; }; dq=1; cur+="$c"; started=1; i=$((i+1)) ;;
-      '\')
-        # クォート外の `\` は次の 1 文字を escape する (bash 準拠)。 両者を同一トークンに取り込み、
-        # `echo \; gh pr create` の `\;` を separator と誤認しないようにする。 末尾単独 `\` は
-        # backslash 自体を保持する。
-        [ "$started" -eq 0 ] && { tcs=$pend; pend=0; tnl=$nl; nl=0; }
+
+    if [ "$dq" -eq 1 ]; then
+      local dq_piece dq_plen dq_cq dq_cb dq_lq dq_lb
+      dq_piece="${cmd:$i:$CHUNK}"
+      dq_plen=${#dq_piece}
+      dq_cq="${dq_piece%%\"*}"
+      dq_cb="${dq_piece%%\\*}"
+      dq_lq=${#dq_cq}
+      dq_lb=${#dq_cb}
+      if [ "$dq_lb" -ge "$dq_plen" ] && [ "$dq_lq" -ge "$dq_plen" ]; then
+        # window 内に `"` も `\` も無い (window が尽きた、 または入力末尾)。
+        # window 分だけ進めて再スキャンする (末尾なら次ループの `i<n` で自然終了)。
+        i=$((i+dq_plen))
+        continue
+      fi
+      if [ "$dq_lb" -lt "$dq_lq" ]; then
+        i=$((i+dq_lb))
         nc="${cmd:$((i+1)):1}"
-        if [ -n "$nc" ]; then cur+="$c$nc"; i=$((i+2)); else cur+="$c"; i=$((i+1)); fi
-        started=1
+        case "$nc" in
+          '$'|'`'|'"'|'\')
+            # 標準 escape ペア。 両者を同一トークンに取り込む。
+            i=$((i+2))
+            ;;
+          "$NL")
+            # dq 内の行継続。 それまでの区間を frag へ退避し、 `\<LF>` の 2 文字を
+            # 論理値から除去する (出力は原文保持なので i を進めるだけで良い)。
+            frag+="${cmd:$tbeg:$((i-tbeg))}"
+            i=$((i+2))
+            tbeg=$i
+            ;;
+          *)
+            # backslash 単体 (次が非 escape 文字)。 backslash 自身だけ 1 文字進める。
+            i=$((i+1))
+            ;;
+        esac
+      else
+        # 閉じ quote の方が近い。
+        i=$((i+dq_lq+1))
+        dq=0
+      fi
+      continue
+    fi
+
+    c="${cmd:$i:1}"
+    case "$c" in
+      "'")
+        if [ "$started" -eq 0 ]; then tbeg=$i; tcs=$pend; pend=0; tnl=$nl; nl=0; fi
+        sq=1; started=1; i=$((i+1))
+        ;;
+      '"')
+        if [ "$started" -eq 0 ]; then tbeg=$i; tcs=$pend; pend=0; tnl=$nl; nl=0; fi
+        dq=1; started=1; i=$((i+1))
+        ;;
+      '\')
+        # クォート外の `\`。 次の 1 文字が LF なら行継続 (トークン連結・行境界にしない)。
+        # それ以外は bash 準拠の 1 文字 escape として同一トークンに取り込む。
+        nc="${cmd:$((i+1)):1}"
+        if [ "$nc" = "$NL" ]; then
+          if [ "$started" -eq 1 ]; then
+            frag+="${cmd:$tbeg:$((i-tbeg))}"
+            i=$((i+2)); tbeg=$i
+          else
+            # トークン境界での行継続 (`gh pr \<LF>create` 等) は完全に不可視。
+            i=$((i+2))
+          fi
+        else
+          if [ "$started" -eq 0 ]; then tbeg=$i; tcs=$pend; pend=0; tnl=$nl; nl=0; fi
+          started=1
+          if [ -n "$nc" ]; then i=$((i+2)); else i=$((i+1)); fi
+        fi
         ;;
       '#')
         if [ "$started" -eq 0 ]; then
           # 語頭の `#` は行末までコメント (改行自体は次ループで区切りとして処理)。
-          while [ "$i" -lt "$n" ] && [ "${cmd:$i:1}" != $'\n' ]; do i=$((i+1)); done
+          local cmt_rest cmt_head
+          cmt_rest="${cmd:$i}"
+          cmt_head="${cmt_rest%%"$NL"*}"
+          i=$((i+${#cmt_head}))
         else
-          cur+="$c"; i=$((i+1))
+          started=1; i=$((i+1))
         fi
         ;;
-      ' '|$'\t'|'<'|'>')
-        # トークン区切り (コマンド区切りではない)。 `<` `>` はリダイレクト演算子。
-        if [ "$started" -eq 1 ]; then TVAL+=("$cur"); TEND+=("$i"); TSTART+=("$tcs"); TNL+=("$tnl"); cur=""; started=0; fi
+      ' '|"$TAB"|'>')
+        # トークン区切り (コマンド区切りではない)。 `>` はリダイレクト演算子。
+        _flush_token
         i=$((i+1))
         ;;
-      $'\n')
-        # **改行は command-start にしない** (pend は立てない): here-doc 本文の各行を新規コマンドと
-        # 誤認して本文に --draft を挿入し破壊するのを防ぐため。 代わりに nl=1 を立て、 次の
-        # トークンに「物理行頭」フラグ (TNL) を付ける。 これにより引数スキャンを「コマンド行内」
-        # に限定でき、 here-doc 本文 (= 別行) を引数と誤認しない。 また `gh pr create --body-file -
-        # <<EOF ... EOF` は先頭行で検出・付与でき本文は不変。 代償として **literal な改行で区切られた
-        # 2 行目以降の行頭 `gh pr create`** は検出対象外 (`;` / `&&` ・単一行・別 Bash 呼び出しを想定)。
-        if [ "$started" -eq 1 ]; then TVAL+=("$cur"); TEND+=("$i"); TSTART+=("$tcs"); TNL+=("$tnl"); cur=""; started=0; fi
-        nl=1; i=$((i+1))
+      '<')
+        # `<` はリダイレクト演算子だが、 `<<`/`<<<` は heredoc / herestring の可能性が
+        # あるため個別に判定する。
+        _flush_token
+        if [ "${cmd:$((i+1)):1}" != "<" ]; then
+          i=$((i+1))
+        elif [ "${cmd:$((i+2)):1}" = "<" ]; then
+          # herestring `<<<`。 heredoc ではない。 3 文字進めて通常のトークン境界にする。
+          i=$((i+3))
+        else
+          # heredoc 宣言。 `-` (strip) → 空白 → delimiter word を読み取る。
+          local hj=$((i+2)) hd_strip=0 hd_word="" hd_quoted=0
+          local hd_wstart hd_wc hd_rest hd_w hd_next
+          if [ "${cmd:$hj:1}" = "-" ]; then hd_strip=1; hj=$((hj+1)); fi
+          while :; do
+            case "${cmd:$hj:1}" in
+              ' '|"$TAB") hj=$((hj+1)) ;;
+              *) break ;;
+            esac
+          done
+          case "${cmd:$hj:1}" in
+            "'")
+              hj=$((hj+1))
+              hd_rest="${cmd:$hj}"
+              hd_w="${hd_rest%%\'*}"
+              if [ "${#hd_w}" -eq "${#hd_rest}" ] || ! [[ "$hd_w" =~ ^[A-Za-z0-9_]+$ ]]; then
+                OPAQUE=1; break
+              fi
+              hd_word="$hd_w"; hj=$((hj+1+${#hd_w})); hd_quoted=1
+              ;;
+            '"')
+              hj=$((hj+1))
+              hd_rest="${cmd:$hj}"
+              hd_w="${hd_rest%%\"*}"
+              if [ "${#hd_w}" -eq "${#hd_rest}" ] || ! [[ "$hd_w" =~ ^[A-Za-z0-9_]+$ ]]; then
+                OPAQUE=1; break
+              fi
+              hd_word="$hd_w"; hj=$((hj+1+${#hd_w})); hd_quoted=1
+              ;;
+            '\')
+              hj=$((hj+1)); hd_wstart=$hj
+              while :; do
+                hd_wc="${cmd:$hj:1}"
+                case "$hd_wc" in
+                  [A-Za-z0-9_]) hj=$((hj+1)) ;;
+                  *) break ;;
+                esac
+              done
+              if [ "$hj" -eq "$hd_wstart" ]; then OPAQUE=1; break; fi
+              hd_word="${cmd:$hd_wstart:$((hj-hd_wstart))}"; hd_quoted=1
+              ;;
+            *)
+              hd_wstart=$hj
+              while :; do
+                hd_wc="${cmd:$hj:1}"
+                case "$hd_wc" in
+                  [A-Za-z0-9_]) hj=$((hj+1)) ;;
+                  *) break ;;
+                esac
+              done
+              if [ "$hj" -eq "$hd_wstart" ]; then OPAQUE=1; break; fi
+              hd_word="${cmd:$hd_wstart:$((hj-hd_wstart))}"; hd_quoted=0
+              ;;
+          esac
+          hd_next="${cmd:$hj:1}"
+          case "$hd_next" in
+            ""|" "|"$TAB"|"$NL"|";"|"&"|"|"|"("|")"|"<"|">")
+              HD_DELIMS+=("$hd_word")
+              HD_STRIPS+=("$hd_strip")
+              HD_QUOTED+=("$hd_quoted")
+              i=$hj
+              ;;
+            *)
+              OPAQUE=1; break
+              ;;
+          esac
+        fi
+        ;;
+      "$NL")
+        # **改行は command-start にしない** (pend は立てない): here-doc 本文の各行を
+        # 新規コマンドと誤認して本文に --draft を挿入し破壊するのを防ぐため。 代わりに
+        # nl=1 を立て、 次のトークンに「物理行頭」フラグ (TNL) を付ける。 pending
+        # heredoc があれば、 ここから本文モードに入り delimiter 行まで丸ごとスキップする。
+        _flush_token
+        i=$((i+1))
+        if [ "${#HD_DELIMS[@]}" -gt 0 ]; then
+          local defer_next=0 hb_delim hb_strip hb_quoted hb_rest hb_line hb_llen
+          local hb_line_end hb_has_nl hb_check hb_bs bs_probe bs_stripped hb_odd hb_term
+          while [ "${#HD_DELIMS[@]}" -gt 0 ] && [ "$i" -lt "$n" ]; do
+            hb_delim="${HD_DELIMS[0]}"; hb_strip="${HD_STRIPS[0]}"; hb_quoted="${HD_QUOTED[0]}"
+            hb_rest="${cmd:$i}"
+            hb_line="${hb_rest%%"$NL"*}"
+            hb_llen=${#hb_line}
+            hb_line_end=$((i+hb_llen))
+            hb_has_nl=1
+            [ "$hb_line_end" -ge "$n" ] && hb_has_nl=0
+
+            hb_check="$hb_line"
+            if [ "$hb_strip" -eq 1 ]; then
+              while [ "${hb_check:0:1}" = "$TAB" ]; do
+                hb_check="${hb_check:1}"
+              done
+            fi
+
+            hb_term=0
+            if [ "$defer_next" -eq 0 ] && [ "$hb_check" = "$hb_delim" ]; then
+              hb_term=1
+            fi
+
+            if [ "$hb_term" -eq 1 ]; then
+              HD_DELIMS=("${HD_DELIMS[@]:1}")
+              HD_STRIPS=("${HD_STRIPS[@]:1}")
+              HD_QUOTED=("${HD_QUOTED[@]:1}")
+              defer_next=0
+            else
+              if [ "$hb_quoted" -eq 0 ]; then
+                # unquoted delimiter のみ、 行末の連続 backslash の奇偶を見て次行の
+                # terminator 判定を遅延させるか決める (bash の行継続結合が terminator
+                # 判定に先行する実挙動に合わせる)。
+                hb_bs=0; bs_probe="$hb_line"
+                while :; do
+                  bs_stripped="${bs_probe%\\}"
+                  [ "$bs_stripped" = "$bs_probe" ] && break
+                  hb_bs=$((hb_bs+1)); bs_probe="$bs_stripped"
+                done
+                hb_odd=0
+                [ $((hb_bs % 2)) -eq 1 ] && hb_odd=1
+                defer_next=$hb_odd
+              else
+                defer_next=0
+              fi
+            fi
+
+            i=$hb_line_end
+            [ "$hb_has_nl" -eq 1 ] && i=$((i+1))
+          done
+        fi
+        nl=1
         ;;
       ';')
-        if [ "$started" -eq 1 ]; then TVAL+=("$cur"); TEND+=("$i"); TSTART+=("$tcs"); TNL+=("$tnl"); cur=""; started=0; fi
+        _flush_token
         pend=1; i=$((i+1))
         ;;
       '&'|'|')
-        if [ "$started" -eq 1 ]; then TVAL+=("$cur"); TEND+=("$i"); TSTART+=("$tcs"); TNL+=("$tnl"); cur=""; started=0; fi
+        _flush_token
         nc="${cmd:$((i+1)):1}"
         if [ "$nc" = "$c" ]; then i=$((i+2)); else i=$((i+1)); fi
         pend=1
@@ -156,26 +442,53 @@ analyze_and_rewrite() {
       '(')
         if [ "$started" -eq 1 ]; then
           # トークン途中の `(` は `NAME=(...)` 配列代入 / `$(...)` 置換 / 関数定義 `foo(` など
-          # の **構文・データ** であり、 サブシェルのコマンド開始ではない。 `(` を現トークンに
-          # 取り込み、 中の語を command-start にしない (配列要素・置換内部を実コマンドと誤認して
-          # 書き換え・誤 deny しないため)。
-          cur+="$c"; i=$((i+1))
+          # の **構文・データ** であり、 サブシェルのコマンド開始ではない。 直前 2 文字が
+          # `$(` (= `$((` 完成) なら算術式として深度追跡込みで丸ごと取り込み、 内部の `<<`
+          # (ビットシフト) を heredoc と誤認しないようにする。 それ以外は通常の 1 文字。
+          if [ "$i" -ge 2 ] && [ "${cmd:$((i-2)):2}" = '$(' ]; then
+            local depth=2
+            i=$((i+1))
+            while [ "$i" -lt "$n" ] && [ "$depth" -gt 0 ]; do
+              case "${cmd:$i:1}" in
+                '(') depth=$((depth+1)) ;;
+                ')') depth=$((depth-1)) ;;
+              esac
+              i=$((i+1))
+            done
+          else
+            i=$((i+1))
+          fi
         else
-          # コマンド位置の `(` = サブシェル開始 (`( cmd )`)。 中の先頭は command-start。
-          pend=1; i=$((i+1))
+          # コマンド位置の `(`。 次も `(` なら算術コマンド `((...))` として深度追跡込みで
+          # 丸ごと 1 トークンに取り込む。 それ以外はサブシェル開始 (`( cmd )`)。
+          if [ "${cmd:$((i+1)):1}" = "(" ]; then
+            tbeg=$i; tcs=$pend; pend=0; tnl=$nl; nl=0
+            started=1
+            local depth=2
+            i=$((i+2))
+            while [ "$i" -lt "$n" ] && [ "$depth" -gt 0 ]; do
+              case "${cmd:$i:1}" in
+                '(') depth=$((depth+1)) ;;
+                ')') depth=$((depth-1)) ;;
+              esac
+              i=$((i+1))
+            done
+          else
+            pend=1; i=$((i+1))
+          fi
         fi
         ;;
       ')')
-        if [ "$started" -eq 1 ]; then TVAL+=("$cur"); TEND+=("$i"); TSTART+=("$tcs"); TNL+=("$tnl"); cur=""; started=0; fi
+        _flush_token
         pend=1; i=$((i+1))
         ;;
       *)
-        [ "$started" -eq 0 ] && { tcs=$pend; pend=0; tnl=$nl; nl=0; }
-        cur+="$c"; started=1; i=$((i+1))
+        if [ "$started" -eq 0 ]; then tbeg=$i; tcs=$pend; pend=0; tnl=$nl; nl=0; fi
+        started=1; i=$((i+1))
         ;;
     esac
   done
-  [ "$started" -eq 1 ] && { TVAL+=("$cur"); TEND+=("$i"); TSTART+=("$tcs"); TNL+=("$tnl"); }
+  _flush_token
 
   local ntok=${#TVAL[@]} t=0 v
   local -a INS=()   # ` --draft` を挿入するオフセット (昇順)
@@ -277,9 +590,15 @@ analyze_and_rewrite() {
                     esac
                     j=$((j+1))
                   done
+                  # opaque fallback (#144) がこの invocation の引数領域内で発動した場合
+                  # (= 引数走査が境界に遭遇せず配列末尾まで到達 = スキャン打ち切り時点で
+                  # 開いていたのがこの invocation)、 draft 指定の確定状態に関係なく常に
+                  # deny する (不可視の宣言行残余に conflicting な後着 flag が隠れうるため)。
                   # `--draft=false` 等の明示的 非 draft は enforce 方針違反として deny する
                   # (truthy / 未指定より優先)。 README『PR は必ず draft で起こす』に合わせる。
-                  if [ "$off" -eq 1 ]; then
+                  if [ "$OPAQUE" -eq 1 ] && [ "$j" -eq "$ntok" ]; then
+                    RW_DENY=1
+                  elif [ "$off" -eq 1 ]; then
                     RW_DENY=1
                   elif [ "$on" -eq 0 ]; then
                     INS+=("${TEND[$cidx]}")
@@ -308,13 +627,15 @@ analyze_and_rewrite() {
 
 analyze_and_rewrite "$COMMAND"
 
-# `--draft=false` 等の明示的 非 draft 指定は enforce 方針違反として deny する。
+# `--draft=false` 等の明示的 非 draft 指定、 または未対応 heredoc delimiter 構文による
+# opaque fallback (対象 invocation の引数領域内で発動した場合) は enforce 方針違反 /
+# 解析不能として deny する。
 if [ "$RW_DENY" -eq 1 ]; then
   jq -n '{
     "hookSpecificOutput": {
       "hookEventName": "PreToolUse",
       "permissionDecision": "deny",
-      "permissionDecisionReason": "enforce-draft-pr: `--draft=false` のように非 draft を明示する PR 作成はこのプラグインの方針 (PR は必ず draft で起こす) で許可していません。`--draft=false` を外して draft PR を作成するか、 draft 強制が不要ならこのプラグインを無効化してください。"
+      "permissionDecisionReason": "enforce-draft-pr: `--draft=false` のように非 draft を明示する PR 作成、または未対応の heredoc delimiter 構文のため draft 指定を解析できないコマンドはこのプラグインの方針 (PR は必ず draft で起こす) で許可していません。`--draft=false` を外して draft PR を作成するか、heredoc の delimiter を単純な形 (`<<EOF` / `<<'"'"'EOF'"'"'` 等) に書き直すか、draft 強制が不要ならこのプラグインを無効化してください。"
     }
   }'
   exit 0
