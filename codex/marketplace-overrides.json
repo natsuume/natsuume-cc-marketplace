@@ -44,7 +44,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.3.0",
+      "version": "0.4.0",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -66,7 +66,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "9282dd039fde2e290321add807821ac7502059a1d3ffa18b274544407a18a0fc"
+        "sourceTreeDigest": "4126d36e653a3fde267f23e5bb0646fa1adf565236349863291fa59211d04e28"
       }
     },
     "auto-lint-check": {
