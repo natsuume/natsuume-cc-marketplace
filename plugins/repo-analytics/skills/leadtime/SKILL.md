@@ -13,7 +13,8 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 - 対象: 省略時はカレントの git リポジトリ (origin remote から `owner/repo` を解決)。ディレクトリパスが与えられた場合は配下の git リポジトリを再帰探索する。`owner/repo` のカンマ区切りリストも受け付ける。
 - `since=YYYY-MM-DD` (省略可)。省略時は全期間を対象にする。
-- remote が GitHub でない、remote が存在しない、または owner/repo の識別子が charset 不正 (明示指定エントリを含む) なリポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
+- remote が GitHub でない、remote が存在しない、owner/repo の識別子が charset 不正 (明示指定エントリを含む)、またはパスに危険文字を含む (次項) リポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
+- **コマンド template への置換値の共通規律**: 本 skill の bash コマンド例は、エージェントがコマンド文字列へ値を文字列置換して実行する。パス値 (対象ディレクトリ・再帰探索で発見した checkout パス) に `"`・`$`・バッククォート・`\`・改行のいずれかが含まれる場合、その値をコマンドに使用せず fail-closed で扱う: 対象ディレクトリ自体なら中断してユーザーに報告し、発見した checkout パスなら `{"repo": "<パス文字列>", "reason": "unsafe_path"}` を `skippedRepos` に追記してスキップする (これらの文字はディレクトリ名として合法だが、双引用符付き template への文字列置換では quoting を破って任意コマンド実行に到達しうるため)。owner/name (手順 4・5) と default branch 名 (第 6 章) には別途の charset 検証を適用しており、この規律はパス値を対象とする。`<work>` / `<plugin-root>` はエージェント自身が生成・解決する値のためこの検査の対象外とする。
 - すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。この重複排除は 2 段階の契約である。第 1 段はここで述べる、収集キー (owner/repo の入力文字列) を小文字化して比較する case-insensitive dedup である。第 2 段はセクション 3 の収集ループ冒頭で、API が解決した canonical 名 (nameWithOwner) を基準に行う dedup であり、リネーム・移管によって収集キー上は別名に見えるが実体が同一リポジトリであるケースを捕捉する。JSONL レコードに書く repo 値はこの正規化キー (第 1 段のキー) ではなく、API が返す canonical な nameWithOwner を使う。各収集キー (owner/repo) に、解決に使ったローカル checkout パスを optional として保持する。owner/repo 直接指定と発見済み checkout が同一リポジトリに重複した場合も checkout の関連付けを失わない。同一リポジトリに複数の checkout がある場合は最初に発見したものを代表として選ぶ。保持した checkout はセクション 6 のリポジトリイベント抽出で使う。
 
 ### 手順
