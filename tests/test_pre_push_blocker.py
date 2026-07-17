@@ -85,5 +85,76 @@ class BlockPrePushMissingJqTest(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
 
 
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+class BlockPrePushWorktreeDiagnosticsTest(unittest.TestCase):
+    """Linked worktree の marker 保存先を deny 出力から確認できる契約。"""
+
+    def git(self, cwd: Path, *args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def create_linked_worktree(self, temporary: Path) -> Path:
+        origin = temporary / "origin.git"
+        main = temporary / "main"
+        linked = temporary / "linked"
+        self.git(temporary, "init", "--bare", str(origin))
+        self.git(temporary, "init", str(main))
+        self.git(main, "config", "user.name", "Marketplace Test")
+        self.git(main, "config", "user.email", "marketplace@example.invalid")
+        (main / "example.txt").write_text("base\n", encoding="utf-8")
+        self.git(main, "add", "example.txt")
+        self.git(main, "commit", "-m", "base")
+        self.git(main, "branch", "-M", "master")
+        self.git(main, "remote", "add", "origin", str(origin))
+        self.git(main, "push", "-u", "origin", "master")
+        self.git(main, "remote", "set-head", "origin", "master")
+        self.git(
+            main,
+            "worktree",
+            "add",
+            "-b",
+            "feature/linked",
+            str(linked),
+            "master",
+        )
+        (linked / "example.txt").write_text("linked change\n", encoding="utf-8")
+        self.git(linked, "add", "example.txt")
+        self.git(linked, "commit", "-m", "linked change")
+        return linked
+
+    def test_deny_reason_names_linked_worktree_marker_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            linked = self.create_linked_worktree(Path(temporary_name))
+            git_dir = subprocess.check_output(
+                ["git", "rev-parse", "--absolute-git-dir"], cwd=linked
+            ).decode().strip()
+            payload = {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "git push origin HEAD"},
+            }
+            result = subprocess.run(
+                ["bash", str(HOOK)],
+                cwd=linked,
+                input=json.dumps(payload).encode("utf-8"),
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            response = json.loads(result.stdout)
+            reason = response["hookSpecificOutput"][
+                "permissionDecisionReason"
+            ]
+            self.assertIn(f"marker storage: {git_dir}", reason)
+            self.assertIn("git rev-parse --absolute-git-dir", reason)
+
+
 if __name__ == "__main__":
     unittest.main()
