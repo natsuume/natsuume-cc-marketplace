@@ -27,7 +27,10 @@ L / P の一部は現行実装では **fail するのが正しい (red)**。fail
    番号付き `3<<EOF` も heredoc。`<<<` (herestring) は heredoc ではない。unquoted
    delimiter の本文では、行末の連続 backslash が奇数個の行の直後行は terminator と
    判定しない (bash の行継続結合が terminator 判定に先行する)。偶数個なら terminator
-   は有効。
+   は有効。quote 外で語頭 (command-start または空白直後) の `#` から行末まではコメント
+   であり、コメント内の `<<` は heredoc として扱わない。heredoc 本文モードの開始は
+   quote 外の生改行に限る。quote 内の改行はデータであり本文モードを開始しない。
+   pending 登録後も quote 外の生改行までは宣言行の引数走査を継続する。
 2. **対応 delimiter 形式**: `<<WORD` / `<< WORD` / `<<-WORD` / `<<'WORD'` / `<<"WORD"` /
    `<<\\WORD` (WORD は `[A-Za-z0-9_]+`)。該当しない構文を検出したら opaque fallback: それ
    以降のコマンド文字列を一切解析しない。判定は 2 分岐:
@@ -219,6 +222,14 @@ class EnforceDraftPrTest(unittest.TestCase):
             'gh pr create --draft --title "a" --body "b"; '
             'gh pr create --draft --title "c" --body "d"'
         )
+        self.assert_rewrite(command, expected)
+
+    def test_r15_flag_shaped_value_not_treated_as_flag(self) -> None:
+        # 値取りオプションの値は flag 判定から除外される。値を flag と誤認する
+        # 実装は「draft 指定あり」として不介入になり、非 draft PR が作られる
+        # ため fail する。
+        command = 'gh pr create --title --draft --body "b"'
+        expected = 'gh pr create --draft --title --draft --body "b"'
         self.assert_rewrite(command, expected)
 
     # ------------------------------------------------------------------
@@ -848,6 +859,39 @@ class EnforceDraftPrTest(unittest.TestCase):
         command = (
             'gh pr create --title "a" --body "b"; '
             'gh pr create --title "c" --body-file - <<E"OF"'
+            + NL
+            + "body"
+            + NL
+            + "EOF"
+        )
+        self.assert_denied(command)
+
+    def test_h26_heredoc_marker_in_comment_ignored(self) -> None:
+        # コメント内の <<EOF を heredoc 登録する誤実装は 2 行目を本文扱いし、
+        # 2 個目の挿入欠落で fail する。
+        command = (
+            'gh pr create --title "t" --body "b" # see <<EOF usage'
+            + NL
+            + ':; gh pr create --title "t2" --body "b2"'
+        )
+        expected = (
+            'gh pr create --draft --title "t" --body "b" # see <<EOF usage'
+            + NL
+            + ':; gh pr create --draft --title "t2" --body "b2"'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_h27_quoted_newline_after_pending_heredoc_not_body_start(
+        self,
+    ) -> None:
+        # heredoc pending 登録後も、quote 外の生改行までは宣言行の引数走査が
+        # 継続する。quote 内改行を本文モード開始と誤認する実装は falsy を
+        # 本文扱いして見逃し、allow + 挿入を返して fail する (H24 と L10 の
+        # 合成 witness)。
+        command = (
+            'gh pr create --body-file - <<EOF --title "multi'
+            + NL
+            + 'line" --draft=false'
             + NL
             + "body"
             + NL
