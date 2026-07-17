@@ -85,7 +85,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 - `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
 - `prs.jsonl` の各行で `closingIssuesReferences.totalCount > len(nodes)` の PR は `fetch-pr-closing-issues.graphql` で当該 PR の closingIssuesReferences を先頭から全ページ取得し、一覧クエリ由来の closingIssuesReferences を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の closingIssuesReferences は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する (集計スクリプトは不完全な行を入力エラーとして中断する)。
-- 収集段階の診断 (第 1 章のリポジトリスキップ件数・理由、第 6 章のリポジトリイベント収集結果・WebSearch 省略の有無等) は、判明した時点で scratchpad の固定 shape JSON (例: `{"skippedRepos": [{"repo": str, "reason": str}], "webSearchSkipped": bool, "repoEventCollection": [{"repo": str, "status": "collected" | "no_checkout" | "default_ref_unavailable" | "default_ref_stale" | "shallow_history" | "shallow_check_failed"}]}`) に追記して記録する。第 9 章のターミナルサマリと Artifact レポートは、この記録された値をそのまま参照し独自に再集計しない。
+- 収集段階の診断 (第 1 章のリポジトリスキップ件数・理由、第 6 章のリポジトリイベント収集結果・WebSearch 省略の有無等) は、判明した時点で scratchpad の固定 shape JSON (例: `{"skippedRepos": [{"repo": str, "reason": str}], "webSearchSkipped": bool, "repoEventCollection": [{"repo": str, "status": "collected" | "no_checkout" | "default_ref_unavailable" | "default_branch_unsupported" | "default_ref_stale" | "shallow_history" | "shallow_check_failed"}]}`) に追記して記録する。第 9 章のターミナルサマリと Artifact レポートは、この記録された値をそのまま参照し独自に再集計しない。
 
 ### 手順
 
@@ -281,18 +281,29 @@ python3 compute_leadtime.py \
 
 対象リポジトリの default branch 上のコミットのみを対象にする。全祖先走査ではなく first-parent 走査を用い、first-parent 上で変更を取り込んだコミット (merge commit を含む) の committer date (`%cI`、ISO8601) を、default branch への統合時刻の**近似値**として採用する (git は push・反映の時刻自体を保持しないため、厳密な反映時刻ではない)。merge commit topology では、フィーチャーブランチ上のコミットの `%cI` が実際の統合時刻より過去になるため、全祖先走査では boundary が実際より過去の時刻に配置されてしまう (backdate される)。フィーチャーブランチ上の元コミット日時 `%aI` は使わない。ローカル checkout の作業ツリーが実際に default branch を指しているとは限らないため、`git log` を無条件に実行せず、次の手順で repo/ref を明示的に束縛してから実行する。`git fetch` は使わない (ローカル git メタデータへの書き込みであり、本 skill の副作用契約「gh read-only query + scratchpad 書き込みのみ」に反するため)。
 
-1. read-only の GitHub API で対象リポジトリの default branch 名と tip の commit OID を取得する。
+1. read-only の GitHub API で対象リポジトリの default branch 名と tip の commit OID を取得する。branch 名を URL パスに埋め込む REST 呼び出し (`repos/<owner>/<name>/branches/<branch>` 形) は、URL エンコードの考慮漏れと command injection の余地を構造的に残すため使わない。branch 名をパスに埋め込まない 1 回の parameterized GraphQL 呼び出し (他の収集クエリと同じ variables 方式) で取得する。
 
    ```bash
-   gh api repos/<owner>/<name> --jq .default_branch
-   gh api repos/<owner>/<name>/branches/<default-branch> --jq .commit.sha
+   gh api graphql \
+     -f owner=<owner> -f name=<name> \
+     -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name target { oid } } } }' \
+     --jq '.data.repository.defaultBranchRef'
    ```
 
+   出力の `name` を default branch 名、`target.oid` を tip の commit OID として以降の手順で使う。コマンドが非 0 で終了する、または `defaultBranchRef` が `null` (空リポジトリ等で default branch が存在しない) の場合、このリポジトリのイベント抽出をスキップし、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "default_ref_unavailable"}` を追記して以降に進まない (この status は手順 3 で述べるローカル追跡 ref の未確認とも共用し、「default branch の ref を解決・確認できない (remote 側・local 側とも)」を表す)。
+
+   取得できた default branch 名は、以降の手順のコマンド template に文字列置換で埋め込む前に、次の保守的な charset で検証する。
+
+   ```bash
+   printf '%s' "<default-branch>" | grep -Eq '^[A-Za-z0-9._/-]+$'
+   ```
+
+   非 0 (charset 不一致)、または branch 名に `..` が含まれる場合、このリポジトリのイベント抽出をスキップし、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "default_branch_unsupported"}` を追記して以降に進まない (fail-closed)。git refname は `;` `$` バッククォート等の shell metacharacter を合法に含みうるが、本 skill の手順はコマンド template への文字列置換で実行されるため、保守的な charset に一致する branch 名のみを扱い、それ以外は注入の余地を残さないよう fail-closed で除外する。`..` は refname に合法には現れないが、現れた場合 git の範囲指定として解釈されうるため同様に除外する。
 2. 第 1 章で保持したこのリポジトリの checkout パスを確認する。checkout が無い (第 1 章手順 3 の再帰探索で発見されず、明示指定 owner/repo にも対応する checkout が紐付いていない) 場合、このリポジトリのイベント抽出をスキップし、`<work>/collection-diagnostics.json` の `repoEventCollection` に `{"repo": "<owner>/<name>", "status": "no_checkout"}` を追記して手順 3 以降に進まない。
 3. checkout があれば、ローカルの追跡 ref を確認する。
 
    ```bash
-   git -C "<checkout>" rev-parse --verify refs/remotes/origin/<default-branch>
+   git -C "<checkout>" rev-parse --verify "refs/remotes/origin/<default-branch>"
    ```
 
    コマンドが非 0 で終了する (追跡 ref が無い) 場合、このリポジトリのイベント抽出をスキップし、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "default_ref_unavailable"}` を追記して手順 4 に進まない。
@@ -310,19 +321,19 @@ python3 compute_leadtime.py \
      - plugin / 機能の新設 (初回追加) の検出例:
 
        ```bash
-       git -C "<checkout>" log <ref> --first-parent --diff-filter=A --format='%H|%cI|%s' -- 'plugins/*/.claude-plugin/plugin.json'
+       git -C "<checkout>" log "<ref>" --first-parent --diff-filter=A --format='%H|%cI|%s' -- 'plugins/*/.claude-plugin/plugin.json'
        ```
 
      - 破壊的変更 (Conventional Commits の `!:` 記法) の検出例:
 
        ```bash
-       git -C "<checkout>" log <ref> --first-parent --format='%H|%cI|%s' | grep -E '^[0-9a-f]+\|[^|]+\|[a-z]+(\([^)]+\))?!:'
+       git -C "<checkout>" log "<ref>" --first-parent --format='%H|%cI|%s' | grep -E '^[0-9a-f]+\|[^|]+\|[a-z]+(\([^)]+\))?!:'
        ```
 
      - CI workflow 追加の検出例:
 
        ```bash
-       git -C "<checkout>" log <ref> --first-parent --diff-filter=A --format='%H|%cI|%s' -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+       git -C "<checkout>" log "<ref>" --first-parent --diff-filter=A --format='%H|%cI|%s' -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
        ```
 
      いずれのコマンドも `<ref>` に `--first-parent` を付与する (`--first-parent` 時は merge commit の diff が first parent との比較になるため、`--diff-filter=A` でファイル初回追加を merge commit でも検出できる)。ただし非 squash の merge topology では、フィーチャーブランチ内にのみ存在する `feat!:` 等の subject が first-parent 走査に現れず検出漏れになりうる。boundary 注釈はヒューリスティックであり、検出漏れ (保守的な欠落) より誤った過去時刻での誤配置の方が区間集計に有害という設計判断で first-parent を採る。
@@ -330,7 +341,7 @@ python3 compute_leadtime.py \
      各ヒットの `%cI` をイベント時刻として採用し、コミットメッセージ (`%s`) や変更ファイルからラベルを組み立てる (例: 「plugin repo-analytics 新設」)。完了後、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "collected"}` を追記する。
    - 不一致 (stale) の場合、このリポジトリのイベント抽出をスキップし、`repoEventCollection` に `{"repo": "<owner>/<name>", "status": "default_ref_stale"}` を追記する。
 
-いずれかの理由でスキップした対象については、「この対象はローカル checkout が存在しない・ref が確認できない・shallow clone で履歴が欠落している・shallow 判定に失敗した、のいずれかの理由により、当該リポジトリに由来するリポジトリイベント注釈を含まない」という注記を Artifact レポート (第 7・8 章) とターミナルサマリ (第 9 章) に明記する。
+いずれかの理由でスキップした対象については、「この対象はローカル checkout が存在しない・ref が確認できない・default branch 名が対応 charset 外である (解決不能な場合を含む)・shallow clone で履歴が欠落している・shallow 判定に失敗した、のいずれかの理由により、当該リポジトリに由来するリポジトリイベント注釈を含まない」という注記を Artifact レポート (第 7・8 章) とターミナルサマリ (第 9 章) に明記する。
 
 **(b) モデル・ツールイベントの収集**
 
