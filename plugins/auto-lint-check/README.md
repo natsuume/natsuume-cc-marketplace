@@ -4,7 +4,12 @@
 
 ## バージョン
 
-v0.5.2
+v0.5.3
+
+### v0.5.2 → v0.5.3 の変更点 (#148)
+
+- 編集対象が Git worktree 外にある場合は `code-format` を無音で skip し、無関係な祖先 config を拾った formatter / package runner の起動を防止した
+- worktree 内の untracked file は従来どおり自動 format の対象に保ち、repository 境界の integration test で両方の挙動を固定した
 
 ### v0.5.1 → v0.5.2 の変更点 (#147)
 
@@ -216,7 +221,7 @@ pathspec の検出には Python の `shlex` でクォート対応トークン化
 | JS/TS | `eslint --fix <file>` → `prettier --write <file>` |
 | Python | `ruff check --fix <file>` → `ruff format <file>` |
 
-各コマンドは個別に成否を吸収し、失敗しても hook 全体は `exit 0` で終了します。
+各コマンドは個別に成否を吸収し、失敗しても hook 全体は `exit 0` で終了します。対象ファイルが Git worktree 外にある場合は、無関係な祖先 config による formatter 起動を避けるため何も実行せず終了します。worktree 内の untracked file は自動整形の対象です。
 
 #### 4. post-commit-lint
 
