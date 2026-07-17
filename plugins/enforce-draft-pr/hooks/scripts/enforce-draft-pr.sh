@@ -70,6 +70,19 @@
 # 位置の `((...))` を対応する `))` まで (内部括弧の深度追跡込み、 quote は無視) 丸ごと
 # 1 トークンとして取り込み、 内部の `<<` を heredoc 宣言として扱わないようにする。
 #
+# ## opaque shell scope (#145)
+#
+# `$(...)` command substitution / legacy backtick / subshell `(...)` 内部は不介入と
+# する。paren depth を追跡し、scope 内の空白 / separator で token や command-start
+# を分割しない。これは内部 invocation への誤挿入を防ぐだけでなく、
+# parameter expansion / 算術展開 / process substitution も独立した quote・comment・
+# heredoc 境界で消費する。`TOKEN=$(...) gh pr create ...` の assignment を
+# 1 token のまま保ち、後続の
+# top-level invocation を env-prefix skip 後に検出するためにも必要である。legacy
+# backtick は escaped delimiter を考慮して閉じ backtick まで不透明に消費する。
+# 対応済み heredoc が scope 内にある場合も、本文中の `)` を scope の閉じと
+# 誤認しないよ delimiter まで丸ごと消費する。
+#
 # ## opaque fallback (#144)
 #
 # heredoc 宣言が対応構文 (上記 5 形式) に一致しない場合 (部分 quote 連結 `E"OF"` 等、
@@ -154,7 +167,8 @@ RW_DENY=0
 
 # _flush_token: analyze_and_rewrite のトークン走査ループから呼ばれる内部ヘルパー。
 # bash の関数呼び出しは動的スコープなので、 呼び出し元 (analyze_and_rewrite) が
-# local 宣言した cmd/i/tbeg/FRAG/started/tcs/tnl/trd/TVAL/TEND/TSTART/TNL/TREDIR を、 本関数が
+# local 宣言した cmd/i/tbeg/FRAG/started/tcs/tnl/trd/TVAL/TEND/TSTART/TNL/TREDIR
+# を、 本関数が
 # 同名の local を宣言せずに直接読み書きする。 進行中のトークンが無ければ何もしない。
 _flush_token() {
   [ "$started" -eq 1 ] || return 0
@@ -191,6 +205,131 @@ _begin_token() {
   started=1
 }
 
+# legacy backtick command substitution を閉じ backtick まで 1 token 内へ不透明に
+# 取り込む。backtick 内で backslash が特別扱いする `$` / `` ` `` / `\` /
+# newline だけを escape pair として消費し、escaped backtick を閉じと誤認しない。
+_consume_backtick_substitution() {
+  local bt_c bt_nc
+  i=$((i+1))
+  while [ "$i" -lt "$n" ]; do
+    bt_c="${cmd:$i:1}"
+    if [ "$bt_c" = "\\" ]; then
+      bt_nc="${cmd:$((i+1)):1}"
+      case "$bt_nc" in
+        '$'|'`'|'\'|"$NL") i=$((i+2)); continue ;;
+      esac
+    elif [ "$bt_c" = '`' ]; then
+      i=$((i+1))
+      return
+    fi
+    i=$((i+1))
+  done
+}
+
+# `${...}` 内の literal `(` / `)` は外側 command substitution / subshell の
+# paren depth と無関係。nested parameter expansion、quote、escape、backtick を
+# 尊重しつつ対応する `}` まで 1 token 内で消費する。
+_consume_parameter_expansion() {
+  local pe_depth=1 pe_sq=0 pe_dq=0 pe_c pe_nc
+  i=$((i+2))
+  while [ "$i" -lt "$n" ] && [ "$pe_depth" -gt 0 ]; do
+    pe_c="${cmd:$i:1}"
+    if [ "$pe_sq" -eq 1 ]; then
+      [ "$pe_c" = "'" ] && pe_sq=0
+      i=$((i+1))
+      continue
+    fi
+    if [ "$pe_dq" -eq 1 ]; then
+      if [ "$pe_c" = "\\" ]; then
+        pe_nc="${cmd:$((i+1)):1}"
+        case "$pe_nc" in
+          '$'|'`'|'"'|'\'|"$NL") i=$((i+2)); continue ;;
+        esac
+      elif [ "$pe_c" = '"' ]; then
+        pe_dq=0
+      fi
+      i=$((i+1))
+      continue
+    fi
+    case "$pe_c" in
+      "'") pe_sq=1; i=$((i+1)) ;;
+      '"') pe_dq=1; i=$((i+1)) ;;
+      '\')
+        if [ -n "${cmd:$((i+1)):1}" ]; then i=$((i+2)); else i=$((i+1)); fi
+        ;;
+      '`') _consume_backtick_substitution ;;
+      '$')
+        if [ "${cmd:$((i+1)):1}" = "{" ]; then
+          pe_depth=$((pe_depth+1))
+          i=$((i+2))
+        elif [ "${cmd:$((i+1)):1}" = "(" ]; then
+          if [ "${cmd:$i:3}" = '$((' ]; then
+            _consume_arithmetic_scope 3
+          else
+            _consume_process_substitution
+          fi
+        else
+          i=$((i+1))
+        fi
+        ;;
+      '}') pe_depth=$((pe_depth-1)); i=$((i+1)) ;;
+      *) i=$((i+1)) ;;
+    esac
+  done
+}
+
+# `$((...))` / `((...))` を対応する `))` まで消費する。呼び出し元は
+# 先頭の消費文字数 (3 / 2) を渡す。内部の `<<` は bit shift であり
+# heredoc として解釈しない。
+_consume_arithmetic_scope() {
+  local ar_prefix=$1 ar_depth=2 ar_sq=0 ar_dq=0 ar_c ar_nc
+  i=$((i+ar_prefix))
+  while [ "$i" -lt "$n" ] && [ "$ar_depth" -gt 0 ]; do
+    ar_c="${cmd:$i:1}"
+    if [ "$ar_sq" -eq 1 ]; then
+      [ "$ar_c" = "'" ] && ar_sq=0
+      i=$((i+1))
+      continue
+    fi
+    if [ "$ar_dq" -eq 1 ]; then
+      if [ "$ar_c" = "\\" ]; then
+        ar_nc="${cmd:$((i+1)):1}"
+        case "$ar_nc" in
+          '$'|'`'|'"'|'\'|"$NL") i=$((i+2)); continue ;;
+        esac
+      elif [ "$ar_c" = '"' ]; then
+        ar_dq=0
+      fi
+      i=$((i+1))
+      continue
+    fi
+    case "$ar_c" in
+      "'") ar_sq=1; i=$((i+1)) ;;
+      '"') ar_dq=1; i=$((i+1)) ;;
+      '\')
+        if [ -n "${cmd:$((i+1)):1}" ]; then i=$((i+2)); else i=$((i+1)); fi
+        ;;
+      '`') _consume_backtick_substitution ;;
+      '$')
+        if [ "${cmd:$((i+1)):1}" = "{" ]; then
+          _consume_parameter_expansion
+        elif [ "${cmd:$((i+1)):1}" = "(" ]; then
+          if [ "${cmd:$i:3}" = '$((' ]; then
+            _consume_arithmetic_scope 3
+          else
+            _consume_process_substitution
+          fi
+        else
+          i=$((i+1))
+        fi
+        ;;
+      '(') ar_depth=$((ar_depth+1)); i=$((i+1)) ;;
+      ')') ar_depth=$((ar_depth-1)); i=$((i+1)) ;;
+      *) i=$((i+1)) ;;
+    esac
+  done
+}
+
 # redirection operator に空白なしで隣接する数字 token は IO number であり argv ではない。
 _mark_io_number() {
   [ "$started" -eq 1 ] || return 0
@@ -205,11 +344,15 @@ _mark_io_number() {
   fi
 }
 
-# i が `<(` / `>(` の先頭を指す process substitution を、quote と nested paren を尊重して
-# 1 token 内へ不透明に取り込む。内部の separator を top-level command boundary にしない。
+# i が `<(` / `>(` / `$(` の先頭を指す paren substitution を、quote、
+# comment、supported heredoc、parameter / arithmetic expansion、nested paren を尊重して
+# 1 token 内へ不透明に取り込む。内部の separator を top-level command boundary
+# にせず、comment / heredoc body 内の literal paren で閉じ位置を誤らない。
 _consume_process_substitution() {
-  local depth=1 ps_sq=0 ps_dq=0 ps_c ps_nc
-  i=$((i+2))
+  local ps_prefix=${1:-2}
+  local depth=1 ps_sq=0 ps_dq=0 ps_word_start=1 ps_c ps_nc
+  local -a PS_HD_DELIMS=() PS_HD_STRIPS=() PS_HD_QUOTED=()
+  i=$((i+ps_prefix))
   while [ "$i" -lt "$n" ] && [ "$depth" -gt 0 ]; do
     ps_c="${cmd:$i:1}"
     if [ "$ps_sq" -eq 1 ]; then
@@ -230,12 +373,85 @@ _consume_process_substitution() {
       continue
     fi
     case "$ps_c" in
-      "'") ps_sq=1; i=$((i+1)) ;;
-      '"') ps_dq=1; i=$((i+1)) ;;
-      '\') i=$((i+2)) ;;
-      '(') depth=$((depth+1)); i=$((i+1)) ;;
-      ')') depth=$((depth-1)); i=$((i+1)) ;;
-      *) i=$((i+1)) ;;
+      "'") ps_sq=1; ps_word_start=0; i=$((i+1)) ;;
+      '"') ps_dq=1; ps_word_start=0; i=$((i+1)) ;;
+      '\')
+        if [ -n "${cmd:$((i+1)):1}" ]; then i=$((i+2)); else i=$((i+1)); fi
+        ps_word_start=0
+        ;;
+      '`') _consume_backtick_substitution; ps_word_start=0 ;;
+      '$')
+        if [ "${cmd:$((i+1)):1}" = "{" ]; then
+          _consume_parameter_expansion
+        elif [ "${cmd:$i:3}" = '$((' ]; then
+          _consume_arithmetic_scope 3
+        elif [ "${cmd:$((i+1)):1}" = "(" ]; then
+          _consume_process_substitution
+        else
+          i=$((i+1))
+        fi
+        ps_word_start=0
+        ;;
+      '#')
+        if [ "$ps_word_start" -eq 1 ]; then
+          _scan_to_literal "$i" "$NL"
+          i=$SCAN_END
+        else
+          i=$((i+1))
+        fi
+        ps_word_start=0
+        ;;
+      '<')
+        if [ "${cmd:$((i+1)):1}" = "<" ] && [ "${cmd:$((i+2)):1}" != "<" ]; then
+          _parse_heredoc_declaration
+          if [ "$HDP_OK" -eq 0 ]; then OPAQUE=1; i=$n; return; fi
+          PS_HD_DELIMS+=("$HDP_WORD")
+          PS_HD_STRIPS+=("$HDP_STRIP")
+          PS_HD_QUOTED+=("$HDP_QUOTED")
+          i=$HDP_END
+        else
+          i=$((i+1))
+        fi
+        ps_word_start=0
+        ;;
+      ' '|"$TAB") ps_word_start=1; i=$((i+1)) ;;
+      "$NL")
+        i=$((i+1))
+        if [ "${#PS_HD_DELIMS[@]}" -gt 0 ]; then
+          local hb_delim hb_strip hb_quoted
+          while [ "${#PS_HD_DELIMS[@]}" -gt 0 ] && [ "$i" -lt "$n" ]; do
+            hb_delim="${PS_HD_DELIMS[0]}"
+            hb_strip="${PS_HD_STRIPS[0]}"
+            hb_quoted="${PS_HD_QUOTED[0]}"
+            _scan_heredoc_body
+            i=$((i+HB_CONSUMED))
+            if [ "$HB_FOUND" -eq 1 ]; then
+              PS_HD_DELIMS=("${PS_HD_DELIMS[@]:1}")
+              PS_HD_STRIPS=("${PS_HD_STRIPS[@]:1}")
+              PS_HD_QUOTED=("${PS_HD_QUOTED[@]:1}")
+            else
+              break
+            fi
+          done
+        fi
+        ps_word_start=1
+        ;;
+      ';') ps_word_start=1; i=$((i+1)) ;;
+      '&'|'|')
+        ps_nc="${cmd:$((i+1)):1}"
+        if [ "$ps_nc" = "$ps_c" ]; then i=$((i+2)); else i=$((i+1)); fi
+        ps_word_start=1
+        ;;
+      '(')
+        if [ "${cmd:$((i+1)):1}" = "(" ]; then
+          _consume_arithmetic_scope 2
+          ps_word_start=0
+        else
+          depth=$((depth+1)); ps_word_start=1; i=$((i+1))
+        fi
+        ;;
+      ')') depth=$((depth-1)); ps_word_start=0; i=$((i+1)) ;;
+      *) ps_word_start=0; i=$((i+1)) ;;
     esac
   done
 }
@@ -259,6 +475,73 @@ _scan_to_literal() {
     scan=$((scan+plen))
   done
   SCAN_END=$n
+}
+
+# i が `<<` の先頭を指す heredoc 宣言の delimiter を解析する。
+# 呼び出し元の dynamic scope に HDP_OK / HDP_END / HDP_WORD / HDP_STRIP /
+# HDP_QUOTED を書き戻す。main scanner と opaque paren scope で同一の対応
+# delimiter 契約を使い、片方だけが本文を paren と誤解釈しないようにする。
+_parse_heredoc_declaration() {
+  local hj=$((i+2)) hd_wstart hd_wc hd_next
+  HDP_OK=0
+  HDP_END=$i
+  HDP_WORD=""
+  HDP_STRIP=0
+  HDP_QUOTED=0
+  if [ "${cmd:$hj:1}" = "-" ]; then HDP_STRIP=1; hj=$((hj+1)); fi
+  while :; do
+    case "${cmd:$hj:1}" in
+      ' '|"$TAB") hj=$((hj+1)) ;;
+      *) break ;;
+    esac
+  done
+  case "${cmd:$hj:1}" in
+    "'")
+      hj=$((hj+1))
+      _scan_to_literal "$hj" "'"
+      HDP_WORD="${cmd:$hj:$((SCAN_END-hj))}"
+      if [ "$SCAN_FOUND" -eq 0 ] || ! [[ "$HDP_WORD" =~ ^[A-Za-z0-9_-]+$ ]]; then return; fi
+      hj=$((SCAN_END+1)); HDP_QUOTED=1
+      ;;
+    '"')
+      hj=$((hj+1))
+      _scan_to_literal "$hj" '"'
+      HDP_WORD="${cmd:$hj:$((SCAN_END-hj))}"
+      if [ "$SCAN_FOUND" -eq 0 ] || ! [[ "$HDP_WORD" =~ ^[A-Za-z0-9_-]+$ ]]; then return; fi
+      hj=$((SCAN_END+1)); HDP_QUOTED=1
+      ;;
+    '\')
+      hj=$((hj+1)); hd_wstart=$hj
+      while :; do
+        hd_wc="${cmd:$hj:1}"
+        case "$hd_wc" in
+          [A-Za-z0-9_-]) hj=$((hj+1)) ;;
+          *) break ;;
+        esac
+      done
+      if [ "$hj" -eq "$hd_wstart" ]; then return; fi
+      HDP_WORD="${cmd:$hd_wstart:$((hj-hd_wstart))}"; HDP_QUOTED=1
+      ;;
+    *)
+      hd_wstart=$hj
+      while :; do
+        hd_wc="${cmd:$hj:1}"
+        case "$hd_wc" in
+          [A-Za-z0-9_-]) hj=$((hj+1)) ;;
+          *) break ;;
+        esac
+      done
+      if [ "$hj" -eq "$hd_wstart" ]; then return; fi
+      HDP_WORD="${cmd:$hd_wstart:$((hj-hd_wstart))}"; HDP_QUOTED=0
+      ;;
+  esac
+  hd_next="${cmd:$hj:1}"
+  case "$hd_next" in
+    ""|' '|"$TAB"|"$NL"|';'|'&'|'|'|'('|')'|'<'|'>')
+      HDP_OK=1
+      HDP_END=$hj
+      ;;
+  esac
 }
 
 # _scan_heredoc_body: i から始まる 1 entry 分の heredoc 本文を POSIX awk で行走査する。
@@ -320,6 +603,7 @@ analyze_and_rewrite() {
   # heredoc pending キュー (出現順 FIFO)。
   local -a HD_DELIMS=() HD_STRIPS=() HD_QUOTED=()
   local OPAQUE=0
+  local HDP_OK=0 HDP_END=0 HDP_WORD="" HDP_STRIP=0 HDP_QUOTED=0
   local SCAN_END=0 SCAN_FOUND=0
   local HB_FOUND=0 HB_CONSUMED=0
   # double quote 内ジャンプの bounded window サイズ。 backslash が密集する入力でも
@@ -338,44 +622,61 @@ analyze_and_rewrite() {
     fi
 
     if [ "$dq" -eq 1 ]; then
-      local dq_piece dq_plen dq_cq dq_cb dq_lq dq_lb
+      local dq_piece dq_plen dq_cq dq_cb dq_cd dq_ct
+      local dq_lq dq_lb dq_ld dq_lt dq_min dq_kind
       dq_piece="${cmd:$i:$CHUNK}"
       dq_plen=${#dq_piece}
       dq_cq="${dq_piece%%\"*}"
       dq_cb="${dq_piece%%\\*}"
+      dq_cd="${dq_piece%%\$*}"
+      dq_ct="${dq_piece%%\`*}"
       dq_lq=${#dq_cq}
       dq_lb=${#dq_cb}
-      if [ "$dq_lb" -ge "$dq_plen" ] && [ "$dq_lq" -ge "$dq_plen" ]; then
-        # window 内に `"` も `\` も無い (window が尽きた、 または入力末尾)。
+      dq_ld=${#dq_cd}
+      dq_lt=${#dq_ct}
+      dq_min=$dq_plen
+      dq_kind=""
+      if [ "$dq_lq" -lt "$dq_min" ]; then dq_min=$dq_lq; dq_kind=quote; fi
+      if [ "$dq_lb" -lt "$dq_min" ]; then dq_min=$dq_lb; dq_kind=backslash; fi
+      if [ "$dq_ld" -lt "$dq_min" ]; then dq_min=$dq_ld; dq_kind=dollar; fi
+      if [ "$dq_lt" -lt "$dq_min" ]; then dq_min=$dq_lt; dq_kind=backtick; fi
+      if [ "$dq_min" -ge "$dq_plen" ]; then
+        # window 内に `"` / `\` / `$` / backtick が無い。
         # window 分だけ進めて再スキャンする (末尾なら次ループの `i<n` で自然終了)。
         i=$((i+dq_plen))
         continue
       fi
-      if [ "$dq_lb" -lt "$dq_lq" ]; then
-        i=$((i+dq_lb))
-        nc="${cmd:$((i+1)):1}"
-        case "$nc" in
-          '$'|'`'|'"'|'\')
-            # 標準 escape ペア。 両者を同一トークンに取り込む。
-            i=$((i+2))
-            ;;
-          "$NL")
-            # dq 内の行継続。 それまでの区間を FRAG へ退避し、 `\<LF>` の 2 文字を
-            # 論理値から除去する (出力は原文保持なので i を進めるだけで良い)。
-            FRAG+=("${cmd:$tbeg:$((i-tbeg))}")
-            i=$((i+2))
-            tbeg=$i
-            ;;
-          *)
-            # backslash 単体 (次が非 escape 文字)。 backslash 自身だけ 1 文字進める。
+      i=$((i+dq_min))
+      case "$dq_kind" in
+        quote) i=$((i+1)); dq=0 ;;
+        backtick) _consume_backtick_substitution ;;
+        dollar)
+          if [ "${cmd:$((i+1)):1}" = "(" ]; then
+            if [ "${cmd:$i:3}" = '$((' ]; then
+              _consume_arithmetic_scope 3
+            else
+              _consume_process_substitution
+            fi
+          elif [ "${cmd:$((i+1)):1}" = "{" ]; then
+            _consume_parameter_expansion
+          else
             i=$((i+1))
-            ;;
-        esac
-      else
-        # 閉じ quote の方が近い。
-        i=$((i+dq_lq+1))
-        dq=0
-      fi
+          fi
+          ;;
+        backslash)
+          nc="${cmd:$((i+1)):1}"
+          case "$nc" in
+            '$'|'`'|'"'|'\') i=$((i+2)) ;;
+            "$NL")
+              # dq 内の行継続。論理 token 値からのみ除去する。
+              FRAG+=("${cmd:$tbeg:$((i-tbeg))}")
+              i=$((i+2))
+              tbeg=$i
+              ;;
+            *) i=$((i+1)) ;;
+          esac
+          ;;
+      esac
       continue
     fi
 
@@ -399,7 +700,7 @@ analyze_and_rewrite() {
           case "$dq_raw" in
             *\\$'\n'*)
               case "$dq_raw" in
-                *"$DBS"*|*"$BS_DQ"*) ;;
+                *"$DBS"*|*"$BS_DQ"*|*'$'*|*'`'*) ;;
                 *)
                   FRAG+=("${cmd:$tbeg:$((dq_open-tbeg))}")
                   dq_norm="$(normalize_line_continuations "$dq_raw")"
@@ -414,6 +715,22 @@ analyze_and_rewrite() {
           esac
         fi
         dq=1; i=$((i+1))
+        ;;
+      '`')
+        if [ "$started" -eq 0 ]; then _begin_token; fi
+        _consume_backtick_substitution
+        ;;
+      '$')
+        if [ "$started" -eq 0 ]; then _begin_token; fi
+        if [ "${cmd:$((i+1)):1}" = "{" ]; then
+          _consume_parameter_expansion
+        elif [ "${cmd:$i:3}" = '$((' ]; then
+          _consume_arithmetic_scope 3
+        elif [ "${cmd:$((i+1)):1}" = "(" ]; then
+          _consume_process_substitution
+        else
+          i=$((i+1))
+        fi
         ;;
       '\')
         # クォート外の `\`。 次の 1 文字が LF なら行継続 (トークン連結・行境界にしない)。
@@ -486,72 +803,12 @@ analyze_and_rewrite() {
           redir_next=1
           i=$((i+3))
         else
-          # heredoc 宣言。 `-` (strip) → 空白 → delimiter word を読み取る。
-          local hj=$((i+2)) hd_strip=0 hd_word="" hd_quoted=0
-          local hd_wstart hd_wc hd_next
-          if [ "${cmd:$hj:1}" = "-" ]; then hd_strip=1; hj=$((hj+1)); fi
-          while :; do
-            case "${cmd:$hj:1}" in
-              ' '|"$TAB") hj=$((hj+1)) ;;
-              *) break ;;
-            esac
-          done
-          case "${cmd:$hj:1}" in
-            "'")
-              hj=$((hj+1))
-              _scan_to_literal "$hj" "'"
-              hd_word="${cmd:$hj:$((SCAN_END-hj))}"
-              if [ "$SCAN_FOUND" -eq 0 ] || ! [[ "$hd_word" =~ ^[A-Za-z0-9_-]+$ ]]; then
-                OPAQUE=1; break
-              fi
-              hj=$((SCAN_END+1)); hd_quoted=1
-              ;;
-            '"')
-              hj=$((hj+1))
-              _scan_to_literal "$hj" '"'
-              hd_word="${cmd:$hj:$((SCAN_END-hj))}"
-              if [ "$SCAN_FOUND" -eq 0 ] || ! [[ "$hd_word" =~ ^[A-Za-z0-9_-]+$ ]]; then
-                OPAQUE=1; break
-              fi
-              hj=$((SCAN_END+1)); hd_quoted=1
-              ;;
-            '\')
-              hj=$((hj+1)); hd_wstart=$hj
-              while :; do
-                hd_wc="${cmd:$hj:1}"
-                case "$hd_wc" in
-                  [A-Za-z0-9_-]) hj=$((hj+1)) ;;
-                  *) break ;;
-                esac
-              done
-              if [ "$hj" -eq "$hd_wstart" ]; then OPAQUE=1; break; fi
-              hd_word="${cmd:$hd_wstart:$((hj-hd_wstart))}"; hd_quoted=1
-              ;;
-            *)
-              hd_wstart=$hj
-              while :; do
-                hd_wc="${cmd:$hj:1}"
-                case "$hd_wc" in
-                  [A-Za-z0-9_-]) hj=$((hj+1)) ;;
-                  *) break ;;
-                esac
-              done
-              if [ "$hj" -eq "$hd_wstart" ]; then OPAQUE=1; break; fi
-              hd_word="${cmd:$hd_wstart:$((hj-hd_wstart))}"; hd_quoted=0
-              ;;
-          esac
-          hd_next="${cmd:$hj:1}"
-          case "$hd_next" in
-            ""|" "|"$TAB"|"$NL"|";"|"&"|"|"|"("|")"|"<"|">")
-              HD_DELIMS+=("$hd_word")
-              HD_STRIPS+=("$hd_strip")
-              HD_QUOTED+=("$hd_quoted")
-              i=$hj
-              ;;
-            *)
-              OPAQUE=1; break
-              ;;
-          esac
+          _parse_heredoc_declaration
+          if [ "$HDP_OK" -eq 0 ]; then OPAQUE=1; break; fi
+          HD_DELIMS+=("$HDP_WORD")
+          HD_STRIPS+=("$HDP_STRIP")
+          HD_QUOTED+=("$HDP_QUOTED")
+          i=$HDP_END
         fi
         ;;
       "$NL")
@@ -581,7 +838,8 @@ analyze_and_rewrite() {
         ;;
       ';')
         _flush_token
-        pend=1; i=$((i+1))
+        pend=1
+        i=$((i+1))
         ;;
       '&'|'|')
         _flush_token
@@ -597,39 +855,19 @@ analyze_and_rewrite() {
         ;;
       '(')
         if [ "$started" -eq 1 ]; then
-          # トークン途中の `(` は `NAME=(...)` 配列代入 / `$(...)` 置換 / 関数定義 `foo(` など
-          # の **構文・データ** であり、 サブシェルのコマンド開始ではない。 直前 2 文字が
-          # `$(` (= `$((` 完成) なら算術式として深度追跡込みで丸ごと取り込み、 内部の `<<`
-          # (ビットシフト) を heredoc と誤認しないようにする。 それ以外は通常の 1 文字。
-          if [ "$i" -ge 2 ] && [ "${cmd:$((i-2)):2}" = '$(' ]; then
-            local depth=2
-            i=$((i+1))
-            while [ "$i" -lt "$n" ] && [ "$depth" -gt 0 ]; do
-              case "${cmd:$i:1}" in
-                '(') depth=$((depth+1)) ;;
-                ')') depth=$((depth-1)) ;;
-              esac
-              i=$((i+1))
-            done
-          else
-            i=$((i+1))
-          fi
+          # `$()` / `$((...))` は直前の `$` branch で丸ごと消費済み。
+          # ここに到達するトークン途中の `(` は関数定義 / 配列代入等の
+          # 構文として 1 文字進める。
+          i=$((i+1))
         else
-          # コマンド位置の `(`。 次も `(` なら算術コマンド `((...))` として深度追跡込みで
-          # 丸ごと 1 トークンに取り込む。 それ以外はサブシェル開始 (`( cmd )`)。
+          # コマンド位置の `((...))` は算術コマンド、`(...)` は
+          # documented opaque subshell。generic paren-scope consumer で token 内へ
+          # 丸ごと取り込む。
+          _begin_token
           if [ "${cmd:$((i+1)):1}" = "(" ]; then
-            _begin_token
-            local depth=2
-            i=$((i+2))
-            while [ "$i" -lt "$n" ] && [ "$depth" -gt 0 ]; do
-              case "${cmd:$i:1}" in
-                '(') depth=$((depth+1)) ;;
-                ')') depth=$((depth-1)) ;;
-              esac
-              i=$((i+1))
-            done
+            _consume_arithmetic_scope 2
           else
-            pend=1; i=$((i+1))
+            _consume_process_substitution 1
           fi
         fi
         ;;

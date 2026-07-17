@@ -4,7 +4,13 @@
 
 ## バージョン
 
-v0.4.0
+v0.4.1
+
+### v0.4.0 → v0.4.1 の変更点 (issue #145)
+
+- `$(...)` command substitution、legacy backtick、subshell `(...)` の内部に separator 付きの `gh pr create` があると `--draft` を誤挿入する、文書化済みの不介入契約との不整合を解消した
+- opaque scope は quote / escape / nested paren / comment / backtick / parameter expansion / 算術展開 / process substitution / 対応済み heredoc の境界を追跡しつつ 1 token のまま保持し、scope 後の top-level `gh pr create` だけに draft 強制を適用する
+- `TOKEN=$(...) gh pr create ...` のように substitution を env assignment の値に使う正常系でも、top-level invocation への `--draft` 付与と `--draft=false` deny を維持した
 
 ### v0.3.0 → v0.4.0 の変更点
 

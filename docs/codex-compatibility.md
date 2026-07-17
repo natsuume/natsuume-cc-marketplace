@@ -7,7 +7,7 @@ Claude Code marketplace を version 以外の共有 metadata の正本とし、S
 | Plugin | Claude Code | Codex | Codex 配布 | 移植状態 | Skills | command hooks | 意図した差分 |
 |---|---:|---:|---|---|---:|---:|---|
 | `git-guardrails` | 0.5.1 | 0.5.1 | 対象 | 完全共有 | 1 | 3/3 | なし |
-| `enforce-draft-pr` | 0.4.0 | 0.4.0 | 対象 | 完全共有 | 0 | 1/1 | なし |
+| `enforce-draft-pr` | 0.4.1 | 0.4.1 | 対象 | 完全共有 | 0 | 1/1 | なし |
 | `auto-lint-check` | 0.5.1 | 0.5.1 | 対象 | 完全共有 | 0 | 4/4 | なし |
 | `pre-push-review` | 4.1.4 | — | 対象外: 現行 Codex runtime の spawn_agent に agent_type selector が無く、agent_type=default の unauthenticated default agents を 3 reviewer として安全に識別できないため、fail-closed で marketplace 配布対象から除外します。 | メタデータのみ | 2 | 6/6 | Codex marketplace では pre-push-review の entry、manifest、Skill、hook を公開しないため、Codex から workflow を install・選択できません。<br>Codex 版 v3.1.4 以前の既存 install は marketplace からの除外だけでは local config/cache から削除されません。codex plugin remove pre-push-review@natsuume-plugins を実行し、新しい Codex thread を開始する必要があります。<br>Claude Code marketplace の plugin、command、agent、hook は引き続き利用できます。 |
 | `update-default-branch` | 0.3.0 | 0.3.0 | 対象 | 完全共有 | 1 | 0/0 | なし |
@@ -36,7 +36,7 @@ Claude Code marketplace を version 以外の共有 metadata の正本とし、S
 | Plugin | 残る保証差 | 検証テスト |
 |---|---|---|
 | `git-guardrails` | なし | `scripts/smoke_codex_marketplace.sh` — 生成 marketplace から plugin と共有 hook を Codex に install できること<br>`tests/test_git_guardrails_target_mismatch.py` — git global option と subcommand-local option を区別しつつ target-mismatch を fail-closed に deny すること |
-| `enforce-draft-pr` | なし | `scripts/smoke_codex_marketplace.sh` — 生成 marketplace から plugin と共有 hook を Codex に install できること |
+| `enforce-draft-pr` | なし | `tests/test_enforce_draft_pr.py` — draft 自動付与・明示的 non-draft deny、heredoc / opaque shell scope / redirection 境界、原文保持、性能契約<br>`scripts/smoke_codex_marketplace.sh` — 生成 marketplace から plugin と共有 hook を Codex に install できること |
 | `auto-lint-check` | なし | `tests/test_auto_lint_codex_adapter.py` — apply_patch path 抽出、ignore 検知、Codex deny JSON の adapter 契約<br>`tests/test_auto_lint_commit_parser.py` — commit と cd の実行順に応じた repo override 判定契約 |
 | `pre-push-review` | Codex 版の意図等価 adapter は提供しません。agent_type selector が実装され、runtime が named reviewer identity を lifecycle event で保証できるまで fail-closed の除外を維持します。 | `tests/test_pre_push_codex_adapter.py` — Codex marketplace からの除外、generic agent_type=default の marker 生成拒否、named agent type に限定した fail-closed 契約<br>`tests/test_pre_push_auto_mark.py` — Claude Code の SubagentStart launch attestation と SubagentStop での parent-safe report・hash 束縛検証、Codex pending attestation の final marker 昇格・失敗時破棄 |
 | `update-default-branch` | なし | `scripts/smoke_codex_marketplace.sh` — 共有 Skill を含む plugin の Codex install surface |

@@ -363,6 +363,151 @@ class EnforceDraftPrTest(unittest.TestCase):
         )
         self.assert_no_intervention(command)
 
+    def test_s09_substitution_in_env_prefix_keeps_top_level_rewrite(self) -> None:
+        command = (
+            'TOKEN=$(printf x; echo y) '
+            'gh pr create --title outer --body b'
+        )
+        expected = (
+            'TOKEN=$(printf x; echo y) '
+            'gh pr create --draft --title outer --body b'
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s10_substitution_in_env_prefix_keeps_top_level_falsy_deny(self) -> None:
+        command = (
+            'TOKEN=$(printf x; echo y) '
+            'gh pr create --draft=false --title outer --body b'
+        )
+        self.assert_denied(command)
+
+    def test_s11_heredoc_paren_inside_substitution_stays_opaque(self) -> None:
+        command = (
+            "NOTES=$(cat <<'EOF'"
+            + NL
+            + ")"
+            + NL
+            + "EOF"
+            + NL
+            + "echo hi; gh pr create --title inner --body b); "
+            + "gh pr create --title outer --body b"
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s12_parameter_expansion_open_paren_does_not_hide_top_level(self) -> None:
+        command = (
+            'NOTES=$(printf %s ${v:-(}); '
+            'gh pr create --title outer --body b'
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s13_parameter_expansion_close_paren_does_not_expose_inner(self) -> None:
+        command = (
+            'NOTES=$(printf %s ${v:-)}; '
+            'gh pr create --title inner --body b); '
+            'gh pr create --title outer --body b'
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s14_arithmetic_shift_inside_env_substitution_keeps_gate(self) -> None:
+        command = (
+            'TOKEN=$(echo $((1<<2+1))) '
+            'gh pr create --title outer --body b'
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s15_process_substitution_comment_paren_keeps_top_level(self) -> None:
+        command = (
+            "cat <(printf x # ( comment"
+            + NL
+            + "); gh pr create --title outer --body b"
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s16_process_substitution_comment_close_paren_stays_opaque(self) -> None:
+        command = (
+            "cat <(printf x # ) ; gh pr create --title inner --body b"
+            + NL
+            + "); gh pr create --title outer --body b"
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s17_process_substitution_heredoc_paren_keeps_top_level(self) -> None:
+        command = (
+            "cat <(cat <<EOF"
+            + NL
+            + "("
+            + NL
+            + "EOF"
+            + NL
+            + "); gh pr create --title outer --body b"
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s18_quoted_env_substitution_keeps_top_level_gate(self) -> None:
+        command = (
+            'TOKEN="$(printf "%s" "x y")" '
+            'gh pr create --title outer --body b'
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s19_quoted_env_substitution_keeps_inner_opaque(self) -> None:
+        command = (
+            'TOKEN="$(echo x; gh pr create --title inner --body b)" '
+            'gh pr create --title outer --body b'
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
+    def test_s20_quoted_env_line_continuation_keeps_substitution_scope(self) -> None:
+        command = (
+            'TOKEN="prefix'
+            + BS
+            + NL
+            + '$(printf "%s" "x y")" '
+            + 'gh pr create --title outer --body b'
+        )
+        expected = command.replace(
+            "gh pr create --title outer",
+            "gh pr create --draft --title outer",
+        )
+        self.assert_rewrite(command, expected)
+
     # ------------------------------------------------------------------
     # グループ H: heredoc 認識・opaque fallback
     # ------------------------------------------------------------------
