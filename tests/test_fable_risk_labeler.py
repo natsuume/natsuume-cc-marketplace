@@ -40,6 +40,10 @@ class FableRiskLabelerContractTest(unittest.TestCase):
         )["plugins"]["fable-risk-labeler"]
         self.assertEqual("available", overrides["distribution"]["status"])
         self.assertEqual("0.1.0", overrides["version"])
+        self.assertEqual(
+            ["skills/label-issues/agents/"],
+            overrides["versioning"]["codexOnlyPaths"],
+        )
 
         codex_manifest = json.loads(
             (PLUGIN / ".codex-plugin" / "plugin.json").read_text(

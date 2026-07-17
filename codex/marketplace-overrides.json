@@ -655,7 +655,7 @@
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": [
-          "skills/label-issues/"
+          "skills/label-issues/agents/"
         ]
       },
       "displayName": "Fable Risk Labeler",
@@ -681,7 +681,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "23108674f4f604887abfdcf83260c4a5bbdc26abbde06276028b8277dce72a68"
+        "sourceTreeDigest": "f84a1f109e99745523d1b8c38f1b1db7d5615c250bcfa76c63a76a88fed732d5"
       }
     }
   }
