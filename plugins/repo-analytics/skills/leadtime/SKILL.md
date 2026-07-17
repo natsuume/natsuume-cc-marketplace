@@ -26,7 +26,8 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ## 3. データ収集
 
-- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 3 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql`) を `gh api graphql --paginate -F owner=... -F name=... -F query=@<file>` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
+- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 4 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql`) を `gh api graphql` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
+- 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (`fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` の `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --paginate -f owner=<owner> -f name=<name> -F query=@<file>`。
 - `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を追加ページングし、取得済み nodes とマージする。
 - `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
@@ -100,6 +101,7 @@ python3 compute_leadtime.py \
 - 改善余地は断定した対策ではなく「データが指す介入点」としてユーザーに提示し、意思決定はユーザーに委ねる。
 - 完了根拠 (qualifying completion) は MERGED の PR、または現在 OPEN・non-draft の PR の ready 到達である (merge そのものではない)。merge されず close された PR は破棄された試行として完了根拠にしない。ready 到達済み・未 merge のタスクは mainSeries に completionBasis = "ready_unmerged" として含まれ、打ち切り (censored) は qualifying PR がリンクされていない着手済み open issue に限定される。
 - 週次 cohort の中央値は完了タスクのみから計算される記述的統計である (censor 非調整)。censored のみの週も median null + censoredN で行が出るため、censoredN が大きい週の中央値は必ず censoredN と併せて解釈する。
+- 収集範囲外のリポジトリの merged PR で close された issue は `auxiliarySeries.externalMergedClose` として分離集計され、`mainSeries` にも `censored` にも入らない (ready 到達時刻を計測できないため)。
 
 (手順詳細は Phase B で全文化する)
 

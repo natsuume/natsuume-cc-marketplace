@@ -7,8 +7,11 @@ Phase A (spec-first) の位置づけ:
   `resolve_start` / `resolve_ready` / `resolve_close_linkage` / `compute` /
   `main` の処理本体は `NotImplementedError` を送出する (Phase B で実装する)。
 - このファイルは issue #288 Phase A 契約ドキュメント セクション 8 の
-  test matrix T1〜T41 を全件実装する。各テストメソッド名・コメントに
-  `T<n>` を付与し対応関係を明示する。
+  test matrix T1〜T42 を全件実装する。各テストメソッド名・コメントに
+  `T<n>` を付与し対応関係を明示する (T42: 収集範囲外リポジトリの merged PR
+  を closer とする issue が `resolve_close_linkage` で `"merged_pr_external"`
+  に分類され、`compute` の出力で `auxiliarySeries["externalMergedClose"]`
+  に入ることの検証)。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -1095,7 +1098,13 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(result["prSeries"], [])
         self.assertEqual(result["mainSeries"], [])
         aux = result["auxiliarySeries"]
-        for category in ("manualClose", "commitClose", "notPlanned", "unmergedPr"):
+        for category in (
+            "manualClose",
+            "commitClose",
+            "notPlanned",
+            "unmergedPr",
+            "externalMergedClose",
+        ):
             issue_numbers = {entry["issue"] for entry in aux[category]}
             self.assertNotIn(issue_number, issue_numbers)
 
@@ -1271,6 +1280,52 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(merged_at, datetime(2026, 7, 5, tzinfo=timezone.utc))
         self.assertEqual(entry["phaseHours"]["readyToMerge"], 48.0)
         self.assertEqual(result["censored"], [])
+
+    def test_t42_cross_repo_merged_closer_is_external(self):
+        # T42: 最終 ClosedEvent の closer が merged=true の PullRequest だが、
+        # その PR は収集範囲外の別リポジトリの PR であり prs_by_key (prs.jsonl
+        # から構築) には存在しない。resolve_close_linkage は closer["merged"]
+        # を一次情報として "merged_pr_external" に分類する (prs_by_key 不在
+        # だけで "unmerged_pr" に誤分類しない)。compute の出力では当該 issue
+        # が auxiliarySeries["externalMergedClose"] にのみ入り、mainSeries /
+        # censored / auxiliarySeries["unmergedPr"] のいずれにも入らない。
+        repo = "owner/name"
+        issue_number = 500
+        external_pr_repo = "owner/other-repo"
+        external_pr_number = 999
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="CLOSED",
+            state_reason="COMPLETED",
+            created_at="2026-07-01T00:00:00Z",
+            closed_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x"),
+                closed_event(
+                    "2026-07-05T00:00:00Z",
+                    pr_closer(external_pr_number, repo=external_pr_repo, merged=True),
+                ),
+            ],
+        )
+
+        # resolve_close_linkage 単体でも、prs_by_key に該当 PR が無い状態で
+        # "merged_pr_external" を検証する。
+        linkage = compute_leadtime.resolve_close_linkage(issue, {})
+        self.assertEqual(linkage.category, "merged_pr_external")
+
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute([issue], [], self.patterns, as_of, None, None)
+
+        self.assertEqual(result["mainSeries"], [])
+        self.assertEqual(result["censored"], [])
+        aux = result["auxiliarySeries"]
+        unmerged_issue_numbers = {entry["issue"] for entry in aux["unmergedPr"]}
+        self.assertNotIn(issue_number, unmerged_issue_numbers)
+        external_issue_numbers = {
+            entry["issue"] for entry in aux["externalMergedClose"]
+        }
+        self.assertIn(issue_number, external_issue_numbers)
 
 
 # ---------------------------------------------------------------------------

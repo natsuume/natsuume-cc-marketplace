@@ -36,6 +36,10 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
   `ClosedEvent` / `ReopenedEvent` のいずれかのイベントの配列。
   `timelineItems.totalCount > len(nodes)` の行は timeline 取得が不完全であり、
   主系列・打ち切り系列から除外され `exclusions.timelineOverflow` に列挙される。
+  `ClosedEvent.closer` が `PullRequest` (`__typename == "PullRequest"`) の
+  場合、その closer は `merged` フィールド (bool) を必須で持つ
+  (`resolve_close_linkage` の category 判定の一次情報。`prs_by_key` への
+  存在有無だけでは判定しない)。
 - `--prs`: 1 行 1 PR (OPEN + MERGED。merge 済みか否かに依らず収集する) の
   JSONL。各行は `repo`, `number`, `state` (`"OPEN" | "MERGED"`), `isDraft`
   (bool), `createdAt`, `mergedAt` (`state == "OPEN"` の行は `null` を許容
@@ -226,24 +230,35 @@ class CloseLinkage:
     """1 件の issue に対する最終クローズ状態の分類結果 (`resolve_close_linkage` の戻り値)。
 
     Attributes:
-        category: 次のいずれか。
+        category: 次のいずれか。closer が `PullRequest` の場合の分類は
+            closer 自身の `merged` フィールド (bool、必須。モジュール docstring
+            「入力 JSONL 契約」参照) を一次情報とする —
+            `prs_by_key` への存在有無だけでは判定しない。
+
             - `"open"`: issue が CLOSED 状態でない (まだ開いている)。
             - `"not_planned"`: `issue["stateReason"] == "NOT_PLANNED"`
               (最終 ClosedEvent の closer 種別より優先して判定する)。
             - `"merged_pr"`: 最終 `ClosedEvent.closer` が `PullRequest` であり、
-              その PR が `prs_by_key` (= merged PR 集合) に存在する。
-            - `"unmerged_pr"`: 最終 `ClosedEvent.closer` が `PullRequest` だが、
-              その PR が `prs_by_key` に存在しない
-              (closer 側の `merged` が false、または merged PR 収集対象外)。
+              `closer["merged"] == True` かつその PR が `prs_by_key`
+              (= 収集対象リポジトリの PR 集合) に存在する。
+            - `"merged_pr_external"`: 最終 `ClosedEvent.closer` が
+              `PullRequest` であり `closer["merged"] == True` だが、その PR が
+              `prs_by_key` に存在しない (収集範囲外リポジトリの PR 等、
+              closer 情報以外に手掛かりが無い)。ready 到達時刻が得られないため
+              `mainSeries` には含めない (`auxiliarySeries.externalMergedClose`
+              側で分離集計する。`compute` の docstring 参照)。
+            - `"unmerged_pr"`: 最終 `ClosedEvent.closer` が `PullRequest` であり
+              `closer["merged"] == False` (真の破棄試行)。`prs_by_key` への
+              存在有無は問わない。
             - `"commit"`: 最終 `ClosedEvent.closer` が `Commit`。
             - `"manual"`: 最終 `ClosedEvent.closer` が無い (null)、または
               CLOSED 状態なのに `ClosedEvent` が timeline 中に見つからない
               (timeline 不完全時のフォールバック)。
         linked_pr: `category == "merged_pr"` のときのみ
             `{"repo": str, "number": int}` を設定する。それ以外の category では
-            `None` (unmerged_pr であっても closer の PR 番号は保持しない —
-            必要な場合は `resolve_close_linkage` の呼び出し元が
-            `issue` の timeline から別途参照する)。
+            `None` (`merged_pr_external` / `unmerged_pr` であっても closer の
+            PR 番号は保持しない — 必要な場合は `resolve_close_linkage` の
+            呼び出し元が `issue` の timeline から別途参照する)。
 
     境界:
         「最終 ClosedEvent」は `timelineItems.nodes` を createdAt 昇順に見て、
@@ -360,9 +375,13 @@ def resolve_close_linkage(issue: dict, prs_by_key: dict) -> CloseLinkage:
     Args:
         issue: `issues.jsonl` の 1 行。`timelineItems.nodes` 内の `ClosedEvent` /
             `ReopenedEvent` を走査する。
-        prs_by_key: `(repo, number)` をキーとした merged PR の辞書
-            (`prs.jsonl` から構築済み。最終 `ClosedEvent.closer` が参照する PR が
-            merged PR 集合に含まれるかどうかの判定に使う)。
+        prs_by_key: `(repo, number)` をキーとした PR の辞書 (`prs.jsonl` から
+            構築済み)。最終 `ClosedEvent.closer` が `PullRequest` かつ
+            `closer["merged"] == True` のとき、その PR が収集対象リポジトリの
+            PR 集合 (= `prs_by_key`) に存在するかどうかで `"merged_pr"` と
+            `"merged_pr_external"` を区別する判定に使う (`category` の
+            docstring 参照。`closer["merged"] == False` の場合は
+            `prs_by_key` を参照せず `"unmerged_pr"` とする)。
 
     Returns:
         CloseLinkage: `category` / `linked_pr` の定義は `CloseLinkage` の
@@ -463,12 +482,14 @@ def compute(
           `phaseHours.readyToMerge` が `None` (ready から先の区間が未確定
           のため)。`leadTimeHours` は `firstStartAt` → `readyAt`
           の経過時間 (`lastStartAt` ではない。複数着手の解釈が必要な場合に
-          備えて `lastStartAt` 自体は保持する)。`phaseHours` の 3 区間は
-          `firstStartAt → prCreatedAt → readyAt → mergedAt` を合計すると
-          `leadTimeHours` (+ readyToMerge) に一致する
-          (`completionBasis == "ready_unmerged"` では `readyToMerge` を
-          除いた 2 区間の合計が `leadTimeHours` に一致する)。`since`
-          フィルタ適用対象。
+          備えて `lastStartAt` 自体は保持する)。丸め前の値では
+          `startToPrCreated + prCreatedToReady` が `leadTimeHours` に、
+          それに `readyToMerge` を加えた値が着手→merge の総時間に一致する。
+          出力値は各フィールドを独立に小数第 2 位へ丸めるため、丸め後の
+          `startToPrCreated + prCreatedToReady` は `leadTimeHours` と最大
+          ±0.01 時間ずれうる (許容誤差であり、Phase B 実装は丸め後の等式を
+          強制しない。`readyToMerge` は両辺に同じ丸め済み値が現れるため
+          誤差上限に影響しない)。`since` フィルタ適用対象。
         - `censored` (list[dict]): 着手マーカーがあり `category == "open"`
           (まだクローズしていない) issue のうち、qualifying completion PR
           (`closingIssuesReferences` にその issue を含む、`state ==
@@ -483,12 +504,20 @@ def compute(
           "elapsedHoursLowerBound"}`。`elapsedHoursLowerBound` は
           `as_of - firstStartAt` (時間)。`since` フィルタ適用対象。
         - `auxiliarySeries` (dict): 着手マーカーはあるが `category` が
-          `merged_pr` でも `open` でもない issue を category 別に振り分けた
-          `{"manualClose": [...], "commitClose": [...], "notPlanned": [...],
-          "unmergedPr": [...]}`。各要素は少なくとも `repo` / `issue` /
-          `firstStartAt` / `lastStartAt` / `startWeek` を含む (確定契約)。
-          category 固有の追加フィールド (例: `unmergedPr` の PR 番号) は
-          Phase B 実装時に後方互換な追加として拡張しうる。
+          `merged_pr` でも `open` でもない issue を category 別に振り分けた、
+          次の 5 キー固定 shape の dict — `{"manualClose": [...],
+          "commitClose": [...], "notPlanned": [...], "unmergedPr": [...],
+          "externalMergedClose": [...]}`。該当 issue が 0 件のカテゴリでも
+          キー自体は省略せず空リストを出力する。各要素は少なくとも `repo` /
+          `issue` / `firstStartAt` / `lastStartAt` / `startWeek` を含む
+          (確定契約)。category 固有の追加フィールド (例: `unmergedPr` の PR
+          番号) は Phase B 実装時に後方互換な追加として拡張しうる。
+          `externalMergedClose` は `resolve_close_linkage(...).category ==
+          "merged_pr_external"` (最終クローズの closer が `merged == true` の
+          `PullRequest` だが `prs_by_key` に存在しない、収集範囲外リポジトリの
+          merged PR 等) だった着手済み issue を列挙する。この分離により、
+          収集範囲外リポジトリの merged PR で close された issue は ready
+          到達時刻が得られず、`mainSeries` にも `censored` にも入らない。
           `since` フィルタ適用対象 (mainSeries と揃える)。
         - `prSeries` (list[dict]): ready 到達済み PR (`state == "MERGED"`、
           または `state == "OPEN"` かつ `isDraft == False`) を 1 件 1 要素
