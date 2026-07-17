@@ -23,6 +23,7 @@ v4.1.0 (前身: `pre-commit-review` v0.4.0)
 - レビュー完了検知を PostToolUse から subagent lifecycle hook (SubagentStart / SubagentStop) へ完全移行した。Claude Code v2.1.198 以降は Agent tool が既定で background 起動になり、PostToolUse は起動受理時 (`status: "async_launched"`) に 1 回発火するのみで完了時には発火しないため、v4.0.x の completion 検証は async 起動 harness で marker を永遠に書けず push gate が恒久 deny になっていた
 - SubagentStart で「agent_id + 開始時 review hash」の launch attestation を one-shot 記録し、SubagentStop で (a) attestation の存在と一回限りの消費 (b) 開始時 hash と現在 hash の一致 (c) `last_assistant_message` 内の単一 `Status: pass|findings` 行 (d) `stop_hook_active == false` をすべて検証した場合のみ marker を書く。SendMessage resume 後の再 stop・レビュー開始後の差分変更・重複 stop は fail-closed に遮断する (codex-reviewer は従来どおり wrapper pending attestation の現在 hash 一致も要求)
 - 旧 PostToolUse completion 経路と hooks.json の PostToolUse 配線を撤去した (PostToolUseFailure による codex pending 破棄は補助掃除経路として維持)
+- attestation の消費時に launch tombstone (`.claude-pre-push-done-<agent_id>`、30 日保持) を排他作成し、同一 agent_id での SubagentStart 再発火 (SendMessage resume 等) による attestation 再鋳造を遮断した (agent_id 1 つにつきフル review 1 回。再レビューは新規 spawn で行う)。Start は既存 attestation の上書きも禁止し、attestation / tombstone の作成は排他 `ln` の create-if-absent で行う
 
 ### v4.0.0 → v4.0.1 の変更点 (issue #281)
 
@@ -265,6 +266,7 @@ wrapper exit 0 だけで final marker を書くと、その後の report 正規�
 | `.claude-pre-push-codex-reviewed.pending` | wrapper が束縛した review 対象 hash。final report 成功時だけ marker へ rename | report 失敗・hash mismatch・次回 wrapper 起動で削除 |
 | `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の commit 列 + branch 全差分のハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-launch-<agent_id>` | SubagentStart が one-shot 記録するレビュー開始時の hash (launch attestation、v4.1.0 新設)。SubagentStop が開始時 hash と現在 hash の一致検証に使う | 最初の SubagentStop で消費 (削除)。1 日より古い残存分は次回 SubagentStart が掃除 |
+| `.claude-pre-push-done-<agent_id>` | attestation 消費時に排他作成される launch tombstone (v4.1.0 新設)。同一 agent_id での SubagentStart 再発火 (resume 等) による attestation 再鋳造を遮断する。再レビューは新規 spawn (新しい agent_id) で行う | 30 日より古い残存分は次回 SubagentStart が掃除 (Claude Code の transcript 既定保持 30 日に整合) |
 
 > **v2.x → v3.0.0 アップグレード時の注意**: v2.x で実行済みの 3 マーカー (code-reviewed / codex-reviewed / security-reviewed) は v3.0.0 でも hash が一致する限り有効です。 marker file 名と hash 計算式は不変なので追加の cleanup は不要です。
 

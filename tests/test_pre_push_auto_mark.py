@@ -61,6 +61,7 @@ MARKERS = {
 }
 CODEX_PENDING_MARKER = ".claude-pre-push-codex-reviewed.pending"
 LAUNCH_ATTESTATION_PREFIX = ".claude-pre-push-launch-"
+LAUNCH_TOMBSTONE_PREFIX = ".claude-pre-push-done-"
 DEFAULT_AGENT_ID = "a1b2c3d4e5f6a7b8c"
 CLAUDE_REVIEWER_MATCHER = (
     "^pre-push-review:(code|codex|security)-reviewer$"
@@ -209,6 +210,11 @@ class PrePushAutoMarkTest(unittest.TestCase):
     ) -> Path:
         return self.git_dir(work) / f"{LAUNCH_ATTESTATION_PREFIX}{agent_id}"
 
+    def launch_tombstone_path(
+        self, work: Path, agent_id: str = DEFAULT_AGENT_ID
+    ) -> Path:
+        return self.git_dir(work) / f"{LAUNCH_TOMBSTONE_PREFIX}{agent_id}"
+
     def assert_no_marker(
         self, work: Path, agent_type: str, payload: dict[str, object]
     ) -> None:
@@ -275,6 +281,36 @@ class PrePushAutoMarkTest(unittest.TestCase):
             self.assertFalse(stale.exists())
             self.assertTrue(self.launch_attestation_path(work).exists())
 
+    def test_start_does_not_overwrite_existing_attestation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:code-reviewer"
+            self.run_start(work, agent_type)
+            attestation = self.launch_attestation_path(work)
+            original_content = attestation.read_text(encoding="utf-8")
+            (work / "example.txt").write_text(
+                "changed after first start\n", encoding="utf-8"
+            )
+            self.run_start(work, agent_type)
+            self.assertEqual(
+                attestation.read_text(encoding="utf-8"), original_content
+            )
+
+    def test_subagent_start_prunes_stale_tombstones(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            stale_tombstone = self.launch_tombstone_path(work, "staletombstone")
+            stale_tombstone.write_text("0" * 64, encoding="utf-8")
+            thirty_one_days_ago = time.time() - 31 * 24 * 3600
+            os.utime(stale_tombstone, (thirty_one_days_ago, thirty_one_days_ago))
+            fresh_tombstone = self.launch_tombstone_path(work, "freshtombstone")
+            fresh_tombstone.write_text("0" * 64, encoding="utf-8")
+            one_hour_ago = time.time() - 3600
+            os.utime(fresh_tombstone, (one_hour_ago, one_hour_ago))
+            self.run_start(work, "pre-push-review:code-reviewer")
+            self.assertFalse(stale_tombstone.exists())
+            self.assertTrue(fresh_tombstone.exists())
+
     # ------------------------------------------------------------------
     # SubagentStop: marker 書き込み
     # ------------------------------------------------------------------
@@ -289,19 +325,30 @@ class PrePushAutoMarkTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
-            for agent_type in MARKERS:
-                for status, report in reports.items():
+            for cycle, agent_type in enumerate(MARKERS):
+                for status_index, (status, report) in enumerate(
+                    reports.items()
+                ):
                     with self.subTest(agent_type=agent_type, status=status):
+                        # 独立した review サイクルごとに一意の agent_id を使う
+                        # (実運用では agent_id が spawn ごとに一意である現実を
+                        # モデルする。 同一 agent_id を使い回すと 2 サイクル目以降が
+                        # launch tombstone に阻まれ、 この subTest が検証すべき
+                        # 「report 正常完了で marker が書かれる」経路を通らなくなる)。
+                        agent_id = f"{DEFAULT_AGENT_ID}{cycle}{status_index}"
                         marker = self.marker_path(work, agent_type)
                         marker.unlink(missing_ok=True)
-                        self.run_start(work, agent_type)
+                        self.run_start(work, agent_type, agent_id=agent_id)
                         if agent_type == "pre-push-review:codex-reviewer":
                             self.codex_pending_marker_path(work).write_text(
                                 self.expected_review_hash(work),
                                 encoding="utf-8",
                             )
                         result = self.run_hook(
-                            work, self.stop_payload(agent_type, report)
+                            work,
+                            self.stop_payload(
+                                agent_type, report, agent_id=agent_id
+                            ),
                         )
                         self.assertEqual(
                             result.returncode, 0, result.stderr.decode()
@@ -312,8 +359,33 @@ class PrePushAutoMarkTest(unittest.TestCase):
                             re.compile(r"^[0-9a-f]{64}$"),
                         )
                         self.assertFalse(
-                            self.launch_attestation_path(work).exists()
+                            self.launch_attestation_path(
+                                work, agent_id
+                            ).exists()
                         )
+
+    def test_stop_creates_tombstone_and_blocks_restart(self) -> None:
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:code-reviewer"
+            marker = self.marker_path(work, agent_type)
+            tombstone = self.launch_tombstone_path(work)
+
+            self.run_start(work, agent_type)
+            result = self.run_hook(work, self.stop_payload(agent_type, report))
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertTrue(marker.exists(), result.stderr.decode())
+            self.assertTrue(tombstone.exists())
+
+            marker.unlink(missing_ok=True)
+            attestation = self.launch_attestation_path(work)
+            self.run_start(work, agent_type)
+            self.assertFalse(attestation.exists())
+
+            result = self.run_hook(work, self.stop_payload(agent_type, report))
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(marker.exists(), result.stderr.decode())
 
     def test_stop_without_attestation_does_not_write_marker(self) -> None:
         report = "# Code Review\n\nStatus: pass\nFindings: 0"
@@ -363,11 +435,24 @@ class PrePushAutoMarkTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
             agent_type = "pre-push-review:code-reviewer"
-            for case, report in rejected_reports.items():
+            for index, (case, report) in enumerate(rejected_reports.items()):
                 with self.subTest(case=case):
-                    self.run_start(work, agent_type)
+                    # case ごとに一意の agent_id を使う (同一 agent_id だと
+                    # 1 ケース目の stop が作る launch tombstone に後続ケースの
+                    # run_start が阻まれ、Status 行検証ロジックを実際には
+                    # 通らなくなる)。
+                    agent_id = f"{DEFAULT_AGENT_ID}{index}"
+                    self.run_start(work, agent_type, agent_id=agent_id)
+                    # run_start が実際に attestation を作成した (= tombstone に
+                    # 阻まれていない) ことを担保し、後続の stop が Status 行
+                    # 検証ロジックを実際に通ることを保証する。
+                    self.assertTrue(
+                        self.launch_attestation_path(work, agent_id).exists()
+                    )
                     self.assert_no_marker(
-                        work, agent_type, self.stop_payload(agent_type, report)
+                        work,
+                        agent_type,
+                        self.stop_payload(agent_type, report, agent_id=agent_id),
                     )
 
     def test_stop_after_diff_change_does_not_write_marker(self) -> None:
@@ -401,6 +486,20 @@ class PrePushAutoMarkTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertTrue(marker.exists(), result.stderr.decode())
 
+    def test_stop_hook_active_does_not_create_tombstone(self) -> None:
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:code-reviewer"
+            tombstone = self.launch_tombstone_path(work)
+            self.run_start(work, agent_type)
+            self.assert_no_marker(
+                work,
+                agent_type,
+                self.stop_payload(agent_type, report, stop_hook_active=True),
+            )
+            self.assertFalse(tombstone.exists())
+
     def test_stop_name_only_agent_type_is_ignored(self) -> None:
         report = "# Code Review\n\nStatus: pass\nFindings: 0"
         with tempfile.TemporaryDirectory() as temporary_name:
@@ -423,16 +522,26 @@ class PrePushAutoMarkTest(unittest.TestCase):
             work = self.create_feature_repository(Path(temporary_name))
             agent_type = "pre-push-review:codex-reviewer"
 
-            self.run_start(work, agent_type)
+            # 2 つの独立サイクル (pending なし / pending 不一致) にそれぞれ
+            # 一意の agent_id を使う (同一 agent_id だと 1 サイクル目の stop が
+            # 作る launch tombstone に 2 サイクル目の run_start が阻まれ、
+            # pending 不一致検証の経路を通らなくなる)。
+            first_agent_id = f"{DEFAULT_AGENT_ID}0"
+            self.run_start(work, agent_type, agent_id=first_agent_id)
             self.assert_no_marker(
-                work, agent_type, self.stop_payload(agent_type, report)
+                work,
+                agent_type,
+                self.stop_payload(agent_type, report, agent_id=first_agent_id),
             )
 
-            self.run_start(work, agent_type)
+            second_agent_id = f"{DEFAULT_AGENT_ID}1"
+            self.run_start(work, agent_type, agent_id=second_agent_id)
             pending = self.codex_pending_marker_path(work)
             pending.write_text("0" * 64, encoding="utf-8")
             self.assert_no_marker(
-                work, agent_type, self.stop_payload(agent_type, report)
+                work,
+                agent_type,
+                self.stop_payload(agent_type, report, agent_id=second_agent_id),
             )
             self.assertFalse(pending.exists())
 

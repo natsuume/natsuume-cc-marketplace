@@ -23,14 +23,29 @@
 #      matcher の regex 解釈には依存しない)
 #   2. agent_id が ^[A-Za-z0-9._-]{1,128}$ に一致しなければ exit 0 (path 混入防止。
 #      filesystem 操作は一切行わない)
-#   3. base 検出不能 / branch 取得不能 / master・main / hash 計算失敗 →
+#   3. launch tombstone (.claude-pre-push-done-<agent_id>) が存在すれば exit 0
+#      (同一 agent_id はフル review 1 回のみ。 resume での SubagentStart 再発火に
+#      よる attestation 再鋳造を遮断する。 issue #285 codex review P1 指摘)
+#   4. 既存 launch attestation が存在する場合も exit 0 (上書き禁止。 中間 stop を
+#      挟む重複 Start で開始 hash が更新される経路を塞ぐ)
+#   5. base 検出不能 / branch 取得不能 / master・main / hash 計算失敗 →
 #      attestation を書かず exit 0 (block-pre-push.sh の pass-through / deny 条件と
 #      整合)
-#   4. 1 日より古い launch attestation (.claude-pre-push-launch-*) を
-#      opportunistic に削除する (stale 掃除、best-effort)
-#   5. 開始時 review hash を launch attestation
-#      (git-dir/.claude-pre-push-launch-<agent_id>) へ temp file + mv で atomic に
-#      書く
+#   6. 1 日より古い launch attestation (.claude-pre-push-launch-*) と 30 日より
+#      古い launch tombstone (.claude-pre-push-done-*) をそれぞれ opportunistic に
+#      削除する (stale 掃除、best-effort。 tombstone の保持期間は Claude Code の
+#      transcript 既定保持 30 日に合わせる — resume は transcript が生きている間
+#      だけ成立しうるため、 それより長く tombstone を残す必要がない)
+#   7. 開始時 review hash を launch attestation
+#      (git-dir/.claude-pre-push-launch-<agent_id>) へ、 同一ディレクトリ内 temp
+#      file + 排他 `ln` (create-if-absent。 既存なら失敗) で atomic に書く
+#
+# **resume での再レビューは意図的に拒否する** (issue #285 codex review P1 指摘):
+# 一度 SubagentStop まで到達した agent_id で SubagentStart が再発火しても
+# (SendMessage resume 等)、 その再発火は branch 全差分に対する自律的なフル review の
+# 実行を証明しない (resume は既存の subagent context を継続するだけ)。 再レビューが
+# 必要な場合は新規 subagent の spawn (= 新しい agent_id での launch attestation) で
+# 行う。
 #
 # - SubagentStop (同 matcher):
 #   1. agent_type / agent_id を SubagentStart と同じ基準で検証。不一致は exit 0
@@ -43,8 +58,14 @@
 #      stop_hook_active == false の最初の有効 report で marker を書き、以降の再 stop は
 #      attestation 消費済みのため marker を更新しない (「最終 stop」ではなく
 #      「初回有効 report」を採用する意図的なセマンティクス)
-#   4. attestation は最初の SubagentStop で必ず消費する (読み取り後に削除。
-#      one-shot。以降の検証が失敗しても再 stop で marker を書ける経路を残さない)
+#   4. attestation は最初の SubagentStop (stop_hook_active=false) で必ず消費する:
+#      以降の検証 (5〜8) の成否に関わらず、 まず launch tombstone
+#      (.claude-pre-push-done-<agent_id>) を排他 `ln` で作り (中身は attestation の
+#      hash。 作成失敗 = 既存なら無視して続行)、 続けて attestation を rm する
+#      (読み取り後に削除。 one-shot。 「最初の false stop で成否に関わらず
+#      attestation→tombstone へ不可逆遷移する」ことで、 以降の検証が失敗しても
+#      再 stop で marker を書ける経路も、 同一 agent_id での SubagentStart 再発火も
+#      残さない)
 #   5. last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行が
 #      ちょうど 1 つ、かつその行が ^Status: (pass|findings)$ に一致するときのみ
 #      有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 / 非 string は
@@ -180,6 +201,21 @@ case "$HOOK_EVENT_NAME" in
 
     GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 
+    # tombstone (この agent_id は一度 SubagentStop まで到達した) が存在すれば exit 0。
+    # 同一 agent_id はフル review 1 回のみ許す (resume で SubagentStart が再発火する
+    # 環境での attestation 再鋳造を遮断する。 issue #285 codex review P1 指摘)。
+    TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    if [ -e "$TOMBSTONE_PATH" ]; then
+      exit 0
+    fi
+
+    # 既存 attestation が存在する場合も exit 0 (上書き禁止。 中間 stop を挟む重複
+    # Start で開始 hash が更新される経路を塞ぐ)。
+    ATTESTATION_PATH=$(launch_attestation_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    if [ -e "$ATTESTATION_PATH" ]; then
+      exit 0
+    fi
+
     # base 検出不能 / branch 取得不能 / master・main / hash 計算失敗では、いずれも
     # attestation を書かず exit 0 (block-pre-push.sh の pass-through / deny 条件と整合)。
     BASE=$(detect_base_branch) || exit 0
@@ -193,16 +229,27 @@ case "$HOOK_EVENT_NAME" in
     # 1 日 (1440 分) より古い launch attestation を opportunistic に削除する
     # (stale 掃除、best-effort)。 find の失敗 (権限不足等) は無視する。
     find "$STORAGE_DIR" -maxdepth 1 -name "${LAUNCH_ATTESTATION_PREFIX}*" -type f -mmin +1440 -delete 2>/dev/null || true
+    # tombstone は 30 日 (43200 分) より古いものを opportunistic に削除する。
+    # Claude Code の transcript 既定保持期間 (30 日) に合わせている: resume は
+    # transcript が生きている間だけ成立しうるため、 それより長く tombstone を残す
+    # 必要がない。
+    find "$STORAGE_DIR" -maxdepth 1 -name "${LAUNCH_TOMBSTONE_PREFIX}*" -type f -mmin +43200 -delete 2>/dev/null || true
 
-    ATTESTATION_PATH=$(launch_attestation_path "$GIT_DIR" "$AGENT_ID") || exit 0
-    # 同一ディレクトリ内 temp file (mktemp) → mv の atomic 書き込み。
-    # 書き込み失敗は silent exit 0。
+    # 同一ディレクトリ内 temp file (mktemp) → 排他 `ln` (create-if-absent。 既存なら
+    # 失敗) → tmp を rm、の atomic 書き込み。 `mv` ではなく `ln` を使うのは、 上の
+    # 存在チェックと実書き込みの間に別プロセスが attestation を作る TOCTOU を
+    # filesystem レベルでも防ぐため (`ln` は target が既存なら常に失敗する)。
+    # 書き込み失敗 (tmp 作成失敗・書き込み失敗・ln 失敗) はいずれも silent exit 0。
     ATTESTATION_TMP=$(mktemp "${STORAGE_DIR}/${LAUNCH_ATTESTATION_PREFIX}tmp.XXXXXX" 2>/dev/null) || exit 0
     if ! printf '%s' "$HASH" > "$ATTESTATION_TMP" 2>/dev/null; then
       rm -f "$ATTESTATION_TMP" 2>/dev/null
       exit 0
     fi
-    mv "$ATTESTATION_TMP" "$ATTESTATION_PATH" 2>/dev/null || rm -f "$ATTESTATION_TMP" 2>/dev/null
+    if ! ln "$ATTESTATION_TMP" "$ATTESTATION_PATH" 2>/dev/null; then
+      rm -f "$ATTESTATION_TMP" 2>/dev/null
+      exit 0
+    fi
+    rm -f "$ATTESTATION_TMP" 2>/dev/null
     exit 0
     ;;
 
@@ -250,8 +297,23 @@ case "$HOOK_EVENT_NAME" in
     fi
 
     ATTESTED_HASH=$(cat "$ATTESTATION_PATH" 2>/dev/null)
+    # attestation → tombstone の不可逆遷移: 最初の (stop_hook_active=false の)
+    # SubagentStop で、 以降の検証 (Status / hash 一致等) の成否に関わらず、 常に
+    # tombstone を作り attestation を消費する。 tombstone は同一 agent_id での
+    # SubagentStart 再発火 (resume 等) を恒久的に拒否するため、 検証結果を問わず
+    # 「この agent_id は一度ここまで到達した」事実だけを記録する。
+    # 排他 `ln` (create-if-absent) を使う: 既に tombstone がある場合 (通常発生しない
+    # はずだが二重 stop 等の異常系) は失敗を無視して続行する (best-effort)。
+    TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    TOMBSTONE_TMP=$(mktemp "$(dirname "$TOMBSTONE_PATH")/${LAUNCH_TOMBSTONE_PREFIX}tmp.XXXXXX" 2>/dev/null) || true
+    if [ -n "$TOMBSTONE_TMP" ]; then
+      if printf '%s' "$ATTESTED_HASH" > "$TOMBSTONE_TMP" 2>/dev/null; then
+        ln "$TOMBSTONE_TMP" "$TOMBSTONE_PATH" 2>/dev/null || true
+      fi
+      rm -f "$TOMBSTONE_TMP" 2>/dev/null || true
+    fi
     # attestation は最初の SubagentStop で必ず消費する (読み取り後に削除。one-shot。
-    # 以降の検証がすべて失敗しても再 stop で marker を書ける経路を残さない)。
+    # 以降の検証が失敗しても再 stop で marker を書ける経路を残さない)。
     rm -f "$ATTESTATION_PATH" 2>/dev/null || true
 
     CODEX_PENDING_PATH=""

@@ -26,6 +26,15 @@ SECURITY_MARKER_NAME=".claude-pre-push-security-reviewed"
 # issue #285: SubagentStart が書く launch attestation (agent_id ごとに 1 ファイル) の prefix。
 # auto-mark.sh の SubagentStart/SubagentStop 契約が「開始時 review hash」を束縛するために使う。
 LAUNCH_ATTESTATION_PREFIX=".claude-pre-push-launch-"
+# issue #285 (codex review P1 指摘): SendMessage による resume で SubagentStart が
+# 同一 agent_id で再発火する環境では、 attestation の「作り直し」がフル review を経ない
+# まま開始 hash を更新してしまう (= resume 後の再 stop が誤って marker を書ける経路)。
+# tombstone は「この agent_id は一度 SubagentStop (stop_hook_active=false) まで到達した」
+# ことを恒久的に記録し、 同一 agent_id での 2 回目以降の SubagentStart を構造的に拒否する。
+# attestation とは別の prefix にするのは、 agent_id が `.done` 等の文字列を含みうるため
+# `<attestation-path>.done` のような suffix 方式だと agent_id の内容次第で name 衝突しうる
+# ため (例: agent_id="foo.done" だと衝突する)。 prefix 方式なら agent_id の中身に依存しない。
+LAUNCH_TOMBSTONE_PREFIX=".claude-pre-push-done-"
 
 # 引数: <git-dir> [runtime]
 # 出力: runtime に対応する marker storage directory
@@ -137,4 +146,17 @@ launch_attestation_path() {
   local agent_id="$2"
   local runtime="${3:-claude}"
   marker_path "$git_dir" "${LAUNCH_ATTESTATION_PREFIX}${agent_id}" "$runtime"
+}
+
+# 引数: <git-dir> <agent_id> [runtime]
+# 出力: SubagentStop が作る launch tombstone (git-dir/.claude-pre-push-done-<agent_id>) の path
+#
+# agent_id の validation は launch_attestation_path と同様に呼び出し側 (auto-mark.sh) の
+# 責務。 tombstone は一度作られたら (30 日の opportunistic prune までは) 恒久的に残り、
+# 同一 agent_id での SubagentStart 再発火 (resume 等) を拒否するために使う。
+launch_tombstone_path() {
+  local git_dir="$1"
+  local agent_id="$2"
+  local runtime="${3:-claude}"
+  marker_path "$git_dir" "${LAUNCH_TOMBSTONE_PREFIX}${agent_id}" "$runtime"
 }
