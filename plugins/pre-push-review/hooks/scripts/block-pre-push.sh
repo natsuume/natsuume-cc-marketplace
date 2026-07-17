@@ -230,18 +230,51 @@ EOF
   skip_env_assignments _first_toks _fi
   if [ "$_fi" -lt "$_fn" ]; then
     _fc="$(unquote_token "${_first_toks[$_fi]}")"
+    _unsupported_wrapper_push=0
     case "$_fc" in
-      bash|sh|zsh|dash|ksh|eval|exec|builtin|command|time|env)
-        REASON=$(cat <<'EOF'
+      bash|sh|zsh|dash|ksh)
+        # shell interpreter の `-c` command string と、stdin / interactive / init file
+        # から command を読む形は従来どおり unsupported wrapper として fail-closed に保つ。
+        # 通常の最初の positional script path がある場合だけ、path / 通常引数中の `push`
+        # を command として評価しないため shape check の対象外にする。
+        _unsupported_wrapper_push=1
+        _wi=$((_fi+1))
+        while [ "$_wi" -lt "$_fn" ]; do
+          _wt="$(unquote_token "${_first_toks[$_wi]}")"
+          case "$_wt" in
+            -O|+O|-o|+o)
+              _wi=$((_wi+2)); continue ;;
+            -O?*|+O?*|-o?*|+o?*) _wi=$((_wi+1)); continue ;;
+            -c|-[^-]*c*|-i|-s|-[^-]*i*|-[^-]*s*|--rcfile|--init-file|--rcfile=*|--init-file=*)
+              break ;;
+            --)
+              _wi=$((_wi+1))
+              if [ "$_wi" -lt "$_fn" ]; then
+                _wt="$(unquote_token "${_first_toks[$_wi]}")"
+                case "$_wt" in '<'*|'>'*) ;; *) _unsupported_wrapper_push=0 ;; esac
+              fi
+              break
+              ;;
+            -*|+*) _wi=$((_wi+1)); continue ;;
+            '<'*|'>'*) break ;;
+            *) _unsupported_wrapper_push=0; break ;;
+          esac
+        done
+        ;;
+      eval|exec|builtin|command|time|env)
+        _unsupported_wrapper_push=1
+        ;;
+    esac
+    if [ "$_unsupported_wrapper_push" -eq 1 ]; then
+      REASON=$(cat <<'EOF'
 プッシュをブロックしました。 シェルラッパー (`bash -c "..."` / `sh -c ...` / `eval ...` / `time git push ...` / `env git push ...` 等) 経由の git push はサポート外です。
 
 直接 `git push` を実行してください (前段コマンドが必要な場合は `cd dir && git push` 形式で連結できます)。
 EOF
 )
-        deny "$REASON"
-        exit 0
-        ;;
-    esac
+      deny "$REASON"
+      exit 0
+    fi
   fi
   unset _first_toks
 done

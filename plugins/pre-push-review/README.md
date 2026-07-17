@@ -18,7 +18,12 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v4.1.3 (前身: `pre-commit-review` v0.4.0)
+v4.1.4 (前身: `pre-commit-review` v0.4.0)
+
+### v4.1.3 → v4.1.4 の変更点 (issue #129)
+
+- `block-pre-push.sh` の事前 shape check で shell interpreter の positional script path と `-c` command string を区別し、`bash ./scripts/push-deploy-notifications.sh` のように path に `push` を含むだけの script 実行を誤 deny しないようにした
+- `bash -c`、`env` / `time` 等の wrapper、`bash -s` の stdin、`bash -i` と `--rcfile` / `--init-file` の初期化ファイル実行は、従来どおり fail-closed に deny する
 
 ### v4.1.2 → v4.1.3 の変更点 (issue #294)
 
@@ -204,7 +209,7 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 
 **残っている deny 制約 (loop discipline 維持に必要な最小防御)**:
 
-- `bash -c "..."` 等の **シェルラッパー** 経由 push は引き続き deny (クォート内のコマンドを本フックの文字列パーサで解析できず、 postfix scan も成立しないため)
+- `bash -c "..."`、stdin / interactive / init file を使う **シェルラッパー** 経由 push は引き続き deny。通常の positional script path や引数に `push` が含まれるだけなら介入しない
 - 単独の `&` (background) と `|` (pipeline) は deny (並列実行になりマーカー検証完了後に状態が変更される経路になるため)
 - `git push` の **後** にシェル区切り文字 (`;`, `&`, `&&`, `||`, `|`) を続ける複合コマンドは deny (1 マーカー = 1 push 保証のため)
 - 引用符で囲まれた `git push` 文字列 (`grep "git push" README` など) はテキスト参照とみなしフックは介入しません
