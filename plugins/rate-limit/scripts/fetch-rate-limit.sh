@@ -28,7 +28,11 @@
 #     "cache_age_seconds": <①のみ>,
 #     "five_hour": { "used_percentage": <0-100>, "resets_at": "<ISO 8601 UTC>" } | null,
 #     "seven_day": 同上 | null,
-#     "extras": <②のみ任意。seven_day_opus / seven_day_sonnet / extra_usage の非 null のみ> }
+#     "extras": <②のみ任意。seven_day_opus / seven_day_sonnet / extra_usage / limits の非 null のみ> }
+#
+#   extras.limits は endpoint の limits 配列 (model-scoped limit を含む) の raw passthrough
+#   (issue #307)。extra_usage と同様に正規化・スキーマ検証は行わず、null / 欠落なら extras に
+#   含めない。空配列 [] は非 null のためそのまま出力する。値の解釈は skill 側 (SKILL.md) が担う。
 #
 # 正規化マッピング (実機検証済み。2026-07-11、Linux/WSL2、Claude Code v2.1.207):
 #   | 出力フィールド            | 経路① (statusline キャッシュ)          | 経路② (oauth/usage)              |
@@ -39,7 +43,7 @@
 #   | five_hour.used_percentage | rate_limits.five_hour.used_percentage     | five_hour.utilization (0-100 実測) |
 #   | five_hour.resets_at       | epoch なら ISO 8601 UTC に変換、ISO ならそのまま | ISO のままパススルー (実測: +00:00 オフセット付き文字列) |
 #   | seven_day.*               | 同上                                       | 同上                                |
-#   | extras                    | (出力しない)                              | seven_day_opus / seven_day_sonnet / extra_usage のうち非 null のみ。全 null ならキー省略 |
+#   | extras                    | (出力しない)                              | seven_day_opus / seven_day_sonnet / extra_usage / limits のうち非 null のみ。全 null ならキー省略 |
 #   片 window が invalid (used_percentage が 0-100 の数値でない、resets_at 欠落等) → その window
 #   は null。両方 invalid なら経路失敗 (キャッシュなら経路②へ、経路②なら exit 1)。
 #
@@ -169,11 +173,13 @@ extract_oauth_window() {
   normalize_window_values "$pct" "$resets_at"
 }
 
-# extras は allowlist (seven_day_opus / seven_day_sonnet / extra_usage) の非 null のみ。
+# extras は allowlist (seven_day_opus / seven_day_sonnet / extra_usage / limits) の非 null のみ。
+# limits は model-scoped limit を含む配列の raw passthrough (issue #307。検証しない方針は
+# ヘッダの公開契約を参照)。
 build_extras() {
   local resp_file="$1"
   jq -c '
-    {seven_day_opus, seven_day_sonnet, extra_usage}
+    {seven_day_opus, seven_day_sonnet, extra_usage, limits}
     | with_entries(select(.value != null))
   ' "$resp_file" 2>/dev/null
 }
