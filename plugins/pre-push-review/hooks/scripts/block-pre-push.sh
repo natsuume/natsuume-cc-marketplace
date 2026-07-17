@@ -632,6 +632,7 @@ fi
 if CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR" "$MARKER_RUNTIME") &&
   CODEX_MARKER=$(codex_marker_path "$GIT_DIR" "$MARKER_RUNTIME") &&
   SECURITY_MARKER=$(security_marker_path "$GIT_DIR" "$MARKER_RUNTIME"); then
+  MARKER_STORAGE_DIR=${CODE_REVIEWED_MARKER%/*}
   CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
   CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
   SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
@@ -642,6 +643,7 @@ else
   CODE_REVIEWED_HASH=""
   CODEX_HASH=""
   SECURITY_HASH=""
+  MARKER_STORAGE_DIR="解決不能 (Codex plugin data path または git-dir を確認してください)"
 fi
 
 # 真の commit push (real push) に到達した時点で BASE が解決できないと branch 全差分が
@@ -728,6 +730,9 @@ REASON=$(cat <<EOF
 
 target: ${TARGET_CWD}
 ブランチ: ${BRANCH} (基準: origin/${BASE})
+marker storage: ${MARKER_STORAGE_DIR}
+
+linked worktree では marker / launch attestation は main \`.git\` 直下ではなく、worktree 専用 git-dir (\`.git/worktrees/<name>/\`) に保存されます。target で \`git rev-parse --absolute-git-dir\` を実行し、上記 storage と一致することを確認してください。
 
 レビュー状態 (下記 3 つすべてが「✓ 最新の差分でレビュー済み」 になると push が許可されます):
   correctness review : $CODE_REVIEWED_STATUS

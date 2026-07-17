@@ -314,6 +314,58 @@ class PrePushAutoMarkTest(unittest.TestCase):
             self.assertTrue(stale_tombstone.exists())
             self.assertTrue(fresh_tombstone.exists())
 
+    def test_linked_worktree_lifecycle_uses_worktree_git_dir(self) -> None:
+        """Marker は common git-dir ではなく linked worktree の git-dir に置く。"""
+        with tempfile.TemporaryDirectory() as temporary_name:
+            temporary = Path(temporary_name)
+            main = self.create_feature_repository(temporary)
+            linked = temporary / "linked-worktree"
+            self.git(
+                main,
+                "worktree",
+                "add",
+                "-b",
+                "feature/linked",
+                str(linked),
+                "master",
+            )
+            (linked / "example.txt").write_text(
+                "linked change\n", encoding="utf-8"
+            )
+            self.git(linked, "add", "example.txt")
+            self.git(linked, "commit", "-m", "linked change")
+
+            agent_type = "pre-push-review:code-reviewer"
+            linked_git_dir = self.git_dir(linked)
+            common_git_dir = Path(
+                subprocess.check_output(
+                    ["git", "rev-parse", "--git-common-dir"], cwd=linked
+                ).decode().strip()
+            )
+            if not common_git_dir.is_absolute():
+                common_git_dir = (linked / common_git_dir).resolve()
+
+            self.run_start(linked, agent_type)
+            linked_attestation = self.launch_attestation_path(linked)
+            self.assertEqual(linked_attestation.parent, linked_git_dir)
+            self.assertTrue(linked_attestation.exists())
+            self.assertFalse(
+                (common_git_dir / linked_attestation.name).exists()
+            )
+
+            result = self.run_hook(
+                linked,
+                self.stop_payload(
+                    agent_type,
+                    "# Code Review\n\nStatus: pass\nFindings: 0",
+                ),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            marker = self.marker_path(linked, agent_type)
+            self.assertEqual(marker.parent, linked_git_dir)
+            self.assertTrue(marker.exists(), result.stderr.decode())
+            self.assertFalse((common_git_dir / marker.name).exists())
+
     # ------------------------------------------------------------------
     # SubagentStop: marker 書き込み
     # ------------------------------------------------------------------

@@ -14,9 +14,17 @@
 > - **起動・marker 発行経路の単一化**: 親 session は 3 軸とも同じ `Agent` / `Task` tool で起動し、3 marker とも auto-mark.sh が SubagentStart の launch attestation と SubagentStop での parent-safe report 検証を経て発行します。Codex wrapper は review 開始時点の hash を pending attestation に束縛し、auto-mark が report 成功後に final marker へ昇格します。
 > - **`/pre-push-review:review` slash command を 3 subagent 並列発出に書き換え**: deny メッセージとともに案内されます。 wall-clock は最遅レビュー 1 本の時間で完了します。
 
+Linked worktree では marker、launch attestation、tombstone を main `.git` 直下ではなく、`git rev-parse --absolute-git-dir` が返す worktree 専用 git-dir (`.git/worktrees/<name>/`) に保存します。`block-pre-push.sh` の deny メッセージは実際の marker storage を表示するため、main `.git` の同名ファイルを見てレビュー状態を判断しないでください。
+
 ## バージョン
 
-v4.1.2 (前身: `pre-commit-review` v0.4.0)
+v4.1.3 (前身: `pre-commit-review` v0.4.0)
+
+### v4.1.2 → v4.1.3 の変更点 (issue #294)
+
+- issue #294 の対象 worktree を再調査し、SubagentStart / SubagentStop が発火して worktree 専用 git-dir に launch tombstone と3マーカーを書いていたことを確認した。当初の「hook が一度も発火していない」という推定は、main `.git` 直下を marker storage とみなしたことによる保存先の取り違えだった
+- `block-pre-push.sh` の deny メッセージへ実際の marker storage と `git rev-parse --absolute-git-dir` による確認手順を追加し、linked worktree で main `.git` の stale marker を誤参照して手動 override する再発経路を塞いだ
+- linked worktree の lifecycle marker が worktree 専用 git-dir に保存され、common git-dir 直下には書かれないことを integration test で固定した
 
 ### v4.1.1 → v4.1.2 の変更点 (issue #127)
 
