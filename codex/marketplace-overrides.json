@@ -85,7 +85,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.5.1",
+      "version": "0.5.2",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -103,7 +103,7 @@
         "verificationTests": [
           {
             "path": "tests/test_auto_lint_codex_adapter.py",
-            "covers": "apply_patch path 抽出、ignore 検知、Codex deny JSON の adapter 契約"
+            "covers": "apply_patch path 抽出、ignore 検知、Codex deny JSON の adapter 契約、symlink 経由の config-root 解決"
           },
           {
             "path": "tests/test_auto_lint_commit_parser.py",
@@ -111,7 +111,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "03f385ab8a4254bd338da080d5d392c6885e28985d9bca6f96f370b28c876d18"
+        "sourceTreeDigest": "c030911ffcf32459cff7448c8a2c87782c7afd2ed16d99526465485d1113164c"
       }
     },
     "pre-push-review": {

@@ -4,7 +4,13 @@
 
 ## バージョン
 
-v0.5.1
+v0.5.2
+
+### v0.5.1 → v0.5.2 の変更点 (#147)
+
+- config-root 探索の開始ディレクトリを Python の `os.path.realpath` で正規化し、symlink 経由の workspace path でもリンク先 repo の設定ファイルと `.git` 境界を探索するようにした
+- GNU 固有の `realpath -m` は導入せず、既存の Python 3 依存を使って Linux (WSL2) / macOS の同一挙動を維持した
+- symlink 設置場所に config がないケースと通常の real path の両方を integration test で固定した
 
 ### v0.5.0 → v0.5.1 の変更点 (#146)
 
@@ -281,7 +287,7 @@ Ruff は `uvx ruff` を最優先、次にグローバル PATH の `ruff` を使�
 | Prettier | `.prettierrc`, `.prettierrc.{json,json5,yml,yaml,js,cjs,mjs,ts,toml}`, `prettier.config.{js,cjs,mjs,ts,mts,cts}`, `package.json` の `prettier` |
 | Ruff | `ruff.toml`, `.ruff.toml`, `pyproject.toml` の `[tool.ruff]` セクション |
 
-設定ファイル名は上記の**固定リスト**の存在判定で探索します (グロブではないため、一覧外の拡張子は検出しません)。加えて `package.json` の `eslintConfig` / `prettier` フィールド、`pyproject.toml` の `[tool.ruff]` セクションも config-root として検出します。`.git` ディレクトリ (またはファイル) に到達したら探索を打ち切ります。
+設定ファイル名は上記の**固定リスト**の存在判定で探索します (グロブではないため、一覧外の拡張子は検出しません)。加えて `package.json` の `eslintConfig` / `prettier` フィールド、`pyproject.toml` の `[tool.ruff]` セクションも config-root として検出します。探索開始前に対象ファイルの親を実パスへ解決するため、workspace package への symlink 経由でもリンク先のディレクトリ階層を探索します。`.git` ディレクトリ (またはファイル) に到達したら探索を打ち切ります。
 
 ## ディレクトリ構成
 

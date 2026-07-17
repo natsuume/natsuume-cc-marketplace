@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,7 @@ def load_module(name: str, path: Path):
 paths_module = load_module("extract_edit_paths", LIB / "extract-edit-paths.py")
 DETECT_SCRIPT = LIB / "detect-new-ignores.py"
 BLOCK_SCRIPT = LIB.parent / "block-ignore-lint-comment.sh"
+FIND_CONFIG_ROOT = LIB / "find-config-root.sh"
 
 
 class EditPathAdapterTest(unittest.TestCase):
@@ -187,6 +189,53 @@ class IgnoreAdapterTest(unittest.TestCase):
         hook_output = response["hookSpecificOutput"]
         self.assertEqual(hook_output["hookEventName"], "PreToolUse")
         self.assertEqual(hook_output["permissionDecision"], "deny")
+
+
+class ConfigRootResolutionTest(unittest.TestCase):
+    def run_finder(self, file_path: Path, linter: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(FIND_CONFIG_ROOT), str(file_path), linter],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+    def test_symlinked_workspace_path_uses_real_config_hierarchy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repository = root / "real-repo"
+            source = repository / "packages" / "app"
+            source.mkdir(parents=True)
+            (repository / ".git").mkdir()
+            (repository / "eslint.config.js").write_text(
+                "export default [];\n", encoding="utf-8"
+            )
+            real_file = source / "index.js"
+            real_file.write_text("const value = 1;\n", encoding="utf-8")
+
+            linked_source = root / "linked-app"
+            linked_source.symlink_to(source, target_is_directory=True)
+
+            result = self.run_finder(linked_source / "index.js", "eslint")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(repository.resolve()))
+
+    def test_real_workspace_path_keeps_existing_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp) / "repo"
+            source = repository / "src"
+            source.mkdir(parents=True)
+            (repository / ".git").mkdir()
+            (repository / ".prettierrc").write_text("{}\n", encoding="utf-8")
+            file_path = source / "index.js"
+            file_path.write_text("const value = 1;\n", encoding="utf-8")
+
+            result = self.run_finder(file_path, "prettier")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(repository.resolve()))
 
 
 if __name__ == "__main__":
