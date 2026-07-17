@@ -29,9 +29,17 @@ run_in() {
 
 format_file() {
   local file_path="$1"
-  local root_eslint root_prettier root_ruff
+  local file_dir root_eslint root_prettier root_ruff
 
   if [ -z "$file_path" ] || [ ! -f "$file_path" ]; then
+    return 0
+  fi
+
+  # repository 外の scratch file では祖先の無関係な config を拾って formatter や
+  # package runner を起動しない。repository 内なら untracked file も従来どおり対象に
+  # するため、git ls-files ではなく worktree membership だけを確認する。
+  file_dir=$(dirname "$file_path")
+  if ! git -C "$file_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     return 0
   fi
 
