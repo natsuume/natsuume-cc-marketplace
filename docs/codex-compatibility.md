@@ -7,7 +7,7 @@ Claude Code marketplace を version 以外の共有 metadata の正本とし、S
 | Plugin | Claude Code | Codex | Codex 配布 | 移植状態 | Skills | command hooks | 意図した差分 |
 |---|---:|---:|---|---|---:|---:|---|
 | `git-guardrails` | 0.5.0 | 0.5.0 | 対象 | 完全共有 | 1 | 3/3 | なし |
-| `enforce-draft-pr` | 0.3.0 | 0.3.0 | 対象 | 完全共有 | 0 | 1/1 | なし |
+| `enforce-draft-pr` | 0.4.0 | 0.4.0 | 対象 | 完全共有 | 0 | 1/1 | なし |
 | `auto-lint-check` | 0.5.0 | 0.5.0 | 対象 | 完全共有 | 0 | 4/4 | なし |
 | `pre-push-review` | 4.0.1 | — | 対象外: 現行 Codex runtime の spawn_agent に agent_type selector が無く、agent_type=default の unauthenticated default agents を 3 reviewer として安全に識別できないため、fail-closed で marketplace 配布対象から除外します。 | メタデータのみ | 2 | 5/5 | Codex marketplace では pre-push-review の entry、manifest、Skill、hook を公開しないため、Codex から workflow を install・選択できません。<br>Codex 版 v3.1.4 以前の既存 install は marketplace からの除外だけでは local config/cache から削除されません。codex plugin remove pre-push-review@natsuume-plugins を実行し、新しい Codex thread を開始する必要があります。<br>Claude Code marketplace の plugin、command、agent、hook は引き続き利用できます。 |
 | `update-default-branch` | 0.3.0 | 0.3.0 | 対象 | 完全共有 | 1 | 0/0 | なし |
