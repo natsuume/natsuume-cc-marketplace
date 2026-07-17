@@ -25,8 +25,10 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
   `ClosedEvent` / `ReopenedEvent` のいずれかのイベントの配列。
   `timelineItems.totalCount > len(nodes)` の行は timeline 取得が不完全であり、
   主系列・打ち切り系列から除外され `exclusions.timelineOverflow` に列挙される。
-- `--prs`: 1 行 1 **merged** PR の JSONL。各行は `repo`, `number`, `createdAt`,
-  `mergedAt`, `additions`, `deletions`, `timelineItems` (`ReadyForReviewEvent` /
+- `--prs`: 1 行 1 PR (OPEN + MERGED。merge 済みか否かに依らず収集する) の
+  JSONL。各行は `repo`, `number`, `state` (`"OPEN" | "MERGED"`), `isDraft`
+  (bool), `createdAt`, `mergedAt` (`state == "OPEN"` の行は `null` を許容
+  する), `additions`, `deletions`, `timelineItems` (`ReadyForReviewEvent` /
   `ConvertToDraftEvent` の配列), `closingIssuesReferences.nodes` を持つ。
 - `--claim-patterns-file`: claim 判定パターン (SKILL.md 「claim 判定パターン
   (正本)」セクションの JSON block をそのまま書き出したファイル)。
@@ -171,18 +173,30 @@ class ReadyResolution:
     """1 件の PR に対する ready 化時刻の解決結果 (`resolve_ready` の戻り値)。
 
     Attributes:
-        ready_at: 最後 (createdAt が最大) の `ReadyForReviewEvent.createdAt`。
-            `ReadyForReviewEvent` が 1 件も無ければ `pr["createdAt"]` にフォールバックする。
+        ready_at: PR の `state` / `isDraft` に応じて次のように解決する。
+
+            - `state == "MERGED"`: 最後 (createdAt が最大) の
+              `ReadyForReviewEvent.createdAt`。`ReadyForReviewEvent` が
+              1 件も無ければ `pr["createdAt"]` にフォールバックする
+              (従来どおり)。
+            - `state == "OPEN"` かつ `isDraft == False`: 最後の
+              `ReadyForReviewEvent.createdAt`、無ければ `pr["createdAt"]`
+              (作成時から ready であった扱い)。
+            - `state == "OPEN"` かつ `isDraft == True`: `None`
+              (ready 未到達。過去に `ReadyForReviewEvent` があっても現在
+              draft に戻っているため、完了とは見なさない)。
         redraft_count: `ConvertToDraftEvent` の件数 (= draft に戻された回数)。
             例えば draft で作成 → ready → draft → ready は 1、**ready で作成 →
             draft 化 → ready 化も 1** (`ConvertToDraftEvent` が 1 件のため)。
-            イベントが無ければ 0。
+            イベントが無ければ 0。`state` / `isDraft` に関わらず同じ規則で
+            数える。
         via_draft: `ReadyForReviewEvent` が 1 件以上存在すれば `True`
-            (= 実際に draft から ready 化した実績がある)。存在しなければ `False`
-            (この場合 `ready_at` は `pr["createdAt"]` へのフォールバック)。
+            (= 実際に draft から ready 化した実績がある)。存在しなければ
+            `False`。この定義は `state` / `isDraft` によらず変わらない
+            (`ready_at` が `None` になる場合でも `via_draft` は独立に判定する)。
     """
 
-    ready_at: datetime
+    ready_at: datetime | None
     redraft_count: int
     via_draft: bool
 
@@ -291,18 +305,26 @@ def resolve_start(issue: dict, patterns: ClaimPatterns) -> StartResolution:
 
 
 def resolve_ready(pr: dict) -> ReadyResolution:
-    """PR の `timelineItems` から ready 化時刻を解決する。
+    """PR の `state` / `isDraft` / `timelineItems` から ready 化時刻を解決する。
 
     対象イベントは `ReadyForReviewEvent` と `ConvertToDraftEvent`。
 
     Args:
         pr: `prs.jsonl` の 1 行 (モジュール docstring の入力契約を参照)。
+            `state` (`"OPEN" | "MERGED"`) と `isDraft` (bool) によって
+            `ready_at` の解決規則が分岐する
+            (`ReadyResolution.ready_at` の docstring を参照)。
 
     Returns:
         ReadyResolution: `ready_at` / `redraft_count` / `via_draft` の定義は
         `ReadyResolution` の docstring を参照。
 
     境界:
+        - `ready_at` の解決規則 (`state` / `isDraft` による分岐) は
+          `ReadyResolution.ready_at` の docstring を正本とする。
+          `state == "OPEN"` かつ `isDraft == True` のときは `ready_at` を
+          `None` として返す (この場合も `redraft_count` / `via_draft` は
+          他の分岐と同じ規則で計算する)。
         - `ConvertToDraftEvent` は `ready_at` の計算に使わず、`redraft_count`
           の算出にのみ使う (`via_draft` は `ReadyForReviewEvent` の有無だけで
           判定する)。
@@ -358,7 +380,8 @@ def compute(
 
     Args:
         issues: `issues.jsonl` の各行を `json.loads` した dict のリスト。
-        prs: `prs.jsonl` の各行を `json.loads` した dict のリスト (merged PR のみ)。
+        prs: `prs.jsonl` の各行を `json.loads` した dict のリスト
+            (OPEN + MERGED PR)。
         patterns: `load_claim_patterns` が返した検証済みパターン。
         as_of: 集計基準時刻 (UTC, aware datetime)。打ち切り系列の経過時間と
             出力の `asOf` に使う。
@@ -376,26 +399,49 @@ def compute(
         - `since` (str | None): `since` を `YYYY-MM-DD` 文字列化したもの (無指定なら `None`)。
         - `sizeBands` (list[dict]): `SIZE_BANDS` を
           `[{"band": b, "min": lo, "max": hi}, ...]` に投影したもの。
-        - `repos` (list[dict]): repo 別の `{"repo", "issues", "closedIssues", "mergedPrs"}`。
-          `since` によるフィルタは適用しない (全期間)。`issues` はその repo の
-          issue 総数、`closedIssues` は `state == "CLOSED"` の数、`mergedPrs` は
-          その repo の merged PR 数。
-        - `mainSeries` (list[dict]): 「着手マーカーあり (`first_start is not None`)
-          かつ最終クローズが `category == "merged_pr"`」の issue を 1 件 1 要素で
-          列挙する。各要素は `{"repo", "issue", "firstStartAt", "lastStartAt",
+        - `repos` (list[dict]): repo 別の `{"repo", "issues", "closedIssues",
+          "mergedPrs", "openReadyPrs"}`。`since` によるフィルタは適用しない
+          (全期間)。`issues` はその repo の issue 総数、`closedIssues` は
+          `state == "CLOSED"` の数、`mergedPrs` はその repo の merged PR 数
+          (従来どおり)、`openReadyPrs` はその repo の `state == "OPEN"` かつ
+          ready 到達済み (`isDraft == False`) の PR 数。
+        - `mainSeries` (list[dict]): 着手マーカーあり (`first_start is not None`)
+          かつ次のいずれかを満たす issue を 1 件 1 要素で列挙する。
+
+          - (a) CLOSED issue で最終クローズが `category == "merged_pr"`
+            (従来どおり。`completionBasis = "merged"`)。
+          - (b) OPEN issue で、`closingIssuesReferences` にその issue を
+            含む ready 到達済み PR (`resolve_ready` の `ready_at` が
+            非 `None`。すなわち `state == "MERGED"`、または
+            `state == "OPEN"` かつ `isDraft == False`) が存在する
+            (`completionBasis = "ready_unmerged"`)。(b) に該当する
+            ready 到達済み PR が複数存在する場合は `readyAt` が最も早い
+            PR を採用し、該当した issue 件数を
+            `dataQuality.multipleReadyPrIssues` に計上する。
+
+          各要素は `{"repo", "issue", "firstStartAt", "lastStartAt",
           "startWeek", "pr", "prCreatedAt", "readyAt", "mergedAt",
-          "leadTimeHours", "phaseHours": {"startToPrCreated", "prCreatedToReady",
-          "readyToMerge"}, "sizeBand", "sizeLines", "viaDraft", "redraftCount",
-          "negativeInterval"}`。`leadTimeHours` は `firstStartAt` → `readyAt`
+          "completionBasis", "leadTimeHours", "phaseHours": {"startToPrCreated",
+          "prCreatedToReady", "readyToMerge"}, "sizeBand", "sizeLines",
+          "viaDraft", "redraftCount", "negativeInterval"}`。`completionBasis`
+          は `"merged" | "ready_unmerged"`。`completionBasis ==
+          "ready_unmerged"` の要素は `mergedAt` が `None`、
+          `phaseHours.readyToMerge` が `None` (ready から先の区間が未確定
+          のため)。`leadTimeHours` は `firstStartAt` → `readyAt`
           の経過時間 (`lastStartAt` ではない。複数着手の解釈が必要な場合に
           備えて `lastStartAt` 自体は保持する)。`phaseHours` の 3 区間は
           `firstStartAt → prCreatedAt → readyAt → mergedAt` を合計すると
-          `leadTimeHours` (+ readyToMerge) に一致する。`since` フィルタ適用対象。
+          `leadTimeHours` (+ readyToMerge) に一致する
+          (`completionBasis == "ready_unmerged"` では `readyToMerge` を
+          除いた 2 区間の合計が `leadTimeHours` に一致する)。`since`
+          フィルタ適用対象。
         - `censored` (list[dict]): 着手マーカーはあるが `category == "open"`
-          (まだクローズしていない) issue。各要素は `{"repo", "issue",
-          "firstStartAt", "startWeek", "elapsedHoursLowerBound"}`。
-          `elapsedHoursLowerBound` は `as_of - firstStartAt` (時間)。
-          `since` フィルタ適用対象。
+          (まだクローズしていない) issue のうち、`mainSeries` の (b) に該当
+          しない (ready 到達済みのリンク PR が存在しない) もの。これにより
+          `censored` の経過時間は常に「着手→ready」の下限値として解釈できる。
+          各要素は `{"repo", "issue", "firstStartAt", "startWeek",
+          "elapsedHoursLowerBound"}`。`elapsedHoursLowerBound` は
+          `as_of - firstStartAt` (時間)。`since` フィルタ適用対象。
         - `auxiliarySeries` (dict): 着手マーカーはあるが `category` が
           `merged_pr` でも `open` でもない issue を category 別に振り分けた
           `{"manualClose": [...], "commitClose": [...], "notPlanned": [...],
@@ -404,30 +450,46 @@ def compute(
           category 固有の追加フィールド (例: `unmergedPr` の PR 番号) は
           Phase B 実装時に後方互換な追加として拡張しうる。
           `since` フィルタ適用対象 (mainSeries と揃える)。
-        - `prSeries` (list[dict]): merged PR 1 件 1 要素で列挙する。各要素は
-          `{"repo", "pr", "createdAt", "readyAt", "mergedAt",
+        - `prSeries` (list[dict]): ready 到達済み PR (`state == "MERGED"`、
+          または `state == "OPEN"` かつ `isDraft == False`) を 1 件 1 要素
+          で列挙する。ready 未到達 (`state == "OPEN"` かつ
+          `isDraft == True`) の PR は `prSeries` に含めない。各要素は
+          `{"repo", "pr", "state", "createdAt", "readyAt", "mergedAt",
           "createdToReadyHours", "readyToMergeHours", "sizeBand", "sizeLines",
-          "viaDraft", "redraftCount"}`。issue 側の着手マーカー有無に関わらず
-          merged PR であれば列挙する (issue 起点の主系列とは独立)。
+          "viaDraft", "redraftCount"}`。`state` は `"OPEN" | "MERGED"`。
+          `state == "OPEN"` の要素は `mergedAt` / `readyToMergeHours` が
+          `None`。issue 側の着手マーカー有無に関わらず対象条件を満たす PR
+          であれば列挙する (issue 起点の主系列とは独立)。
           `since` の適用: `pr["createdAt"]` (UTC date) `>= since` の
           inclusive filter を適用する (issue 系列と異なり着手時刻を持たない
           ため PR createdAt を基準にする。`markerCoverage` / `repos` は
           全期間・非フィルタ)。
-        - `weeklyCohorts` (list[dict]): `mainSeries` を `startWeek`
-          (= `firstStartAt` の ISO 8601 週、`%G-W%V`、月曜始まり、UTC。
-          `closedAt` 週ではない) でグルーピングした週次集計。各要素は
+        - `weeklyCohorts` (list[dict]): 母集団は `mainSeries` と `censored`
+          の `startWeek` (= `firstStartAt` の ISO 8601 週、`%G-W%V`、
+          月曜始まり、UTC。`closedAt` 週ではない) の和集合であり、
+          `censored` しか存在しない週も必ず 1 行を出す。各要素は
           `{"week", "n", "medianLeadTimeHours", "phaseMedians": {...},
           "bySizeBand": {band: {"n", "medianLeadTimeHours"}, ...}, "censoredN",
           "viaDraftRate", "medianSizeLines"}`。`n` はその週に割り当てられた
-          `mainSeries` 要素数 (`negativeInterval` な要素も含む)。中央値系
-          (`medianLeadTimeHours` / `phaseMedians` / `bySizeBand` 内の中央値) は
-          `negativeInterval == True` の要素を除外して計算する
-          (該当週の全要素が `negativeInterval` なら中央値は `null`)。
-          `bySizeBand` は当該週に 1 件以上存在した帯のみをキーとして含める
-          (0 件の帯は省略する疎な dict)。`censoredN` はその週に割り当てられた
-          `censored` 要素数。`viaDraftRate` / `medianSizeLines` は
-          `negativeInterval` を除外せず `n` 全体で計算する。
-          中央値は `statistics.median` に準拠 (偶数個は中央 2 値の算術平均)。
+          `mainSeries` 要素数 (`negativeInterval` な要素も含む)。`mainSeries`
+          が 0 件で `censored` のみの週は `n: 0`、`medianLeadTimeHours: None`、
+          `phaseMedians` 各値 `None`、`bySizeBand: {}`、`viaDraftRate: None`、
+          `medianSizeLines: None`、`censoredN` はその週の `censored` 件数、
+          とする。中央値系 (`medianLeadTimeHours` / `phaseMedians` /
+          `bySizeBand` 内の中央値) は `negativeInterval == True` の要素を
+          除外して計算する (該当週の全要素が `negativeInterval` なら
+          中央値は `null`)。`phaseMedians.readyToMerge` はさらに
+          `completionBasis == "ready_unmerged"` (= `phaseHours.readyToMerge
+          is None`) の要素を除外して計算する (該当週に merge 済みの要素が
+          1 件も無ければ `null`)。`bySizeBand` は当該週に 1 件以上存在した
+          帯のみをキーとして含める (0 件の帯は省略する疎な dict)。
+          `censoredN` はその週に割り当てられた `censored` 要素数。
+          `viaDraftRate` / `medianSizeLines` は `negativeInterval` を
+          除外せず `n` 全体で計算する (`n == 0` の週は前述のとおり
+          `None`)。中央値は `statistics.median` に準拠 (偶数個は中央 2 値の
+          算術平均)。`medianLeadTimeHours` 等の中央値は完了タスクのみから
+          計算される記述的統計であり、censor-aware 推定 (Kaplan–Meier 等)
+          は行わない。解釈は `censoredN` と併せて行う。
         - `markerCoverage` (list[dict]): repo × 月 (`issue["closedAt"]` を
           `YYYY-MM` に truncate、UTC) 別の `{"repo", "month", "closedIssues",
           "withMarker", "coverage"}`。`closedIssues` はその repo・月に
@@ -452,7 +514,11 @@ def compute(
           だった **PR** を `{"repo", "pr", "totalCount", "fetched", "linkedIssues"}`
           で列挙する (`fetched == len(nodes)`。`linkedIssues` はこの除外により
           `mainSeries` から除外された issue 番号の昇順リスト。該当なしなら空リスト)。
-          overflow した PR は `prSeries` から除外する。
+          この判定は PR の `state` (OPEN / MERGED) を問わず同様に適用する
+          (OPEN PR も `timelineItems.totalCount > len(nodes)` なら同じ扱いで
+          除外する)。overflow した PR は `prSeries` から除外し、`mainSeries`
+          (b) の ready 到達済みリンク PR としても採用しない (timeline 不完全な
+          PR の ready 時刻は信頼できないため)。
           `resolve_close_linkage(...).linked_pr` が overflow PR と一致する issue は
           `mainSeries` から除外し、`auxiliarySeries` のいずれのカテゴリにも
           再分類しない (timeline 不完全な PR の ready 時刻は信頼できないため)。
@@ -467,12 +533,16 @@ def compute(
           `smallOnly*` は `sizeBand == "S"` の要素のみに絞った集計。
           `boundaries` が `None` または空のとき `intervalStats == []`。
         - `dataQuality` (dict): `{"negativeIntervalCount": int, "redraftPrCount":
-          int, "notStartedClosedIssues": int}`。`negativeIntervalCount` は
-          `mainSeries` 中で `readyAt < firstStartAt` (`negativeInterval == True`)
-          だった件数。`redraftPrCount` は `prSeries` 中で `redraftCount > 0`
-          だった PR 件数。`notStartedClosedIssues` は `state == "CLOSED"` かつ
-          着手マーカーが無かった (`first_start is None`) issue の件数
-          (`since` フィルタは適用しない)。
+          int, "notStartedClosedIssues": int, "multipleReadyPrIssues": int}`。
+          `negativeIntervalCount` は `mainSeries` 中で `readyAt < firstStartAt`
+          (`negativeInterval == True`) だった件数。`redraftPrCount` は
+          `prSeries` 中で `redraftCount > 0` だった PR 件数。
+          `notStartedClosedIssues` は `state == "CLOSED"` かつ着手マーカーが
+          無かった (`first_start is None`) issue の件数 (`since` フィルタは
+          適用しない)。`multipleReadyPrIssues` は `mainSeries` の (b)
+          (`completionBasis == "ready_unmerged"`) において、ready 到達済み
+          リンク PR が複数存在したため `readyAt` 最小の PR を採用した issue
+          の件数。
 
     境界:
         - `since` の inclusive filter は `firstStartAt` (UTC date 部分)
@@ -545,7 +615,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--prs",
         required=True,
         type=Path,
-        help="prs.jsonl (merged PR のみ、1 行 1 PR) のパス",
+        help="prs.jsonl (OPEN + MERGED PR、1 行 1 PR) のパス",
     )
     parser.add_argument(
         "--claim-patterns-file",

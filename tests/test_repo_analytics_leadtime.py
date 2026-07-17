@@ -7,10 +7,10 @@ Phase A (spec-first) の位置づけ:
   `resolve_start` / `resolve_ready` / `resolve_close_linkage` / `compute` /
   `main` の処理本体は `NotImplementedError` を送出する (Phase B で実装する)。
 - このファイルは issue #288 Phase A 契約ドキュメント セクション 8 の
-  test matrix T1〜T35 を全件実装する。各テストメソッド名・コメントに
+  test matrix T1〜T39 を全件実装する。各テストメソッド名・コメントに
   `T<n>` を付与し対応関係を明示する。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
-  pass する。挙動を検証するテスト (T1〜T35) は本物の期待値アサーションを
+  pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
   くるまない)。そのため Phase A では `NotImplementedError` が捕捉されずに
   伝播し、unittest 上は ERROR として報告される。これは意図した red 状態であり、
@@ -99,6 +99,8 @@ def make_pr(
     *,
     number,
     repo="owner/name",
+    state="MERGED",
+    is_draft=False,
     created_at="2026-01-01T00:00:00Z",
     merged_at=None,
     additions=0,
@@ -111,6 +113,8 @@ def make_pr(
     return {
         "repo": repo,
         "number": number,
+        "state": state,
+        "isDraft": is_draft,
         "createdAt": created_at,
         "mergedAt": merged_at,
         "additions": additions,
@@ -541,6 +545,20 @@ class ResolveReadyTests(unittest.TestCase):
         self.assertEqual(result.ready_at, datetime(2026, 1, 1, tzinfo=timezone.utc))
         self.assertFalse(result.via_draft)
         self.assertEqual(result.redraft_count, 0)
+
+    def test_t39_resolve_ready_open_draft_returns_none(self):
+        # T39: state="OPEN" かつ isDraft=True (現在 draft に戻っている PR) は
+        # 過去に ReadyForReviewEvent があっても ready_at が None になる
+        # (改訂 1: draft に戻った PR は ready 未到達として扱う)。
+        pr = make_pr(
+            number=39,
+            state="OPEN",
+            is_draft=True,
+            created_at="2026-01-01T00:00:00Z",
+            timeline_nodes=[ready_event("2026-01-02T00:00:00Z")],
+        )
+        result = compute_leadtime.resolve_ready(pr)
+        self.assertIsNone(result.ready_at)
 
 
 # ---------------------------------------------------------------------------
@@ -1046,6 +1064,120 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(entry["totalCount"], 150)
         self.assertEqual(entry["fetched"], 2)
         self.assertEqual(entry["linkedIssues"], [issue_number])
+
+    def test_t36_open_ready_pr_links_issue_into_main_series(self):
+        # T36 (改訂 1): OPEN + isDraft=False の PR (ReadyForReviewEvent 1 件、
+        # closingIssuesReferences に着手済み OPEN issue) は ready 到達済みと
+        # みなされ、リンクされた issue が mainSeries に
+        # completionBasis="ready_unmerged" として入る (censored には入らない)。
+        # PR 自体も prSeries に state="OPEN"、mergedAt=None で入る。
+        repo = "owner/name"
+        issue_number = 400
+        pr_number = 900
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="OPEN",
+            created_at="2026-07-01T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        pr = make_pr(
+            repo=repo,
+            number=pr_number,
+            state="OPEN",
+            is_draft=False,
+            created_at="2026-07-02T00:00:00Z",
+            merged_at=None,
+            timeline_nodes=[ready_event("2026-07-03T00:00:00Z")],
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(len(result["mainSeries"]), 1)
+        entry = result["mainSeries"][0]
+        self.assertEqual(entry["issue"], issue_number)
+        self.assertEqual(entry["completionBasis"], "ready_unmerged")
+        self.assertIsNone(entry["mergedAt"])
+        self.assertIsNone(entry["phaseHours"]["readyToMerge"])
+        self.assertEqual(result["censored"], [])
+
+        self.assertEqual(len(result["prSeries"]), 1)
+        pr_entry = result["prSeries"][0]
+        self.assertEqual(pr_entry["pr"], pr_number)
+        self.assertEqual(pr_entry["state"], "OPEN")
+        self.assertIsNone(pr_entry["mergedAt"])
+
+    def test_t37_open_draft_pr_does_not_complete_issue(self):
+        # T37 (改訂 1): OPEN + isDraft=True の PR (過去に ReadyForReviewEvent が
+        # あってもよい) は prSeries に入らず、リンクされた着手済み OPEN issue は
+        # mainSeries に入らず censored に残る。
+        repo = "owner/name"
+        issue_number = 401
+        pr_number = 901
+        issue = make_issue(
+            repo=repo,
+            number=issue_number,
+            state="OPEN",
+            created_at="2026-07-01T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        pr = make_pr(
+            repo=repo,
+            number=pr_number,
+            state="OPEN",
+            is_draft=True,
+            created_at="2026-07-02T00:00:00Z",
+            merged_at=None,
+            timeline_nodes=[
+                ready_event("2026-07-03T00:00:00Z"),
+                draft_event("2026-07-04T00:00:00Z"),
+            ],
+            closing_issues=[
+                {"number": issue_number, "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [issue], [pr], self.patterns, as_of, None, None
+        )
+
+        self.assertEqual(result["prSeries"], [])
+        self.assertEqual(result["mainSeries"], [])
+        censored_issues = {entry["issue"] for entry in result["censored"]}
+        self.assertIn(issue_number, censored_issues)
+
+    def test_t38_censored_only_week_appears_in_weekly_cohorts(self):
+        # T38 (改訂 2): mainSeries が 0 件で censored しか無い週も
+        # weeklyCohorts に行が出て、n=0・medianLeadTimeHours=None・
+        # censoredN>=1 になる。
+        issue = make_issue(
+            repo="owner/name",
+            number=402,
+            state="OPEN",
+            created_at="2026-07-06T00:00:00Z",
+            timeline_nodes=[
+                issue_comment("2026-07-06T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute([issue], [], self.patterns, as_of, None, None)
+
+        start_week = date(2026, 7, 6).strftime("%G-W%V")
+        cohorts_by_week = {cohort["week"]: cohort for cohort in result["weeklyCohorts"]}
+        self.assertIn(start_week, cohorts_by_week)
+        cohort = cohorts_by_week[start_week]
+        self.assertEqual(cohort["n"], 0)
+        self.assertIsNone(cohort["medianLeadTimeHours"])
+        self.assertGreaterEqual(cohort["censoredN"], 1)
 
 
 # ---------------------------------------------------------------------------

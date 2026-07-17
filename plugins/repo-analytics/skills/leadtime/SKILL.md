@@ -28,6 +28,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 - `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 3 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql`) を `gh api graphql --paginate -F owner=... -F name=... -F query=@<file>` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
 - `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を追加ページングし、取得済み nodes とマージする。
+- `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
 
 (手順詳細は Phase B で全文化する)
@@ -96,6 +97,8 @@ python3 compute_leadtime.py \
 - 中央値の底上げ・テールの伸び・停滞 (n の減少) を区別し、要因を分離できない箇所は「識別不能」と明示する。
 - レポートには「測定上の限界」節を必須とし、壁時計時間ベースであること・比較可能な coverage 期間・各集計の n の小ささ・推定 (censoring・intervalStats 等) を用いた箇所を列挙する。
 - 改善余地は断定した対策ではなく「データが指す介入点」としてユーザーに提示し、意思決定はユーザーに委ねる。
+- 主指標の完了条件は PR の ready 到達である (merge ではない)。ready 到達済み・未 merge のタスクは mainSeries に completionBasis = "ready_unmerged" として含まれ、打ち切り (censored) は ready 未到達の着手済みタスクに限定される。
+- 週次 cohort の中央値は完了タスクのみから計算される記述的統計である (censor 非調整)。censored のみの週も median null + censoredN で行が出るため、censoredN が大きい週の中央値は必ず censoredN と併せて解釈する。
 
 (手順詳細は Phase B で全文化する)
 

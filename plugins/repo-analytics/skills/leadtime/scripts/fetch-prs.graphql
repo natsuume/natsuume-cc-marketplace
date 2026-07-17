@@ -1,12 +1,14 @@
 query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(first: 50, after: $endCursor, states: [MERGED]) {
+    pullRequests(first: 50, after: $endCursor, states: [OPEN, MERGED]) {
       pageInfo {
         hasNextPage
         endCursor
       }
       nodes {
         number
+        state
+        isDraft
         createdAt
         mergedAt
         additions
