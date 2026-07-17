@@ -90,6 +90,13 @@
       "description": "context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (/clear・startup 後) にその内容を自動注入するプラグイン。/session-handoff:setup で natsuume-statusline のキャッシュ連携を登録する。",
       "version": "0.2.0",
       "keywords": ["session-handoff", "context-window", "handoff", "session-start", "statusline", "cache", "hook", "skill"]
+    },
+    {
+      "name": "fable-risk-labeler",
+      "source": "./plugins/fable-risk-labeler",
+      "description": "GitHub issue と関連実装を Codex で調査し、Claude Fable 5 が正規操作を誤ブロックする可能性が高い作業へ model:prefer-gpt-5.6-sol ラベルを安全に付与する Skill を提供する。",
+      "version": "0.1.0",
+      "keywords": ["github", "issue", "triage", "label", "fable", "codex", "gpt-5.6-sol", "risk"]
     }
   ]
 }
