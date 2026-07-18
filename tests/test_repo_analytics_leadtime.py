@@ -94,6 +94,7 @@ _SCRIPTS_DIR = (
     / "scripts"
 )
 _SKILL_PATH = _SCRIPTS_DIR.parent / "SKILL.md"
+_PR_SNAPSHOT_QUERY_PATH = _SCRIPTS_DIR / "fetch-pr-snapshot.graphql"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
@@ -137,7 +138,7 @@ class GithubHostContractTests(unittest.TestCase):
             )
 
         api_commands = [line for line in logical_lines if line.startswith("gh api ")]
-        self.assertEqual(len(api_commands), 6)
+        self.assertEqual(len(api_commands), 7)
         self.assertTrue(
             all("--hostname github.com" in command for command in api_commands),
             api_commands,
@@ -148,6 +149,42 @@ class GithubHostContractTests(unittest.TestCase):
         ]
         self.assertEqual(auth_commands, ["gh auth status --hostname github.com"])
         self.assertIn("`gh auth login --hostname github.com`", skill)
+
+
+class StalePrSnapshotRefreshContractTests(unittest.TestCase):
+    def test_single_pr_query_preserves_the_list_snapshot_shape(self):
+        self.assertTrue(_PR_SNAPSHOT_QUERY_PATH.is_file())
+        query = re.sub(
+            r"\s+", " ", _PR_SNAPSHOT_QUERY_PATH.read_text(encoding="utf-8")
+        )
+        self.assertIn("$number: Int!", query)
+        self.assertIn("pullRequest(number: $number)", query)
+        for field in (
+            "number",
+            "state",
+            "isDraft",
+            "createdAt",
+            "mergedAt",
+            "additions",
+            "deletions",
+            "timelineItems",
+            "closingIssuesReferences",
+        ):
+            self.assertRegex(query, rf"\b{field}\b")
+
+    def test_skill_refreshes_stale_merged_closer_snapshots_fail_closed(self):
+        skill = _SKILL_PATH.read_text(encoding="utf-8")
+        for contract_fragment in (
+            '"prSnapshotRefresh": []',
+            "fetch-pr-snapshot.graphql",
+            'select(.state != "MERGED")',
+            '"status": "refreshed"',
+            '"status": "failed"',
+            "再取得前の snapshot のまま",
+            "timelineItems",
+            "closingIssuesReferences",
+        ):
+            self.assertIn(contract_fragment, skill)
 
 
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ### 手順
 
-0. 作業ディレクトリを次のとおり定義する。`<work-root>` = セッション scratchpad 配下の `repo-analytics-leadtime/` (`<scratchpad>/repo-analytics-leadtime/`。`<scratchpad>` はセッションの scratchpad ディレクトリ)。`<work>` = `<work-root>/<一意な実行 ID>/` (例: `date -u +%Y%m%dT%H%M%SZ` 等で採番) を **新規作成** する (既存ディレクトリの再利用・`mkdir -p` による黙認は禁止。ディレクトリ作成が既存パスと衝突したら別の実行 ID を採番し、必ず新規作成できたディレクトリを `<work>` として使う)。収集診断 (`collection-diagnostics.json`) を含むこの実行のすべての中間ファイルは `<work>` 配下にのみ書く: `issues.jsonl` / `prs.jsonl` / `patterns.json` / `boundaries.json` / `collection-diagnostics.json` / `result.json`。`collection-diagnostics.json` を `{"skippedRepos": [], "webSearchSkipped": false, "repoEventCollection": []}` で初期化する (Write ツール)。続けて `issues.jsonl` / `prs.jsonl` を空 (0 バイト) で先行作成する (Write ツールで空内容を書き込む)。収集キーが 0 件でも第 5 章の集計が入力欠落 (exit 2) にならず、skip 件数を明記した空レポート経路が成立する (第 3 章での書き込みは追記 `>>` のため、この先行作成と矛盾しない)。リトライ時は新しい `<work>` を作成してこのセクションからやり直し、過去の実行 (別の `<work>`) の部分成果物を再利用しない。
+0. 作業ディレクトリを次のとおり定義する。`<work-root>` = セッション scratchpad 配下の `repo-analytics-leadtime/` (`<scratchpad>/repo-analytics-leadtime/`。`<scratchpad>` はセッションの scratchpad ディレクトリ)。`<work>` = `<work-root>/<一意な実行 ID>/` (例: `date -u +%Y%m%dT%H%M%SZ` 等で採番) を **新規作成** する (既存ディレクトリの再利用・`mkdir -p` による黙認は禁止。ディレクトリ作成が既存パスと衝突したら別の実行 ID を採番し、必ず新規作成できたディレクトリを `<work>` として使う)。収集診断 (`collection-diagnostics.json`) を含むこの実行のすべての中間ファイルは `<work>` 配下にのみ書く: `issues.jsonl` / `prs.jsonl` / `patterns.json` / `boundaries.json` / `collection-diagnostics.json` / `result.json`。`collection-diagnostics.json` を `{"skippedRepos": [], "webSearchSkipped": false, "repoEventCollection": [], "prSnapshotRefresh": []}` で初期化する (Write ツール)。続けて `issues.jsonl` / `prs.jsonl` を空 (0 バイト) で先行作成する (Write ツールで空内容を書き込む)。収集キーが 0 件でも第 5 章の集計が入力欠落 (exit 2) にならず、skip 件数を明記した空レポート経路が成立する (第 3 章での書き込みは追記 `>>` のため、この先行作成と矛盾しない)。リトライ時は新しい `<work>` を作成してこのセクションからやり直し、過去の実行 (別の `<work>`) の部分成果物を再利用しない。
 1. 呼び出し引数の文字列を分割し、`since=YYYY-MM-DD` に一致するトークンを期間指定として取り出す (複数あれば最後の値を採用し、その旨を記録する)。残りのトークンを対象指定として扱う。対象指定・期間指定のいずれも無ければ対象は「カレントディレクトリの git リポジトリ」、期間は「全期間」とみなす。
 2. 対象指定が既存ディレクトリのパスであれば手順 3 の再帰探索、それ以外 (存在しないパス、またはカンマを含む文字列) であれば `owner/repo` のカンマ区切りリストとして手順 4 に進む。
 3. ディレクトリパスが与えられた場合、まず与えられたパスを絶対パスへ解決する (解決できない場合は中断してユーザーに報告する)。`find` は第 1 引数が `-` で始まる文字列だと探索パスではなく式 (action) として解釈する — 例えば `-delete` という名前のディレクトリをそのまま渡すと、GNU find は starting point 未指定として `.` を走査し、式の左から右への評価により `-name` の絞り込み前に削除が実行されうる。この経路を閉じるため、`find` には必ず解決済みの絶対パスだけを渡す。そのうえで配下の git リポジトリを次のように再帰探索する (探索深さの上限で暴走を防ぐ)。
@@ -82,14 +82,14 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ## 3. データ収集
 
-- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 4 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql`) を `gh api graphql --hostname github.com` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
+- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 5 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` / `fetch-pr-snapshot.graphql`) を `gh api graphql --hostname github.com` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
 - 各行の repo フィールドには API が返す canonical な nameWithOwner を使う (ユーザ入力の owner/repo 文字列を使わない。closer や closingIssuesReferences が返す nameWithOwner と join キーのケーシングを一致させるため)。
-- 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (`fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` の `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --hostname github.com --paginate -f owner="<owner>" -f name="<name>" -F query=@<file>`。
+- 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (issue / PR 番号を受け取る3テンプレートの `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --hostname github.com --paginate -f owner="<owner>" -f name="<name>" -F query=@<file>`。
 - `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を先頭から全ページ取得し、一覧クエリ由来の timelineItems を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の timelineItems は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する。
 - `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
 - `prs.jsonl` の各行で `closingIssuesReferences.totalCount > len(nodes)` の PR は `fetch-pr-closing-issues.graphql` で当該 PR の closingIssuesReferences を先頭から全ページ取得し、一覧クエリ由来の closingIssuesReferences を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の closingIssuesReferences は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する (集計スクリプトは不完全な行を入力エラーとして中断する)。
-- 収集段階の診断 (第 1 章のリポジトリスキップ件数・理由、第 6 章のリポジトリイベント収集結果・WebSearch 省略の有無等) は、判明した時点で scratchpad の固定 shape JSON (例: `{"skippedRepos": [{"repo": str, "reason": str}], "webSearchSkipped": bool, "repoEventCollection": [{"repo": str, "status": "collected" | "no_checkout" | "default_ref_unavailable" | "default_branch_unsupported" | "default_ref_stale" | "shallow_history" | "shallow_check_failed"}]}`) に追記して記録する。第 9 章のターミナルサマリと Artifact レポートは、この記録された値をそのまま参照し独自に再集計しない。
+- 収集段階の診断 (第 1 章のリポジトリスキップ件数・理由、stale PR snapshot の再取得結果、第 6 章のリポジトリイベント収集結果・WebSearch 省略の有無等) は、判明した時点で scratchpad の固定 shape JSON に追記して記録する。`prSnapshotRefresh` の各要素は `{prRepo, pr, status, reason}` (`status`: `refreshed` | `failed`、成功時の `reason` は `null`) とする。第 9 章のターミナルサマリと Artifact レポートは、この記録された値をそのまま参照し独自に再集計しない。
 
 ### 手順
 
@@ -206,8 +206,55 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```
 
    PR 側の `timelineItems` (`ReadyForReviewEvent` / `ConvertToDraftEvent`) は overflow しても追加ページングテンプレートが無いため置換せず、既存の bullet のとおり集計スクリプトの除外に委ねる。
-2. 全リポジトリの収集が終わったら、`date -u +%Y-%m-%dT%H:%M:%SZ` 等で収集完了時刻 (UTC ISO8601) を記録する。この値を第 5 章の `--as-of` に渡す。
-3. 収集中に判明した診断 (スキップしたリポジトリの最終件数など) を `<work>/collection-diagnostics.json` へ反映する (Write ツールで上書き)。第 9 章のターミナルサマリと Artifact レポートはこのファイルの値をそのまま参照し、独自に再集計しない。
+2. 全収集キーについて a〜d と timeline 置換が完了した後、merged closer PR の stale snapshot を検知・再取得する。
+
+   **merged closer PR の stale snapshot 検知・再取得**
+
+   `issues.jsonl` の各 issue について `timelineItems.nodes` 配列内で最後に現れる `ClosedEvent` を採用し、その closer が `merged == true` の `PullRequest` であるものだけを調べる。`prs.jsonl` に同じ `(repo, number)` の snapshot が存在し、かつ `state != "MERGED"` なら stale 候補とする。cross-repo close を正しく突合するため、PR のキーには issue 側 repo ではなく closer の `repository.nameWithOwner` を使う。同じ PR が複数 issue を close していても再取得は1回にする。
+
+   ```bash
+   jq -c --slurpfile prs "<work>/prs.jsonl" '
+     . as $issue
+     | ([.timelineItems.nodes[] | select(.__typename == "ClosedEvent")] | last) as $closed
+     | select($closed.closer.__typename == "PullRequest" and $closed.closer.merged == true)
+     | $closed.closer.repository.nameWithOwner as $prRepo
+     | $closed.closer.number as $pr
+     | $prs[]
+     | select(.repo == $prRepo and .number == $pr)
+     | select(.state != "MERGED")
+     | {issueRepo: $issue.repo, issue: $issue.number, prRepo: $prRepo, pr: $pr,
+        snapshotState: .state, snapshotIsDraft: .isDraft}
+   ' "<work>/issues.jsonl" \
+     | jq -s -c 'unique_by([.prRepo, .pr])[]' \
+     > "<work>/_stale-pr-snapshots.jsonl"
+   ```
+
+   各 stale 候補の canonical `<prRepo>` を owner/name に分解し、`fetch-pr-snapshot.graphql` で一覧 query と同一 field の完全 snapshot を取得する。
+
+   ```bash
+   gh api graphql --hostname github.com \
+     -f owner="<owner>" -f name="<name>" -F number=<pr_number> \
+     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-pr-snapshot.graphql" \
+     --jq '.data.repository as $r | if ($r == null or $r.pullRequest == null) then empty else $r.pullRequest + {repo: $r.nameWithOwner} end' \
+     > "<work>/_stale-pr-snapshot.json"
+   ```
+
+   コマンドが成功し、出力がちょうど1個の object で、`repo` / `number` が候補キーと一致し、一覧 query と同じ必須 field を持ち、`state == "MERGED"` であることを `jq -e` で確認する。この時点ではまだ `prs.jsonl` を変更しない。
+
+   取得した一時 snapshot について `timelineItems.totalCount > (nodes | length)` を再判定し、該当すれば追加取得せず `exclusions.prTimelineOverflow` に委ねる。`closingIssuesReferences.totalCount > (nodes | length)` も再判定し、該当すれば手順 d と同じ `fetch-pr-closing-issues.graphql` による全ページ再取得・完全置換を一時 snapshot 上で再適用する。closingIssuesReferences の再取得・集約・件数検証がすべて成功するまで正本 `prs.jsonl` は変更しない。これらの overflow 判定を省略して refreshed row を集計へ渡してはならない。
+
+   snapshot 検証と必要な overflow 再取得がすべて成功した後に限り、`prs.jsonl` の該当行を部分 merge ではなく完成した snapshot 全体で置換する。
+
+   ```bash
+   jq -c --slurpfile repl "<work>/_stale-pr-snapshot.json" \
+     'if .repo == "<owner>/<name>" and .number == <pr_number> then $repl[0] else . end' \
+     "<work>/prs.jsonl" > "<work>/prs.jsonl.tmp" \
+     && mv "<work>/prs.jsonl.tmp" "<work>/prs.jsonl"
+   ```
+
+   snapshot 取得・検証、または closingIssuesReferences overflow の再取得・検証に失敗した場合は `prs.jsonl` の行を一切変更せず、`prSnapshotRefresh` に `{prRepo, pr, "status": "failed", reason}` を追記する。`reason` は `api_error` / `snapshot_missing` / `snapshot_invalid` / `snapshot_still_stale` / `overflow_refresh_failed` のいずれかとする。該当 PR は再取得前の snapshot のまま既存の compute guard (`exclusions.mergedCloserPrNotQualifying`) に委ね、取得失敗を Artifact とターミナルサマリの「測定上の限界」で開示する (部分的な応答や推測値で補完しない)。置換と overflow 再適用に成功した場合は `{prRepo, pr, "status": "refreshed", "reason": null}` を追記する。この targeted refresh の API 失敗だけは旧 snapshot + 診断へ縮退し、第 2 章の全収集中断規則の例外とする。
+3. 全リポジトリの収集が終わったら、`date -u +%Y-%m-%dT%H:%M:%SZ` 等で収集完了時刻 (UTC ISO8601) を記録する。この値を第 5 章の `--as-of` に渡す。
+4. 収集中に判明した診断 (スキップしたリポジトリの最終件数など) を `<work>/collection-diagnostics.json` へ反映する (Write ツールで上書き)。第 9 章のターミナルサマリと Artifact レポートはこのファイルの値をそのまま参照し、独自に再集計しない。
 
 ## 4. claim 判定パターン (正本)
 
@@ -254,7 +301,7 @@ python3 compute_leadtime.py \
 
 ### 手順
 
-1. 第 4 章で作成した `<work>/patterns.json` と、第 3 章で完成させた `<work>/issues.jsonl` / `<work>/prs.jsonl`、および第 3 章手順 2 で記録した収集完了時刻を用意する。
+1. 第 4 章で作成した `<work>/patterns.json` と、第 3 章で完成させた `<work>/issues.jsonl` / `<work>/prs.jsonl`、および第 3 章手順 3 で記録した収集完了時刻を用意する。
 2. 初回実行 (この時点では第 6 章のイベント注釈がまだ無いため `--boundaries-file` は付けない)。
 
    ```bash
@@ -418,6 +465,7 @@ python3 compute_leadtime.py \
 - [ ] `dataQuality` 各値 (`negativeIntervalCount` / `redraftPrCount` / `notStartedClosedIssues` / `multipleReadyPrIssues`) の件数
 - [ ] `markerCoverage` 中の `unknownTimeline` (timeline 不完全で観測不能だった件数)
 - [ ] `claimDetection.looseOnlyIssues` の件数 (取りこぼし候補)
+- [ ] stale merged closer PR snapshot の再取得成功・失敗件数と失敗理由 (収集診断の `prSnapshotRefresh`)
 - [ ] リポジトリイベント注釈をスキップした対象とその理由 (収集診断の `repoEventCollection`)
 
 ### 個別の実行時挙動への対応

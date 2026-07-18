@@ -102,7 +102,7 @@
       "name": "repo-analytics",
       "source": "./plugins/repo-analytics",
       "description": "GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン。",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "keywords": ["analytics", "leadtime", "github", "metrics", "report"]
     }
   ]
