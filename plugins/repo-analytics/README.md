@@ -4,7 +4,13 @@ GitHub の issue/PR タイムラインから AI タスクのリードタイム (
 
 ## バージョン
 
-v0.1.2
+v0.1.3
+
+### v0.1.2 → v0.1.3 の変更点 (#301, #305)
+
+- `exclusions.prTimelineOverflow[].linkedIssues` を最終分類後に確定し、別の qualifying PR で `mainSeries` に入った issue、着手マーカー無し、NOT_PLANNED など overflow が分類除外の原因ではない issue の過大申告を解消した
+- completion は証明できるが PR timeline overflow により ready 時刻だけが不明な着手済み issue を `exclusions.prReadyTimeUnknown` に分離し、open issue は `censored` から除外した。これにより全 `censored[].elapsedHoursLowerBound` の下限値解釈を維持する
+- 集計 script / Skill / test の bug fix のため Claude Code version を patch bump した。repo-analytics は Codex 配布対象外なので Codex version / install surface は変更しない
 
 ### v0.1.1 → v0.1.2 の変更点 (#298)
 
