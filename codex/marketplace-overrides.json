@@ -259,7 +259,7 @@
           },
           {
             "path": "tests/test_statusline_display_width.py",
-            "covers": "ANSI 保持、CJK・結合文字・emoji の terminal cell 幅、全角文字を幅上限外へ出さない prefix truncate"
+            "covers": "ANSI 保持、CJK・結合文字・emoji の terminal cell 幅、C locale のUTF-8正規化、全角文字を幅上限外へ出さない prefix truncate"
           },
           {
             "path": "tests/test_statusline_github_namespace_cache.py",
@@ -303,7 +303,7 @@
             "disposition": "surface-unavailable",
             "codexReplacement": "skills/setup-codex/SKILL.md",
             "reason": "custom statusline runtime が無いため共有 helper の呼び出し先がありません。",
-            "sourceDigest": "a3ce18962f6d993be5572621d71dae96ca4f627bc16ac20c2440e980b59f93cb"
+            "sourceDigest": "372bfb42de9eac6164cc474d548798b200602c08445e4b9f768840cc255e83a3"
           },
           {
             "source": "statusline/line1.sh",
@@ -341,7 +341,7 @@
             "sourceDigest": "1529e071e2fc9b90edf39fb421fc82d84917fd11093e9a9a131ddfb41ae10ebd"
           }
         ],
-        "sourceTreeDigest": "dbee4efb2a5a24f14e8c7ae57b33417dbcb649bcd24231c011a58279475a88ea"
+        "sourceTreeDigest": "326694aee072c31d1965aa438fb6a570b895635f62ac8e641ff27d47a7be8dbb"
       }
     },
     "agent-discipline": {

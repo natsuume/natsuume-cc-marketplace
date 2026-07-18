@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import unittest
@@ -12,7 +13,13 @@ ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class StatuslineDisplayWidthTest(unittest.TestCase):
-    def run_function(self, function: str, text: str, *args: str) -> str:
+    def run_function(
+        self,
+        function: str,
+        text: str,
+        *args: str,
+        env: dict[str, str] | None = None,
+    ) -> str:
         shell_args = " ".join(f'"${index}"' for index in range(2, 2 + len(args) + 1))
         result = subprocess.run(
             [
@@ -26,6 +33,7 @@ class StatuslineDisplayWidthTest(unittest.TestCase):
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=env,
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -53,6 +61,15 @@ class StatuslineDisplayWidthTest(unittest.TestCase):
         self.assertEqual(self.visible_width("abcde"), 5)
         truncated = self.run_function("truncate_visible", "abcdef", "5")
         self.assertEqual(ANSI_SGR.sub("", truncated), "abcde")
+
+    def test_c_locale_is_normalized_for_width_operations(self) -> None:
+        env = os.environ.copy()
+        env["LC_ALL"] = "C"
+        env["LANG"] = "C"
+
+        self.assertEqual(self.run_function("visible_length", "日本語", env=env), "6")
+        truncated = self.run_function("truncate_visible", "日本語", "5", env=env)
+        self.assertEqual(ANSI_SGR.sub("", truncated), "日本")
 
 
 if __name__ == "__main__":

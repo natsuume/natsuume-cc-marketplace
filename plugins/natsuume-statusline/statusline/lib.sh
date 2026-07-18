@@ -290,6 +290,25 @@ terminal_width() {
   printf '80'
 }
 
+# Bash の文字列演算が byte 単位になる C/POSIX locale でも UTF-8 path を壊さないよう、
+# 幅計算にだけ使える UTF-8 locale を一度検出する。Linux と macOS で一般的な候補を
+# locale command で実在確認し、process 全体の locale は変更しない。
+_STATUSLINE_UTF8_LOCALE=""
+for _statusline_locale_candidate in \
+  "${LC_CTYPE:-}" "${LANG:-}" "C.UTF-8" "en_US.UTF-8" "UTF-8"; do
+  [ -n "$_statusline_locale_candidate" ] || continue
+  _statusline_charmap=$(
+    LC_ALL= LC_CTYPE="$_statusline_locale_candidate" locale charmap 2>/dev/null
+  ) || continue
+  case "$_statusline_charmap" in
+    UTF-8|UTF8|utf-8|utf8)
+      _STATUSLINE_UTF8_LOCALE="$_statusline_locale_candidate"
+      break
+      ;;
+  esac
+done
+unset _statusline_locale_candidate _statusline_charmap
+
 # 1 code point が占める terminal cell 幅を `_STATUSLINE_CELL_WIDTH` に設定する。
 # Unicode East Asian Width の Wide / Fullwidth、主要 emoji は 2、結合文字・variation
 # selector・ZWJ は 0、それ以外は 1。外部 wcwidth/Python process を文字ごとに起動せず、
@@ -336,6 +355,7 @@ _statusline_set_cell_width() {
 
 # ANSI SGR escape を除いた terminal cell 幅を返す。
 visible_length() {
+  local LC_ALL="" LC_CTYPE="${_STATUSLINE_UTF8_LOCALE:-${LC_CTYPE:-}}"
   local s="$1" len=${#1} i=0 in_esc=0 c total=0
   while [ "$i" -lt "$len" ]; do
     c="${s:$i:1}"
@@ -355,6 +375,7 @@ visible_length() {
 # 文字列をANSIエスケープを保持したまま可視幅 max で切り詰める
 # 末尾に色漏れ防止のリセットコードを必ず付与する
 truncate_visible() {
+  local LC_ALL="" LC_CTYPE="${_STATUSLINE_UTF8_LOCALE:-${LC_CTYPE:-}}"
   local s="$1" max="$2"
   local len=${#s}
   local i=0 visible=0 in_esc=0 c result="" next_visible
