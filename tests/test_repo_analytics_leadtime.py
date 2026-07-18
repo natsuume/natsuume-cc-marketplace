@@ -138,7 +138,7 @@ class GithubHostContractTests(unittest.TestCase):
             )
 
         api_commands = [line for line in logical_lines if line.startswith("gh api ")]
-        self.assertEqual(len(api_commands), 6)
+        self.assertEqual(len(api_commands), 7)
         self.assertTrue(
             all("--hostname github.com" in command for command in api_commands),
             api_commands,

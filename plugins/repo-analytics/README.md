@@ -4,7 +4,12 @@ GitHub の issue/PR タイムラインから AI タスクのリードタイム (
 
 ## バージョン
 
-v0.1.1
+v0.1.2
+
+### v0.1.1 → v0.1.2 の変更点 (#298)
+
+- issue timeline が merge 済みと示す PR の収集 snapshot が古い場合、単一 PR を再取得して行全体を更新し、overflow を再検査するようにした
+- 再取得の成功・失敗を `collection-diagnostics.json` に記録し、失敗時は旧 snapshot を維持したまま測定上の限界へ開示する fail-closed 経路を追加した
 
 ### v0.1.0 → v0.1.1 の変更点 (#300)
 
@@ -55,6 +60,8 @@ repo-analytics/
 │           ├── fetch-issues.graphql
 │           ├── fetch-prs.graphql
 │           ├── fetch-issue-timeline.graphql
+│           ├── fetch-pr-closing-issues.graphql
+│           ├── fetch-pr-snapshot.graphql
 │           └── compute_leadtime.py
 └── README.md
 ```

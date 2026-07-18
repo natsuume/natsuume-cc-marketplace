@@ -1,0 +1,38 @@
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    nameWithOwner
+    pullRequest(number: $number) {
+      number
+      state
+      isDraft
+      createdAt
+      mergedAt
+      additions
+      deletions
+      timelineItems(
+        first: 100
+        itemTypes: [READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT]
+      ) {
+        totalCount
+        nodes {
+          __typename
+          ... on ReadyForReviewEvent {
+            createdAt
+          }
+          ... on ConvertToDraftEvent {
+            createdAt
+          }
+        }
+      }
+      closingIssuesReferences(first: 20) {
+        totalCount
+        nodes {
+          number
+          repository {
+            nameWithOwner
+          }
+        }
+      }
+    }
+  }
+}
