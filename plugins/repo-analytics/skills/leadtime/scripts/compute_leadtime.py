@@ -754,10 +754,18 @@ def compute(
              ケースになりうる)。選択 PR が `state == "OPEN"` かつ
              `isDraft == False` なら `completionBasis = "ready_unmerged"` で
              `mergedAt = None` / `phaseHours.readyToMerge = None` とする。
-          5. 候補が無く issue が `state == "OPEN"` なら `censored` に入れる。
-             これにより `censored` の経過時間は常に「着手→ready」の下限値
-             として解釈できる。
-          6. 候補が無く issue が `state == "CLOSED"` なら、
+          5. 候補が無いが、overflow PR が無ければ qualifying だったことを
+             snapshot state (`MERGED`、または `OPEN` かつ non-draft) または
+             issue timeline の merged closer から証明できる場合は、ready
+             時刻だけが不明な除外として `exclusions.prReadyTimeUnknown` に
+             PR との対応関係を列挙する。同じ issue を当該 overflow PR の
+             `exclusions.prTimelineOverflow[].linkedIssues` にも列挙し、
+             `mainSeries` / `censored` / `auxiliarySeries` には入れない。
+          6. 候補もステップ 5 の completion 証明も無く、issue が `state ==
+             "OPEN"` なら `censored` に入れる。これにより `censored` の
+             経過時間は常に「着手→ready」の下限値として解釈できる。
+          7. 候補もステップ 5 の completion 証明も無く、issue が `state ==
+             "CLOSED"` なら、
              `resolve_close_linkage(issue, prs_by_key).category` に応じて
              `auxiliarySeries` の該当キー (`"manual"` → `manualClose`,
              `"commit"` → `commitClose`, `"unmerged_pr"` → `unmergedPr`,
@@ -773,14 +781,17 @@ def compute(
           その PR は候補にならない (ステップ 3 で除外)。2 つ目の情報源
           (`closingIssuesReferences` 逆引き) にも qualifying candidate が
           見つからなければ、`resolve_close_linkage` を呼び直すと `category ==
-          "merged_pr"` に見えることがあるが、ステップ 6 は `"manual"` /
+          "merged_pr"` に見えることがあるが、ステップ 7 は `"manual"` /
           `"commit"` / `"unmerged_pr"` / `"merged_pr_external"` の
           4 category しか `auxiliarySeries` に対応付けないため、この issue
           はどの `auxiliarySeries` にも該当せず、除外されたまま
           (`mainSeries` にも `censored` にも `auxiliarySeries` にも入らない)
-          となる。overflow による除外の場合、除外された issue は overflow
-          PR 側の `exclusions.prTimelineOverflow[].linkedIssues` に列挙
-          される。非 qualifying (stale snapshot) による除外の場合は
+          となる。overflow が候補不成立の唯一の理由なら、除外された issue は
+          overflow PR 側の `exclusions.prTimelineOverflow[].linkedIssues` に
+          列挙される。別の qualifying PR で `mainSeries` に入った issue、
+          着手マーカー無し、NOT_PLANNED など overflow が分類除外の原因では
+          ない issue は列挙しない。非 qualifying (stale snapshot) による
+          除外の場合は
           `exclusions.mergedCloserPrNotQualifying` に列挙される。
 
           `mainSeries` の各要素は `{"repo", "issue", "firstStartAt",
@@ -814,13 +825,13 @@ def compute(
           除外は metric 単位で行う (`dataQuality` / `weeklyCohorts` /
           `intervalStats` の各項目 docstring を参照。「レコード全体を全
           中央値から除外する」規則ではない)。`since` フィルタ適用対象。
-        - `censored` (list[dict]): 上記パイプラインのステップ 5 で
+        - `censored` (list[dict]): 上記パイプラインのステップ 6 で
           `censored` に入れられた issue の一覧。各要素は `{"repo", "issue",
           "firstStartAt", "startWeek", "elapsedHoursLowerBound"}`。
           `elapsedHoursLowerBound` は `as_of - firstStartAt` (時間)。
           `since` フィルタ適用対象。
         - `auxiliarySeries` (dict): 上記パイプラインのステップ 2
-          (`notPlanned`) およびステップ 6 で振り分けられた issue を
+          (`notPlanned`) およびステップ 7 で振り分けられた issue を
           category 別にまとめた、次の 5 キー固定 shape の dict —
           `{"manualClose": [...], "commitClose": [...], "notPlanned": [...],
           "unmergedPr": [...], "externalMergedClose": [...]}`。該当 issue が
@@ -911,8 +922,8 @@ def compute(
           は、部分的な timeline から着手判定を行うと誤判定になりうるため、
           `strictIssues` の分母にも `looseOnlyIssues` の列挙対象にも含めない。
         - `exclusions` (dict): `{"timelineOverflow": list[dict],
-          "prTimelineOverflow": list[dict], "mergedCloserPrNotQualifying":
-          list[dict]}`。
+          "prTimelineOverflow": list[dict], "prReadyTimeUnknown": list[dict],
+          "mergedCloserPrNotQualifying": list[dict]}`。
           `timelineOverflow` は `timelineItems.totalCount > len(timelineItems.nodes)`
           だった issue を `{"repo", "issue", "totalCount", "fetched"}` で列挙する
           (`fetched == len(nodes)`)。これらの issue は `mainSeries` /
@@ -925,9 +936,10 @@ def compute(
           他 repo の issue を指しうるため issue 番号だけでは一意に特定
           できない。`(repo, issue)` の組で重複排除し、`repo` の辞書順→
           `issue` の昇順で決定的に並べる。該当なしなら空リスト)。
-          この判定は PR の `state` (OPEN / MERGED) を問わず同様に適用する
-          (OPEN PR も `timelineItems.totalCount > len(nodes)` なら同じ扱いで
-          除外する)。overflow した PR は `prSeries` から除外し、qualifying PR
+          PR 自体の overflow 判定は `state` (OPEN / MERGED) を問わず同様に
+          適用する。`linkedIssues` は最終分類後に確定し、別の qualifying PR
+          で `mainSeries` に入った issue や候補パイプライン外の issue は
+          含めない。overflow した PR は `prSeries` から除外し、qualifying PR
           候補 (`mainSeries` 対象決定パイプラインのステップ 3 参照) としても
           採用しない (timeline 不完全な PR の ready 時刻は信頼できないため)。
           最終 `ClosedEvent` の closer が overflow PR と一致する issue も、
@@ -935,6 +947,13 @@ def compute(
           に入らず、`auxiliarySeries` のいずれのカテゴリにも再分類しない。
           詳細は `mainSeries` docstring の「境界」を参照)。除外された issue は
           `{repo, issue}` として当該 PR の `linkedIssues` に列挙する。
+          `prReadyTimeUnknown` は、着手済み issue について completion は証明
+          できるが overflow により ready 時刻を特定できず、他の qualifying
+          candidate も無い対応関係を `{"repo": str, "issue": int,
+          "prRepo": str, "pr": int}` で列挙する。`repo` / `issue` は issue
+          側、`prRepo` / `pr` は overflow PR 側の複合キー。同じ issue に
+          該当 PR が複数あれば PR ごとに 1 要素とし、辞書順で決定的に並べる。
+          これらは completion 済みのため `censored` には含めない。
           `mergedCloserPrNotQualifying` は、`mainSeries` 対象決定パイプライン
           ステップ 3 の 1 つ目の情報源 (最終 `ClosedEvent` の merged closer)
           で特定された PR が、overflow ではないが qualifying completion PR
@@ -1025,6 +1044,9 @@ def compute(
     pr_overflow_info: dict[tuple[str, int], dict] = {}
     pr_ready_info: dict[tuple[str, int], ReadyResolution] = {}
     closing_ref_index: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
+    overflow_closing_ref_index: dict[
+        tuple[str, int], list[tuple[str, int]]
+    ] = defaultdict(list)
     # overflow で continue しなかった PR のうち ready 到達済み (qualifying) の
     # ものだけを集めた集合。merged-closer 経路 (下の issue 走査ループ) と
     # closingIssuesReferences 逆引き経路 (`closing_ref_index` への登録) の
@@ -1038,6 +1060,9 @@ def compute(
         if total_count > fetched:
             pr_overflow_set.add(pr_key)
             pr_overflow_info[pr_key] = {"totalCount": total_count, "fetched": fetched}
+            for ref in pr["closingIssuesReferences"]["nodes"]:
+                ref_key = (ref["repository"]["nameWithOwner"], ref["number"])
+                overflow_closing_ref_index[ref_key].append(pr_key)
             continue
 
         ready_resolution = resolve_ready(pr)
@@ -1049,12 +1074,13 @@ def compute(
                 closing_ref_index[ref_key].append(pr_key)
 
     pr_series = _build_pr_series(prs, pr_overflow_set, pr_ready_info, since)
-    pr_timeline_overflow_out = _build_pr_timeline_overflow(
-        prs, pr_overflow_set, pr_overflow_info
-    )
 
     timeline_overflow_out: list[dict] = []
     merged_closer_not_qualifying_out: list[dict] = []
+    pr_timeline_linked_issues: dict[
+        tuple[str, int], set[tuple[str, int]]
+    ] = defaultdict(set)
+    pr_ready_time_unknown_out: list[dict] = []
     coverage_counts: dict[tuple[str, str], dict] = defaultdict(
         lambda: {"closedIssues": 0, "withMarker": 0, "unknownTimeline": 0}
     )
@@ -1140,13 +1166,16 @@ def compute(
         linkage = resolve_close_linkage(issue, prs_by_key)
 
         candidates: set[tuple[str, int]] = set()
+        completion_proven_overflow_candidates: set[tuple[str, int]] = set()
         if linkage.category == "merged_pr":
             assert linkage.linked_pr is not None
             candidate_key = (linkage.linked_pr["repo"], linkage.linked_pr["number"])
             if candidate_key in qualifying_pr_keys:
                 candidates.add(candidate_key)
             elif candidate_key in pr_overflow_set:
-                pass  # 既存の overflow 除外経路 (mainSeries docstring の「境界」参照)
+                # issue timeline の merged closer 自体が completion を証明する。
+                # overflow で ready 時刻だけを信頼できない候補として保持する。
+                completion_proven_overflow_candidates.add(candidate_key)
             else:
                 # 非 overflow かつ非 qualifying = 収集時点の PR snapshot が
                 # issue timeline より古い (stale)。fail-closed に候補から
@@ -1166,6 +1195,17 @@ def compute(
             (issue["repo"], issue["number"]), []
         ):
             candidates.add(candidate_key)
+        for candidate_key in overflow_closing_ref_index.get(
+            (issue["repo"], issue["number"]), []
+        ):
+            overflow_pr = prs_by_key[candidate_key]
+            if overflow_pr["state"] == "MERGED" or (
+                overflow_pr["state"] == "OPEN" and not overflow_pr["isDraft"]
+            ):
+                # MERGED または OPEN non-draft なら ready 到達済みであることは
+                # snapshot state から証明できるが、不完全 timeline から readyAt
+                # 自体は特定できない。
+                completion_proven_overflow_candidates.add(candidate_key)
 
         if candidates:
             chosen_key = min(
@@ -1182,6 +1222,18 @@ def compute(
                 len(candidates) > 1,
             )
             main_records_all.append(record)
+        elif completion_proven_overflow_candidates:
+            issue_key = (issue["repo"], issue["number"])
+            for candidate_key in sorted(completion_proven_overflow_candidates):
+                pr_timeline_linked_issues[candidate_key].add(issue_key)
+                pr_ready_time_unknown_out.append(
+                    {
+                        "repo": issue["repo"],
+                        "issue": issue["number"],
+                        "prRepo": candidate_key[0],
+                        "pr": candidate_key[1],
+                    }
+                )
         elif issue["state"] == "OPEN":
             censored_all.append(
                 (
@@ -1210,6 +1262,21 @@ def compute(
             # qualifying (stale snapshot) の除外により到達した場合は、
             # どの系列にも含めず除外されたままにする
             # (mainSeries docstring の「境界」参照)。
+
+    pr_timeline_overflow_out = _build_pr_timeline_overflow(
+        prs,
+        pr_overflow_set,
+        pr_overflow_info,
+        pr_timeline_linked_issues,
+    )
+    pr_ready_time_unknown_out.sort(
+        key=lambda entry: (
+            entry["repo"],
+            entry["issue"],
+            entry["prRepo"],
+            entry["pr"],
+        )
+    )
 
     main_records = [
         record for record in main_records_all if since_ok(record.raw_first_start)
@@ -1266,6 +1333,7 @@ def compute(
         "exclusions": {
             "timelineOverflow": timeline_overflow_out,
             "prTimelineOverflow": pr_timeline_overflow_out,
+            "prReadyTimeUnknown": pr_ready_time_unknown_out,
             "mergedCloserPrNotQualifying": merged_closer_not_qualifying_out,
         },
         "boundaries": boundaries_out,
@@ -1470,20 +1538,16 @@ def _build_pr_timeline_overflow(
     prs: list[dict],
     pr_overflow_set: set[tuple[str, int]],
     pr_overflow_info: dict[tuple[str, int], dict],
+    linked_issues: dict[tuple[str, int], set[tuple[str, int]]],
 ) -> list[dict]:
-    """timeline 不完全だった PR から `exclusions.prTimelineOverflow` を組み立てる。"""
+    """timeline 不完全だった PR と、実際に候補除外された issue を組み立てる。"""
     entries = []
     for pr in prs:
         pr_key = (pr["repo"], pr["number"])
         if pr_key not in pr_overflow_set:
             continue
         info = pr_overflow_info[pr_key]
-        linked = sorted(
-            {
-                (ref["repository"]["nameWithOwner"], ref["number"])
-                for ref in pr["closingIssuesReferences"]["nodes"]
-            }
-        )
+        linked = sorted(linked_issues.get(pr_key, set()))
         entries.append(
             {
                 "repo": pr["repo"],

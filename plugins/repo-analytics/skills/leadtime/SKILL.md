@@ -448,7 +448,7 @@ python3 compute_leadtime.py \
 - 中央値の底上げ・テールの伸び・停滞 (n の減少) を区別し、要因を分離できない箇所は「識別不能」と明示する。
 - レポートには「測定上の限界」節を必須とし、壁時計時間ベースであること・比較可能な coverage 期間・各集計の n の小ささ・推定 (censoring・intervalStats 等) を用いた箇所を列挙する。
 - 改善余地は断定した対策ではなく「データが指す介入点」としてユーザーに提示し、意思決定はユーザーに委ねる。
-- 完了根拠 (qualifying completion) は MERGED の PR、または現在 OPEN・non-draft の PR の ready 到達である (merge そのものではない)。merge されず close された PR は破棄された試行として完了根拠にしない。ready 到達済み・未 merge のタスクは mainSeries に completionBasis = "ready_unmerged" として含まれ、打ち切り (censored) は qualifying PR がリンクされていない着手済み open issue に限定される。
+- 完了根拠 (qualifying completion) は MERGED の PR、または現在 OPEN・non-draft の PR の ready 到達である (merge そのものではない)。merge されず close された PR は破棄された試行として完了根拠にしない。ready 到達済み・未 merge のタスクは mainSeries に completionBasis = "ready_unmerged" として含まれる。PR timeline overflow により completion は証明できるが ready 時刻だけが不明な issue は `exclusions.prReadyTimeUnknown` に分離し、打ち切り (censored) は completion が証明される PR がリンクされていない着手済み open issue に限定する。
 - 週次 cohort の中央値は完了タスクのみから計算される記述的統計である (censor 非調整)。censored のみの週も median null + censoredN で行が出るため、censoredN が大きい週の中央値は必ず censoredN と併せて解釈する。
 - 収集範囲外のリポジトリの merged PR で close された issue は `auxiliarySeries.externalMergedClose` として分離集計され、`mainSeries` にも `censored` にも入らない (ready 到達時刻を計測できないため)。
 
@@ -460,7 +460,7 @@ python3 compute_leadtime.py \
 - [ ] 比較可能な coverage 期間 (`markerCoverage` の repo × 月別 `coverage` を基に、着手マーカーが安定して観測できている期間の範囲)
 - [ ] 各集計の n の小ささ (`weeklyCohorts[].n` / `intervalStats[].n` が小さい週・区間の明示。`n = 0` の週は空欄・線の途切れとして扱い隠さない)
 - [ ] 推定を用いた箇所: 打ち切り (`censored` の `elapsedHoursLowerBound` は下限値であること) と、第 6 章で補正・代用したイベント適用日 (推定である旨のラベルをそのまま引用する)
-- [ ] `exclusions.timelineOverflow` / `exclusions.prTimelineOverflow` の件数
+- [ ] `exclusions.timelineOverflow` / `exclusions.prTimelineOverflow` / `exclusions.prReadyTimeUnknown` の件数 (`prReadyTimeUnknown` は completion 済みだが ready 時刻不明のため censored から除外した対応関係)
 - [ ] `exclusions.mergedCloserPrNotQualifying` の件数 (merged closer とされた PR の収集 snapshot が非 qualifying だったため除外された件数)
 - [ ] `dataQuality` 各値 (`negativeIntervalCount` / `redraftPrCount` / `notStartedClosedIssues` / `multipleReadyPrIssues`) の件数
 - [ ] `markerCoverage` 中の `unknownTimeline` (timeline 不完全で観測不能だった件数)
