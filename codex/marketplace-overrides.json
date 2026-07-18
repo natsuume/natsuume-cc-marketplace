@@ -230,7 +230,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.9.1",
+      "version": "0.9.2",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -256,6 +256,10 @@
           {
             "path": "tests/test_statusline_codex_adapter.py",
             "covers": "組み込み status-line item、backup/atomic replace/strict parse failure/atomic restore の instruction contract、parse 検査境界と rendering 保証差"
+          },
+          {
+            "path": "tests/test_statusline_display_width.py",
+            "covers": "ANSI 保持、CJK・結合文字・emoji の terminal cell 幅、全角文字を幅上限外へ出さない prefix truncate"
           },
           {
             "path": "tests/test_statusline_github_namespace_cache.py",
@@ -299,7 +303,7 @@
             "disposition": "surface-unavailable",
             "codexReplacement": "skills/setup-codex/SKILL.md",
             "reason": "custom statusline runtime が無いため共有 helper の呼び出し先がありません。",
-            "sourceDigest": "b56e2de9bcd34c47056fbe750552c7dfca9b77b856bfe7d828528176be4e3493"
+            "sourceDigest": "a3ce18962f6d993be5572621d71dae96ca4f627bc16ac20c2440e980b59f93cb"
           },
           {
             "source": "statusline/line1.sh",
@@ -337,7 +341,7 @@
             "sourceDigest": "1529e071e2fc9b90edf39fb421fc82d84917fd11093e9a9a131ddfb41ae10ebd"
           }
         ],
-        "sourceTreeDigest": "3474276110bb427cc4f1e65d4e47995fd3b813492689707d56a817fcd94cf434"
+        "sourceTreeDigest": "dbee4efb2a5a24f14e8c7ae57b33417dbcb649bcd24231c011a58279475a88ea"
       }
     },
     "agent-discipline": {

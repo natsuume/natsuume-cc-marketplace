@@ -4,7 +4,12 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.9.1
+v0.9.2
+
+### v0.9.1 → v0.9.2 の変更点 (#158)
+
+- ANSI SGR を除外した文字数ではなく terminal cell 幅を使い、CJK Wide/Fullwidth、主要 emoji、結合文字・variation selector・ZWJを考慮して statusline の幅を判定するようにした
+- 全角文字を追加すると上限を超える場合はその直前で prefix truncate し、日本語の path / repo / branch 名で1行目が折り返して後続行を崩す問題を修正した。外部 `wcwidth` や Python process に依存せず Bash 3.2 互換で実装した
 
 ### v0.9.0 → v0.9.1 の変更点 (#159)
 

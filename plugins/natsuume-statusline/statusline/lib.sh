@@ -290,11 +290,66 @@ terminal_width() {
   printf '80'
 }
 
-# ANSIエスケープシーケンスを除いた可視文字数を返す
+# 1 code point が占める terminal cell 幅を `_STATUSLINE_CELL_WIDTH` に設定する。
+# Unicode East Asian Width の Wide / Fullwidth、主要 emoji は 2、結合文字・variation
+# selector・ZWJ は 0、それ以外は 1。外部 wcwidth/Python process を文字ごとに起動せず、
+# macOS 標準 Bash 3.2 と Linux の UTF-8 locale で同じ判定を使う。
+_statusline_set_cell_width() {
+  local char="$1" codepoint
+  _STATUSLINE_CELL_WIDTH=1
+  [ -n "$char" ] || { _STATUSLINE_CELL_WIDTH=0; return; }
+  printf -v codepoint '%d' "'$char" 2>/dev/null || return
+
+  # C0/C1 control、結合文字、format selector は cell を進めない。
+  if (( codepoint < 32 \
+    || (codepoint >= 127 && codepoint < 160) \
+    || (codepoint >= 0x0300 && codepoint <= 0x036f) \
+    || (codepoint >= 0x1ab0 && codepoint <= 0x1aff) \
+    || (codepoint >= 0x1dc0 && codepoint <= 0x1dff) \
+    || codepoint == 0x200d \
+    || (codepoint >= 0x20d0 && codepoint <= 0x20ff) \
+    || (codepoint >= 0xfe00 && codepoint <= 0xfe0f) \
+    || (codepoint >= 0xfe20 && codepoint <= 0xfe2f) \
+    || (codepoint >= 0x1f3fb && codepoint <= 0x1f3ff) \
+    || (codepoint >= 0xe0020 && codepoint <= 0xe007f) \
+    || (codepoint >= 0xe0100 && codepoint <= 0xe01ef) )); then
+    _STATUSLINE_CELL_WIDTH=0
+    return
+  fi
+
+  # Unicode の主要 Wide / Fullwidth range。East Asian Ambiguous は多くの modern
+  # terminal の既定に合わせて 1 のまま扱う。
+  if (( (codepoint >= 0x1100 && codepoint <= 0x115f) \
+    || codepoint == 0x2329 || codepoint == 0x232a \
+    || (codepoint >= 0x2e80 && codepoint <= 0xa4cf && codepoint != 0x303f) \
+    || (codepoint >= 0xac00 && codepoint <= 0xd7a3) \
+    || (codepoint >= 0xf900 && codepoint <= 0xfaff) \
+    || (codepoint >= 0xfe10 && codepoint <= 0xfe19) \
+    || (codepoint >= 0xfe30 && codepoint <= 0xfe6f) \
+    || (codepoint >= 0xff01 && codepoint <= 0xff60) \
+    || (codepoint >= 0xffe0 && codepoint <= 0xffe6) \
+    || (codepoint >= 0x1f300 && codepoint <= 0x1faff) \
+    || (codepoint >= 0x20000 && codepoint <= 0x3fffd) )); then
+    _STATUSLINE_CELL_WIDTH=2
+  fi
+}
+
+# ANSI SGR escape を除いた terminal cell 幅を返す。
 visible_length() {
-  local s="$1" stripped
-  stripped=$(printf '%s' "$s" | sed $'s/\x1b\\[[0-9;]*m//g')
-  printf '%s' "${#stripped}"
+  local s="$1" len=${#1} i=0 in_esc=0 c total=0
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ "$in_esc" -eq 1 ]; then
+      [ "$c" = "m" ] && in_esc=0
+    elif [ "$c" = $'\033' ]; then
+      in_esc=1
+    else
+      _statusline_set_cell_width "$c"
+      total=$((total + _STATUSLINE_CELL_WIDTH))
+    fi
+    i=$((i + 1))
+  done
+  printf '%s' "$total"
 }
 
 # 文字列をANSIエスケープを保持したまま可視幅 max で切り詰める
@@ -302,9 +357,9 @@ visible_length() {
 truncate_visible() {
   local s="$1" max="$2"
   local len=${#s}
-  local i=0 visible=0 in_esc=0 c result=""
+  local i=0 visible=0 in_esc=0 c result="" next_visible
 
-  while [ "$i" -lt "$len" ] && [ "$visible" -lt "$max" ]; do
+  while [ "$i" -lt "$len" ]; do
     c="${s:$i:1}"
     if [ "$in_esc" -eq 1 ]; then
       result+="$c"
@@ -313,17 +368,14 @@ truncate_visible() {
       result+="$c"
       in_esc=1
     else
+      _statusline_set_cell_width "$c"
+      next_visible=$((visible + _STATUSLINE_CELL_WIDTH))
+      if [ "$_STATUSLINE_CELL_WIDTH" -gt 0 ] && [ "$next_visible" -gt "$max" ]; then
+        break
+      fi
       result+="$c"
-      visible=$((visible + 1))
+      visible=$next_visible
     fi
-    i=$((i + 1))
-  done
-
-  # 開きっぱなしのエスケープがあれば閉じきる
-  while [ "$i" -lt "$len" ] && [ "$in_esc" -eq 1 ]; do
-    c="${s:$i:1}"
-    result+="$c"
-    [ "$c" = "m" ] && in_esc=0
     i=$((i + 1))
   done
 
