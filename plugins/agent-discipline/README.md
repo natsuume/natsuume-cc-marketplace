@@ -4,9 +4,15 @@ Claude Code と Codex の振る舞い規律 (= agent としての discipline) �
 
 ## バージョン
 
-v0.18.0
+v0.19.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.18.0 → v0.19.0 の変更点
+
+- temporary ルールの `inject-temporary.sh` を SessionStart と UserPromptSubmit の共通配送経路にした。SessionStart は従来どおり現在の `hooks/prompts/temporary/*.md` を全件連結配送し、ファイル名単位の配送済み集合を `${TMPDIR:-/tmp}/agent-discipline-state/` に atomic 記録する
+- UserPromptSubmit では同じ session の配送済み集合に無い temporary md だけを辞書順で連結し、追加後の最初のプロンプト処理時に one-shot 配送する。全件配送済み・directory が空・`agent_id` 付き入力・marker 書込失敗は無音 `exit 0` とし、削除済み md は再配送しない (issue #237)
+- `hooks/` の共有 script / manifest と検証 test を変更したため、Claude Code / Codex の両 version を minor bump した。Codex は runtime 固有の `codex/hooks.json` を使うため、Claude 固有の temporary UI workaround / UserPromptSubmit 配送を引き続き discovery しない
 
 ### Claude Code v0.17.1 / Codex v0.17.2 → v0.18.0 の変更点
 
@@ -275,6 +281,19 @@ claude plugin install agent-discipline@natsuume-plugins
 - `always-fable.md`: 各ルールを「意図 (なぜ) + 短い指示 + 境界 (いつ例外か)」で記述しパターン列挙を避ける。禁止表現 8 カテゴリは意図短文に圧縮する。進捗・完了報告はこのセッションのツール結果で裏付けられた事実のみを書く旨を含める
 - `always-sonnet-1.md` / `always-sonnet-2.md` / `always-sonnet-3.md`: 各ルールに適用範囲を明示し、否定形の指示には具体的な代替行動を併記する。ルールごとに良い例 / 悪い例を最小 1 セット添える。禁止表現 8 カテゴリは列挙を維持する。part 3/3 (`always-sonnet-3.md`) の末尾に「単純な作業では深い思考を要さない」の steering 文を置く。issue #236 (v0.15.0) で単一ファイル (`always-sonnet.md`) を rule 境界で 3 分割したもので、rule 本文・rule ID マーカーは分割前から無変更 (各 part 冒頭のヘッダコメント・`part n/3` 表記・1〜2 文の説明のみが分割に伴う追加)
 - `rule:issue-claim` (連続 issue 解決時の排他制御、part 3/3 に含まれる) のみ、安全機構のため `always-fable.md` / `always-sonnet-3.md` とも手順本体を省略せず完全記載する
+
+#### inject-temporary
+
+**ファイル**: `hooks/scripts/inject-temporary.sh`
+**イベント**: `SessionStart` / `UserPromptSubmit`
+
+**動作** (v0.12.0 新設、issue #237 (v0.19.0) で実行中 session の追い配送を追加):
+
+- `SessionStart` では従来どおり `hooks/prompts/temporary/*.md` の非空ファイルをファイル名の辞書順 (`LC_ALL=C`) で連結し、1 つの `additionalContext` として全件配送する。同時にファイル名の POSIX `cksum` (CRC + byte length) を session ごとの配送済み集合 `${TMPDIR:-/tmp}/agent-discipline-state/delivered-temporary-<session_id>` へ atomic に記録する
+- `UserPromptSubmit` では配送済み集合に無い非空 md だけを同じ順序で連結し、追加後の最初のプロンプト処理時に one-shot 配送する。配送済み集合は本文 hash ではなくファイル名単位なので、temporary rule の lifecycle は従来どおりファイル追加・削除で管理する
+- SessionStart の全件配送は resume / clear / compact を含めて維持し、その時点の存在ファイルで配送済み集合を置き換える。temporary directory が空なら空集合を記録するため、その後に同名ファイルが追加されても次の UserPromptSubmit で配送できる
+- `agent_id` 付き UserPromptSubmit は subagent 経路として無音終了し、配送済み集合も変更しない。`jq` 不在 / 不正 JSON / session_id 不正 / state directory または atomic marker 書込失敗 / 全件配送済み / directory が空の場合も無音 `exit 0` する
+- SessionStart input に session_id が無い異常系だけは v0.12.0 からの既存挙動を保つため、marker 無しで全件配送する。正常系では出力 JSON を先に生成し、marker 更新に成功した後だけ stdout へ出す
 
 #### resolve-model-on-prompt
 

@@ -29,6 +29,7 @@ CHECK_UNCOMMITTED = (
     PLUGIN_DIR / "hooks" / "scripts" / "check-uncommitted-on-session-start.sh"
 )
 BLOCK_FABLE = PLUGIN_DIR / "hooks" / "scripts" / "block-fable-subagent.sh"
+INJECT_TEMPORARY = PLUGIN_DIR / "hooks" / "scripts" / "inject-temporary.sh"
 
 
 class AgentDisciplineCodexAdapterTest(unittest.TestCase):
@@ -236,6 +237,138 @@ esac
                 for group in groups
             },
         )
+
+    def test_temporary_rules_are_caught_up_once_per_main_session(self) -> None:
+        hooks = json.loads(HOOKS_PATH.read_text(encoding="utf-8"))
+        temporary_command = (
+            "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-temporary.sh"
+        )
+        for event in ("SessionStart", "UserPromptSubmit"):
+            commands = [
+                handler["command"]
+                for group in hooks["hooks"][event]
+                for handler in group["hooks"]
+            ]
+            self.assertEqual(1, commands.count(temporary_command), event)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            plugin = temp / "agent-discipline"
+            shutil.copytree(PLUGIN_DIR, plugin)
+            prompts = plugin / "hooks" / "prompts" / "temporary"
+            for prompt in prompts.glob("*.md"):
+                prompt.unlink()
+            (prompts / "10-initial.md").write_text("initial rule\n", encoding="utf-8")
+
+            script = plugin / "hooks" / "scripts" / "inject-temporary.sh"
+            env = {"TMPDIR": str(temp / "state-root")}
+            session_id = "temporary/catch-up session"
+            session_start = self.run_hook(
+                script,
+                {
+                    "hook_event_name": "SessionStart",
+                    "session_id": session_id,
+                },
+                env=env,
+            )
+            self.assertEqual(0, session_start.returncode, session_start.stderr)
+            self.assertEqual(
+                "initial rule",
+                json.loads(session_start.stdout)["hookSpecificOutput"][
+                    "additionalContext"
+                ],
+            )
+
+            prompt_payload = {
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": session_id,
+            }
+            already_delivered = self.run_hook(script, prompt_payload, env=env)
+            self.assertEqual(0, already_delivered.returncode, already_delivered.stderr)
+            self.assertEqual("", already_delivered.stdout)
+
+            (prompts / "20-later.md").write_text("later rule\n", encoding="utf-8")
+            catch_up = self.run_hook(script, prompt_payload, env=env)
+            self.assertEqual(0, catch_up.returncode, catch_up.stderr)
+            self.assertEqual(
+                "later rule",
+                json.loads(catch_up.stdout)["hookSpecificOutput"][
+                    "additionalContext"
+                ],
+            )
+            repeated = self.run_hook(script, prompt_payload, env=env)
+            self.assertEqual("", repeated.stdout)
+
+            (prompts / "30-main-only.md").write_text(
+                "main session only\n", encoding="utf-8"
+            )
+            subagent = self.run_hook(
+                script,
+                {**prompt_payload, "agent_id": "subagent-1"},
+                env=env,
+            )
+            self.assertEqual(0, subagent.returncode, subagent.stderr)
+            self.assertEqual("", subagent.stdout)
+            main_session = self.run_hook(script, prompt_payload, env=env)
+            self.assertEqual(
+                "main session only",
+                json.loads(main_session.stdout)["hookSpecificOutput"][
+                    "additionalContext"
+                ],
+            )
+
+            (prompts / "20-later.md").unlink()
+            (prompts / "30-main-only.md").unlink()
+            after_removal = self.run_hook(script, prompt_payload, env=env)
+            self.assertEqual("", after_removal.stdout)
+
+            next_session = self.run_hook(
+                script,
+                {"hook_event_name": "SessionStart", "session_id": "next-session"},
+                env=env,
+            )
+            self.assertEqual(
+                "initial rule",
+                json.loads(next_session.stdout)["hookSpecificOutput"][
+                    "additionalContext"
+                ],
+            )
+
+            (prompts / "10-initial.md").unlink()
+            empty_start = self.run_hook(
+                script,
+                {"hook_event_name": "SessionStart", "session_id": session_id},
+                env=env,
+            )
+            self.assertEqual(0, empty_start.returncode, empty_start.stderr)
+            self.assertEqual("", empty_start.stdout)
+
+            (prompts / "10-initial.md").write_text(
+                "reintroduced rule\n", encoding="utf-8"
+            )
+            after_empty_start = self.run_hook(script, prompt_payload, env=env)
+            self.assertEqual(
+                "reintroduced rule",
+                json.loads(after_empty_start.stdout)["hookSpecificOutput"][
+                    "additionalContext"
+                ],
+            )
+
+    def test_temporary_rule_catch_up_fails_open_when_state_is_unwritable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            blocked_tmpdir = temp / "not-a-directory"
+            blocked_tmpdir.write_text("blocked\n", encoding="utf-8")
+            result = self.run_hook(
+                INJECT_TEMPORARY,
+                {
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "marker-write-failure",
+                },
+                env={"TMPDIR": str(blocked_tmpdir)},
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("", result.stdout)
 
     def test_claude_runtime_guard_preserves_no_output_and_skips_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,5 +1,5 @@
 {
-  "description": "agent-discipline の配送経路 (issue #236 で注入ペイロードを 8K 以下の複数要素に分割): SessionStart で inject-always.sh がモデル別 (Fable/Sonnet) の常時適用ルールの part 1/3 (delivery-note 付き) のみを注入する。残りの part (always-sonnet-2.md / always-sonnet-3.md) と分業規律 (discipline-fable.md 系 / discipline-sonnet.md 系) は UserPromptSubmit の inject-rules-part.sh (part 2・part 3 の 2 entries) / inject-discipline.sh が at-most-once で個別要素として配送する。加えて暫定ルール (hooks/prompts/temporary/*.md — 問題修正までの一時規律、md 削除で撤去可能) を独立 hook で連結注入する (inject-temporary.sh)。UserPromptSubmit ではさらに、判定不能セッションの one-shot モデル補正 (resolve-model-on-prompt.sh、issue #236 で常時ルール確定版のみを再送し分業規律補正は inject-discipline.sh に分離) と auto mode 限定の自走方針注入 (inject-auto.sh) と session 初回の未コミット変更チェック (check-uncommitted-on-session-start.sh) を実行する。PreToolUse (Bash) で gh issue/pr create|edit の body を禁止表現規範で semantic 検証し、gh pr create のみ branch 名から推定される issue の closing keyword 有無も検証する agent hook (4 entries)、PreToolUse (Agent|Task) で block-fable-subagent.sh (サブエージェントの Fable 実行経路 deny、判定不能は fail-open) を実行。SubagentStart では subagent 向け常時適用ルール (hooks/prompts/subagent-rules.md — bash-decompose / 報告の事実性 / default-deny / エスカレーション定型の 4 規律、モデル・agent_type 分岐なし) を全 subagent に注入する (inject-subagent-rules.sh、Claude Code 2.0.43+、issue #221)。設計判断・経緯の詳細は plugin README を参照。",
+  "description": "agent-discipline の配送経路 (issue #236 で注入ペイロードを 8K 以下の複数要素に分割): SessionStart で inject-always.sh がモデル別 (Fable/Sonnet) の常時適用ルールの part 1/3 (delivery-note 付き) のみを注入する。残りの part (always-sonnet-2.md / always-sonnet-3.md) と分業規律 (discipline-fable.md 系 / discipline-sonnet.md 系) は UserPromptSubmit の inject-rules-part.sh (part 2・part 3 の 2 entries) / inject-discipline.sh が at-most-once で個別要素として配送する。加えて暫定ルール (hooks/prompts/temporary/*.md — 問題修正までの一時規律、md 削除で撤去可能) を inject-temporary.sh が SessionStart で全件、UserPromptSubmit で同 session の未配送分だけ one-shot 連結注入する。UserPromptSubmit ではさらに、判定不能セッションの one-shot モデル補正 (resolve-model-on-prompt.sh、issue #236 で常時ルール確定版のみを再送し分業規律補正は inject-discipline.sh に分離) と auto mode 限定の自走方針注入 (inject-auto.sh) と session 初回の未コミット変更チェック (check-uncommitted-on-session-start.sh) を実行する。PreToolUse (Bash) で gh issue/pr create|edit の body を禁止表現規範で semantic 検証し、gh pr create のみ branch 名から推定される issue の closing keyword 有無も検証する agent hook (4 entries)、PreToolUse (Agent|Task) で block-fable-subagent.sh (サブエージェントの Fable 実行経路 deny、判定不能は fail-open) を実行。SubagentStart では subagent 向け常時適用ルール (hooks/prompts/subagent-rules.md — bash-decompose / 報告の事実性 / default-deny / エスカレーション定型の 4 規律、モデル・agent_type 分岐なし) を全 subagent に注入する (inject-subagent-rules.sh、Claude Code 2.0.43+、issue #221)。設計判断・経緯の詳細は plugin README を参照。",
   "hooks": {
     "SessionStart": [
       {
@@ -31,6 +31,10 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/resolve-model-on-prompt.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-temporary.sh"
           },
           {
             "type": "command",

@@ -355,7 +355,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.18.0",
+      "version": "0.19.0",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": [
@@ -395,7 +395,7 @@
         "verificationTests": [
           {
             "path": "tests/test_agent_discipline_codex_adapter.py",
-            "covers": "Claude/Codex hook 分離、Codex native semantic policy の developer role 分離、Sol/Luna model 制約、attached short flag・行継続を含む shell-pre-extracted body/branch、isolated cwd、hostile AGENTS/project config 非読込、web/shell/search tools 無効化、read-only/ephemeral validator、provider/privacy opt-in lifecycle、Structured Outputs subset、fail-closed deny、明示代替 Skills、Claude runtime 維持"
+            "covers": "Claude/Codex hook 分離、Claude temporary rule の SessionStart 記録と UserPromptSubmit one-shot 追い配送、Codex native semantic policy の developer role 分離、Sol/Luna model 制約、attached short flag・行継続を含む shell-pre-extracted body/branch、isolated cwd、hostile AGENTS/project config 非読込、web/shell/search tools 無効化、read-only/ephemeral validator、provider/privacy opt-in lifecycle、Structured Outputs subset、fail-closed deny、明示代替 Skills、Claude runtime 維持"
           },
           {
             "path": "tests/test_codex_prompt_injection.py",
@@ -438,7 +438,7 @@
             "sourceDigest": "a23b1862a7921dd2daad8ae5ff3addf9ed5fd71b7994ed6a746c788dc4fe1345"
           }
         ],
-        "sourceTreeDigest": "8eb496bf0404867b2d172a6f0df00bd21000d6479f479bbe51e54beba15fc2f4"
+        "sourceTreeDigest": "df73ce891ebe6f8bcbf7441bfb503bc1ee22f872fc9536e040362e35712e0943"
       }
     },
     "ui-discipline": {
