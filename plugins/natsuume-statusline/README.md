@@ -9,7 +9,7 @@ v0.9.2
 ### v0.9.1 → v0.9.2 の変更点 (#158)
 
 - ANSI SGR を除外した文字数ではなく terminal cell 幅を使い、CJK Wide/Fullwidth、主要 emoji、結合文字・variation selector・ZWJを考慮して statusline の幅を判定するようにした
-- 全角文字を追加すると上限を超える場合はその直前で prefix truncate し、日本語の path / repo / branch 名で1行目が折り返して後続行を崩す問題を修正した。外部 `wcwidth` や Python process に依存せず、利用可能なUTF-8 localeを幅関数へ局所適用するBash 3.2互換実装で、macOS runnerのC localeでもbyte途中の切断を防ぐ
+- 全角文字を追加すると上限を超える場合はその直前で prefix truncate し、日本語の path / repo / branch 名で1行目が折り返して後続行を崩す問題を修正した。UTF-8対応Bashではshell内で計算し、macOS Bash 3.2などmultibyte substringを使えない環境だけPython 3標準ライブラリへfallbackしてbyte途中の切断を防ぐ
 
 ### v0.9.0 → v0.9.1 の変更点 (#159)
 
@@ -150,7 +150,7 @@ cp ~/.claude/settings.natsuume-statusline-backup.<timestamp>.json ~/.claude/sett
 - `git` — 無いとリポジトリ情報セグメント全体がスキップ
 - `gh` — 無いと所有 namespace 判定が無効化され `owner/repo` 形式のまま表示
 - `tput` または `stty` — 無いと環境変数 `COLUMNS`、最終的に 80 桁にフォールバック
-- `python3` (3.7+) — `resets_at` が ISO 8601 形式で渡された場合の epoch 変換 fallback (BSD/macOS の `date` に `-d` が無い環境用)。無いとレートリミットのリセット残時間が空表示
+- `python3` (3.7+) — `resets_at` が ISO 8601 形式で渡された場合の epoch 変換 fallback、および Bash がUTF-8 multibyte substringを提供しない環境 (macOS Bash 3.2等) のcell幅計算に使用。無い場合、前者はリセット残時間が空表示、後者はBash側の文字走査へ縮退する
 - `curl` — モデル別週次枠 (3 行目) を OAuth usage API から取得するために使用。無いと background fetch が起動せず、3 行目はモデル別週次枠を含まない (7d のみ、または非表示) まま縮退
 
 ## 関連情報

@@ -63,9 +63,10 @@ Claude Code marketplace を version 以外の共有 metadata の正本とし、S
 | `pre-push-review` | `hooks/hooks.json#/hooks/PostToolUseFailure/0/hooks/0` | `be236d7412a9…` | `surface-unavailable` | — | Claude Code の Agent / Task failure payload に残る Codex pending attestation を破棄する lifecycle hook であり、plugin 自体を Codex distribution から除外しているため Codex surface は公開しません。 |
 | `natsuume-statusline` | `commands/setup.md` | `fedf745cd1d0…` | `adapted` | `skills/setup-codex/SKILL.md` | Claude settings.json の statusLine.command 設定を Codex の /statusline と config.toml 手順に変換します。 |
 | `natsuume-statusline` | `statusline/context-cache-dump.sh` | `0c584020d0d6…` | `surface-unavailable` | — | Codex に statusline stdin callback はありません。context handoff の意図は session-handoff の PreCompact adapter が担います。 |
+| `natsuume-statusline` | `statusline/display-width.py` | `0ffb0171daef…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer の幅計算と切り詰めは Codex runtime が所有します。 |
 | `natsuume-statusline` | `statusline/entrypoint.sh` | `e5ca162aa51a…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex に任意 shell statusline entrypoint がありません。 |
 | `natsuume-statusline` | `statusline/gauges.sh` | `c82b07e30809…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer は独自 gauge renderer を受け付けません。 |
-| `natsuume-statusline` | `statusline/lib.sh` | `328d150d6188…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | custom statusline runtime が無いため共有 helper の呼び出し先がありません。 |
+| `natsuume-statusline` | `statusline/lib.sh` | `d2ca180e1841…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | custom statusline runtime が無いため共有 helper の呼び出し先がありません。 |
 | `natsuume-statusline` | `statusline/line1.sh` | `223204ab78ad…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer は任意の複数行 renderer を受け付けません。 |
 | `natsuume-statusline` | `statusline/line2.sh` | `83bf3877e200…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer は任意の複数行 renderer を受け付けません。 |
 | `natsuume-statusline` | `statusline/line3.sh` | `f1e0d4c06eae…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer は任意の複数行 renderer を受け付けません。 |

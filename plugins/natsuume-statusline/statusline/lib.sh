@@ -1,6 +1,9 @@
 #!/bin/bash
 # statusline 共通関数・定数
 
+_STATUSLINE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_STATUSLINE_WIDTH_HELPER="$_STATUSLINE_LIB_DIR/display-width.py"
+
 # ANSIカラー定数
 RESET='\033[00m'
 BOLD_GREEN='\033[01;32m'
@@ -310,6 +313,9 @@ for _statusline_locale_candidate in \
 done
 unset _statusline_locale_candidate
 unset -f _statusline_locale_counts_utf8
+if [ "${_STATUSLINE_FORCE_PYTHON_WIDTH:-0}" = "1" ]; then
+  _STATUSLINE_UTF8_LOCALE=""
+fi
 
 # 1 code point が占める terminal cell 幅を `_STATUSLINE_CELL_WIDTH` に設定する。
 # Unicode East Asian Width の Wide / Fullwidth、主要 emoji は 2、結合文字・variation
@@ -359,6 +365,10 @@ _statusline_set_cell_width() {
 visible_length() {
   local LC_ALL="" LC_CTYPE="${_STATUSLINE_UTF8_LOCALE:-${LC_CTYPE:-}}"
   local s="$1" len=${#1} i=0 in_esc=0 c total=0
+  if [ -z "$_STATUSLINE_UTF8_LOCALE" ] && command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$s" | python3 "$_STATUSLINE_WIDTH_HELPER" width
+    return
+  fi
   while [ "$i" -lt "$len" ]; do
     c="${s:$i:1}"
     if [ "$in_esc" -eq 1 ]; then
@@ -381,6 +391,10 @@ truncate_visible() {
   local s="$1" max="$2"
   local len=${#s}
   local i=0 visible=0 in_esc=0 c result="" next_visible
+  if [ -z "$_STATUSLINE_UTF8_LOCALE" ] && command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$s" | python3 "$_STATUSLINE_WIDTH_HELPER" truncate "$max"
+    return
+  fi
 
   while [ "$i" -lt "$len" ]; do
     c="${s:$i:1}"

@@ -66,6 +66,7 @@ class StatuslineDisplayWidthTest(unittest.TestCase):
         env = os.environ.copy()
         env["LC_ALL"] = "C"
         env["LANG"] = "C"
+        env["_STATUSLINE_FORCE_PYTHON_WIDTH"] = "1"
 
         self.assertEqual(self.run_function("visible_length", "日本語", env=env), "6")
         truncated = self.run_function("truncate_visible", "日本語", "5", env=env)

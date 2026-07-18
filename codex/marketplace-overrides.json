@@ -285,6 +285,13 @@
             "sourceDigest": "0c584020d0d6045c435b7c58d243687d91efb00dbbfeda7971ee6ceb530df835"
           },
           {
+            "source": "statusline/display-width.py",
+            "disposition": "surface-unavailable",
+            "codexReplacement": "skills/setup-codex/SKILL.md",
+            "reason": "Codex footer の幅計算と切り詰めは Codex runtime が所有します。",
+            "sourceDigest": "0ffb0171daef20d177c1a11f707c8c991c16be0ec1d1e147229c5207c7ae20ca"
+          },
+          {
             "source": "statusline/entrypoint.sh",
             "disposition": "surface-unavailable",
             "codexReplacement": "skills/setup-codex/SKILL.md",
@@ -303,7 +310,7 @@
             "disposition": "surface-unavailable",
             "codexReplacement": "skills/setup-codex/SKILL.md",
             "reason": "custom statusline runtime が無いため共有 helper の呼び出し先がありません。",
-            "sourceDigest": "328d150d6188470d6cee8d1b33f26d5e5cd77cb6bf27cdc2e19a7b0904bfd123"
+            "sourceDigest": "d2ca180e18415db2ccdbefa2cd9352c3387a1144f0f0d8209d2554c81cf4b03e"
           },
           {
             "source": "statusline/line1.sh",
@@ -341,7 +348,7 @@
             "sourceDigest": "1529e071e2fc9b90edf39fb421fc82d84917fd11093e9a9a131ddfb41ae10ebd"
           }
         ],
-        "sourceTreeDigest": "ed8a7961c2849e0315baf99e5d5442c379facf6e2a162a2d1fa913a828dbfd37"
+        "sourceTreeDigest": "cba866b4b4f5c7e89017fb5bf990c484926dfe1981748b36347c3f38d303db89"
       }
     },
     "agent-discipline": {
