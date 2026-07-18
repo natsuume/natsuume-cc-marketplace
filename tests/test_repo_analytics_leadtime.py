@@ -63,7 +63,14 @@ Phase A (spec-first) の位置づけ:
   auxiliarySeries のいずれにも入らず `exclusions.mergedCloserPrNotQualifying`
   に列挙されることの検証、および同じ stale closer に加えて
   closingIssuesReferences 逆引きで qualifying な PR が別途見つかる混在
-  ケースでその PR により issue が mainSeries に編入されることの検証。
+  ケースでその PR により issue が mainSeries に編入されることの検証。T56:
+  overflow PR と別の qualifying PR が同じ issue を参照する場合、および
+  着手マーカー無し / NOT_PLANNED の issue を overflow PR が参照する場合に、
+  overflow が分類除外の原因ではない issue を `prTimelineOverflow.linkedIssues`
+  へ過大申告しないことの検証。T57: completion を証明する overflow PR だけが
+  qualifying 候補だった着手済み open issue を `censored` に入れず、
+  `exclusions.prReadyTimeUnknown` に `{repo, issue, prRepo, pr}` で列挙して、
+  `elapsedHoursLowerBound` の下限値契約を維持することの検証。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -1490,14 +1497,19 @@ class ComputeTests(unittest.TestCase):
         self.assertEqual(entry["totalCount"], 150)
         self.assertEqual(entry["fetched"], 2)
         self.assertEqual(entry["linkedIssues"], [{"repo": repo, "issue": issue_number}])
+        self.assertEqual(
+            result["exclusions"]["prReadyTimeUnknown"],
+            [{"repo": repo, "issue": issue_number, "prRepo": repo, "pr": pr_number}],
+        )
 
     def test_t44_linked_issues_same_number_different_repos_kept_separate(self):
         # T44: 1 件の overflow PR の closingIssuesReferences が、同じ issue
         # 番号 (5) を持つ別リポジトリの 2 issue (owner/repo-a, owner/repo-b)
         # を指す場合、linkedIssues は (repo, issue) の複合キーで両方を別
         # レコードとして列挙する (issue 番号だけで重複排除すると片方が
-        # 失われる回帰の防止)。着手マーカー付きだが qualifying 候補が
-        # overflow PR しか無い issue は OPEN のまま censored に入る。
+        # 失われる回帰の防止)。T57 として、着手マーカー付きだが completion
+        # を証明する overflow PR しか無い OPEN issue は censored に入れず、
+        # ready 時刻不明の独立した exclusion に入れる。
         repo = "owner/name"
         pr_number = 950
         issue_a = make_issue(
@@ -1536,11 +1548,7 @@ class ComputeTests(unittest.TestCase):
         )
 
         self.assertEqual(result["mainSeries"], [])
-        censored_keys = {
-            (entry["repo"], entry["issue"]) for entry in result["censored"]
-        }
-        self.assertIn(("owner/repo-a", 5), censored_keys)
-        self.assertIn(("owner/repo-b", 5), censored_keys)
+        self.assertEqual(result["censored"], [])
 
         overflow = result["exclusions"]["prTimelineOverflow"]
         self.assertEqual(len(overflow), 1)
@@ -1551,6 +1559,92 @@ class ComputeTests(unittest.TestCase):
                 {"repo": "owner/repo-b", "issue": 5},
             ],
         )
+        self.assertEqual(
+            result["exclusions"]["prReadyTimeUnknown"],
+            [
+                {
+                    "repo": "owner/repo-a",
+                    "issue": 5,
+                    "prRepo": repo,
+                    "pr": pr_number,
+                },
+                {
+                    "repo": "owner/repo-b",
+                    "issue": 5,
+                    "prRepo": repo,
+                    "pr": pr_number,
+                },
+            ],
+        )
+
+    def test_t56_overflow_linked_issues_only_report_actual_exclusions(self):
+        # T56 (#301): 同じ started issue を非 overflow の qualifying PR と
+        # overflow PR の両方が参照する場合、issue は前者で mainSeries に入り、
+        # overflow は分類除外の原因ではない。また marker 無し / NOT_PLANNED の
+        # issue は候補パイプライン自体に入らない。3 件とも overflow PR の
+        # linkedIssues や prReadyTimeUnknown へ列挙してはならない。
+        repo = "owner/name"
+        started = make_issue(
+            repo=repo,
+            number=5601,
+            state="OPEN",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        not_started = make_issue(repo=repo, number=5602, state="OPEN")
+        not_planned = make_issue(
+            repo=repo,
+            number=5603,
+            state="OPEN",
+            state_reason="NOT_PLANNED",
+            timeline_nodes=[
+                issue_comment("2026-07-01T00:00:00Z", "🔒 ai:claim branch=x")
+            ],
+        )
+        qualifying = make_pr(
+            repo=repo,
+            number=5610,
+            state="MERGED",
+            created_at="2026-07-02T00:00:00Z",
+            merged_at="2026-07-04T00:00:00Z",
+            timeline_nodes=[ready_event("2026-07-03T00:00:00Z")],
+            closing_issues=[
+                {"number": started["number"], "repository": {"nameWithOwner": repo}}
+            ],
+        )
+        overflow = make_pr(
+            repo=repo,
+            number=5620,
+            state="MERGED",
+            created_at="2026-07-02T00:00:00Z",
+            merged_at="2026-07-05T00:00:00Z",
+            timeline_nodes=[ready_event("2026-07-03T00:00:00Z")],
+            total_count=150,
+            closing_issues=[
+                {"number": number, "repository": {"nameWithOwner": repo}}
+                for number in (5601, 5602, 5603)
+            ],
+        )
+        as_of = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        result = compute_leadtime.compute(
+            [started, not_started, not_planned],
+            [qualifying, overflow],
+            self.patterns,
+            as_of,
+            None,
+            None,
+        )
+
+        self.assertEqual([entry["issue"] for entry in result["mainSeries"]], [5601])
+        self.assertEqual(
+            [entry["issue"] for entry in result["auxiliarySeries"]["notPlanned"]],
+            [5603],
+        )
+        self.assertEqual(
+            result["exclusions"]["prTimelineOverflow"][0]["linkedIssues"], []
+        )
+        self.assertEqual(result["exclusions"]["prReadyTimeUnknown"], [])
 
     def test_t36_open_ready_pr_links_issue_into_main_series(self):
         # T36 (改訂 1): OPEN + isDraft=False の PR (ReadyForReviewEvent 1 件、
