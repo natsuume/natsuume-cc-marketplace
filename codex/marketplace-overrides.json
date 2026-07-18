@@ -230,7 +230,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.9.0",
+      "version": "0.9.1",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": []
@@ -256,6 +256,10 @@
           {
             "path": "tests/test_statusline_codex_adapter.py",
             "covers": "組み込み status-line item、backup/atomic replace/strict parse failure/atomic restore の instruction contract、parse 検査境界と rendering 保証差"
+          },
+          {
+            "path": "tests/test_statusline_github_namespace_cache.py",
+            "covers": "Claude statusline の GitHub namespace refresh timeout、並行 cache miss の排他、正常時の login/org 出力"
           },
           {
             "path": "scripts/smoke_codex_marketplace.sh",
@@ -295,7 +299,7 @@
             "disposition": "surface-unavailable",
             "codexReplacement": "skills/setup-codex/SKILL.md",
             "reason": "custom statusline runtime が無いため共有 helper の呼び出し先がありません。",
-            "sourceDigest": "d5b8ef0a4c8ee2643e6bf626f58d4d455c10e2debf6dd4ae6b83468bb4d6a8a4"
+            "sourceDigest": "b56e2de9bcd34c47056fbe750552c7dfca9b77b856bfe7d828528176be4e3493"
           },
           {
             "source": "statusline/line1.sh",
@@ -333,7 +337,7 @@
             "sourceDigest": "1529e071e2fc9b90edf39fb421fc82d84917fd11093e9a9a131ddfb41ae10ebd"
           }
         ],
-        "sourceTreeDigest": "41b2d2b683b68e0cc15b44f213482b0d86989c86361963829607a21f17d21d91"
+        "sourceTreeDigest": "3474276110bb427cc4f1e65d4e47995fd3b813492689707d56a817fcd94cf434"
       }
     },
     "agent-discipline": {
