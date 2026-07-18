@@ -303,7 +303,7 @@
             "disposition": "surface-unavailable",
             "codexReplacement": "skills/setup-codex/SKILL.md",
             "reason": "custom statusline runtime が無いため共有 helper の呼び出し先がありません。",
-            "sourceDigest": "372bfb42de9eac6164cc474d548798b200602c08445e4b9f768840cc255e83a3"
+            "sourceDigest": "328d150d6188470d6cee8d1b33f26d5e5cd77cb6bf27cdc2e19a7b0904bfd123"
           },
           {
             "source": "statusline/line1.sh",
@@ -341,7 +341,7 @@
             "sourceDigest": "1529e071e2fc9b90edf39fb421fc82d84917fd11093e9a9a131ddfb41ae10ebd"
           }
         ],
-        "sourceTreeDigest": "326694aee072c31d1965aa438fb6a570b895635f62ac8e641ff27d47a7be8dbb"
+        "sourceTreeDigest": "ed8a7961c2849e0315baf99e5d5442c379facf6e2a162a2d1fa913a828dbfd37"
       }
     },
     "agent-discipline": {

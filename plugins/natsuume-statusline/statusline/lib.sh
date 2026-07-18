@@ -292,22 +292,24 @@ terminal_width() {
 
 # Bash の文字列演算が byte 単位になる C/POSIX locale でも UTF-8 path を壊さないよう、
 # 幅計算にだけ使える UTF-8 locale を一度検出する。Linux と macOS で一般的な候補を
-# locale command で実在確認し、process 全体の locale は変更しない。
+# Bash 自身が `日` を1文字と数えるかで確認し、process 全体の locale は変更しない。
+# BSD locale は `locale charmap` keyword を提供しないため、外部 command の出力には依存しない。
+_statusline_locale_counts_utf8() {
+  local LC_ALL='' LC_CTYPE="$1" probe='日'
+  [ "${#probe}" -eq 1 ]
+}
+
 _STATUSLINE_UTF8_LOCALE=""
 for _statusline_locale_candidate in \
   "${LC_CTYPE:-}" "${LANG:-}" "C.UTF-8" "en_US.UTF-8" "UTF-8"; do
   [ -n "$_statusline_locale_candidate" ] || continue
-  _statusline_charmap=$(
-    LC_ALL= LC_CTYPE="$_statusline_locale_candidate" locale charmap 2>/dev/null
-  ) || continue
-  case "$_statusline_charmap" in
-    UTF-8|UTF8|utf-8|utf8)
-      _STATUSLINE_UTF8_LOCALE="$_statusline_locale_candidate"
-      break
-      ;;
-  esac
+  if _statusline_locale_counts_utf8 "$_statusline_locale_candidate" 2>/dev/null; then
+    _STATUSLINE_UTF8_LOCALE="$_statusline_locale_candidate"
+    break
+  fi
 done
-unset _statusline_locale_candidate _statusline_charmap
+unset _statusline_locale_candidate
+unset -f _statusline_locale_counts_utf8
 
 # 1 code point が占める terminal cell 幅を `_STATUSLINE_CELL_WIDTH` に設定する。
 # Unicode East Asian Width の Wide / Fullwidth、主要 emoji は 2、結合文字・variation
