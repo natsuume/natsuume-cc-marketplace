@@ -313,7 +313,10 @@ for _statusline_locale_candidate in \
 done
 unset _statusline_locale_candidate
 unset -f _statusline_locale_counts_utf8
-if [ "${_STATUSLINE_FORCE_PYTHON_WIDTH:-0}" = "1" ]; then
+# macOS 標準の Bash 3.2 は process 起動時の locale では multibyte 文字数を返しても、
+# function 内で LC_CTYPE を切り替えた後の substring が byte 単位になる。version 3 系は
+# locale probe の結果にかかわらず Python helper へ切り替える。
+if [ "${BASH_VERSINFO[0]}" -lt 4 ] || [ "${_STATUSLINE_FORCE_PYTHON_WIDTH:-0}" = "1" ]; then
   _STATUSLINE_UTF8_LOCALE=""
 fi
 

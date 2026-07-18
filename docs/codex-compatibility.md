@@ -66,7 +66,7 @@ Claude Code marketplace を version 以外の共有 metadata の正本とし、S
 | `natsuume-statusline` | `statusline/display-width.py` | `0ffb0171daef…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer の幅計算と切り詰めは Codex runtime が所有します。 |
 | `natsuume-statusline` | `statusline/entrypoint.sh` | `e5ca162aa51a…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex に任意 shell statusline entrypoint がありません。 |
 | `natsuume-statusline` | `statusline/gauges.sh` | `c82b07e30809…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer は独自 gauge renderer を受け付けません。 |
-| `natsuume-statusline` | `statusline/lib.sh` | `d2ca180e1841…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | custom statusline runtime が無いため共有 helper の呼び出し先がありません。 |
+| `natsuume-statusline` | `statusline/lib.sh` | `6178e3fe380f…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | custom statusline runtime が無いため共有 helper の呼び出し先がありません。 |
 | `natsuume-statusline` | `statusline/line1.sh` | `223204ab78ad…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer は任意の複数行 renderer を受け付けません。 |
 | `natsuume-statusline` | `statusline/line2.sh` | `83bf3877e200…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer は任意の複数行 renderer を受け付けません。 |
 | `natsuume-statusline` | `statusline/line3.sh` | `f1e0d4c06eae…` | `surface-unavailable` | `skills/setup-codex/SKILL.md` | Codex footer は任意の複数行 renderer を受け付けません。 |
