@@ -4,7 +4,12 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.9.0
+v0.9.1
+
+### v0.9.0 → v0.9.1 の変更点 (#159)
+
+- GitHub namespace cache の `gh api user` / `gh api user/orgs` を並行実行し、それぞれ2秒で打ち切る portable watchdog を追加した。GNU `timeout` に依存せず Linux (WSL2) / macOS で同じ上限を適用する
+- cache miss の同時描画を `mkdir` lock で1 refresh に集約し、異常終了で残った30秒超の lock は再取得する。refresh 成功時の user/org 出力と24時間 cache は維持する
 
 ### v0.8.0 → v0.9.0 の変更点
 

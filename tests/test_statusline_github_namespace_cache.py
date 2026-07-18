@@ -82,11 +82,15 @@ esac
 
             first = self.namespace_process(env)
             second = self.namespace_process(env)
-            first.communicate(timeout=6)
-            second.communicate(timeout=6)
+            first_stdout, first_stderr = first.communicate(timeout=6)
+            second_stdout, second_stderr = second.communicate(timeout=6)
 
-            self.assertEqual(first.returncode, 0)
-            self.assertEqual(second.returncode, 0)
+            self.assertEqual(first.returncode, 0, first_stderr.decode())
+            self.assertEqual(second.returncode, 0, second_stderr.decode())
+            self.assertCountEqual(
+                (first_stdout + second_stdout).decode().splitlines(),
+                ["test-user", "test-org"],
+            )
             calls = call_log.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(calls), 2)
             self.assertCountEqual(

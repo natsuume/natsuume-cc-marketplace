@@ -131,12 +131,60 @@ extract_github_repo() {
   echo "$url" | sed -n 's#.*github\.com[:/]\(.*\)$#\1#p' | sed 's/\.git$//'
 }
 
+# GNU timeout が標準搭載されない macOS でも外部 command の待機時間を制限する。
+# non-interactive Bash の monitor mode で command を専用 process group にし、deadline
+# 到達時は descendant ごと終了する。statusline 用の read-only query にだけ使用する。
+_statusline_run_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+  local monitor_was_enabled command_pid watchdog_pid command_status
+
+  case "$timeout_seconds" in
+    ''|*[!0-9]*|0) return 1 ;;
+  esac
+  [ "$#" -gt 0 ] || return 1
+
+  case $- in
+    *m*) monitor_was_enabled=1 ;;
+    *)
+      monitor_was_enabled=0
+      set -m
+      ;;
+  esac
+  (exec "$@") &
+  command_pid=$!
+
+  (
+    sleep "$timeout_seconds"
+    kill -TERM -- "-$command_pid" 2>/dev/null || exit 0
+    # query の出力先は一時ファイルで、graceful cleanup を必要としない。TERM を
+    # 無視する descendant が statusline の pipe を保持し続けないよう直ちに回収する。
+    kill -KILL -- "-$command_pid" 2>/dev/null || true
+  ) &
+  watchdog_pid=$!
+  if [ "$monitor_was_enabled" -eq 0 ]; then
+    set +m
+  fi
+
+  if wait "$command_pid" 2>/dev/null; then
+    command_status=0
+  else
+    command_status=$?
+  fi
+  # watchdog の shell だけでなく待機中の sleep も同じ process group から回収する。
+  kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+  kill -KILL -- "-$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  return "$command_status"
+}
+
 # ユーザー自身の GitHub ログイン名と所属 org の一覧をキャッシュ経由で取得
 # キャッシュ: $HOME/.claude/cache/owned-github-namespaces.txt（24時間有効）
 # gh コマンドが無い／未認証の場合は空キャッシュを作って空を返す
 owned_github_namespaces() {
   local cache_dir="$HOME/.claude/cache"
   local cache_file="$cache_dir/owned-github-namespaces.txt"
+  local lock_dir="$cache_dir/.owned-github-namespaces.lock"
   local max_age=$((24 * 3600))
 
   if [ -f "$cache_file" ]; then
@@ -159,16 +207,47 @@ owned_github_namespaces() {
     return
   fi
 
-  # 初回または期限切れ時にのみ gh を叩く（数百ms〜数秒のコスト）。
-  # 並行 statusline 実行が同一 cache_file を同時 truncate し、 失敗側の空ファイルを
-  # 別プロセスが読む競合を避けるため、 tmp に書いてから mv でアトミックに差し替える。
-  local tmp
+  # cache miss の並行描画では 1 process だけが refresh し、他は stale cache (または
+  # 初回なら空) を返す。通常 refresh は 2 秒上限のため、30 秒超の lock は前回の
+  # statusline 異常終了で残った stale lock とみなして reclaim する。
+  local lock_acquired=0 lock_mtime lock_now lock_age
+  if mkdir "$lock_dir" 2>/dev/null; then
+    lock_acquired=1
+  else
+    lock_mtime=$(stat -c %Y "$lock_dir" 2>/dev/null || stat -f %m "$lock_dir" 2>/dev/null)
+    if [ -n "$lock_mtime" ]; then
+      lock_now=$(date +%s)
+      lock_age=$((lock_now - lock_mtime))
+      if [ "$lock_age" -ge 30 ] && rmdir "$lock_dir" 2>/dev/null \
+        && mkdir "$lock_dir" 2>/dev/null; then
+        lock_acquired=1
+      fi
+    fi
+  fi
+  if [ "$lock_acquired" -ne 1 ]; then
+    cat "$cache_file" 2>/dev/null
+    return 0
+  fi
+
+  # user / org endpoint は独立しているため並行取得し、各 process group を 2 秒で
+  # 打ち切る。合計待ち時間を endpoint 数に比例させず、完了後だけ atomic replace する。
+  local tmp user_tmp orgs_tmp user_pid orgs_pid
   tmp=$(mktemp "$cache_dir/.ns.XXXXXX" 2>/dev/null) || tmp="$cache_file.$$.tmp"
+  user_tmp="${tmp}.user"
+  orgs_tmp="${tmp}.orgs"
+  _statusline_run_with_timeout 2 gh api user --jq '.login' > "$user_tmp" 2>/dev/null &
+  user_pid=$!
+  _statusline_run_with_timeout 2 gh api user/orgs --jq '.[].login' > "$orgs_tmp" 2>/dev/null &
+  orgs_pid=$!
+  wait "$user_pid" 2>/dev/null || true
+  wait "$orgs_pid" 2>/dev/null || true
   {
-    gh api user --jq '.login' 2>/dev/null
-    gh api user/orgs --jq '.[].login' 2>/dev/null
+    cat "$user_tmp" 2>/dev/null
+    cat "$orgs_tmp" 2>/dev/null
   } > "$tmp"
+  rm -f "$user_tmp" "$orgs_tmp"
   mv -f "$tmp" "$cache_file" 2>/dev/null
+  rmdir "$lock_dir" 2>/dev/null || true
   cat "$cache_file" 2>/dev/null
 }
 

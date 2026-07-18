@@ -42,7 +42,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [auto-lint-check](#auto-lint-check) | 0.5.3 | 0.5.3 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
 | [pre-push-review](#pre-push-review) | 4.2.2 | — | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
 | [update-default-branch](#update-default-branch) | 0.3.1 | 0.3.1 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
-| [natsuume-statusline](#natsuume-statusline) | 0.9.0 | 0.9.0 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
+| [natsuume-statusline](#natsuume-statusline) | 0.9.1 | 0.9.1 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.18.0 | 0.18.0 | 作業規律を runtime 別の SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知する。Codex は GPT-5.6 Sol / Luna native prompt、provider/privacy 明示 opt-in、明示 follow-through Skill を提供 |
 | [ui-discipline](#ui-discipline) | 0.3.0 | 0.3.1 | UI 実装の 10 規律を runtime 別の SessionStart / SubagentStart prompt で常時注入するプラグイン。Codex は GPT-5.6 Sol / Luna の質問・subagent semantics へ適応し、具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.5.1 | 0.5.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン。Codex は GPT-5.6 Sol / Luna native prompt と `$plugin:skill` 表記を使い、outline / draft / review の共有 Skills へ接続する |
