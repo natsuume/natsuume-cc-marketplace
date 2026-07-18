@@ -46,13 +46,13 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
      の場合、パス部分から `owner/repo` を取り出し末尾の `.git` を除去する。
    - 上記いずれの形式にも一致しない、またはホストが `github.com` でない場合: 「remote が GitHub でない」としてスキップし、`{"repo": "<解決できた範囲の文字列>", "reason": "non_github_remote"}` を同じく `skippedRepos` に追記する。
    - 上記で `owner/repo` を切り出せた場合、続けて `owner` が `^[A-Za-z0-9-]+$`、`repo` (name) が `^[A-Za-z0-9._-]+$` にそれぞれ一致することを確認する (GitHub の owner / repository 命名規則に基づく保守的 charset)。分析対象ディレクトリ配下の `.git/config` は非信頼データであり、切り出した owner/name は本 skill のコマンド template へ文字列置換されるため、第 6 章の default branch 名と同様に保守的 charset で検証してから使う (注入の余地を fail-closed で排除する)。いずれかが charset に一致しない場合: 「識別子が不正」としてスキップし、`{"repo": "<解決できた範囲の文字列>", "reason": "invalid_identifier"}` を同じく `skippedRepos` に追記する。
-5. 明示指定の `owner/repo` エントリ (カンマ区切りリストの各要素、前後の空白を trim) は、`/` で `owner` と `repo` (name) に分解したうえで、手順 4 と同じ charset 検証 (`owner` は `^[A-Za-z0-9-]+$`、name は `^[A-Za-z0-9._-]+$`) を通してから収集キー候補として採用する (この段階では GitHub への到達性を検証しない。文字種のみを検証する。存在しない owner/repo は第 3 章の `gh api graphql` 実行時にエラーとして判明し、第 2 章の fail-closed 規則に従って扱う)。charset に一致しないエントリは「識別子が不正」としてスキップし、`{"repo": "<エントリ文字列>", "reason": "invalid_identifier"}` を `skippedRepos` に追記する。
+5. 明示指定の `owner/repo` エントリ (カンマ区切りリストの各要素、前後の空白を trim) は、`/` で `owner` と `repo` (name) に分解したうえで、手順 4 と同じ charset 検証 (`owner` は `^[A-Za-z0-9-]+$`、name は `^[A-Za-z0-9._-]+$`) を通してから収集キー候補として採用する (この段階では GitHub への到達性を検証しない。文字種のみを検証する。存在しない owner/repo は第 3 章の `gh api graphql --hostname github.com` 実行時にエラーとして判明し、第 2 章の fail-closed 規則に従って扱う)。charset に一致しないエントリは「識別子が不正」としてスキップし、`{"repo": "<エントリ文字列>", "reason": "invalid_identifier"}` を `skippedRepos` に追記する。
 6. 手順 4・5 で得た収集キー候補全体を、`owner/repo` を小文字化した文字列をキーとして重複排除する (case-insensitive)。重複した場合、由来 (再帰探索 / 明示指定) を問わず 1 回だけ収集対象に残す。重複排除後のキー一覧が第 3 章のデータ収集ループの対象になる。
 
 ## 2. 前提確認 (fail-closed)
 
 - `command -v jq` と `jq --version` で jq の有無とバージョンを確認する。不在、または 1.5 未満の場合は GitHub API 呼び出し前に fail-closed で中断し、必要バージョン (jq 1.5+) を報告する。
-- `gh auth status` で認証状態を確認する。
+- `gh auth status --hostname github.com` で github.com の認証状態を確認する。
 - 未認証、または後続の GraphQL クエリがエラーを返した場合は、部分データのまま分析を進めず中断し、原因をユーザーに報告する。
 
 ### 手順
@@ -71,20 +71,20 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 2. jq の前提を満たしていれば、続けて必ず次のコマンドで認証状態を確認する。
 
    ```bash
-   gh auth status
+   gh auth status --hostname github.com
    ```
 
 3. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
-   - `gh auth status` が未認証を示したこと (コマンドの出力を含める)
-   - 対応方法 (`gh auth login` を実行してから再実行する)
+   - `gh auth status --hostname github.com` が未認証を示したこと (コマンドの出力を含める)
+   - 対応方法 (`gh auth login --hostname github.com` を実行してから再実行する)
    - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
-4. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
+4. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql --hostname github.com` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
 
 ## 3. データ収集
 
-- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 4 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql`) を `gh api graphql` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
+- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 4 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql`) を `gh api graphql --hostname github.com` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
 - 各行の repo フィールドには API が返す canonical な nameWithOwner を使う (ユーザ入力の owner/repo 文字列を使わない。closer や closingIssuesReferences が返す nameWithOwner と join キーのケーシングを一致させるため)。
-- 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (`fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` の `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --paginate -f owner="<owner>" -f name="<name>" -F query=@<file>`。
+- 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (`fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` の `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --hostname github.com --paginate -f owner="<owner>" -f name="<name>" -F query=@<file>`。
 - `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を先頭から全ページ取得し、一覧クエリ由来の timelineItems を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の timelineItems は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する。
 - `fetch-prs.graphql` は OPEN + MERGED の PR を収集する (merged PR のみではない)。
 - `prs.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の PR は timeline 取得が不完全である。PR 側には追加ページングテンプレートを用意しない (ready/draft の 2 イベント種に絞った totalCount が 100 を超える PR は実運用上ほぼ発生しない) ため、該当 PR は集計スクリプトが除外し `exclusions.prTimelineOverflow` に列挙する。除外件数はレポートの「測定上の限界」に明記する。
@@ -101,7 +101,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    リポジトリごとの収集開始時、issues / PR の取得より前に、canonical 名を独立に解決する。
 
    ```bash
-   gh api "repos/<owner>/<name>" --jq .full_name
+   gh api "repos/<owner>/<name>" --hostname github.com --jq .full_name
    ```
 
    (issue / PR が 0 件のリポジトリでも取得できる)。小文字化した canonical 名を「canonical → (ターゲット, checkout パス)」の対応表と突合する。
@@ -114,7 +114,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    **a. issues 収集**
 
    ```bash
-   gh api graphql --paginate \
+   gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" \
      -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issues.graphql" \
      --jq '.data.repository as $r | $r.issues.nodes[] | . + {repo: $r.nameWithOwner}' \
@@ -124,7 +124,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    **b. prs 収集**
 
    ```bash
-   gh api graphql --paginate \
+   gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" \
      -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-prs.graphql" \
      --jq '.data.repository as $r | $r.pullRequests.nodes[] | . + {repo: $r.nameWithOwner}' \
@@ -144,7 +144,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    該当した各 issue (`repo`, `number` の組) について、`fetch-issue-timeline.graphql` で先頭ページから全ページを取得し直す。
 
    ```bash
-   gh api graphql --paginate \
+   gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" -F number=<issue_number> \
      -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issue-timeline.graphql" \
      --jq '.data.repository.issue.timelineItems' \
@@ -180,7 +180,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    該当した各 PR (`repo`, `number` の組) について、`fetch-pr-closing-issues.graphql` で先頭ページから全ページを取得し直す。
 
    ```bash
-   gh api graphql --paginate \
+   gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" -F number=<pr_number> \
      -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-pr-closing-issues.graphql" \
      --jq '.data.repository.pullRequest.closingIssuesReferences' \
@@ -288,7 +288,7 @@ python3 compute_leadtime.py \
 1. read-only の GitHub API で対象リポジトリの default branch 名と tip の commit OID を取得する。branch 名を URL パスに埋め込む REST 呼び出し (`repos/<owner>/<name>/branches/<branch>` 形) は、URL エンコードの考慮漏れと command injection の余地を構造的に残すため使わない。branch 名をパスに埋め込まない 1 回の parameterized GraphQL 呼び出し (他の収集クエリと同じ variables 方式) で取得する。
 
    ```bash
-   gh api graphql \
+   gh api graphql --hostname github.com \
      -f owner="<owner>" -f name="<name>" \
      -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name target { oid } } } }' \
      --jq '.data.repository.defaultBranchRef'

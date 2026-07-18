@@ -78,6 +78,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -92,6 +93,7 @@ _SCRIPTS_DIR = (
     / "leadtime"
     / "scripts"
 )
+_SKILL_PATH = _SCRIPTS_DIR.parent / "SKILL.md"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
@@ -117,6 +119,35 @@ def _load_compute_leadtime():
 
 
 compute_leadtime = _load_compute_leadtime()
+
+
+class GithubHostContractTests(unittest.TestCase):
+    def test_all_gh_queries_and_auth_are_pinned_to_github_com(self):
+        skill = _SKILL_PATH.read_text(encoding="utf-8")
+        bash_blocks = re.findall(
+            r"^[ \t]*```bash\n(.*?)^[ \t]*```[ \t]*$",
+            skill,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        logical_lines = []
+        for block in bash_blocks:
+            logical_lines.extend(
+                line.strip()
+                for line in re.sub(r"\\\n\s*", " ", block).splitlines()
+            )
+
+        api_commands = [line for line in logical_lines if line.startswith("gh api ")]
+        self.assertEqual(len(api_commands), 6)
+        self.assertTrue(
+            all("--hostname github.com" in command for command in api_commands),
+            api_commands,
+        )
+
+        auth_commands = [
+            line for line in logical_lines if line.startswith("gh auth status")
+        ]
+        self.assertEqual(auth_commands, ["gh auth status --hostname github.com"])
+        self.assertIn("`gh auth login --hostname github.com`", skill)
 
 
 # ---------------------------------------------------------------------------

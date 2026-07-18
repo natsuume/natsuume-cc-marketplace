@@ -50,7 +50,7 @@ command hook を含むプラグインは、インストール後に Codex CLI �
 | [rate-limit](#rate-limit) | 0.4.0 | 0.4.0 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.2.0 | 0.2.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [fable-risk-labeler](#fable-risk-labeler) | 0.1.0 | 0.1.0 | GitHub issue と関連実装を Codex で調査し、Fable が正規操作を誤ブロックする可能性が高い作業へ `model:prefer-gpt-5.6-sol` label を安全に付与する Skill を提供する |
-| [repo-analytics](#repo-analytics) | 0.1.0 | — | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
+| [repo-analytics](#repo-analytics) | 0.1.1 | — | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
 
 Codex version が `—` の plugin は Codex marketplace の配布対象外です。Claude Code marketplace と Claude plugin は引き続き提供します。
 
