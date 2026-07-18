@@ -1,6 +1,9 @@
 #!/bin/bash
 # statusline 共通関数・定数
 
+_STATUSLINE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_STATUSLINE_WIDTH_HELPER="$_STATUSLINE_LIB_DIR/display-width.py"
+
 # ANSIカラー定数
 RESET='\033[00m'
 BOLD_GREEN='\033[01;32m'
@@ -290,21 +293,113 @@ terminal_width() {
   printf '80'
 }
 
-# ANSIエスケープシーケンスを除いた可視文字数を返す
+# Bash の文字列演算が byte 単位になる C/POSIX locale でも UTF-8 path を壊さないよう、
+# 幅計算にだけ使える UTF-8 locale を一度検出する。Linux と macOS で一般的な候補を
+# Bash 自身が `日` を1文字と数えるかで確認し、process 全体の locale は変更しない。
+# BSD locale は `locale charmap` keyword を提供しないため、外部 command の出力には依存しない。
+_statusline_locale_counts_utf8() {
+  local LC_ALL='' LC_CTYPE="$1" probe='日'
+  [ "${#probe}" -eq 1 ]
+}
+
+_STATUSLINE_UTF8_LOCALE=""
+for _statusline_locale_candidate in \
+  "${LC_CTYPE:-}" "${LANG:-}" "C.UTF-8" "en_US.UTF-8" "UTF-8"; do
+  [ -n "$_statusline_locale_candidate" ] || continue
+  if _statusline_locale_counts_utf8 "$_statusline_locale_candidate" 2>/dev/null; then
+    _STATUSLINE_UTF8_LOCALE="$_statusline_locale_candidate"
+    break
+  fi
+done
+unset _statusline_locale_candidate
+unset -f _statusline_locale_counts_utf8
+# macOS 標準の Bash 3.2 は process 起動時の locale では multibyte 文字数を返しても、
+# function 内で LC_CTYPE を切り替えた後の substring が byte 単位になる。version 3 系は
+# locale probe の結果にかかわらず Python helper へ切り替える。
+if [ "${BASH_VERSINFO[0]}" -lt 4 ] || [ "${_STATUSLINE_FORCE_PYTHON_WIDTH:-0}" = "1" ]; then
+  _STATUSLINE_UTF8_LOCALE=""
+fi
+
+# 1 code point が占める terminal cell 幅を `_STATUSLINE_CELL_WIDTH` に設定する。
+# Unicode East Asian Width の Wide / Fullwidth、主要 emoji は 2、結合文字・variation
+# selector・ZWJ は 0、それ以外は 1。外部 wcwidth/Python process を文字ごとに起動せず、
+# macOS 標準 Bash 3.2 と Linux の UTF-8 locale で同じ判定を使う。
+_statusline_set_cell_width() {
+  local char="$1" codepoint
+  _STATUSLINE_CELL_WIDTH=1
+  [ -n "$char" ] || { _STATUSLINE_CELL_WIDTH=0; return; }
+  printf -v codepoint '%d' "'$char" 2>/dev/null || return
+
+  # C0/C1 control、結合文字、format selector は cell を進めない。
+  if (( codepoint < 32 \
+    || (codepoint >= 127 && codepoint < 160) \
+    || (codepoint >= 0x0300 && codepoint <= 0x036f) \
+    || (codepoint >= 0x1ab0 && codepoint <= 0x1aff) \
+    || (codepoint >= 0x1dc0 && codepoint <= 0x1dff) \
+    || codepoint == 0x200d \
+    || (codepoint >= 0x20d0 && codepoint <= 0x20ff) \
+    || (codepoint >= 0xfe00 && codepoint <= 0xfe0f) \
+    || (codepoint >= 0xfe20 && codepoint <= 0xfe2f) \
+    || (codepoint >= 0x1f3fb && codepoint <= 0x1f3ff) \
+    || (codepoint >= 0xe0020 && codepoint <= 0xe007f) \
+    || (codepoint >= 0xe0100 && codepoint <= 0xe01ef) )); then
+    _STATUSLINE_CELL_WIDTH=0
+    return
+  fi
+
+  # Unicode の主要 Wide / Fullwidth range。East Asian Ambiguous は多くの modern
+  # terminal の既定に合わせて 1 のまま扱う。
+  if (( (codepoint >= 0x1100 && codepoint <= 0x115f) \
+    || codepoint == 0x2329 || codepoint == 0x232a \
+    || (codepoint >= 0x2e80 && codepoint <= 0xa4cf && codepoint != 0x303f) \
+    || (codepoint >= 0xac00 && codepoint <= 0xd7a3) \
+    || (codepoint >= 0xf900 && codepoint <= 0xfaff) \
+    || (codepoint >= 0xfe10 && codepoint <= 0xfe19) \
+    || (codepoint >= 0xfe30 && codepoint <= 0xfe6f) \
+    || (codepoint >= 0xff01 && codepoint <= 0xff60) \
+    || (codepoint >= 0xffe0 && codepoint <= 0xffe6) \
+    || (codepoint >= 0x1f300 && codepoint <= 0x1faff) \
+    || (codepoint >= 0x20000 && codepoint <= 0x3fffd) )); then
+    _STATUSLINE_CELL_WIDTH=2
+  fi
+}
+
+# ANSI SGR escape を除いた terminal cell 幅を返す。
 visible_length() {
-  local s="$1" stripped
-  stripped=$(printf '%s' "$s" | sed $'s/\x1b\\[[0-9;]*m//g')
-  printf '%s' "${#stripped}"
+  local LC_ALL="" LC_CTYPE="${_STATUSLINE_UTF8_LOCALE:-${LC_CTYPE:-}}"
+  local s="$1" len=${#1} i=0 in_esc=0 c total=0
+  if [ -z "$_STATUSLINE_UTF8_LOCALE" ] && command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$s" | python3 "$_STATUSLINE_WIDTH_HELPER" width
+    return
+  fi
+  while [ "$i" -lt "$len" ]; do
+    c="${s:$i:1}"
+    if [ "$in_esc" -eq 1 ]; then
+      [ "$c" = "m" ] && in_esc=0
+    elif [ "$c" = $'\033' ]; then
+      in_esc=1
+    else
+      _statusline_set_cell_width "$c"
+      total=$((total + _STATUSLINE_CELL_WIDTH))
+    fi
+    i=$((i + 1))
+  done
+  printf '%s' "$total"
 }
 
 # 文字列をANSIエスケープを保持したまま可視幅 max で切り詰める
 # 末尾に色漏れ防止のリセットコードを必ず付与する
 truncate_visible() {
+  local LC_ALL="" LC_CTYPE="${_STATUSLINE_UTF8_LOCALE:-${LC_CTYPE:-}}"
   local s="$1" max="$2"
   local len=${#s}
-  local i=0 visible=0 in_esc=0 c result=""
+  local i=0 visible=0 in_esc=0 c result="" next_visible
+  if [ -z "$_STATUSLINE_UTF8_LOCALE" ] && command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$s" | python3 "$_STATUSLINE_WIDTH_HELPER" truncate "$max"
+    return
+  fi
 
-  while [ "$i" -lt "$len" ] && [ "$visible" -lt "$max" ]; do
+  while [ "$i" -lt "$len" ]; do
     c="${s:$i:1}"
     if [ "$in_esc" -eq 1 ]; then
       result+="$c"
@@ -313,17 +408,14 @@ truncate_visible() {
       result+="$c"
       in_esc=1
     else
+      _statusline_set_cell_width "$c"
+      next_visible=$((visible + _STATUSLINE_CELL_WIDTH))
+      if [ "$_STATUSLINE_CELL_WIDTH" -gt 0 ] && [ "$next_visible" -gt "$max" ]; then
+        break
+      fi
       result+="$c"
-      visible=$((visible + 1))
+      visible=$next_visible
     fi
-    i=$((i + 1))
-  done
-
-  # 開きっぱなしのエスケープがあれば閉じきる
-  while [ "$i" -lt "$len" ] && [ "$in_esc" -eq 1 ]; do
-    c="${s:$i:1}"
-    result+="$c"
-    [ "$c" = "m" ] && in_esc=0
     i=$((i + 1))
   done
 
