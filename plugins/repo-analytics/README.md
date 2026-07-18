@@ -4,7 +4,11 @@ GitHub の issue/PR タイムラインから AI タスクのリードタイム (
 
 ## バージョン
 
-v0.1.0
+v0.1.1
+
+### v0.1.0 → v0.1.1 の変更点 (#300)
+
+- leadtime 収集の認証確認と全 GitHub API query を `github.com` に固定し、`GH_HOST` が GitHub Enterprise を指す環境でも別 host の同名リポジトリを silent に分析しないようにした
 
 ## 概要
 
@@ -57,7 +61,7 @@ repo-analytics/
 
 ## 必要な実行環境
 
-- `gh` CLI (認証済み: `gh auth status` が通ること)
+- `gh` CLI (github.com に認証済み: `gh auth status --hostname github.com` が通ること)
 - Python 3.11+ (標準ライブラリのみで動作)
 - `jq 1.5+` (SKILL.md の収集手順で JSONL の overflow 検知・置換に使用)
 - Claude Code (Artifact 発行・WebSearch が利用可能なセッション)
