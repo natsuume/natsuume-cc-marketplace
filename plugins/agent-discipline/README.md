@@ -4,9 +4,16 @@ Claude Code と Codex の振る舞い規律 (= agent としての discipline) �
 
 ## バージョン
 
-v0.19.0
+v0.20.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.19.0 → v0.20.0 の変更点
+
+- 分業規律 (`discipline-fable.md` / `discipline-sonnet.md`) の `rule:delegation-rules` に「Opus 5 を使う委任では effort を medium にする (難度による引き上げ・引き下げをしない)」ルールを追加した。Workflow の `agent()` では `effort: 'medium'` を明示し、実効 effort が medium になると保証できない場合は Opus 5 を使わず実効 model を Sonnet 系にする (上位設定の強制でそれも保証できなければ委任せず設定競合を報告する) fail-closed 文面とした
+- 難度別の effort 指針 (機械的作業は low、検証・判定・複雑な調査は high 以上) を廃止し、Sonnet 系には effort を指定せずセッション既定 (xhigh) を継承させる方針へ変更した。「Fable をサブエージェントに使わない」ルールは両ファイルに記載済みのため変更なし
+- 背景: 利用環境側で `CLAUDE_CODE_SUBAGENT_MODEL` env によるサブエージェントモデル固定 (sonnet) を廃止し、モデル・effort の選択を分業規律 (prompt) で運用する方針に変更したため。env が設定されている場合の優先順位の説明は条件付き記述として両ファイルに残置し、`block-fable-subagent.sh` の判定順序も変更していない
+- 共有 path (`hooks/prompts/`) の変更のため Claude Code / Codex の両 version を minor bump した (Codex native prompt は分業規律を配送しないため Codex 側の挙動変更はない)
 
 ### v0.18.0 → v0.19.0 の変更点
 
