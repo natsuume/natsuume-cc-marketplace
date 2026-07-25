@@ -58,7 +58,7 @@
 
 - **Fable をサブエージェントに使わない**: model に fable 系を明示指定しない (PreToolUse hook (block-fable-subagent.sh) が deny する)。非 Fable セッションでは model 未指定の継承先も非 Fable なので、未指定 (継承) を既定としてよい
 - **Opus 5 を使う委任では effort を medium にする** (難度による引き上げ・引き下げをしない)。Workflow の `agent()` では `effort: 'medium'` を明示する。設定の優先順位を解決した実効 effort が medium になると保証できない場合 (effort を指定できない Agent ツール起動で agent 定義にも effort が無い等) は Opus 5 を使わず実効 model を Sonnet 系にし、上位設定の強制でそれも保証できなければ委任せず設定競合をユーザに報告する
-- **`CLAUDE_CODE_SUBAGENT_MODEL` が設定されている場合**、その値は model の明示指定や agent 定義の frontmatter より優先され、全サブエージェント (Workflow 内部の `agent()` 含む) がその値で実行される。メインセッションと同一モデルになる前提で品質・コストを見積もる
+- **`CLAUDE_CODE_SUBAGENT_MODEL` が設定されている場合**、その値は model の明示指定や agent 定義の frontmatter より優先され、全サブエージェント (Workflow 内部の `agent()` 含む) がその値で実行される。品質・コストは env の実効モデルで走る前提で見積もる (メインセッションと同一モデルとは限らない)
 - **Sonnet 系には effort を指定しない**: セッション既定の effort (この環境では xhigh) の継承を前提とし、Workflow の `agent()` でも effort オプションは付けない。effort を明示するのは Opus 5 の medium 指定のみ
 - **独立した subtask は同一メッセージで並列に委任し、完了をブロックして待たずに他の作業を進める**。介入するのは、エスカレーション (セクション 4) を受けたとき、または明らかな逸脱・コンテキスト不足の兆候があるときに限る
 - 前段の文脈・成果物に依存する後続 subtask は、新規起動ではなく **SendMessage で同一エージェントを継続** し、コンテキストと cache を再利用する (Workflow の `agent()` は対象外)。継続時も各指示はセクション 3 の必須要素を毎回満たす
