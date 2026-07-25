@@ -191,12 +191,14 @@
 #      同型の運用方針)。
 #
 # ============================================================================
-# チェック 4 (新設, #195): 分業規律 2 ファイルの rule ID セット一致
+# チェック 4 (新設, #195。PR2/agent-discipline 0.21.0 で 3 ファイル総当たりへ拡張):
+# 分業規律 3 ファイルの rule ID セット一致
 # ============================================================================
 #
 # 対象ファイル:
 #   - plugins/agent-discipline/hooks/prompts/discipline-fable.md
 #   - plugins/agent-discipline/hooks/prompts/discipline-sonnet.md
+#   - plugins/agent-discipline/hooks/prompts/discipline-opus.md
 #
 # 背景:
 #   #194 で分業規律がモデル別 2 ファイル化された (rule ID: role-split / delegation-rules /
@@ -204,19 +206,25 @@
 #   分業規律には同期検証が無く、PR #191 のレビューで「rule マーカー外・lint 対象外の
 #   ドリフトは手動レビューでしか発見できない」ことが実証されている (Fable 版のみに存在した
 #   進捗報告グラウンディング文の欠落を手動レビューで発見した事例) ため、同型の構造 lint を
-#   分業規律 2 ファイルにも掛ける。
+#   分業規律ファイルにも掛ける。PR2 (agent-discipline 0.21.0) で discipline-opus.md
+#   (Opus 系向け) が新設され分業規律が 3 ファイルになったため、対象を 3 ファイルへ拡張した。
+#   モデル別バリアントは同一 rule ID セットを持つべき契約であり、常時ルールの part 分割検証
+#   (チェック 1 の和集合方式) とは意味が異なるため、和集合方式は流用せず 3 ファイル総当たり
+#   (fable↔sonnet と fable↔opus の 2 diff) の完全一致に拡張する (fable を hub にした 2 diff で
+#   sonnet↔opus の一致も推移的に保証されるため、3 通りの組合せ全部ではなく 2 diff で足りる)。
 #
 # 契約:
-#   1. チェック 1 と同じ抽出方式 (extract_rule_ids) で両ファイルの `<!-- rule:<id> -->`
-#      ID 集合を抽出し、順序に依らない集合として比較する。
-#   2. 集合が完全一致すれば pass。一致しない場合は fail し、片方にのみ存在する ID
-#      (差集合) を両方向とも列挙してエラーメッセージに含める。
-#   3. 対象 2 ファイルは pre-flight の存在チェック対象に加え、見つからなければ fail-closed
+#   1. チェック 1 と同じ抽出方式 (extract_rule_ids) で 3 ファイルの `<!-- rule:<id> -->`
+#      ID 集合をそれぞれ抽出し、順序に依らない集合として比較する。
+#   2. discipline-fable.md を基準に discipline-sonnet.md / discipline-opus.md それぞれと
+#      diff を取る (2 diff)。両方が完全一致すれば pass。一致しない diff があれば fail し、
+#      片方にのみ存在する ID (差集合) を両方向とも列挙してエラーメッセージに含める。
+#   3. 対象 3 ファイルは pre-flight の存在チェック対象に加え、見つからなければ fail-closed
 #      (exit 1) とする。マーカーが 1 件も抽出できない場合も fail (チェック 1 と同方針)。
 #   4. 既存チェック 1〜3 の挙動には影響しない (共有するのは extract_rule_ids と WORKDIR のみ)。
 #
-# CI 発火 (ユーザ decision 2026-07-06、issue #195):
-#   .github/workflows/agent-discipline-prompt-lint.yml の paths filter に対象 2 ファイルを
+# CI 発火 (ユーザ decision 2026-07-06、issue #195。PR2 で discipline-opus.md を追加):
+#   .github/workflows/agent-discipline-prompt-lint.yml の paths filter に対象 3 ファイルを
 #   追加し、discipline ファイルの変更でも本 lint が発火するようにする (paths 以外の workflow
 #   構造は変更しない)。
 #
@@ -275,6 +283,9 @@ SONNET_MD_3="plugins/agent-discipline/hooks/prompts/always-sonnet-3.md"
 HOOKS_JSON="plugins/agent-discipline/hooks/hooks.json"
 DISCIPLINE_FABLE_MD="plugins/agent-discipline/hooks/prompts/discipline-fable.md"
 DISCIPLINE_SONNET_MD="plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
+# PR2 (agent-discipline 0.21.0) で discipline-opus.md (Opus 系向け) を新設し、チェック 4 の
+# 対象を分業規律 3 ファイルに拡張した。
+DISCIPLINE_OPUS_MD="plugins/agent-discipline/hooks/prompts/discipline-opus.md"
 SUBAGENT_MD="plugins/agent-discipline/hooks/prompts/subagent-rules.md"
 
 # チェック 2 前提検証 (#186) で使う、 期待される type:agent entry 数。
@@ -283,7 +294,7 @@ EXPECTED_AGENT_ENTRIES=4
 overall_fail=0
 
 # --- pre-flight: リポジトリルートから実行されているか / jq が使えるか ---
-for f in "$FABLE_MD" "$SONNET_MD_1" "$SONNET_MD_2" "$SONNET_MD_3" "$HOOKS_JSON" "$DISCIPLINE_FABLE_MD" "$DISCIPLINE_SONNET_MD" "$SUBAGENT_MD"; do
+for f in "$FABLE_MD" "$SONNET_MD_1" "$SONNET_MD_2" "$SONNET_MD_3" "$HOOKS_JSON" "$DISCIPLINE_FABLE_MD" "$DISCIPLINE_SONNET_MD" "$DISCIPLINE_OPUS_MD" "$SUBAGENT_MD"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: $f が見つかりません。リポジトリルートから実行してください。" >&2
     exit 1
@@ -582,26 +593,43 @@ else
 fi
 
 # ============================================================================
-# チェック 4: 分業規律 2 ファイルの rule ID セット一致 (discipline-fable.md <-> discipline-sonnet.md)
+# チェック 4: 分業規律 3 ファイルの rule ID セット一致
+# (discipline-fable.md <-> discipline-sonnet.md、discipline-fable.md <-> discipline-opus.md)
 # ============================================================================
 
 echo ""
-echo "== check 4: discipline rule ID set (discipline-fable.md <-> discipline-sonnet.md) =="
+echo "== check 4: discipline rule ID set (discipline-fable.md <-> discipline-sonnet.md / discipline-opus.md) =="
 
 extract_rule_ids "$DISCIPLINE_FABLE_MD" > "$WORKDIR/ids_discipline_fable.txt"
 extract_rule_ids "$DISCIPLINE_SONNET_MD" > "$WORKDIR/ids_discipline_sonnet.txt"
+extract_rule_ids "$DISCIPLINE_OPUS_MD" > "$WORKDIR/ids_discipline_opus.txt"
 
-if [ ! -s "$WORKDIR/ids_discipline_fable.txt" ] || [ ! -s "$WORKDIR/ids_discipline_sonnet.txt" ]; then
-  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($DISCIPLINE_FABLE_MD / $DISCIPLINE_SONNET_MD)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
+if [ ! -s "$WORKDIR/ids_discipline_fable.txt" ] || [ ! -s "$WORKDIR/ids_discipline_sonnet.txt" ] || [ ! -s "$WORKDIR/ids_discipline_opus.txt" ]; then
+  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($DISCIPLINE_FABLE_MD / $DISCIPLINE_SONNET_MD / $DISCIPLINE_OPUS_MD)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
   exit 1
 fi
 
-if diff -u "$WORKDIR/ids_discipline_fable.txt" "$WORKDIR/ids_discipline_sonnet.txt" > "$WORKDIR/ids_discipline_diff.txt" 2>&1; then
+check4_fail=0
+
+if diff -u "$WORKDIR/ids_discipline_fable.txt" "$WORKDIR/ids_discipline_sonnet.txt" > "$WORKDIR/ids_discipline_diff_sonnet.txt" 2>&1; then
   discipline_id_count=$(wc -l < "$WORKDIR/ids_discipline_fable.txt" | tr -d ' ')
-  echo "OK: discipline rule ID sets match (${discipline_id_count} IDs)"
+  echo "OK: discipline rule ID sets match (${discipline_id_count} IDs, fable <-> sonnet)"
 else
   echo "FAIL: discipline rule ID sets differ between $DISCIPLINE_FABLE_MD and $DISCIPLINE_SONNET_MD" >&2
-  cat "$WORKDIR/ids_discipline_diff.txt" >&2
+  cat "$WORKDIR/ids_discipline_diff_sonnet.txt" >&2
+  check4_fail=1
+fi
+
+if diff -u "$WORKDIR/ids_discipline_fable.txt" "$WORKDIR/ids_discipline_opus.txt" > "$WORKDIR/ids_discipline_diff_opus.txt" 2>&1; then
+  discipline_id_count=$(wc -l < "$WORKDIR/ids_discipline_fable.txt" | tr -d ' ')
+  echo "OK: discipline rule ID sets match (${discipline_id_count} IDs, fable <-> opus)"
+else
+  echo "FAIL: discipline rule ID sets differ between $DISCIPLINE_FABLE_MD and $DISCIPLINE_OPUS_MD" >&2
+  cat "$WORKDIR/ids_discipline_diff_opus.txt" >&2
+  check4_fail=1
+fi
+
+if [ "$check4_fail" -ne 0 ]; then
   overall_fail=1
 fi
 

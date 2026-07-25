@@ -4,9 +4,22 @@ Claude Code と Codex の振る舞い規律 (= agent としての discipline) �
 
 ## バージョン
 
-v0.20.0
+v0.21.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.20.0 → v0.21.0 の変更点
+
+agent-discipline 分業規律の Opus 5 対応 (3-way 配送) です (PR2)。
+
+- **`discipline-opus.md` を新設**: Opus 系モデル (Opus 5 等) 向けの分業規律。基本形は `discipline-sonnet.md` を踏襲しつつ、Opus 5 公式ガイド (prompting-claude-opus-5) の固有挙動 (指示なしの自己検証・自己修正、サブエージェント委任への強い傾向、過剰検証によるトークン浪費) に合わせて verifier 委任の既定を「非自明な全成果物への義務化」から「大規模で独立した track・副作用や安全性のリスクがある成果物・設計境界の独立確認が必要な場合」に限定した基準式に変更し、委任粒度の抑制 (数回の tool call で完結する作業は直接行う) を明記した。rule ID セット (`role-split` / `delegation-rules` / `delegation-instruction` / `escalation`) は `discipline-fable.md` / `discipline-sonnet.md` と完全一致させている
+- **`discipline-fable.md` / `discipline-sonnet.md` に Opus 5 過剰検証注意を追記**: 「Opus 5 への委任では汎用的な再確認指示を加えない (タスク固有の受入条件の検証指示と終了時自己点検はこの対象外)」を `rule:delegation-instruction` の末尾に追記した。`discipline-sonnet.md` のヘッダコメントの対象読者も「非 Fable モデル (Sonnet / Opus / Haiku 等)」から「非 Fable かつ非 Opus のモデル (Sonnet / Haiku 等)。Opus 系メインセッションには discipline-opus.md が配送される」に更新した
+- **`inject-discipline.sh` を fable / opus / その他非 fable の 3-way 配送に拡張**: fable 判定 (常に最優先) の次に opus 判定 (`grep -qi 'opus'`) を追加した。マーカー無し + state が opus の直接配送は見出し「# agent-discipline: 分業規律 (Opus)」+ `discipline-opus.md`。`sonnet-gate` → opus 確定時は fable 補正と同型の one-shot 補正 (補正 prefix + 空行 + Opus 見出し + 空行 + `discipline-opus.md`) を配送し、成功時のみマーカーを `final` にする。`discipline-opus.md` が読めない場合は既存の fail-open 慣行どおり無音 `exit 0` (マーカーを進めない)
+- **`lint-prompt-sync.sh` のチェック 4 を 3 ファイル総当たりへ拡張**: `DISCIPLINE_OPUS_MD` 定数と pre-flight 存在チェックを追加し、`discipline-fable.md` を基準に `discipline-sonnet.md` / `discipline-opus.md` それぞれとの ID 集合 diff (2 diff、fable を hub にした推移律で 3 ファイルの完全一致を保証) を検証するよう拡張した
+- **`hooks.json` の description**: 分業規律の配送説明に `discipline-opus.md` (Opus 系) を追記した
+- **`.github/workflows/agent-discipline-prompt-lint.yml`**: `pull_request.paths` / `push.paths` の両方に `discipline-opus.md` を追加した
+- **サイズ予算**: `discipline-opus.md` は 6,268 UTF-16 code units (7,000 以下)。`discipline-sonnet.md` + `discipline-preamble-self-gate.md` の合算も 8,000 未満を維持した
+- **version bump**: `0.20.0` → `0.21.0` (minor)。共有 path (`hooks/prompts/`) の変更のため `plugin.json` / `codex/marketplace-overrides.json` / `marketplace.json` / リポジトリ README / 本 README の各箇所を同期した (Codex native prompt は分業規律を配送しないため Codex 側の挙動変更はない)
 
 ### v0.19.0 → v0.20.0 の変更点
 
@@ -340,21 +353,23 @@ claude plugin install agent-discipline@natsuume-plugins
 **ファイル**: `hooks/scripts/inject-discipline.sh`
 **イベント**: `UserPromptSubmit`
 
-**動作** (v0.15.0 新設、issue #236):
+**動作** (v0.15.0 新設、issue #236。v0.21.0 で fable / opus / その他非 fable の 3-way 配送に拡張):
 
 - 分業規律 (discipline-\*.md、モデル別) を独立要素として配送する。マーカー `delivered-discipline-<session_id>` は内容として 3 状態を持つ: **無し** / `sonnet-gate` / `final`
 - **マーカー無し**: pending 優先・state 次点で分岐する:
   - pending あり → 見出し「# agent-discipline: 分業規律 (Sonnet)」+ `discipline-preamble-self-gate.md` + `discipline-sonnet.md` を注入し、マーカーを `sonnet-gate` にする
-  - pending 無し + state が fable → 見出し「# agent-discipline: 分業規律 (Fable セッション)」+ `discipline-preamble-fable.md` + `discipline-fable.md` (分業規律 fable 版) を注入し、マーカーを `final` にする
-  - pending 無し + state が非 fable → 見出し「# agent-discipline: 分業規律 (Sonnet)」+ `discipline-sonnet.md` (分業規律 sonnet 版) を注入し、マーカーを `final` にする
+  - pending 無し + state が fable → 見出し「# agent-discipline: 分業規律 (Fable セッション)」+ `discipline-preamble-fable.md` + `discipline-fable.md` (分業規律 fable 版) を注入し、マーカーを `final` にする (fable 判定は常に最優先)
+  - pending 無し + state が非 fable かつ opus → 見出し「# agent-discipline: 分業規律 (Opus)」+ `discipline-opus.md` (分業規律 Opus 版) を注入し、マーカーを `final` にする
+  - pending 無し + state が非 fable かつ非 opus (haiku 等) → 見出し「# agent-discipline: 分業規律 (Sonnet)」+ `discipline-sonnet.md` (分業規律 sonnet 版) を注入し、マーカーを `final` にする
   - pending も state も無い異常系 → pending 時と同じ自己ゲート付き配送、マーカーを `sonnet-gate` にする
 - **マーカー `sonnet-gate`** (判定不能時の自己ゲート付き分業規律を配送済み、one-shot 補正の対象):
   - pending 無し + state が fable に確定していた → 補正前置き (自己ゲート付きで配送済みの Sonnet 版分業規律を破棄し本要素を優先する旨) + 分業規律 fable 版を注入し、マーカーを `final` に更新する
-  - pending 無し + state が非 fable に確定していた → 注入なしでマーカーを `final` に更新する (配送済みの Sonnet 版がそのまま確定内容のため)
+  - pending 無し + state が非 fable かつ opus に確定していた → 補正前置き (fable 補正と同型の Opus 版) + 分業規律 Opus 版を注入し、マーカーを `final` に更新する
+  - pending 無し + state が非 fable かつ非 opus に確定していた → 注入なしでマーカーを `final` に更新する (配送済みの Sonnet 版がそのまま確定内容のため)
   - pending あり、または state 無し → 何もしない (`resolve-model-on-prompt.sh` の state 書込 → pending 削除の完了待ち。同一 event 内の並列実行で本スクリプトが先に読んだ場合、最大 1 プロンプトの補正遅延が生じる。既知の制約参照)
 - **マーカー `final`**: 即 `exit 0`
 - マーカーの書き込みは注入本文と出力 JSON の生成に成功した後に行う (`sonnet-gate` → `final` の「注入なし」更新は本文生成が無いため直接書く)。マーカーの読み書きも同一ディレクトリ内 temp file → `mv` の atomic 書込にする
-- `jq` 不在 / 不正 JSON 入力 / 配送対象のペイロードが読めない場合は無音 `exit 0` でマーカーは書かない (次プロンプトで再試行)
+- `jq` 不在 / 不正 JSON 入力 / 配送対象のペイロード (`discipline-opus.md` を含む) が読めない場合は無音 `exit 0` でマーカーは書かない (次プロンプトで再試行)
 
 #### inject-auto
 
@@ -597,7 +612,7 @@ Codex が Claude Auto を hook input から識別できない差分に対する�
   3. `gh pr create` / `gh pr edit` が共有する PR 固有の判定原則追加文 (「PR body で commit/discussion 経由でユーザ承認が明示されている文脈は禁止対象外」)。**除去 (v0.7.2、#187)** より前に、除去対象の文言が PR 系 2 entries それぞれに実在することを検証し、実在しなければ fail する
   正規化後の 4 entries が byte-identical でなければ diff 形式で乖離箇所を報告して fail する
 - **チェック 3 (gh pr create Step 3 ブロック構造チェック、v0.7.2 新設、#185)**: チェック 2 の `norm_b` は `gh pr create` entry 固有の Step 3 (Closes 検証) ブロックを共通ブロック比較の対象外とするため丸ごと除去する。そのため Step 3 の判定手順がどのように破損しても、開始・終了の見出しパターンさえ残っていれば除去は成功し共通ブロック比較 (チェック 2) は pass してしまう (false pass)。これを埋めるため、除去される前の raw prompt から Step 3 ブロックを独立に抽出し、スクリプト内定数の必須キーワードリスト (`` `<cwd>/.git` ``、`gitdir:`、`ref: refs/heads/`、`issue-<数字>`、`closing keyword`、`境界一致`、`fail-open で誘導層の`、の 7 要素) をすべて含むかを検証する。期待構造のソース・オブ・トゥルースは README 等の外部文書ではなくスクリプト内定数とし (#185 の合意事項)、判定ロジックの意味的な等価性までは検証しない構造スモークチェックである旨を明記している (欠落があれば diff ではなく欠落キーワードの一覧を報告して fail する)
-- **チェック 4 (分業規律 2 ファイルの rule ID 一致、#195)**: `hooks/prompts/discipline-fable.md` と `hooks/prompts/discipline-sonnet.md` から `<!-- rule:<id> -->` の ID 集合を抽出し、チェック 1 と同じ方式で完全一致を検証する
+- **チェック 4 (分業規律 3 ファイルの rule ID 一致、#195。v0.21.0 で discipline-opus.md を追加し 3 ファイル総当たりへ拡張)**: `hooks/prompts/discipline-fable.md` を基準に `discipline-sonnet.md` / `discipline-opus.md` それぞれとの `<!-- rule:<id> -->` ID 集合 diff (2 diff、fable を hub にした推移律で 3 ファイルの完全一致を保証) を、チェック 1 と同じ抽出方式で検証する
 - **チェック 5 (subagent-rules.md の rule ID サブセット検査、#221。v0.15.0 で母集合を和集合化)**: `hooks/prompts/subagent-rules.md` の rule ID 集合が `always-sonnet-{1,2,3}.md` の和集合 (チェック 1 で抽出・重複検査済みの集合) に含まれるかを片方向で検証する。含まれない ID があれば fail する (sonnet 側にのみ存在する ID は「subagent に配送しない」意図的な選択のため検査しない)
 - **引数**: なし。**実行位置**: リポジトリルートを前提とする (それ以外や前提ファイル欠如は fail-closed で exit 1)。**依存**: `jq` (CI・ローカルとも前提。不在時は明確なエラーメッセージで exit 1)。**exit code**: 全チェック (1〜5) pass で 0、いずれか fail または実行時エラーで 1
 - POSIX sh (`#!/bin/sh`) で記述しており `dash` でも動作する。ローカルでリポジトリルートから直接実行できる (`./plugins/agent-discipline/scripts/lint-prompt-sync.sh`)
@@ -606,7 +621,7 @@ Codex が Claude Auto を hook input から識別できない差分に対する�
 
 **ファイル**: `.github/workflows/agent-discipline-prompt-lint.yml`
 
-`always-fable.md` / `always-sonnet-{1,2,3}.md` / `hooks.json` / `discipline-fable.md` / `discipline-sonnet.md` / `subagent-rules.md` / lint スクリプト自身 / 本 workflow 自身のいずれかが変更された `push` (master 向け) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `actions/checkout@v4` の後に `lint-prompt-sync.sh` を実行する。ubuntu-latest には `jq` が標準搭載されているため追加のセットアップ step は無い。
+`always-fable.md` / `always-sonnet-{1,2,3}.md` / `hooks.json` / `discipline-fable.md` / `discipline-sonnet.md` / `discipline-opus.md` / `subagent-rules.md` / lint スクリプト自身 / 本 workflow 自身のいずれかが変更された `push` (master 向け) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `actions/checkout@v4` の後に `lint-prompt-sync.sh` を実行する。ubuntu-latest には `jq` が標準搭載されているため追加のセットアップ step は無い。
 
 ## 旧 plugin との関係 (移行ガイド)
 
@@ -758,10 +773,10 @@ agent-discipline/
 - **`block-fable-subagent.sh` は Workflow ツール内部の `agent()` 呼び出しを PreToolUse で捕捉できない** (v0.8.0): PreToolUse はメインループのツール呼び出しにのみ発火するため、Workflow スクリプト内部のサブエージェントスポーンは本 hook の対象外 (env 側でカバー)
 - **`block-fable-subagent.sh` はセッション途中の `/model` 切替を検知できない** (v0.8.0): model を含む hook 入力は `SessionStart` のみで、`$CLAUDE_MODEL` 環境変数も存在しない。env 不在時は state file が次の `SessionStart` まで stale になり、fable への切替は素通り (旧 state で allow)、fable からの切替は誤 deny になる (deny メッセージの model 明示誘導で自己修復可能)
 - **compact 直後のギャップ** (issue #236、v0.15.0): `SessionStart(source=compact)` 後、次のユーザプロンプトまでは part 1 要素 (delivery-note + `always-fable.md` / `always-sonnet-1.md`) のみが再注入され、残りの要素 (part 2/3・分業規律) は再配送されない (`UserPromptSubmit` はユーザプロンプトでしか発火しないため)。compact 後に agentic loop が自動継続する経路では、この間の推論は part 1 の delivery-note (自己修復指示) と compact summary 内の痕跡に依存する。従来設計でも同経路では persisted-output (2KB プレビュー) しか届いていなかったため、劣化ではない
-- **判定不能 → Fable 確定の補正遅延** (issue #236、v0.15.0): 分業規律の Fable 補正は `resolve-model-on-prompt.sh` の state 書込と `inject-discipline.sh` の読み取りが同一 event 内で並列競合した場合、最大 1 プロンプト遅れて配送される (誤配送はしない)
+- **判定不能 → Fable / Opus 確定の補正遅延** (issue #236、v0.15.0。v0.21.0 で Opus 系にも拡張): 分業規律の Fable / Opus 補正は `resolve-model-on-prompt.sh` の state 書込と `inject-discipline.sh` の読み取りが同一 event 内で並列競合した場合、最大 1 プロンプト遅れて配送される (誤配送はしない)
 - **exactly-once は保証しない** (issue #236、v0.15.0): hook 出力に配送 ACK が無いため、マーカー書込後に配送が失われた場合の再送はできない (SessionStart での全マーカーリセットが回復手段)。逆に TMPDIR 掃除等でマーカーが消えた場合は再配送される (重複は無害)
 - **state / pending の両方が書けない持続障害下の床** (issue #236、v0.15.0): `inject-always.sh` で state 書込と pending 作成が両方失敗した場合 (TMPDIR が持続的に書込不能等)、後続スクリプトは旧 state (読めれば) または両不在フォールバックに基づいて配送する。`/model` 切替を跨いだ旧 state が残っていると誤ったモデル変種が配送されうるが、この露出は state 書込失敗を無視していた v0.14.0 以前にも存在する
-- **pending 削除失敗時の補正遅延** (issue #236、v0.15.0): `resolve-model-on-prompt.sh` が state 書込に成功した後の pending 削除に失敗した場合、優先規則 (pending 優先) により分業規律の Fable 補正は次の SessionStart (マーカーリセット + pending 掃除) まで配送されない。常時ルールの Fable 確定版 (prefix + `always-fable.md`) は配送済みのため、規律の主要部は欠落しない
+- **pending 削除失敗時の補正遅延** (issue #236、v0.15.0。v0.21.0 で Opus 系にも拡張): `resolve-model-on-prompt.sh` が state 書込に成功した後の pending 削除に失敗した場合、優先規則 (pending 優先) により分業規律の Fable / Opus 補正は次の SessionStart (マーカーリセット + pending 掃除) まで配送されない。常時ルールの Fable 確定版 (prefix + `always-fable.md`) は配送済み (Opus 系は常時ルールが元々 Sonnet 版のまま変わらない) のため、規律の主要部は欠落しない
 
 ## Codex 代替実装の検証
 

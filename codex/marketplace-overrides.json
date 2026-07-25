@@ -355,7 +355,7 @@
       "distribution": {
         "status": "available"
       },
-      "version": "0.20.0",
+      "version": "0.21.0",
       "versioning": {
         "claudeOnlyPaths": [],
         "codexOnlyPaths": [
@@ -438,7 +438,7 @@
             "sourceDigest": "a23b1862a7921dd2daad8ae5ff3addf9ed5fd71b7994ed6a746c788dc4fe1345"
           }
         ],
-        "sourceTreeDigest": "85cf06bb15ecd0f27c1dff0c7b503955406862758501510be5dc6581760772c6"
+        "sourceTreeDigest": "057477e6c0d8557988a5ccca72564eff4d45799bbdd4102d8fe5635d5cf4adca"
       }
     },
     "ui-discipline": {
