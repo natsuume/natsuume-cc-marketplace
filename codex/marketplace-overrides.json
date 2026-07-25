@@ -163,7 +163,7 @@
             "source": "commands/review.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
-            "sourceDigest": "ec2b3fa33b0311ae895b910a5b635427f3f7d30e40ecb0f12ecee28fc8dac92c"
+            "sourceDigest": "0704d21d71f76df4a7641df79a6ed3bbc252d80f70429f513b69e04f014e3381"
           },
           {
             "source": "agents/code-reviewer.md",
@@ -190,7 +190,7 @@
             "sourceDigest": "be236d7412a9db67d9f5e0f36383515bbac7e179a628d39d96b19405d7f0cd72"
           }
         ],
-        "sourceTreeDigest": "c779fa6cf231bfec5f715ce6dc1ebb9cf8505e20090134b0fc97a9341b5f2a21"
+        "sourceTreeDigest": "4d15994bbe9a1c0f9631017e7ac21cb6e2d61a7fe0726ae0bac364c919e1ee67"
       }
     },
     "update-default-branch": {
@@ -524,7 +524,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "dd35e39c1c09498cadfb4feabfa8233352b0f36e6284015ac83bf834db77a4c8"
+        "sourceTreeDigest": "76a6413d2bcb3d9b1f4aa808fa85ad4d54023d937a9fe4695ea913b872c3b71b"
       }
     },
     "codex-advisor": {
@@ -592,7 +592,7 @@
             "sourceDigest": "f5e61eb80fba1870f28d16e6d2757235e422cce3a7168f45e7262c720c47f20a"
           }
         ],
-        "sourceTreeDigest": "b73664a828fba9daea999abaf5a19095fc0b0a509f697c5b04ec3d08f3af1f50"
+        "sourceTreeDigest": "f91fedf8cc03e3806f34a6412d615c0839bf7d12376635d951d5a58c2526cec5"
       }
     },
     "rate-limit": {
@@ -763,7 +763,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "9a10c3ae55624e878e0e0ce4e27bc30ef07082a0eaea7b97373acfbe15ae592b"
+        "sourceTreeDigest": "472086b88cd9766cf443920029e56daf5dbbaf8f8f00cc0cc23af7679f694b1f"
       }
     }
   }

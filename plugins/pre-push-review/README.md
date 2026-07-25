@@ -23,7 +23,7 @@ v5.0.0 (前身: `pre-commit-review` v0.4.0)
 ### v4.2.2 → v5.0.0 の変更点
 
 - **互換破壊**: code-reviewer / security-reviewer が model: opus (+ effort: medium) を要求するようになった。Opus 5 を利用できないプラン・model 制限環境では既定の 3 subagent 並列フローが起動に失敗する (fallback は下記)
-- Opus 5 を利用できない環境では、該当 reviewer を `model: "sonnet"` の明示で単独再起動する fallback が使える (marker は subagent の agent_type に対して発行されるため fallback でも機能するが、実効モデルは opus ではなくなる)
+- Opus 5 を利用できない環境では code-reviewer / security-reviewer を `model: "sonnet"` の明示で、Sonnet 制限環境では codex-reviewer を利用可能な非 Fable モデル (例: `model: "opus"`) の明示で、それぞれ単独再起動する fallback が使える (呼び出し側の model 指定は frontmatter より優先され、marker は subagent の agent_type に対して発行されるため fallback でも機能するが、実効モデルは既定と異なる)
 - code-reviewer / security-reviewer の frontmatter を `model: opus` + `effort: medium` に、codex-reviewer の frontmatter を `model: sonnet` に固定した (従来の `model: inherit` を廃止)
 - `/pre-push-review:review` の 3 起動仕様、単独再起動の案内、`block-pre-push.sh` / `block-bg-codex-wrapper.sh` の deny メッセージに、起動すべき model (`model: "opus"` / `model: "sonnet"`) を明示した
 - code-reviewer / security-reviewer の自己フィルタ (`Identify ONLY` / confidence 8/10 閾値での `Drop anything`) を廃止し、Exclusions を通過した候補を `Confidence: high | medium | low` で較正して全件報告する契約に変更した。選別は親セッションの分類パスに委ね、`/pre-push-review:review` の修正フローに `Confidence: low` 候補の分類指針を追加した

@@ -6,10 +6,11 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v1.2.0
+v2.0.0
 
-### v1.1.0 → v1.2.0 の変更点
+### v1.1.0 → v2.0.0 の変更点
 
+- **互換破壊**: 3 runner が model: sonnet を要求するようになった。Sonnet を利用できない model 制限環境では runner 起動が失敗する (回避は既知の制約を参照)
 - 3 runner (`advisor-runner` / `rescue-runner` / `review-runner`) の frontmatter を `model: sonnet` に固定した (従来の `model: inherit` を廃止)
 - `/codex-advisor:consult` skill、`hooks/prompts/advisor-rules.md`、`hooks/prompts/advisor-rules-subagent.md`、`manage-codex-runners.mjs` の deny メッセージ、3 runner 本文の親向け起動契約に、起動すべき model (`model: "sonnet"`) を明示した
 - 理由: Claude 5 世代の運用制約 (Fable はサブエージェント禁止、Sonnet 系はサブエージェント推奨) と、`CLAUDE_CODE_SUBAGENT_MODEL` 環境固定の廃止により、Fable セッションでは model 未指定の Agent 起動が agent-discipline の hook に deny されるため
