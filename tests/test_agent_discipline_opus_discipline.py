@@ -22,6 +22,30 @@ spec-first 2 段階で進め、本ファイルは実装前の Phase A として�
   inject-discipline.sh の 3-way 化 (Phase B) まで、現行実装が opus state を
   非 fable として一律 sonnet 版で処理するため red になる。
 
+checkpoint (cycle 5 advisor 相談) で確定した追加仕様により、以下 7 項目を本ファイルへ
+増補した (canonical 文言は ``OPUS_DISCIPLINE_HEADING`` / ``OPUS_CORRECTION_PREFIX`` /
+``OPUS_CORRECTION_PRIORITIZE_PHRASE`` / ``OPUS_CORRECTION_DISCARD_SONNET_PHRASE`` に
+固定する):
+
+1. haiku routing (test_1): state=claude-haiku-4-5 → Sonnet 版配送 (3-way の補集合が
+   Sonnet であることの固定、green)
+2. fable 優先順位 (test_2): state に fable と opus の両方の部分文字列を含む synthetic
+   値 → Fable 版配送 (fable 判定最優先のブラックボックス固定、green)
+3. fable 補正経路の回帰 (test_3): marker=sonnet-gate + state=claude-fable-5 → 補正
+   prefix + Fable 見出し (既存実装の回帰テスト、green)
+4. Opus 補正の意味的検証 (test_4): 補正 context 内で Opus 版を優先する旨と Sonnet 版を
+   破棄する旨の両方が Opus 見出しより前に位置すること (Phase B まで red)
+5. workflow trigger 別検証 (test_workflow_pull_request_and_push_paths_...): 旧来の
+   合計出現数 (== 2) の assert を置き換え、pull_request.paths と push.paths それぞれに
+   discipline-opus.md が 1 回ずつ含まれることを個別に検証する (Phase B まで red)
+6. 否定契約 (test_discipline_opus_excludes_sonnet_only_verifier_obligation_phrases):
+   discipline-opus.md に Sonnet 版限定の一律 verifier 義務文言が混入していないこと
+   (discipline-opus.md 不在のため Phase B まで red)
+7. 配送本文サイズ (test_7a/7b/7c): Opus 直接配送・Opus 補正・pending 時の
+   self-gate+Sonnet それぞれの実際の additionalContext が UTF-16 code unit 数 8,000
+   未満であること。7a/7b は Opus 系配送に依存するため Phase B まで red、7c
+   (pending 分) は現行実装で成立するため green。
+
 Phase B (discipline-opus.md 新設・discipline-fable.md / discipline-sonnet.md への
 追記・inject-discipline.sh の 3-way 化・lint-prompt-sync.sh / workflow yml の
 paths 追加) が完了すると、本ファイルの全テストが green になる想定。
@@ -54,6 +78,20 @@ WORKFLOW_YML = ROOT / ".github" / "workflows" / "agent-discipline-prompt-lint.ym
 RULE_ID_PATTERN = re.compile(r"<!--\s*rule:([a-zA-Z0-9_-]+)\s*-->")
 
 OPUS_DISCIPLINE_PATH = "plugins/agent-discipline/hooks/prompts/discipline-opus.md"
+
+# checkpoint (cycle 5 advisor 相談) で確定した canonical 文言 (実装とテストの共通契約)。
+# Opus 直接配送の見出し (heading + 空行 + discipline-opus.md 本文の構成で使われる)。
+OPUS_DISCIPLINE_HEADING = "# agent-discipline: 分業規律 (Opus)"
+
+# Opus one-shot 補正 prefix (fable 補正の鏡写し)。補正 context は
+# prefix + 空行 + OPUS_DISCIPLINE_HEADING + 空行 + discipline-opus.md 本文の構成になる。
+OPUS_CORRECTION_PREFIX = (
+    "(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの分業規律を暫定配送していた。"
+    "会話の進行によりこのセッションのモデルが Opus 系であると確定したため、以後は本メッセージ以下の Opus 版分業規律を優先し、"
+    "先に配送済みの Sonnet 版分業規律は破棄すること。"
+)
+OPUS_CORRECTION_PRIORITIZE_PHRASE = "以後は本メッセージ以下の Opus 版分業規律を優先し"
+OPUS_CORRECTION_DISCARD_SONNET_PHRASE = "先に配送済みの Sonnet 版分業規律は破棄すること"
 
 
 def extract_rule_ids(text: str) -> set[str]:
@@ -141,16 +179,62 @@ class DisciplineOpusStaticContractTests(unittest.TestCase):
         text = LINT_PROMPT_SYNC_SH.read_text(encoding="utf-8")
         self.assertIn(OPUS_DISCIPLINE_PATH, text)
 
-    def test_workflow_paths_reference_discipline_opus_twice(self) -> None:
-        """agent-discipline-prompt-lint.yml の pull_request / push 両方の paths に
-        discipline-opus.md が 1 回ずつ (計 2 回) 追加されていること。
+    def test_workflow_pull_request_and_push_paths_each_reference_discipline_opus_once(
+        self,
+    ) -> None:
+        """agent-discipline-prompt-lint.yml の pull_request.paths と push.paths の
+        それぞれに discipline-opus.md が 1 回ずつ含まれることを個別に検証する
+        (checkpoint 決定: 合計出現数のみの検証は、例えば discipline-opus.md への
+        参照が pull_request 側にだけ 2 回書かれ push 側に無い、といったケースでも
+        合計 2 に一致してしまう false positive を生むため置き換える)。
+
+        PyYAML は GitHub Actions の `on:` キーを YAML 1.1 の慣習でブール値
+        `True` として解釈してしまう既知の落とし穴があり、本テストの意図が
+        かえって読みにくくなるため使わない。代わりに pull_request: ブロックと
+        push: ブロックをそれぞれの開始位置 (次の兄弟キー、または push の後の
+        トップレベルキー `permissions:`) で切り出す文字列処理を用いる。
         """
         text = WORKFLOW_YML.read_text(encoding="utf-8")
-        occurrences = text.count(OPUS_DISCIPLINE_PATH)
+        pull_request_start = text.index("\n  pull_request:")
+        push_start = text.index("\n  push:")
+        permissions_start = text.index("\npermissions:")
+        self.assertLess(pull_request_start, push_start)
+        self.assertLess(push_start, permissions_start)
+
+        pull_request_block = text[pull_request_start:push_start]
+        push_block = text[push_start:permissions_start]
+
         self.assertEqual(
-            2,
-            occurrences,
-            "pull_request / push 両方の paths ブロックに 1 回ずつ出現するはず",
+            1,
+            pull_request_block.count(OPUS_DISCIPLINE_PATH),
+            "pull_request.paths に discipline-opus.md が 1 回だけ含まれるはず",
+        )
+        self.assertEqual(
+            1,
+            push_block.count(OPUS_DISCIPLINE_PATH),
+            "push.paths に discipline-opus.md が 1 回だけ含まれるはず",
+        )
+
+    def test_discipline_opus_excludes_sonnet_only_verifier_obligation_phrases(
+        self,
+    ) -> None:
+        """discipline-opus.md に、Sonnet 版限定の「一律 verifier 義務」文言
+        (「verifier 委任の義務 (必須)」「非自明な全成果物」) が混入していないこと。
+        Opus 版は verifier 委任を限定式 (基準を満たす場合のみ) にする設計契約であり、
+        Sonnet 版の義務化文言がそのまま紛れ込んでいないかを固定する。
+        """
+        self.assertTrue(
+            DISCIPLINE_OPUS_MD.is_file(),
+            f"{DISCIPLINE_OPUS_MD} が存在しません (Phase B で新設される想定)",
+        )
+        text = DISCIPLINE_OPUS_MD.read_text(encoding="utf-8")
+        leaked = [
+            phrase
+            for phrase in ("verifier 委任の義務 (必須)", "非自明な全成果物")
+            if phrase in text
+        ]
+        self.assertEqual(
+            [], leaked, f"discipline-opus.md に混入してはいけない Sonnet 限定文言: {leaked}"
         )
 
     def test_discipline_opus_size_and_combined_budget(self) -> None:
@@ -328,6 +412,170 @@ class InjectDisciplineOpusBehaviorTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual("", result.stdout)
             self.assertEqual("final", paths["marker"].read_text(encoding="utf-8"))
+
+    def test_1_haiku_state_delivers_sonnet_version_and_marks_final(self) -> None:
+        """特性化 (green、checkpoint 追加項目 1): marker/pending 無し +
+        state=claude-haiku-4-5 (fable でも opus でもない) は Sonnet 版を配送し
+        marker=final にする。3-way 化後も「fable でも opus でもない state」の
+        既定配送が Sonnet (3-way の補集合) であることを固定する。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_id = "opus-pr2-checkpoint-1-haiku"
+            paths = self.make_state_paths(tmp_dir, session_id)
+            paths["state"].write_text("claude-haiku-4-5", encoding="utf-8")
+
+            result = self.run_inject_discipline(session_id, tmp_dir)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("分業規律 (Sonnet)", context)
+            self.assertIn("verifier 委任の義務 (必須)", context)
+            self.assertEqual("final", paths["marker"].read_text(encoding="utf-8"))
+
+    def test_2_state_containing_fable_and_opus_substrings_prioritizes_fable(
+        self,
+    ) -> None:
+        """特性化 (green、checkpoint 追加項目 2): state 文字列が "fable" と "opus"
+        の両方の部分文字列を含む synthetic 値 (例: fable-opus-hybrid-test) では
+        Fable 版が配送される (fable 判定が常に最優先であることのブラックボックス
+        固定)。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_id = "opus-pr2-checkpoint-2-fable-priority"
+            paths = self.make_state_paths(tmp_dir, session_id)
+            paths["state"].write_text("fable-opus-hybrid-test", encoding="utf-8")
+
+            result = self.run_inject_discipline(session_id, tmp_dir)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("分業規律 (Fable セッション)", context)
+            self.assertEqual("final", paths["marker"].read_text(encoding="utf-8"))
+
+    def test_3_sonnet_gate_fable_confirmed_delivers_correction_and_marks_final(
+        self,
+    ) -> None:
+        """特性化 (green、checkpoint 追加項目 3、既存 fable 補正経路の回帰):
+        marker=sonnet-gate + state=claude-fable-5 (pending 無し) は one-shot
+        補正 (補正 prefix 「先に配送済みの Sonnet 版分業規律は破棄すること」を含む
+        + Fable 見出し) を配送し marker=final にする。既存の a/c/d/f は
+        sonnet-gate からの fable 補正経路そのものを検証していなかったため、
+        回帰テストとして固定する。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_id = "opus-pr2-checkpoint-3-fable-gate"
+            paths = self.make_state_paths(tmp_dir, session_id)
+            paths["marker"].write_text("sonnet-gate", encoding="utf-8")
+            paths["state"].write_text("claude-fable-5", encoding="utf-8")
+
+            result = self.run_inject_discipline(session_id, tmp_dir)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("one-shot 補正", context)
+            self.assertIn("先に配送済みの Sonnet 版分業規律は破棄すること", context)
+            self.assertIn("分業規律 (Fable セッション)", context)
+            self.assertEqual("final", paths["marker"].read_text(encoding="utf-8"))
+
+    def test_4_opus_correction_context_places_opus_phrases_before_heading(
+        self,
+    ) -> None:
+        """契約 (Phase B、現状 red、checkpoint 追加項目 4): marker=sonnet-gate +
+        state=claude-opus-5 (pending 無し) の補正 context には
+        OPUS_CORRECTION_PRIORITIZE_PHRASE と OPUS_CORRECTION_DISCARD_SONNET_PHRASE
+        の両方が含まれ、いずれも OPUS_DISCIPLINE_HEADING より前に位置すること
+        (補正 context の構成契約: prefix + 空行 + Opus 見出し + 空行 +
+        discipline-opus.md 本文)。現行実装は非 fable 確定時に追加配送をしないため
+        red になる。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_id = "opus-pr2-checkpoint-4-opus-correction-order"
+            paths = self.make_state_paths(tmp_dir, session_id)
+            paths["marker"].write_text("sonnet-gate", encoding="utf-8")
+            paths["state"].write_text("claude-opus-5", encoding="utf-8")
+
+            result = self.run_inject_discipline(session_id, tmp_dir)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue(
+                result.stdout.strip(),
+                "opus 確定時は one-shot 補正配送が期待されるが、現行実装は空応答"
+                " (Phase A 時点の既知の red)",
+            )
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertIn(OPUS_CORRECTION_PRIORITIZE_PHRASE, context)
+            self.assertIn(OPUS_CORRECTION_DISCARD_SONNET_PHRASE, context)
+            self.assertIn(OPUS_DISCIPLINE_HEADING, context)
+
+            heading_index = context.index(OPUS_DISCIPLINE_HEADING)
+            self.assertLess(
+                context.index(OPUS_CORRECTION_PRIORITIZE_PHRASE), heading_index
+            )
+            self.assertLess(
+                context.index(OPUS_CORRECTION_DISCARD_SONNET_PHRASE), heading_index
+            )
+
+    def test_7a_opus_direct_delivery_size_under_budget(self) -> None:
+        """契約 (Phase B、現状 red、checkpoint 追加項目 7 の Opus 直接配送分):
+        state=claude-opus-5 (marker/pending 無し) の additionalContext が
+        Opus 版であることを確認したうえで、UTF-16 code unit 数が 8,000 未満で
+        あることを assert する (受入基準そのものの検証)。現行実装は opus 版を
+        配送しないため red になる。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_id = "opus-pr2-checkpoint-7a-opus-direct-size"
+            paths = self.make_state_paths(tmp_dir, session_id)
+            paths["state"].write_text("claude-opus-5", encoding="utf-8")
+
+            result = self.run_inject_discipline(session_id, tmp_dir)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertIn(OPUS_DISCIPLINE_HEADING, context)
+            self.assertLess(utf16_units(context), 8000)
+
+    def test_7b_opus_correction_size_under_budget(self) -> None:
+        """契約 (Phase B、現状 red、checkpoint 追加項目 7 の Opus 補正分):
+        marker=sonnet-gate + state=claude-opus-5 (pending 無し) の
+        additionalContext が Opus 補正であることを確認したうえで、UTF-16
+        code unit 数が 8,000 未満であることを assert する (受入基準そのものの
+        検証)。現行実装は非 fable 確定時に追加配送をしないため red になる。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_id = "opus-pr2-checkpoint-7b-opus-correction-size"
+            paths = self.make_state_paths(tmp_dir, session_id)
+            paths["marker"].write_text("sonnet-gate", encoding="utf-8")
+            paths["state"].write_text("claude-opus-5", encoding="utf-8")
+
+            result = self.run_inject_discipline(session_id, tmp_dir)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue(
+                result.stdout.strip(),
+                "opus 確定時は one-shot 補正配送が期待されるが、現行実装は空応答"
+                " (Phase A 時点の既知の red)",
+            )
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertIn(OPUS_CORRECTION_PREFIX, context)
+            self.assertIn(OPUS_DISCIPLINE_HEADING, context)
+            self.assertLess(utf16_units(context), 8000)
+
+    def test_7c_pending_self_gate_sonnet_size_under_budget(self) -> None:
+        """特性化 (green、checkpoint 追加項目 7 の pending 分): marker 無し +
+        pending ファイル存在時に配送される self-gate 前置き + Sonnet 版の
+        additionalContext が UTF-16 code unit 数 8,000 未満であること (受入基準
+        そのものの検証)。現行実装で既に成立する。
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            session_id = "opus-pr2-checkpoint-7c-pending-size"
+            paths = self.make_state_paths(tmp_dir, session_id)
+            paths["pending"].write_text("pending", encoding="utf-8")
+
+            result = self.run_inject_discipline(session_id, tmp_dir)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertLess(utf16_units(context), 8000)
 
 
 if __name__ == "__main__":
