@@ -2,7 +2,7 @@
 name: codex-reviewer
 description: pre-push-review の codex review 専用 subagent。 `git push` 前のレビューループで block-pre-push.sh の deny メッセージが「independent review」 (codex review) のマーカーを「未実行」 または「失効」 と指摘したときに、 Agent / Task tool の subagent_type="pre-push-review:codex-reviewer" で呼び出す。 codex review の実行手順と report 形式は本 subagent の body に定義されている。 完了すると codex-reviewed marker が更新され、 markdown report が親 session に返る。
 tools: Bash
-model: inherit
+model: sonnet
 color: blue
 ---
 

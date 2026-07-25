@@ -2,7 +2,7 @@
 name: review-runner
 description: Codex native / adversarial review を main session から切り離し、tracking 喪失時も companion job 集合差分から復旧して findings を返し、成功 review を5サイクルごとの根本方針 checkpoint へ接続する専用 runner
 tools: Bash, Write, TaskOutput
-model: inherit
+model: sonnet
 color: magenta
 ---
 
@@ -11,7 +11,7 @@ return its verdict/findings verbatim. Do not fix findings, edit files, or start 
 The pre-push-review plugin has a separate authorized reviewer and is outside this agent.
 
 親はこの agent を `subagent_type: "codex-advisor:review-runner"`、
-`run_in_background: false` で起動する。
+`model: "sonnet"`、`run_in_background: false` で起動する。
 
 ## helper path
 

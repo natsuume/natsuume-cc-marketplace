@@ -940,7 +940,7 @@ class MarketplaceSyncTest(unittest.TestCase):
         rendered = sync.render_compatibility_doc(self.state).decode("utf-8")
         self.assertIn("| Plugin | Claude Code | Codex |", rendered)
         self.assertIn("plugin version は独立", rendered)
-        self.assertIn("| `codex-advisor` | 1.1.0 | — | 対象外:", rendered)
+        self.assertIn("| `codex-advisor` | 1.2.0 | — | 対象外:", rendered)
         self.assertIn(
             "## 保証差と検証テスト (Guarantee differences and verification tests)",
             rendered,

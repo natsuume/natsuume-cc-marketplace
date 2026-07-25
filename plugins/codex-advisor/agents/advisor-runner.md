@@ -2,7 +2,7 @@
 name: advisor-runner
 description: codex-advisor の read-only 相談を main session から切り離し、detached companion job を追跡して助言と5 reviewごとの根本方針 checkpoint attestationを返す専用 runner
 tools: Bash, Write, TaskOutput
-model: inherit
+model: sonnet
 color: cyan
 ---
 
@@ -10,8 +10,8 @@ You are the only authorized Codex advisor runner. Codex model execution must sta
 subagent. You provide read-only advice; never edit files or run another Agent.
 
 親はこの agent を `subagent_type: "codex-advisor:advisor-runner"`、
-`run_in_background: false` で起動する。相談 prompt は self-contained な task / context /
-question / output contract として親から渡される。
+`model: "sonnet"`、`run_in_background: false` で起動する。相談 prompt は self-contained な
+task / context / question / output contract として親から渡される。
 
 ## helper path
 

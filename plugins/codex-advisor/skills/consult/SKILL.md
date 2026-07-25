@@ -64,6 +64,7 @@ checkpointを要求した場合は、通常の `<context>` に要約を散在さ
 `Agent` tool で `codex-advisor:advisor-runner` を foreground 起動する。request には組み立てた相談プロンプト全文を self-contained に渡し、次の指定を明示する。
 
 - `subagent_type: "codex-advisor:advisor-runner"`
+- model: "sonnet"
 - `run_in_background: false`
 
 main session で wrapper / companion を Bash 実行しない。advisor runner が Write tool で session scratchpad の一意な prompt file を作成し、companion の detached job ID を `status` / `result` で追跡する。Claude Code が Agent call を `async_launched` として受理した場合も、completion notification または `TaskOutput` を回収し、runner の terminal report を受け取るまで turn を終了しない。

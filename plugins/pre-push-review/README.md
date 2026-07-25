@@ -18,7 +18,14 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v4.2.2 (前身: `pre-commit-review` v0.4.0)
+v4.3.0 (前身: `pre-commit-review` v0.4.0)
+
+### v4.2.2 → v4.3.0 の変更点
+
+- code-reviewer / security-reviewer の frontmatter を `model: opus` + `effort: medium` に、codex-reviewer の frontmatter を `model: sonnet` に固定した (従来の `model: inherit` を廃止)
+- `/pre-push-review:review` の 3 起動仕様、単独再起動の案内、`block-pre-push.sh` / `block-bg-codex-wrapper.sh` の deny メッセージに、起動すべき model (`model: "opus"` / `model: "sonnet"`) を明示した
+- code-reviewer / security-reviewer の自己フィルタ (`Identify ONLY` / confidence 8/10 閾値での `Drop anything`) を廃止し、Exclusions を通過した候補を `Confidence: high | medium | low` で較正して全件報告する契約に変更した。選別は親セッションの分類パスに委ね、`/pre-push-review:review` の修正フローに `Confidence: low` 候補の分類指針を追加した
+- 理由: Claude 5 世代の運用制約 (Fable はサブエージェント禁止、Opus 5 は effort medium 固定、Sonnet 系はサブエージェント推奨) と、`CLAUDE_CODE_SUBAGENT_MODEL` 環境固定の廃止により、Fable セッションでは model 未指定の Agent 起動が agent-discipline の hook に deny されるため。あわせて Opus 5 / Sonnet 5 の literal な指示追従傾向により、confidence 閾値での自己フィルタが recall を下げる懸念に対応した
 
 ### v4.2.1 → v4.2.2 の変更点 (issue #280)
 
@@ -345,7 +352,7 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 - subagent body には logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリと exclusion ルール (style / docs / perf / refactor / security / pre-existing bug 等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report の単一 `Status: pass|findings` 行を確認して code-reviewed マーカーを更新する
-- model は `inherit` で親 session と同じモデルを使用
+- model は `opus` + `effort: medium` に固定 (v4.3.0 まで `inherit` で親 session と同じモデルを使用していた)
 
 #### `pre-push-review:codex-reviewer` (subagent / v3.0.0 で追加)
 
@@ -360,7 +367,7 @@ codex review wrapper (`hooks/scripts/run-codex-review.sh`) を foreground で 1 
 - 親 session は finding の priority / location / impact / verification / fix direction / disposition を受け取る。実行可能な command、payload、環境値、段階的な再現・回避手順、raw stdout / stderr は subagent context に閉じ込められる
 - exact detail を使った追加確認が必要な場合は同一 codex-reviewer を resume し、検証結果だけを再度 parent-safe report で受け取る
 - wrapper は exit 0 完了時に hash-bound pending attestation を atomic write し、auto-mark が subagent の正規 `pass/findings` report と current hash 一致を確認して codex-reviewed marker へ昇格する
-- model は `inherit` で親 session と同じモデルを使用
+- model は `sonnet` に固定 (v4.3.0 まで `inherit` で親 session と同じモデルを使用していた)
 - **v4.0.0 で frontmatter `description` を起動条件中心に縮小**: 呼び出しタイミング (deny メッセージがどのマーカーを指摘したときか) と `subagent_type="pre-push-review:codex-reviewer"` の呼び出し方だけを記載し、 wrapper path や marker/attestation 実装詳細はメインセッションへ直接開示しない (実行手順・report 形式は引き続き body に定義)
 
 #### `pre-push-review:security-reviewer` (subagent)
@@ -375,7 +382,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 - subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report の単一 `Status: pass|findings` 行を確認して security マーカーを更新する (`execution-failed` / 欠落 / 重複 / 未知値では書かず、silent-pass を防ぐ)
-- model は `inherit` で親 session と同じモデルを使用
+- model は `opus` + `effort: medium` に固定 (v4.3.0 まで `inherit` で親 session と同じモデルを使用していた)
 
 #### code-reviewer / security-reviewer subagent が標準 skill を invoke しない理由 (共通)
 

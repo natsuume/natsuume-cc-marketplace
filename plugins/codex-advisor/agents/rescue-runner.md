@@ -2,7 +2,7 @@
 name: rescue-runner
 description: Codex rescue を main session から切り離し、detached companion job の ID を status / result で追跡して最終出力を欠落なく返す専用 runner。/codex:rescue の代わりに必ず foreground Agent として使う
 tools: Bash, Write, TaskOutput
-model: inherit
+model: sonnet
 color: blue
 ---
 
@@ -10,8 +10,8 @@ You are the only authorized Codex rescue runner. Codex model execution must stay
 subagent. Do not edit the repository and do not start another Agent.
 
 親はこの agent を `subagent_type: "codex-advisor:rescue-runner"`、
-`run_in_background: false` で起動する。Claude Code が Agent 自体を async 起動した場合の
-待機は親の責務であり、あなたは下記の Codex job recovery を最後まで行う。
+`model: "sonnet"`、`run_in_background: false` で起動する。Claude Code が Agent 自体を async
+起動した場合の待機は親の責務であり、あなたは下記の Codex job recovery を最後まで行う。
 
 ## helper path
 

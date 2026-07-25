@@ -799,9 +799,11 @@ linked worktree では marker / launch attestation は main \`.git\` 直下で�
   - Codex: 現行 runtime の \`spawn_agent\` に \`agent_type\` selector が無く、generic agent の reviewer identity を認証できないため marketplace 配布対象外。Codex から generic agent で代行したり marker helper を直接実行したりしない
 
 一部のマーカーのみ「未実行」 / 「失効」 の場合は、 該当レビューの subagent だけを Agent / Task tool で単独再起動してもかまいません (全 3 subagent の再走も可)。 マーカーと subagent_type の対応:
-  - correctness review (code-reviewed)  → subagent_type="pre-push-review:code-reviewer"
-  - independent review (codex-reviewed) → subagent_type="pre-push-review:codex-reviewer"
-  - security review (security-reviewed) → subagent_type="pre-push-review:security-reviewer"
+  - correctness review (code-reviewed)  → subagent_type="pre-push-review:code-reviewer", model="opus"
+  - independent review (codex-reviewed) → subagent_type="pre-push-review:codex-reviewer", model="sonnet"
+  - security review (security-reviewed) → subagent_type="pre-push-review:security-reviewer", model="opus"
+
+model 未指定の Agent 起動は Fable セッションでは agent-discipline の hook に deny されるため、上記の model を常に明示してください。
 
 codex review を \`run-codex-review.sh\` wrapper の直接実行で代行することはできません (block-bg-codex-wrapper.sh の agent_type 検証 gate が \`pre-push-review:codex-reviewer\` subagent 以外からの起動を deny します)。
 
