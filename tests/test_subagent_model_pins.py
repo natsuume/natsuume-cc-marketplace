@@ -88,6 +88,31 @@ def body_after_frontmatter(body: str) -> str:
     return body[match.end() :]
 
 
+def exclude_frontmatter_description_line(body: str) -> str:
+    """frontmatter の `description:` 行 (marketplace 向け説明文) だけを除いた全文を返す。
+
+    code-reviewer.md の frontmatter description は「検出された high-confidence bug を
+    markdown report として親 session に返す。」という既存のマーケティング文言を含む。
+    これは変更仕様 1 (frontmatter の `model`/`effort` 固定) の対象であって変更仕様 3
+    (reviewer 本文の自己フィルタ廃止) の対象ではないため、confidence-gating パターン検査
+    からこの 1 行だけを除外する (この行以外の frontmatter・本文は検査対象に残す)。
+    """
+    return "\n".join(
+        line for line in body.splitlines() if not line.startswith("description:")
+    )
+
+
+# 変更仕様 3 拡張 (codex review P2 網羅性指摘): `Identify ONLY` / `Drop anything` という
+# 直接的な言い回し以外の confidence-gating 表現。大文字小文字を無視して検索する。
+CONFIDENCE_GATING_PATTERNS = (
+    "high-confidence",
+    "8/10",
+    "only report",
+    "report only",
+    "below the threshold",
+)
+
+
 class AgentFrontmatterModelPinTest(unittest.TestCase):
     """変更仕様 1: 6 agent の frontmatter model 固定。"""
 
@@ -167,6 +192,25 @@ class BlockBgCodexWrapperModelAnnotationTest(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIn("model", line)
 
+    def test_both_deny_paths_declare_codex_reviewer_model(self) -> None:
+        """codex review P2 網羅性指摘: agent_type 欠落経路と不一致経路の両方が model を持つ。
+
+        両 deny メッセージ (agent_type 欠落 / agent_type 不一致) はそれぞれ独立した
+        REASON heredoc であり、どちらも `subagent_type="pre-push-review:codex-reviewer",
+        model="sonnet"` の案内を含む必要がある。1 回だけの出現では欠落経路のみ・
+        不一致経路のみのいずれかが model 注記を欠いたまま残っている可能性を見逃すため、
+        出現回数を 2 以上で assert する。
+        """
+        body = read(BLOCK_BG_CODEX_WRAPPER)
+        literal = 'subagent_type="pre-push-review:codex-reviewer", model="sonnet"'
+        self.assertGreaterEqual(body.count(literal), 2)
+
+    def test_no_model_less_legacy_restart_guidance_remains(self) -> None:
+        """model 注記の無い旧形式の起動案内が残っていないことを確認する。"""
+        self.assertNotIn(
+            'subagent_type="pre-push-review:codex-reviewer" を起動', read(BLOCK_BG_CODEX_WRAPPER)
+        )
+
 
 class ManageCodexRunnersModelAnnotationTest(unittest.TestCase):
     """変更仕様 2: manage-codex-runners.mjs の deny メッセージが sonnet model を明示する。"""
@@ -179,6 +223,44 @@ class ManageCodexRunnersModelAnnotationTest(unittest.TestCase):
     def test_unescaped_literal_declares_sonnet_model(self) -> None:
         body = read(MANAGE_CODEX_RUNNERS)
         self.assertIn('model: "sonnet"', body)
+
+    def test_no_model_less_escaped_legacy_literal_remains(self) -> None:
+        """codex review P2 網羅性指摘: model 注記の無い旧形式 (escaped) が残っていない。"""
+        body = read(MANAGE_CODEX_RUNNERS)
+        self.assertNotIn(r'subagent_type=\"${expectedRunner}\", run_in_background', body)
+
+    def test_no_model_less_unescaped_legacy_literal_remains(self) -> None:
+        """codex review P2 網羅性指摘: model 注記の無い旧形式 (unescaped) が残っていない。"""
+        body = read(MANAGE_CODEX_RUNNERS)
+        self.assertNotIn("subagent_type に指定し、run_in_background: false で", body)
+
+    def test_user_facing_run_in_background_instruction_lines_declare_model(
+        self,
+    ) -> None:
+        """`run_in_background: false` のユーザ向け指示文行は全て model を含む。
+
+        行の判別は元指定の 2 部分文字列 (`run_in_background: false を指定` /
+        `run_in_background: false で`) の有無で行う。コード内の Boolean 比較行
+        (`input.tool_input?.run_in_background === true`) はこの部分文字列を含まない
+        (`false` を含まない) ため自動的に除外され、追加の判別ロジックは不要だった。
+        """
+        body = read(MANAGE_CODEX_RUNNERS)
+        instruction_markers = (
+            "run_in_background: false を指定",
+            "run_in_background: false で",
+        )
+        matching_lines = [
+            line
+            for line in body.splitlines()
+            if any(marker in line for marker in instruction_markers)
+        ]
+        self.assertTrue(
+            matching_lines,
+            "no user-facing run_in_background instruction line was found",
+        )
+        for line in matching_lines:
+            with self.subTest(line=line):
+                self.assertIn("model", line)
 
 
 class CodexAdvisorDocsModelAnnotationTest(unittest.TestCase):
@@ -225,6 +307,30 @@ class ReviewerSelfFilterRemovalTest(unittest.TestCase):
                 )
                 self.assertNotIn("Identify ONLY", body)
                 self.assertNotIn("Drop anything", body)
+
+    def test_reviewers_do_not_use_confidence_gating_language(self) -> None:
+        """codex review P2 網羅性指摘: `Identify ONLY`/`Drop anything` 以外の
+
+        confidence-gating 表現 (`high-confidence`/`8/10`/`only report`/`report only`/
+        `below the threshold`、大文字小文字無視) も残っていないことを確認する。
+
+        code-reviewer.md の frontmatter description 行は変更仕様 3 の対象外の
+        マーケティング文言 (`high-confidence bug`) を含むため、
+        `exclude_frontmatter_description_line` でその 1 行のみ除外する。本文冒頭の
+        「Your job is to find HIGH-CONFIDENCE ... bugs/vulnerabilities」という導入文は
+        検査対象に残るため、この行も含めて自己フィルタ廃止の趣旨に沿った書き換えが
+        Phase B に要求される (既存の変更仕様 3 が列挙する `Identify ONLY`/`Drop anything`
+        の削除だけでは、本チェックは green にならない)。
+        """
+        for name, path in OPUS_EFFORT_AGENTS.items():
+            body = exclude_frontmatter_description_line(read(path))
+            for pattern in CONFIDENCE_GATING_PATTERNS:
+                with self.subTest(reviewer=name, pattern=pattern):
+                    match = re.search(re.escape(pattern), body, re.IGNORECASE)
+                    self.assertIsNone(
+                        match,
+                        f"{name} still uses confidence-gating language: {pattern!r}",
+                    )
 
     def test_review_command_fix_flow_defines_low_confidence_classification(
         self,
