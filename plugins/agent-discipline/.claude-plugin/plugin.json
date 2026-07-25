@@ -1,6 +1,6 @@
 {
   "name": "agent-discipline",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。"
 }

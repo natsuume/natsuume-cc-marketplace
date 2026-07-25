@@ -23,6 +23,7 @@ on:
       # ルール ID コメントを持つ分業規律モデル別プロンプトファイル (チェック 4 の対象)
       - "plugins/agent-discipline/hooks/prompts/discipline-fable.md"
       - "plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
+      - "plugins/agent-discipline/hooks/prompts/discipline-opus.md"
       # subagent 向けルールファイル (チェック 5 のサブセット検査対象、#221)
       - "plugins/agent-discipline/hooks/prompts/subagent-rules.md"
       # lint スクリプト自身と本 workflow 自身 (契約変更時も CI が追従することを保証する)
@@ -38,6 +39,7 @@ on:
       - "plugins/agent-discipline/hooks/hooks.json"
       - "plugins/agent-discipline/hooks/prompts/discipline-fable.md"
       - "plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
+      - "plugins/agent-discipline/hooks/prompts/discipline-opus.md"
       - "plugins/agent-discipline/hooks/prompts/subagent-rules.md"
       - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
       - ".github/workflows/agent-discipline-prompt-lint.yml"
