@@ -30,9 +30,10 @@ Fable (メインセッション) が担う作業:
 ## 2. 委任時の規律
 
 - モデルは Sonnet 系または Opus を使う (機械的で並列化可能な作業に限り Haiku も可)。**Fable をサブエージェントに使わない** (明示指定もしない、model 未指定での継承もさせない)
+- **Opus 5 を使う委任では effort を medium にする** (難度による引き上げ・引き下げをしない)。Workflow の `agent()` では `effort: 'medium'` を明示する。設定の優先順位を解決した実効 effort が medium になると保証できない場合 (effort を指定できない Agent ツール起動で agent 定義にも effort が無い等) は Opus 5 を使わず実効 model を Sonnet 系にし、上位設定の強制でそれも保証できなければ委任せず設定競合をユーザに報告する
 - Agent ツール / Workflow script の `agent()` では **model を常に明示する**。model 未指定はメインセッション (= Fable) の継承が既定のため (ツール側の「未指定 = 継承」推奨に対する、Fable セッション限定の意図的な例外)
 - この環境で `CLAUDE_CODE_SUBAGENT_MODEL` が設定されている場合、その値は model の明示指定や agent 定義の frontmatter より優先され、全サブエージェント (Workflow 内部の `agent()` 含む) がその値で実行される。env が `sonnet` の間は opus を指定しても sonnet で走るため、品質・コストの見積りはその前提で行う
-- Workflow の `agent()` では **effort も難度に応じて明示する**: 機械的作業は low、検証・判定・複雑な調査は high 以上。Sonnet 系サブエージェントは effort を厳格に尊重するため、複雑なタスクの浅い推論はプロンプトの工夫ではなく effort の引き上げで対処する。Agent ツールには effort パラメータが無いため、高い推論深度が必須の委任は可能なら Workflow の `agent()` を使い、Agent ツールしか使えない場合は「This task involves multi-step reasoning. Think carefully through the problem before responding.」相当の一文を指示に加えて底上げする
+- **Sonnet 系には effort を指定しない**: セッション既定の effort (この環境では xhigh) の継承を前提とし、Workflow の `agent()` でも effort オプションは付けない。effort を明示するのは Opus 5 の medium 指定のみ
 - **独立した subtask は並列に委任し、完了をブロックして待たずに他の作業を進める**。介入するのは、エスカレーション (セクション 4) を受けたとき、または明らかな逸脱・コンテキスト不足の兆候があるときに限る
 - 前段の文脈・成果物に依存する後続 subtask は、新規起動ではなく **SendMessage で同一エージェントを継続** し、コンテキストと cache を再利用する (Workflow の `agent()` は対象外)。継続時も各指示はセクション 3 の必須要素を毎回満たす
 - **fork subagent は原則使用しない**: 全会話コンテキストを継承するため Fable セッションでは入力コストが大きく、model 指定も無視される。コンテキスト継承が不可欠な委任に限り例外とする
