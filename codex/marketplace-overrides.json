@@ -163,25 +163,25 @@
             "source": "commands/review.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime は authenticated named reviewer を選択する agent_type selector を提供せず、plugin 自体を marketplace 配布対象外とするため、この command の Codex surface は公開しません。",
-            "sourceDigest": "511c5af9a53d0943fba7f455fccb01757fe94f73907f30b23a5b689ad8d57f40"
+            "sourceDigest": "0704d21d71f76df4a7641df79a6ed3bbc252d80f70429f513b69e04f014e3381"
           },
           {
             "source": "agents/code-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では correctness reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "9420845734ab82c56c2a804ede529487e1ff150b2c5440a479c277a11f70fdf0"
+            "sourceDigest": "24cb740dae760a353c695aa03194d8940e6bfab149491618038198a9d09c6c8b"
           },
           {
             "source": "agents/codex-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では independent reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "e72e6926bcea267d904535418e3263340f6714d72caba6407fd82cee4a18e3cb"
+            "sourceDigest": "8e77e9cf9fd27cae71f107f2a3dae557e7ca96283afb18257735d3016ae78016"
           },
           {
             "source": "agents/security-reviewer.md",
             "disposition": "surface-unavailable",
             "reason": "現行 Codex runtime では security reviewer の named identity を安全に選択・検証できず、Codex distribution から除外するため公開しません。",
-            "sourceDigest": "eab7f7185a5bed6dfe3a6a4cede98b76286299247819678971a444d4bfe0d7d0"
+            "sourceDigest": "77b62558d1d18445b5c6cf1d011503dd3d299e92c022c00a1a0e1bab3f988ba3"
           },
           {
             "source": "hooks/hooks.json#/hooks/PostToolUseFailure/0/hooks/0",
@@ -190,7 +190,7 @@
             "sourceDigest": "be236d7412a9db67d9f5e0f36383515bbac7e179a628d39d96b19405d7f0cd72"
           }
         ],
-        "sourceTreeDigest": "4989c6c5e9a6cf2bf5c0abcf92696d1634c16bfdfe81e67d7185b33d55864c5f"
+        "sourceTreeDigest": "4d15994bbe9a1c0f9631017e7ac21cb6e2d61a7fe0726ae0bac364c919e1ee67"
       }
     },
     "update-default-branch": {
@@ -524,7 +524,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "84235778876ae2455521defc2a4e2f2d0d1fff3873ac7ce7b11e7d5b04b21d7e"
+        "sourceTreeDigest": "76a6413d2bcb3d9b1f4aa808fa85ad4d54023d937a9fe4695ea913b872c3b71b"
       }
     },
     "codex-advisor": {
@@ -571,19 +571,19 @@
             "source": "agents/advisor-runner.md",
             "disposition": "surface-unavailable",
             "reason": "Claude Code の Agent tool と companion job を接続し、5 review ごとの根本方針 checkpoint attestation も返す role 固有 runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
-            "sourceDigest": "cd7fd21b6568ad967cc46a0a5b9ef3f079bad63870b79ceb264a881a2ffedefe"
+            "sourceDigest": "d998a253510f441794a3341a422b73bd9667b6df6faf89ba48d4666d679e99be"
           },
           {
             "source": "agents/rescue-runner.md",
             "disposition": "surface-unavailable",
             "reason": "Claude Code の legacy rescue 経路を named Agent へ reroute する runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
-            "sourceDigest": "684a9495ec11e1a528d7e917352ea5f4d5060cb226d83bbe9fe916eb522bb7f6"
+            "sourceDigest": "37678ccf98ebf51c0c57a41ebec7f0efd809f2a8f44a0ac61cbe6054c2076a74"
           },
           {
             "source": "agents/review-runner.md",
             "disposition": "surface-unavailable",
             "reason": "Claude Code の Bash / TaskOutput tracking 喪失を companion job 集合差分から復旧し、成功 review を pre-push Codex review と共有する cadence counter へ接続する runner であり、plugin 自体を Codex distribution から除外しているため公開しません。",
-            "sourceDigest": "c69fca238b9a025091672fdabfcc62e28041f18833c99c933dc0908f1d34a660"
+            "sourceDigest": "9ac685f95d7d3ccb357c5d5cf7bb41a88037e9de1b20864b618c16a831f1ce16"
           },
           {
             "source": "hooks/hooks.json#/hooks/SessionEnd/0/hooks/0",
@@ -592,7 +592,7 @@
             "sourceDigest": "f5e61eb80fba1870f28d16e6d2757235e422cce3a7168f45e7262c720c47f20a"
           }
         ],
-        "sourceTreeDigest": "ff20ba949d3d4cf3eb124e782892c53198eb3a4c0feda4f127d8a998be8e7d9a"
+        "sourceTreeDigest": "f91fedf8cc03e3806f34a6412d615c0839bf7d12376635d951d5a58c2526cec5"
       }
     },
     "rate-limit": {
@@ -763,7 +763,7 @@
           }
         ],
         "components": [],
-        "sourceTreeDigest": "8a87fa2ae12b7b057f47c809db6a408e7edccdd900cbd40c1ac5df86280ffd1c"
+        "sourceTreeDigest": "472086b88cd9766cf443920029e56daf5dbbaf8f8f00cc0cc23af7679f694b1f"
       }
     }
   }

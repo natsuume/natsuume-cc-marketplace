@@ -513,7 +513,7 @@ function handlePreToolUse(input) {
     mismatch = "background / pipeline を含む起動";
   }
   return denyResponse(
-    `codex-advisor: ${launch.entrypoint} は ${expectedRunner} の foreground Agent だけが実行できます。${mismatch} からの直接実行を拒否しました。main session は Agent tool で subagent_type=\"${expectedRunner}\", run_in_background: false を指定し、terminal report まで待ってください。${stateFailure}`,
+    `codex-advisor: ${launch.entrypoint} は ${expectedRunner} の foreground Agent だけが実行できます。${mismatch} からの直接実行を拒否しました。main session は Agent tool で subagent_type=\"${expectedRunner}\", model=\"sonnet\", run_in_background: false を指定し、terminal report まで待ってください。${stateFailure}`,
   );
 }
 
@@ -723,7 +723,7 @@ function handleStop(input) {
       return `${runner} は active です。既存 Agent の completion notification / TaskOutput を回収し、terminal report を受け取るまで終了しないでください。新しい runner は重複起動しません。`;
     }
     const retry = record.phase === "retry-required" ? "自動 retry (残り 1 回)" : "reroute";
-    return `${runner} を Agent tool の subagent_type に指定し、run_in_background: false で ${retry} してください。起動受理だけをユーザーへ返さず、terminal report まで待ってください。`;
+    return `${runner} を Agent tool の subagent_type に指定し、model: "sonnet"、run_in_background: false で ${retry} してください。起動受理だけをユーザーへ返さず、terminal report まで待ってください。`;
   });
   if (cadence?.checkpointRequired) {
     instructions.push(

@@ -89,7 +89,7 @@
 - review / adversarial-review: `codex-advisor:review-runner`
 - advisor / consult: `codex-advisor:advisor-runner`
 
-Agent call は `run_in_background: false` を明示し、request 本文・thread flag・review scope 等を self-contained に渡す。Claude Code が Agent を `async_launched` として受理した場合も、completion notification または TaskOutput を回収し、runner の terminal report が返るまで「起動した」とだけユーザへ報告して turn を終了しない。自律的に rescue / review を使うときは `/codex:rescue` / `/codex:review` を再入せず、上記 runner を直接起動する。
+Agent call は `model: "sonnet"` と `run_in_background: false` を明示し (model 未指定の継承は Fable セッションで deny される)、request 本文・thread flag・review scope 等を self-contained に渡す。Claude Code が Agent を `async_launched` として受理した場合も、completion notification または TaskOutput を回収し、runner の terminal report が返るまで「起動した」とだけユーザへ報告して turn を終了しない。自律的に rescue / review を使うときは `/codex:rescue` / `/codex:review` を再入せず、上記 runner を直接起動する。
 
 PreToolUse gate は `codex-companion.mjs task|review|adversarial-review` と `run-codex-advisor.sh` の実行形を、対応 runner 以外では deny する。ユーザが旧 `/codex:rescue` / `/codex:review` を明示した場合も deny と Stop hook の案内に従い、追加質問をせず runner へ reroute する。runner が tracking failure を報告した場合は lifecycle hook が 1 回だけ新規 runner で retry を要求する。2 回目の失敗、cancel、未 install / 未認証、入力不正は terminal failure として明示報告する。
 

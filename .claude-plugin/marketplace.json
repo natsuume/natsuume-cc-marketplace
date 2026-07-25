@@ -32,7 +32,7 @@
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "4.2.2",
+      "version": "5.0.0",
       "keywords": ["push", "review", "quality", "codex", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
@@ -74,7 +74,7 @@
       "name": "codex-advisor",
       "source": "./plugins/codex-advisor",
       "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧するプラグイン。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI)。",
-      "version": "1.1.0",
+      "version": "2.0.0",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {

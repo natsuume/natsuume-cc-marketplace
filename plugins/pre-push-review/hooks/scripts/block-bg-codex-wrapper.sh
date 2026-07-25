@@ -458,7 +458,7 @@ wrapper を実行せずファイル内容を確認したいだけなら、 `cat`
 
 対応:
   - `/pre-push-review:review` で 3 レビューを並列起動してください (推奨)
-  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動してください
+  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-review:codex-reviewer", model="sonnet" を起動してください
   - 上記を行っても `agent_type` 欠落が解消しない場合は、 Claude Code を 2.1.211 以上へ更新してください (本 gate は Claude Code 2.1.211 で実機検証済みです)
 EOF
 )
@@ -472,7 +472,7 @@ wrapper を実行せずファイル内容を確認したいだけなら、 \`cat
 
 対応:
   - \`/pre-push-review:review\` で 3 レビューを並列起動してください (推奨)
-  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-review:codex-reviewer" を起動してください
+  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-review:codex-reviewer", model="sonnet" を起動してください
   - お使いの Claude Code が \`agent_type\` を正しく送信しない場合は 2.1.211 以上へ更新してください (本 gate は Claude Code 2.1.211 で実機検証済みです)
 EOF
 )
@@ -549,7 +549,7 @@ if [ "$RUN_IN_BG" = "true" ]; then
 
 理由: wrapper 自身は codex review を foreground で実行しますが、 Bash tool の `run_in_background: true` で起動すると **codex-reviewer subagent は wrapper の stdout / stderr (= codex review の verdict / findings) を観察できないまま完了しうる**ため、parent-safe report を正しく組み立てられません。v4.0.1 以降は wrapper が pending attestation を書いても、正規 report 成功前に final marker へ昇格しないため push gate bypass にはなりませんが、review cycle と report delivery が分離し、stale pending だけが残る不正な完了になります。
 
-対応: `run_in_background: true` を使わず、 wrapper を plain foreground の単独コマンドとして再実行してください。 wrapper は内部で codex companion を `--wait` で foreground 起動するため、 Bash 呼び出し自体が review 完了まで block しますが、 これが本プラグインの想定する正しい使い方です (= review 結果を観察してから push 判断する)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent を再起動してください。
+対応: `run_in_background: true` を使わず、 wrapper を plain foreground の単独コマンドとして再実行してください。 wrapper は内部で codex companion を `--wait` で foreground 起動するため、 Bash 呼び出し自体が review 完了まで block しますが、 これが本プラグインの想定する正しい使い方です (= review 結果を観察してから push 判断する)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
 EOF
 )
 elif [ "$HAS_INDIRECTION" -eq 1 ]; then
@@ -560,7 +560,7 @@ elif [ "$HAS_INDIRECTION" -eq 1 ]; then
 
 本コマンドはコマンド置換 `$(...)` 等の間接実行 (indirection) を含むため、 `&` / `|` が wrapper 呼び出しの直前・直後に隣接していなくても **位置を問わず** deny しています (indirection 経由の実行は、 substring を含む segment と実際に wrapper を実行する segment の対応関係を本 parser が追跡できないため、 保守的に deny する必要があります)。
 
-対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent を再起動してください。
+対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
 EOF
 )
 else
@@ -569,7 +569,7 @@ else
 
 理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動したり、output を別 process が変換したりするため、 **codex-reviewer subagent が wrapper の verdict / findings を観察しない / 不完全にしか観察しない** 経路ができます。pending attestation と schema 上の report だけが揃っても、report の根拠となる review output を完全に観察した保証がないため、foreground review 要件に反します。
 
-対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent を再起動してください。
+対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
 EOF
 )
 fi
