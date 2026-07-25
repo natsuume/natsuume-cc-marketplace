@@ -18,14 +18,17 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v4.3.0 (前身: `pre-commit-review` v0.4.0)
+v5.0.0 (前身: `pre-commit-review` v0.4.0)
 
-### v4.2.2 → v4.3.0 の変更点
+### v4.2.2 → v5.0.0 の変更点
 
+- **互換破壊**: code-reviewer / security-reviewer が model: opus (+ effort: medium) を要求するようになった。Opus 5 を利用できないプラン・model 制限環境では既定の 3 subagent 並列フローが起動に失敗する (fallback は下記)
+- Opus 5 を利用できない環境では、該当 reviewer を `model: "sonnet"` の明示で単独再起動する fallback が使える (marker は subagent の agent_type に対して発行されるため fallback でも機能するが、実効モデルは opus ではなくなる)
 - code-reviewer / security-reviewer の frontmatter を `model: opus` + `effort: medium` に、codex-reviewer の frontmatter を `model: sonnet` に固定した (従来の `model: inherit` を廃止)
 - `/pre-push-review:review` の 3 起動仕様、単独再起動の案内、`block-pre-push.sh` / `block-bg-codex-wrapper.sh` の deny メッセージに、起動すべき model (`model: "opus"` / `model: "sonnet"`) を明示した
 - code-reviewer / security-reviewer の自己フィルタ (`Identify ONLY` / confidence 8/10 閾値での `Drop anything`) を廃止し、Exclusions を通過した候補を `Confidence: high | medium | low` で較正して全件報告する契約に変更した。選別は親セッションの分類パスに委ね、`/pre-push-review:review` の修正フローに `Confidence: low` 候補の分類指針を追加した
 - 理由: Claude 5 世代の運用制約 (Fable はサブエージェント禁止、Opus 5 は effort medium 固定、Sonnet 系はサブエージェント推奨) と、`CLAUDE_CODE_SUBAGENT_MODEL` 環境固定の廃止により、Fable セッションでは model 未指定の Agent 起動が agent-discipline の hook に deny されるため。あわせて Opus 5 / Sonnet 5 の literal な指示追従傾向により、confidence 閾値での自己フィルタが recall を下げる懸念に対応した
+- 既知の制約: marker は reviewer subagent の agent_type に対して発行され、実効モデルを検証しない。`CLAUDE_CODE_SUBAGENT_MODEL` は起動時の model 指定・frontmatter より優先され、`CLAUDE_CODE_EFFORT_LEVEL` は frontmatter の effort より優先されるため、これらを設定した環境では opus + effort medium の保証が失われる。本プラグインはこれらの環境変数を設定しない運用を前提とする
 
 ### v4.2.1 → v4.2.2 の変更点 (issue #280)
 

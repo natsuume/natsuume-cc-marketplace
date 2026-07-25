@@ -37,6 +37,7 @@ Phase 文脈を渡すのは code-reviewer と security-reviewer だけです。c
 - codex review wrapper が「codex プラグインが見つかりません」 で失敗 → 公式 codex プラグインを install (`claude plugin install codex@openai-codex`) してから codex-reviewer subagent を再起動
 - 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ 3 subagent を順次起動しても push gate の構造的保証は同じ (= 3 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。 順次起動する場合は **code-reviewer → security-reviewer → codex-reviewer** の順を推奨します (codex-reviewer は wrapper が codex CLI を foreground で hold するため最長になりやすく、 後段に置くと前段の review 結果を主 session が並行確認できる)。
 - 一部の marker のみ失効している場合は、 3 subagent 全部を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします)。 単独再起動時も上記 3 起動仕様と同じ model 指定を必ず添えてください (model 未指定の起動は Fable セッションでは agent-discipline の hook に deny されます)。 3 subagent 並列発出が既定であることは変わりません (= 初回実行や複数 marker が失効した場合は引き続き並列 3 起動を使う)。
+- code-reviewer / security-reviewer の起動が model 利用不可 (Opus 5 を提供しないプラン等) で失敗する場合は、該当 reviewer を `model: "sonnet"` の明示で単独再起動してよい (marker は subagent の agent_type に対して発行されるため fallback でも機能する)。この場合レビューの実効モデルは opus ではなくなる
 
 ## レビュー指摘の修正フロー (3 subagent 完了後)
 
