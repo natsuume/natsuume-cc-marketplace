@@ -92,6 +92,8 @@ Status: findings
 
 Derive a deterministic ID from `SEC`, the normalized location, and a non-sensitive cause-class slug. Never derive it from a command, payload, secret, or concrete environment value. If multiple reviewers or symptoms identify the same cause, report the cause once and refer to its finding ID instead of repeating mechanics.
 
+Keep the report length proportional to the findings: write each free-text field (Cause class, Violated invariant, Impact, Fix direction) as a single sentence, and do not add sections or narrative beyond this contract.
+
 Assign priority using the repository definitions:
 
 - **P1**: breaks a normal operation, has broad impact, stops autonomous work, or compromises safety

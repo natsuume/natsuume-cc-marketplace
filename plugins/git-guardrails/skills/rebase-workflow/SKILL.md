@@ -14,27 +14,25 @@ description: rebase を用いてリモートのデフォルトブランチの変
 
 ## 手順
 
-### 1. デフォルトブランチ名の取得
+### 1. リモート状態の更新とデフォルトブランチ名の取得
 
-デフォルトブランチ名はリポジトリによって異なります（master, main, develop など）。以下のコマンドで動的に取得します：
+デフォルトブランチ名はリポジトリによって異なります（master, main, develop など）。ローカルの `origin/HEAD` はリモート側のデフォルトブランチ変更に自動追従せず、古い値を正常終了で返しうるため、参照する前に次の 2 コマンドを順に実行してリモート状態を更新します：
 
 ```bash
-git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'
+git fetch --prune origin
 ```
-
-取得できない場合は、以下で設定できます：
 
 ```bash
 git remote set-head origin --auto
 ```
 
-### 2. リモートの変更を取得
+そのうえでデフォルトブランチ名を取得します：
 
 ```bash
-git fetch origin
+git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'
 ```
 
-### 3. rebase で変更を取り込む
+### 2. rebase で変更を取り込む
 
 ```bash
 git rebase origin/<default-branch>
@@ -46,7 +44,7 @@ git rebase origin/<default-branch>
 git rebase origin/master
 ```
 
-### 4. コンフリクト発生時の対処
+### 3. コンフリクト発生時の対処
 
 rebase 中にコンフリクトが発生した場合：
 
@@ -74,7 +72,7 @@ rebase 中にコンフリクトが発生した場合：
    git rebase --abort
    ```
 
-### 5. リモートへの push
+### 4. リモートへの push
 
 rebase 後は履歴が書き換わるため、通常の `git push` は失敗します。
 `--force-with-lease` を使って安全に push します：
@@ -87,32 +85,14 @@ git push --force-with-lease
 > これにより、他人の変更を誤って上書きすることを防げます。
 > 単なる `--force` は絶対に使用しないでください。
 
-## 一連のコマンド例
-
-```bash
-# デフォルトブランチ名を取得
-DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-
-# リモートの変更を取得
-git fetch origin
-
-# rebase で取り込み
-git rebase origin/$DEFAULT_BRANCH
-
-# リモートへ push（必要な場合）
-git push --force-with-lease
-```
-
 ## トラブルシューティング
 
 ### デフォルトブランチ名が取得できない
 
-```bash
-# リモートの HEAD を自動設定
-git remote set-head origin --auto
+手順 1 の 2 コマンド (fetch --prune / set-head --auto) を実行済みでも取得できない場合は、リモートとの接続と HEAD branch を確認してください：
 
-# 再度取得を試みる
-git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'
+```bash
+git remote show origin
 ```
 
 ### rebase 中に大量のコンフリクトが発生

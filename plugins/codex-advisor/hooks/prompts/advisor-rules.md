@@ -31,12 +31,7 @@
 
 **なぜ**: 同じ方針のまま局所修正と Codex review を反復すると、個別 finding は減っても問題設定・設計境界・検証戦略の誤りを温存し、20 サイクル規模まで収束しないことがある。5 サイクルごとに review とは独立した advisor へ根本方針を問い直せば、局所最適化を続ける前に course-correction を判断できる。
 
-**指示**: `pre-push-review:codex-reviewer` が `Status: pass|findings` で完了した Codex review、または `codex-advisor:review-runner` が成功した native review / adversarial review を 1 サイクルと数える。前回の根本方針 checkpoint から合計 5 サイクル完了したら、次の review または完了宣言より先に `/codex-advisor:consult` の review cadence mode で `codex-advisor:advisor-runner` を foreground 起動する。相談の `<review_cycle_checkpoint>` には次を含める。
-
-- 元の Goal、受入基準、変えてはならない制約
-- 直近 5 サイクルの主要 findings、施した修正、反復している傾向
-- 現在の問題設定・仮説・アプローチと、残っている不確実性
-- 「局所修正を続けるべきか、根本方針・設計境界・検証戦略を変えるべきか」という 1 つの質問
+**指示**: `pre-push-review:codex-reviewer` が `Status: pass|findings` で完了した Codex review、または `codex-advisor:review-runner` が成功した native review / adversarial review を 1 サイクルと数える。前回の根本方針 checkpoint から合計 5 サイクル完了したら、次の review または完了宣言より先に `/codex-advisor:consult` の review cadence mode で `codex-advisor:advisor-runner` を foreground 起動する。相談の `<review_cycle_checkpoint>` には、`/codex-advisor:consult` が定義する 4 項目 (Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い) を省略せず含める。
 
 助言はセクション 3 に従って採否を判断し、採用する course-correction または現方針を維持する根拠を記録してから review cycle を再開する。lifecycle hook は session ごとに両経路の成功 review を同じカウンターへ加算し、5 回目の完了後は main session の Stop と次の一般 review / pre-push Codex review 起動を block する。advisor runner が qualifying request と Codex の成功を `Codex-Advisor-Review-Cadence: satisfied` で証明したときだけカウンターを reset する。
 
@@ -89,7 +84,7 @@
 - review / adversarial-review: `codex-advisor:review-runner`
 - advisor / consult: `codex-advisor:advisor-runner`
 
-Agent call は `model: "sonnet"` と `run_in_background: false` を明示し (model 未指定の継承は Fable セッションで deny される)、request 本文・thread flag・review scope 等を self-contained に渡す。Claude Code が Agent を `async_launched` として受理した場合も、completion notification または TaskOutput を回収し、runner の terminal report が返るまで「起動した」とだけユーザへ報告して turn を終了しない。自律的に rescue / review を使うときは `/codex:rescue` / `/codex:review` を再入せず、上記 runner を直接起動する。
+Agent call は `model: "sonnet"` と `run_in_background: false` を明示し (model 未指定の継承は Fable セッションで deny される)、request 本文・thread flag・review scope 等を self-contained に渡す。Claude Code が Agent を `async_launched` として受理した場合の結果回収は `/codex-advisor:consult` の Claude Code host 節に従い、runner の terminal report が返るまで「起動した」とだけユーザへ報告して turn を終了しない。自律的に rescue / review を使うときは `/codex:rescue` / `/codex:review` を再入せず、上記 runner を直接起動する。
 
 PreToolUse gate は `codex-companion.mjs task|review|adversarial-review` と `run-codex-advisor.sh` の実行形を、対応 runner 以外では deny する。ユーザが旧 `/codex:rescue` / `/codex:review` を明示した場合も deny と Stop hook の案内に従い、追加質問をせず runner へ reroute する。runner が tracking failure を報告した場合は lifecycle hook が 1 回だけ新規 runner で retry を要求する。2 回目の失敗、cancel、未 install / 未認証、入力不正は terminal failure として明示報告する。
 

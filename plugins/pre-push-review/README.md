@@ -18,9 +18,13 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v5.1.0
+v5.1.1
 
 (前身: `pre-commit-review` v0.4.0)
+
+### v5.1.0 → v5.1.1 の変更点
+
+code-reviewer / security-reviewer subagent の report contract に、自由記述フィールド (Cause class / Violated invariant / Impact / Fix direction) を 1 文に制限する長さ較正を追加した。
 
 ### v5.0.0 → v5.1.0 の変更点
 

@@ -4,9 +4,15 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.22.0
+v0.22.1
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.22.0 → v0.22.1 の変更点
+
+- `discipline-fable.md` / `discipline-sonnet.md` / `discipline-opus.md` 間の drift を修復した (同一メッセージでの並列委任の明記、調査・レビュー・検証系への対象拡張、fork 例外の代替手段の明記、WebSearch 等の特定ツール使用例の補完、目的・背景を渡す意図の明記、state を書くテストでの隔離 TMPDIR 例の補完、`discipline-fable.md` / `discipline-sonnet.md` の xhigh ハードコード記述の除去)
+- `always-fable.md` の AskUserQuestion 必須化ルールに、質問要否の判断自体は変えないことと不要な質問を新設しないことの caveat を追加した
+- `subagent-rules.md` の bash-decompose ルールに、単一論理操作でのパイプライン使用を許容する規定を追加した
 
 ### v0.21.0 → v0.22.0 の変更点
 

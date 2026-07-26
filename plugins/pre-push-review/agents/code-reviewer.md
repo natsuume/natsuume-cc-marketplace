@@ -90,6 +90,8 @@ Status: findings
 
 Derive a deterministic ID from `CODE`, the normalized location, and a non-sensitive cause-class slug. Never derive it from a command, payload, secret, or concrete input value. If multiple symptoms share one cause, report one finding and describe the impact class rather than repeating mechanics.
 
+Keep the report length proportional to the findings: write each free-text field (Cause class, Violated invariant, Impact, Fix direction) as a single sentence, and do not add sections or narrative beyond this contract.
+
 Assign priority using the repository definitions:
 
 - **P1**: breaks a normal operation, has broad impact, stops autonomous work, or compromises safety
