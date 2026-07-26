@@ -4,7 +4,11 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.6.0
+v0.6.1
+
+### v0.6.0 → v0.6.1 の変更点
+
+rebase-workflow Skill の一括コマンド例 (bash-decompose 違反) を削除し、`origin/HEAD` の stale 対策 (`git fetch --prune` / `git remote set-head origin --auto` の先行実行) を追加した。
 
 ### v0.5.3 → v0.6.0 の変更点
 

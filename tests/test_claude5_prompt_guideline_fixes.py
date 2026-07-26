@@ -115,8 +115,12 @@ class SubagentRulesPipeAllowanceTest(unittest.TestCase):
     """
 
     def test_subagent_rules_allow_single_logical_operation_pipes(self) -> None:
+        """許容 (permission) の極性まで含む長いフレーズで検査する (「単一論理操作」
+        という語の出現だけでは、逆に禁止する文でも green になるため)。
+        """
         text = read(SUBAGENT_RULES)
-        self.assertIn("単一論理操作", text)
+        self.assertIn("パイプライン `|` は単一論理操作", text)
+        self.assertIn("で使う場合のみ許容", text)
 
 
 class RebaseWorkflowSkillTest(unittest.TestCase):

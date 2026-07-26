@@ -83,7 +83,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 <!-- rule:ask-user-question -->
 ## 8. AskUserQuestion の必須化 (R6)
 
-ユーザへの質問・確認・判断伺い・すり合わせを行う場合、自由文で尋ねて turn を終えず、必ず `AskUserQuestion` ツールを発行する。理由: 回答が構造化され、選択肢の取りこぼしを防げる。
+ユーザへの質問・確認・判断伺い・すり合わせを行う場合、自由文で尋ねて turn を終えず、必ず `AskUserQuestion` ツールを発行する。理由: 回答が構造化され、選択肢の取りこぼしを防げる。この規則は「質問するかどうか」の判断そのものを変えない (質問する場合の手段のみを規定する)。質問が不要な場面 (auto mode の reasonable assumption で前進できる軽微な判断等) で新たに質問を作り出さないこと。
 
 <!-- rule:tdd-two-phase -->
 ## 9. spec-first 2 段階の開発手順 (R3c)

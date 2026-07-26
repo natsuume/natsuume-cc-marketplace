@@ -6,7 +6,11 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v2.0.0
+v2.0.1
+
+### v2.0.0 → v2.0.1 の変更点
+
+`advisor-rules.md` の checkpoint 必須 4 項目と async 起動時の結果回収手順を、`/codex-advisor:consult` skill を正本とする参照に置換した (残余義務と起動安全項目は維持しつつ注入サイズを削減した)。
 
 ### v1.1.0 → v2.0.0 の変更点
 
