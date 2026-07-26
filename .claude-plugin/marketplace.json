@@ -11,63 +11,63 @@
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
       "description": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。",
-      "version": "0.5.3",
+      "version": "0.6.0",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
       "name": "enforce-draft-pr",
       "source": "./plugins/enforce-draft-pr",
       "description": "gh pr create に --draft を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft で作成させ、レビューを経て ready 化する運用を支える。",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
       "name": "auto-lint-check",
       "source": "./plugins/auto-lint-check",
       "description": "編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する。",
-      "version": "0.5.3",
+      "version": "0.6.0",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
     },
     {
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "git push 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "5.0.0",
+      "version": "5.1.0",
       "keywords": ["push", "review", "quality", "codex", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
       "name": "update-default-branch",
       "source": "./plugins/update-default-branch",
       "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "keywords": ["git", "pull", "prune", "branch-cleanup", "merge"]
     },
     {
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
       "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。/natsuume-statusline:setup で ~/.claude/settings.json に登録する。",
-      "version": "0.9.2",
+      "version": "0.10.0",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。",
-      "version": "0.21.0",
+      "version": "0.22.0",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
       "description": "UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う。",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     },
     {
       "name": "natsuume-writing",
       "source": "./plugins/natsuume-writing",
       "description": "natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) でテックブログ・技術書の執筆を支援するプラグイン。SessionStart でコア要点を常時注入し、outline / draft / review の 3 skill を提供する。",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook", "skill"]
     },
     {
@@ -81,28 +81,21 @@
       "name": "rate-limit",
       "source": "./plugins/rate-limit",
       "description": "Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する /rate-limit:status Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する /rate-limit:codex-status Skill を提供するプラグイン。/rate-limit:setup で statusline キャッシュ連携を登録する。",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "keywords": ["rate-limit", "usage-limit", "statusline", "oauth", "skill", "codex"]
     },
     {
       "name": "session-handoff",
       "source": "./plugins/session-handoff",
       "description": "context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (/clear・startup 後) にその内容を自動注入するプラグイン。/session-handoff:setup で natsuume-statusline のキャッシュ連携を登録する。",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "keywords": ["session-handoff", "context-window", "handoff", "session-start", "statusline", "cache", "hook", "skill"]
-    },
-    {
-      "name": "fable-risk-labeler",
-      "source": "./plugins/fable-risk-labeler",
-      "description": "GitHub issue と関連実装を Codex で調査し、Claude Fable 5 が正規操作を誤ブロックする可能性が高い作業へ model:prefer-gpt-5.6-sol ラベルを安全に付与する Skill を提供する。",
-      "version": "0.1.0",
-      "keywords": ["github", "issue", "triage", "label", "fable", "codex", "gpt-5.6-sol", "risk"]
     },
     {
       "name": "repo-analytics",
       "source": "./plugins/repo-analytics",
       "description": "GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン。",
-      "version": "0.1.3",
+      "version": "0.2.0",
       "keywords": ["analytics", "leadtime", "github", "metrics", "report"]
     }
   ]

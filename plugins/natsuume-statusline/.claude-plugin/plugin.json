@@ -1,6 +1,6 @@
 {
   "name": "natsuume-statusline",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。/natsuume-statusline:setup で ~/.claude/settings.json に登録する。"
 }

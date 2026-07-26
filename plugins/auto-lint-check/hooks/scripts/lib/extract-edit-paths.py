@@ -1,41 +1,11 @@
 #!/usr/bin/env python3
-"""Emit edited file paths from Claude or Codex hook input as NUL records."""
+"""Emit edited file paths from Claude hook input as NUL records."""
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
-
-
-FILE_HEADER_RE = re.compile(r"^\*\*\* (Add|Update|Delete) File: (.+)$")
-MOVE_HEADER_RE = re.compile(r"^\*\*\* Move to: (.+)$")
-
-
-def _paths_from_apply_patch(command: str) -> list[str]:
-    paths: list[str] = []
-    action: str | None = None
-    candidate: str | None = None
-
-    def flush() -> None:
-        nonlocal action, candidate
-        if action in {"Add", "Update"} and candidate:
-            paths.append(candidate)
-        action = None
-        candidate = None
-
-    for line in command.splitlines():
-        file_match = FILE_HEADER_RE.match(line)
-        if file_match is not None:
-            flush()
-            action, candidate = file_match.groups()
-            continue
-        move_match = MOVE_HEADER_RE.match(line)
-        if move_match is not None and action == "Update":
-            candidate = move_match.group(1)
-    flush()
-    return paths
 
 
 def extract_paths(payload: dict[object, object]) -> list[str]:
@@ -47,9 +17,6 @@ def extract_paths(payload: dict[object, object]) -> list[str]:
     if tool_name in {"Write", "Edit", "MultiEdit"}:
         file_path = tool_input.get("file_path")
         candidates = [file_path] if isinstance(file_path, str) else []
-    elif tool_name == "apply_patch":
-        command = tool_input.get("command")
-        candidates = _paths_from_apply_patch(command) if isinstance(command, str) else []
     else:
         candidates = []
 

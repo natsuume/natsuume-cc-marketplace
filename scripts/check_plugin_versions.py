@@ -1,5 +1,28 @@
 #!/usr/bin/env python3
-"""Require independent runtime semver bumps for changed plugins."""
+"""Require a semver bump for changed plugins, and keep version metadata consistent.
+
+Checks enforced (see README / issue history for the full rationale):
+  a. a changed plugin's current version must be greater than its base version
+  b. no plugin's version may regress (current < base)
+  c. plugins/<name>/.claude-plugin/plugin.json version must match the
+     corresponding .claude-plugin/marketplace.json entry version
+  d. the marketplace.json plugin name set and the plugins/ directory name set
+     (directories with a .claude-plugin/plugin.json) must match, both ways
+  e. the repository root README.md plugin table must list every marketplace
+     plugin with a version matching plugin.json
+  f. plugins/<name>/README.md must have a `## バージョン` heading followed by
+     `vX.Y.Z` matching plugin.json
+
+"Changed" plugin detection (checks 1-4):
+  1. git diff shows a change under plugins/<name>/ (a change limited to
+     plugins/<name>/.claude-plugin/plugin.json does not count on its own)
+  2. plugins/<name>/.claude-plugin/plugin.json changed in a field other than
+     "version"
+  3. the plugin's marketplace.json entry changed in a field other than
+     "version"
+  4. marketplace.json's global metadata (everything other than "plugins")
+     changed, which marks every plugin as changed
+"""
 
 from __future__ import annotations
 
@@ -15,6 +38,10 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+PLUGIN_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json"
+README_TABLE_ROW_RE = re.compile(r"^\|\s*\[([^\]]+)\]\([^)]*\)\s*\|\s*([^|]+?)\s*\|")
+PLUGIN_README_HEADING_RE = re.compile(r"^##\s+バージョン\s*$")
+PLUGIN_README_VERSION_LINE_RE = re.compile(r"^v(\d+\.\d+\.\d+)\s*$")
 
 
 class VersionPolicyError(RuntimeError):
@@ -26,16 +53,6 @@ def parse_semver(value: str) -> tuple[int, int, int]:
     if match is None:
         raise VersionPolicyError(f"invalid strict semver: {value!r}")
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
-
-
-def is_feature_or_breaking_bump(
-    previous: tuple[int, int, int], current: tuple[int, int, int]
-) -> bool:
-    """Return whether current is at least a minor bump from previous."""
-
-    return current[0] > previous[0] or (
-        current[0] == previous[0] and current[1] > previous[1]
-    )
 
 
 def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
@@ -91,108 +108,17 @@ def _marketplace_plugins(payload: dict[str, Any] | None) -> dict[str, dict[str, 
     return result
 
 
-def _without_digest_acknowledgements(value: Any) -> Any:
-    """Remove Codex release metadata that does not change its install surface."""
-
-    normalized = copy.deepcopy(value)
-    if not isinstance(normalized, dict):
-        return normalized
-    normalized.pop("version", None)
-    normalized.pop("versioning", None)
-    distribution = normalized.get("distribution")
-    if isinstance(distribution, dict) and distribution.get("status") == "available":
-        normalized.pop("distribution", None)
-    compatibility = normalized.get("compatibility")
-    if not isinstance(compatibility, dict):
-        return normalized
-    compatibility.pop("sourceTreeDigest", None)
-    components = compatibility.get("components")
-    if isinstance(components, list):
-        for component in components:
-            if isinstance(component, dict):
-                component.pop("sourceDigest", None)
-    return normalized
-
-
-def _port_plugins(payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    if payload is None:
-        return {}
-    plugins = payload.get("plugins")
-    if not isinstance(plugins, dict):
-        raise VersionPolicyError("codex port config plugins must be an object")
-    if not all(
-        isinstance(name, str) and isinstance(value, dict)
-        for name, value in plugins.items()
-    ):
-        raise VersionPolicyError("codex port config contains an invalid plugin entry")
-    return plugins
-
-
-def _distribution_status(plugin: dict[str, Any] | None) -> str:
-    """Return the effective distribution status, including schema v3 defaults."""
-
-    if not isinstance(plugin, dict):
-        return "available"
-    distribution = plugin.get("distribution")
-    if not isinstance(distribution, dict):
-        return "available"
-    status = distribution.get("status")
-    return status if isinstance(status, str) else "available"
-
-
-def _excluded_in_both(
-    plugin_name: str,
-    current_plugins: dict[str, dict[str, Any]],
-    base_plugins: dict[str, dict[str, Any]],
-) -> bool:
-    return (
-        _distribution_status(current_plugins.get(plugin_name)) == "excluded"
-        and _distribution_status(base_plugins.get(plugin_name)) == "excluded"
-    )
-
-
-def _scope_matches(path: str, scope: str) -> bool:
-    if scope.endswith("/"):
-        return path.startswith(scope)
-    return path == scope
-
-
-def _runtime_scope_for_path(path: str, port: dict[str, Any] | None) -> set[str]:
-    """Classify a plugin-relative path, defaulting unknown paths to shared."""
-
-    if path == ".claude-plugin/plugin.json" or path.startswith(".codex-plugin/"):
-        return set()
-    distribution = port.get("distribution") if isinstance(port, dict) else None
-    if isinstance(distribution, dict) and distribution.get("status") == "excluded":
-        return {"claude"}
-    if path == "README.md":
-        return {"either"}
-    versioning = port.get("versioning") if isinstance(port, dict) else None
-    if not isinstance(versioning, dict):
-        return {"claude", "codex"}
-    matches: set[str] = set()
-    for runtime, field in (
-        ("claude", "claudeOnlyPaths"),
-        ("codex", "codexOnlyPaths"),
-    ):
-        scopes = versioning.get(field, [])
-        if isinstance(scopes, list) and any(
-            isinstance(scope, str) and _scope_matches(path, scope)
-            for scope in scopes
-        ):
-            matches.add(runtime)
-    if len(matches) > 1:
-        raise VersionPolicyError(
-            f"plugin path is assigned to both runtime version scopes: {path}"
-        )
-    return matches or {"claude", "codex"}
-
-
-def _manifest_without_version(value: dict[str, Any] | None) -> dict[str, Any] | None:
+def _without_version(value: dict[str, Any] | None) -> dict[str, Any] | None:
     if value is None:
         return None
     normalized = copy.deepcopy(value)
     normalized.pop("version", None)
+    return normalized
+
+
+def _marketplace_global_metadata(payload: dict[str, Any] | None) -> dict[str, Any]:
+    normalized = dict(payload or {})
+    normalized.pop("plugins", None)
     return normalized
 
 
@@ -203,332 +129,278 @@ def comparison_range(base_revision: str, *, direct: bool) -> str:
     return f"{base_revision}{separator}HEAD"
 
 
-def changed_runtime_plugins(
-    base_revision: str, *, direct: bool = False
-) -> dict[str, set[str]]:
-    """Return plugin names requiring Claude, Codex, or either runtime bump."""
+def _current_plugin_directory_names() -> set[str]:
+    """Return plugins/ subdirectory names that have a .claude-plugin/plugin.json."""
 
-    current_port = load_current_json(ROOT / "codex" / "marketplace-overrides.json")
-    base_port = read_json_at_revision(base_revision, "codex/marketplace-overrides.json")
-    current_port_plugins = _port_plugins(current_port)
-    base_port_plugins = _port_plugins(base_port)
+    plugins_dir = ROOT / "plugins"
+    if not plugins_dir.is_dir():
+        return set()
+    return {
+        child.name
+        for child in plugins_dir.iterdir()
+        if child.is_dir() and (child / PLUGIN_MANIFEST_RELATIVE_PATH).is_file()
+    }
 
-    changed = git(
-        "diff", "--name-only", "-z", comparison_range(base_revision, direct=direct)
+
+def _plugin_directory_names_at_revision(revision: str) -> set[str]:
+    """Same as _current_plugin_directory_names, but read from a Git revision."""
+
+    result = git("ls-tree", "-r", "--name-only", revision, "--", "plugins", check=False)
+    if result.returncode != 0:
+        return set()
+    names: set[str] = set()
+    for raw_line in result.stdout.decode("utf-8", errors="surrogateescape").splitlines():
+        parts = Path(raw_line).parts
+        if len(parts) == 4 and parts[0] == "plugins" and Path(*parts[2:]).as_posix() == (
+            PLUGIN_MANIFEST_RELATIVE_PATH
+        ):
+            names.add(parts[1])
+    return names
+
+
+def _plugin_relative_path(path: str) -> tuple[str, str] | None:
+    """Split a repo-relative path into (plugin_name, plugin_relative_path)."""
+
+    parts = Path(path).parts
+    if len(parts) >= 3 and parts[0] == "plugins":
+        return parts[1], Path(*parts[2:]).as_posix()
+    return None
+
+
+def changed_plugin_names(base_revision: str, *, direct: bool = False) -> set[str]:
+    """Return plugin names considered changed under checks 1-4."""
+
+    changed: set[str] = set()
+
+    # check 1: a path change under plugins/<name>/, except a change limited to
+    # the plugin manifest file itself (that is covered separately by check 2,
+    # which ignores version-only edits).
+    # --no-renames keeps a moved file listed as delete + add so that the source
+    # plugin of a cross-directory move is still attributed as changed.
+    diff_output = git(
+        "diff",
+        "--no-renames",
+        "--name-only",
+        "-z",
+        comparison_range(base_revision, direct=direct),
     ).stdout
-    impacts = {"claude": set(), "codex": set(), "either": set()}
-    for raw_path in changed.split(b"\0"):
+    for raw_path in diff_output.split(b"\0"):
         if not raw_path:
             continue
-        path = raw_path.decode("utf-8", errors="surrogateescape")
-        parts = Path(path).parts
-        if len(parts) >= 3 and parts[0] == "plugins":
-            name = parts[1]
-            relative = Path(*parts[2:]).as_posix()
-            port = current_port_plugins.get(name) or base_port_plugins.get(name)
-            for runtime in _runtime_scope_for_path(relative, port):
-                impacts[runtime].add(name)
+        parsed = _plugin_relative_path(raw_path.decode("utf-8", errors="surrogateescape"))
+        if parsed is None:
+            continue
+        name, relative = parsed
+        if relative == PLUGIN_MANIFEST_RELATIVE_PATH:
+            continue
+        changed.add(name)
 
-    current_marketplace_payload = load_current_json(
-        ROOT / ".claude-plugin" / "marketplace.json"
+    # check 2: plugin.json changed in a field other than "version".
+    plugin_names = _current_plugin_directory_names() | _plugin_directory_names_at_revision(
+        base_revision
     )
+    for name in plugin_names:
+        current_manifest = load_current_json(ROOT / "plugins" / name / PLUGIN_MANIFEST_RELATIVE_PATH)
+        base_manifest = read_json_at_revision(
+            base_revision, f"plugins/{name}/{PLUGIN_MANIFEST_RELATIVE_PATH}"
+        )
+        if _without_version(current_manifest) != _without_version(base_manifest):
+            changed.add(name)
+
+    current_marketplace_payload = load_current_json(ROOT / ".claude-plugin" / "marketplace.json")
     base_marketplace_payload = read_json_at_revision(
         base_revision, ".claude-plugin/marketplace.json"
     )
     current_marketplace = _marketplace_plugins(current_marketplace_payload)
     base_marketplace = _marketplace_plugins(base_marketplace_payload)
-    for name in set(current_marketplace) & set(base_marketplace):
-        current_entry = dict(current_marketplace[name])
-        base_entry = dict(base_marketplace[name])
-        current_entry.pop("version", None)
-        base_entry.pop("version", None)
-        if current_entry != base_entry:
-            impacts["claude"].add(name)
-            if not _excluded_in_both(
-                name, current_port_plugins, base_port_plugins
-            ):
-                impacts["codex"].add(name)
 
-    current_marketplace_global = dict(current_marketplace_payload or {})
-    base_marketplace_global = dict(base_marketplace_payload or {})
-    current_marketplace_global.pop("plugins", None)
-    base_marketplace_global.pop("plugins", None)
-    if current_marketplace_global != base_marketplace_global:
-        names = set(current_marketplace) | set(base_marketplace)
-        impacts["claude"].update(names)
-        impacts["codex"].update(
-            name
-            for name in names
-            if not _excluded_in_both(
-                name, current_port_plugins, base_port_plugins
-            )
-        )
-
-    for name in set(current_port_plugins) | set(base_port_plugins):
-        current_distribution = current_port_plugins.get(name, {}).get("distribution")
-        base_distribution = base_port_plugins.get(name, {}).get("distribution")
-        if (
-            isinstance(current_distribution, dict)
-            and current_distribution.get("status") == "excluded"
-            and isinstance(base_distribution, dict)
-            and base_distribution.get("status") == "excluded"
+    # check 3: a marketplace.json entry changed in a field other than "version".
+    for name in set(current_marketplace) | set(base_marketplace):
+        if _without_version(current_marketplace.get(name)) != _without_version(
+            base_marketplace.get(name)
         ):
-            continue
-        current_plugin = _without_digest_acknowledgements(
-            current_port_plugins.get(name)
-        )
-        base_plugin = _without_digest_acknowledgements(base_port_plugins.get(name))
-        if current_plugin != base_plugin:
-            impacts["codex"].add(name)
-    current_port_global = dict(current_port or {})
-    base_port_global = dict(base_port or {})
-    current_port_global.pop("plugins", None)
-    base_port_global.pop("plugins", None)
-    current_port_global.pop("schemaVersion", None)
-    base_port_global.pop("schemaVersion", None)
-    if current_port_global != base_port_global:
-        impacts["codex"].update(
-            name
-            for name in set(current_port_plugins) | set(base_port_plugins)
-            if not _excluded_in_both(
-                name, current_port_plugins, base_port_plugins
-            )
-        )
+            changed.add(name)
 
-    all_names = (
-        set(current_marketplace)
-        | set(base_marketplace)
-        | set(current_port_plugins)
-        | set(base_port_plugins)
-    )
-    for name in all_names:
-        current_manifest = load_current_json(
-            ROOT / "plugins" / name / ".claude-plugin" / "plugin.json"
-        )
-        base_manifest = read_json_at_revision(
-            base_revision, f"plugins/{name}/.claude-plugin/plugin.json"
-        )
-        if _manifest_without_version(current_manifest) != _manifest_without_version(
-            base_manifest
-        ):
-            impacts["claude"].add(name)
-            if not _excluded_in_both(
-                name, current_port_plugins, base_port_plugins
-            ):
-                impacts["codex"].add(name)
-    return impacts
+    # check 4: marketplace.json global metadata (everything but "plugins")
+    # changed, which marks every known plugin as changed.
+    if _marketplace_global_metadata(current_marketplace_payload) != _marketplace_global_metadata(
+        base_marketplace_payload
+    ):
+        changed.update(set(current_marketplace) | set(base_marketplace))
+
+    return changed
 
 
-def changed_plugin_names(base_revision: str, *, direct: bool = False) -> set[str]:
-    """Compatibility helper returning the union of all runtime impacts."""
-
-    impacts = changed_runtime_plugins(base_revision, direct=direct)
-    return set().union(*impacts.values())
-
-
-def current_claude_version(plugin_name: str) -> str | None:
-    manifest = load_current_json(
-        ROOT / "plugins" / plugin_name / ".claude-plugin" / "plugin.json"
-    )
+def current_manifest_version(plugin_name: str) -> str | None:
+    manifest = load_current_json(ROOT / "plugins" / plugin_name / PLUGIN_MANIFEST_RELATIVE_PATH)
     if manifest is None:
         return None
     value = manifest.get("version")
     if not isinstance(value, str):
-        raise VersionPolicyError(f"{plugin_name}: current manifest version is missing")
+        raise VersionPolicyError(f"{plugin_name}: current plugin.json version is missing")
     return value
 
 
-def base_claude_version(base_revision: str, plugin_name: str) -> str | None:
+def base_manifest_version(base_revision: str, plugin_name: str) -> str | None:
     manifest = read_json_at_revision(
-        base_revision, f"plugins/{plugin_name}/.claude-plugin/plugin.json"
+        base_revision, f"plugins/{plugin_name}/{PLUGIN_MANIFEST_RELATIVE_PATH}"
     )
     if manifest is None:
         return None
     value = manifest.get("version")
     if not isinstance(value, str):
-        raise VersionPolicyError(f"{plugin_name}: base manifest version is missing")
-    return value
-
-
-def current_codex_version(plugin_name: str) -> str | None:
-    port = load_current_json(ROOT / "codex" / "marketplace-overrides.json")
-    plugin = _port_plugins(port).get(plugin_name)
-    if plugin is None:
-        return None
-    value = plugin.get("version")
-    if not isinstance(value, str):
-        raise VersionPolicyError(f"{plugin_name}: current Codex version is missing")
-    return value
-
-
-def base_codex_version(base_revision: str, plugin_name: str) -> str | None:
-    port = read_json_at_revision(base_revision, "codex/marketplace-overrides.json")
-    plugin = _port_plugins(port).get(plugin_name)
-    if plugin is not None and "version" in plugin:
-        value = plugin["version"]
-        if not isinstance(value, str):
-            raise VersionPolicyError(f"{plugin_name}: base Codex version is invalid")
-        return value
-
-    # schemaVersion 3 generated the Codex version from the Claude manifest. Use
-    # the committed generated manifest as the migration baseline so adopting the
-    # independent source does not force a release by itself.
-    manifest = read_json_at_revision(
-        base_revision, f"plugins/{plugin_name}/.codex-plugin/plugin.json"
-    )
-    if manifest is None:
-        return None
-    value = manifest.get("version")
-    if not isinstance(value, str):
-        raise VersionPolicyError(f"{plugin_name}: base Codex manifest version is missing")
+        raise VersionPolicyError(f"{plugin_name}: base plugin.json version is missing")
     return value
 
 
 def _parsed_version(
-    plugin_name: str, runtime: str, value: str | None, *, base: bool
+    plugin_name: str, value: str | None, *, base: bool
 ) -> tuple[int, int, int] | None:
     if value is None:
         return None
     try:
         return parse_semver(value)
     except VersionPolicyError as exc:
-        prefix = "base " if base else ""
-        raise VersionPolicyError(f"{plugin_name}: {prefix}{runtime} {exc}") from exc
+        prefix = "base " if base else "current "
+        raise VersionPolicyError(f"{plugin_name}: {prefix}{exc}") from exc
 
 
-def _require_runtime_bump(
-    failures: list[str],
-    plugin_name: str,
-    runtime: str,
-    current: str | None,
-    previous: str | None,
-) -> None:
-    current_tuple = _parsed_version(plugin_name, runtime, current, base=False)
-    previous_tuple = _parsed_version(plugin_name, runtime, previous, base=True)
-    if current_tuple is None:
-        return
-    if previous_tuple is not None and current_tuple <= previous_tuple:
-        failures.append(
-            f"{plugin_name}: {runtime} changes require {runtime} version > "
-            f"{previous} (current {current})"
-        )
+def _root_readme_plugin_versions() -> dict[str, str]:
+    """Parse the root README.md plugin table: `| [name](#anchor) | X.Y.Z | ... |`."""
+
+    readme_path = ROOT / "README.md"
+    if not readme_path.is_file():
+        return {}
+    versions: dict[str, str] = {}
+    for line in readme_path.read_text(encoding="utf-8").splitlines():
+        match = README_TABLE_ROW_RE.match(line.strip())
+        if match is None:
+            continue
+        versions[match.group(1)] = match.group(2)
+    return versions
+
+
+def _plugin_readme_version(plugin_name: str) -> str | None:
+    """Read the `vX.Y.Z` line under the `## バージョン` heading (blank lines allowed)."""
+
+    readme_path = ROOT / "plugins" / plugin_name / "README.md"
+    if not readme_path.is_file():
+        return None
+    lines = readme_path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if PLUGIN_README_HEADING_RE.match(line.strip()) is None:
+            continue
+        for candidate in lines[index + 1 :]:
+            stripped = candidate.strip()
+            if stripped == "":
+                continue
+            match = PLUGIN_README_VERSION_LINE_RE.match(stripped)
+            return match.group(1) if match else None
+    return None
 
 
 def check_versions(base_revision: str, *, direct: bool = False) -> list[str]:
     git("rev-parse", "--verify", f"{base_revision}^{{commit}}")
-    impacts = changed_runtime_plugins(base_revision, direct=direct)
-    failures: list[str] = []
+    changed = changed_plugin_names(base_revision, direct=direct)
+
     current_marketplace = _marketplace_plugins(
         load_current_json(ROOT / ".claude-plugin" / "marketplace.json")
     )
-    base_marketplace = _marketplace_plugins(
-        read_json_at_revision(base_revision, ".claude-plugin/marketplace.json")
-    )
-    current_port = _port_plugins(
-        load_current_json(ROOT / "codex" / "marketplace-overrides.json")
-    )
-    base_port = _port_plugins(
-        read_json_at_revision(base_revision, "codex/marketplace-overrides.json")
-    )
-    all_names = (
-        set().union(*impacts.values())
-        | set(current_marketplace)
-        | set(base_marketplace)
-        | set(current_port)
-        | set(base_port)
-    )
+    plugin_directory_names = _current_plugin_directory_names()
+
+    failures: list[str] = []
+
+    # checks a-c: per-plugin version bump / regression / manifest-marketplace
+    # consistency, evaluated over every plugin known in the current state or
+    # touched by this change.
+    all_names = set(current_marketplace) | plugin_directory_names | changed
     for plugin_name in sorted(all_names):
-        versions = {
-            "claude": (
-                current_claude_version(plugin_name),
-                base_claude_version(base_revision, plugin_name),
-            ),
-            "codex": (
-                current_codex_version(plugin_name),
-                base_codex_version(base_revision, plugin_name),
-            ),
-        }
-        for runtime in ("claude", "codex"):
-            current, previous = versions[runtime]
-            current_tuple = _parsed_version(
-                plugin_name, runtime, current, base=False
-            )
-            previous_tuple = _parsed_version(
-                plugin_name, runtime, previous, base=True
-            )
-            if (
-                current_tuple is not None
-                and previous_tuple is not None
-                and current_tuple < previous_tuple
-            ):
-                failures.append(
-                    f"{plugin_name}: {runtime} version regressed from {previous} "
-                    f"to {current}"
-                )
-        for runtime in ("claude", "codex"):
-            if plugin_name in impacts[runtime]:
-                _require_runtime_bump(
-                    failures,
-                    plugin_name,
-                    runtime,
-                    *versions[runtime],
-                )
-        current_distribution = _distribution_status(current_port.get(plugin_name))
-        base_distribution = _distribution_status(base_port.get(plugin_name))
-        current_codex, base_codex = versions["codex"]
-        current_codex_tuple = _parsed_version(
-            plugin_name, "codex", current_codex, base=False
-        )
-        base_codex_tuple = _parsed_version(
-            plugin_name, "codex", base_codex, base=True
-        )
-        codex_version_increased = (
-            current_codex_tuple is not None
-            and base_codex_tuple is not None
-            and current_codex_tuple > base_codex_tuple
-        )
+        current_version = current_manifest_version(plugin_name)
+        base_version = base_manifest_version(base_revision, plugin_name)
+        current_tuple = _parsed_version(plugin_name, current_version, base=False)
+        previous_tuple = _parsed_version(plugin_name, base_version, base=True)
+
+        # check b: no plugin's version may regress.
         if (
-            base_distribution == "available"
-            and current_distribution == "excluded"
-            and codex_version_increased
-            and current_codex_tuple[0] <= base_codex_tuple[0]
+            current_tuple is not None
+            and previous_tuple is not None
+            and current_tuple < previous_tuple
         ):
             failures.append(
-                f"{plugin_name}: Codex distribution available -> excluded requires "
-                f"a major version bump from {base_codex} (current {current_codex})"
+                f"{plugin_name}: version regressed from {base_version} to {current_version}"
             )
+
+        # check a: a changed plugin must have current version > base version.
         if (
-            base_distribution == "excluded"
-            and current_distribution == "available"
-            and codex_version_increased
-            and not is_feature_or_breaking_bump(
-                base_codex_tuple, current_codex_tuple
-            )
+            plugin_name in changed
+            and current_tuple is not None
+            and previous_tuple is not None
+            and current_tuple <= previous_tuple
         ):
             failures.append(
-                f"{plugin_name}: Codex distribution excluded -> available requires "
-                f"a minor or major version bump from {base_codex} "
-                f"(current {current_codex})"
+                f"{plugin_name}: changed plugin requires version > {base_version} "
+                f"(current {current_version})"
             )
-        if plugin_name in impacts["either"]:
-            bumped = False
-            for runtime in ("claude", "codex"):
-                current, previous = versions[runtime]
-                current_tuple = _parsed_version(
-                    plugin_name, runtime, current, base=False
+
+        # check c: plugin.json version must match the marketplace.json entry.
+        if plugin_name in plugin_directory_names and plugin_name in current_marketplace:
+            marketplace_version = current_marketplace[plugin_name].get("version")
+            if not isinstance(marketplace_version, str):
+                raise VersionPolicyError(
+                    f"{plugin_name}: marketplace.json entry version is missing"
                 )
-                previous_tuple = _parsed_version(
-                    plugin_name, runtime, previous, base=True
-                )
-                if current_tuple is not None and (
-                    previous_tuple is None or current_tuple > previous_tuple
-                ):
-                    bumped = True
-            if not bumped:
+            parse_semver(marketplace_version)
+            if marketplace_version != current_version:
                 failures.append(
-                    f"{plugin_name}: plugin documentation changes require at least "
-                    "one runtime version bump"
+                    f"{plugin_name}: plugin.json version ({current_version}) does not "
+                    f"match marketplace.json version ({marketplace_version})"
                 )
+
+    # check d: the marketplace.json plugin name set and the plugins/ directory
+    # name set must match, both ways.
+    for name in sorted(set(current_marketplace) - plugin_directory_names):
+        failures.append(
+            f"{name}: marketplace.json lists this plugin but "
+            f"plugins/{name}/{PLUGIN_MANIFEST_RELATIVE_PATH} is missing"
+        )
+    for name in sorted(plugin_directory_names - set(current_marketplace)):
+        failures.append(
+            f"{name}: plugins/{name}/{PLUGIN_MANIFEST_RELATIVE_PATH} exists but "
+            "marketplace.json does not list it"
+        )
+
+    # check e: the root README.md plugin table must list every marketplace
+    # plugin with a version matching plugin.json.
+    readme_versions = _root_readme_plugin_versions()
+    for name in sorted(current_marketplace):
+        if name not in readme_versions:
+            failures.append(f"{name}: README.md plugin table is missing a row for this plugin")
+            continue
+        manifest_version = current_manifest_version(name)
+        if manifest_version is not None and readme_versions[name] != manifest_version:
+            failures.append(
+                f"{name}: README.md table version ({readme_versions[name]}) does not "
+                f"match plugin.json version ({manifest_version})"
+            )
+
+    # check f: plugins/<name>/README.md must carry a `## バージョン` heading with
+    # a `vX.Y.Z` line matching plugin.json.
+    for name in sorted(plugin_directory_names):
+        manifest_version = current_manifest_version(name)
+        if manifest_version is None:
+            continue
+        readme_version = _plugin_readme_version(name)
+        if readme_version is None:
+            failures.append(
+                f"{name}: plugins/{name}/README.md is missing a `## バージョン` heading "
+                "with a vX.Y.Z line"
+            )
+        elif readme_version != manifest_version:
+            failures.append(
+                f"{name}: plugins/{name}/README.md version ({readme_version}) does not "
+                f"match plugin.json version ({manifest_version})"
+            )
+
     return failures
 
 
@@ -554,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
         for failure in failures:
             print(f"error: {failure}", file=sys.stderr)
         return 1
-    print(f"OK: affected runtime versions are greater than {args.base_revision}.")
+    print(f"OK: affected plugin versions are greater than {args.base_revision}.")
     return 0
 
 

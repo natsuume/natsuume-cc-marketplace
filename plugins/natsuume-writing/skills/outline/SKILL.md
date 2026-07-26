@@ -9,7 +9,7 @@ description: 壁打ちで技術記事・技術書の章立て・section構成を
 
 この `SKILL.md` を含む `skills/outline/` の 2 階層上を `<plugin-root>` として解決する。通常の Skill 実行では hook 用の `${CLAUDE_PLUGIN_ROOT}` が設定される保証はないため、reference file は実パスから解決する。
 
-以下の「ユーザーに確認」は、実行 surface が提供する対話手段を使う。Claude Code では `AskUserQuestion`、Codex では通常のユーザー質問または利用可能な同等機構を使い、未確定事項を推測で埋めない。
+以下の「ユーザーに確認」は `AskUserQuestion` を使い、未確定事項を推測で埋めない。
 
 対象は Markdown ファイルのみです (ReVIEW 形式の技術書原稿はスコープ外のため扱いません)。
 

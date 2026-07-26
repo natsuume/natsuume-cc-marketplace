@@ -111,7 +111,7 @@ def _load_compute_leadtime():
 
     通常の `import compute_leadtime` は「sys.path 操作より前に import 文が来る」
     という lint 制約 (E402) に抵触するため、既存テスト
-    (`tests/test_sync_codex_marketplace.py`) と同じ `importlib.util` 経由の
+    と同じ `importlib.util` 経由の
     明示 import で置き換える。
     """
     spec = importlib.util.spec_from_file_location(

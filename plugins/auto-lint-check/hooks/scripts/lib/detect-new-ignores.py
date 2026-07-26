@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detect newly inserted lint/formatter ignores in Claude/Codex edit payloads.
+"""Detect newly inserted lint/formatter ignores in Claude edit payloads.
 
 Reads a hook payload (JSON) from stdin and prints up to 3 newly-added matches
 to stdout. Exit codes:
@@ -13,7 +13,6 @@ keys between "old" and "new" texts:
   - Edit       old=tool_input.old_string, new=tool_input.new_string
   - MultiEdit  old=join(edits[].old_string), new=join(edits[].new_string)
   - Write      new=tool_input.content; old=existing file content (if any)
-  - apply_patch old=removed patch lines, new=added patch lines
 
 If the multiset count of a given (label, line_text) in "new" exceeds the count
 in "old", the difference is reported as newly added. This avoids false
@@ -84,19 +83,6 @@ def _collect_old_new(payload: dict) -> tuple[str, str] | None:
         old_text = "\n".join(e.get("old_string", "") or "" for e in edits)
         new_text = "\n".join(e.get("new_string", "") or "" for e in edits)
         return old_text, new_text
-
-    if tool_name == "apply_patch":
-        command = tool_input.get("command", "") or ""
-        if not isinstance(command, str):
-            return None
-        old_lines: list[str] = []
-        new_lines: list[str] = []
-        for line in command.splitlines():
-            if line.startswith("-"):
-                old_lines.append(line[1:])
-            elif line.startswith("+"):
-                new_lines.append(line[1:])
-        return "\n".join(old_lines), "\n".join(new_lines)
 
     return None
 

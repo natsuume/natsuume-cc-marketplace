@@ -1,5 +1,5 @@
 {
-  "description": "session-handoff の配送経路: Claude Code では PostToolUse (matcher \"*\") で context 使用率キャッシュを参照し、閾値超過時に handoff 作成指示を 1 セッション 1 回注入する。Codex では PreCompact (matcher \"auto|manual\") と Codex 固有 turn_id で runtime を判定し、transcript 末尾を read-only/ephemeral な nested Codex に要約させ、pending handoff を atomic 保存する。SessionStart の clear|startup は既存 pending 全般、resume|compact は同一 session_id の pending-codex-* だけを at-most-once 注入する。失敗時は session/compaction を止めない。詳細な保証差と検証方法は plugin README を参照。",
+  "description": "session-handoff の配送経路: PostToolUse (matcher \"*\") で context 使用率キャッシュを参照し、閾値超過時に handoff 作成指示を 1 セッション 1 回注入する。SessionStart の clear|startup は既存 pending を at-most-once 注入する。失敗時は session を止めない。詳細な保証差と検証方法は plugin README を参照。",
   "hooks": {
     "PostToolUse": [
       {
@@ -12,21 +12,9 @@
         ]
       }
     ],
-    "PreCompact": [
-      {
-        "matcher": "auto|manual",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/save-codex-handoff.sh",
-            "timeout": 180
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
-        "matcher": "clear|startup|resume|compact",
+        "matcher": "clear|startup",
         "hooks": [
           {
             "type": "command",

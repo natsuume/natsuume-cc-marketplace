@@ -1,11 +1,9 @@
 #!/bin/bash
 # mark-review.sh - marker writer の低レベル診断 helper (通常フローでは使用しない)。
 #
-# Claude Code では auto-mark.sh が Agent/Task の完了 payload を検証して 3 reviewer の
-# marker を書く (Codex は wrapper pending attestation の一致も検証)。Codex runtime では
-# codex-auto-mark.sh が project custom agent の SubagentStop
-# payload と report footer を検証して role ごとに marker を書く。review-codex Skill や通常の
-# 利用者は本 helper を直接呼ばない。hash/marker の計算確認や保守時の診断専用として残す。
+# auto-mark.sh が Agent/Task の完了 payload と wrapper pending attestation の一致を検証して
+# 3 reviewer の marker を書く。通常の利用者は本 helper を直接呼ばない。hash/marker の計算確認
+# や保守時の診断専用として残す。
 
 set -e
 

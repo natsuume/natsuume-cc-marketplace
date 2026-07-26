@@ -2,15 +2,14 @@
 # inject-auto.sh
 # Claude Code の permission_mode == "auto" のとき、after 系 (変更が一段落した後の
 # commit→push→PR→merge 自走パイプライン) の方針を additionalContext として注入する。
-# UserPromptSubmit から呼ばれる。Codex の permission_mode は Auto preset を一意に表さない
-# ため全 mode を no-op とし、明示 Skill auto-codex が意図を代替する。
+# UserPromptSubmit から呼ばれる。
 #
 # 注入する本文は hooks/prompts/auto-mode.md に定義する (プロンプトを sh に直接埋め込むと
 # 視認性・メンテナンス性が下がるため分離)。
 #
-# Claude Code では auto 以外、Codex では既知値を含む全 mode で何もしない。
-# during 系 (実装自走の判断境界) と他の常時適用ルール (物理層 / before 系 / closing keyword)
-# は inject-always.sh が SessionStart で配送する (v0.1.1 で during 系を inject-always 側に移動)。
+# auto 以外では何もしない。during 系 (実装自走の判断境界) と他の常時適用ルール
+# (物理層 / before 系 / closing keyword) は inject-always.sh が SessionStart で配送する
+# (v0.1.1 で during 系を inject-always 側に移動)。
 #
 # v0.1.1 で旧来の PostToolBatch 経路 (+ once-per-turn dedup logic) を撤去。 per-turn 2 回
 # inject (UserPromptSubmit + PostToolBatch) が 1 回 (UserPromptSubmit のみ) に削減された。
@@ -21,29 +20,26 @@ fi
 
 INPUT=$(cat)
 
-# hook_event_name / permission_mode / Codex extension の turn_id を 1 回の jq 呼び出しで取得する。
+# hook_event_name / permission_mode を 1 回の jq 呼び出しで取得する。
 # 値境界は Linux / macOS bash 3.2 で扱える NUL delimiter とする。
 {
   IFS= read -r -d '' HOOK_EVENT
   IFS= read -r -d '' PERMISSION_MODE
-  IFS= read -r -d '' TURN_ID
 } < <(
   printf '%s' "$INPUT" | jq -j '
     (.hook_event_name // ""), "\u0000",
-    (.permission_mode // ""), "\u0000",
-    (.turn_id // ""), "\u0000"
+    (.permission_mode // ""), "\u0000"
   '
 )
 
-# runtime ごとの permission_mode を安全側へ正規化する。Claude では従来どおり auto のみ、
-# Codex は Auto を証明できないため全 mode を対象外にする。
+# permission_mode が literal auto のときだけ配送する。
 SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 if [ -z "$SCRIPT_DIR" ] || [ ! -r "$SCRIPT_DIR/lib/permission-mode.sh" ]; then
   exit 0
 fi
 # shellcheck source=plugins/agent-discipline/hooks/scripts/lib/permission-mode.sh
 source "$SCRIPT_DIR/lib/permission-mode.sh" || exit 0
-if ! is_agent_discipline_autonomous_mode "$PERMISSION_MODE" "$TURN_ID"; then
+if ! is_agent_discipline_autonomous_mode "$PERMISSION_MODE"; then
   exit 0
 fi
 

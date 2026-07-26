@@ -4,7 +4,11 @@ GitHub の issue/PR タイムラインから AI タスクのリードタイム (
 
 ## バージョン
 
-v0.1.3
+v0.2.0
+
+### v0.1.3 → v0.2.0 の変更点
+
+Codex 配布対応 (marketplace 移植) を廃止した。repo-analytics はもともと Codex 配布対象外だったため、Claude Code 版の leadtime Skill・生成物への影響はない。
 
 ### v0.1.2 → v0.1.3 の変更点 (#301, #305)
 

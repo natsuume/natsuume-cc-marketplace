@@ -4,7 +4,11 @@
 
 ## バージョン
 
-v0.5.3
+v0.6.0
+
+### v0.5.3 → v0.6.0 の変更点
+
+Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest と `apply_patch` adapter を削除し、Claude Code 版の 4 hook は無変更。
 
 ### v0.5.2 → v0.5.3 の変更点 (#148)
 
