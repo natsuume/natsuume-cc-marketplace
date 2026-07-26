@@ -18,6 +18,7 @@ Phase A で red、Phase B のプロンプト修正で green になる。
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -36,10 +37,14 @@ REVIEWERS = {
     "security-reviewer.md": PRE_PUSH_AGENTS / "security-reviewer.md",
 }
 
-# 撤廃対象の旧固定文 (部分文字列)。
+# 撤廃対象の旧固定文 (部分文字列)。ルール見出しだけでなく、旧 bullet 内の
+# Workflow 向け明示 (effort: 'medium') と fail-closed 節 (実効 effort が medium に
+# なると保証できない場合の Sonnet 降格) の断片も含め、部分書換えの残存を検知する。
 REMOVED_PHRASES = (
     "effort を medium にする",
     "medium 指定のみ",
+    "effort: 'medium'",
+    "実効 effort が medium",
 )
 
 # 置換後の新 canonical 文 (部分文字列)。
@@ -53,8 +58,25 @@ REVIEWER_CALIBRATION_PHRASE = (
 )
 
 
+FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+
+
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def body_after_frontmatter(text: str) -> str:
+    """YAML frontmatter (先頭の --- ... ---) を除いた本文を返す。
+
+    reviewer 較正文は実行時に subagent へ配送される本文に存在しなければ意味が
+    無いため、frontmatter (description 等の metadata) への記載を green と誤認
+    しないよう検査対象から除く (tests/test_subagent_model_pins.py の同名
+    ヘルパーと同じ方式)。
+    """
+    match = FRONTMATTER_PATTERN.match(text)
+    if match is None:
+        return text
+    return text[match.end():]
 
 
 class DisciplineEffortUnpinTests(unittest.TestCase):
@@ -112,7 +134,7 @@ class ReviewerCalibrationTests(unittest.TestCase):
         missing = [
             name
             for name, path in REVIEWERS.items()
-            if REVIEWER_CALIBRATION_PHRASE not in read(path)
+            if REVIEWER_CALIBRATION_PHRASE not in body_after_frontmatter(read(path))
         ]
         self.assertEqual([], missing, f"検証較正文が無い reviewer: {missing}")
 
