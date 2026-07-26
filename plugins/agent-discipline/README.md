@@ -4,9 +4,18 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.22.1
+v0.23.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.22.1 → v0.23.0 の変更点
+
+Claude Opus 5 System Card の実測に基づき、分業規律の Opus 5 effort=medium 固定を撤廃してプロンプト指示へ置換した。
+
+- `discipline-fable.md` / `discipline-sonnet.md` / `discipline-opus.md` の `rule:delegation-rules` から「Opus 5 を使う委任では effort を medium にする」(v0.20.0 導入の fail-closed 文面) を削除し、「effort を固定しない: 難度・コストに応じて選択してよい (機械的・コスト優先の作業は低め、長期・多段の推論が品質を左右する作業は高め。性能は effort に対して単調増加とは限らない)」の非拘束の目安へ置換した。「Sonnet 系には effort を指定しない」の末尾も「effort を明示する場合は Opus 5 への委任に限る」へ整合させた
+- `rule:delegation-instruction` の「汎用的な再確認指示を加えない」段落の直前に「Opus 5 への委任指示にはスコープ制限の 1 文を必ず含める」段落を追加した。System Card §8.4 (FrontierCode) は high 超の effort でのタスク範囲外変更によるスコア低下と、スコープ制限指示 1 文での回復 (モデル限界ではない) を報告しており、effort の固定ではなくプロンプト指示で副作用を抑える
+- 根拠: System Card §8.5 (FrontierBench) / §8.10.1 (HLE) / §8.12.2 (BenchCAD) は高難度タスクの effort スケーリングを、§6.2.1 (pilot feedback) は高 effort での自己修正ループを報告している。自己修正ループ対策は既存の「Opus 5 への委任では汎用的な再確認指示を加えない」を維持する
+- 契約テスト `tests/test_opus5_effort_unpin.py` を追加し、旧固定文 6 断片の不在・新指針とスコープ制限指示の存在 (節スコープ + 段落隣接)・「Sonnet 系には effort を指定しない」の保全を固定した
 
 ### v0.22.0 → v0.22.1 の変更点
 

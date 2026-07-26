@@ -39,6 +39,8 @@ REVIEWERS = {
     "security-reviewer.md": PRE_PUSH_AGENTS / "security-reviewer.md",
 }
 
+PRE_PUSH_README = REPO_ROOT / "plugins" / "pre-push-review" / "README.md"
+
 # 撤廃対象の旧固定文 (部分文字列)。ルール見出しだけでなく、旧 bullet 内の
 # Workflow 向け明示 (effort: 'medium') と fail-closed 節 (実効 effort が medium に
 # なると保証できない場合の Sonnet 降格) の断片も含め、部分書換えの残存を検知する。
@@ -60,7 +62,8 @@ RECHECK_BAN_PHRASE = "Opus 5 への委任では汎用的な再確認指示を加
 # Phase B の書換えが bullet 全体を誤って削除しないことを固定する保全ガード。
 SONNET_RULE_PHRASE = "Sonnet 系には effort を指定しない"
 
-# 隣接配置検査で切り出すセクション境界 (rule ID マーカー)。
+# 節スコープ検査で切り出すセクション境界 (rule ID マーカー)。
+DELEGATION_RULES_MARKER = "<!-- rule:delegation-rules -->"
 DELEGATION_INSTRUCTION_MARKER = "<!-- rule:delegation-instruction -->"
 ESCALATION_MARKER = "<!-- rule:escalation -->"
 
@@ -101,20 +104,24 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
     """
 
     def test_medium_lock_phrases_absent(self) -> None:
-        for phrase in REMOVED_PHRASES:
-            offenders = [
-                name for name, path in THREE_WAY.items() if phrase in read(path)
-            ]
-            self.assertEqual(
-                [], offenders, f"旧固定文 {phrase!r} が残るファイル: {offenders}"
-            )
+        violations = [
+            f"{name}: {phrase!r}"
+            for phrase in REMOVED_PHRASES
+            for name, path in THREE_WAY.items()
+            if phrase in read(path)
+        ]
+        self.assertEqual([], violations, f"旧固定文が残る箇所: {violations}")
 
     def test_effort_selection_guidance_present(self) -> None:
-        missing = [
-            name
-            for name, path in THREE_WAY.items()
-            if EFFORT_GUIDANCE_PHRASE not in read(path)
-        ]
+        """effort 選択指針が delegation-rules 節内に存在する (節外の言及は不可)。"""
+        missing = []
+        for name, path in THREE_WAY.items():
+            text = read(path)
+            start = text.find(DELEGATION_RULES_MARKER)
+            end = text.find(DELEGATION_INSTRUCTION_MARKER, max(start, 0))
+            section = text[start:end] if 0 <= start < end else ""
+            if EFFORT_GUIDANCE_PHRASE not in section:
+                missing.append(name)
         self.assertEqual([], missing, f"effort 選択指針が無いファイル: {missing}")
 
     def test_scope_instruction_requirement_present(self) -> None:
@@ -188,6 +195,22 @@ class ReviewerCalibrationTests(unittest.TestCase):
             if REVIEWER_CALIBRATION_PHRASE not in body_after_frontmatter(read(path))
         ]
         self.assertEqual([], missing, f"検証較正文が無い reviewer: {missing}")
+
+
+class ReviewerDocConsistencyTests(unittest.TestCase):
+    """pre-push-review README の現状参照節が撤廃後の構成と整合すること。
+
+    変更履歴 (changelog) 節の過去記録は改変対象外であり、以下の検査文字列は
+    現状参照節 (Agents 節の動作 bullet) にのみ現れる書式を選んでいる。
+    """
+
+    def test_reference_prose_does_not_assert_retired_effort_pin(self) -> None:
+        text = read(PRE_PUSH_README)
+        self.assertNotIn("model は `opus` + `effort: medium` に固定", text)
+
+    def test_reference_prose_describes_session_default_inheritance(self) -> None:
+        text = read(PRE_PUSH_README)
+        self.assertIn("effort は指定せずセッション既定を継承", text)
 
 
 if __name__ == "__main__":

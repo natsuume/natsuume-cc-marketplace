@@ -18,9 +18,18 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v5.2.0
+v5.3.0
 
 (前身: `pre-commit-review` v0.4.0)
+
+### v5.2.0 → v5.3.0 の変更点
+
+Claude Opus 5 System Card の実測に基づき、code-reviewer / security-reviewer の effort=medium 固定を撤廃した。
+
+- 両 reviewer の frontmatter から `effort: medium` を削除した (`model: opus` の固定は維持)。effort はセッション既定を継承する
+- 理由: System Card の実測 (高難度の検証・調査タスクは effort とともに性能がスケールする。§8.5 FrontierBench / §8.10.1 HLE) に基づき、agent-discipline v0.23.0 で分業規律の Opus 5 effort=medium 固定が撤廃されたことに追随した (v5.0.0 で effort を固定した理由は同規律の旧文面)
+- 高 effort 継承時の自己修正ループ対策 (System Card §6.2.1) として、両 reviewer の body に「各候補の検証は 1 回で完了し、検証済み finding の再検証ループに入らず、レビュータスクのスコープ内に留まる」較正文を追加した
+- 契約テストを更新した: `tests/test_subagent_model_pins.py` の frontmatter 検査を「model: opus + effort: medium」から「model: opus のみ (effort キー行の不在)」へ変更し、`tests/test_opus5_effort_unpin.py` に reviewer body 較正文と本 README 現状参照節の整合の検査を追加した
 
 ### v5.1.1 → v5.2.0 の変更点 (issue #337)
 
@@ -360,7 +369,7 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 - subagent body には logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリと exclusion ルール (style / docs / perf / refactor / security / pre-existing bug 等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report の単一 `Status: pass|findings` 行を確認して code-reviewed マーカーを更新する
-- model は `opus` + `effort: medium` に固定 (v4.3.0 まで `inherit` で親 session と同じモデルを使用していた)
+- model は `opus` に固定、effort は指定せずセッション既定を継承 (v4.3.0 まで model は `inherit`、v5.2.0 までは `effort: medium` も固定していた)
 
 #### `pre-push-review:codex-reviewer` (subagent / v3.0.0 で追加)
 
@@ -391,7 +400,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 - subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report の単一 `Status: pass|findings` 行を確認して security マーカーを更新する (`execution-failed` / 欠落 / 重複 / 未知値では書かず、silent-pass を防ぐ)
-- model は `opus` + `effort: medium` に固定 (v4.3.0 まで `inherit` で親 session と同じモデルを使用していた)
+- model は `opus` に固定、effort は指定せずセッション既定を継承 (v4.3.0 まで model は `inherit`、v5.2.0 までは `effort: medium` も固定していた)
 
 #### code-reviewer / security-reviewer subagent が標準 skill を invoke しない理由 (共通)
 
