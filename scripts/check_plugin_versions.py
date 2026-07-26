@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 PLUGIN_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json"
 README_TABLE_ROW_RE = re.compile(r"^\|\s*\[([^\]]+)\]\([^)]*\)\s*\|\s*([^|]+?)\s*\|")
-PLUGIN_README_HEADING_RE = re.compile(r"^#{1,6}\s*バージョン\s*$")
+PLUGIN_README_HEADING_RE = re.compile(r"^##\s+バージョン\s*$")
 PLUGIN_README_VERSION_LINE_RE = re.compile(r"^v(\d+\.\d+\.\d+)\s*$")
 
 

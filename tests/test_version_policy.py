@@ -570,6 +570,32 @@ class PluginReadmeVersionConsistencyTest(unittest.TestCase):
             failures = check_fixture_versions(repository, revision)
             self.assertTrue(any("sample" in failure for failure in failures), failures)
 
+    def test_non_level_two_version_heading_fails(self) -> None:
+        # 規約は「`## バージョン` 直下」であり、level-2 以外の見出しは正本として認めない
+        for heading in ("# バージョン", "### バージョン"):
+            with self.subTest(heading=heading):
+                with tempfile.TemporaryDirectory() as name:
+                    repository = Path(name)
+                    initialize_repository(repository)
+                    write_plugin_manifest(repository, "sample", "1.0.0")
+                    readme = repository / "plugins/sample/README.md"
+                    readme.parent.mkdir(parents=True, exist_ok=True)
+                    readme.write_text(
+                        f"# sample\n\n{heading}\n\nv1.0.0\n", encoding="utf-8"
+                    )
+                    write_marketplace(
+                        repository, [marketplace_entry("sample", "1.0.0")]
+                    )
+                    write_root_readme(
+                        repository, [("sample", "1.0.0", "sample plugin")]
+                    )
+                    revision = commit_all(repository, "non level-2 version heading")
+
+                    failures = check_fixture_versions(repository, revision)
+                    self.assertTrue(
+                        any("sample" in failure for failure in failures), failures
+                    )
+
     def test_plugin_readme_version_with_extra_blank_line_passes(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             repository = Path(name)
