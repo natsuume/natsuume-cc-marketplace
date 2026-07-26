@@ -68,6 +68,13 @@ REVIEWER_LAUNCH_MODELS = {
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
+# effort キーの負の検査 (不在確認) 用。正の検査 (model: opus の存在) は正準表記を
+# リポジトリ側が所有するためリテラル一致でよいが、不在確認は YAML の書式揺れ
+# (キー前後の空白・引用符付きキー) を伴う同義の pin を見逃さないようキー検出の
+# 正規表現で行う (完全な YAML 意味解析ではなく、平坦な agent frontmatter の
+# 通常の書式揺れを対象とする契約)。
+EFFORT_KEY_PATTERN = re.compile(r"^\s*[\"']?effort[\"']?\s*:")
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -125,7 +132,7 @@ class AgentFrontmatterModelPinTest(unittest.TestCase):
             with self.subTest(agent=name):
                 lines = frontmatter_lines(read(path))
                 self.assertIn("model: opus", lines, path)
-                effort_lines = [line for line in lines if line.startswith("effort:")]
+                effort_lines = [line for line in lines if EFFORT_KEY_PATTERN.match(line)]
                 self.assertEqual([], effort_lines, path)
 
     def test_sonnet_agents_pin_model_sonnet(self) -> None:

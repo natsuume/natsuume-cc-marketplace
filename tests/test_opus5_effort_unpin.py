@@ -45,6 +45,7 @@ REMOVED_PHRASES = (
     "medium 指定のみ",
     "effort: 'medium'",
     "実効 effort が medium",
+    "Opus 5 を使わず実効 model を Sonnet 系に",
 )
 
 # 置換後の新 canonical 文 (部分文字列)。
