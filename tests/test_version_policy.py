@@ -232,6 +232,32 @@ class ChangedPluginDetectionTest(unittest.TestCase):
                 changed_names_for_fixture(repository, base_revision), {"sample"}
             )
 
+    def test_rename_out_of_plugin_directory_marks_source_plugin_changed(self) -> None:
+        # rename detection が働くと --name-only は移動先 path だけを返すため、
+        # --no-renames なしでは移動元 plugin の bump 漏れが CI を素通りする
+        with tempfile.TemporaryDirectory() as name:
+            repository = Path(name)
+            initialize_repository(repository)
+            repository_git(repository, "config", "diff.renames", "true")
+            write_full_consistent_repository(repository, [("sample", "1.0.0")])
+            payload = repository / "plugins/sample/scripts/payload.sh"
+            payload.parent.mkdir(parents=True)
+            payload.write_text("#!/bin/sh\n" + "echo payload\n" * 20, encoding="utf-8")
+            base_revision = commit_all(repository, "base with payload")
+
+            (repository / "scripts").mkdir(exist_ok=True)
+            repository_git(
+                repository,
+                "mv",
+                "plugins/sample/scripts/payload.sh",
+                "scripts/payload.sh",
+            )
+            commit_all(repository, "move payload out of the plugin directory")
+
+            self.assertIn(
+                "sample", changed_names_for_fixture(repository, base_revision)
+            )
+
     def test_plugin_json_version_only_change_is_not_counted_as_changed(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             repository = Path(name)

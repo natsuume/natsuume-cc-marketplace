@@ -175,8 +175,14 @@ def changed_plugin_names(base_revision: str, *, direct: bool = False) -> set[str
     # check 1: a path change under plugins/<name>/, except a change limited to
     # the plugin manifest file itself (that is covered separately by check 2,
     # which ignores version-only edits).
+    # --no-renames keeps a moved file listed as delete + add so that the source
+    # plugin of a cross-directory move is still attributed as changed.
     diff_output = git(
-        "diff", "--name-only", "-z", comparison_range(base_revision, direct=direct)
+        "diff",
+        "--no-renames",
+        "--name-only",
+        "-z",
+        comparison_range(base_revision, direct=direct),
     ).stdout
     for raw_path in diff_output.split(b"\0"):
         if not raw_path:
