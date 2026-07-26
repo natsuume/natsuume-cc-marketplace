@@ -85,11 +85,11 @@ class AgentDisciplineThreeWayParityTest(unittest.TestCase):
 
         環境設定の変更でプロンプトが陳腐化し、opus 版の条件形記述と矛盾して
         読めるため (公式ガイドの「矛盾する指示の併存は性能を下げる」)。
+        表現の言い換えで値だけ残る経路を塞ぐため、文単位ではなく値トークン
+        そのものの不在を検査する (3 ファイルに xhigh の正当な用例は無い)。
         """
         offenders = [
-            name
-            for name, path in THREE_WAY.items()
-            if "この環境では xhigh" in read(path)
+            name for name, path in THREE_WAY.items() if "xhigh" in read(path)
         ]
         self.assertEqual([], offenders, f"環境値ハードコードが残るファイル: {offenders}")
 
@@ -123,18 +123,37 @@ class RebaseWorkflowSkillTest(unittest.TestCase):
     """rebase-workflow skill が bash-decompose 規律と整合し stale 対策を持つこと。"""
 
     def test_no_command_substitution_example(self) -> None:
-        """コマンド置換 + 変数連結の一括スクリプト例 (bash-decompose 違反) が無いこと。"""
-        text = read(REBASE_SKILL)
-        self.assertNotIn("DEFAULT_BRANCH=$(", text)
-        self.assertNotIn("## 一連のコマンド例", text)
+        """コマンド置換 + 変数連結の一括スクリプト例 (bash-decompose 違反) が無いこと。
 
-    def test_stale_origin_head_mitigation_present(self) -> None:
-        """symbolic-ref 参照前に fetch --prune / set-head --auto を先行させること
-        (update-default-branch skill と同じ stale 対策)。
+        定義行 (`DEFAULT_BRANCH=$(...)`) だけでなく消費側 (`origin/$DEFAULT_BRANCH`)
+        の残骸も塞ぐため、変数名トークン自体の不在を検査する。
         """
         text = read(REBASE_SKILL)
-        self.assertIn("git fetch --prune origin", text)
-        self.assertIn("git remote set-head origin --auto", text)
+        self.assertNotIn("DEFAULT_BRANCH", text)
+        self.assertNotIn("## 一連のコマンド例", text)
+
+    def test_stale_origin_head_mitigation_precedes_symbolic_ref_read(self) -> None:
+        """symbolic-ref の最初の参照より前に fetch --prune / set-head --auto を
+        この順で先行させること (update-default-branch skill と同じ stale 対策)。
+        存在検査だけでは後段 (トラブルシューティング等) への出現でも green に
+        なってしまうため、最初の出現位置の相対順序を固定する。
+        """
+        text = read(REBASE_SKILL)
+        fetch_cmd = "git fetch --prune origin"
+        set_head_cmd = "git remote set-head origin --auto"
+        symref_cmd = "git symbolic-ref refs/remotes/origin/HEAD"
+        for command in (fetch_cmd, set_head_cmd, symref_cmd):
+            self.assertIn(command, text)
+        self.assertLess(
+            text.index(fetch_cmd),
+            text.index(set_head_cmd),
+            "fetch --prune が set-head --auto より前に無い",
+        )
+        self.assertLess(
+            text.index(set_head_cmd),
+            text.index(symref_cmd),
+            "set-head --auto が最初の symbolic-ref 参照より前に無い",
+        )
 
 
 class PrePushReviewerLengthCalibrationTest(unittest.TestCase):
@@ -154,15 +173,37 @@ class CodexAdvisorDeduplicationTest(unittest.TestCase):
 
     def test_checkpoint_items_not_duplicated_verbatim(self) -> None:
         """checkpoint 4 項目の箇条書きは consult/SKILL.md を正本とし、
-        advisor-rules.md 側は逐語複製しない。
+        advisor-rules.md 側は逐語複製しない。1 項目だけ消して 3 項目の
+        中途半端な列挙が残る経路を塞ぐため、4 項目すべての不在を検査する。
         """
         text = read(ADVISOR_RULES)
-        self.assertNotIn("直近 5 サイクルの主要 findings、施した修正、反復している傾向", text)
+        leftovers = [
+            bullet
+            for bullet in (
+                "- 元の Goal、受入基準、変えてはならない制約",
+                "- 直近 5 サイクルの主要 findings、施した修正、反復している傾向",
+                "- 現在の問題設定・仮説・アプローチと、残っている不確実性",
+                "- 「局所修正を続けるべきか、根本方針・設計境界・検証戦略を変えるべきか」という 1 つの質問",
+            )
+            if bullet in text
+        ]
+        self.assertEqual([], leftovers, f"advisor-rules.md に残る重複 bullet: {leftovers}")
+
+    def test_async_recovery_narrative_not_duplicated(self) -> None:
+        """async_launched 時の結果回収手順の詳細は consult/SKILL.md の
+        Claude Code host 節を正本とし、advisor-rules.md 側は逐語複製しない。
+        """
+        text = read(ADVISOR_RULES)
+        self.assertNotIn("completion notification または TaskOutput を回収", text)
 
     def test_advisor_rules_points_to_consult_definition(self) -> None:
-        """advisor-rules.md は checkpoint 項目の定義を consult skill へ参照で委ねる。"""
+        """advisor-rules.md は checkpoint 項目の定義を consult skill へ、正本の
+        識別子 (`/codex-advisor:consult`) 付きの参照で委ねる。
+        """
         text = read(ADVISOR_RULES)
+        self.assertIn("が定義する 4 項目", text)
         self.assertIn("省略せず含める", text)
+        self.assertIn("`/codex-advisor:consult` が定義する", text)
 
     def test_consult_skill_remains_canonical_for_checkpoint(self) -> None:
         """正本側 (consult/SKILL.md) の checkpoint テンプレートは維持される。"""
