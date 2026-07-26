@@ -11,6 +11,13 @@
 
 本テストは spec-first Phase A で実装前の red テストとして追加する。Phase B で
 `plugins/pre-push-review/agents/codex-reviewer.md` が改訂されると green になる。
+
+本改訂は、初版に対するレビュー指摘 (assert が非識別的で無関係な既存文言にも
+誤マッチしうる、境界 3 種が個別に固定されておらず 1 つの assert で束ねられていた、
+回収手順の意味論 — poll 継続条件・truncated 時の Read 補完・境界時の report 記述 —
+が一文単位で契約化されていなかった) に対応し、Phase B で md に書かれるべき canonical
+な一文をモジュール定数として固定した上で、`## Background-move recovery` セクション
+内に空白正規化した上でその一文が存在することを個別の assert で検証する形に再構成した。
 """
 
 from __future__ import annotations
@@ -24,6 +31,50 @@ ROOT = Path(__file__).resolve().parents[1]
 CODEX_REVIEWER = ROOT / "plugins" / "pre-push-review" / "agents" / "codex-reviewer.md"
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+
+POLL_SENTENCE = (
+    "Recover with TaskOutput (block=true) against the same task ID, "
+    "repeating until the task reaches a terminal state"
+)
+SECOND_RUN_SENTENCE = "Do not start a second wrapper run"
+TRUNCATED_SENTENCE = (
+    "If the recovered report is truncated, "
+    "Read the recorded output file path to complete it."
+)
+LOST_SENTENCE = (
+    "If you lost the task ID or the output file path, "
+    "return `Status: execution-failed`"
+)
+BUDGET_SENTENCE = (
+    "If the recovery budget is exhausted before the task reaches a terminal "
+    "state, return `Status: execution-failed` and state in the recovery "
+    "direction that the codex review is likely still running in the background."
+)
+NOT_FOUND_SENTENCE = (
+    "If TaskOutput reports that the task can no longer be found, "
+    "return `Status: execution-failed`"
+)
+
+
+def recovery_section(body: str) -> str:
+    """`## Background-move recovery` 見出しから次の `\\n## ` 見出し (または文書末尾)
+
+    までの slice を返す。見出しが無ければ空文字列を返す。
+    """
+    marker = "## Background-move recovery"
+    start = body.find(marker)
+    if start == -1:
+        return ""
+    rest = body[start:]
+    next_heading = rest.find("\n## ", len(marker))
+    if next_heading == -1:
+        return rest
+    return rest[:next_heading]
+
+
+def normalize(text: str) -> str:
+    """空白・改行を単一スペースに正規化する (md の 80 桁前後の折り返し差異を吸収する)。"""
+    return " ".join(text.split())
 
 
 class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
@@ -41,30 +92,43 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
         lines = self.frontmatter_lines(body)
         self.assertIn("tools: Bash, TaskOutput, Read", lines)
 
-    def test_procedure_documents_background_move_recovery(self) -> None:
+    def test_recovery_section_documents_background_move(self) -> None:
         body = self.read(CODEX_REVIEWER)
-        self.assertIn("## Background-move recovery", body)
-        self.assertIn("moved to the background", body)
-        self.assertIn("task ID", body)
-        self.assertIn("output file path", body)
-        self.assertIn("TaskOutput", body)
+        section = recovery_section(body)
+        self.assertNotEqual(section, "")
+        normalized = normalize(section)
+        self.assertIn("moved to the background", normalized)
+        self.assertIn("record the task ID and the output file path", normalized)
+
+    def test_recovery_polls_same_task_to_terminal(self) -> None:
+        body = self.read(CODEX_REVIEWER)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(POLL_SENTENCE), normalized)
 
     def test_recovery_forbids_second_wrapper_run(self) -> None:
         body = self.read(CODEX_REVIEWER)
-        self.assertIn("Do not start a second wrapper run", body)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(SECOND_RUN_SENTENCE), normalized)
 
     def test_truncated_output_recovered_via_read(self) -> None:
         body = self.read(CODEX_REVIEWER)
-        self.assertIn("truncated", body)
-        self.assertIn("Read", body)
-        self.assertIn("output file", body)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(TRUNCATED_SENTENCE), normalized)
 
-    def test_boundary_cases_end_with_execution_failed(self) -> None:
+    def test_boundary_lost_id_or_path_ends_execution_failed(self) -> None:
         body = self.read(CODEX_REVIEWER)
-        self.assertIn("lost the task ID", body)
-        self.assertIn("recovery budget", body)
-        self.assertIn("still running in the background", body)
-        self.assertIn("Status: execution-failed", body)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(LOST_SENTENCE), normalized)
+
+    def test_boundary_budget_exhausted_reports_still_running(self) -> None:
+        body = self.read(CODEX_REVIEWER)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(BUDGET_SENTENCE), normalized)
+
+    def test_boundary_task_not_found_ends_execution_failed(self) -> None:
+        body = self.read(CODEX_REVIEWER)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(NOT_FOUND_SENTENCE), normalized)
 
     def test_bash_only_wording_removed(self) -> None:
         body = self.read(CODEX_REVIEWER)
