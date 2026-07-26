@@ -527,7 +527,11 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     分類は「canonical token 値」(single/double quote 除去・backslash escape
     解決・fragment 連結を行った shell word の静的な値) に対して行い、head token
     のみさらに basename 正規化する。動的展開 (`$VAR` 等) を含み canonical 値を
-    静的に決定できない head は解析不能として保守的に実行形とする。
+    静的に決定できない head は解析不能として保守的に実行形とする。head の
+    canonical 値が compound-command 構文の開始文字 (`(` / `{`) を含む場合、
+    または shell keyword (if / then / elif / else / fi / while / until / for /
+    do / done / case / esac / function) の場合も、グループ内の実コマンドを
+    本分類は解析しないため保守的に実行形とする。
 
     実行形と分類するのは (a) head の basename が wrapper 名そのもの (b) shell
     interpreter (bash/sh/dash/zsh/ksh) / exec-capable builtin (source / `.` /
@@ -543,11 +547,16 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     -exec/-execdir/-ok/-okdir、rg の --pre / --pre=*、sort の
     --compress-program / --compress-program=* (canonical 値で判定。値を取る
     option の literal 引数 (`rg -e '--pre'`) も保守的 superset として deny し、
-    false positive を受容する) (f) git は現行特例 (縮小 subcommand 集合 +
+    false positive を受容する。危険 option の列挙は受容境界であり、列挙外の
+    value-taking option (稀な helper binary 指定等) は残余ギャップとして
+    受容する (arity 解析を行わない設計判断)) (f) git は現行特例 (縮小 subcommand 集合 +
     --ext-diff/--textconv 検査、いずれも canonical 値で判定) を維持 (g) segment
     先頭の leading 代入列と launcher 剥がし中に skip する代入列の値に wrapper
     substring を含む場合、および head token が無い segment (assignment-only)。
-    引数位置の NAME=VALUE 形 (shell は env 代入と解釈しない) は検査しない。
+    declaration builtin (export / declare / readonly / typeset / local) が
+    head の場合、その引数の NAME=VALUE 形は代入として leading 代入列と同様に
+    値を検査する。それ以外の head の引数位置 NAME=VALUE 形 (shell は env
+    代入と解釈しない) は検査しない。
 
     それ以外の引数・quoted 文字列としての出現は言及扱いで allow する (fail-open
     への意図的転換)。本 hook は cooperative 前提の補助 gate であり (真の push
@@ -1205,6 +1214,81 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                     "command": (
                         '"$CMD" plugins/pre-push-review/hooks/scripts/'
                         "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_subshell_group_launch_is_denied(self) -> None:
+        # subshell に接着した head は解析不能として保守的に実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "(cd /tmp && bash plugins/pre-push-review/hooks/"
+                        "scripts/run-codex-review.sh)"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_brace_group_launch_is_denied(self) -> None:
+        # brace group に接着した head も subshell と同様に実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "{ bash plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh; }"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_shell_keyword_head_launch_is_denied(self) -> None:
+        # shell keyword (if) が head の場合もグループ内は解析せず実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "if true; then bash plugins/pre-push-review/hooks/"
+                        "scripts/run-codex-review.sh; fi"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_export_wrapper_path_assignment_is_denied(self) -> None:
+        # declaration builtin (export) の代入値に wrapper substring。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "export WRP=plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_declare_wrapper_path_assignment_is_denied(self) -> None:
+        # declare + flag 形でも declaration builtin の代入値検査は維持する。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "declare -x WRP=plugins/pre-push-review/hooks/"
+                        "scripts/run-codex-review.sh"
                     )
                 },
             }
