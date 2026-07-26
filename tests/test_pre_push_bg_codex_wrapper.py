@@ -535,8 +535,10 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     保守的に実行形) (c) launcher prefix (command / builtin / env / timeout /
     nohup / nice / setsid / stdbuf / sudo / doas / time / `!`) は反復的に剥がして
     残りを再分類する。剥がすたびに代入 slot (NAME=VALUE 列) を再評価して skip し、
-    代入値に wrapper substring があれば実行形 (GIT_EXTERNAL_DIFF 型)。`-` 始まりの
-    canonical token が現れたら解析不能として実行形 (d) script/対話内実行面を持つ
+    代入値に wrapper substring があれば実行形 (GIT_EXTERNAL_DIFF 型)。timeout の
+    duration operand (canonical 値が数値 + 任意の s/m/h/d suffix) は消費してから
+    再分類する。`-` 始まりの canonical token が現れたら解析不能として実行形
+    (d) script/対話内実行面を持つ
     sed/awk/xargs/less/more/parallel (e) option-aware: find の
     -exec/-execdir/-ok/-okdir、rg の --pre / --pre=*、sort の
     --compress-program / --compress-program=* (canonical 値で判定。値を取る
