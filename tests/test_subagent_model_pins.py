@@ -2,7 +2,8 @@
 
 pre-push-review / codex-advisor の各 subagent は現在 `model: inherit` で起動されており、
 親セッションのモデルをそのまま継承する。Claude 5 世代対応として、レビュー品質が重要な
-code-reviewer / security-reviewer は `model: opus` + `effort: medium` に固定し、
+code-reviewer / security-reviewer は `model: opus` に固定し (effort は Claude Opus 5
+System Card 準拠の撤廃により pin せずセッション既定を継承する)、
 wrapper 起動や job tracking が主目的の codex-reviewer / codex-advisor の 3 runner は
 `model: sonnet` に固定する。あわせて、起動仕様 (review.md の Agent 起動、
 block-pre-push.sh / block-bg-codex-wrapper.sh の deny メッセージ、
@@ -45,8 +46,8 @@ CONSULT_SKILL = CODEX_ADVISOR / "skills" / "consult" / "SKILL.md"
 ADVISOR_RULES = CODEX_ADVISOR / "hooks" / "prompts" / "advisor-rules.md"
 ADVISOR_RULES_SUBAGENT = CODEX_ADVISOR / "hooks" / "prompts" / "advisor-rules-subagent.md"
 
-# 変更仕様 1: agent frontmatter の model 固定対象。
-OPUS_EFFORT_AGENTS = {
+# 変更仕様 1: agent frontmatter の model 固定対象。effort pin は v5.3.0 で撤廃 (System Card 準拠)。
+OPUS_AGENTS = {
     "code-reviewer": CODE_REVIEWER,
     "security-reviewer": SECURITY_REVIEWER,
 }
@@ -56,7 +57,7 @@ SONNET_AGENTS = {
     "rescue-runner": RESCUE_RUNNER,
     "review-runner": REVIEW_RUNNER,
 }
-ALL_PINNED_AGENTS = {**OPUS_EFFORT_AGENTS, **SONNET_AGENTS}
+ALL_PINNED_AGENTS = {**OPUS_AGENTS, **SONNET_AGENTS}
 
 # 変更仕様 2: review.md の起動仕様が近傍に明示すべき model。
 REVIEWER_LAUNCH_MODELS = {
@@ -93,7 +94,7 @@ def exclude_frontmatter_description_line(body: str) -> str:
 
     code-reviewer.md の frontmatter description は「検出された high-confidence bug を
     markdown report として親 session に返す。」という既存のマーケティング文言を含む。
-    これは変更仕様 1 (frontmatter の `model`/`effort` 固定) の対象であって変更仕様 3
+    これは変更仕様 1 (frontmatter の `model` 固定) の対象であって変更仕様 3
     (reviewer 本文の自己フィルタ廃止) の対象ではないため、confidence-gating パターン検査
     からこの 1 行だけを除外する (この行以外の frontmatter・本文は検査対象に残す)。
     """
@@ -116,12 +117,16 @@ CONFIDENCE_GATING_PATTERNS = (
 class AgentFrontmatterModelPinTest(unittest.TestCase):
     """変更仕様 1: 6 agent の frontmatter model 固定。"""
 
-    def test_opus_reviewers_pin_model_opus_with_medium_effort(self) -> None:
-        for name, path in OPUS_EFFORT_AGENTS.items():
+    def test_opus_reviewers_pin_model_opus_without_effort_pin(self) -> None:
+        """model: opus は維持し、effort は pin せずセッション既定を継承させる
+        (Claude Opus 5 System Card の effort スケーリング実測に基づく撤廃)。
+        """
+        for name, path in OPUS_AGENTS.items():
             with self.subTest(agent=name):
                 lines = frontmatter_lines(read(path))
                 self.assertIn("model: opus", lines, path)
-                self.assertIn("effort: medium", lines, path)
+                effort_lines = [line for line in lines if line.startswith("effort:")]
+                self.assertEqual([], effort_lines, path)
 
     def test_sonnet_agents_pin_model_sonnet(self) -> None:
         for name, path in SONNET_AGENTS.items():
@@ -297,7 +302,7 @@ class ReviewerSelfFilterRemovalTest(unittest.TestCase):
     def test_code_and_security_reviewers_report_all_findings_without_self_filtering(
         self,
     ) -> None:
-        for name, path in OPUS_EFFORT_AGENTS.items():
+        for name, path in OPUS_AGENTS.items():
             with self.subTest(reviewer=name):
                 body = read(path)
                 self.assertIn(
@@ -322,7 +327,7 @@ class ReviewerSelfFilterRemovalTest(unittest.TestCase):
         Phase B に要求される (既存の変更仕様 3 が列挙する `Identify ONLY`/`Drop anything`
         の削除だけでは、本チェックは green にならない)。
         """
-        for name, path in OPUS_EFFORT_AGENTS.items():
+        for name, path in OPUS_AGENTS.items():
             body = exclude_frontmatter_description_line(read(path))
             for pattern in CONFIDENCE_GATING_PATTERNS:
                 with self.subTest(reviewer=name, pattern=pattern):
