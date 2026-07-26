@@ -51,6 +51,9 @@ state, normalize its output through the existing report contract: a
 successful review yields `Status: pass` or `Status: findings`, and a failed
 wrapper run yields `Status: execution-failed`.
 
+Normalize only from the complete recovered output: treat the recovered report
+as truncated whenever its completeness cannot be established — for example
+when a retrieval call returns only a tail chunk instead of the whole report.
 If the recovered report is truncated, complete it by Reading the recorded
 output file path; if that path was not captured or cannot be read, return
 `Status: execution-failed`. Use Read only when the recovered report is
