@@ -130,6 +130,7 @@ class RebaseWorkflowSkillTest(unittest.TestCase):
         """
         text = read(REBASE_SKILL)
         self.assertNotIn("DEFAULT_BRANCH", text)
+        self.assertNotIn("$(git", text)
         self.assertNotIn("## 一連のコマンド例", text)
 
     def test_stale_origin_head_mitigation_precedes_symbolic_ref_read(self) -> None:
@@ -160,12 +161,23 @@ class PrePushReviewerLengthCalibrationTest(unittest.TestCase):
     """Opus 5 固定の reviewer 2 体の report contract に長さ較正があること。"""
 
     def test_reviewers_calibrate_report_length(self) -> None:
-        for name, path in (
-            ("code-reviewer.md", CODE_REVIEWER),
-            ("security-reviewer.md", SECURITY_REVIEWER),
-        ):
-            with self.subTest(reviewer=name):
-                self.assertIn("as a single sentence", read(path))
+        """report contract の自由記述フィールドに 1 文較正を課す文の存在を、
+        意図を特定できる長いフレーズで検査する (短い汎用句だと無関係な出現でも
+        green になるため)。subTest は使わない (runner による報告差異を避ける)。
+        """
+        phrase = (
+            "each free-text field (Cause class, Violated invariant, Impact, "
+            "Fix direction) as a single sentence"
+        )
+        missing = [
+            name
+            for name, path in (
+                ("code-reviewer.md", CODE_REVIEWER),
+                ("security-reviewer.md", SECURITY_REVIEWER),
+            )
+            if phrase not in read(path)
+        ]
+        self.assertEqual([], missing, f"長さ較正文を含まない reviewer: {missing}")
 
 
 class CodexAdvisorDeduplicationTest(unittest.TestCase):
@@ -189,12 +201,17 @@ class CodexAdvisorDeduplicationTest(unittest.TestCase):
         ]
         self.assertEqual([], leftovers, f"advisor-rules.md に残る重複 bullet: {leftovers}")
 
-    def test_async_recovery_narrative_not_duplicated(self) -> None:
+    def test_async_recovery_narrative_not_duplicated_but_residual_kept(self) -> None:
         """async_launched 時の結果回収手順の詳細は consult/SKILL.md の
         Claude Code host 節を正本とし、advisor-rules.md 側は逐語複製しない。
+        ただし advisor-rules.md は consult skill を経由しない直接 runner 起動
+        (rescue / review) も認めるため、常時注入側に「terminal report が返るまで
+        完了報告しない」という義務の残余文を必ず残す (除去のみだと skill 未ロード
+        経路で回収義務が context から消える)。
         """
         text = read(ADVISOR_RULES)
         self.assertNotIn("completion notification または TaskOutput を回収", text)
+        self.assertIn("terminal report が返るまで", text)
 
     def test_advisor_rules_points_to_consult_definition(self) -> None:
         """advisor-rules.md は checkpoint 項目の定義を consult skill へ、正本の
@@ -206,10 +223,26 @@ class CodexAdvisorDeduplicationTest(unittest.TestCase):
         self.assertIn("`/codex-advisor:consult` が定義する", text)
 
     def test_consult_skill_remains_canonical_for_checkpoint(self) -> None:
-        """正本側 (consult/SKILL.md) の checkpoint テンプレートは維持される。"""
+        """正本側 (consult/SKILL.md) の checkpoint テンプレート全フィールドと
+        async 回収手順が維持される (advisor-rules.md 側を参照化した後に正本側が
+        縮退すると、参照先の定義ごと消える事故を塞ぐ positive assertion)。
+        """
         text = read(CONSULT_SKILL)
-        self.assertIn("<review_cycle_checkpoint>", text)
-        self.assertIn("<review_history>", text)
+        missing = [
+            element
+            for element in (
+                "<review_cycle_checkpoint>",
+                "<goal_and_acceptance>",
+                "<constraints>",
+                "<review_history>",
+                "<current_strategy>",
+                "<question>",
+                "TaskOutput",
+                "terminal report",
+            )
+            if element not in text
+        ]
+        self.assertEqual([], missing, f"consult/SKILL.md から欠落した正本要素: {missing}")
 
     def test_advisor_rules_keeps_launch_safety_essentials(self) -> None:
         """参照化後も安全上必須の起動指定 (model / run_in_background) は本文に残す。"""
