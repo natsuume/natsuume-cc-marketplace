@@ -41,6 +41,21 @@ file path 単独の喪失を task ID 喪失と同列の即時 terminal 条件に
 BUDGET_DEFINITION_SENTENCE を TaskOutput の実際の per-call 最大 timeout (10 分)
 基準の固定値に置き換え、`recovery_section` を fence 追跡 scanner に書き換えて
 合成 markdown による回帰テストを追加した。
+
+4 回目のレビュー指摘 (rescue 壁打ちの結果を含む) は次の 3 点だった: (i) tools
+frontmatter を `Bash, TaskOutput, Read` へ拡張したにもかかわらず、`Read` の
+使途を「truncated 時の回収 artifact の補完」に限定する契約が本文に無く、
+無制限の Read 権限に読めてしまう、(ii) 旧 Bash-only 設計時代の「他ツール禁止」
+「`Bash` のみが許可ツール」を示す複数の言い回しが個別に潰されておらず、
+tools 拡張後の本文に矛盾する残存文言が生き残りうる、(iii) `recovery_section`
+の fence 判定がインデント無しの ``` 前提で、リスト項目内などインデント付き
+fence を fence として認識できず、fence 内の見出し様の行を誤って起点・終点と
+扱いうる。これに対応し、TOOL_SCOPE_SENTENCE で Read の使途を「同じ background
+task の回収済み output file path のみ・truncated 時のみ」に限定する契約を新設し、
+test_bash_only_wording_removed の negative assert を 5 本 (旧来の 2 本 + 新規 3 本)
+に拡充し、`recovery_section` の fence 判定を行頭空白除去後の ``` 判定に変更して
+インデント付き fence にも対応した上で、合成 markdown の回帰テストにリスト項目内の
+インデント付き fence ケースを追加した。
 """
 
 from __future__ import annotations
@@ -88,16 +103,22 @@ NOT_FOUND_SENTENCE = (
     "If TaskOutput reports that the task can no longer be found, "
     "return `Status: execution-failed`"
 )
+TOOL_SCOPE_SENTENCE = (
+    "Use Read only when the recovered report is truncated, and only on "
+    "the same background task's recorded output file path; do not read "
+    "other files or independently re-review the diff."
+)
 
 
 def recovery_section(body: str) -> str:
     """`## Background-move recovery` セクションを fence 追跡 scanner で抽出する。
 
-    行単位で走査し、行が ``` で始まるたびに fence 状態を toggle する。fence 外で
-    行全体が `## Background-move recovery` に一致する行を起点、それ以降の fence
-    外で `## ` で始まる次の行を終点とし、その間 (起点行含む・終点行含まず) を
-    返す。コード fence 内に偶然含まれる同名見出しや `## ` 行は起点・終点の判定
-    から除外される。見出しが無ければ空文字列を返す。
+    行単位で走査し、行の先頭空白を除去した後に ``` で始まるたびに fence 状態を
+    toggle する (リスト項目内などインデント付き fence も fence として扱う)。
+    fence 外で行全体が `## Background-move recovery` に一致する行を起点、それ
+    以降の fence 外で `## ` で始まる次の行を終点とし、その間 (起点行含む・
+    終点行含まず) を返す。コード fence 内に偶然含まれる同名見出しや `## ` 行は
+    起点・終点の判定から除外される。見出しが無ければ空文字列を返す。
     """
     marker = "## Background-move recovery"
     lines = body.splitlines(keepends=True)
@@ -105,7 +126,7 @@ def recovery_section(body: str) -> str:
     start_index: int | None = None
     for index, line in enumerate(lines):
         content = line.rstrip("\n")
-        if content.startswith("```"):
+        if content.lstrip().startswith("```"):
             in_fence = not in_fence
             continue
         if in_fence:
@@ -164,6 +185,11 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
         normalized = normalize(recovery_section(body))
         self.assertIn(normalize(TRUNCATED_SENTENCE), normalized)
 
+    def test_read_scope_limited_to_recovered_output(self) -> None:
+        body = self.read(CODEX_REVIEWER)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(TOOL_SCOPE_SENTENCE), normalized)
+
     def test_boundary_lost_task_id_ends_execution_failed(self) -> None:
         body = self.read(CODEX_REVIEWER)
         normalized = normalize(recovery_section(body))
@@ -193,6 +219,11 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
         body = self.read(CODEX_REVIEWER)
         self.assertNotIn("Do not invoke other tools.", body)
         self.assertNotIn("grants `Bash` only", body)
+        self.assertNotIn(
+            "Do not read files or independently analyze the diff", body
+        )
+        self.assertNotIn("Only the `Bash` tool", body)
+        self.assertNotIn("are all disallowed", body)
 
     def test_recovery_section_helper_ignores_fenced_headings(self) -> None:
         fake_body = (
@@ -208,6 +239,12 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
             "## fenced heading inside the real section must not end it\n"
             "```\n\n"
             "More real content after the fenced block.\n\n"
+            "1. A list item with an indented fenced block:\n\n"
+            "   ```text\n"
+            "## indented fence must stay open despite this unindented "
+            "heading-like line\n"
+            "   ```\n\n"
+            "Content after the indented fenced block.\n\n"
             "## Next section\n\n"
             "Unrelated trailing content.\n"
         )
@@ -222,6 +259,12 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
             "fenced heading inside the real section must not end it", section
         )
         self.assertIn("More real content after the fenced block.", section)
+        self.assertIn(
+            "indented fence must stay open despite this unindented "
+            "heading-like line",
+            section,
+        )
+        self.assertIn("Content after the indented fenced block.", section)
         self.assertNotIn("Unrelated trailing content.", section)
 
 
