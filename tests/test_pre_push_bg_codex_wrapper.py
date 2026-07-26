@@ -522,47 +522,75 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
 
     wrapper 名 (`run-codex-review.sh`) を含む segment の分類を、read-only
     allowlist 方式 (不明コマンド = fail-closed で実行形) から executable 位置方式へ
-    転換する。
+    転換する。分類は「canonical token 値」(single/double quote 除去・backslash
+    escape 解決・fragment 連結を行った shell word の静的な値) に対して行い、
+    head token のみさらに basename 正規化する。canonical 化は本 hook 内の
+    専用 helper に閉じ、共有 parser (cmd-parser.sh) や push gate
+    (block-pre-push.sh) の token 判定は変更しない。
 
-    分類は「canonical token 値」(single/double quote 除去・backslash escape
-    解決・fragment 連結を行った shell word の静的な値) に対して行い、head token
-    のみさらに basename 正規化する。動的展開 (`$VAR` 等) を含み canonical 値を
-    静的に決定できない head は解析不能として保守的に実行形とする。head の
-    canonical 値が compound-command 構文の開始文字 (`(` / `{`) を含む場合、
-    または shell keyword (if / then / elif / else / fi / while / until / for /
-    do / done / case / esac / function) の場合も、グループ内の実コマンドを
-    本分類は解析しないため保守的に実行形とする。
+    契約の主構造は fail-closed の前提条件である。segment が言及 (mention) と
+    分類されうるのは、head token が次の前提条件をすべて満たす場合に限る:
 
-    実行形と分類するのは (a) head の basename が wrapper 名そのもの (b) shell
-    interpreter (bash/sh/dash/zsh/ksh) / exec-capable builtin (source / `.` /
-    exec / eval) が head で wrapper substring と共存 (option の精密解析はせず
-    保守的に実行形) (c) launcher prefix (command / builtin / env / timeout /
-    nohup / nice / setsid / stdbuf / sudo / doas / time / `!`) は反復的に剥がして
-    残りを再分類する。剥がすたびに代入 slot (NAME=VALUE 列) を再評価して skip し、
-    代入値に wrapper substring があれば実行形 (GIT_EXTERNAL_DIFF 型)。timeout の
-    duration operand (canonical 値が数値 + 任意の s/m/h/d suffix) は消費してから
-    再分類する。`-` 始まりの canonical token が現れたら解析不能として実行形
-    (d) script/対話内実行面を持つ
+    1. canonical 値が静的に確定する (動的展開 `$VAR` 等・indirection を含まない)
+    2. 通常の外部コマンド word の形をしている (英数字・`_`・`/` のいずれかで
+       始まり、`[A-Za-z0-9_/.+-]` のみで構成される)
+    3. bash keyword の静的 superset (if / then / else / elif / fi / case /
+       esac / for / select / while / until / do / done / in / function /
+       time / coproc / `{` / `}` / `[[` / `]]` / `!`) に該当しない
+    4. shell builtin の静的 superset (対応 bash 世代の compgen -b 相当の
+       全集合。source / `.` / exec / eval / trap / command / builtin /
+       export / declare / readonly / typeset / local / set / unset /
+       shopt / bind / complete / mapfile / read / printf / ulimit / kill /
+       suspend / fc / history / hash / enable / caller / let / wait /
+       jobs / fg / bg / disown / getopts / alias / unalias / cd / pushd /
+       popd / dirs / umask / times / help / logout / return / break /
+       continue / shift / exit / eval を含むがこれに限らない) に該当しない。
+       ただし無害 builtin allowlist (echo / test / `[` / true / false /
+       pwd / type) のみこの前提条件を免除して mention 判定へ進める (printf は
+       `-v` の変数書込面があるため免除しない)
+
+    前提条件を 1 つでも満たさない head の segment は解析不能として実行形
+    (fail-closed) とする。redirection 演算子が head に来る形
+    (`>out bash <W>` 等)・coproc・trap・未知の記号構文はこの構造規則で一括して
+    実行形に落ちる (個別列挙に依存しない)。
+
+    前提条件を満たした head には次の実行形判定を適用する: (a) head の
+    basename が wrapper 名そのもの (b) shell interpreter
+    (bash/sh/dash/zsh/ksh) が head で wrapper substring と共存 (option の
+    精密解析はせず保守的に実行形) (c) launcher prefix (command / builtin /
+    env / timeout / nohup / nice / setsid / stdbuf / sudo / doas / time /
+    `!` — keyword/builtin superset 由来のものは前提条件 3-4 で実行形になる
+    ため、ここでの剥がしは実装上 canonical 分類器の内部遷移として行う) は
+    反復的に剥がして残りを再分類する。剥がすたびに代入 slot (NAME=VALUE 列)
+    を再評価して skip し、代入値に wrapper substring があれば実行形
+    (GIT_EXTERNAL_DIFF 型)。timeout の duration operand は canonical 値が
+    数値 + 任意の s/m/h/d suffix の単純形のみ消費し、認識できない operand が
+    現れたら解析不能として実行形 (fail-closed)。`-` 始まりの canonical
+    token が現れた場合も同様 (d) script/対話内実行面を持つ
     sed/awk/xargs/less/more/parallel (e) option-aware: find の
     -exec/-execdir/-ok/-okdir、rg の --pre / --pre=*、sort の
-    --compress-program / --compress-program=* (canonical 値で判定。値を取る
-    option の literal 引数 (`rg -e '--pre'`) も保守的 superset として deny し、
-    false positive を受容する。危険 option の列挙は受容境界であり、列挙外の
-    value-taking option (稀な helper binary 指定等) は残余ギャップとして
-    受容する (arity 解析を行わない設計判断)) (f) git は現行特例 (縮小 subcommand 集合 +
-    --ext-diff/--textconv 検査、いずれも canonical 値で判定) を維持 (g) segment
-    先頭の leading 代入列と launcher 剥がし中に skip する代入列の値に wrapper
-    substring を含む場合、および head token が無い segment (assignment-only)。
-    declaration builtin (export / declare / readonly / typeset / local) が
-    head の場合、その引数の NAME=VALUE 形は代入として leading 代入列と同様に
-    値を検査する。それ以外の head の引数位置 NAME=VALUE 形 (shell は env
-    代入と解釈しない) は検査しない。
+    --compress-program (省略形を逐次列挙せず、canonical 値が --com で始まる
+    token を保守的 prefix 一致で deny する。= 付き含む) — いずれも canonical
+    値で判定し、値を取る option の literal 引数 (`rg -e '--pre'`) も保守的
+    superset として deny し false positive を受容する。危険 option の列挙は
+    受容境界であり、列挙外の value-taking option は残余ギャップとして
+    受容する (f) git は現行特例 (縮小 subcommand 集合 + --ext-diff/--textconv
+    検査、いずれも canonical 値で判定) を維持 (g) segment 先頭の leading
+    代入列と launcher 剥がし中に skip する代入列の値に wrapper substring を
+    含む場合、および head token が無い segment (assignment-only)。
+    declaration builtin (export / declare 等) は前提条件 4 の builtin
+    superset で実行形となるため、変数経由の遅延起動
+    (`export W=<wrapper>; bash "$W"`) も deny 側に落ちる。それ以外の head の
+    引数位置 NAME=VALUE 形 (shell は env 代入と解釈しない) は検査しない。
 
-    それ以外の引数・quoted 文字列としての出現は言及扱いで allow する (fail-open
-    への意図的転換)。本 hook は cooperative 前提の補助 gate であり (真の push
-    gate は block-pre-push.sh)、任意の未知 launcher・動的構築コマンドへの完全性は
-    保証しない。言及扱い segment の pipe chain 検査 (neighbor は従来の read-only
-    allowlist を exact 判定のまま維持し、basename 正規化を適用しない) と
+    以上のどの実行形判定にも該当しない「外部コマンド形の不明 head」による
+    引数・quoted 文字列としての出現のみ、言及扱いで allow する (fail-open は
+    この 1 経路に限定する。issue #339 の意図的転換)。本 hook は cooperative
+    前提の補助 gate であり (真の push gate は block-pre-push.sh)、外部
+    コマンド形の未知 launcher (`frobnicate <wrapper>` 等) への完全性は
+    保証しない。言及扱い segment の pipe chain 検査 (neighbor は従来の
+    read-only allowlist を exact 判定のまま維持し、basename 正規化を適用
+    しない — 中心 segment との判定非対称は受容境界として明示する) と
     indirection 規則 1 は現行のまま維持する。
     """
 
@@ -1289,6 +1317,107 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                     "command": (
                         "declare -x WRP=plugins/pre-push-review/hooks/"
                         "scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_coproc_keyword_launch_is_denied(self) -> None:
+        # coproc は bash keyword の静的 superset に該当し実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "coproc bash plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_trap_callback_builtin_is_denied(self) -> None:
+        # trap は shell builtin superset の callback 面を持つため実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "trap 'bash plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh' EXIT"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_redirection_head_launch_is_denied(self) -> None:
+        # redirection 演算子が head に来る非コマンド形は解析不能として実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        ">codex.log bash plugins/pre-push-review/hooks/"
+                        "scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_timeout_unrecognized_operand_is_denied(self) -> None:
+        # 認識できない duration operand (1,5) は解析不能として実行形
+        # (grep 自体は read-only だが operand 解析不能のため実行形に落ちる)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "timeout 1,5 grep -n marker plugins/pre-push-review/"
+                        "hooks/scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_sort_abbreviated_compress_option_is_denied(self) -> None:
+        # --compress-prog は危険 option の保守的 prefix 一致で deny。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "sort --compress-prog=gzip plugins/pre-push-review/"
+                        "hooks/scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_type_builtin_mention_is_allowed(self) -> None:
+        # type は無害 builtin allowlist に pin (現行実装では deny の見込み)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "type run-codex-review.sh"},
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_mention_piped_to_non_allowlist_neighbor_is_denied(self) -> None:
+        # neighbor (jq) が非 mention-safe allowlist のため chain 全体が実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg -l marker plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh | jq ."
                     )
                 },
             }
