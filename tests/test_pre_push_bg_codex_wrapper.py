@@ -528,60 +528,76 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     専用 helper に閉じ、共有 parser (cmd-parser.sh) や push gate
     (block-pre-push.sh) の token 判定は変更しない。
 
-    契約の主構造は fail-closed の前提条件である。segment が言及 (mention) と
-    分類されうるのは、head token が次の前提条件をすべて満たす場合に限る:
+    分類は次の順序付き決定表で行う。各 step は上から順に評価し、最初に
+    確定した判定を採用する:
 
-    1. canonical 値が静的に確定する (動的展開 `$VAR` 等・indirection を含まない)
-    2. 通常の外部コマンド word の形をしている (英数字・`_`・`/` のいずれかで
-       始まり、`[A-Za-z0-9_/.+-]` のみで構成される)
-    3. bash keyword の静的 superset (if / then / else / elif / fi / case /
-       esac / for / select / while / until / do / done / in / function /
-       time / coproc / `{` / `}` / `[[` / `]]` / `!`) に該当しない
-    4. shell builtin の静的 superset (対応 bash 世代の compgen -b 相当の
-       全集合。source / `.` / exec / eval / trap / command / builtin /
+    1. segment が indirection (quote-aware のコマンド置換 / バッククォート /
+       プロセス置換) を含む → 実行形 (INDIRECTION フラグ連動。現行規則 1 の
+       まま)
+    2. leading 代入列 (segment 先頭の NAME=VALUE 連鎖) を処理する: 代入値に
+       wrapper substring があれば実行形 (GIT_EXTERNAL_DIFF 型)。処理後に
+       head token が無い (assignment-only / 空) → 実行形
+    3. head token の canonical 化 (single/double quote 除去・backslash
+       escape 解決・fragment 連結。hook 専用 helper で行い共有 parser は
+       変更しない) が失敗する (動的展開 `$VAR` 等を含む) → 実行形
+    4. 無害 builtin 例外: canonical head が echo / test / `[` / true /
+       false / pwd / type に完全一致 (basename 適用なし。
+       word-shape・keyword・builtin superset 検査より先に評価するため `[`
+       も到達可能) → mention 候補 (step 12 へ)
+    5. launcher prefix 例外 (word-shape / keyword / builtin superset 検査
+       より先に評価する明示的第二例外): canonical head が command /
+       builtin / env / timeout / nohup / nice / setsid / stdbuf / sudo /
+       doas / time / `!` に完全一致 (basename 適用なし) → 限定解析で
+       剥がす: 直後の代入 slot (NAME=VALUE 列) を再評価して skip し代入値に
+       wrapper substring があれば実行形。timeout は数値 + 任意の s/m/h/d
+       suffix の単純形 duration operand のみ消費。`-` 始まりまたは認識
+       できない operand が現れたら実行形。剥がし後の残り token 列を
+       step 3 から再評価する
+    6. canonical head が通常の外部コマンド word の形 (英数字・`_`・`/` の
+       いずれかで始まり `[A-Za-z0-9_/.+-]` のみで構成) でない (redirection
+       演算子・記号構文等) → 実行形
+    7. canonical head が bash keyword 静的 superset (if / then / else /
+       elif / fi / case / esac / for / select / while / until / do /
+       done / in / function / coproc / `{` / `}` / `[[` / `]]`。time と
+       `!` は step 5 で処理済み) に該当 → 実行形
+    8. canonical head が shell builtin 静的 superset (対応 bash 世代の
+       compgen -b 相当の全集合。source / `.` / exec / eval / trap /
        export / declare / readonly / typeset / local / set / unset /
-       shopt / bind / complete / mapfile / read / printf / ulimit / kill /
-       suspend / fc / history / hash / enable / caller / let / wait /
-       jobs / fg / bg / disown / getopts / alias / unalias / cd / pushd /
-       popd / dirs / umask / times / help / logout / return / break /
-       continue / shift / exit / eval を含むがこれに限らない) に該当しない。
-       ただし無害 builtin allowlist (echo / test / `[` / true / false /
-       pwd / type) のみこの前提条件を免除して mention 判定へ進める (printf は
-       `-v` の変数書込面があるため免除しない)
+       shopt / bind / complete / mapfile / read / printf / kill / wait /
+       alias / cd / pushd / popd / return / break / continue / shift /
+       exit / let / eval 等を含む。step 4 の無害 builtin と step 5 の
+       launcher は処理済みのため到達しない) に該当 → 実行形 (declaration
+       builtin の代入形引数の値検査を含む: 値に wrapper substring が
+       あれば当然実行形だが、builtin superset 該当時点で実行形のためこの
+       検査は宣言的な補強である)
+    9. head の basename (step 9 以降でのみ basename を適用する) が
+       wrapper 名 (run-codex-review.sh) に完全一致 → 実行形。shell
+       interpreter (bash/sh/dash/zsh/ksh) が head で wrapper substring と
+       共存 → 実行形 (option の精密解析はしない)
+    10. script/対話内実行面を持つ sed/awk/xargs/less/more/parallel →
+        実行形。option-aware: find の -exec/-execdir/-ok/-okdir、rg の
+        --pre / --pre=*、sort の --compress-program (--com 以上の
+        prefix 一致、= 付き含む) が canonical token として存在 → 実行形
+        (値を取る option の literal 引数も保守的 superset として deny し
+        false positive を受容する。危険 option の列挙は受容境界であり、
+        列挙外の value-taking option は残余ギャップとして受容する)
+    11. git 特例: 縮小 subcommand 集合 (diff / log / show / status /
+        ls-files / rev-parse / cat-file) に直後 token が一致し、
+        --ext-diff / --textconv (canonical 値・prefix でなく完全一致) が
+        無い場合のみ mention 候補 (step 12 へ)。特例に一致しない git は
+        すべて実行形 (fall-through は実行形側であり mention 側へ落ちない)
+    12. ここまで実行形と確定しなかった head (無害 builtin・git 特例・
+        外部コマンド形の不明 head) は mention 候補: 従来の pipe chain
+        検査 (neighbor は read-only allowlist の exact 判定のまま、
+        basename 正規化なし — 中心 segment との非対称は受容境界) を
+        通過すれば mention (allow)、通過しなければ実行形
 
-    前提条件を 1 つでも満たさない head の segment は解析不能として実行形
-    (fail-closed) とする。redirection 演算子が head に来る形
-    (`>out bash <W>` 等)・coproc・trap・未知の記号構文はこの構造規則で一括して
-    実行形に落ちる (個別列挙に依存しない)。
-
-    前提条件を満たした head には次の実行形判定を適用する: (a) head の
-    basename が wrapper 名そのもの (b) shell interpreter
-    (bash/sh/dash/zsh/ksh) が head で wrapper substring と共存 (option の
-    精密解析はせず保守的に実行形) (c) launcher prefix (command / builtin /
-    env / timeout / nohup / nice / setsid / stdbuf / sudo / doas / time /
-    `!` — keyword/builtin superset 由来のものは前提条件 3-4 で実行形になる
-    ため、ここでの剥がしは実装上 canonical 分類器の内部遷移として行う) は
-    反復的に剥がして残りを再分類する。剥がすたびに代入 slot (NAME=VALUE 列)
-    を再評価して skip し、代入値に wrapper substring があれば実行形
-    (GIT_EXTERNAL_DIFF 型)。timeout の duration operand は canonical 値が
-    数値 + 任意の s/m/h/d suffix の単純形のみ消費し、認識できない operand が
-    現れたら解析不能として実行形 (fail-closed)。`-` 始まりの canonical
-    token が現れた場合も同様 (d) script/対話内実行面を持つ
-    sed/awk/xargs/less/more/parallel (e) option-aware: find の
-    -exec/-execdir/-ok/-okdir、rg の --pre / --pre=*、sort の
-    --compress-program (省略形を逐次列挙せず、canonical 値が --com で始まる
-    token を保守的 prefix 一致で deny する。= 付き含む) — いずれも canonical
-    値で判定し、値を取る option の literal 引数 (`rg -e '--pre'`) も保守的
-    superset として deny し false positive を受容する。危険 option の列挙は
-    受容境界であり、列挙外の value-taking option は残余ギャップとして
-    受容する (f) git は現行特例 (縮小 subcommand 集合 + --ext-diff/--textconv
-    検査、いずれも canonical 値で判定) を維持 (g) segment 先頭の leading
-    代入列と launcher 剥がし中に skip する代入列の値に wrapper substring を
-    含む場合、および head token が無い segment (assignment-only)。
-    declaration builtin (export / declare 等) は前提条件 4 の builtin
-    superset で実行形となるため、変数経由の遅延起動
-    (`export W=<wrapper>; bash "$W"`) も deny 側に落ちる。それ以外の head の
-    引数位置 NAME=VALUE 形 (shell は env 代入と解釈しない) は検査しない。
+    wrapper 名の判定は exact basename 一致であり、変則 path (basename が
+    wrapper 名を部分包含する別名ファイル) は cooperative 境界として対象外
+    (ヘッダの wrapper alias 対象外宣言と同じ受容範囲)。redirection 演算子の
+    うち事前正規化 sed が空白置換する形 (`2>&1` / `&>` / `<<<` 等) は分類前に
+    除去されるため、step 6 の主張は正規化後の segment に対して適用される
+    (正規化前 head の評価は別 issue で扱う)。
 
     以上のどの実行形判定にも該当しない「外部コマンド形の不明 head」による
     引数・quoted 文字列としての出現のみ、言及扱いで allow する (fail-open は
@@ -1418,6 +1434,51 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                     "command": (
                         "rg -l marker plugins/pre-push-review/hooks/scripts/"
                         "run-codex-review.sh | jq ."
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_command_prefixed_mention_head_is_allowed(self) -> None:
+        # step 5 の剥がし後に外部コマンド形 head (grep) へ到達する pin。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "command grep -n marker plugins/pre-push-review/"
+                        "hooks/scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_bracket_builtin_mention_is_allowed(self) -> None:
+        # step 4 (無害 builtin) が step 6 (word-shape) に先行する pin。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "[ -f plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh ]"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_git_unlisted_subcommand_is_denied(self) -> None:
+        # step 11 の git 特例 fall-through は実行形側に落ちる pin。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "git difftool plugins/pre-push-review/hooks/"
+                        "scripts/run-codex-review.sh"
                     )
                 },
             }
