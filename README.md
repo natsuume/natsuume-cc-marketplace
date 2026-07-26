@@ -24,7 +24,8 @@ claude plugin install git-guardrails@natsuume-plugins
 
 ```bash
 # Codex 側: install 済みの各 plugin を削除 (config / cache も削除される)
-codex plugin remove <plugin-name>
+# <plugin-name> は実際の plugin 名に置換する (例: codex plugin remove agent-discipline@natsuume-plugins)
+codex plugin remove <plugin-name>@natsuume-plugins
 
 # Codex 側: marketplace 登録を削除
 codex plugin marketplace remove natsuume-plugins
