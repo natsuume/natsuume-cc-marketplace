@@ -56,6 +56,25 @@ test_bash_only_wording_removed の negative assert を 5 本 (旧来の 2 本 + 
 に拡充し、`recovery_section` の fence 判定を行頭空白除去後の ``` 判定に変更して
 インデント付き fence にも対応した上で、合成 markdown の回帰テストにリスト項目内の
 インデント付き fence ケースを追加した。
+
+5 回目のレビュー指摘と advisor checkpoint (rescue 壁打ちに加え、Codex advisor
+への根本方針確認) は次の 4 点だった: (i) BUDGET_SENTENCE / RESUME_CHECK_SENTENCE
+の「手動確認経路」が、resume 後の TaskOutput 呼び出しを codex-reviewed marker
+昇格の代替経路であるかのように読める余地があり、auto-mark.sh の attestation
+lifecycle (単一 run の hash-bound pending attestation を、単一の SubagentStop
+hook 呼び出しが正規 report を条件に昇格させる) と整合しない、(ii) background
+移行と wrapper failure (non-zero exit) の優先順位が本文で固定されておらず、
+両者が排他的に扱われるべきことが自明でない、(iii) tools frontmatter の検査が
+`tools:` 行の完全一致 1 行のみを想定しており複数行や部分一致に対して脆弱、
+(iv) 旧 Bash-only 文言の不在検査がフラグメント単位で、正当な絞り込み文言
+(例: 新設した TOOL_SCOPE_SENTENCE の "do not read other files") に過剰マッチ
+しうる。これに対応し、BUDGET_SENTENCE と RESUME_CHECK_SENTENCE を「resume は
+診断専用であり marker を昇格できず、push gate を満たすには新規 reviewer run
+が必要」と明記する文に改め、PRECEDENCE_SENTENCE で background 移行が
+wrapper failure の non-zero-exit path と扱われないことを固定し、
+test_tools_frontmatter_grants_recovery_tools を `tools:` 行の個数 1 + 完全
+一致の 2 段検査に強化し、test_bash_only_wording_removed を normalize 済みの
+旧文言 3 種 (完全文 2 種 + 7 語の連続句 1 種) の verbatim 不在検査に置き換えた。
 """
 
 from __future__ import annotations
@@ -92,12 +111,14 @@ BUDGET_SENTENCE = (
     "If the recovery budget is exhausted before the task reaches a terminal "
     "state, return `Status: execution-failed`, state in the recovery "
     "direction that the codex review is likely still running in the "
-    "background, and name promptly resuming this same subagent with a "
-    "focused status-check question as the manual confirmation path."
+    "background, and note that the parent may resume this same subagent "
+    "for a diagnostic status check only."
 )
 RESUME_CHECK_SENTENCE = (
-    "A resumed status check is a single bounded TaskOutput call "
-    "outside the initial recovery budget."
+    "A resumed status check is a single bounded TaskOutput call outside "
+    "the initial recovery budget; it is diagnostic only and can never "
+    "promote the codex-reviewed marker — satisfying the push gate "
+    "requires a fresh reviewer run."
 )
 NOT_FOUND_SENTENCE = (
     "If TaskOutput reports that the task can no longer be found, "
@@ -107,6 +128,11 @@ TOOL_SCOPE_SENTENCE = (
     "Use Read only when the recovered report is truncated, and only on "
     "the same background task's recorded output file path; do not read "
     "other files or independently re-review the diff."
+)
+PRECEDENCE_SENTENCE = (
+    "A background move is not a wrapper failure: when the Bash result "
+    "reports the run was moved to the background, follow this recovery "
+    "section instead of the non-zero-exit path."
 )
 
 
@@ -160,7 +186,9 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
     def test_tools_frontmatter_grants_recovery_tools(self) -> None:
         body = self.read(CODEX_REVIEWER)
         lines = self.frontmatter_lines(body)
-        self.assertIn("tools: Bash, TaskOutput, Read", lines)
+        tools_lines = [line for line in lines if line.startswith("tools:")]
+        self.assertEqual(len(tools_lines), 1)
+        self.assertEqual(tools_lines[0], "tools: Bash, TaskOutput, Read")
 
     def test_recovery_section_documents_background_move(self) -> None:
         body = self.read(CODEX_REVIEWER)
@@ -169,6 +197,11 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
         normalized = normalize(section)
         self.assertIn("moved to the background", normalized)
         self.assertIn("record the task ID and the output file path", normalized)
+
+    def test_background_move_takes_precedence_over_error_path(self) -> None:
+        body = self.read(CODEX_REVIEWER)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(PRECEDENCE_SENTENCE), normalized)
 
     def test_recovery_polls_same_task_to_terminal(self) -> None:
         body = self.read(CODEX_REVIEWER)
@@ -217,13 +250,25 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
 
     def test_bash_only_wording_removed(self) -> None:
         body = self.read(CODEX_REVIEWER)
-        self.assertNotIn("Do not invoke other tools.", body)
-        self.assertNotIn("grants `Bash` only", body)
+        normalized_body = normalize(body)
         self.assertNotIn(
-            "Do not read files or independently analyze the diff", body
+            normalize(
+                "**Do not invoke other tools.** Only the `Bash` tool to "
+                "start the wrapper."
+            ),
+            normalized_body,
         )
-        self.assertNotIn("Only the `Bash` tool", body)
-        self.assertNotIn("are all disallowed", body)
+        self.assertNotIn(
+            normalize(
+                "This subagent's `tools` field grants `Bash` only — "
+                "Read / Edit / Write / Skill / Task are all disallowed."
+            ),
+            normalized_body,
+        )
+        self.assertNotIn(
+            normalize("Do not read files or independently analyze the diff"),
+            normalized_body,
+        )
 
     def test_recovery_section_helper_ignores_fenced_headings(self) -> None:
         fake_body = (
