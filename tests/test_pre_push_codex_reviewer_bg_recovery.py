@@ -75,6 +75,34 @@ wrapper failure の non-zero-exit path と扱われないことを固定し、
 test_tools_frontmatter_grants_recovery_tools を `tools:` 行の個数 1 + 完全
 一致の 2 段検査に強化し、test_bash_only_wording_removed を normalize 済みの
 旧文言 3 種 (完全文 2 種 + 7 語の連続句 1 種) の verbatim 不在検査に置き換えた。
+
+6 回目のレビュー指摘 (rescue approve 済み) は次の 4 点だった: (i) background
+移行の検知直後に「何を記録するか」を指す substring assert (`"moved to the
+background"` / `"record the task ID and the output file path"`) は緩く、
+記録指示がどの契機に紐づくかという出所 (Bash 結果が background 移行を報告
+した直後、という条件) まで一文で固定していなかった、(ii) 回収予算超過後の
+report と異なり、回収が成功して task が terminal state に達した後の出力を
+既存の parent-safe report 契約 (`Status: pass` / `Status: findings` /
+`Status: execution-failed`) へどう normalize するかという handoff が本文に
+明記されていなかった、(iii) BUDGET_DEFINITION_SENTENCE が「10 分」という
+具体的な分数を含んでおり、ツール仕様側の実際の上限値と将来ずれた場合に
+テストと実装の二重管理になる、(iv) `recovery_section` の fence 追跡が
+delimiter 文字と run 長を区別しておらず、4-backtick fence 内の 3-backtick
+行や、tilde (`~~~`) fence 内の backtick 行を閉じ fence と誤認しうる。これに
+対応し、RECORD_SENTENCE で記録指示を「Bash 結果が background 移行を報告した
+直後」という出所付きの完全命令文として固定し (test_recovery_section_documents_
+background_move を空でないこと + RECORD_SENTENCE 包含の 2 assert に単純化)、
+HANDOFF_SENTENCE で回収後 terminal state からの report 契約 handoff を固定し、
+PRECEDENCE_SENTENCE を「background 移行はそれ自体では wrapper failure ではない」
+という move の分類のみに限定する文に改め、BUDGET_DEFINITION_SENTENCE から
+分数の数値を除去し、`recovery_section` の fence 追跡を delimiter 文字
+(backtick/tilde) と開始 run 長を記録し、閉じ fence を「同一文字・開始長以上の
+run・run 後は空白のみ」に限定する厳密な scanner に書き換え、合成 markdown の
+回帰テストに 4-backtick fence と tilde fence の 2 ケースを追加した。
+
+この改訂をもって、issue #337 Phase A の red テスト契約を freeze する。以降の
+変更は Phase B (`codex-reviewer.md` の実装) で green 化することを前提とし、
+本ファイルへのさらなる contract 変更は新たな issue として起票する。
 """
 
 from __future__ import annotations
@@ -105,7 +133,18 @@ LOST_SENTENCE = (
 )
 BUDGET_DEFINITION_SENTENCE = (
     "For the initial automatic recovery, make at most five TaskOutput "
-    "calls, each with the tool's maximum timeout of ten minutes."
+    "calls, each with the tool's maximum timeout."
+)
+RECORD_SENTENCE = (
+    "When the Bash result reports that the wrapper run was moved to the "
+    "background, immediately record the task ID and the output file path "
+    "that the background-move result surfaces."
+)
+HANDOFF_SENTENCE = (
+    "Once the recovered run reaches a terminal state, normalize its "
+    "output through the existing report contract: a successful review "
+    "yields `Status: pass` or `Status: findings`, and a failed wrapper "
+    "run yields `Status: execution-failed`."
 )
 BUDGET_SENTENCE = (
     "If the recovery budget is exhausted before the task reaches a terminal "
@@ -130,32 +169,50 @@ TOOL_SCOPE_SENTENCE = (
     "other files or independently re-review the diff."
 )
 PRECEDENCE_SENTENCE = (
-    "A background move is not a wrapper failure: when the Bash result "
-    "reports the run was moved to the background, follow this recovery "
-    "section instead of the non-zero-exit path."
+    "A background move is not by itself a wrapper failure: when the Bash "
+    "result reports the run was moved to the background, follow this "
+    "recovery section instead of the non-zero-exit path."
 )
+
+
+FENCE_OPEN_PATTERN = re.compile(r"^(`{3,}|~{3,})")
 
 
 def recovery_section(body: str) -> str:
     """`## Background-move recovery` セクションを fence 追跡 scanner で抽出する。
 
-    行単位で走査し、行の先頭空白を除去した後に ``` で始まるたびに fence 状態を
-    toggle する (リスト項目内などインデント付き fence も fence として扱う)。
-    fence 外で行全体が `## Background-move recovery` に一致する行を起点、それ
-    以降の fence 外で `## ` で始まる次の行を終点とし、その間 (起点行含む・
-    終点行含まず) を返す。コード fence 内に偶然含まれる同名見出しや `## ` 行は
-    起点・終点の判定から除外される。見出しが無ければ空文字列を返す。
+    行単位で走査し、行の先頭空白を除去した後に ``` または ~~~ 以上の run で
+    始まる行を fence の開始とみなし、その delimiter 文字 (backtick/tilde) と
+    run 長を記録する。fence の終了は、同一の delimiter 文字が開始 run 長以上
+    連続し、その後が空白のみで終わる行に限定する (delimiter 文字が異なる、
+    または run 長が開始未満の行では閉じない)。fence 外で行全体が
+    `## Background-move recovery` に一致する行を起点、それ以降の fence 外で
+    `## ` で始まる次の行を終点とし、その間 (起点行含む・終点行含まず) を返す。
+    コード fence 内に偶然含まれる同名見出しや `## ` 行は起点・終点の判定から
+    除外される。見出しが無ければ空文字列を返す。
     """
     marker = "## Background-move recovery"
     lines = body.splitlines(keepends=True)
     in_fence = False
+    fence_char = ""
+    fence_len = 0
     start_index: int | None = None
     for index, line in enumerate(lines):
         content = line.rstrip("\n")
-        if content.lstrip().startswith("```"):
-            in_fence = not in_fence
-            continue
+        stripped = content.lstrip()
         if in_fence:
+            run_len = 0
+            while run_len < len(stripped) and stripped[run_len] == fence_char:
+                run_len += 1
+            if run_len >= fence_len and stripped[run_len:].strip() == "":
+                in_fence = False
+            continue
+        open_match = FENCE_OPEN_PATTERN.match(stripped)
+        if open_match:
+            run = open_match.group(1)
+            fence_char = run[0]
+            fence_len = len(run)
+            in_fence = True
             continue
         if start_index is None:
             if content == marker:
@@ -195,8 +252,12 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
         section = recovery_section(body)
         self.assertNotEqual(section, "")
         normalized = normalize(section)
-        self.assertIn("moved to the background", normalized)
-        self.assertIn("record the task ID and the output file path", normalized)
+        self.assertIn(normalize(RECORD_SENTENCE), normalized)
+
+    def test_recovered_terminal_state_routes_through_report_contract(self) -> None:
+        body = self.read(CODEX_REVIEWER)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(HANDOFF_SENTENCE), normalized)
 
     def test_background_move_takes_precedence_over_error_path(self) -> None:
         body = self.read(CODEX_REVIEWER)
@@ -290,6 +351,17 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
             "heading-like line\n"
             "   ```\n\n"
             "Content after the indented fenced block.\n\n"
+            "````text\n"
+            "```\n"
+            "## a heading-like line inside the four-backtick fence must "
+            "not end it\n"
+            "````\n\n"
+            "Content after the four-backtick fenced block.\n\n"
+            "~~~text\n"
+            "```\n"
+            "## a heading-like line inside the tilde fence must not end it\n"
+            "~~~\n\n"
+            "Content after the tilde fenced block.\n\n"
             "## Next section\n\n"
             "Unrelated trailing content.\n"
         )
@@ -310,6 +382,17 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
             section,
         )
         self.assertIn("Content after the indented fenced block.", section)
+        self.assertIn(
+            "a heading-like line inside the four-backtick fence must not "
+            "end it",
+            section,
+        )
+        self.assertIn("Content after the four-backtick fenced block.", section)
+        self.assertIn(
+            "a heading-like line inside the tilde fence must not end it",
+            section,
+        )
+        self.assertIn("Content after the tilde fenced block.", section)
         self.assertNotIn("Unrelated trailing content.", section)
 
 
