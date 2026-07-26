@@ -18,6 +18,14 @@
 が一文単位で契約化されていなかった) に対応し、Phase B で md に書かれるべき canonical
 な一文をモジュール定数として固定した上で、`## Background-move recovery` セクション
 内に空白正規化した上でその一文が存在することを個別の assert で検証する形に再構成した。
+
+さらに 2 回目のレビュー指摘 (poll 継続条件が回収予算の超過を終了条件として含まず
+無限 poll を許す抜け穴になっていた、予算超過時の report 記述に手動確認への案内が
+欠けていた) に対応し、初回自動回収の予算 (TaskOutput call 回数の上限 × 各 call の
+timeout 上限) と、resume 後に行う単発の bounded な status check を canonical な
+一文として固定した。POLL_SENTENCE の終了条件に予算超過を明記し、BUDGET_SENTENCE
+に手動確認経路 (この同じ subagent を focused な status-check question で resume
+する) の案内を統合した。
 """
 
 from __future__ import annotations
@@ -34,7 +42,8 @@ FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
 POLL_SENTENCE = (
     "Recover with TaskOutput (block=true) against the same task ID, "
-    "repeating until the task reaches a terminal state"
+    "repeating until the task reaches a terminal state "
+    "or the recovery budget is exhausted"
 )
 SECOND_RUN_SENTENCE = "Do not start a second wrapper run"
 TRUNCATED_SENTENCE = (
@@ -45,10 +54,21 @@ LOST_SENTENCE = (
     "If you lost the task ID or the output file path, "
     "return `Status: execution-failed`"
 )
+BUDGET_DEFINITION_SENTENCE = (
+    "For the initial automatic recovery, make at most five TaskOutput calls, "
+    "each with a timeout of at most ten minutes, so the recovery stays "
+    "within the 60-minute background-shell limit."
+)
 BUDGET_SENTENCE = (
     "If the recovery budget is exhausted before the task reaches a terminal "
-    "state, return `Status: execution-failed` and state in the recovery "
-    "direction that the codex review is likely still running in the background."
+    "state, return `Status: execution-failed`, state in the recovery "
+    "direction that the codex review is likely still running in the "
+    "background, and name promptly resuming this same subagent with a "
+    "focused status-check question as the manual confirmation path."
+)
+RESUME_CHECK_SENTENCE = (
+    "A resumed status check is a single bounded TaskOutput call "
+    "outside the initial recovery budget."
 )
 NOT_FOUND_SENTENCE = (
     "If TaskOutput reports that the task can no longer be found, "
@@ -124,6 +144,16 @@ class CodexReviewerBackgroundMoveRecoveryTest(unittest.TestCase):
         body = self.read(CODEX_REVIEWER)
         normalized = normalize(recovery_section(body))
         self.assertIn(normalize(BUDGET_SENTENCE), normalized)
+
+    def test_recovery_budget_is_bounded(self) -> None:
+        body = self.read(CODEX_REVIEWER)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(BUDGET_DEFINITION_SENTENCE), normalized)
+
+    def test_resumed_check_is_bounded(self) -> None:
+        body = self.read(CODEX_REVIEWER)
+        normalized = normalize(recovery_section(body))
+        self.assertIn(normalize(RESUME_CHECK_SENTENCE), normalized)
 
     def test_boundary_task_not_found_ends_execution_failed(self) -> None:
         body = self.read(CODEX_REVIEWER)
