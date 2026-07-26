@@ -13,7 +13,9 @@
   security-reviewer frontmatter の effort: medium 固定も撤廃する (model: opus は
   維持。frontmatter の契約は tests/test_subagent_model_pins.py が検査する)。
 
-Phase A で red、Phase B のプロンプト修正で green になる。
+変更要求の契約は Phase A で red、Phase B のプロンプト修正で green になる。
+存続規範の保全ガード (test_sonnet_no_effort_rule_preserved) は Phase A から
+green であり、Phase B の書換えが既存規範を丸ごと失わないことを固定する。
 """
 
 from __future__ import annotations
@@ -46,12 +48,21 @@ REMOVED_PHRASES = (
     "effort: 'medium'",
     "実効 effort が medium",
     "Opus 5 を使わず実効 model を Sonnet 系に",
+    "難度による引き上げ・引き下げをしない",
 )
 
 # 置換後の新 canonical 文 (部分文字列)。
 EFFORT_GUIDANCE_PHRASE = "Opus 5 を使う委任では effort を固定しない"
 SCOPE_INSTRUCTION_PHRASE = "Opus 5 への委任指示にはスコープ制限の 1 文を必ず含める"
 RECHECK_BAN_PHRASE = "Opus 5 への委任では汎用的な再確認指示を加えない"
+
+# 撤廃断片 (medium 指定のみ) を含む既存 bullet のうち、存続させるべき規範文。
+# Phase B の書換えが bullet 全体を誤って削除しないことを固定する保全ガード。
+SONNET_RULE_PHRASE = "Sonnet 系には effort を指定しない"
+
+# 隣接配置検査で切り出すセクション境界 (rule ID マーカー)。
+DELEGATION_INSTRUCTION_MARKER = "<!-- rule:delegation-instruction -->"
+ESCALATION_MARKER = "<!-- rule:escalation -->"
 
 # reviewer body の較正文 (effort 継承化に伴う高 effort 自己修正ループ対策)。
 REVIEWER_CALIBRATION_PHRASE = (
@@ -117,15 +128,54 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
         )
 
     def test_scope_instruction_precedes_recheck_ban(self) -> None:
-        """スコープ制限 → 汎用再確認禁止の順で隣接配置される (先に読ませる)。"""
-        out_of_order = []
+        """スコープ制限 → 汎用再確認禁止の順の隣接配置 (対で先に読ませる)。
+
+        rule:delegation-instruction 節を切り出し、その中で両段落が各 1 回、
+        間に別段落を挟まず連続して現れることを検査する。順序のみの検査では
+        別セクションへの分離や対ごとの移動を検知できないため、節スコープ +
+        段落 index の隣接まで固定する。
+        """
+        violations = []
         for name, path in THREE_WAY.items():
             text = read(path)
-            if SCOPE_INSTRUCTION_PHRASE not in text or RECHECK_BAN_PHRASE not in text:
-                out_of_order.append(f"{name} (文言不在)")
-            elif text.index(SCOPE_INSTRUCTION_PHRASE) > text.index(RECHECK_BAN_PHRASE):
-                out_of_order.append(name)
-        self.assertEqual([], out_of_order, f"配置順が不正: {out_of_order}")
+            start = text.find(DELEGATION_INSTRUCTION_MARKER)
+            if start < 0:
+                violations.append(f"{name} (delegation-instruction 節が無い)")
+                continue
+            end = text.find(ESCALATION_MARKER, start)
+            section = text[start:end] if end >= 0 else text[start:]
+            paragraphs = section.split("\n\n")
+            scope_idxs = [
+                i for i, p in enumerate(paragraphs) if SCOPE_INSTRUCTION_PHRASE in p
+            ]
+            recheck_idxs = [
+                i for i, p in enumerate(paragraphs) if RECHECK_BAN_PHRASE in p
+            ]
+            if len(scope_idxs) != 1 or len(recheck_idxs) != 1:
+                violations.append(
+                    f"{name} (出現回数 scope={len(scope_idxs)},"
+                    f" recheck={len(recheck_idxs)})"
+                )
+            elif recheck_idxs[0] != scope_idxs[0] + 1:
+                violations.append(
+                    f"{name} (scope={scope_idxs[0]}, recheck={recheck_idxs[0]})"
+                )
+        self.assertEqual([], violations, f"隣接配置が不成立: {violations}")
+
+    def test_sonnet_no_effort_rule_preserved(self) -> None:
+        """「Sonnet 系には effort を指定しない」ルール本体の保全ガード (Phase A から green)。
+
+        撤廃断片「medium 指定のみ」はこの bullet の末尾にあり、Phase B は末尾の
+        参照だけを書き換える。bullet 全体の削除 (存続規範の喪失) を red にする。
+        """
+        missing = [
+            name
+            for name, path in THREE_WAY.items()
+            if SONNET_RULE_PHRASE not in read(path)
+        ]
+        self.assertEqual(
+            [], missing, f"存続すべき Sonnet 規範文が無いファイル: {missing}"
+        )
 
 
 class ReviewerCalibrationTests(unittest.TestCase):
