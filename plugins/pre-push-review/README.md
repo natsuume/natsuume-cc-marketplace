@@ -18,9 +18,20 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v5.1.1
+v5.2.0
 
 (前身: `pre-commit-review` v0.4.0)
+
+### v5.1.1 → v5.2.0 の変更点 (issue #337)
+
+codex-reviewer が Bash timeout の background 自動移行後に review 結果を回収できるようになった。従来は `tools` が `Bash` のみだったため、Bash tool が timeout してラッパー実行を background へ自動移行させると codex review 自体は完走していても subagent 側に回収手段が無く、正規の parent-safe report を返せず push gate が詰まっていた。
+
+- `agents/codex-reviewer.md` の frontmatter `tools` を `Bash, TaskOutput, Read` に拡張した (TaskOutput / Read は下記回収専用)
+- `## Background-move recovery` セクションを新設した: Bash 結果が background 移行を報告した直後に task ID と output file path を記録し、同一 task ID に対して `TaskOutput (block=true)` で terminal state まで bounded に poll する (初回自動回収は TaskOutput 呼び出し 5 回・各呼び出しはツールの最大 timeout までを予算とする)。report が truncated な場合のみ記録済み output file path を Read で補完する。回収成功時は既存の parent-safe report 契約 (`Status: pass` / `Status: findings` / `Status: execution-failed`) へ normalize する
+- 境界条件 3 種で `Status: execution-failed` を返す: task ID 喪失、回収予算超過 (この場合は codex review が background で継続中である旨と、診断専用の単発 status check のためにこの同じ subagent を resume できる旨を report に記載する。resume は marker を昇格できず、push gate を満たすには新規 reviewer run が必要)、TaskOutput が task を見失った場合
+- background 移行はそれ自体では wrapper failure (non-zero exit) ではないことを明記し、両者を排他的な扱いに固定した
+- `## Constraints` の旧 `Bash` のみ前提の文言 2 箇所を、`Bash, TaskOutput, Read` 構成 (TaskOutput / Read は上記回収専用、Edit / Write / Skill / Task は引き続き非許可) に合わせて改訂した
+- 後方互換のある機能追加 (tools 拡張は既存の wrapper-only 実行サーフェスを維持したままの回収経路追加) のため minor bump
 
 ### v5.1.0 → v5.1.1 の変更点
 
@@ -170,7 +181,7 @@ plugin description (plugin.json / marketplace.json) を人間向けの簡潔な�
 ### v2.0.1 → v3.0.0 の変更点 (互換破壊あり)
 
 - **`agents/code-reviewer.md` を新設**: v2.x の Skill `/code-review` (Anthropic bundled skill / read-only correctness バグ検出) に相当する self-contained subagent。 prompt は標準 skill と独立に管理 (security-reviewer と同じ理由: 主 session から直接 skill を呼ぶと turn が終了、 subagent 内から呼んでも nested subagent 制約で sub-task が動かないため)。 tools は `Bash, Read, Glob, Grep, LS` で `Skill` / `Task` を含まない (= 標準 skill を invoke できない構造的防御)。
-- **`agents/codex-reviewer.md` を新設**: codex review wrapper (`run-codex-review.sh`) を foreground で 1 回起動するだけの最小 subagent。 tools は `Bash` のみで、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。v3.0.0 当時は wrapper が codex-reviewed marker を書いたが、v4.0.1 で pending attestation + auto-mark 昇格へ変更した。
+- **`agents/codex-reviewer.md` を新設**: codex review wrapper (`run-codex-review.sh`) を foreground で 1 回起動するだけの最小 subagent。 tools は `Bash` のみで、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。v3.0.0 当時は wrapper が codex-reviewed marker を書いたが、v4.0.1 で pending attestation + auto-mark 昇格へ変更した。v5.2.0 で tools を `Bash, TaskOutput, Read` に拡張し、Bash timeout による background 移行後の回収経路 (詳細は上記バージョン節) を追加した。
 - **`commands/review.md` を 3 subagent 並列発出に書き換え**: Skill (`code-review`) + Bash (codex wrapper) + Agent (security-reviewer) の 3 経路混在を、 Agent x 3 (code-reviewer + codex-reviewer + security-reviewer) に統一しました。
 - **`auto-mark.sh` の検知ロジックを Skill → Agent に移行 + name-only 受理を廃止**: PRECHECK\_RE と case 文から Skill `code-review` / `security-review` の検知を全廃。v3.0.0 当時は namespace 付き code/security reviewer のみを検知し、codex marker は wrapper が書いた。v4.0.1 では正規 report Status を検証できるようになったため namespace 付き codex-reviewer も検知対象へ加え、pending attestation を final marker へ昇格する。name-only (`code-reviewer` / `security-reviewer` / `codex-reviewer`) は他 plugin の同名 agent との衝突を避けるため引き続き受理しない。
 - **`block-pre-push.sh` の deny メッセージを 3 Agent 案内に書き換え**: Skill (`code-review`) と Bash (codex wrapper) の fallback 起動コマンドを Agent x 3 に置換。 wrapper の絶対パス埋め込み (CODEX_WRAPPER_PATH) も削除しました (subagent 経由で起動するため不要)。
@@ -359,7 +370,8 @@ codex review wrapper (`hooks/scripts/run-codex-review.sh`) を foreground で 1 
 
 **動作**:
 
-- tools は `Bash` のみ (Read / Edit / Write / Skill / Task はすべて非許可)。 wrapper-only な実行サーフェスを構造的に強制
+- tools は `Bash, TaskOutput, Read` (v5.2.0 で拡張。 Edit / Write / Skill / Task はすべて非許可)。 TaskOutput / Read は Bash timeout による background 移行後の回収専用 (下記) で、 wrapper-only な実行サーフェスは構造的に維持される
+- **v5.2.0 で background-move recovery を追加 (issue #337)**: Bash tool が timeout してラッパー実行を background へ自動移行させても、 codex review 自体は完走していることが多い。 subagent は Bash 結果が background 移行を報告した直後に task ID と output file path を記録し、 同一 task ID に対して `TaskOutput (block=true)` で terminal state まで bounded に poll する (初回自動回収は TaskOutput 呼び出し 5 回・各呼び出しはツールの最大 timeout までを予算とする)。 report が truncated な場合のみ、 記録済み output file path に限定して Read で補完する。 回収成功時は既存の parent-safe report 契約へ normalize し、 task ID 喪失・回収予算超過・task 見失いの 3 境界では `Status: execution-failed` を返す (予算超過時は診断専用の resume 経路を report に案内するが、 resume は marker を昇格できず push gate を満たすには新規 reviewer run が必要)。 background 移行はそれ自体では wrapper failure (non-zero exit) 扱いにしない
 - subagent body は wrapper を `run_in_background: false` で 1 回起動し、raw output を final reply へコピーせず parent-safe report に変換する
 - 親 session は finding の priority / location / impact / verification / fix direction / disposition を受け取る。実行可能な command、payload、環境値、段階的な再現・回避手順、raw stdout / stderr は subagent context に閉じ込められる
 - exact detail を使った追加確認が必要な場合は同一 codex-reviewer を resume し、検証結果だけを再度 parent-safe report で受け取る
