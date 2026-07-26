@@ -4,7 +4,11 @@
 
 ## バージョン
 
-v0.4.1
+v0.5.0
+
+### v0.4.1 → v0.5.0 の変更点
+
+Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest を削除し、Claude Code 版の `enforce-draft-pr` hook は無変更。
 
 ### v0.4.0 → v0.4.1 の変更点 (issue #145)
 

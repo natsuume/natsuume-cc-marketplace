@@ -4,7 +4,11 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.5.3
+v0.6.0
+
+### v0.5.3 → v0.6.0 の変更点
+
+Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest を削除し、Claude Code 版の 3 hook と rebase-workflow Skill は無変更。
 
 ### v0.5.2 → v0.5.3 の変更点 (#141)
 

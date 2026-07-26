@@ -1,28 +1,24 @@
-name: marketplace-sync
+name: ci
 
 on:
   pull_request:
   push:
     branches: [master]
-  schedule:
-    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: marketplace-sync-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  CODEX_CLI_VERSION: "0.144.4"
   CLAUDE_CODE_VERSION: "2.1.210"
 
 jobs:
-  parity:
-    if: github.event_name != 'schedule'
-    name: marketplace parity (${{ matrix.os }})
+  validate:
+    name: validate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -46,20 +42,11 @@ jobs:
       - name: Run unit and adapter tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
 
-      - name: Verify generated artifacts, source fingerprints, guarantees, and test evidence
-        run: python3 scripts/sync_codex_marketplace.py --check
-
-      - name: Install pinned Claude Code and validate the canonical marketplace
+      - name: Install pinned Claude Code and validate the marketplace
         if: matrix.os == 'ubuntu-latest'
         run: |
           npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           claude plugin validate . --strict
-
-      - name: Install pinned Codex CLI
-        run: npm install --global "@openai/codex@${CODEX_CLI_VERSION}"
-
-      - name: Smoke-test marketplace and all plugin installs
-        run: bash scripts/smoke_codex_marketplace.sh
 
       - name: Check all shell scripts with the platform Bash
         shell: bash
@@ -85,7 +72,9 @@ jobs:
 
       - name: Require plugin version bumps
         if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
-        run: python3 scripts/check_plugin_versions.py "${{ github.event.pull_request.base.sha }}"
+        env:
+          BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/check_plugin_versions.py "$BASE_REVISION"
 
       - name: Require plugin version bumps on direct master push
         if: matrix.os == 'ubuntu-latest' && github.event_name == 'push'
@@ -97,35 +86,3 @@ jobs:
             exit 0
           fi
           python3 scripts/check_plugin_versions.py --direct "$BASE_REVISION"
-
-  latest-codex:
-    if: github.event_name == 'schedule'
-    name: marketplace smoke (latest Codex)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Verify generated artifacts, source fingerprints, guarantees, and test evidence
-        run: python3 scripts/sync_codex_marketplace.py --check
-
-      - name: Validate the canonical marketplace with latest Claude Code
-        run: |
-          npm install --global @anthropic-ai/claude-code@latest
-          claude plugin validate . --strict
-
-      - name: Install latest Codex CLI
-        run: npm install --global @openai/codex@latest
-
-      - name: Smoke-test marketplace and all plugin installs
-        run: bash scripts/smoke_codex_marketplace.sh

@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "session-handoff"
 INJECT = PLUGIN / "hooks" / "scripts" / "inject-pending-handoff.sh"
+HOOKS = PLUGIN / "hooks" / "hooks.json"
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
@@ -137,6 +138,34 @@ class SessionHandoffPendingConsumerTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.stdout, b"")
             self.assertTrue(pending.exists())
+
+
+class SessionHandoffHooksContractTest(unittest.TestCase):
+    """hooks/hooks.json の Phase B 最終状態契約。
+
+    別エージェントが並行して plugins/ 配下を編集中のため、実行タイミングによっては
+    このテストが red になりうる (それが正しい状態であり、最終検証は親セッションが行う)。
+    save-codex-handoff.sh の PreCompact entry が削除され、SessionStart の matcher が
+    'clear|startup' に縮小され、inject-pending-handoff.sh の登録は残ることを検証する。
+    """
+
+    def test_precompact_entry_removed_and_session_start_matcher_narrowed(self) -> None:
+        hooks = json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
+
+        self.assertNotIn("PreCompact", hooks)
+
+        session_start_groups = hooks["SessionStart"]
+        self.assertEqual(1, len(session_start_groups))
+        self.assertEqual("clear|startup", session_start_groups[0]["matcher"])
+
+        commands = [handler["command"] for handler in session_start_groups[0]["hooks"]]
+        self.assertTrue(
+            any(
+                command.endswith("/hooks/scripts/inject-pending-handoff.sh")
+                for command in commands
+            ),
+            commands,
+        )
 
 
 if __name__ == "__main__":

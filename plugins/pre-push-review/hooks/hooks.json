@@ -1,5 +1,5 @@
 {
-  "description": "pre-push-review の配送経路: PreToolUse (Bash) で未レビューの git push を deny (block-pre-push.sh)、codex review wrapper の background 起動を deny (block-bg-codex-wrapper.sh)。Claude Code は SubagentStart で launch attestation を書き、SubagentStop で report / hash 検証を経て .git marker を更新する。PostToolUseFailure では Codex pending attestation を破棄する。Codex 用 SubagentStop adapter は agent_type selector を公開する将来の runtime 向けに named profile だけを受理し、generic agent を認証済み reviewer として扱わない。マーカー仕様・保証差は plugin README を参照。",
+  "description": "pre-push-review の配送経路: PreToolUse (Bash) で未レビューの git push を deny (block-pre-push.sh)、codex review wrapper の background 起動を deny (block-bg-codex-wrapper.sh)。SubagentStart で launch attestation を書き、SubagentStop で report / hash 検証を経て .git marker を更新する。PostToolUseFailure では Codex pending attestation を破棄する。マーカー仕様・保証差は plugin README を参照。",
   "hooks": {
     "PreToolUse": [
       {
@@ -39,15 +39,6 @@
       }
     ],
     "SubagentStop": [
-      {
-        "matcher": "^pre_push_(correctness|independent|security)_reviewer$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/codex-auto-mark.sh\""
-          }
-        ]
-      },
       {
         "matcher": "^pre-push-review:(code|codex|security)-reviewer$",
         "hooks": [

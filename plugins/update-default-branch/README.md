@@ -4,7 +4,11 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 ## バージョン
 
-v0.3.1
+v0.4.0
+
+### v0.3.1 → v0.4.0 の変更点
+
+Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest を削除し、Claude Code 版の update-default-branch Skill は無変更。
 
 ### v0.3.0 → v0.3.1 の変更点 (issue #164)
 
