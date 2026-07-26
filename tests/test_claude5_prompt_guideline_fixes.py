@@ -1,0 +1,206 @@
+"""Claude 5 世代公式プロンプトガイド準拠のプロンプト是正 (6 plugin) の契約テスト。
+
+背景:
+- Anthropic 公式ガイド (claude-prompting-best-practices / prompting-claude-fable-5 /
+  prompting-claude-opus-5 / prompting-claude-sonnet-5 / context engineering blog) に
+  照らした監査で確定した是正内容を、実行可能仕様 (spec-first Phase A) として固定する。
+- agent-discipline: 3-way 分業規律 (fable / opus / sonnet) 間の意味的 drift の修復。
+  lint-prompt-sync.sh は rule ID 集合の一致のみを検査し本文の表現差分を見ないため
+  (同スクリプトのスコープ注記参照)、共有 canonical 文の存在を本テストで固定する。
+- git-guardrails: rebase-workflow skill に残る bash-decompose 規律違反 (コマンド置換 +
+  変数連結の一括スクリプト例) の除去と、origin/HEAD stale 対策の追加。
+- pre-push-review: Opus 5 が消費する reviewer report への長さ較正 (公式ガイドの
+  「Opus 5 の書く文書は長くなりがちで明示較正が必要」への対応)。
+- codex-advisor: 8,000 文字注入予算の advisor-rules.md と consult/SKILL.md 間の
+  逐語重複の参照化 (checkpoint 4 項目・async_launched 回収手順)。
+- ui-discipline: 完了前チェックリストの位置づけ緩和 (Opus 5 の過剰検証誘発対策と
+  Sonnet 系の見落とし防止の両立)。
+- natsuume-writing: draft skill 一括生成の分量較正。
+
+Phase A で先行 commit され red になり、Phase B のプロンプト修正で green になる。
+"""
+
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PLUGINS = REPO_ROOT / "plugins"
+
+DISCIPLINE_FABLE = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline-fable.md"
+DISCIPLINE_OPUS = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline-opus.md"
+DISCIPLINE_SONNET = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline-sonnet.md"
+ALWAYS_FABLE = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "always-fable.md"
+SUBAGENT_RULES = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "subagent-rules.md"
+REBASE_SKILL = PLUGINS / "git-guardrails" / "skills" / "rebase-workflow" / "SKILL.md"
+CODE_REVIEWER = PLUGINS / "pre-push-review" / "agents" / "code-reviewer.md"
+SECURITY_REVIEWER = PLUGINS / "pre-push-review" / "agents" / "security-reviewer.md"
+ADVISOR_RULES = PLUGINS / "codex-advisor" / "hooks" / "prompts" / "advisor-rules.md"
+CONSULT_SKILL = PLUGINS / "codex-advisor" / "skills" / "consult" / "SKILL.md"
+UI_PATTERNS_SKILL = PLUGINS / "ui-discipline" / "skills" / "ui-patterns" / "SKILL.md"
+DRAFT_SKILL = PLUGINS / "natsuume-writing" / "skills" / "draft" / "SKILL.md"
+
+THREE_WAY = {
+    "discipline-fable.md": DISCIPLINE_FABLE,
+    "discipline-opus.md": DISCIPLINE_OPUS,
+    "discipline-sonnet.md": DISCIPLINE_SONNET,
+}
+
+# 3 ファイルすべてに存在すべき共有 canonical 文 (モデル固有差分ではない委任規律の本体)。
+SHARED_CANONICAL_PHRASES = (
+    # 並列委任は単一メッセージ内の複数 Agent 呼び出しでのみ成立する (fable 版で欠落していた)
+    "同一メッセージで並列に委任し",
+    # 全件報告要求の対象カテゴリ (fable 版は「検証」が欠落していた)
+    "調査・レビュー・検証系",
+    # fork 禁止の正の代替 (fable 版で欠落していた)
+    "代わりに、必要な文脈を指示文に埋め込んだ新規起動 (セクション 2 の self-contained 要件) を使う",
+    # 特定ツール使用意図の明示の具体例 (opus 版で欠落していた)
+    "(例: 必ず WebSearch で最新情報を確認させる)",
+    # 目的・背景を渡す意図の限定 (opus 版で欠落していた)
+    "目的・背景は判断を委ねる根拠ではなく",
+    # 副作用手順固定の例示 (fable 版で欠落していた)
+    "state を書くテストは隔離した TMPDIR を env 指定",
+)
+
+
+def read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+class AgentDisciplineThreeWayParityTest(unittest.TestCase):
+    """3-way 分業規律間で共有 canonical 文の存在と環境値ハードコードの不在を固定する。"""
+
+    def test_shared_canonical_phrases_exist_in_all_three_files(self) -> None:
+        for phrase in SHARED_CANONICAL_PHRASES:
+            missing = [
+                name for name, path in THREE_WAY.items() if phrase not in read(path)
+            ]
+            self.assertEqual(
+                [], missing, f"共有 canonical 文 {phrase!r} を含まないファイル: {missing}"
+            )
+
+    def test_no_environment_effort_value_hardcode(self) -> None:
+        """セッション既定 effort の環境固有値 (xhigh) をハードコードしない。
+
+        環境設定の変更でプロンプトが陳腐化し、opus 版の条件形記述と矛盾して
+        読めるため (公式ガイドの「矛盾する指示の併存は性能を下げる」)。
+        """
+        offenders = [
+            name
+            for name, path in THREE_WAY.items()
+            if "この環境では xhigh" in read(path)
+        ]
+        self.assertEqual([], offenders, f"環境値ハードコードが残るファイル: {offenders}")
+
+
+class AlwaysFableAskUserQuestionScopeTest(unittest.TestCase):
+    """always-fable.md の AskUserQuestion 必須化ルールに scope 限定 caveat があること。
+
+    always-sonnet-3.md には「質問を作り出さない」caveat があるが fable 版で欠落しており、
+    質問過多方向の overtrigger 源になっていた (公式ガイドの強調語 overtrigger 対応)。
+    """
+
+    def test_always_fable_contains_question_scope_caveat(self) -> None:
+        text = read(ALWAYS_FABLE)
+        self.assertIn("質問を作り出さない", text)
+        self.assertIn("質問するかどうか」の判断そのものを変えない", text)
+
+
+class SubagentRulesPipeAllowanceTest(unittest.TestCase):
+    """subagent-rules.md の bash-decompose に単一論理操作パイプの許容規定があること。
+
+    main session 側 (always-sonnet-1.md) には許容規定があるが subagent 版に無く、
+    literal に従う subagent が正当なパイプまで過剰分解する非対称があった。
+    """
+
+    def test_subagent_rules_allow_single_logical_operation_pipes(self) -> None:
+        text = read(SUBAGENT_RULES)
+        self.assertIn("単一論理操作", text)
+
+
+class RebaseWorkflowSkillTest(unittest.TestCase):
+    """rebase-workflow skill が bash-decompose 規律と整合し stale 対策を持つこと。"""
+
+    def test_no_command_substitution_example(self) -> None:
+        """コマンド置換 + 変数連結の一括スクリプト例 (bash-decompose 違反) が無いこと。"""
+        text = read(REBASE_SKILL)
+        self.assertNotIn("DEFAULT_BRANCH=$(", text)
+        self.assertNotIn("## 一連のコマンド例", text)
+
+    def test_stale_origin_head_mitigation_present(self) -> None:
+        """symbolic-ref 参照前に fetch --prune / set-head --auto を先行させること
+        (update-default-branch skill と同じ stale 対策)。
+        """
+        text = read(REBASE_SKILL)
+        self.assertIn("git fetch --prune origin", text)
+        self.assertIn("git remote set-head origin --auto", text)
+
+
+class PrePushReviewerLengthCalibrationTest(unittest.TestCase):
+    """Opus 5 固定の reviewer 2 体の report contract に長さ較正があること。"""
+
+    def test_reviewers_calibrate_report_length(self) -> None:
+        for name, path in (
+            ("code-reviewer.md", CODE_REVIEWER),
+            ("security-reviewer.md", SECURITY_REVIEWER),
+        ):
+            with self.subTest(reviewer=name):
+                self.assertIn("as a single sentence", read(path))
+
+
+class CodexAdvisorDeduplicationTest(unittest.TestCase):
+    """advisor-rules.md (8K 注入予算) と consult/SKILL.md の逐語重複が参照化されたこと。"""
+
+    def test_checkpoint_items_not_duplicated_verbatim(self) -> None:
+        """checkpoint 4 項目の箇条書きは consult/SKILL.md を正本とし、
+        advisor-rules.md 側は逐語複製しない。
+        """
+        text = read(ADVISOR_RULES)
+        self.assertNotIn("直近 5 サイクルの主要 findings、施した修正、反復している傾向", text)
+
+    def test_advisor_rules_points_to_consult_definition(self) -> None:
+        """advisor-rules.md は checkpoint 項目の定義を consult skill へ参照で委ねる。"""
+        text = read(ADVISOR_RULES)
+        self.assertIn("省略せず含める", text)
+
+    def test_consult_skill_remains_canonical_for_checkpoint(self) -> None:
+        """正本側 (consult/SKILL.md) の checkpoint テンプレートは維持される。"""
+        text = read(CONSULT_SKILL)
+        self.assertIn("<review_cycle_checkpoint>", text)
+        self.assertIn("<review_history>", text)
+
+    def test_advisor_rules_keeps_launch_safety_essentials(self) -> None:
+        """参照化後も安全上必須の起動指定 (model / run_in_background) は本文に残す。"""
+        text = read(ADVISOR_RULES)
+        self.assertIn('`model: "sonnet"`', text)
+        self.assertIn('`run_in_background: false`', text)
+
+
+class UiPatternsChecklistReframingTest(unittest.TestCase):
+    """完了前チェックリストが「該当ルールのみの再確認」に位置づけ直されたこと。
+
+    「実装完了前の総合チェックリスト」は Opus 5 に過剰検証 (公式が除去推奨する
+    「最後に検証ステップ」型) を誘発しうるため、全項目の機械的確認を求めない形にする。
+    """
+
+    def test_checklist_heading_reframed(self) -> None:
+        text = read(UI_PATTERNS_SKILL)
+        self.assertNotIn("実装完了前の総合チェックリスト", text)
+        self.assertIn("見落としやすい項目の再確認", text)
+
+    def test_checklist_scopes_to_touched_rules_only(self) -> None:
+        text = read(UI_PATTERNS_SKILL)
+        self.assertIn("触れたルールに対応する項目だけ", text)
+
+
+class NatsuumeWritingDraftCalibrationTest(unittest.TestCase):
+    """draft skill の一括生成に分量較正があること (Opus 5 の文書肥大対策)。"""
+
+    def test_draft_skill_calibrates_generated_length(self) -> None:
+        text = read(DRAFT_SKILL)
+        self.assertIn("分量はコメントの指示量に比例", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
