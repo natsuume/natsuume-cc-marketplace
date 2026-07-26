@@ -18,6 +18,20 @@ claude plugin install git-guardrails@natsuume-plugins
 
 > Claude Code セッション内からは `/plugin marketplace add natsuume/natsuume-cc-marketplace` → `/plugin install <plugin-name>@natsuume-plugins` でも同じ操作ができます。
 
+## 旧 Codex 配布からの移行
+
+本リポジトリはかつて OpenAI Codex CLI 向けにも plugin を配布していましたが、2026-07 に廃止しました (fable-risk-labeler plugin は Codex 実行を前提としていたため plugin ごと廃止)。marketplace の更新だけでは Codex 側に install 済みの plugin の local config / cache は削除されないため、旧配布を利用していた場合は以下で撤去してください:
+
+```bash
+# Codex 側: install 済みの各 plugin を削除 (config / cache も削除される)
+codex plugin remove <plugin-name>
+
+# Codex 側: marketplace 登録を削除
+codex plugin marketplace remove natsuume-plugins
+```
+
+Claude Code 側で fable-risk-labeler を install していた場合は、plugin 自体が廃止されたため `claude plugin uninstall fable-risk-labeler@natsuume-plugins` で削除してください。
+
 ## プラグイン一覧
 
 | プラグイン | バージョン | 説明 |

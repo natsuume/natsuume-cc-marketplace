@@ -195,32 +195,22 @@ class AgentDisciplineTemporaryRulesTest(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual("", result.stdout)
 
-    def test_permission_mode_adapter_preserves_claude_and_skips_codex_modes(self) -> None:
+    def test_permission_mode_adapter_emits_only_for_literal_auto(self) -> None:
         base_payload = {
             "session_id": "session-mode",
             "hook_event_name": "UserPromptSubmit",
             "cwd": str(ROOT),
         }
 
-        for mode, should_emit in (("auto", True), ("default", False), ("plan", False)):
-            with self.subTest(runtime="claude", mode=mode):
-                result = self.run_hook(INJECT_AUTO, {**base_payload, "permission_mode": mode})
-                self.assertEqual(should_emit, bool(result.stdout.strip()), result.stderr)
-
         for mode, should_emit in (
-            ("auto", False),
+            ("auto", True),
             ("default", False),
-            ("acceptEdits", False),
-            ("dontAsk", False),
-            ("bypassPermissions", False),
             ("plan", False),
-            ("future-mode", False),
+            ("acceptEdits", False),
+            ("bypassPermissions", False),
         ):
-            with self.subTest(runtime="codex", mode=mode):
-                result = self.run_hook(
-                    INJECT_AUTO,
-                    {**base_payload, "permission_mode": mode, "turn_id": "turn-mode"},
-                )
+            with self.subTest(mode=mode):
+                result = self.run_hook(INJECT_AUTO, {**base_payload, "permission_mode": mode})
                 self.assertEqual(should_emit, bool(result.stdout.strip()), result.stderr)
 
     def test_fable_guard_denies_bash_agent_with_fable_model_in_claude_hooks(self) -> None:
@@ -248,7 +238,7 @@ class AgentDisciplineTemporaryRulesTest(unittest.TestCase):
         decision = json.loads(claude_result.stdout)["hookSpecificOutput"]
         self.assertEqual("deny", decision["permissionDecision"])
 
-    def test_uncommitted_check_preserves_claude_auto_and_skips_codex_modes(self) -> None:
+    def test_uncommitted_check_emits_only_for_claude_auto(self) -> None:
         with tempfile.TemporaryDirectory() as repository, tempfile.TemporaryDirectory() as tempdir:
             repo = Path(repository)
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -256,55 +246,37 @@ class AgentDisciplineTemporaryRulesTest(unittest.TestCase):
             base = {
                 "hook_event_name": "UserPromptSubmit",
                 "cwd": str(repo),
-                "turn_id": "turn-uncommitted",
             }
             env = {"TMPDIR": tempdir}
 
             for mode in (
-                "auto",
                 "default",
                 "acceptEdits",
-                "dontAsk",
                 "bypassPermissions",
                 "plan",
             ):
-                with self.subTest(runtime="codex", mode=mode):
+                with self.subTest(mode=mode):
                     result = self.run_hook(
                         CHECK_UNCOMMITTED,
                         {
                             **base,
-                            "session_id": f"codex-{mode}",
+                            "session_id": f"non-auto-{mode}",
                             "permission_mode": mode,
                         },
                         env=env,
                     )
                     self.assertEqual("", result.stdout)
 
-            claude_base = {
-                "hook_event_name": "UserPromptSubmit",
-                "cwd": str(repo),
-            }
             claude_auto = self.run_hook(
                 CHECK_UNCOMMITTED,
                 {
-                    **claude_base,
+                    **base,
                     "session_id": "claude-auto",
                     "permission_mode": "auto",
                 },
                 env=env,
             )
             self.assertTrue(claude_auto.stdout.strip(), claude_auto.stderr)
-
-            claude_default = self.run_hook(
-                CHECK_UNCOMMITTED,
-                {
-                    **claude_base,
-                    "session_id": "claude-default",
-                    "permission_mode": "default",
-                },
-                env=env,
-            )
-            self.assertEqual("", claude_default.stdout)
 
 
 if __name__ == "__main__":
