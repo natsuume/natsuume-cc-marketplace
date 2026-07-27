@@ -66,6 +66,24 @@ canonical 肯定文の文境界完全一致 (`DIRECT_EXCEPTION_CANONICAL_SENTENC
 の段落全体の内容について契約所有権を主張することになるため採らず、意図的に
 「先頭の肯定文が変質していないこと」に絞った smoke 契約とした。段落全体の意味
 保証は PR diff レビューと、当該段落を所有する別 issue の責務に委ねる。
+
+改訂 5 回目 (収束確定。5 巡目レビューの findings 4 件のうち、review cadence
+checkpoint (Codex advisor) が承認した扱いに従い 1 件のみ修正し 2 件は理由を
+記録するに留める):
+(1) 修正: test_scale_boundary_present に、bullet ブロックと直後段落の間に
+空行が必須であることの検査を追加する。空行なしで境界文を置くと markdown の
+lazy continuation により最後の bullet の継続行として render され、規模境界が
+リスト全体ではなく最後の項目のみに掛かって見える。この false-green は codex /
+correctness の 2 レビュアーが独立に確認 (片方は再現実行済み) した決定的経路の
+ため修正する。
+(2) 却下 (理由記録): soft-wrap 正規化 (normalize_soft_wrapped) が行間に空白
+を挿入しない件は指摘があったが却下した。対象は日本語の canonical 文であり、
+無空白復元は明示仕様である (空白挿入はむしろ正当な折返しを false-red にして
+しまう)。既存の rescue 裁定を維持する。
+(3) スコープ外 (follow-up 候補として記録): canonical bullet の重複出現
+(存在判定のみで重複を検出しない) は、受入基準に一意性要求が無いため本
+Phase A のスコープ外とする。検査をリスト完全一致や順序固定まで広げることは
+せず、後続対応の候補として記録するに留める。
 """
 
 from __future__ import annotations
@@ -338,11 +356,16 @@ class DelegationItemsAdditionTests(unittest.TestCase):
     def test_scale_boundary_present(self) -> None:
         """bullet ブロック直後の段落が規模境界の canonical 2 文と完全一致すること。
 
-        段落を normalize_soft_wrapped (行末 rstrip 連結。行頭インデントは保持
-        し、行間に区切り文字を挟まない) で正規化したうえで
-        `SCALE_SENTENCE + SMALL_FIX_SENTENCE[name]` と完全一致するかを検査
-        する。substring 包含 2 回では、無関係な文脈に同じ部分文字列が現れる
-        再文脈化ですり抜ける可能性があったため。
+        段落抽出の前提として、bullet ブロックと直後段落の間に空行が必須である
+        ことをまず検査する。空行なしで境界文を置くと markdown の lazy
+        continuation により最後の bullet の継続行として render され、規模境界
+        がリスト全体ではなく最後の項目のみに掛かって見える (codex /
+        correctness の 2 レビュアーが独立に確認、片方は再現実行済みの決定的
+        経路)。空行が確認できた場合のみ、段落を normalize_soft_wrapped (行末
+        rstrip 連結。行頭インデントは保持し、行間に区切り文字を挟まない) で
+        正規化したうえで `SCALE_SENTENCE + SMALL_FIX_SENTENCE[name]` と完全
+        一致するかを検査する。substring 包含 2 回では、無関係な文脈に同じ
+        部分文字列が現れる再文脈化ですり抜ける可能性があったため。
         """
         violations = []
         for name, path in THREE_WAY.items():
@@ -355,7 +378,14 @@ class DelegationItemsAdditionTests(unittest.TestCase):
                 violations.append(f"{name} (委任リスト見出しが節内に無い)")
                 continue
             _bullets, end_idx = block
-            para = paragraph_after(section.splitlines(), end_idx)
+            lines = section.splitlines()
+            if end_idx == 0 or lines[end_idx - 1].strip() != "":
+                violations.append(
+                    f"{name} (bullet ブロックと直後段落の間に空行が無い"
+                    " — markdown lazy continuation)"
+                )
+                continue
+            para = paragraph_after(lines, end_idx)
             if para is None:
                 violations.append(f"{name} (bullet ブロック直後に段落が無い)")
                 continue
