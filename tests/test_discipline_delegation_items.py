@@ -18,10 +18,22 @@
   test_scale_boundary_absent_outside_role_split。Phase B の書換えが既存規範を
   破壊しないことを保証する)。
 
-改訂 (pre-push review (codex / correctness) の指摘と Codex rescue 壁打ちで確定):
+改訂 1 回目 (pre-push review (codex / correctness) の指摘と Codex rescue 壁打ちで確定):
 検査範囲を「委任リスト見出し直下の bullet 行の並び」「その直後の空行区切り
 段落」「例外見出しと同一段落」まで精密化し、節全体の部分文字列検索による
 過検出・過小検出 (無関係な箇所での偶然一致・節境界をまたいだ誤検出) を防ぐ。
+
+改訂 2 回目 (再レビュー (codex P2 x2 / correctness P2 x1) の指摘、Codex rescue の
+approve と親セッションの決定で確定):
+(1) 完全文 anchoring — 規模境界・小規模修正の判定文字列を句点込みの全文に
+することで、部分文字列一致による意味反転 (否定を含む書換えなどの誤検出漏れ)
+を排除する。(2) column-zero bullet 判定 — delegation_bullet_block の bullet
+収集を行頭 (インデント無し) の `- ` に限定し、ネストした子 bullet を top-level
+項目と誤認しないようにする (この契約における「top-level」は Markdown 一般の
+定義ではなく、この判定基準を指す)。(3) sonnet 版 discipline-sonnet.md は
+配送予算 (self-gate 前置き + 本体の合算が 8,000 UTF-16 units、残余 ~156 units)
+の制約があるため、スケルトン一括作成の bullet 文言のみ圧縮した canonical 文言
+を契約とする (ITEM_SKELETON をファイル別の辞書にする)。
 """
 
 from __future__ import annotations
@@ -38,16 +50,22 @@ THREE_WAY = {
     "discipline-sonnet.md": PROMPTS / "discipline-sonnet.md",
 }
 
-# 追加対象の委任項目 (canonical 文字列。一字一句この通り)。
-ITEM_SKELETON = (
-    "- 実装初期のスケルトン / スタブ / 型骨格の一括作成"
-    " (設計契約をコメントとして埋め込む場合を含む)"
-)
-ITEM_REVIEW_FIX = "- レビュー・受入検証の指摘修正の一括反映"
+# 委任 bullet (column-zero の raw 行と完全一致させる)。sonnet は配送予算
+# (self-gate + sonnet 合算 8,000 UTF-16 units、残余 ~156 units) に収める圧縮文言を契約とする。
+ITEM_SKELETON = {
+    "discipline-fable.md": "- 実装初期のスケルトン / スタブ / 型骨格の一括作成 (設計契約をコメントとして埋め込む場合を含む)",
+    "discipline-opus.md": "- 実装初期のスケルトン / スタブ / 型骨格の一括作成 (設計契約をコメントとして埋め込む場合を含む)",
+    "discipline-sonnet.md": "- 実装初期のスケルトン / スタブ / 型骨格の一括作成",
+}
+ITEM_REVIEW_FIX = "- レビュー・受入検証の指摘修正の一括反映"  # 3 ファイル共通
 
-# 規模境界の記述 (両方が同一段落内に必要)。
-SCALE_BOUNDARY = "複数ファイルまたは数十行以上の規模で適用する"
-SMALL_FIX_PHRASE = "単一ファイル数行の指摘修正は"
+# 規模境界 (完全文・句点込み。意味反転を排除するため主語 + 述部の全文で固定する)
+SCALE_SENTENCE = "スケルトン一括作成・指摘修正の一括反映は複数ファイルまたは数十行以上の規模で適用する。"  # 3 ファイル共通
+SMALL_FIX_SENTENCE = {
+    "discipline-fable.md": "単一ファイル数行の指摘修正は下記の例外 (直接編集してよいもの) の範囲である。",
+    "discipline-sonnet.md": "単一ファイル数行の指摘修正は後述の「自明な修正」の定義に従って扱う。",
+    "discipline-opus.md": "単一ファイル数行の指摘修正は後述の「委任しない作業」として直接行ってよい。",
+}
 
 # 「サブエージェントに委任する作業:」見出し (この見出し直下の bullet 行を検査範囲にする)。
 DELEGATION_LIST_HEADING = "サブエージェントに委任する作業:"
@@ -107,23 +125,40 @@ def role_split_section(text: str) -> str | None:
     return text[start:end]
 
 
-def delegation_bullet_block(section: str) -> tuple[list[str], int] | None:
-    """委任リスト見出し直下の bullet 行の並びと、ブロック終端の行 index を返す。
+def scale_boundary_phrases(name: str) -> tuple[str, str]:
+    """規模境界の 2 文 (存在検査・節外漂流検査の両方で共有する単一ソース)。
 
-    (i) strip() 後の完全一致で DELEGATION_LIST_HEADING に一致する行を探す
-    (部分文字列検索では他文脈への偶然一致を拾うため)。
+    片方のテストだけを更新して他方が古い定数を参照し続ける (片側更新漏れ) を
+    構造的に防ぐため、検査フレーズの取得口をこの関数に一本化する。
+    """
+    return SCALE_SENTENCE, SMALL_FIX_SENTENCE[name]
+
+
+def delegation_bullet_block(section: str) -> tuple[list[str], int] | None:
+    """委任リスト見出し直下の column-zero bullet 行の並びと、ブロック終端の行 index を返す。
+
+    (i) `line.rstrip() == DELEGATION_LIST_HEADING` (先頭インデント不許可) で
+    見出し行を探す。見出し自体も column-zero であることを要求する。
     (ii) 見出し行の直後に空行があれば 1 行だけ許容してスキップする。
-    (iii) それに続く行を走査し、`- ` で始まる行 (strip 後) だけを bullet として
-    連続収集する。空行は打ち切り条件を満たさない (非空 かつ 非 bullet) ため
-    読み飛ばして走査を継続し、最初の「非空・非 bullet」行に到達したところで
-    打ち切る。戻り値の終端 index はその行 (直後段落の先頭) を指す。
+    (iii) それに続く行を走査し、次の 4 分類で扱う:
+      - raw 行が `- ` で始まる (インデント無し) → column-zero の top-level
+        bullet として `raw.rstrip()` を収集する
+      - strip 後が空 → 空行として読み飛ばす (打ち切らない)
+      - raw にインデントがあり strip 後が `- ` で始まる → 既存 top-level 項目
+        にぶら下がる子 bullet とみなし、ブロック内ではあるが top-level には
+        収集しない (読み飛ばして走査継続)
+      - それ以外 (非空・非 bullet な地の文) → その行で打ち切る
+    戻り値の終端 index は打ち切り行 (直後段落の先頭) を指す。
+
+    注記: ここでの「top-level」は Markdown 一般の構文規則ではなく、この契約
+    (bullet 行がインデント無しで書かれていること) 固有の判定基準である。
 
     見出しが節内に見つからない場合は None を返す。
     """
     lines = section.splitlines()
     heading_idx = None
     for i, line in enumerate(lines):
-        if line.strip() == DELEGATION_LIST_HEADING:
+        if line.rstrip() == DELEGATION_LIST_HEADING:
             heading_idx = i
             break
     if heading_idx is None:
@@ -135,12 +170,17 @@ def delegation_bullet_block(section: str) -> tuple[list[str], int] | None:
 
     bullets: list[str] = []
     while idx < len(lines):
-        stripped = lines[idx].strip()
-        if stripped.startswith("- "):
-            bullets.append(stripped)
+        raw = lines[idx]
+        if raw.startswith("- "):
+            bullets.append(raw.rstrip())
             idx += 1
             continue
+        stripped = raw.strip()
         if stripped == "":
+            idx += 1
+            continue
+        if stripped.startswith("- "):
+            # インデント付きの子 bullet: ブロック内だが top-level ではないため収集しない
             idx += 1
             continue
         break
@@ -173,6 +213,27 @@ def find_paragraph_with(section: str, marker: str) -> str | None:
     return None
 
 
+def line_exists_stripped(section: str, target: str) -> bool:
+    """節内のいずれかの行が strip() 後に target と完全一致するか。"""
+    return any(line.strip() == target for line in section.splitlines())
+
+
+def missing_item_violation(
+    section: str, bullets: list[str], item: str, name: str, description: str
+) -> str | None:
+    """item が bullets (top-level) に無い場合の violation メッセージを返す。
+
+    bullets に無くても、節内に strip 一致で存在する場合は「top-level ではなく
+    ネスト/ブロック外に存在」の診断に切り替え、単純な不在と区別する
+    (診断の精度向上。原因箇所の特定を早める)。item が bullets にあれば None。
+    """
+    if item in bullets:
+        return None
+    if line_exists_stripped(section, item):
+        return f"{name} ({description}: top-level ではなくネスト/ブロック外に存在)"
+    return f"{name} ({description}が無い)"
+
+
 class DelegationItemsAdditionTests(unittest.TestCase):
     """委任対象への 2 項目追加契約 (issue #238)。Phase A では red。
 
@@ -194,10 +255,16 @@ class DelegationItemsAdditionTests(unittest.TestCase):
                 violations.append(f"{name} (委任リスト見出しが節内に無い)")
                 continue
             bullets, _end_idx = block
-            if ITEM_SKELETON not in bullets:
-                violations.append(f"{name} (スケルトン一括作成の項目が無い)")
-            if ITEM_REVIEW_FIX not in bullets:
-                violations.append(f"{name} (レビュー指摘修正一括反映の項目が無い)")
+            v = missing_item_violation(
+                section, bullets, ITEM_SKELETON[name], name, "スケルトン一括作成の項目"
+            )
+            if v is not None:
+                violations.append(v)
+            v = missing_item_violation(
+                section, bullets, ITEM_REVIEW_FIX, name, "レビュー指摘修正一括反映の項目"
+            )
+            if v is not None:
+                violations.append(v)
         self.assertEqual([], violations, f"委任項目の追加が未反映: {violations}")
 
     def test_scale_boundary_present(self) -> None:
@@ -216,10 +283,11 @@ class DelegationItemsAdditionTests(unittest.TestCase):
             if para is None:
                 violations.append(f"{name} (bullet ブロック直後に段落が無い)")
                 continue
-            if SCALE_BOUNDARY not in para:
-                violations.append(f"{name} (規模境界の記述が直後の段落に無い)")
-            if SMALL_FIX_PHRASE not in para:
-                violations.append(f"{name} (小規模修正を除外する記述が直後の段落に無い)")
+            scale_sentence, small_fix_sentence = scale_boundary_phrases(name)
+            if scale_sentence not in para:
+                violations.append(f"{name} (規模境界の一文が直後の段落に無い)")
+            if small_fix_sentence not in para:
+                violations.append(f"{name} (小規模修正の扱いの一文が直後の段落に無い)")
         self.assertEqual([], violations, f"規模境界の記述が未反映: {violations}")
 
 
@@ -242,12 +310,25 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
                 violations.append(f"{name} (委任リスト見出しが節内に無い)")
                 continue
             bullets, _end_idx = block
-            if EXISTING_ITEM_IMPLEMENTATION[name] not in bullets:
-                violations.append(f"{name} (既存の実装委任項目が無い)")
-            if EXISTING_ITEM_INVESTIGATION not in bullets:
-                violations.append(f"{name} (既存の調査委任項目が無い)")
-            if EXISTING_ITEM_MECHANICAL not in bullets:
-                violations.append(f"{name} (既存の機械的作業委任項目が無い)")
+            v = missing_item_violation(
+                section,
+                bullets,
+                EXISTING_ITEM_IMPLEMENTATION[name],
+                name,
+                "既存の実装委任項目",
+            )
+            if v is not None:
+                violations.append(v)
+            v = missing_item_violation(
+                section, bullets, EXISTING_ITEM_INVESTIGATION, name, "既存の調査委任項目"
+            )
+            if v is not None:
+                violations.append(v)
+            v = missing_item_violation(
+                section, bullets, EXISTING_ITEM_MECHANICAL, name, "既存の機械的作業委任項目"
+            )
+            if v is not None:
+                violations.append(v)
         self.assertEqual([], violations, f"既存の委任項目が失われている: {violations}")
 
     def test_direct_edit_exception_preserved(self) -> None:
@@ -273,6 +354,8 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
         """規模境界の記述が role-split 節の外へ漂流していないことの固定。
 
         prefix / suffix を連結せず個別に検索する (連結境界での偶然一致を排除)。
+        存在検査 (test_scale_boundary_present) と同じ scale_boundary_phrases
+        から検査フレーズを取得し、片側更新漏れを防ぐ。
         """
         violations = []
         for name, path in THREE_WAY.items():
@@ -284,7 +367,7 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
             start, end = bounds
             prefix = text[:start]
             suffix = text[end:]
-            for phrase in (SCALE_BOUNDARY, SMALL_FIX_PHRASE):
+            for phrase in scale_boundary_phrases(name):
                 if phrase in prefix or phrase in suffix:
                     violations.append(f"{name}: {phrase!r}")
         self.assertEqual([], violations, f"規模境界の記述が節外に漂流: {violations}")
