@@ -90,7 +90,9 @@ Codex-Advisor-Review-Cadence: satisfied
 qualifying request だが plugin / Node 未 install、未認証、timeout 等で Codex を利用できず
 terminal failure になった場合は、既存の fail-open 境界を deadlock させないため直前行を
 `Codex-Advisor-Review-Cadence: unavailable` とする。通常相談が偶然方針に触れても
-カウンター解除を自己判断しない。この予約行がない report は lifecycle hook が不正と扱う。
+カウンター解除を自己判断しない。この予約行がない report は lifecycle hook が不正と扱う。この
+予約行を含む末尾の footer 一式も、下の ## failure と footer 節と同様にコードフェンス・引用
+ブロックで囲まない。
 
 ## failure と footer
 
@@ -99,7 +101,10 @@ tracking / status transport の一時失敗または差分 0 件は `retryable-f
 `terminal-failure` または `cancelled`。failure report には簡潔な理由、既知 job ID、
 `run-codex-job.sh status JOB_ID` / `result JOB_ID` という手動確認方向だけを含める。
 
-必ず次の 3 行で終了する (`JOB_ID` 不明時は `unknown`)。
+必ず次の 3 行で終了する (`JOB_ID` 不明時は `unknown`)。footer (直前の
+`Codex-Advisor-Review-Cadence` 予約行を含む) をコードフェンス・引用ブロックで囲まず、プレーン
+テキストの最終行群として出力する。下のコードブロックは記法の説明であり、フェンス自体を出力に
+含めない。
 
 ```text
 Codex-Runner-Operation: advisor

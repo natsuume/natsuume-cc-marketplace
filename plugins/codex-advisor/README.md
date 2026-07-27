@@ -6,7 +6,11 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v2.0.1
+v2.0.2
+
+### v2.0.1 → v2.0.2 の変更点
+
+lifecycle hook の runner footer / attestation 解析を、コードフェンス行・空白行を無視した実質末尾行方式へ頑健化し、成功 runner の retry-required 誤判定を解消した (#348)。3 runner md に footer をフェンスで囲まない出力契約を明記した。
 
 ### v2.0.0 → v2.0.1 の変更点
 

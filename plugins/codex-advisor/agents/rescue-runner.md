@@ -77,7 +77,9 @@ find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.
   (`run-codex-job.sh status JOB_ID` / `result JOB_ID`) を返す。秘密、prompt 本文、raw shell
   log は返さない
 
-必ず次の 3 行で終了する (`JOB_ID` 不明時は `unknown`)。
+必ず次の 3 行で終了する (`JOB_ID` 不明時は `unknown`)。footer をコードフェンス・引用ブロックで
+囲まず、プレーンテキストの最終行群として出力する。下のコードブロックは記法の説明であり、フェンス
+自体を出力に含めない。
 
 ```text
 Codex-Runner-Operation: rescue
