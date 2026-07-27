@@ -18,9 +18,13 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v5.3.0
+v5.3.1
 
 (前身: `pre-commit-review` v0.4.0)
+
+### v5.3.0 → v5.3.1 の変更点
+
+- `block-bg-codex-wrapper.sh` の segment 分類を read-only allowlist 方式から 14-step の順序付き決定表による executable 位置分類へ転換 (issue #339)。`rg` 等の引数として wrapper ファイル名を参照しただけの read-only コマンドが deny される誤検知を解消した。fail-open は「外部コマンド形の不明 head の引数参照」1 経路に限定され、shell keyword / builtin superset・launcher prefix・代入 slot の存在・危険 option (canonical token 値で判定)・indirection・pipe chain 検査は fail-closed を維持する。加えて、共有 parser の depth / quote 状態が実 shell 意味論と乖離した segment・token (複数コマンドの merge、複数 shell word の merge、ANSI-C quoting) は解析不能として実行形に倒す
 
 ### v5.2.0 → v5.3.0 の変更点
 
@@ -295,7 +299,13 @@ push 前 3 レビューを **同じアシスタントメッセージで並列に
 
 `run-codex-review.sh` wrapper の起動を検証する PreToolUse hook です。 **v4.0.0 で agent_type 検証 gate を追加** (issue #267): wrapper を含む Bash 実行の hook payload トップレベル `agent_type` が `pre-push-review:codex-reviewer` (namespace 付き完全一致) でなければ **fail-closed に deny** します。 `agent_type` 欠落はメインセッションからの直接実行、 または `agent_type` を hook payload に含めない旧 Claude Code を意味します。 本 gate は **Claude Code 2.1.211 で実機検証済み** (= 動作要件の検証済み最低 version) で、 それより古く `agent_type` を送らない Claude Code では、 正規フロー (`/pre-push-review:review` や codex-reviewer subagent 経由起動) からの wrapper 起動も deny されるため、 2.1.211 以上への更新が必要です。
 
-**gate の発火対象は実行形コマンドのみ**: command が `run-codex-review.sh` の substring を含んでいても、 wrapper を実行せず言及するだけの read-only 検査コマンド (`cat` / `grep` / `git diff` 等) は agent_type gate を skip して許可します。 interpreter 起動 (`bash` / `sh` 等)、 コマンド置換 (`$(...)` / バッククォート / `<(...)` / `>(...)`) を含む形、 不明コマンドのみを実行形として gate します。 分類は fail-closed (不明・解析不能な形はすべて実行形扱い) です。 コマンド置換等の間接実行を含む場合は、 `&` / `|` が wrapper 呼び出しに隣接していなくても位置を問わず deny します (詳細は `block-bg-codex-wrapper.sh` のファイルヘッダ「検知ロジック」節を参照)。
+**gate の発火対象は実行形コマンドのみ**: command が `run-codex-review.sh` の substring を含んでいても、 wrapper を実行せず言及するだけの read-only 検査コマンド (`cat` / `grep` / `git diff` 等) は agent_type gate を skip して許可します。 **v5.3.1 で分類方式を read-only allowlist 方式から 14-step の順序付き決定表による executable 位置分類へ転換しました** (issue #339)。
+
+実行形として gate するのは次の形です: コマンド置換等の indirection (`$(...)` / バッククォート / `<(...)` / `>(...)`)、 解析不能な segment / token (複数コマンドの merge、 複数 shell word の merge、 ANSI-C quoting、 静的に決定できない展開を含む token)、 segment 先頭の `NAME=VALUE` 代入 slot (値によらず。 `GIT_EXTERNAL_DIFF` / `RIPGREP_CONFIG_PATH` / `LESSOPEN` 等の間接実行面を変数名の列挙なしで塞ぐため)、 bash keyword / shell builtin の静的 superset、 head の basename が wrapper 名または shell interpreter (`bash` / `sh` / `dash` / `zsh` / `ksh`) に一致する形、 launcher の path 修飾形、 script / 対話内実行面を持つコマンド (`sed` / `awk` / `xargs` / `less` / `more` / `parallel`)、 危険 option (`find` の `-exec` 系 / `rg` の `--pre` 系・`--hostname-bin` 系 / `sort` の `--compress-program` 系 / `git` の `--ext-diff`・`--textconv`)。
+
+**allow 側 (mention 候補) は 3 つだけです**: 無害 builtin (`echo` / `true` / `false` / `pwd` / `type`)、 `git` の縮小 subcommand 特例 (`diff` / `log` / `show` / `status` / `ls-files` / `rev-parse` / `cat-file`)、 および **外部コマンド形の不明 head による引数・quoted 文字列としての参照**です。 最後の 1 経路だけが fail-open であり (issue #339 で確定した意図的転換)、 それ以外は従来どおり fail-closed を維持します。 したがって未知の launcher (`frobnicate <wrapper>` 等) に対する完全性は保証しません。 **本 hook は cooperative 利用前提の補助 gate であり、 真の push gate は fail-closed の marker hash 検証を行う `block-pre-push.sh` です。**
+
+コマンド置換等の間接実行を含む場合は、 `&` / `|` が wrapper 呼び出しに隣接していなくても位置を問わず deny します。 分類の正本は `tests/test_pre_push_bg_codex_wrapper.py` の `BlockBgCodexWrapperExecPositionClassificationTest` docstring にある 14-step 決定表で、 各 step の根拠と受容境界は `block-bg-codex-wrapper.sh` のファイルヘッダ「検知ロジック」節を参照してください。
 
 agent_type gate を通過した後は、 従来どおり次の 2 経路の background 起動を検知します:
 
