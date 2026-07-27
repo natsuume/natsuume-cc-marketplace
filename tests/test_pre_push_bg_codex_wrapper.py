@@ -528,11 +528,13 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     escape し、double quote 内では `$` / バッククォート / `"` / `\` の前で
     のみ escape として消費し、それ以外では literal に保持する。escaped
     backslash `\\` は 1 つの `\` に collapse し、その直後に現れる `$` は
-    escape されていない動的展開として canonical 化失敗と判定する。`$` は、
-    直後が展開開始として有効な文字 (英数字 / `_` / `{` / `(` / `@` / `*` /
-    `#` / `?` / `!` / `-` / `$`) の場合のみ動的展開として canonical 化
-    失敗とする。それ以外 (token 末尾の `$` や、正規表現の行末アンカーの
-    ような literal な `$`) は literal 文字として扱う) に対して行い、
+    escape されていない動的展開として canonical 化失敗と判定する。quote
+    外の `$` を含む token は step 3 で既に実行形へ落ちているため、
+    canonicalize_token が扱う `$` は double quote 内の残余ケースのみで
+    ある。double quote 内の `$` は、直後が展開開始として有効な文字
+    (英数字 / `_` / `{` / `(` / `@` / `*` / `#` / `?` / `!` / `-` /
+    `$`) の場合のみ canonical 化失敗とし、それ以外 (行末アンカー等) は
+    literal 文字として扱う) に対して行い、
     head token のみさらに basename 正規化する。canonical 化は本 hook 内の
     専用 helper に閉じ、共有 parser (cmd-parser.sh) や push gate
     (block-pre-push.sh) の token 判定は変更しない。
@@ -554,16 +556,33 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        開始 (`$'`) が現れる場合も、本検査は ANSI-C quote の内部意味論を
        模さず共有 parser の quote 状態と乖離するため、解析不能として
        実行形とする
-    3. segment の各 token が単一 shell word であることを検査する:
-       token の raw 文字列を正しい quote 意味論 (single quote 内は
-       literal、double quote 内は `$` / バッククォート / `"` / `\` の
-       前でのみ backslash が escape) で走査し、(a) quote 外の空白が
-       現れる (共有 tokenizer の quote 状態 desync により複数 shell
-       word が 1 token に merge されている) または (b) 走査終了時に
-       quote 状態が閉じていない場合、解析不能として実行形とする。merge
-       された token は内側に危険 option を隠して exact / prefix 一致を
-       逃れるため、head だけでなく全 token を対象とする。共有 parser
-       側の desync 原因そのものは #354 で扱う
+    3. segment の各 token が静的 literal であることを検査する: raw
+       token を正しい quote 意味論 (single quote 内は literal、double
+       quote 内は `$` / バッククォート / `"` / `\` の前でのみ
+       backslash が escape) で走査し、次のいずれかに該当すれば解析
+       不能として実行形とする:
+       - (a) 走査終了時に quote が閉じていない
+       - (b) quote 外に空白が現れる (共有 tokenizer の quote 状態
+         desync (#354) により複数 shell word が 1 token に merge
+         されている)
+       - (c) quote 外に展開・置換・word 生成を導入する文字が現れる:
+         `$` (変数展開・`${...}`・コマンド置換 `$(...)`・ANSI-C
+         quoting `$'...'`・locale 翻訳 quoting `$"..."`・旧算術展開
+         `$[...]` を 1 つの規則で一括して覆う)、バッククォート、
+         brace expansion の `{` / `}`、pathname expansion の `*` /
+         `?` / `[` / `]`、tilde expansion の token 先頭 `~`、および
+         `(` / `)` / `<` / `>` 等の shell 構文文字
+       - (d) double quote 内に、展開開始として有効な文字 (英数字 /
+         `_` / `{` / `(` / `@` / `*` / `#` / `?` / `!` / `-` / `$`)
+         が続く `$`、または escape されていないバッククォートが現れる
+       bash は quote 外の `$` / brace / glob を parse 後に展開する
+       ため、展開結果を静的に決定できない token を mention 判定の
+       材料にしてはならない (token 文字列と実際にコマンドへ渡される
+       引数が一致する保証が無い)。double quote 内で展開開始が続かない
+       `$` (正規表現の行末アンカー `"marker$"` 等) と、quote 内の
+       glob / brace 文字 (`rg -n 'a*b' <wrapper>` 等) は展開されない
+       ため literal として許容する。head だけでなく全 token を対象と
+       し、step 4 (canonical 化) 以降の判定より前に実施する
     4. leading 代入列 (segment 先頭の NAME=VALUE 連鎖) を処理する: 代入
        slot が 1 つでも存在すれば、値に関わらず実行形とする。代入値が
        指すのは wrapper path だけでなく、head コマンドの間接実行面を
@@ -1830,6 +1849,98 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         'rg -n "marker$" plugins/pre-push-review/hooks/'
+                        "scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_locale_translation_quoted_option_is_denied(self) -> None:
+        # locale 翻訳 quoting ($"...") は quote 外の `$` として実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        'rg $"--pre=bash" marker '
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_brace_expansion_option_is_denied(self) -> None:
+        # brace expansion は quote 外の `{` / `}` として実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg {--pre=bash,--pre=bash} marker "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_glob_expansion_option_is_denied(self) -> None:
+        # pathname expansion は quote 外の `?` として実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg --pr?=bash marker "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_legacy_arithmetic_expansion_is_denied(self) -> None:
+        # 旧算術展開 $[...] も quote 外の `$` として実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg $[1] marker "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_double_quoted_variable_operand_is_denied(self) -> None:
+        # double quote 内の変数展開 (regression pin)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": 'rg -n marker "$HOME/run-codex-review.sh"'
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_single_quoted_glob_pattern_is_allowed(self) -> None:
+        # quote 内の glob は展開されないので mention のまま (規則が
+        # 過剰に広くないことの pin)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg -n 'a*b' plugins/pre-push-review/hooks/"
                         "scripts/run-codex-review.sh"
                     )
                 },

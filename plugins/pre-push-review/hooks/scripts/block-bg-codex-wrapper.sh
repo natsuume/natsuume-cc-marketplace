@@ -85,7 +85,13 @@
 # される経路を検知する token 単位の単一 shell word 検査 (`token_is_unanalyzable`、 新
 # step 3) を追加、 (7) `segment_is_unanalyzable` に ANSI-C quoting (`$'`) の検出を
 # 追加、 (8) `canonicalize_token` の `$` 判定を「直後が展開開始として有効な文字の場合
-# のみ失敗」 へ精密化、 の 5 点をさらに反映した。
+# のみ失敗」 へ精密化、 の 5 点をさらに反映した。 Phase B 4 巡目レビューで、 3 巡目の
+# `$` 判定緩和が bash の他の quoting form (`$"..."` locale 翻訳、 `$[...]` 旧算術
+# 展開) と、 parse 後に展開される brace expansion (`{`/`}`) / pathname expansion
+# (`*`/`?`/`[`/`]`) を取りこぼしていたことを受け、 `token_is_unanalyzable` (step 3)
+# を「単一 shell word 検査」 から「静的 literal 検査」 へ一般化した (個別構文の列挙
+# ではなく、 mention 判定に使ってよい token は静的に決定できる literal 値である、 と
+# いう積極要件に転換。 詳細は `token_is_unanalyzable` 関数コメント参照)。
 #
 # ## 検知ロジック
 #
@@ -119,9 +125,12 @@
 #        は `classify_wrapper_segment` (戻り値 0 = 実行形、 1 = mention 候補) が判定する。
 #        判定は「canonical token 値」 (single/double quote 除去・backslash escape 解決・
 #        fragment 連結を行った shell word の静的な値。 `canonicalize_token` 関数参照) に
-#        対して行う 14-step の順序付き決定表であり、 概略は次のとおり: 全 token が単一
-#        shell word であること (`token_is_unanalyzable`。 共有 tokenizer の quote 状態
-#        desync #354 で複数 word が 1 token に merge され危険 option を隠す経路を塞ぐ) /
+#        対して行う 14-step の順序付き決定表であり、 概略は次のとおり: 全 token が静的
+#        literal であること (`token_is_unanalyzable`。 quote 外の `$`・brace
+#        expansion・pathname expansion・tilde expansion は bash が parse 後に展開
+#        するため、 これらを含む token は展開結果を静的に決定できず解析不能とする。
+#        共有 tokenizer の quote 状態 desync #354 で複数 word が 1 token に merge
+#        され危険 option を隠す経路も同じ検査で塞ぐ) /
 #        leading 代入列 (NAME=VALUE 連鎖) の代入 slot が 1 つでも存在すれば値によらず
 #        実行形 (GIT_EXTERNAL_DIFF / RIPGREP_CONFIG_PATH / LESSOPEN 等、 変数名列挙では
 #        なく存在自体で判定) / head の canonical 化が失敗 (動的展開が残る) すれば実行形 /
@@ -576,6 +585,16 @@ pipe_chain_all_mention_safe() {
 # すり抜けた single quote 内の `$(` を canonicalize_token 内で再度誤検知しない」
 # ための一貫性維持であり、 実質的な検知は規則 1 が担う。
 #
+# **4 巡目レビューによる位置づけの変化 (静的 literal 検査、 決定表 step 3)**: quote
+# 外の `$` (変数展開・`${...}`・`$(...)`・ANSI-C quoting `$'...'`・locale 翻訳
+# quoting `$"..."`・旧算術展開 `$[...]` を含む) を持つ token は、 本関数より先に
+# `token_is_unanalyzable` (step 3) が一律に解析不能 (実行形) と判定して落とすため、
+# 本関数が実際に処理する `$` は **double quote 内の残余ケースのみ**になった
+# (unquoted 領域の `$` 分岐は、 step 3 を通過した token には理論上到達しないが、
+# 保険として残す実装は変更しない)。 double quote 内の `$` 判定・backslash の
+# quote 別意味論はいずれも現行のまま維持する (詳細は `token_is_unanalyzable`
+# 関数コメント参照)。
+#
 # **cmd-parser.sh の `unquote_token` との違い**: `unquote_token` はトークン両端の
 # quote ペアを 1 段剥がすだけで、 `--'pre'` や `--'ext-diff'` のような fragment
 # 分断形 (先頭 `--` が quote 外、 残りが quote 内という 1 token 内の quote 混在) を
@@ -694,29 +713,55 @@ canonicalize_token() {
 }
 
 # token_is_unanalyzable <raw_token>
-# 戻り値: 0 = 解析不能 (quote 状態 desync の疑い)、 1 = 単一 shell word として
-#   解析可能。
+# 戻り値: 0 = 解析不能 (静的 literal ではない、 または quote 状態 desync の疑い)、
+#   1 = 静的 literal として解析可能。
 #
-# 決定表 step 3 (issue #339 3 巡目レビュー、 codex P1 + security P2)。
-# `tokenize_segment` (共有 parser、 #354 で追跡中の quote 状態 desync 疑い) は、
-# 本来複数の shell word であるべき入力を 1 token に merge して返す経路がある
-# (例: `"x\\"` のように escape 判定が絡む形。 `--pre` のような危険 option が
-# merge 後 token の内側に隠れると、 `canonicalize_token` による exact / prefix
-# 一致判定を欺いて option 走査 (step 12/13) をすり抜けうる)。 本関数は
-# `tokenize_segment` の出力結果を信頼せず、 raw token 文字列を
-# `canonicalize_token` と同じ quote 意味論 (single quote 内は escape 無効、
+# 決定表 step 3 (issue #339 3/4 巡目レビュー、 codex P1 + security P2、 全て同根)。
+#
+# **なぜ「静的 literal であること」を積極要件にするか**: bash は quote 外の
+# `$` (変数展開・コマンド置換・各種 quoting)・brace expansion・pathname
+# expansion (glob)・tilde expansion を **parse 後、実際にコマンドへ渡す前** に
+# 展開する。 そのため、 これらの構文を含む token の raw 文字列は、 実際にコマンド
+# へ渡される引数と一致する保証が無い (例: `{--pre=bash,--pre=bash}` は brace
+# expansion 後 `--pre=bash` という別 token に展開されるが、 raw 文字列だけを見て
+# `--pre` との exact / prefix 一致を判定する `canonicalize_token` はこれを見抜け
+# ない)。 3 巡目で `$` の直後文字を精査する緩和を入れたが、 これは bash が `$` を
+# 消費する他の quoting form (`$"..."` locale 翻訳、 `$[...]` 旧算術展開) を
+# 取りこぼし、 さらに brace / glob / tilde expansion も未対応だった。 個別の
+# 構文を列挙して塞ぐのではなく、 **mention 判定の材料にしてよい token は
+# 「静的に決定できる literal 値である」 という積極要件で一般化する** (これに
+# 該当しない token は保守的に解析不能 = 実行形とする)。
+#
+# 本関数は raw token 文字列を quote 意味論 (single quote 内は escape 無効、
 # double quote 内は `$`/バッククォート/`"`/`\` の前でのみ escape、 それ以外は
-# unquoted として次の 1 文字を無条件 escape) で独立に再走査し、
-#   - quote 外 (unquoted) の空白文字が現れる (= 本来 tokenize_segment が
-#     ここで token を区切っているはずなのに 1 token に残っている。 quote 状態
-#     desync の証跡)
-#   - 走査終了時に single/double quote が閉じていない (= token 内で quote が
-#     完結していない)
-# のいずれかを解析不能と判定する。 head だけでなく `classify_wrapper_segment`
-# が扱う全 token に対して呼ぶ (merge された token は option 位置に限らず
-# operand 位置にも現れうるため)。 共有 parser 側の quote 状態 desync の根本
-# 原因そのものは #354 で追跡中であり、 本関数はその症状を検知する防御層に
-# すぎない。 bash 3.2 互換 (mapfile / declare -A / `${var,,}` を使わない)。
+# unquoted として次の 1 文字を無条件 escape。 `canonicalize_token` と同じ規約)
+# で 1 文字ずつ走査し、 次のいずれかに該当すれば解析不能 (実行形) とする:
+#   (a) 走査終了時に single/double quote が閉じていない
+#   (b) quote 外 (unquoted) の空白文字が現れる (= 本来 tokenize_segment が
+#       ここで token を区切っているはずなのに 1 token に残っている。 共有
+#       tokenizer の quote 状態 desync (#354) の証跡)
+#   (c) quote 外に展開・置換・word 生成を導入する文字が現れる: `$` (変数展開・
+#       `${...}`・コマンド置換 `$(...)`・ANSI-C quoting `$'...'`・locale 翻訳
+#       quoting `$"..."`・旧算術展開 `$[...]` を、 直後の文字を見ずに `$` の
+#       出現だけで一括して覆う)、 バッククォート、 brace expansion の `{`/`}`、
+#       pathname expansion の `*`/`?`/`[`/`]`、 token 先頭の `~`
+#       (tilde expansion)、 `(`/`)`/`<`/`>` 等の shell 構文文字
+#   (d) double quote 内に、 展開開始として有効な文字 (英数字/`_`/`{`/`(`/`@`/
+#       `*`/`#`/`?`/`!`/`-`/`$`) が続く `$`、 または escape されていない
+#       バッククォートが現れる
+# quote 外の特殊文字が `\` で escape されている場合は「現れた」ことにならない
+# ため rule (c) の対象外とする (unquoted の `\` は次の 1 文字を無条件 escape
+# して読み飛ばすため、 escape pair は 2 文字纏めて消費し個別の文字判定に到達
+# しない)。 double quote 内で展開開始が続かない `$` (正規表現の行末アンカー
+# `"marker$"` 等) と、 quote 内の glob / brace 文字 (`'a*b'` 等) は bash が
+# 展開しないため literal として許容する (対応する allow テストあり)。
+#
+# head だけでなく `classify_wrapper_segment` が扱う全 token に対して呼ぶ
+# (merge された token・展開構文を含む token のいずれも option 位置に限らず
+# operand 位置にも現れうるため)、 決定表 step 4 (leading 代入列) 以降より前に
+# 実施する。 共有 tokenizer 側の quote 状態 desync の根本原因そのものは #354
+# で追跡中であり、 本関数はその症状 (b) を検知する防御層の 1 つにすぎない。
+# bash 3.2 互換 (mapfile / declare -A / `${var,,}` を使わない)。
 token_is_unanalyzable() {
   local _tw_tok="$1"
   local _tw_i=0 _tw_len=${#_tw_tok}
@@ -727,6 +772,8 @@ token_is_unanalyzable() {
     _tw_c="${_tw_tok:$_tw_i:1}"
 
     if [ "$_tw_in_squote" -eq 1 ]; then
+      # single quote 内: quote 終端のみ判定し、 それ以外はすべて literal
+      # (展開・置換の対象にならないため rule (c)/(d) は適用しない)。
       [ "$_tw_c" = "'" ] && _tw_in_squote=0
       _tw_i=$((_tw_i+1))
       continue
@@ -746,28 +793,57 @@ token_is_unanalyzable() {
             continue
             ;;
         esac
+        _tw_i=$((_tw_i+1))
+        continue
+      fi
+      if [ "$_tw_c" = '`' ]; then
+        # rule (d): escape されていないバッククォート。
+        return 0
+      fi
+      if [ "$_tw_c" = '$' ]; then
+        _tw_nc="${_tw_tok:$((_tw_i+1)):1}"
+        case "$_tw_nc" in
+          [A-Za-z0-9_]|'{'|'('|'@'|'*'|'#'|'?'|'!'|'-'|'$')
+            # rule (d): 展開開始として有効な文字が続く `$`。
+            return 0
+            ;;
+        esac
       fi
       _tw_i=$((_tw_i+1))
       continue
     fi
 
-    # unquoted 領域: 空白が現れたら quote 状態 desync の証跡 (解析不能)。
+    # unquoted 領域。
     if [[ "$_tw_c" == [[:space:]] ]]; then
+      # rule (b): quote 外の空白 (quote 状態 desync の証跡)。
+      return 0
+    fi
+
+    if [ "$_tw_c" = "\\" ]; then
+      # unquoted の `\` は次の 1 文字を無条件に escape する。 escape された
+      # 展開開始文字は rule (c) の対象外 (2 文字纏めて読み飛ばす)。
+      _tw_i=$((_tw_i+2))
+      continue
+    fi
+
+    if [ "$_tw_i" -eq 0 ] && [ "$_tw_c" = '~' ]; then
+      # rule (c): token 先頭の tilde expansion。
       return 0
     fi
 
     case "$_tw_c" in
       "'") _tw_in_squote=1; _tw_i=$((_tw_i+1)); continue ;;
       '"') _tw_in_dquote=1; _tw_i=$((_tw_i+1)); continue ;;
-      "\\")
-        _tw_i=$((_tw_i+2))
-        continue
+      '$'|'`'|'{'|'}'|'*'|'?'|'['|']'|'('|')'|'<'|'>')
+        # rule (c): 展開・置換・word 生成を導入する quote 外の文字。
+        return 0
         ;;
     esac
     _tw_i=$((_tw_i+1))
   done
 
   if [ "$_tw_in_squote" -eq 1 ] || [ "$_tw_in_dquote" -eq 1 ]; then
+    # rule (a): 走査終了時に quote が閉じていない。
     return 0
   fi
   return 1
@@ -788,13 +864,17 @@ token_is_unanalyzable() {
 # `BlockBgCodexWrapperExecPositionClassificationTest` docstring にある 14-step の
 # 順序付き決定表 (step 3〜14。 step 1 は規則 1、 step 2 は規則 1.5 として既に呼び出し
 # 元で処理済み)。 各 step は上から順に評価し、 最初に確定した判定を採用する:
-#   - step 3: segment の全 token (`tokenize_segment` の出力) それぞれが単一 shell
-#     word であることを `token_is_unanalyzable` で検査する (issue #339 3 巡目
-#     レビュー、 codex P1 + security P2)。 共有 tokenizer の quote 状態 desync
-#     (#354) により複数 shell word が 1 token に merge され、 内側に危険 option
-#     (`--pre` 等) を隠して canonicalize_token の exact / prefix 一致を逃れうる
-#     ため、 head だけでなく全 token を対象に、 step 4 (leading 代入列) より前に
-#     検査する。 1 つでも解析不能な token があれば実行形とする。
+#   - step 3: segment の全 token (`tokenize_segment` の出力) それぞれが「静的
+#     literal」 であることを `token_is_unanalyzable` で検査する (issue #339
+#     3/4 巡目レビュー、 codex P1 + security P2、 全て同根)。 bash は quote 外の
+#     `$` (各種 quoting 含む)・brace expansion・pathname expansion (glob)・
+#     tilde expansion を parse 後に展開するため、 これらを含む token の raw
+#     文字列は実際にコマンドへ渡される引数と一致する保証が無い。 また共有
+#     tokenizer の quote 状態 desync (#354) により複数 shell word が 1 token に
+#     merge され、 内側に危険 option (`--pre` 等) を隠して canonicalize_token の
+#     exact / prefix 一致を逃れうる。 head だけでなく全 token を対象に、 step 4
+#     (leading 代入列) より前に検査する。 1 つでも解析不能な token があれば
+#     実行形とする (判定内容の詳細は `token_is_unanalyzable` 関数コメント参照)。
 #   - step 4: segment 先頭の `NAME=VALUE` (leading 代入 slot) が存在すれば、 値に
 #     関わらず実行形とする (issue #339 2 巡目レビュー、 codex P1 must-fix)。 代入値が
 #     指すのは wrapper path だけでなく、 head コマンドの間接実行面を有効化する設定値
@@ -860,11 +940,14 @@ classify_wrapper_segment() {
   local _cw_idx=0
   local _cw_raw _cw_unq
 
-  # step 3: 全 token が単一 shell word であることを検査する (issue #339 3 巡目
-  # レビュー、 codex P1 + security P2)。 共有 tokenizer の quote 状態 desync
-  # (#354) により複数 shell word が 1 token に merge され、 内側の危険 option
-  # (`--pre` 等) が exact / prefix 一致から隠れる経路を塞ぐ。 head だけでなく
-  # 全 token を対象とし、 leading 代入列の判定 (step 4) より前に行う。
+  # step 3: 全 token が静的 literal であることを検査する (issue #339 3/4 巡目
+  # レビュー、 codex P1 + security P2、 全て同根)。 quote 外の `$` / brace /
+  # glob / tilde expansion を含む token は展開結果を静的に決定できず、 また
+  # 共有 tokenizer の quote 状態 desync (#354) により複数 shell word が
+  # 1 token に merge され内側の危険 option (`--pre` 等) が exact / prefix
+  # 一致から隠れる経路もある。 head だけでなく全 token を対象とし、 leading
+  # 代入列の判定 (step 4) より前に行う (詳細は `token_is_unanalyzable`
+  # 関数コメント参照)。
   for _cw_raw in "${_cw_toks[@]}"; do
     if token_is_unanalyzable "$_cw_raw"; then
       unset _cw_toks
