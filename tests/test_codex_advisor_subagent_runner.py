@@ -803,9 +803,12 @@ class CodexRunnerFooterRobustnessTest(HookHarness):
 
     def test_fenced_attestation_and_footer_together_is_recognized(self) -> None:
         """修正前 fail: advisor runner の attestation 行と footer 3 行を
-        まとめてフェンスで囲むと、現行実装は lines.at(-4) が閉じフェンス行を
-        指してしまい attestation 照合に失敗し retry-required のまま残る
-        (実測で確認)。Phase B 後は success 終端となる。
+        まとめてフェンスで囲むと、末尾の閉じフェンス行が全 tail オフセットを
+        1 行ずらすため、footer 3 行照合 (lines.slice(-3) が footer の後半 2 行
+        + 閉じフェンス行を指す) も attestation 参照 (lines.at(-4) が閉じ
+        フェンス行ではなく Codex-Runner-Operation 行を指す) も意図した行を
+        外し、現行実装では retry-required のまま残る (実測で確認)。Phase B
+        後は success 終端となる。
         """
         self.subagent_start("advisor")
         report = "\n".join(

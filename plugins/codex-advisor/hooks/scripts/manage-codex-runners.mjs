@@ -552,11 +552,39 @@ function handleSubagentStart(input) {
   return null;
 }
 
+/**
+ * footer / attestation 解析が共有する「実質末尾行」抽出 (issue #348)。
+ *
+ * runner が footer をコードフェンス (```/~~~) で囲んだり、footer 行間に空白行を挟んだり
+ * しても誤って retry-required にならないよう、message を行分割し、末尾から走査して
+ * 空白行 (/^\s*$/) とコードフェンス行 (先頭空白を除去した後に ``` または ~~~ で始まる行)
+ * をスキップしながら実質行を count 行、元の並び順で収集して返す。count 行に満たない
+ * 場合は null。行の内容自体は変更しない (先頭空白の除去もしない — footer 行自体の
+ * 先頭空白は従来どおり照合失敗になる)。
+ */
+function significantTailLines(message, count) {
+  const lines = message.split(/\r?\n/);
+  const collected = [];
+  for (
+    let index = lines.length - 1;
+    index >= 0 && collected.length < count;
+    index -= 1
+  ) {
+    const line = lines[index];
+    if (/^\s*$/.test(line)) continue;
+    if (/^\s*(?:```|~~~)/.test(line)) continue;
+    collected.push(line);
+  }
+  if (collected.length < count) return null;
+  collected.reverse();
+  return collected;
+}
+
 function parseRunnerFooter(message) {
   if (typeof message !== "string") return null;
-  const lines = message.replace(/\s+$/, "").split(/\r?\n/);
-  if (lines.length < 3) return null;
-  const footer = lines.slice(-3);
+  // 末尾のフェンス・空白行を無視した実質末尾 3 行を footer とみなす (issue #348)。
+  const footer = significantTailLines(message, 3);
+  if (!footer) return null;
   const labels = [
     "Codex-Runner-Operation",
     "Codex-Runner-Status",
@@ -572,10 +600,12 @@ function parseRunnerFooter(message) {
 
 function parseReviewCadenceAttestation(message) {
   if (typeof message !== "string") return null;
-  const lines = message.replace(/\s+$/, "").split(/\r?\n/);
-  if (lines.length < 4) return null;
+  // footer 3 行 + その直前の実質行 (attestation) の計 4 行を、フェンス・空白行を
+  // 無視した実質末尾から取り出す (issue #348)。先頭要素が attestation 行になる。
+  const lines = significantTailLines(message, 4);
+  if (!lines) return null;
   const prefix = "Codex-Advisor-Review-Cadence: ";
-  const line = lines.at(-4);
+  const line = lines[0];
   if (!line?.startsWith(prefix)) return null;
   const value = line.slice(prefix.length).trim();
   return REVIEW_CADENCE_ATTESTATIONS.has(value) ? value : null;

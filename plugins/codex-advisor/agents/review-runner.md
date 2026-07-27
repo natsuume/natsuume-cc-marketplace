@@ -82,7 +82,9 @@ tracking / status transport の一時失敗と job 差分 0 件は `retryable-fa
 `terminal-failure` または `cancelled`。failure report には簡潔な理由、既知 job ID、
 `run-codex-job.sh status JOB_ID` / `result JOB_ID` という手動確認方向だけを含める。
 
-必ず次の 3 行で終了する (正常 foreground 完了で job ID を必要としなかった場合は `none`)。
+必ず次の 3 行で終了する (正常 foreground 完了で job ID を必要としなかった場合は `none`)。footer を
+コードフェンス・引用ブロックで囲まず、プレーンテキストの最終行群として出力する。下のコードブロックは
+記法の説明であり、フェンス自体を出力に含めない。
 
 ```text
 Codex-Runner-Operation: review
