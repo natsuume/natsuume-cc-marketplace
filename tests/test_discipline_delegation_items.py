@@ -48,10 +48,29 @@ find_paragraph_with が誤って拾う (保全ガードの誤 red) 経路があ�
 変更する (substring 包含 2 回では再文脈化 (別の文脈に同じ部分文字列が現れる)
 によるすり抜けを防げないため)。節外漂流ガードは不在検査のため substring 検索
 のまま維持する。
+
+改訂 4 回目 (4 巡目 codex review の P2 x2 (may-defer) への対応、Codex rescue の
+判定 ((a) fallback 案の条件付き許容 / (b) approve + helper 共有化) と親セッション
+の決定で確定):
+(1) 正規化 helper `normalize_soft_wrapped` を新設し、規模境界の段落一致・例外
+段落の文抽出・節外漂流ガードの prefix/suffix 検索の 3 箇所で共有する (正規化
+ロジックの片側更新漏れによる drift を防ぐ)。節外漂流ガードは prefix/suffix を
+個別に正規化してから substring 検索する形に強化し、soft line-wrap された節外
+複製も検出できるようにする。(2) 例外保全ガードを、substring 存在検査から
+canonical 肯定文の文境界完全一致 (`DIRECT_EXCEPTION_CANONICAL_SENTENCE`。段落を
+正規化し「。」区切りで文に分割したうえで、canonical 文が文リストに完全一致で
+存在するか) へ強化する。substring 存在検査は文中の否定化・改変 (「〜てよい。」
+→「〜てよいわけではない。」等) を検出できなかったため。
+残余リスクの明示: 例外段落に後置の矛盾文を追加する改変は本ガードの検出対象外
+である。段落全文を丸ごと固定する設計も検討したが、それは本 issue のスコープ外
+の段落全体の内容について契約所有権を主張することになるため採らず、意図的に
+「先頭の肯定文が変質していないこと」に絞った smoke 契約とした。段落全体の意味
+保証は PR diff レビューと、当該段落を所有する別 issue の責務に委ねる。
 """
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -106,11 +125,28 @@ DIRECT_EXCEPTION_PARAGRAPH_PREFIX = {
     "discipline-sonnet.md": "**例外 (直接編集してよいもの)**:",
     "discipline-opus.md": "**委任しない作業 (直接行ってよいもの)**:",
 }
-# 直接編集/直接作業の例外段落 (上記 prefix で始まる段落) に残るべき本文フレーズ。
-DIRECT_EXCEPTION_BODY_PHRASE = {
-    "discipline-fable.md": "数行規模で仕様の曖昧さがない自明な修正",
-    "discipline-sonnet.md": "この場合も verifier は不要",
-    "discipline-opus.md": "数回の tool call で完結する作業",
+# 直接編集/直接作業の例外段落 (上記 prefix で始まる段落) の第 1 文全文
+# (太字 prefix + 主語 + 述部 + 句点)。段落を正規化し「。」区切りで文に分割した
+# うえで、この文が文リストに完全一致で存在することを検査する
+# (対象ファイルの現物の文と一字一句一致することを確認済み)。
+DIRECT_EXCEPTION_CANONICAL_SENTENCE = {
+    "discipline-fable.md": (
+        "**例外 (直接編集してよいもの)**: 数行規模で仕様の曖昧さがない自明な修正"
+        " (typo 修正、定数変更、合意済みの 1 箇所修正など) は、委任オーバーヘッド"
+        " (サブエージェント起動 + コンテキスト再構築) の方が高くつくため"
+        " Fable が直接行ってよい。"
+    ),
+    "discipline-sonnet.md": (
+        "**例外 (直接編集してよいもの)**: 上記「自明な修正」は委任オーバーヘッド"
+        " (サブエージェント起動 + コンテキスト再構築) の方が高くつくため"
+        "直接行ってよい。"
+    ),
+    "discipline-opus.md": (
+        "**委任しない作業 (直接行ってよいもの)**: Opus 5 には小さなタスクまで"
+        "サブエージェントへ委任する傾向があるが、数回の tool call で完結する作業"
+        " (自明な修正、単発の確認、1 ファイルの小さな編集) は委任オーバーヘッド"
+        " (サブエージェント起動 + コンテキスト再構築) の方が高くつくため直接行う。"
+    ),
 }
 
 
@@ -148,6 +184,17 @@ def scale_boundary_phrases(name: str) -> tuple[str, str]:
     構造的に防ぐため、検査フレーズの取得口をこの関数に一本化する。
     """
     return SCALE_SENTENCE, SMALL_FIX_SENTENCE[name]
+
+
+def normalize_soft_wrapped(text: str) -> str:
+    """行末の改行・空白のみを吸収して連結する (行頭インデントは保持する)。
+
+    soft line-wrap (長い文が複数行に折り返されている) された文字列を、行を
+    区切り文字なしで連結して 1 本の文字列に正規化する。規模境界の段落一致・
+    例外段落の文抽出・節外漂流ガードの prefix/suffix 検索の 3 箇所で共有し、
+    正規化ロジックの分岐 (片側だけ更新されて挙動がずれる) を防ぐ。
+    """
+    return "".join(line.rstrip() for line in text.splitlines())
 
 
 def delegation_bullet_block(section: str) -> tuple[list[str], int] | None:
@@ -291,10 +338,11 @@ class DelegationItemsAdditionTests(unittest.TestCase):
     def test_scale_boundary_present(self) -> None:
         """bullet ブロック直後の段落が規模境界の canonical 2 文と完全一致すること。
 
-        段落を行末 rstrip 連結 (行頭インデントは保持し、行間に区切り文字を挟ま
-        ない) で正規化したうえで `SCALE_SENTENCE + SMALL_FIX_SENTENCE[name]`
-        と完全一致するかを検査する。substring 包含 2 回では、無関係な文脈に
-        同じ部分文字列が現れる再文脈化ですり抜ける可能性があったため。
+        段落を normalize_soft_wrapped (行末 rstrip 連結。行頭インデントは保持
+        し、行間に区切り文字を挟まない) で正規化したうえで
+        `SCALE_SENTENCE + SMALL_FIX_SENTENCE[name]` と完全一致するかを検査
+        する。substring 包含 2 回では、無関係な文脈に同じ部分文字列が現れる
+        再文脈化ですり抜ける可能性があったため。
         """
         violations = []
         for name, path in THREE_WAY.items():
@@ -311,7 +359,7 @@ class DelegationItemsAdditionTests(unittest.TestCase):
             if para is None:
                 violations.append(f"{name} (bullet ブロック直後に段落が無い)")
                 continue
-            normalized = "".join(line.rstrip() for line in para.splitlines())
+            normalized = normalize_soft_wrapped(para)
             scale_sentence, small_fix_sentence = scale_boundary_phrases(name)
             expected = scale_sentence + small_fix_sentence
             if normalized != expected:
@@ -360,6 +408,16 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
         self.assertEqual([], violations, f"既存の委任項目が失われている: {violations}")
 
     def test_direct_edit_exception_preserved(self) -> None:
+        """例外段落の第 1 文が canonical 肯定文と文単位で完全一致すること。
+
+        段落を find_paragraph_starting_with (段落先頭一致) で特定したうえで
+        normalize_soft_wrapped で正規化し、「。」区切りで文に分割する
+        (句点は各文の末尾に保持する)。canonical 文がその文リストに完全一致で
+        存在するかを検査する。substring 存在検査では、文中の否定化・改変
+        (「〜てよい。」→「〜てよいわけではない。」等) を検出できなかったため
+        文境界の完全一致に強化した (段落全体の意味保証は対象外。モジュール
+        docstring の残余リスク節を参照)。
+        """
         violations = []
         for name, path in THREE_WAY.items():
             section = role_split_section(read(path))
@@ -367,13 +425,15 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
                 violations.append(f"{name} (role-split 節が見つからない)")
                 continue
             prefix = DIRECT_EXCEPTION_PARAGRAPH_PREFIX[name]
-            body_phrase = DIRECT_EXCEPTION_BODY_PHRASE[name]
             para = find_paragraph_starting_with(section, prefix)
             if para is None:
                 violations.append(f"{name} (直接作業の例外段落 (prefix 先頭一致) が節内に無い)")
                 continue
-            if body_phrase not in para:
-                violations.append(f"{name} (例外段落に本文フレーズが無い)")
+            normalized = normalize_soft_wrapped(para)
+            sentences = re.findall(r"[^。]*。", normalized)
+            canonical_sentence = DIRECT_EXCEPTION_CANONICAL_SENTENCE[name]
+            if canonical_sentence not in sentences:
+                violations.append(f"{name} (canonical 肯定文が文単位で一致しない)")
         self.assertEqual(
             [], violations, f"直接作業の例外文言が失われている: {violations}"
         )
@@ -381,10 +441,12 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
     def test_scale_boundary_absent_outside_role_split(self) -> None:
         """規模境界の記述が role-split 節の外へ漂流していないことの固定。
 
-        prefix / suffix を連結せず個別に検索する (連結境界での偶然一致を排除)。
-        存在検査 (test_scale_boundary_present) と同じ scale_boundary_phrases
-        から検査フレーズを取得し、片側更新漏れを防ぐ。不在検査のため substring
-        検索のまま維持する (完全一致は「無いこと」の検査には不適)。
+        prefix / suffix を連結せず個別に normalize_soft_wrapped で正規化して
+        から substring 検索する (連結境界での偶然一致を排除しつつ、soft
+        line-wrap された節外複製も検出できるようにする)。存在検査
+        (test_scale_boundary_present) と同じ scale_boundary_phrases から
+        検査フレーズを取得し、片側更新漏れを防ぐ。不在検査のため正規化後の
+        substring 検索のまま維持する (完全一致は「無いこと」の検査には不適)。
         """
         violations = []
         for name, path in THREE_WAY.items():
@@ -394,8 +456,8 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
                 violations.append(f"{name} (role-split 節が見つからない)")
                 continue
             start, end = bounds
-            prefix = text[:start]
-            suffix = text[end:]
+            prefix = normalize_soft_wrapped(text[:start])
+            suffix = normalize_soft_wrapped(text[end:])
             for phrase in scale_boundary_phrases(name):
                 if phrase in prefix or phrase in suffix:
                     violations.append(f"{name}: {phrase!r}")
