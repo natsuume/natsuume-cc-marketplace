@@ -196,7 +196,7 @@ split_command() {
         # 次の 1 文字を escape として消費
         local nc="${cmd:$((i+1)):1}"
         case "$nc" in
-          '$'|'`'|'"'|'\\')
+          '$'|'`'|'"'|'\')
             segment+="$c$nc"; i=$((i+2)); continue ;;
         esac
       fi
@@ -213,7 +213,7 @@ split_command() {
     case "$c" in
       "'") in_squote=1; segment+="$c"; i=$((i+1)) ;;
       '"') in_dquote=1; segment+="$c"; i=$((i+1)) ;;
-      '\\')
+      '\')
         # quote 外の `\` は次の 1 文字を escape する。両方をそのまま保持。
         local nc="${cmd:$((i+1)):1}"
         segment+="$c$nc"
@@ -374,7 +374,7 @@ tokenize_segment() {
       if [ "$c" = "\\" ]; then
         local nc="${seg:$((i+1)):1}"
         case "$nc" in
-          '$'|'`'|'"'|'\\')
+          '$'|'`'|'"'|'\')
             current+="$c$nc"; i=$((i+2)); continue ;;
         esac
       fi

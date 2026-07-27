@@ -1,6 +1,6 @@
 {
   "name": "git-guardrails",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。"
 }

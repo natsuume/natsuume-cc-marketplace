@@ -4,7 +4,11 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.6.1
+v0.6.2
+
+### v0.6.1 → v0.6.2 の変更点
+
+共有 lib cmd-parser.sh の同期更新 (#354。escaped backslash の quote 状態漏れ修正)。
 
 ### v0.6.0 → v0.6.1 の変更点
 
