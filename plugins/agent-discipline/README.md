@@ -4,9 +4,13 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.23.0
+v0.24.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.23.0 → v0.24.0 の変更点
+
+分業規律 3 ファイル (`discipline-fable.md` / `discipline-sonnet.md` / `discipline-opus.md`) の「サブエージェントに委任する作業」リストに、週次有効性調査 (#234 / #238) で逸脱が集中していた 2 場面 (実装初期のスケルトン / スタブ / 型骨格の一括作成、レビュー・受入検証の指摘修正の一括反映) を明示追加し、規模境界 (複数ファイルまたは数十行以上で適用、単一ファイル数行の指摘修正は既存の直接編集例外の範囲) を委任リスト直後の段落として明記した。`discipline-sonnet.md` は配送予算 (self-gate 前置きとの合算 8,000 UTF-16 code units) の残余が小さいため、スケルトン bullet と境界文を圧縮した文言で反映した。契約テスト `tests/test_discipline_delegation_items.py` を追加し、canonical 文言・配置 (column-zero bullet / 直後段落 / 空行分離)・既存規範の保全を固定した。
 
 ### v0.22.1 → v0.23.0 の変更点
 
