@@ -522,8 +522,11 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
 
     wrapper 名 (`run-codex-review.sh`) を含む segment の分類を、read-only
     allowlist 方式 (不明コマンド = fail-closed で実行形) から executable 位置方式へ
-    転換する。分類は「canonical token 値」(single/double quote 除去・backslash
-    escape 解決・fragment 連結を行った shell word の静的な値) に対して行い、
+    転換する。分類は「canonical token 値」(行継続正規化後の shell word に対し、
+    single/double quote 除去・backslash escape 解決・fragment 連結を行った
+    静的な値。backslash は bash の意味論に従い、unquoted では次の 1 文字を
+    escape し、double quote 内では `$` / バッククォート / `"` / `\` の前で
+    のみ escape として消費し、それ以外では literal に保持する) に対して行い、
     head token のみさらに basename 正規化する。canonical 化は本 hook 内の
     専用 helper に閉じ、共有 parser (cmd-parser.sh) や push gate
     (block-pre-push.sh) の token 判定は変更しない。
@@ -539,7 +542,11 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        head token が無い (assignment-only / 空) → 実行形
     3. head token の canonical 化 (single/double quote 除去・backslash
        escape 解決・fragment 連結。hook 専用 helper で行い共有 parser は
-       変更しない) が失敗する (動的展開 `$VAR` 等を含む) → 実行形
+       変更しない) が失敗する (動的展開 `$VAR` 等を含む) → 実行形。この
+       fail-closed 規則は head に限らない: 決定表のどの step であれ、
+       mention 判定に必要な token の canonical 化が失敗した場合 (step
+       10/11 の option 走査中の token を含む)、その時点で解析不能として
+       実行形とする
     4. 無害 builtin 例外: canonical head が echo / test / `[` / true /
        false / pwd / type に完全一致 (basename 適用なし。
        word-shape・keyword・builtin superset 検査より先に評価するため `[`
@@ -576,8 +583,10 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        共存 → 実行形 (option の精密解析はしない)
     10. script/対話内実行面を持つ sed/awk/xargs/less/more/parallel →
         実行形。option-aware: find の -exec/-execdir/-ok/-okdir、rg の
-        --pre / --pre=*、sort の --compress-program (--com 以上の
-        prefix 一致、= 付き含む) が canonical token として存在 → 実行形
+        --pre / --pre=*、sort の --compress-program (--co 以上の
+        prefix 一致、= 付き含む。GNU sort の --c 系 long option は
+        --check と --compress-program のみで --co が既に一意省略として
+        受理されるため) が canonical token として存在 → 実行形
         (値を取る option の literal 引数も保守的 superset として deny し
         false positive を受容する。危険 option の列挙は受容境界であり、
         列挙外の value-taking option は残余ギャップとして受容する)
@@ -1478,6 +1487,99 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "git difftool plugins/pre-push-review/hooks/"
+                        "scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_find_ansi_c_quoted_exec_option_is_denied(self) -> None:
+        # canonical 化失敗 token (ANSI-C quote は $ が残る) の fail-closed。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "find . -name run-codex-review.sh $'-exec' bash "
+                        "'{}' ';'"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_rg_ansi_c_quoted_pre_option_is_denied(self) -> None:
+        # canonical 化失敗 token (ANSI-C quote は $ が残る) の fail-closed。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg $'--pre' bash plugins/pre-push-review/hooks/"
+                        "scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_sort_ansi_c_quoted_compress_option_is_denied(self) -> None:
+        # canonical 化失敗 token (ANSI-C quote は $ が残る) の fail-closed。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "sort $'--compress-program=gzip' "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_git_ansi_c_quoted_ext_diff_option_is_denied(self) -> None:
+        # canonical 化失敗 token の fail-closed (git option 走査中も同様)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "git diff $'--ext-diff' "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_rg_double_quoted_backslash_literal_is_allowed(self) -> None:
+        # double quote 内の `\` は `-` の前では literal 保持され、canonical
+        # 値が `--pre` に一致しない。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        r'rg "\-\-pre" plugins/pre-push-review/hooks/'
+                        r"scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_sort_shortest_abbreviated_compress_option_is_denied(self) -> None:
+        # GNU sort が受理する最短一意省略 (--co) の pin。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "sort --co=gzip plugins/pre-push-review/hooks/"
                         "scripts/run-codex-review.sh"
                     )
                 },

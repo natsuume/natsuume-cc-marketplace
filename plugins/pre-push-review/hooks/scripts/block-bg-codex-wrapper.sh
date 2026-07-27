@@ -411,13 +411,23 @@ pipe_chain_all_mention_safe() {
 }
 
 # canonicalize_token <raw_token>
-# stdout: canonical token 値 (single/double quote 除去・backslash escape 解決
-#   (`\x` → `x`。 single quote 内は escape 無効)・fragment 連結を行った、 shell word
-#   の静的な値)。
+# stdout: canonical token 値 (single/double quote 除去・backslash escape 解決・
+#   fragment 連結を行った、 shell word の静的な値)。
 # 戻り値: 0 = canonical 化成功 (stdout に値)、 1 = 失敗 (single quote 外に解決不能な
 #   `$` (動的展開、 例: `$VAR` / `${VAR}`) が残る。 コマンド置換 `$(` 等は
 #   `segment_has_indirection` (規則 1) が本関数より先に検知済みのため、 ここに残る
 #   `$` は素の変数展開のみ)。
+#
+# **backslash の意味論は quote 文脈で分岐する** (bash 実挙動 / lib/cmd-parser.sh
+# の `tokenize_segment` / `split_command` の double quote 分岐と同じ意味論):
+#   - unquoted (single quote 外): `\` は次の 1 文字を無条件に escape する
+#     (`\x` → `x`)。
+#   - single quote 内: `\` を含めすべて literal (escape 無効)。
+#   - double quote 内: `\` は次の文字が `$` / バッククォート / `"` / `\` の
+#     場合のみ escape として消費し、 それ以外 (例 `\-`) は `\` 自体を literal
+#     として保持する (bash は `"\-\-pre"` を `\-\-pre` のまま解決し `--pre`
+#     にはしない。 これを無条件 escape すると `"\-\-pre"` が誤って `--pre` に
+#     一致してしまう false positive を生む)。
 #
 # **cmd-parser.sh の `unquote_token` との違い**: `unquote_token` はトークン両端の
 # quote ペアを 1 段剥がすだけで、 `--'pre'` や `--'ext-diff'` のような fragment
@@ -451,23 +461,26 @@ canonicalize_token() {
       continue
     fi
 
-    if [ "$_ct_c" = "\\" ]; then
-      # single quote 外の `\` は次の 1 文字を escape する (`\x` → `x`)。 token 末尾の
-      # 孤立した `\` (次の文字が無い) は `\` 自体を literal として残す。
-      _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
-      if [ -z "$_ct_nc" ]; then
-        _ct_result+="$_ct_c"
-        _ct_i=$((_ct_i+1))
-      else
-        _ct_result+="$_ct_nc"
-        _ct_i=$((_ct_i+2))
-      fi
-      continue
-    fi
-
     if [ "$_ct_in_dquote" -eq 1 ]; then
       if [ "$_ct_c" = '"' ]; then
         _ct_in_dquote=0
+        _ct_i=$((_ct_i+1))
+        continue
+      fi
+      if [ "$_ct_c" = "\\" ]; then
+        # double quote 内の `\` は、 次の文字が `$` / バッククォート / `"` /
+        # `\` の場合のみ escape として消費する (bash の実意味論)。 それ以外は
+        # `\` 自体を literal として結果に残し、 次の文字は改めて通常どおり
+        # 処理する (2 文字纏めて消費しない)。
+        _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
+        case "$_ct_nc" in
+          '$'|'`'|'"'|'\\')
+            _ct_result+="$_ct_nc"
+            _ct_i=$((_ct_i+2))
+            continue
+            ;;
+        esac
+        _ct_result+="$_ct_c"
         _ct_i=$((_ct_i+1))
         continue
       fi
@@ -476,6 +489,22 @@ canonicalize_token() {
       fi
       _ct_result+="$_ct_c"
       _ct_i=$((_ct_i+1))
+      continue
+    fi
+
+    # unquoted 領域
+    if [ "$_ct_c" = "\\" ]; then
+      # unquoted (single quote 外) の `\` は次の 1 文字を無条件に escape する
+      # (`\x` → `x`)。 token 末尾の孤立した `\` (次の文字が無い) は `\` 自体を
+      # literal として残す。
+      _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
+      if [ -z "$_ct_nc" ]; then
+        _ct_result+="$_ct_c"
+        _ct_i=$((_ct_i+1))
+      else
+        _ct_result+="$_ct_nc"
+        _ct_i=$((_ct_i+2))
+      fi
       continue
     fi
 
@@ -736,6 +765,14 @@ classify_wrapper_segment() {
               return 0
               ;;
           esac
+        else
+          # head (step 3) と対称の fail-closed: option 走査対象 token の
+          # canonical 化が失敗する (ANSI-C quote `$'...'` 等、 動的展開が残る)
+          # 場合、 mention 判定に必要な値を静的決定できないため解析不能として
+          # 実行形とする (契約 docstring の全体不変条件: どの step であれ
+          # canonical 化失敗は実行形)。
+          unset _cw_toks
+          return 0
         fi
         _cw_j=$((_cw_j+1))
       done
@@ -751,6 +788,10 @@ classify_wrapper_segment() {
               return 0
               ;;
           esac
+        else
+          # 同上 (find と対称の fail-closed)。
+          unset _cw_toks
+          return 0
         fi
         _cw_j=$((_cw_j+1))
       done
@@ -761,13 +802,15 @@ classify_wrapper_segment() {
         _cw_traw="${_cw_toks[$_cw_j]}"
         if _cw_tcanon="$(canonicalize_token "$_cw_traw")"; then
           _cw_prefix="${_cw_tcanon%%=*}"
-          if [ "${#_cw_prefix}" -ge 5 ]; then
+          if [ "${#_cw_prefix}" -ge 4 ]; then
             # 意図的に固定文字列 (`--compress-program`) を subject、 動的な
             # `_cw_prefix` を pattern 側に置き、 「token の prefix が
-            # `--compress-program` の接頭辞になっているか」 (`--com` 以上の
-            # abbreviation 一致) を判定する。 shellcheck SC2194 (「定数を case の
-            # subject にするのは variable の `$` 付け忘れでは」 という誤検知)
-            # は意図的な用法のため抑止する。
+            # `--compress-program` の接頭辞になっているか」 (`--co` 以上の
+            # abbreviation 一致。 GNU sort の `--c` 系 long option は `--check`
+            # と `--compress-program` のみで、 `--co` (4 文字) の時点で既に
+            # 一意省略として受理されるため閾値を 4 とする) を判定する。
+            # 定数を case の subject にするのは variable の `$` 付け忘れでは、
+            # という shellcheck の誤検知 (SC2194) は意図的な用法のため抑止する。
             # shellcheck disable=SC2194
             case "--compress-program" in
               "$_cw_prefix"*)
@@ -776,6 +819,10 @@ classify_wrapper_segment() {
                 ;;
             esac
           fi
+        else
+          # 同上 (find/rg と対称の fail-closed)。
+          unset _cw_toks
+          return 0
         fi
         _cw_j=$((_cw_j+1))
       done
@@ -813,6 +860,11 @@ classify_wrapper_segment() {
             return 0
             ;;
         esac
+      else
+        # 同上 (find/rg/sort と対称の fail-closed。 git の --ext-diff/--textconv
+        # 走査中も同じ不変条件を適用する)。
+        unset _cw_toks
+        return 0
       fi
       _cw_j=$((_cw_j+1))
     done
