@@ -611,10 +611,24 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
          `--pre>x` が実 argv の `--pre` と乖離する。この乖離を防ぐ
          ため語中の `<` / `>` は従来どおり実行形のまま維持する
        - 緩和 2 (固定開始を持つ token の pathname / tilde expansion):
-         token が **固定開始 (fixed start)** — 1 文字目が
-         `[A-Za-z0-9_/.]` のいずれかである、または `~/` の 2 文字で
-         始まる — を持つ場合に限り、quote 外の glob 文字 `*` / `?` /
-         `[` / `]` と token 先頭の `~` を解析不能の理由にしない。
+         token が **固定開始 (fixed start)** — その token が word へ
+         最初に寄与する literal 文字 (quote 除去・backslash escape
+         解決を考慮した値の先頭文字) が `[A-Za-z0-9_/.]` のいずれかで
+         ある、または raw token が `~/` の 2 文字で始まる — を持つ
+         場合に限り、quote 外の glob 文字 `*` / `?` / `[` / `]` と
+         token 先頭の `~` を解析不能の理由にしない。判定対象は raw
+         token の 1 文字目ではなく **word へ最初に寄与する literal
+         文字**である: `'plugins'/*/<wrapper>` は raw の 1 文字目が
+         `'` でも quote を剥がした値は `p` で始まるため固定開始を
+         持ち、`"plugins"/*/<wrapper>` と `\\plugins/*/<wrapper>` も
+         同じく `p` が最初の寄与文字になる。一方 `'--pre'*` /
+         `"--pre"*` / `'-'-pre*` は最初の寄与文字が `-` であるため
+         固定開始を持たず、従来どおり実行形とする。quote 区切りの
+         `'` / `"`、緩和 1 で許容した token 先頭の `<` / `>`、緩和 2
+         で許容した token 先頭の `~` は word へ literal 文字を寄与
+         しないため固定開始の判定に算入しない (`~/x` では続く `/`
+         が最初の寄与文字になる)。glob 文字自身が最初の寄与位置に
+         なる token (`*.sh` / `[a]x/<wrapper>`) も固定開始を持たない。
          固定開始を持たない token (`-` 始まり、`*` 始まり、`[`
          始まり、`~` 単独や `~name` 形、`<` / `>` 始まり等) では
          従来どおり実行形とする。brace expansion の `{` / `}`、
@@ -749,6 +763,21 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     依存し、その値はコマンド行に現れず本 hook から観測できないため、
     同じ受容範囲 (cooperative 境界) に属する。`$HOME` が異常値の環境
     でも、上記の字句的不変条件により一致は deny 方向にしか働かない。
+
+    受容境界 (wrapper file への書き込み): redirection の書き込み先
+    (target) として wrapper path が現れる形 (`echo stub > <wrapper>` /
+    `cat x >> <wrapper>` 等) は operand として扱い、mention 候補の
+    ままとする (= allow しうる)。根拠は 3 点ある。(1) 本 hook の責務は
+    wrapper の **起動** を gate することに限定され、wrapper file への
+    書き込みは対象外である。(2) origin/master も
+    `cat x > <wrapper>` / `cat x >> <wrapper>` を allow しており、
+    「wrapper への書き込みは deny される」という不変条件はそもそも
+    成立していない (base が `echo stub > <wrapper>` を deny していたのは
+    設計意図ではなく、read-only allowlist に `echo` が入っていなかった
+    副作用である)。(3) Write / Edit tool 経由の書き込みは Bash tool
+    専用の本 hook からそもそも観測できない。したがって wrapper file の
+    完全性は本 hook の保証範囲外であり、真の push gate である
+    `block-pre-push.sh` の marker hash 検証が担う。
 
     platform caveat (bash 3.2 系では tilde 規則が発火しない): 共有
     tokenizer (`lib/cmd-parser.sh` の `tokenize_segment`) は結果配列を
@@ -2204,6 +2233,149 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
+
+    def test_single_quoted_prefix_glob_operand_is_allowed(self) -> None:
+        # 緩和 2: single quote を剥がした最初の寄与文字 `p` が固定開始になる。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat 'plugins'/*/hooks/scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_double_quoted_prefix_glob_operand_is_allowed(self) -> None:
+        # 緩和 2: double quote 版も同じく `p` が最初の寄与文字で固定開始あり。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        'cat "plugins"/*/hooks/scripts/run-codex-review.sh'
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_quoted_space_prefix_glob_operand_is_allowed(self) -> None:
+        # 緩和 2: quote 内空白は rule (b) 対象外で、`m` が最初の寄与文字。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "cat 'my dir'/*/run-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_backslash_escaped_prefix_glob_operand_is_allowed(self) -> None:
+        # 緩和 2: unquoted の escape pair `\p` は escape された `p` が寄与文字。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "cat \\plugins/*/run-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_split_quoted_pre_option_with_glob_is_denied(self) -> None:
+        # 緩和 2 の境界: `'-'-pre*` の最初の寄与文字は `-` で固定開始なし。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "rg -n marker '-'-pre* run-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_single_quoted_pre_option_with_glob_is_denied(self) -> None:
+        # 緩和 2 の境界: `'--pre'*` も寄与文字が `-` なので実行形のまま。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "rg -n marker '--pre'* run-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_double_quoted_pre_option_with_glob_is_denied(self) -> None:
+        # 緩和 2 の境界: double quote 版 `"--pre"*` も固定開始を持たない。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": 'rg -n marker "--pre"* run-codex-review.sh'
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_leading_glob_operand_is_denied(self) -> None:
+        # 緩和 2 の境界: glob 自身が最初の寄与位置なら固定開始なしで実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat *.sh plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_leading_bracket_glob_operand_is_denied(self) -> None:
+        # 緩和 2 の境界: `[a]x/` 始まりも最初の寄与位置が glob なので実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "cat [a]x/run-codex-review.sh"},
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_echo_redirection_to_wrapper_target_is_allowed(self) -> None:
+        # 受容境界: 書き込み先としての wrapper path は operand 扱い (起動でない)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "echo stub > plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_append_redirection_to_wrapper_target_is_allowed(self) -> None:
+        # 受容境界: `>>` 追記先の wrapper path も base と同じく allow のまま。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat x >> plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
 
 
 if __name__ == "__main__":

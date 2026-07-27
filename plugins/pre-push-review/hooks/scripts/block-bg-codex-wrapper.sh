@@ -140,8 +140,12 @@
 #        共有 tokenizer の quote 状態 desync #354 で複数 word が 1 token に merge
 #        され危険 option を隠す経路も同じ検査で塞ぐ。 検査は head と operand で
 #        非対称で、 head は厳格、 operand は「token 先頭の fd 数字列 + `<`/`>`」 と
-#        「固定開始 `[A-Za-z0-9_/.]` / `~/` を持つ token の glob と先頭 `~`」 の
-#        2 点のみ許容する — pathname expansion が literal prefix を保存するため
+#        「固定開始を持つ token の glob と先頭 `~`」 の 2 点のみ許容する。 固定開始
+#        (fixed start) とは「その token が word へ最初に寄与する literal 文字
+#        (quote 除去・backslash escape 解決後の値の先頭文字) が `[A-Za-z0-9_/.]`
+#        である」 か「raw token が `~/` で始まる」 ことを指し、 raw token の
+#        1 文字目ではない (`'plugins'/*` は固定開始 `p` を持ち、 `'--pre'*` は
+#        持たない) — pathname expansion が literal prefix を保存するため
 #        展開結果が `-` 始まりの危険 option になり得ない、 という字句的不変条件に
 #        基づく緩和であり位置推定ではない。 head 判定は launcher 剥がし後の実 head に
 #        対して行う) /
@@ -179,6 +183,18 @@
 #        chain 走査で検査する。 chain 内に mention-safe でない segment が 1 つでもあれば
 #        command 全体を実行形とする (下記 1. の agent_type gate を発火させる。 該当 segment
 #        が indirection を含む場合は INDIRECTION フラグも連動して立てる)。
+#      - **受容境界 (wrapper file への書き込み)**: redirection の書き込み先 (target) と
+#        して wrapper path が現れる形 (`echo stub > <wrapper>` / `cat x >> <wrapper>` 等)
+#        は operand として扱い、 mention 候補のままとする (= allow しうる)。 根拠は 3 点:
+#        (1) 本 hook の責務は wrapper の **起動** を gate することに限定され、 wrapper
+#        file への書き込みは対象外であること、 (2) origin/master も
+#        `cat x > <wrapper>` / `cat x >> <wrapper>` を allow しており「wrapper への
+#        書き込みは deny される」 という不変条件はそもそも成立していないこと (base が
+#        `echo stub > <wrapper>` を deny していたのは設計意図ではなく、 read-only
+#        allowlist に `echo` が入っていなかった副作用である)、 (3) Write / Edit tool
+#        経由の書き込みは Bash tool 専用の本 hook からそもそも観測できないこと。
+#        wrapper file の完全性は本 hook の保証範囲外であり、 真の push gate である
+#        `block-pre-push.sh` の marker hash 検証が担う。
 # 1. **agent_type gate** (v4.0.0 / issue #267 / fail-closed): 実行形 segment が 1 つでも
 #    ある場合のみ到達する。 command に `run-codex-review.sh` substring を含む場合、 hook
 #    payload のトップレベル `agent_type` が `pre-push-review:codex-reviewer` に完全一致しな
@@ -757,6 +773,25 @@ canonicalize_token() {
   return 0
 }
 
+# note_literal_contribution <literal_char>
+# `token_is_unanalyzable` の走査ループ専用の記録 helper。 引数はその位置で
+# **word へ literal として寄与する文字** (quote 除去・backslash escape 解決を
+# 反映した値の 1 文字) であり、 最初の 1 文字だけを見て「固定開始 (fixed
+# start) を持つか」 を確定する。 2 文字目以降の呼び出しは何もしない。
+#
+# 呼び出し元の局所変数 `_tw_first_seen` / `_tw_fixed_start` を bash の動的
+# スコープ経由で更新する。 呼び出し元は `token_is_unanalyzable` の走査ループ
+# 1 箇所だけで再帰も並行呼び出しも無いため、 状態を引数と戻り値で往復させる
+# より意図が読み取りやすい。 本 helper は quote 状態を一切持たない (第 2 の
+# quote 状態機械を作らないための設計。 #355 の重複指摘参照)。
+note_literal_contribution() {
+  [ "$_tw_first_seen" -eq 0 ] || return 0
+  _tw_first_seen=1
+  case "$1" in
+    [A-Za-z0-9_/.]) _tw_fixed_start=1 ;;
+  esac
+}
+
 # token_is_unanalyzable <raw_token> <position_kind>
 # <position_kind>: `head` = 実行面そのものを決める token (厳格判定)、
 #   `operand` = head の実行面に一切影響しない token (rule (c) を 2 点緩和)。
@@ -834,13 +869,30 @@ canonicalize_token() {
 #     3.2.57 の双方が argv `[--pre] [ARG]` を生む)。 この乖離を防ぐため
 #     語中の `<` / `>` は従来どおり解析不能とする。
 #   - **緩和 2 (固定開始を持つ token の pathname / tilde expansion)**: token が
-#     **固定開始 (fixed start)** — 1 文字目が `[A-Za-z0-9_/.]` のいずれかで
-#     あるか、 token が `~/` の 2 文字で始まる — を持つ場合に限り、 quote 外の
-#     glob 文字 `*` / `?` / `[` / `]` と token 先頭の `~` を解析不能の理由に
-#     しない。 固定開始を持たない token (`-` 始まり、 `*` 始まり、 `[` 始まり、
-#     `~` 単独や `~name` 形、 `<`/`>` 始まり等) では従来どおり解析不能とする。
-#     `{`/`}` (brace expansion)・`(`/`)`・`$`・バッククォートは operand でも
-#     緩和しない。
+#     **固定開始 (fixed start)** — その token が **word へ最初に寄与する
+#     literal 文字** (quote 除去・backslash escape 解決を考慮した値の先頭
+#     文字) が `[A-Za-z0-9_/.]` のいずれかであるか、 raw token が `~/` の
+#     2 文字で始まる — を持つ場合に限り、 quote 外の glob 文字 `*` / `?` /
+#     `[` / `]` と token 先頭の `~` を解析不能の理由にしない。 判定対象が
+#     raw token の 1 文字目ではないのは、 quote された literal な path 断片の
+#     後に unquoted な glob が続く形 (`'plugins'/*/<wrapper>` /
+#     `"plugins"/*/<wrapper>` / `\plugins/*/<wrapper>`) が実際には固定開始
+#     `p` を持つのに、 raw の 1 文字目 (`'` / `"` / `\`) だけを見ると
+#     取りこぼすためである (origin/master では allow だった read-only 形が
+#     deny に退行していた)。 逆に `'--pre'*` / `"--pre"*` / `'-'-pre*` は
+#     最初の寄与文字が `-` であるため固定開始を持たず、 従来どおり解析不能
+#     とする。 quote 区切りの `'` / `"`、 緩和 1 で許容した token 先頭の
+#     `<` / `>`、 緩和 2 で許容した token 先頭の `~` は word へ literal
+#     文字を寄与しないため固定開始の判定に算入しない (`~/x` では続く `/` が
+#     最初の寄与文字になる)。 glob 文字自身が最初の寄与位置になる token
+#     (`*.sh` / `[a]x/<wrapper>`) も固定開始を持たない。 固定開始を持たない
+#     token (`-` 始まり、 `*` 始まり、 `[` 始まり、 `~` 単独や `~name` 形、
+#     `<`/`>` 始まり等) では従来どおり解析不能とする。 `{`/`}` (brace
+#     expansion)・`(`/`)`・`$`・バッククォートは operand でも緩和しない。
+#     固定開始の判定は**走査ループの中で遅延的に**行う (`_tw_first_seen` /
+#     `_tw_fixed_start` を `note_literal_contribution` が更新する)。 事前に
+#     raw token を別途走査して判定すると、 quote 意味論を扱う第 2 の状態機械
+#     を持つことになり #355 が指摘する重複が悪化するためである。
 # 緩和の根拠は「この token は operand のはずだ」 という位置推定ではなく
 # **字句的不変条件**である: pathname expansion は最初の glob メタ文字より前の
 # literal prefix を必ず保存するため、 固定開始 `[A-Za-z0-9_/.]` を持つ token の
@@ -881,24 +933,13 @@ token_is_unanalyzable() {
   local _tw_i=0 _tw_len=${#_tw_tok}
   local _tw_in_squote=0 _tw_in_dquote=0
   local _tw_c _tw_nc
-  local _tw_relax=0 _tw_fixed_start=0
+  local _tw_relax=0 _tw_first_seen=0 _tw_fixed_start=0
 
   if [ "$_tw_pos" = "operand" ]; then
     # operand 位置のみ rule (c) を 2 点緩和する (head は従来どおり厳格。
     # 詳細は関数コメント「head / operand の非対称」節参照)。 `head` 以外の
     # 未知の値が渡された場合も緩和しない (fail-closed 側の既定)。
     _tw_relax=1
-    # 固定開始 (fixed start): 1 文字目が `[A-Za-z0-9_/.]`、 または token が
-    # `~/` の 2 文字で始まること。 緩和 2 (glob / 先頭 `~` の許容) の前提。
-    # `~` を bracket expression `[~]` で書くのは、 「raw token の 1 文字目が
-    # literal な `~` である」 ことだけを判定したいためである (裸の `~/` は
-    # case pattern 側で tilde expansion が起きて意図が壊れ、 quote した
-    # `'~/'` は意図どおり動くが shellcheck が SC2088 で警告する。 `[~]` は
-    # どちらの問題も持たず抑止コメントを要しない)。
-    case "$_tw_tok" in
-      [A-Za-z0-9_/.]*) _tw_fixed_start=1 ;;
-      [~]/*) _tw_fixed_start=1 ;;
-    esac
   fi
 
   while [ "$_tw_i" -lt "$_tw_len" ]; do
@@ -906,8 +947,13 @@ token_is_unanalyzable() {
 
     if [ "$_tw_in_squote" -eq 1 ]; then
       # single quote 内: quote 終端のみ判定し、 それ以外はすべて literal
-      # (展開・置換の対象にならないため rule (c)/(d) は適用しない)。
-      [ "$_tw_c" = "'" ] && _tw_in_squote=0
+      # (展開・置換の対象にならないため rule (c)/(d) は適用しない)。 終端
+      # `'` 以外の全文字が word への寄与文字である (quote 内の空白も含む)。
+      if [ "$_tw_c" = "'" ]; then
+        _tw_in_squote=0
+      else
+        note_literal_contribution "$_tw_c"
+      fi
       _tw_i=$((_tw_i+1))
       continue
     fi
@@ -922,10 +968,15 @@ token_is_unanalyzable() {
         _tw_nc="${_tw_tok:$((_tw_i+1)):1}"
         case "$_tw_nc" in
           '$'|'`'|'"'|'\')
+            # escape pair: word へ寄与するのは escape された側の文字。
+            note_literal_contribution "$_tw_nc"
             _tw_i=$((_tw_i+2))
             continue
             ;;
         esac
+        # escape として消費されない `\` は double quote 内では literal で
+        # あり、 `\` 自身が word へ寄与する。
+        note_literal_contribution "$_tw_c"
         _tw_i=$((_tw_i+1))
         continue
       fi
@@ -941,6 +992,9 @@ token_is_unanalyzable() {
           return 0
         fi
       fi
+      # 展開を開始しない `$` (行末アンカー等) とその他の文字は literal と
+      # して word へ寄与する。
+      note_literal_contribution "$_tw_c"
       _tw_i=$((_tw_i+1))
       continue
     fi
@@ -953,17 +1007,29 @@ token_is_unanalyzable() {
 
     if [ "$_tw_c" = "\\" ]; then
       # unquoted の `\` は次の 1 文字を無条件に escape する。 escape された
-      # 展開開始文字は rule (c) の対象外 (2 文字纏めて読み飛ばす)。
+      # 展開開始文字は rule (c) の対象外 (2 文字纏めて読み飛ばす)。 word へ
+      # 寄与するのは escape された側の文字であり (`\p` なら `p`)、 次の文字が
+      # 無い token 末尾の孤立 `\` では `\` 自身が寄与する。
+      _tw_nc="${_tw_tok:$((_tw_i+1)):1}"
+      if [ -n "$_tw_nc" ]; then
+        note_literal_contribution "$_tw_nc"
+      else
+        note_literal_contribution "$_tw_c"
+      fi
       _tw_i=$((_tw_i+2))
       continue
     fi
 
     if [ "$_tw_i" -eq 0 ] && [ "$_tw_c" = '~' ]; then
-      if [ "$_tw_relax" -eq 1 ] && [ "$_tw_fixed_start" -eq 1 ]; then
-        # 緩和 2 (operand かつ固定開始 `~/`): `$HOME` + `/` + 残りへ展開
+      # 緩和 2 の `~/` 分岐だけは raw token の 2 文字目を直接見る。 固定開始は
+      # 走査が進むまで確定しない遅延判定であり、 token 先頭の `~` に到達した
+      # 時点ではまだ寄与文字が 1 つも無いためである。
+      if [ "$_tw_relax" -eq 1 ] && [ "${_tw_tok:1:1}" = "/" ]; then
+        # 緩和 2 (operand かつ `~/` 始まり): `$HOME` + `/` + 残りへ展開
         # されるため、 展開結果は必ず `/` を含む path 形になり、 exact 一致の
         # 危険 option とは一致しない (prefix 一致の option も deny 方向にしか
-        # 働かない)。
+        # 働かない)。 `~` 自身は word へ literal 文字を寄与しないため記録
+        # せず、 続く `/` が最初の寄与文字になる。
         _tw_i=$((_tw_i+1))
         continue
       fi
@@ -981,7 +1047,11 @@ token_is_unanalyzable() {
           # redirection である。 この token が実 argv へ渡しうる word は
           # 「無し」 か「全数字の word 1 つ」 (fd 番号が実装上限を超える場合。
           # 関数コメント緩和 1 の実測参照) に限られ、 どちらも `-` 始まりの
-          # 危険 option にはなり得ない。
+          # 危険 option にはなり得ない。 redirection 演算子は word へ literal
+          # 文字を寄与しないため固定開始の判定には算入しないが、 その後ろの
+          # 文字は通常どおり寄与する (`>out*` は固定開始 `o` を持つため
+          # 緩和 2 の経路でも許容される。 argv word を生まない token なので
+          # どちらの経路でも危険 option にはなり得ない)。
           case "${_tw_tok:0:$_tw_i}" in
             *[!0-9]*) ;;
             *) _tw_i=$((_tw_i+1)); continue ;;
@@ -992,7 +1062,7 @@ token_is_unanalyzable() {
         return 0
         ;;
       '*'|'?'|'['|']')
-        if [ "$_tw_relax" -eq 1 ] && [ "$_tw_fixed_start" -eq 1 ]; then
+        if [ "$_tw_relax" -eq 1 ] && [ "$_tw_first_seen" -eq 1 ] && [ "$_tw_fixed_start" -eq 1 ]; then
           # 緩和 2 (operand かつ固定開始): pathname expansion は最初の glob
           # メタ文字より前の literal prefix を必ず保存するため、 固定開始
           # `[A-Za-z0-9_/.]` を持つ token の展開結果はすべて同じ非 `-` 文字で
@@ -1000,7 +1070,9 @@ token_is_unanalyzable() {
           _tw_i=$((_tw_i+1))
           continue
         fi
-        # rule (c): pathname expansion。
+        # rule (c): pathname expansion。 寄与文字がまだ 1 つも無い
+        # (`_tw_first_seen` が 0 = この glob が最初の寄与位置) 場合は固定開始
+        # を持たないため、 固定開始が `-` 等だった場合と同じく解析不能とする。
         return 0
         ;;
       '$'|'`'|'{'|'}'|'('|')')
@@ -1010,6 +1082,9 @@ token_is_unanalyzable() {
         return 0
         ;;
     esac
+    # 上記のいずれにも該当しない unquoted の文字は literal として word へ
+    # 寄与する。
+    note_literal_contribution "$_tw_c"
     _tw_i=$((_tw_i+1))
   done
 
@@ -1494,7 +1569,7 @@ if [ "$AGENT_TYPE" != "pre-push-review:codex-reviewer" ]; then
 
 理由: 本 hook の payload に `agent_type` が含まれていません (欠落)。 これはメインセッションが wrapper を直接 Bash 実行した場合、 または `agent_type` を hook payload に含めない旧 Claude Code を使用している場合に発生します。
 
-wrapper を実行せずファイル内容を確認したいだけなら、 `cat` / `git diff` / `grep` 等の read-only コマンドや Read / Grep tool を使ってください (それらは deny されません)。
+wrapper を実行せずファイル内容を確認したいだけなら、 `cat` / `git diff` / `grep` 等の read-only コマンドを **静的に決まる literal path** で使ってください (それらは deny されません)。 path に `$VAR` 等の動的展開・コマンド置換・brace expansion (`{a,b}`)・`~user` 形が含まれる場合は、 展開結果を静的に決定できないため read-only コマンドでも deny されます。 その場合は Read / Grep tool を使ってください (本 hook は Bash tool のみを対象とするため deny されません)。
 
 対応:
   - `/pre-push-review:review` で 3 レビューを並列起動してください (推奨)
@@ -1508,7 +1583,7 @@ EOF
 
 理由: 検出された \`agent_type\` は \`${AGENT_TYPE}\` で、 \`pre-push-review:codex-reviewer\` と一致しません。 メインセッションが wrapper を直接 Bash 実行した場合や、 \`agent_type\` を hook payload に含めない旧 Claude Code を使用している場合にも同様の deny になります。
 
-wrapper を実行せずファイル内容を確認したいだけなら、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドや Read / Grep tool を使ってください (それらは deny されません)。
+wrapper を実行せずファイル内容を確認したいだけなら、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを **静的に決まる literal path** で使ってください (それらは deny されません)。 path に \`\$VAR\` 等の動的展開・コマンド置換・brace expansion (\`{a,b}\`)・\`~user\` 形が含まれる場合は、 展開結果を静的に決定できないため read-only コマンドでも deny されます。 その場合は Read / Grep tool を使ってください (本 hook は Bash tool のみを対象とするため deny されません)。
 
 対応:
   - \`/pre-push-review:review\` で 3 レビューを並列起動してください (推奨)
