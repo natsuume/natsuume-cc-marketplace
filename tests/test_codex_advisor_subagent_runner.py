@@ -730,6 +730,244 @@ class CodexRunnerLifecycleTest(HookHarness):
         )
 
 
+class CodexRunnerFooterRobustnessTest(HookHarness):
+    """issue #348 Phase A: footer 解析頑健化 (フェンス・空白行) の固定テスト。
+
+    現行実装の parseRunnerFooter / parseReviewCadenceAttestation は、末尾から
+    の固定行オフセット (`lines.slice(-3)` / `lines.at(-4)`) で footer を照合
+    する。そのため runner が footer をコードフェンス (``` / ~~~) で囲んだり、
+    footer 行間に空白行を挟んだりすると、成功した実行が誤って
+    `retry-required` と判定される (issue #348)。Phase B では「末尾から
+    フェンス行・空白行を無視した実質末尾の連続 3 行 (attestation はその直前の
+    実質行)」で照合するよう頑健化する。本クラスは Phase B 適用前後の挙動差分
+    を固定する。分類は実測 (このファイルの probe を現行実装に対して実行した
+    結果) に基づく。
+    """
+
+    def stop_with_report(
+        self,
+        operation: str,
+        report: str,
+        *,
+        session_id: str = "session-a",
+        agent_id: str = "agent-a",
+    ) -> dict[str, object] | None:
+        return self.hook_response(
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "agent_type": RUNNERS[operation],
+                "last_assistant_message": report,
+                "stop_hook_active": False,
+            }
+        )
+
+    @staticmethod
+    def footer_lines(
+        operation: str, status: str, job_id: str = "task-example"
+    ) -> list[str]:
+        return [
+            f"Codex-Runner-Operation: {operation}",
+            f"Codex-Runner-Status: {status}",
+            f"Codex-Runner-Job-ID: {job_id}",
+        ]
+
+    def records_for(
+        self, session_id: str, operation: str
+    ) -> list[dict[str, object]]:
+        return [
+            record
+            for record in self.state_records()
+            if record["sessionId"] == session_id
+            and record["operation"] == operation
+        ]
+
+    def test_fenced_footer_with_text_language_tag_is_recognized(self) -> None:
+        """修正前 fail: rescue runner の footer 3 行を ```text フェンスで
+        囲むと、現行実装は lines.slice(-3) が閉じフェンス行 "```" を含んで
+        しまい照合に失敗し retry-required のまま残る (実測で確認)。Phase B
+        後は success 終端となり state record が削除される。
+        """
+        self.subagent_start("rescue")
+        report = "\n".join(
+            [
+                "Codex runner report",
+                "```text",
+                *self.footer_lines("rescue", "success"),
+                "```",
+            ]
+        )
+        self.stop_with_report("rescue", report)
+        self.assertEqual([], self.records_for("session-a", "rescue"))
+
+    def test_fenced_attestation_and_footer_together_is_recognized(self) -> None:
+        """修正前 fail: advisor runner の attestation 行と footer 3 行を
+        まとめてフェンスで囲むと、現行実装は lines.at(-4) が閉じフェンス行を
+        指してしまい attestation 照合に失敗し retry-required のまま残る
+        (実測で確認)。Phase B 後は success 終端となる。
+        """
+        self.subagent_start("advisor")
+        report = "\n".join(
+            [
+                "Codex runner report",
+                "```text",
+                "Codex-Advisor-Review-Cadence: not-applicable",
+                *self.footer_lines("advisor", "success"),
+                "```",
+            ]
+        )
+        self.stop_with_report("advisor", report)
+        self.assertEqual([], self.records_for("session-a", "advisor"))
+
+    def test_trailing_blank_lines_after_footer_are_tolerated(self) -> None:
+        """保全 (現行でも pass、実測で確認): footer 3 行の後に空白行が 2 行
+        続く場合、現行実装は `message.replace(/\\s+$/, "")` で末尾の空白を
+        丸ごと除去するため、フェンスなしのこのケースはすでに success 終端に
+        なる。Phase B 後も同じ挙動を維持することを固定する回帰テスト。
+        """
+        self.subagent_start("rescue")
+        report = (
+            "\n".join(
+                [
+                    "Codex runner report",
+                    *self.footer_lines("rescue", "success"),
+                ]
+            )
+            + "\n\n\n"
+        )
+        self.stop_with_report("rescue", report)
+        self.assertEqual([], self.records_for("session-a", "rescue"))
+
+    def test_tilde_fenced_footer_is_recognized(self) -> None:
+        """修正前 fail: footer を ~~~ フェンスで囲んだ場合も ``` と同様に、
+        現行実装では閉じフェンス行が lines.slice(-3) に混入し retry-required
+        のまま残る (実測で確認)。Phase B 後は success 終端となる。
+        """
+        self.subagent_start("rescue")
+        report = "\n".join(
+            [
+                "Codex runner report",
+                "~~~",
+                *self.footer_lines("rescue", "success"),
+                "~~~",
+            ]
+        )
+        self.stop_with_report("rescue", report)
+        self.assertEqual([], self.records_for("session-a", "rescue"))
+
+    def test_blank_lines_between_footer_lines_are_tolerated(self) -> None:
+        """修正前 fail: footer の各行間に空白行が挟まると、現行実装は
+        lines.slice(-3) が空行を含んでしまい照合に失敗し retry-required の
+        まま残る (実測で確認)。Phase B 後は空白行を無視した実質末尾 3 行と
+        して success 終端になる。
+        """
+        self.subagent_start("rescue")
+        footer = self.footer_lines("rescue", "success")
+        report = "\n".join(
+            [
+                "Codex runner report",
+                "",
+                footer[0],
+                "",
+                footer[1],
+                "",
+                footer[2],
+            ]
+        )
+        self.stop_with_report("rescue", report)
+        self.assertEqual([], self.records_for("session-a", "rescue"))
+
+    def test_fenced_review_success_footer_terminates_and_advances_cadence(
+        self,
+    ) -> None:
+        """修正前 fail: review runner の footer をフェンスで囲むと、現行実装
+        は footer 解析に失敗するため review record が retry-required のまま
+        残り、review cadence の completedReviews も加算されない (実測で確認)。
+        Phase B 後は state 終端 (record 削除) に加えて review cadence が
+        +1 される。
+        """
+        self.subagent_start("review")
+        report = "\n".join(
+            [
+                "Codex runner report",
+                "```text",
+                *self.footer_lines("review", "success"),
+                "```",
+            ]
+        )
+        self.stop_with_report("review", report)
+        self.assertEqual([], self.records_for("session-a", "review"))
+        cadence_records = self.records_for("session-a", "review-cadence")
+        self.assertEqual(1, len(cadence_records))
+        self.assertEqual(1, cadence_records[0]["completedReviews"])
+
+    def test_ordinary_text_between_footer_lines_stays_retry_required(
+        self,
+    ) -> None:
+        """保全 (実測で確認): footer 3 行の間に非空白の通常テキスト行が
+        挟まると、フェンス・空白行のみを無視する Phase B の頑健化後も実質行
+        としての連続性が無いため footer と認識されず、現行実装と同じく
+        retry-required のまま残ることを固定する。
+        """
+        self.subagent_start("rescue")
+        footer = self.footer_lines("rescue", "success")
+        report = "\n".join(
+            [
+                "Codex runner report",
+                footer[0],
+                "some other note",
+                footer[1],
+                footer[2],
+            ]
+        )
+        self.stop_with_report("rescue", report)
+        records = self.records_for("session-a", "rescue")
+        self.assertEqual(1, len(records))
+        self.assertEqual("retry-required", records[0]["phase"])
+
+    def test_real_footer_after_fenced_example_footer_is_still_adopted(
+        self,
+    ) -> None:
+        """保全 (既存 test_codex_output_may_contain_footer_words_before_final_footer
+        の近縁、現行でも pass、実測で確認): footer 形式の 3 行がフェンス付き
+        code block 内に「例」として現れても、実質末尾にある本物の footer 3 行
+        (フェンスなし) が採用され success 終端になる。
+        """
+        self.subagent_start("rescue")
+        report = "\n".join(
+            [
+                "Codex output quoted this example:",
+                "```text",
+                *self.footer_lines("rescue", "retryable-failure", "task-fake"),
+                "```",
+                "but the complete output continues here.",
+                *self.footer_lines("rescue", "success", "task-real"),
+            ]
+        )
+        self.stop_with_report("rescue", report)
+        self.assertEqual([], self.records_for("session-a", "rescue"))
+
+    def test_trailing_text_after_footer_stays_retry_required(self) -> None:
+        """保全 (実測で確認): footer 3 行の後に非空白の通常テキスト行が続く
+        場合、footer は実質最終行群でなければならない契約を維持し、フェンス・
+        空白行のみを無視する Phase B の頑健化後も retry-required のまま残る
+        ことを固定する (現行実装でも同じ結果)。
+        """
+        self.subagent_start("rescue")
+        report = "\n".join(
+            [
+                "Codex runner report",
+                *self.footer_lines("rescue", "success"),
+                "Thanks for your patience.",
+            ]
+        )
+        self.stop_with_report("rescue", report)
+        records = self.records_for("session-a", "rescue")
+        self.assertEqual(1, len(records))
+        self.assertEqual("retry-required", records[0]["phase"])
+
+
 class CodexRunnerArtifactContractTest(unittest.TestCase):
     def test_three_role_specific_runner_agents_are_declared(self) -> None:
         for operation, scoped_name in RUNNERS.items():
