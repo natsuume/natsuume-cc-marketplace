@@ -528,8 +528,11 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     escape し、double quote 内では `$` / バッククォート / `"` / `\` の前で
     のみ escape として消費し、それ以外では literal に保持する。escaped
     backslash `\\` は 1 つの `\` に collapse し、その直後に現れる `$` は
-    escape されていない動的展開として canonical 化失敗と判定する) に
-    対して行い、
+    escape されていない動的展開として canonical 化失敗と判定する。`$` は、
+    直後が展開開始として有効な文字 (英数字 / `_` / `{` / `(` / `@` / `*` /
+    `#` / `?` / `!` / `-` / `$`) の場合のみ動的展開として canonical 化
+    失敗とする。それ以外 (token 末尾の `$` や、正規表現の行末アンカーの
+    ような literal な `$`) は literal 文字として扱う) に対して行い、
     head token のみさらに basename 正規化する。canonical 化は本 hook 内の
     専用 helper に閉じ、共有 parser (cmd-parser.sh) や push gate
     (block-pre-push.sh) の token 判定は変更しない。
@@ -547,8 +550,21 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        shell 意味論が乖離して複数コマンドが 1 segment に merge された
        状態であり、head token が実コマンドを代表しない。この場合は
        解析不能として実行形とする (head だけを見る後続 step が merge
-       後の先頭語で誤判定するのを防ぐ)
-    3. leading 代入列 (segment 先頭の NAME=VALUE 連鎖) を処理する: 代入
+       後の先頭語で誤判定するのを防ぐ)。quote 外に ANSI-C quoting の
+       開始 (`$'`) が現れる場合も、本検査は ANSI-C quote の内部意味論を
+       模さず共有 parser の quote 状態と乖離するため、解析不能として
+       実行形とする
+    3. segment の各 token が単一 shell word であることを検査する:
+       token の raw 文字列を正しい quote 意味論 (single quote 内は
+       literal、double quote 内は `$` / バッククォート / `"` / `\` の
+       前でのみ backslash が escape) で走査し、(a) quote 外の空白が
+       現れる (共有 tokenizer の quote 状態 desync により複数 shell
+       word が 1 token に merge されている) または (b) 走査終了時に
+       quote 状態が閉じていない場合、解析不能として実行形とする。merge
+       された token は内側に危険 option を隠して exact / prefix 一致を
+       逃れるため、head だけでなく全 token を対象とする。共有 parser
+       側の desync 原因そのものは #354 で扱う
+    4. leading 代入列 (segment 先頭の NAME=VALUE 連鎖) を処理する: 代入
        slot が 1 つでも存在すれば、値に関わらず実行形とする。代入値が
        指すのは wrapper path だけでなく、head コマンドの間接実行面を
        有効化する設定値でもありうるため (GIT_EXTERNAL_DIFF は外部 diff
@@ -556,62 +572,66 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        LESSOPEN は input preprocessor 等)、変数名の列挙ではなく代入
        slot の存在自体で判定する。処理後に head token が無い
        (assignment-only / 空) 場合も実行形
-    4. head token の canonical 化 (single/double quote 除去・backslash
+    5. head token の canonical 化 (single/double quote 除去・backslash
        escape 解決・fragment 連結。hook 専用 helper で行い共有 parser は
        変更しない) が失敗する (動的展開 `$VAR` 等を含む) → 実行形。この
        fail-closed 規則は head に限らない: 決定表のどの step であれ、
        mention 判定に必要な token の canonical 化が失敗した場合 (step
-       11/12 の option 走査中の token を含む)、その時点で解析不能として
+       12/13 の option 走査中の token を含む)、その時点で解析不能として
        実行形とする
-    5. 無害 builtin 例外: canonical head が echo / test / `[` / true /
-       false / pwd / type に完全一致 (basename 適用なし。
-       word-shape・keyword・builtin superset 検査より先に評価するため `[`
-       も到達可能) → mention 候補 (step 13 へ)
-    6. launcher prefix 例外 (word-shape / keyword / builtin superset 検査
+    6. 無害 builtin 例外: canonical head が echo / true / false / pwd /
+       type に完全一致 (basename 適用なし) → mention 候補 (step 14 へ)。
+       `test` / `[` は bash の算術評価による再評価面 (`[ -v
+       'arr[$(cmd)]' ]` の subscript が算術評価され、single quote 内
+       でもコマンド置換が実行される) を持つため allowlist に含めない
+       (演算子の列挙ではなく head 単位で閉じる)
+    7. launcher prefix 例外 (word-shape / keyword / builtin superset 検査
        より先に評価する明示的第二例外): canonical head が command /
        builtin / env / timeout / nohup / nice / setsid / stdbuf / sudo /
        doas / time / `!` に完全一致 (basename 適用なし) → 限定解析で
        剥がす: 直後の代入 slot (NAME=VALUE 列) を再評価し、存在すれば
-       step 3 と同じ規則で実行形とする。timeout は数値 + 任意の s/m/h/d
+       step 4 と同じ規則で実行形とする。timeout は数値 + 任意の s/m/h/d
        suffix の単純形 duration operand のみ消費。`-` 始まりまたは認識
        できない operand が現れたら実行形。剥がし後の残り token 列を
-       step 4 から再評価する
-    7. canonical head が通常の外部コマンド word の形 (英数字・`_`・`/` の
+       step 5 から再評価する
+    8. canonical head が通常の外部コマンド word の形 (英数字・`_`・`/` の
        いずれかで始まり `[A-Za-z0-9_/.+-]` のみで構成) でない (redirection
        演算子・記号構文等) → 実行形
-    8. canonical head が bash keyword 静的 superset (if / then / else /
+    9. canonical head が bash keyword 静的 superset (if / then / else /
        elif / fi / case / esac / for / select / while / until / do /
        done / in / function / coproc / `{` / `}` / `[[` / `]]`。time と
-       `!` は step 6 で処理済み) に該当 → 実行形
-    9. canonical head が shell builtin 静的 superset (対応 bash 世代の
-       compgen -b 相当の全集合。source / `.` / exec / eval / trap /
-       export / declare / readonly / typeset / local / set / unset /
-       shopt / bind / complete / mapfile / read / printf / kill / wait /
-       alias / cd / pushd / popd / return / break / continue / shift /
-       exit / let / eval 等を含む。step 5 の無害 builtin と step 6 の
-       launcher は処理済みのため到達しない) に該当 → 実行形 (declaration
-       builtin の代入形引数の値検査を含む: 値に wrapper substring が
-       あれば当然実行形だが、builtin superset 該当時点で実行形のためこの
-       検査は宣言的な補強である)
-    10. head の basename (step 10 以降でのみ basename を適用する) が
+       `!` は step 7 で処理済み) に該当 → 実行形
+    10. canonical head が shell builtin 静的 superset (対応 bash 世代の
+        compgen -b 相当の全集合。source / `.` / exec / eval / trap /
+        export / declare / readonly / typeset / local / set / unset /
+        shopt / bind / complete / mapfile / read / printf / kill / wait /
+        alias / cd / pushd / popd / return / break / continue / shift /
+        exit / let / eval 等を含む。step 6 の無害 builtin と step 7 の
+        launcher は処理済みのため到達しない) に該当 → 実行形
+        (declaration builtin の代入形引数の値検査を含む: 値に wrapper
+        substring があれば当然実行形だが、builtin superset 該当時点で
+        実行形のためこの検査は宣言的な補強である)
+    11. head の basename (step 11 以降でのみ basename を適用する) が
         wrapper 名 (run-codex-review.sh) に完全一致 → 実行形。shell
         interpreter (bash/sh/dash/zsh/ksh) が head で wrapper substring と
         共存 → 実行形 (option の精密解析はしない)
-    11. script/対話内実行面を持つ sed/awk/xargs/less/more/parallel →
+    12. script/対話内実行面を持つ sed/awk/xargs/less/more/parallel →
         実行形。option-aware: find の -exec/-execdir/-ok/-okdir、rg の
-        --pre / --pre=*、sort の --compress-program (--co 以上の
-        prefix 一致、= 付き含む。GNU sort の --c 系 long option は
-        --check と --compress-program のみで --co が既に一意省略として
-        受理されるため) が canonical token として存在 → 実行形
-        (値を取る option の literal 引数も保守的 superset として deny し
-        false positive を受容する。危険 option の列挙は受容境界であり、
-        列挙外の value-taking option は残余ギャップとして受容する)
-    12. git 特例: 縮小 subcommand 集合 (diff / log / show / status /
+        --pre / --pre=* / --hostname-bin / --hostname-bin=* (hyperlink
+        format と併用して外部プログラムを起動できる option)、sort の
+        --compress-program (--co 以上の prefix 一致、= 付き含む。GNU
+        sort の --c 系 long option は --check と --compress-program の
+        みで --co が既に一意省略として受理されるため) が canonical
+        token として存在 → 実行形 (値を取る option の literal 引数も
+        保守的 superset として deny し false positive を受容する。危険
+        option の列挙は受容境界であり、列挙外の value-taking option は
+        残余ギャップとして受容する)
+    13. git 特例: 縮小 subcommand 集合 (diff / log / show / status /
         ls-files / rev-parse / cat-file) に直後 token が一致し、
         --ext-diff / --textconv (canonical 値・prefix でなく完全一致) が
-        無い場合のみ mention 候補 (step 13 へ)。特例に一致しない git は
+        無い場合のみ mention 候補 (step 14 へ)。特例に一致しない git は
         すべて実行形 (fall-through は実行形側であり mention 側へ落ちない)
-    13. ここまで実行形と確定しなかった head (無害 builtin・git 特例・
+    14. ここまで実行形と確定しなかった head (無害 builtin・git 特例・
         外部コマンド形の不明 head) は mention 候補: 従来の pipe chain
         検査 (neighbor は read-only allowlist の exact 判定のまま、
         basename 正規化なし — 中心 segment との非対称は受容境界) を
@@ -621,7 +641,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     wrapper 名を部分包含する別名ファイル) は cooperative 境界として対象外
     (ヘッダの wrapper alias 対象外宣言と同じ受容範囲)。redirection 演算子の
     うち事前正規化 sed が空白置換する形 (`2>&1` / `&>` / `<<<` 等) は分類前に
-    除去されるため、step 7 の主張は正規化後の segment に対して適用される
+    除去されるため、step 8 の主張は正規化後の segment に対して適用される
     (正規化前 head の評価は別 issue で扱う)。
 
     以上のどの実行形判定にも該当しない「外部コマンド形の不明 head」による
@@ -1488,8 +1508,9 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
 
-    def test_bracket_builtin_mention_is_allowed(self) -> None:
-        # step 4 (無害 builtin) が step 6 (word-shape) に先行する pin。
+    def test_bracket_builtin_is_denied(self) -> None:
+        # `[` / `test` は算術評価による再評価面を持つため無害 builtin
+        # allowlist から除外した (deny は受容する false positive)。
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
@@ -1501,7 +1522,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 },
             }
             result = self.run_hook(payload, Path(name))
-            self.assert_allowed(result)
+            self.assert_denied(result)
 
     def test_git_unlisted_subcommand_is_denied(self) -> None:
         # step 11 の git 特例 fall-through は実行形側に落ちる pin。
@@ -1704,6 +1725,117 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
+
+    def test_test_builtin_arithmetic_subscript_is_denied(self) -> None:
+        # single quote 内のため indirection 検査は発火しないが、`[` が
+        # allowlist から外れたことで実行形になる。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "[ -v 'arr[$(bash plugins/pre-push-review/hooks/"
+                        "scripts/run-codex-review.sh)]' ]"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_rg_hostname_bin_option_is_denied(self) -> None:
+        # rg --hostname-bin は外部プログラムを起動できる危険 option。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg --hostname-bin bash foo "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_rg_hostname_bin_equals_option_is_denied(self) -> None:
+        # --hostname-bin=* も同様に危険 option。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg --hostname-bin=bash foo "
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_merged_token_hides_dangerous_option_is_denied(self) -> None:
+        # 共有 tokenizer の quote 状態 desync で --pre が merge 後 token
+        # に隠れる形 (単一 shell word 検査で捕捉する)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        r'rg "x\\" --pre bash '
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_quoted_phrase_argument_is_allowed(self) -> None:
+        # quote 内の空白は単一 shell word なので token 検査で deny しない
+        # (regression guard)。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        'rg -n "foo bar" plugins/pre-push-review/hooks/'
+                        "scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_ansi_c_quote_in_segment_is_denied(self) -> None:
+        # ANSI-C quote による segment merge。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        r"echo $'\'' ; bash plugins/pre-push-review/"
+                        r"hooks/scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_trailing_literal_dollar_is_allowed(self) -> None:
+        # 行末アンカーの literal `$` を動的展開と誤判定しない。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        'rg -n "marker$" plugins/pre-push-review/hooks/'
+                        "scripts/run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
 
 
 if __name__ == "__main__":

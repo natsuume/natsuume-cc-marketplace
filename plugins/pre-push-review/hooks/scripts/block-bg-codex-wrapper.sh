@@ -9,7 +9,7 @@
 #   segment 分類 (下記「検知ロジック」節) は fail-closed で判定する。
 #   (a) **fail-open 経路の限定**: 本 hook が意図的に allow へ倒す fail-open 経路は
 #       「外部コマンド形の不明 head による引数・quoted 文字列としての言及」
-#       (issue #339 の決定表 step 13、 例: `rg -n 'run-codex-review.sh' dir/`) の
+#       (issue #339 の決定表 step 14、 例: `rg -n 'run-codex-review.sh' dir/`) の
 #       1 経路のみに限定される。 それ以外 (agent_type 欠落・不一致、 canonical 化
 #       失敗、 word-shape / keyword / builtin superset 該当、 wrapper basename 一致
 #       等) はすべて fail-closed (実行形扱い) で deny する。
@@ -19,7 +19,7 @@
 #       経路への完全性は保証しない (= 意図的に攻め切らない設計判断。 詳細は下記
 #       「検知ロジック」節および `classify_wrapper_segment` の呼び出し元である
 #       対象テストクラス `BlockBgCodexWrapperExecPositionClassificationTest` の
-#       docstring 13-step 決定表を参照)。
+#       docstring 14-step 決定表を参照)。
 #   (c) **真の push gate は block-pre-push.sh**: 本 hook が抜けても (= 上記 (a) の
 #       fail-open 経路や jq 不在等の環境失敗経路)、 真の保証は block-pre-push.sh が
 #       marker hash check (= fail-closed) で行うため、 未レビュー push は
@@ -70,7 +70,7 @@
 # どこにあるか」 を canonical token 値ベースで判定する executable 位置方式に転換した
 # (下記「検知ロジック」規則 2/3、 `classify_wrapper_segment` / `canonicalize_token` 関数
 # コメント、 および正本である `tests/test_pre_push_bg_codex_wrapper.py` の
-# `BlockBgCodexWrapperExecPositionClassificationTest` docstring の 13-step 決定表を参照)。
+# `BlockBgCodexWrapperExecPositionClassificationTest` docstring の 14-step 決定表を参照)。
 # Phase B 2 巡目レビューで、 (1) leading / launcher 剥がし後の代入 slot 判定を「値に
 # wrapper substring を含むか」 から「代入 slot が 1 つでも存在するか」 へ変更 (代入値は
 # wrapper path 以外にも GIT_EXTERNAL_DIFF / RIPGREP_CONFIG_PATH / LESSOPEN 等、 head
@@ -79,7 +79,13 @@
 # 乖離し複数コマンドが 1 segment に merge される場合 (未対応の `(` / `{` 等) の解析不能
 # 判定 (`segment_is_unanalyzable`、 新 step 2) を追加、 (3) `canonicalize_token` の
 # double quote 内 escaped backslash 判定の case pattern arity 不一致を修正、 の 3 点を
-# 反映した。
+# 反映した。 Phase B 3 巡目レビューで、 (4) 無害 builtin allowlist から算術評価の再評価
+# 面を持つ `test` / `[` を除去、 (5) rg の危険 option に `--hostname-bin` を追加、 (6)
+# 共有 tokenizer の quote 状態 desync (#354) で複数 shell word が 1 token に merge
+# される経路を検知する token 単位の単一 shell word 検査 (`token_is_unanalyzable`、 新
+# step 3) を追加、 (7) `segment_is_unanalyzable` に ANSI-C quoting (`$'`) の検出を
+# 追加、 (8) `canonicalize_token` の `$` 判定を「直後が展開開始として有効な文字の場合
+# のみ失敗」 へ精密化、 の 5 点をさらに反映した。
 #
 # ## 検知ロジック
 #
@@ -97,32 +103,37 @@
 #        ものは非 indirection とする (詳細は `segment_has_indirection` 関数コメント参照)。
 #        これらの内部は本 parser が安全に解析できないため保守的に実行形とし、 command 全体
 #        の INDIRECTION フラグを立てる (下記 2. で使用)。
-#      - **規則 1.5 (解析可能性検査、 決定表 step 2、 issue #339 2 巡目)**: 規則 1 に該当
-#        しない segment に対し `segment_is_unanalyzable` (戻り値 0 = 解析不能、 1 = 解析
-#        可能) を評価する。 `split_command` は quote 外の group delimiter (`(`/`)`/`{`/`}`)
-#        の depth が非 0 の間、 separator 候補文字 (`;`/`|`/`&`/改行) を real separator
-#        ではなく segment 内の literal として保持する仕様のため、 未対応の `(` 等が
-#        あると本来複数コマンドになるはずの入力が 1 segment に merge され、 head token が
-#        実コマンドを代表しなくなる (例: `echo ( ; bash <wrapper>` は `echo` が harmless
-#        builtin のため誤って mention 扱いされかねない)。 解析不能なら実行形とし
+#      - **規則 1.5 (解析可能性検査、 決定表 step 2、 issue #339 2/3 巡目)**: 規則 1 に
+#        該当しない segment に対し `segment_is_unanalyzable` (戻り値 0 = 解析不能、 1 =
+#        解析可能) を評価する。 `split_command` は quote 外の group delimiter
+#        (`(`/`)`/`{`/`}`) の depth が非 0 の間、 separator 候補文字 (`;`/`|`/`&`/改行)
+#        を real separator ではなく segment 内の literal として保持する仕様のため、
+#        未対応の `(` 等があると本来複数コマンドになるはずの入力が 1 segment に merge
+#        され、 head token が実コマンドを代表しなくなる (例: `echo ( ; bash <wrapper>`
+#        は `echo` が harmless builtin のため誤って mention 扱いされかねない)。 quote 外
+#        に ANSI-C quoting の開始 (`$'`) が現れる場合も、 本検査がその内部意味論を模さず
+#        quote 状態が乖離するため同様に解析不能とする。 解析不能なら実行形とし
 #        `classify_wrapper_segment` の呼び出し自体を skip する (詳細は
 #        `segment_is_unanalyzable` 関数コメント参照)。
 #      - **規則 2/3 (executable 位置分類、 issue #339)**: 規則 1 / 1.5 に該当しない segment
 #        は `classify_wrapper_segment` (戻り値 0 = 実行形、 1 = mention 候補) が判定する。
 #        判定は「canonical token 値」 (single/double quote 除去・backslash escape 解決・
 #        fragment 連結を行った shell word の静的な値。 `canonicalize_token` 関数参照) に
-#        対して行う 13-step の順序付き決定表であり、 概略は次のとおり: leading 代入列
-#        (NAME=VALUE 連鎖) の代入 slot が 1 つでも存在すれば値によらず実行形
-#        (GIT_EXTERNAL_DIFF / RIPGREP_CONFIG_PATH / LESSOPEN 等、 変数名列挙ではなく
-#        存在自体で判定) / head の canonical 化が失敗 (動的展開が残る) すれば実行形 /
-#        echo・test・`[`・true・false・pwd・type は無害 builtin として mention 候補 /
-#        command・builtin・env・timeout・nohup・nice・setsid・stdbuf・sudo・doas・time・
-#        `!` は launcher prefix として限定解析で剥がして再評価 / 通常の外部コマンド word
-#        形でない・bash keyword・shell builtin static superset に該当すれば実行形 / head
-#        の basename が wrapper 名または shell interpreter (bash/sh/dash/zsh/ksh) に
-#        一致すれば実行形 / sed・awk・xargs・less・more・parallel、 および find の -exec
-#        系・rg の --pre 系・sort の --compress-program 系 option (canonical token として
-#        存在) は実行形 / git は縮小 subcommand 集合
+#        対して行う 14-step の順序付き決定表であり、 概略は次のとおり: 全 token が単一
+#        shell word であること (`token_is_unanalyzable`。 共有 tokenizer の quote 状態
+#        desync #354 で複数 word が 1 token に merge され危険 option を隠す経路を塞ぐ) /
+#        leading 代入列 (NAME=VALUE 連鎖) の代入 slot が 1 つでも存在すれば値によらず
+#        実行形 (GIT_EXTERNAL_DIFF / RIPGREP_CONFIG_PATH / LESSOPEN 等、 変数名列挙では
+#        なく存在自体で判定) / head の canonical 化が失敗 (動的展開が残る) すれば実行形 /
+#        echo・true・false・pwd・type は無害 builtin として mention 候補 (`test`・`[` は
+#        算術評価の再評価面のため除外し builtin superset へ委ねる) / command・builtin・
+#        env・timeout・nohup・nice・setsid・stdbuf・sudo・doas・time・`!` は launcher
+#        prefix として限定解析で剥がして再評価 / 通常の外部コマンド word 形でない・bash
+#        keyword・shell builtin static superset (`test`・`[` を含む) に該当すれば実行形 /
+#        head の basename が wrapper 名または shell interpreter (bash/sh/dash/zsh/ksh)
+#        に一致すれば実行形 / sed・awk・xargs・less・more・parallel、 および find の
+#        -exec 系・rg の --pre 系 / --hostname-bin 系・sort の --compress-program 系
+#        option (canonical token として存在) は実行形 / git は縮小 subcommand 集合
 #        (diff/log/show/status/ls-files/rev-parse/cat-file) + --ext-diff・--textconv
 #        不在の場合のみ mention 候補、 それ以外の git はすべて実行形 / ここまでで実行形と
 #        確定しなかった head (無害 builtin・git 特例・外部コマンド形の不明 head) が
@@ -333,20 +344,31 @@ segment_has_indirection() {
 #     (depth 0 であれば `split_command` が real separator として分割済みのはず)、
 #     bash 実行結果は 1 segment に留まらない可能性がある。 バランスの取れた
 #     subshell / brace group (`(cd /tmp && bash <wrapper>)` 等) もこの条件で
-#     解析不能と判定されるが、 それらは既存の word-shape 検査 (step 7、 head が
+#     解析不能と判定されるが、 それらは既存の word-shape 検査 (step 8、 head が
 #     `(cd` 等の記号混じりの語になる) でも同じく実行形に確定するため、 最終判定は
 #     変わらない (受容される保守化)。
 # quote 状態の追跡・escape 処理は `segment_has_indirection` と同じ規約 (単純な
 # in_squote / in_dquote トグル、 single quote 内の `\` は literal、 それ以外の `\`
 # は次の 1 文字を escape して読み飛ばす) に従う。 bash 3.2 互換
 # (mapfile / declare -A / `${var,,}` を使わない)。
+#
+# **ANSI-C quoting (`$'...'`) の検出 (issue #339 3 巡目レビュー、 code P2)**: 本関数
+# (および split_command / segment_has_indirection 等の同系関数) は plain single
+# quote (`'`) しか追跡せず、 ANSI-C quote 内の escape 意味論 (`\'` が quote を
+# 終端しない等) を模さない。 そのため quote 外に `$'` が現れると、 以降の quote
+# トグルが実際の bash 意味論と乖離し、 本来複数コマンドのはずの入力が誤って 1
+# segment に merge される (例: `echo $'\''; bash <wrapper>` は `\'` を本関数が
+# 「close quote」 と誤認し、 続く `'` を新たな open quote と誤認するため、 本来
+# top-level の `;` が「quote 内」 と誤判定され split されない)。 これを避けるため、
+# quote 外で `$` の直後に `'` が現れた時点で解析不能とする。
 segment_is_unanalyzable() {
   local seg="$1"
   local i=0 len=${#seg}
   local in_squote=0 in_dquote=0
   local paren_depth=0 brace_depth=0
   local has_stray_separator=0
-  local c
+  local has_ansi_c_quote=0
+  local c nc
   local nl=$'\n'
 
   while [ "$i" -lt "$len" ]; do
@@ -374,6 +396,10 @@ segment_is_unanalyzable() {
     fi
 
     # unquoted 領域
+    if [ "$c" = '$' ]; then
+      nc="${seg:$((i+1)):1}"
+      [ "$nc" = "'" ] && has_ansi_c_quote=1
+    fi
     case "$c" in
       "'") in_squote=1; i=$((i+1)); continue ;;
       '"') in_dquote=1; i=$((i+1)); continue ;;
@@ -387,7 +413,8 @@ segment_is_unanalyzable() {
     i=$((i+1))
   done
 
-  if [ "$paren_depth" -ne 0 ] || [ "$brace_depth" -ne 0 ] || [ "$has_stray_separator" -eq 1 ]; then
+  if [ "$paren_depth" -ne 0 ] || [ "$brace_depth" -ne 0 ] || [ "$has_stray_separator" -eq 1 ] \
+    || [ "$has_ansi_c_quote" -eq 1 ]; then
     return 0
   fi
   return 1
@@ -538,13 +565,24 @@ pipe_chain_all_mention_safe() {
 #     静的解決不能な動的展開として検知できていなかったバグを修正した。
 #     修正後の pattern は 1 文字 (`'\'`) で `_ct_nc` と正しく一致する)。
 #
+# **`$` 判定の精密化 (issue #339 3 巡目レビュー、 codex P2 may-defer 採用)**: `$`
+# の直後の 1 文字が展開開始として有効な文字 (英数字 / `_` / `{` / `(` / `@` / `*` /
+# `#` / `?` / `!` / `-` / `$`。 `$VAR` / `${...}` / `$(...)` / `$@` / `$*` / `$#` /
+# `$?` / `$!` / `$-` / `$$` に対応) の場合のみ動的展開として canonical 化失敗
+# (`_ct_failed=1`) とする。 それ以外 (token 末尾の `$`、 または `"marker$"` の
+# ような正規表現の行末アンカーとして使われる literal な `$`) は展開を開始しない
+# ため literal 文字として結果に含める。 コマンド置換 `$(` は `segment_has_indirection`
+# (規則 1) が本関数より先に検知済みなので、 ここでの `$(` 判定は主に「規則 1 を
+# すり抜けた single quote 内の `$(` を canonicalize_token 内で再度誤検知しない」
+# ための一貫性維持であり、 実質的な検知は規則 1 が担う。
+#
 # **cmd-parser.sh の `unquote_token` との違い**: `unquote_token` はトークン両端の
 # quote ペアを 1 段剥がすだけで、 `--'pre'` や `--'ext-diff'` のような fragment
 # 分断形 (先頭 `--` が quote 外、 残りが quote 内という 1 token 内の quote 混在) を
 # 解決できない (両端が quote で揃っていないため無変化のまま返る)。 本関数はトークン
 # 全体を 1 文字ずつ走査し、 quote 区間をまたいで literal 文字を連結するため、
 # `--'pre'` → `--pre` のように正しい canonical 値が得られる (issue #339 の
-# `BlockBgCodexWrapperExecPositionClassificationTest` 決定表 step 4 / 11 / 12 で
+# `BlockBgCodexWrapperExecPositionClassificationTest` 決定表 step 5 / 12 / 13 で
 # 使用)。 segment 全体ではなく個々の token (数十〜数百 byte) に対してのみ呼ぶため、
 # `result+="$c"` の 1 文字ループの計算コストは許容する (cmd-parser.sh の
 # `split_command` / `tokenize_segment` と同じ設計判断)。 bash 3.2 互換
@@ -601,7 +639,14 @@ canonicalize_token() {
         continue
       fi
       if [ "$_ct_c" = '$' ]; then
-        _ct_failed=1
+        # `$` 直後が展開開始として有効な文字の場合のみ動的展開 (canonical 化
+        # 失敗) とする (詳細は関数コメント「`$` 判定の精密化」節参照)。
+        _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
+        case "$_ct_nc" in
+          [A-Za-z0-9_]|'{'|'('|'@'|'*'|'#'|'?'|'!'|'-'|'$')
+            _ct_failed=1
+            ;;
+        esac
       fi
       _ct_result+="$_ct_c"
       _ct_i=$((_ct_i+1))
@@ -624,10 +669,18 @@ canonicalize_token() {
       continue
     fi
 
+    if [ "$_ct_c" = '$' ]; then
+      # 同上 (double quote 内と同じ「展開開始として有効な文字」判定)。
+      _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
+      case "$_ct_nc" in
+        [A-Za-z0-9_]|'{'|'('|'@'|'*'|'#'|'?'|'!'|'-'|'$')
+          _ct_failed=1
+          ;;
+      esac
+    fi
     case "$_ct_c" in
       "'") _ct_in_squote=1; _ct_i=$((_ct_i+1)); continue ;;
       '"') _ct_in_dquote=1; _ct_i=$((_ct_i+1)); continue ;;
-      '$') _ct_failed=1 ;;
     esac
     _ct_result+="$_ct_c"
     _ct_i=$((_ct_i+1))
@@ -638,6 +691,86 @@ canonicalize_token() {
   fi
   printf '%s' "$_ct_result"
   return 0
+}
+
+# token_is_unanalyzable <raw_token>
+# 戻り値: 0 = 解析不能 (quote 状態 desync の疑い)、 1 = 単一 shell word として
+#   解析可能。
+#
+# 決定表 step 3 (issue #339 3 巡目レビュー、 codex P1 + security P2)。
+# `tokenize_segment` (共有 parser、 #354 で追跡中の quote 状態 desync 疑い) は、
+# 本来複数の shell word であるべき入力を 1 token に merge して返す経路がある
+# (例: `"x\\"` のように escape 判定が絡む形。 `--pre` のような危険 option が
+# merge 後 token の内側に隠れると、 `canonicalize_token` による exact / prefix
+# 一致判定を欺いて option 走査 (step 12/13) をすり抜けうる)。 本関数は
+# `tokenize_segment` の出力結果を信頼せず、 raw token 文字列を
+# `canonicalize_token` と同じ quote 意味論 (single quote 内は escape 無効、
+# double quote 内は `$`/バッククォート/`"`/`\` の前でのみ escape、 それ以外は
+# unquoted として次の 1 文字を無条件 escape) で独立に再走査し、
+#   - quote 外 (unquoted) の空白文字が現れる (= 本来 tokenize_segment が
+#     ここで token を区切っているはずなのに 1 token に残っている。 quote 状態
+#     desync の証跡)
+#   - 走査終了時に single/double quote が閉じていない (= token 内で quote が
+#     完結していない)
+# のいずれかを解析不能と判定する。 head だけでなく `classify_wrapper_segment`
+# が扱う全 token に対して呼ぶ (merge された token は option 位置に限らず
+# operand 位置にも現れうるため)。 共有 parser 側の quote 状態 desync の根本
+# 原因そのものは #354 で追跡中であり、 本関数はその症状を検知する防御層に
+# すぎない。 bash 3.2 互換 (mapfile / declare -A / `${var,,}` を使わない)。
+token_is_unanalyzable() {
+  local _tw_tok="$1"
+  local _tw_i=0 _tw_len=${#_tw_tok}
+  local _tw_in_squote=0 _tw_in_dquote=0
+  local _tw_c _tw_nc
+
+  while [ "$_tw_i" -lt "$_tw_len" ]; do
+    _tw_c="${_tw_tok:$_tw_i:1}"
+
+    if [ "$_tw_in_squote" -eq 1 ]; then
+      [ "$_tw_c" = "'" ] && _tw_in_squote=0
+      _tw_i=$((_tw_i+1))
+      continue
+    fi
+
+    if [ "$_tw_in_dquote" -eq 1 ]; then
+      if [ "$_tw_c" = '"' ]; then
+        _tw_in_dquote=0
+        _tw_i=$((_tw_i+1))
+        continue
+      fi
+      if [ "$_tw_c" = "\\" ]; then
+        _tw_nc="${_tw_tok:$((_tw_i+1)):1}"
+        case "$_tw_nc" in
+          '$'|'`'|'"'|'\')
+            _tw_i=$((_tw_i+2))
+            continue
+            ;;
+        esac
+      fi
+      _tw_i=$((_tw_i+1))
+      continue
+    fi
+
+    # unquoted 領域: 空白が現れたら quote 状態 desync の証跡 (解析不能)。
+    if [[ "$_tw_c" == [[:space:]] ]]; then
+      return 0
+    fi
+
+    case "$_tw_c" in
+      "'") _tw_in_squote=1; _tw_i=$((_tw_i+1)); continue ;;
+      '"') _tw_in_dquote=1; _tw_i=$((_tw_i+1)); continue ;;
+      "\\")
+        _tw_i=$((_tw_i+2))
+        continue
+        ;;
+    esac
+    _tw_i=$((_tw_i+1))
+  done
+
+  if [ "$_tw_in_squote" -eq 1 ] || [ "$_tw_in_dquote" -eq 1 ]; then
+    return 0
+  fi
+  return 1
 }
 
 # classify_wrapper_segment <segment>
@@ -652,10 +785,17 @@ canonicalize_token() {
 # では indirection / 解析可能性を再チェックせず、 決定表 step 3 から開始する)。
 #
 # 正本は `tests/test_pre_push_bg_codex_wrapper.py` の
-# `BlockBgCodexWrapperExecPositionClassificationTest` docstring にある 13-step の
-# 順序付き決定表 (step 3〜13。 step 1 は規則 1、 step 2 は規則 1.5 として既に呼び出し
+# `BlockBgCodexWrapperExecPositionClassificationTest` docstring にある 14-step の
+# 順序付き決定表 (step 3〜14。 step 1 は規則 1、 step 2 は規則 1.5 として既に呼び出し
 # 元で処理済み)。 各 step は上から順に評価し、 最初に確定した判定を採用する:
-#   - step 3: segment 先頭の `NAME=VALUE` (leading 代入 slot) が存在すれば、 値に
+#   - step 3: segment の全 token (`tokenize_segment` の出力) それぞれが単一 shell
+#     word であることを `token_is_unanalyzable` で検査する (issue #339 3 巡目
+#     レビュー、 codex P1 + security P2)。 共有 tokenizer の quote 状態 desync
+#     (#354) により複数 shell word が 1 token に merge され、 内側に危険 option
+#     (`--pre` 等) を隠して canonicalize_token の exact / prefix 一致を逃れうる
+#     ため、 head だけでなく全 token を対象に、 step 4 (leading 代入列) より前に
+#     検査する。 1 つでも解析不能な token があれば実行形とする。
+#   - step 4: segment 先頭の `NAME=VALUE` (leading 代入 slot) が存在すれば、 値に
 #     関わらず実行形とする (issue #339 2 巡目レビュー、 codex P1 must-fix)。 代入値が
 #     指すのは wrapper path だけでなく、 head コマンドの間接実行面を有効化する設定値
 #     でもありうるため (GIT_EXTERNAL_DIFF は外部 diff driver、 RIPGREP_CONFIG_PATH は
@@ -664,46 +804,53 @@ canonicalize_token() {
 #     代入 slot は segment 先頭に連続してのみ現れる (途中からは現れない) ため、 先頭
 #     token 1 つの判定で十分 (先頭が代入でなければそれ以降にも代入は無い)。 先頭 token
 #     が無い (空 segment) 場合も実行形。
-#   - step 4: head token の canonical 化が失敗 (single quote 外に `$VAR` 等の動的
+#   - step 5: head token の canonical 化が失敗 (single quote 外に `$VAR` 等の動的
 #     展開が残る) すれば実行形。
-#   - step 5: canonical head が無害 builtin (echo/test/`[`/true/false/pwd/type、
-#     basename 適用なし) に完全一致すれば mention 候補 (word-shape・keyword・
-#     builtin superset 検査より前に評価するため `[` も到達できる)。
-#   - step 6: canonical head が launcher prefix (command/builtin/env/timeout/
+#   - step 6: canonical head が無害 builtin (echo/true/false/pwd/type、 basename
+#     適用なし) に完全一致すれば mention 候補 (word-shape・keyword・builtin
+#     superset 検査より前に評価する)。 `test` / `[` は bash の算術評価による
+#     再評価面 (`[ -v 'arr[$(cmd)]' ]` の subscript が算術評価され、 single
+#     quote 内でもコマンド置換が実行される) を持つため allowlist に含めない
+#     (issue #339 3 巡目レビュー、 codex P1。 除去された `test` / `[` は
+#     step 10 の builtin superset に落ちて実行形になる)。
+#   - step 7: canonical head が launcher prefix (command/builtin/env/timeout/
 #     nohup/nice/setsid/stdbuf/sudo/doas/time/`!`、 basename 適用なし) に完全一致
-#     すれば、 直後の代入 slot を再評価し、 存在すれば step 3 と同じ規則 (値によらず
+#     すれば、 直後の代入 slot を再評価し、 存在すれば step 4 と同じ規則 (値によらず
 #     実行形) を適用する。 timeout の場合のみ単純形 duration operand
 #     (`^[0-9]+(\.[0-9]+)?[smhd]?$`) を 1 つ消費する (`-` 始まり・認識不能な operand
-#     は実行形)。 剥がし後の残り token 列で step 4 から反復再評価する。
-#   - step 7: canonical head が通常の外部コマンド word の形 (英数字・`_`・`/` の
+#     は実行形)。 剥がし後の残り token 列で step 5 から反復再評価する。
+#   - step 8: canonical head が通常の外部コマンド word の形 (英数字・`_`・`/` の
 #     いずれかで始まり `[A-Za-z0-9_/.+-]` のみで構成) でなければ実行形。
-#   - step 8: canonical head が bash keyword 静的 superset に該当すれば実行形
-#     (time と `!` は step 6 で処理済みのため対象外)。
-#   - step 9: canonical head が shell builtin 静的 superset に該当すれば実行形
-#     (step 5 の無害 builtin と step 6 の launcher は到達しない)。
-#   - step 10 以降: head の basename (`##*/`) を初めて適用する。 basename が
+#   - step 9: canonical head が bash keyword 静的 superset に該当すれば実行形
+#     (time と `!` は step 7 で処理済みのため対象外)。
+#   - step 10: canonical head が shell builtin 静的 superset (`test` / `[` を
+#     含む。 対応 bash 世代の compgen -b 相当の全集合) に該当すれば実行形
+#     (step 6 の無害 builtin と step 7 の launcher は到達しない)。
+#   - step 11 以降: head の basename (`##*/`) を初めて適用する。 basename が
 #     wrapper 名に完全一致、 または shell interpreter (bash/sh/dash/zsh/ksh) に
 #     一致すれば実行形。 launcher (command/builtin/env/timeout/nohup/nice/
 #     setsid/stdbuf/sudo/doas/time) が path 修飾形 (`/usr/bin/sudo` 等) で
-#     現れ、 step 6 の完全一致 (basename 適用なし) を素通りした場合も、 basename
+#     現れ、 step 7 の完全一致 (basename 適用なし) を素通りした場合も、 basename
 #     一致により実行形とする (test_path_qualified_sudo_launch_is_denied の契約。
-#     step 6 が担う代入 slot / duration の精密な剥がしはこの経路には適用しない —
+#     step 7 が担う代入 slot / duration の精密な剥がしはこの経路には適用しない —
 #     path 修飾形の launcher は単に実行形と確定するのみで、 その後続 token を
 #     head として再評価しない保守的な扱い)。
-#   - step 11: basename が sed/awk/xargs/less/more/parallel なら実行形。
+#   - step 12: basename が sed/awk/xargs/less/more/parallel なら実行形。
 #     find なら token 群 (canonical 値) に `-exec`/`-execdir`/`-ok`/`-okdir` の
-#     完全一致が、 rg なら `--pre` 完全一致または `--pre=` prefix 一致が、 sort なら
+#     完全一致が、 rg なら `--pre` / `--hostname-bin` の完全一致または `--pre=` /
+#     `--hostname-bin=` prefix 一致 (`--hostname-bin` は hyperlink format と
+#     併用して外部プログラムを起動できる option) が、 sort なら
 #     `--compress-program` の `--co` 以上の prefix 一致 (`=` 付き含む) が 1 つでも
 #     あれば実行形 (値を取る option の literal 引数も保守的に deny する意図的な
 #     false positive。 列挙外の value-taking option は残余ギャップとして受容する)。
 #     option 走査対象 token の canonical 化が失敗した場合も、 それが option 位置か
-#     operand 位置かを静的に区別できないため実行形とする (step 4 と同じ fail-closed
+#     operand 位置かを静的に区別できないため実行形とする (step 5 と同じ fail-closed
 #     不変条件)。
-#   - step 12: basename が git なら、 直後 token (canonical 値) が縮小 subcommand
+#   - step 13: basename が git なら、 直後 token (canonical 値) が縮小 subcommand
 #     集合 (diff/log/show/status/ls-files/rev-parse/cat-file) に完全一致し、 かつ
 #     token 群に `--ext-diff`/`--textconv` の完全一致が無い場合のみ mention 候補。
 #     それ以外の git はすべて実行形 (fall-through は実行形側)。
-#   - step 13: ここまでで実行形と確定しなかった head (無害 builtin・git 特例・外部
+#   - step 14: ここまでで実行形と確定しなかった head (無害 builtin・git 特例・外部
 #     コマンド形の不明 head) は mention 候補。
 classify_wrapper_segment() {
   local _cw_seg="$1"
@@ -713,7 +860,19 @@ classify_wrapper_segment() {
   local _cw_idx=0
   local _cw_raw _cw_unq
 
-  # step 3: leading 代入 slot。 bash の Simple Command 文法上、 代入 slot は
+  # step 3: 全 token が単一 shell word であることを検査する (issue #339 3 巡目
+  # レビュー、 codex P1 + security P2)。 共有 tokenizer の quote 状態 desync
+  # (#354) により複数 shell word が 1 token に merge され、 内側の危険 option
+  # (`--pre` 等) が exact / prefix 一致から隠れる経路を塞ぐ。 head だけでなく
+  # 全 token を対象とし、 leading 代入列の判定 (step 4) より前に行う。
+  for _cw_raw in "${_cw_toks[@]}"; do
+    if token_is_unanalyzable "$_cw_raw"; then
+      unset _cw_toks
+      return 0
+    fi
+  done
+
+  # step 4: leading 代入 slot。 bash の Simple Command 文法上、 代入 slot は
   # segment 先頭に連続してのみ現れるため、 先頭 token 1 つを見れば「代入 slot が
   # 存在するか」 を判定できる (先頭が代入でなければ、 それ以降にも代入は無い)。
   # 存在すれば値に関わらず実行形とする (issue #339 2 巡目レビュー、 codex P1
@@ -731,20 +890,22 @@ classify_wrapper_segment() {
     return 0
   fi
 
-  # steps 4〜6: head の canonical 化、 無害 builtin 判定、 launcher 剥がしの反復。
+  # steps 5〜7: head の canonical 化、 無害 builtin 判定、 launcher 剥がしの反復。
   local _cw_canon_head _cw_raw_head _cw_launcher
   local _cw_araw _cw_aunq _cw_draw _cw_dcanon
   while :; do
     _cw_raw_head="${_cw_toks[$_cw_idx]}"
     if ! _cw_canon_head="$(canonicalize_token "$_cw_raw_head")"; then
-      # step 4: canonical 化失敗 (動的展開が残る)。
+      # step 5: canonical 化失敗 (動的展開が残る)。
       unset _cw_toks
       return 0
     fi
 
     case "$_cw_canon_head" in
-      echo|test|'['|true|false|pwd|type)
-        # step 5: 無害 builtin (basename 適用なし)。
+      echo|true|false|pwd|type)
+        # step 6: 無害 builtin (basename 適用なし)。 `test` / `[` は算術評価
+        # による再評価面を持つため allowlist から除外し、 step 10 の builtin
+        # superset に委ねる (関数コメント参照)。
         unset _cw_toks
         return 1
         ;;
@@ -752,7 +913,7 @@ classify_wrapper_segment() {
 
     case "$_cw_canon_head" in
       command|builtin|env|timeout|nohup|nice|setsid|stdbuf|sudo|doas|time|'!')
-        # step 6: launcher prefix (basename 適用なし) を剥がして再評価する。
+        # step 7: launcher prefix (basename 適用なし) を剥がして再評価する。
         _cw_launcher="$_cw_canon_head"
         _cw_idx=$((_cw_idx+1))
 
@@ -760,7 +921,7 @@ classify_wrapper_segment() {
           _cw_araw="${_cw_toks[$_cw_idx]}"
           _cw_aunq="$(unquote_token "$_cw_araw")"
           if [[ "$_cw_aunq" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-            # 直後の代入 slot が存在する時点で実行形 (step 3 と同じ規則)。
+            # 直後の代入 slot が存在する時点で実行形 (step 4 と同じ規則)。
             unset _cw_toks
             return 0
           fi
@@ -798,13 +959,13 @@ classify_wrapper_segment() {
     break
   done
 
-  # step 7: 通常の外部コマンド word 形かどうか (canonical head、 basename 適用前)。
+  # step 8: 通常の外部コマンド word 形かどうか (canonical head、 basename 適用前)。
   if ! [[ "$_cw_canon_head" =~ ^[A-Za-z0-9_/][A-Za-z0-9_/.+-]*$ ]]; then
     unset _cw_toks
     return 0
   fi
 
-  # step 8: bash keyword 静的 superset (time / `!` は step 6 で処理済みのため対象外)。
+  # step 9: bash keyword 静的 superset (time / `!` は step 7 で処理済みのため対象外)。
   case "$_cw_canon_head" in
     if|then|else|elif|fi|case|'esac'|for|select|while|until|do|done|in|function|coproc|'{'|'}'|'[['|']]')
       unset _cw_toks
@@ -812,16 +973,18 @@ classify_wrapper_segment() {
       ;;
   esac
 
-  # step 9: shell builtin 静的 superset (対応 bash 世代の `compgen -b` 相当の全集合
-  # から、 step 5 の無害 builtin と step 6 の launcher を除いたもの)。
+  # step 10: shell builtin 静的 superset (対応 bash 世代の `compgen -b` 相当の全集合
+  # から、 step 7 の launcher を除いたもの)。 `test` / `[` は step 6 の無害 builtin
+  # allowlist から除外された (算術評価による再評価面のため) ので、 ここで実行形として
+  # 捕捉する。
   case "$_cw_canon_head" in
-    .|:|alias|bg|bind|break|caller|cd|compgen|complete|compopt|continue|declare|dirs|disown|enable|eval|exec|exit|export|fc|fg|getopts|hash|help|history|jobs|kill|let|local|logout|mapfile|popd|printf|pushd|read|readarray|readonly|return|set|shift|shopt|source|suspend|times|trap|typeset|ulimit|umask|unalias|unset|wait)
+    .|:|alias|bg|bind|break|caller|cd|compgen|complete|compopt|continue|declare|dirs|disown|enable|eval|exec|exit|export|fc|fg|getopts|hash|help|history|jobs|kill|let|local|logout|mapfile|popd|printf|pushd|read|readarray|readonly|return|set|shift|shopt|source|suspend|test|times|trap|typeset|ulimit|umask|unalias|unset|wait|'[')
       unset _cw_toks
       return 0
       ;;
   esac
 
-  # step 10 以降: ここから basename (`##*/`) を適用する。
+  # step 11 以降: ここから basename (`##*/`) を適用する。
   local _cw_base="${_cw_canon_head##*/}"
 
   case "$_cw_base" in
@@ -834,17 +997,17 @@ classify_wrapper_segment() {
       return 0
       ;;
     command|builtin|env|timeout|nohup|nice|setsid|stdbuf|sudo|doas|time)
-      # step 6 の launcher 完全一致 (basename 適用なし) を path 修飾形 (`/usr/bin/sudo`
+      # step 7 の launcher 完全一致 (basename 適用なし) を path 修飾形 (`/usr/bin/sudo`
       # 等) が素通りした場合の basename 一致による捕捉
       # (test_path_qualified_sudo_launch_is_denied 契約)。 この経路は「実行形」と
-      # 確定するのみで、 step 6 のような代入 slot / duration の精密な剥がしは行わない
+      # 確定するのみで、 step 7 のような代入 slot / duration の精密な剥がしは行わない
       # (path 修飾形 launcher は保守的に実行形へ倒すだけで十分なため)。
       unset _cw_toks
       return 0
       ;;
   esac
 
-  # step 11: script/対話内実行面を持つコマンド + option-aware 検査。
+  # step 12: script/対話内実行面を持つコマンド + option-aware 検査。
   local _cw_j _cw_traw _cw_tcanon _cw_prefix
   case "$_cw_base" in
     sed|awk|xargs|less|more|parallel)
@@ -863,7 +1026,7 @@ classify_wrapper_segment() {
               ;;
           esac
         else
-          # head (step 4) と対称の fail-closed: option 走査対象 token の
+          # head (step 5) と対称の fail-closed: option 走査対象 token の
           # canonical 化が失敗する (ANSI-C quote `$'...'` 等、 動的展開が残る)
           # 場合、 mention 判定に必要な値を静的決定できないため解析不能として
           # 実行形とする (契約 docstring の全体不変条件: どの step であれ
@@ -880,7 +1043,9 @@ classify_wrapper_segment() {
         _cw_traw="${_cw_toks[$_cw_j]}"
         if _cw_tcanon="$(canonicalize_token "$_cw_traw")"; then
           case "$_cw_tcanon" in
-            --pre|--pre=*)
+            --pre|--pre=*|--hostname-bin|--hostname-bin=*)
+              # --hostname-bin は hyperlink format と併用して外部プログラムを
+              # 起動できる option (issue #339 3 巡目レビュー、 codex P1)。
               unset _cw_toks
               return 0
               ;;
@@ -926,7 +1091,7 @@ classify_wrapper_segment() {
       ;;
   esac
 
-  # step 12: git 特例。
+  # step 13: git 特例。
   if [ "$_cw_base" = "git" ]; then
     local _cw_gi=$((_cw_idx+1))
     local _cw_sub_ok=0
@@ -970,7 +1135,7 @@ classify_wrapper_segment() {
     return 1
   fi
 
-  # step 13: 実行形と確定しなかった head は mention 候補。
+  # step 14: 実行形と確定しなかった head は mention 候補。
   unset _cw_toks
   return 1
 }
@@ -1001,18 +1166,18 @@ for _cls_i in "${!SEGMENTS[@]}"; do
     continue
   fi
 
-  # 規則 1.5 (解析可能性検査、 決定表 step 2、 issue #339 2 巡目): split_command の
+  # 規則 1.5 (解析可能性検査、 決定表 step 2、 issue #339 2/3 巡目): split_command の
   # depth 追跡と実際の shell 意味論が乖離して複数コマンドが 1 segment に merge
-  # された場合、 head token が実コマンドを代表しないため classify_wrapper_segment
-  # の呼び出し自体を skip して実行形とする (詳細は `segment_is_unanalyzable`
-  # 関数コメント参照)。
+  # された場合、 または ANSI-C quoting (`$'`) で quote 状態が乖離した場合、 head
+  # token が実コマンドを代表しないため classify_wrapper_segment の呼び出し自体を
+  # skip して実行形とする (詳細は `segment_is_unanalyzable` 関数コメント参照)。
   if segment_is_unanalyzable "$_cls_seg"; then
     HAS_EXEC_SEGMENT=1
     continue
   fi
 
   # 規則 2 / 3 (executable 位置分類、 issue #339): classify_wrapper_segment
-  # (戻り値 0 = 実行形、 1 = mention 候補) が 13-step 決定表 (step 3〜13。 step 1/2
+  # (戻り値 0 = 実行形、 1 = mention 候補) が 14-step 決定表 (step 3〜14。 step 1/2
   # は上記規則 1 / 1.5 として既に処理済み) で判定する。 詳細は
   # `classify_wrapper_segment` 関数コメントおよびファイルヘッダ「検知ロジック」節
   # 参照。

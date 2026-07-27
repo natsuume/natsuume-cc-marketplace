@@ -24,7 +24,7 @@ v5.3.1
 
 ### v5.3.0 → v5.3.1 の変更点
 
-- `block-bg-codex-wrapper.sh` の segment 分類を read-only allowlist 方式から 12-step の順序付き決定表による executable 位置分類へ転換 (issue #339)。`rg` 等の引数として wrapper ファイル名を参照しただけの read-only コマンドが deny される誤検知を解消した。fail-open は「外部コマンド形の不明 head の引数参照」1 経路に限定され、shell keyword / builtin superset・launcher prefix・危険 option (canonical token 値で判定)・indirection・pipe chain 検査は fail-closed を維持する
+- `block-bg-codex-wrapper.sh` の segment 分類を read-only allowlist 方式から 14-step の順序付き決定表による executable 位置分類へ転換 (issue #339)。`rg` 等の引数として wrapper ファイル名を参照しただけの read-only コマンドが deny される誤検知を解消した。fail-open は「外部コマンド形の不明 head の引数参照」1 経路に限定され、shell keyword / builtin superset・launcher prefix・代入 slot の存在・危険 option (canonical token 値で判定)・indirection・pipe chain 検査は fail-closed を維持する。加えて、共有 parser の depth / quote 状態が実 shell 意味論と乖離した segment・token (複数コマンドの merge、複数 shell word の merge、ANSI-C quoting) は解析不能として実行形に倒す
 
 ### v5.2.0 → v5.3.0 の変更点
 
