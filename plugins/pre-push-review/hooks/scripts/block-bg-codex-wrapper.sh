@@ -1569,7 +1569,9 @@ if [ "$AGENT_TYPE" != "pre-push-review:codex-reviewer" ]; then
 
 理由: 本 hook の payload に `agent_type` が含まれていません (欠落)。 これはメインセッションが wrapper を直接 Bash 実行した場合、 または `agent_type` を hook payload に含めない旧 Claude Code を使用している場合に発生します。
 
-wrapper を実行せずファイル内容を確認したいだけなら、 `cat` / `git diff` / `grep` 等の read-only コマンドを **静的に決まる literal path** で使ってください (それらは deny されません)。 path に `$VAR` 等の動的展開・コマンド置換・brace expansion (`{a,b}`)・`~user` 形が含まれる場合は、 展開結果を静的に決定できないため read-only コマンドでも deny されます。 その場合は Read / Grep tool を使ってください (本 hook は Bash tool のみを対象とするため deny されません)。
+wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
+
+Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 次の形は read-only コマンドでも deny されます: path に `$VAR` 等の動的展開・コマンド置換・brace expansion (`{a,b}`)・`~user` 形が含まれる (展開結果を静的に決定できないため) / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。
 
 対応:
   - `/pre-push-review:review` で 3 レビューを並列起動してください (推奨)
@@ -1583,7 +1585,9 @@ EOF
 
 理由: 検出された \`agent_type\` は \`${AGENT_TYPE}\` で、 \`pre-push-review:codex-reviewer\` と一致しません。 メインセッションが wrapper を直接 Bash 実行した場合や、 \`agent_type\` を hook payload に含めない旧 Claude Code を使用している場合にも同様の deny になります。
 
-wrapper を実行せずファイル内容を確認したいだけなら、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを **静的に決まる literal path** で使ってください (それらは deny されません)。 path に \`\$VAR\` 等の動的展開・コマンド置換・brace expansion (\`{a,b}\`)・\`~user\` 形が含まれる場合は、 展開結果を静的に決定できないため read-only コマンドでも deny されます。 その場合は Read / Grep tool を使ってください (本 hook は Bash tool のみを対象とするため deny されません)。
+wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
+
+Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 次の形は read-only コマンドでも deny されます: path に \`\$VAR\` 等の動的展開・コマンド置換・brace expansion (\`{a,b}\`)・\`~user\` 形が含まれる (展開結果を静的に決定できないため) / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。
 
 対応:
   - \`/pre-push-review:review\` で 3 レビューを並列起動してください (推奨)
