@@ -671,12 +671,12 @@ dollar_starts_expansion() {
 # `split_command` / `tokenize_segment` と同じ設計判断)。 bash 3.2 互換
 # (mapfile / declare -A / `${var,,}` / nameref を使わない)。
 #
-# **lib/cmd-parser.sh への既知の指摘 (対象外)**: `tokenize_segment` の double
-# quote 分岐にも同型の case pattern arity 不一致があるとレビューで指摘された
-# (`tokenize_segment` / `split_command` の `'$'|'`'|'"'|'\\'` も同じ 1 文字変数
-# vs 2 文字 pattern の arity 不一致を抱える)。 共有 parser (cmd-parser.sh) は
-# 本 hook 以外の caller (block-pre-push.sh 等) にも影響するため、 本 hook 単体の
-# 変更スコープでは触れない (別 issue で扱う)。
+# **lib/cmd-parser.sh の同型 arity 不一致 (修正済み)**: `tokenize_segment` /
+# `split_command` の double quote 分岐にあった同型の case pattern arity 不一致
+# (`'$'|'`'|'"'|'\\'` が 1 文字変数 `$nc` / `$c` に一致しない) は issue #354 で
+# cmd-parser.sh 側も修正済み。 本 hook の検知層 (`token_is_unanalyzable` の
+# rule (b) 等) は、 共有 parser (cmd-parser.sh) 側の同種の回帰に対する多重防御
+# として引き続き維持する。
 canonicalize_token() {
   local _ct_tok="$1"
   local _ct_i=0 _ct_len=${#_ct_tok}

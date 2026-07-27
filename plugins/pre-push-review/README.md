@@ -18,9 +18,13 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v5.3.1
+v5.3.2
 
 (前身: `pre-commit-review` v0.4.0)
+
+### v5.3.1 → v5.3.2 の変更点
+
+- cmd-parser.sh の escaped backslash pattern arity 不一致による quote 状態漏れ (push 検出 fail-open) を修正 (#354)
 
 ### v5.3.0 → v5.3.1 の変更点
 
