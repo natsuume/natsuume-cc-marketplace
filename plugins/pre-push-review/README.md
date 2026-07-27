@@ -18,9 +18,13 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v5.3.0
+v5.3.1
 
 (前身: `pre-commit-review` v0.4.0)
+
+### v5.3.0 → v5.3.1 の変更点
+
+- `block-bg-codex-wrapper.sh` の segment 分類を read-only allowlist 方式から 12-step の順序付き決定表による executable 位置分類へ転換 (issue #339)。`rg` 等の引数として wrapper ファイル名を参照しただけの read-only コマンドが deny される誤検知を解消した。fail-open は「外部コマンド形の不明 head の引数参照」1 経路に限定され、shell keyword / builtin superset・launcher prefix・危険 option (canonical token 値で判定)・indirection・pipe chain 検査は fail-closed を維持する
 
 ### v5.2.0 → v5.3.0 の変更点
 
