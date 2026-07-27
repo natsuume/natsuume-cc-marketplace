@@ -91,7 +91,15 @@
 # (`*`/`?`/`[`/`]`) を取りこぼしていたことを受け、 `token_is_unanalyzable` (step 3)
 # を「単一 shell word 検査」 から「静的 literal 検査」 へ一般化した (個別構文の列挙
 # ではなく、 mention 判定に使ってよい token は静的に決定できる literal 値である、 と
-# いう積極要件に転換。 詳細は `token_is_unanalyzable` 関数コメント参照)。
+# いう積極要件に転換。 詳細は `token_is_unanalyzable` 関数コメント参照)。 Phase B
+# 5 巡目レビューで、 (9) `$` の展開開始文字表が 3 箇所に複製され `[` (旧算術展開
+# `$[...]`) が全箇所から欠落していた drift を、 単一の正本 helper
+# `dollar_starts_expansion` へ集約して解消、 (10) 4 巡目の静的 literal 検査が
+# token の位置を問わず適用され、 head の実行面に影響しない operand 位置の
+# read-only 形 (`cat <path>/run-codex-review.sh > out.txt` / glob path / `~/`
+# 始まりの plugin-cache path 等) まで master 比で deny に退行していた問題を、
+# `token_is_unanalyzable` の第 2 引数 (`head` / `operand`) による非対称化で
+# 解消、 の 2 点を反映した。
 #
 # ## 検知ロジック
 #
@@ -130,7 +138,13 @@
 #        expansion・pathname expansion・tilde expansion は bash が parse 後に展開
 #        するため、 これらを含む token は展開結果を静的に決定できず解析不能とする。
 #        共有 tokenizer の quote 状態 desync #354 で複数 word が 1 token に merge
-#        され危険 option を隠す経路も同じ検査で塞ぐ) /
+#        され危険 option を隠す経路も同じ検査で塞ぐ。 検査は head と operand で
+#        非対称で、 head は厳格、 operand は「token 先頭の fd 数字列 + `<`/`>`」 と
+#        「固定開始 `[A-Za-z0-9_/.]` / `~/` を持つ token の glob と先頭 `~`」 の
+#        2 点のみ許容する — pathname expansion が literal prefix を保存するため
+#        展開結果が `-` 始まりの危険 option になり得ない、 という字句的不変条件に
+#        基づく緩和であり位置推定ではない。 head 判定は launcher 剥がし後の実 head に
+#        対して行う) /
 #        leading 代入列 (NAME=VALUE 連鎖) の代入 slot が 1 つでも存在すれば値によらず
 #        実行形 (GIT_EXTERNAL_DIFF / RIPGREP_CONFIG_PATH / LESSOPEN 等、 変数名列挙では
 #        なく存在自体で判定) / head の canonical 化が失敗 (動的展開が残る) すれば実行形 /
@@ -548,6 +562,34 @@ pipe_chain_all_mention_safe() {
   return 0
 }
 
+# dollar_starts_expansion <next_char>
+# 戻り値: 0 = `$` + <next_char> が展開を開始する、 1 = `$` は literal。
+#
+# **この表が「`$` の直後 1 文字で展開が始まるか」 の単一の正本である**。
+# `canonicalize_token` (double quote 分岐・unquoted 分岐) と
+# `token_is_unanalyzable` の rule (d) はいずれもこの helper だけを参照し、
+# 列挙をインラインで複製しない (以前は 3 箇所に複製されており、 旧算術展開
+# `$[...]` の `[` が 1 箇所も入っていないという drift を実際に生んでいた)。
+#
+# 集合は bash の展開文法から導かれる**閉じた集合**である: 変数名の先頭文字
+# (`[A-Za-z0-9_]`。 数字は位置パラメータ `$1` 等)、 `${...}` の `{`、
+# コマンド置換 `$(...)` の `(`、 旧算術展開 `$[...]` の `[`、 特殊パラメータ
+# `@` / `*` / `#` / `?` / `!` / `-` / `$`。 bash 3.2.57 と 5.2.21 の実機で
+# double quote 内の `$` の直後に全 ASCII 記号を置いて走査し、 両者でこの 11
+# 種のみが展開を開始する (それ以外は literal のまま) ことを確認した表である。
+#
+# `$'` (ANSI-C quoting) と `$"` (locale 翻訳) は含めない: double quote 内では
+# `$'` の `'` が single quote 開始にならず `$` が literal になり、 `$"` は
+# double quote の終端になるため、 いずれも展開を開始しないためである
+# (quote 外に現れる `$'` / `$"` は `segment_is_unanalyzable` および
+# `token_is_unanalyzable` の rule (c) が `$` の出現だけで一括して覆う)。
+dollar_starts_expansion() {
+  case "$1" in
+    [A-Za-z0-9_]|'{'|'('|'['|'@'|'*'|'#'|'?'|'!'|'-'|'$') return 0 ;;
+  esac
+  return 1
+}
+
 # canonicalize_token <raw_token>
 # stdout: canonical token 値 (single/double quote 除去・backslash escape 解決・
 #   fragment 連結を行った、 shell word の静的な値)。
@@ -575,10 +617,16 @@ pipe_chain_all_mention_safe() {
 #     修正後の pattern は 1 文字 (`'\'`) で `_ct_nc` と正しく一致する)。
 #
 # **`$` 判定の精密化 (issue #339 3 巡目レビュー、 codex P2 may-defer 採用)**: `$`
-# の直後の 1 文字が展開開始として有効な文字 (英数字 / `_` / `{` / `(` / `@` / `*` /
-# `#` / `?` / `!` / `-` / `$`。 `$VAR` / `${...}` / `$(...)` / `$@` / `$*` / `$#` /
-# `$?` / `$!` / `$-` / `$$` に対応) の場合のみ動的展開として canonical 化失敗
-# (`_ct_failed=1`) とする。 それ以外 (token 末尾の `$`、 または `"marker$"` の
+# の直後の 1 文字が展開開始として有効な文字 (英数字 / `_` / `{` / `(` / `[` /
+# `@` / `*` / `#` / `?` / `!` / `-` / `$`。 `$VAR` / `${...}` / `$(...)` /
+# 旧算術展開 `$[...]` / `$@` / `$*` / `$#` / `$?` / `$!` / `$-` / `$$` に対応)
+# の場合のみ動的展開として canonical 化失敗
+# (`_ct_failed=1`) とする。 **この列挙は本関数内に複製せず、 単一の正本である
+# `dollar_starts_expansion` helper を double quote 分岐・unquoted 分岐の
+# 両方から呼ぶ** (`token_is_unanalyzable` の rule (d) も同じ helper を参照する
+# ため、 3 箇所の列挙 drift が構造的に起きない。 5 巡目レビュー時点では `[` が
+# 3 箇所すべてから欠落しており、 `"marker$[1]"` (bash 実挙動では `marker1` へ
+# 展開される) を literal と誤認していた)。 それ以外 (token 末尾の `$`、 または `"marker$"` の
 # ような正規表現の行末アンカーとして使われる literal な `$`) は展開を開始しない
 # ため literal 文字として結果に含める。 コマンド置換 `$(` は `segment_has_indirection`
 # (規則 1) が本関数より先に検知済みなので、 ここでの `$(` 判定は主に「規則 1 を
@@ -659,13 +707,12 @@ canonicalize_token() {
       fi
       if [ "$_ct_c" = '$' ]; then
         # `$` 直後が展開開始として有効な文字の場合のみ動的展開 (canonical 化
-        # 失敗) とする (詳細は関数コメント「`$` 判定の精密化」節参照)。
+        # 失敗) とする。 判定表は `dollar_starts_expansion` に単一化されている
+        # (詳細は関数コメント「`$` 判定の精密化」節および同 helper 参照)。
         _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
-        case "$_ct_nc" in
-          [A-Za-z0-9_]|'{'|'('|'@'|'*'|'#'|'?'|'!'|'-'|'$')
-            _ct_failed=1
-            ;;
-        esac
+        if dollar_starts_expansion "$_ct_nc"; then
+          _ct_failed=1
+        fi
       fi
       _ct_result+="$_ct_c"
       _ct_i=$((_ct_i+1))
@@ -689,13 +736,11 @@ canonicalize_token() {
     fi
 
     if [ "$_ct_c" = '$' ]; then
-      # 同上 (double quote 内と同じ「展開開始として有効な文字」判定)。
+      # 同上 (double quote 内と同じ `dollar_starts_expansion` の表を参照)。
       _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
-      case "$_ct_nc" in
-        [A-Za-z0-9_]|'{'|'('|'@'|'*'|'#'|'?'|'!'|'-'|'$')
-          _ct_failed=1
-          ;;
-      esac
+      if dollar_starts_expansion "$_ct_nc"; then
+        _ct_failed=1
+      fi
     fi
     case "$_ct_c" in
       "'") _ct_in_squote=1; _ct_i=$((_ct_i+1)); continue ;;
@@ -712,11 +757,14 @@ canonicalize_token() {
   return 0
 }
 
-# token_is_unanalyzable <raw_token>
+# token_is_unanalyzable <raw_token> <position_kind>
+# <position_kind>: `head` = 実行面そのものを決める token (厳格判定)、
+#   `operand` = head の実行面に一切影響しない token (rule (c) を 2 点緩和)。
+#   `head` 以外の未知値は緩和しない (fail-closed 側の既定)。
 # 戻り値: 0 = 解析不能 (静的 literal ではない、 または quote 状態 desync の疑い)、
 #   1 = 静的 literal として解析可能。
 #
-# 決定表 step 3 (issue #339 3/4 巡目レビュー、 codex P1 + security P2、 全て同根)。
+# 決定表 step 3 (issue #339 3/4/5 巡目レビュー、 codex P1 + security P2、 全て同根)。
 #
 # **なぜ「静的 literal であること」を積極要件にするか**: bash は quote 外の
 # `$` (変数展開・コマンド置換・各種 quoting)・brace expansion・pathname
@@ -746,9 +794,9 @@ canonicalize_token() {
 #       出現だけで一括して覆う)、 バッククォート、 brace expansion の `{`/`}`、
 #       pathname expansion の `*`/`?`/`[`/`]`、 token 先頭の `~`
 #       (tilde expansion)、 `(`/`)`/`<`/`>` 等の shell 構文文字
-#   (d) double quote 内に、 展開開始として有効な文字 (英数字/`_`/`{`/`(`/`@`/
-#       `*`/`#`/`?`/`!`/`-`/`$`) が続く `$`、 または escape されていない
-#       バッククォートが現れる
+#   (d) double quote 内に、 展開開始として有効な文字 (`dollar_starts_expansion`
+#       の 11 種: 英数字/`_`/`{`/`(`/`[`/`@`/`*`/`#`/`?`/`!`/`-`/`$`) が続く
+#       `$`、 または escape されていないバッククォートが現れる
 # quote 外の特殊文字が `\` で escape されている場合は「現れた」ことにならない
 # ため rule (c) の対象外とする (unquoted の `\` は次の 1 文字を無条件 escape
 # して読み飛ばすため、 escape pair は 2 文字纏めて消費し個別の文字判定に到達
@@ -756,17 +804,102 @@ canonicalize_token() {
 # `"marker$"` 等) と、 quote 内の glob / brace 文字 (`'a*b'` 等) は bash が
 # 展開しないため literal として許容する (対応する allow テストあり)。
 #
-# head だけでなく `classify_wrapper_segment` が扱う全 token に対して呼ぶ
-# (merge された token・展開構文を含む token のいずれも option 位置に限らず
+# **head / operand の非対称 (issue #339 5 巡目レビュー、 code P1)**: 4 巡目
+# 時点では rule (c) を token の位置に依らず適用していたため、 head の実行面に
+# 一切影響しない operand 位置の token でも実行形 (deny) に倒れ、 origin/master
+# では allow だった read-only 形 (`cat <path>/run-codex-review.sh > out.txt`、
+# `cat plugins/*/hooks/scripts/run-codex-review.sh`、
+# `cat ~/.claude/plugins/cache/.../run-codex-review.sh`、
+# `wc -l ~/x/run-codex-review.sh`) が退行していた。 とくに `~/` 始まりの
+# plugin-cache path は installed wrapper を参照する正規の書き方であり、
+# issue #339 が解消対象としている false positive クラスそのものである
+# (deny メッセージが「read-only コマンドは deny されない」 と案内するため、
+# 自走 agent が誤診して同じ形を再試行する二次リスクもある)。 そこで
+# <position_kind> = `operand` の場合に限り rule (c) を次の 2 点だけ緩和する
+# (rule (a)/(b)/(d) は operand でも不変):
+#   - **緩和 1 (先頭 redirection)**: quote 外の `<` / `>` が、 その文字より
+#     前の文字がすべて 10 進数字 (0 文字も可、 = token 先頭) である位置に
+#     現れる場合は解析不能の理由にしない。 この token が実 argv へ渡しうる
+#     word は「無し」 か「全数字の word 1 つ」 のいずれかに限られ、 どちらも
+#     `-` 始まりである列挙済み危険 option (`--pre` 等) にはなり得ないため
+#     である。 内訳: fd 番号が実装上の上限内なら token 全体が redirection と
+#     して消費され argv word は生じない。 上限を超える数字列 (実測では
+#     bash 5.2.21 の `2147483648>tgt` が argv `[2147483648] [ARG]` を生む。
+#     bash 3.2.57 は同形を "file descriptor out of range" として redirection
+#     のまま扱いエラーにする) では、 bash は数字列を通常の word として渡すが、
+#     漏れる word は必ず全数字である。
+#     一方 `--pre>x` のように語の途中に現れる `<` / `>` は、 bash が `--pre`
+#     という argv word と redirection に分割するため canonical 値 `--pre>x`
+#     が実 argv の `--pre` と乖離する (#353 と同根。 実測でも bash 5.2.21 /
+#     3.2.57 の双方が argv `[--pre] [ARG]` を生む)。 この乖離を防ぐため
+#     語中の `<` / `>` は従来どおり解析不能とする。
+#   - **緩和 2 (固定開始を持つ token の pathname / tilde expansion)**: token が
+#     **固定開始 (fixed start)** — 1 文字目が `[A-Za-z0-9_/.]` のいずれかで
+#     あるか、 token が `~/` の 2 文字で始まる — を持つ場合に限り、 quote 外の
+#     glob 文字 `*` / `?` / `[` / `]` と token 先頭の `~` を解析不能の理由に
+#     しない。 固定開始を持たない token (`-` 始まり、 `*` 始まり、 `[` 始まり、
+#     `~` 単独や `~name` 形、 `<`/`>` 始まり等) では従来どおり解析不能とする。
+#     `{`/`}` (brace expansion)・`(`/`)`・`$`・バッククォートは operand でも
+#     緩和しない。
+# 緩和の根拠は「この token は operand のはずだ」 という位置推定ではなく
+# **字句的不変条件**である: pathname expansion は最初の glob メタ文字より前の
+# literal prefix を必ず保存するため、 固定開始 `[A-Za-z0-9_/.]` を持つ token の
+# 展開結果はすべて同じ非 `-` 文字で始まり、 `-` 始まりである列挙済み危険 option
+# (`--pre` / `--pre=` / `--hostname-bin` / `--hostname-bin=` /
+# `--compress-program` の `--co` prefix / `-exec` 系 / `--ext-diff` /
+# `--textconv`) のいずれにもなり得ない。 brace expansion は literal prefix を
+# 保存しない (`{--pre,x}` が `--pre` を生む) ため緩和対象から外す。 `~/` は
+# `$HOME` + `/` + 残りへ展開されるため展開結果は必ず `/` を含む path 形であり、
+# exact 一致の危険 option とは一致しない。 prefix 一致の option については、
+# `$HOME` が `-` 始まりの異常環境でも一致方向 (= deny 方向) にしか働かないため
+# bypass にはならない。
+#
+# `classify_wrapper_segment` は step 3 の一括検査で全 token を `operand` として
+# 呼び (merge された token・展開構文を含む token のいずれも option 位置に限らず
 # operand 位置にも現れうるため)、 決定表 step 4 (leading 代入列) 以降より前に
-# 実施する。 共有 tokenizer 側の quote 状態 desync の根本原因そのものは #354
-# で追跡中であり、 本関数はその症状 (b) を検知する防御層の 1 つにすぎない。
+# 実施する。 `head` 判定は静的な位置推定を行わず、 step 5〜7 の launcher 剥がし
+# loop の中で「その時点で実際に head になった token」 に対して canonical 化の
+# 直前に 1 回ずつ呼ぶ (`env cat ~/x/<wrapper>` なら剥がし後の `cat`)。 共有
+# tokenizer 側の quote 状態 desync の根本原因そのものは #354 で追跡中であり、
+# 本関数はその症状 (b) を検知する防御層の 1 つにすぎない。
+#
+# **platform caveat (bash 3.2 系では tilde 規則が発火しない)**: 共有 tokenizer
+# (`lib/cmd-parser.sh` の `tokenize_segment`) は結果配列を `printf '%q'` +
+# `eval` で書き戻す。 bash 3.2.57 の `printf '%q'` は先頭 `~` を escape せず
+# (bash 5.2.21 は `\~` にする)、 書き戻しの `eval` で tilde expansion が起きる
+# ため、 bash 3.2 系 (macOS の system bash) では `~` を含む token が展開済み
+# path として本関数に届く。 結果として rule (c) の「token 先頭の `~`」 も
+# 緩和 2 の `~/` 分岐も bash 3.2 では発火しない。 判定差は緩和方向にのみ生じ
+# (`cat ~root/<wrapper>` が bash 5 では実行形、 bash 3.2 では mention 候補)、
+# 展開後 path でも basename 判定は機能するため wrapper 起動・interpreter
+# 起動・script 実行面コマンドは両者とも実行形のままである (bypass ではない)。
+# 根本原因は本 hook の変更スコープ外 (共有 parser) のため #356 で追跡する。
 # bash 3.2 互換 (mapfile / declare -A / `${var,,}` を使わない)。
 token_is_unanalyzable() {
   local _tw_tok="$1"
+  local _tw_pos="$2"
   local _tw_i=0 _tw_len=${#_tw_tok}
   local _tw_in_squote=0 _tw_in_dquote=0
   local _tw_c _tw_nc
+  local _tw_relax=0 _tw_fixed_start=0
+
+  if [ "$_tw_pos" = "operand" ]; then
+    # operand 位置のみ rule (c) を 2 点緩和する (head は従来どおり厳格。
+    # 詳細は関数コメント「head / operand の非対称」節参照)。 `head` 以外の
+    # 未知の値が渡された場合も緩和しない (fail-closed 側の既定)。
+    _tw_relax=1
+    # 固定開始 (fixed start): 1 文字目が `[A-Za-z0-9_/.]`、 または token が
+    # `~/` の 2 文字で始まること。 緩和 2 (glob / 先頭 `~` の許容) の前提。
+    # `~` を bracket expression `[~]` で書くのは、 「raw token の 1 文字目が
+    # literal な `~` である」 ことだけを判定したいためである (裸の `~/` は
+    # case pattern 側で tilde expansion が起きて意図が壊れ、 quote した
+    # `'~/'` は意図どおり動くが shellcheck が SC2088 で警告する。 `[~]` は
+    # どちらの問題も持たず抑止コメントを要しない)。
+    case "$_tw_tok" in
+      [A-Za-z0-9_/.]*) _tw_fixed_start=1 ;;
+      [~]/*) _tw_fixed_start=1 ;;
+    esac
+  fi
 
   while [ "$_tw_i" -lt "$_tw_len" ]; do
     _tw_c="${_tw_tok:$_tw_i:1}"
@@ -801,13 +934,12 @@ token_is_unanalyzable() {
         return 0
       fi
       if [ "$_tw_c" = '$' ]; then
+        # rule (d): 展開開始として有効な文字が続く `$` (判定表は
+        # `dollar_starts_expansion` に単一化。 `$[` の旧算術展開も含む)。
         _tw_nc="${_tw_tok:$((_tw_i+1)):1}"
-        case "$_tw_nc" in
-          [A-Za-z0-9_]|'{'|'('|'@'|'*'|'#'|'?'|'!'|'-'|'$')
-            # rule (d): 展開開始として有効な文字が続く `$`。
-            return 0
-            ;;
-        esac
+        if dollar_starts_expansion "$_tw_nc"; then
+          return 0
+        fi
       fi
       _tw_i=$((_tw_i+1))
       continue
@@ -827,6 +959,14 @@ token_is_unanalyzable() {
     fi
 
     if [ "$_tw_i" -eq 0 ] && [ "$_tw_c" = '~' ]; then
+      if [ "$_tw_relax" -eq 1 ] && [ "$_tw_fixed_start" -eq 1 ]; then
+        # 緩和 2 (operand かつ固定開始 `~/`): `$HOME` + `/` + 残りへ展開
+        # されるため、 展開結果は必ず `/` を含む path 形になり、 exact 一致の
+        # 危険 option とは一致しない (prefix 一致の option も deny 方向にしか
+        # 働かない)。
+        _tw_i=$((_tw_i+1))
+        continue
+      fi
       # rule (c): token 先頭の tilde expansion。
       return 0
     fi
@@ -834,8 +974,39 @@ token_is_unanalyzable() {
     case "$_tw_c" in
       "'") _tw_in_squote=1; _tw_i=$((_tw_i+1)); continue ;;
       '"') _tw_in_dquote=1; _tw_i=$((_tw_i+1)); continue ;;
-      '$'|'`'|'{'|'}'|'*'|'?'|'['|']'|'('|')'|'<'|'>')
-        # rule (c): 展開・置換・word 生成を導入する quote 外の文字。
+      '<'|'>')
+        if [ "$_tw_relax" -eq 1 ]; then
+          # 緩和 1 (operand): 直前の文字がすべて 10 進数字 (0 文字も可、
+          # = token 先頭) なら、 その `<` / `>` は fd 数字列を前置した
+          # redirection である。 この token が実 argv へ渡しうる word は
+          # 「無し」 か「全数字の word 1 つ」 (fd 番号が実装上限を超える場合。
+          # 関数コメント緩和 1 の実測参照) に限られ、 どちらも `-` 始まりの
+          # 危険 option にはなり得ない。
+          case "${_tw_tok:0:$_tw_i}" in
+            *[!0-9]*) ;;
+            *) _tw_i=$((_tw_i+1)); continue ;;
+          esac
+        fi
+        # rule (c): 語中の `<` / `>` (bash は `--pre>x` を argv word `--pre` と
+        # redirection に分割するため、 canonical 値が実 argv と乖離する)。
+        return 0
+        ;;
+      '*'|'?'|'['|']')
+        if [ "$_tw_relax" -eq 1 ] && [ "$_tw_fixed_start" -eq 1 ]; then
+          # 緩和 2 (operand かつ固定開始): pathname expansion は最初の glob
+          # メタ文字より前の literal prefix を必ず保存するため、 固定開始
+          # `[A-Za-z0-9_/.]` を持つ token の展開結果はすべて同じ非 `-` 文字で
+          # 始まり、 `-` 始まりの列挙済み危険 option になり得ない。
+          _tw_i=$((_tw_i+1))
+          continue
+        fi
+        # rule (c): pathname expansion。
+        return 0
+        ;;
+      '$'|'`'|'{'|'}'|'('|')')
+        # rule (c): 展開・置換・word 生成を導入する quote 外の文字。 brace
+        # expansion (`{`/`}`) は literal prefix を保存しない (`{--pre,x}` が
+        # `--pre` を生む) ため operand でも緩和しない。
         return 0
         ;;
     esac
@@ -866,15 +1037,25 @@ token_is_unanalyzable() {
 # 元で処理済み)。 各 step は上から順に評価し、 最初に確定した判定を採用する:
 #   - step 3: segment の全 token (`tokenize_segment` の出力) それぞれが「静的
 #     literal」 であることを `token_is_unanalyzable` で検査する (issue #339
-#     3/4 巡目レビュー、 codex P1 + security P2、 全て同根)。 bash は quote 外の
+#     3/4/5 巡目レビュー、 codex P1 + security P2、 全て同根)。 bash は quote 外の
 #     `$` (各種 quoting 含む)・brace expansion・pathname expansion (glob)・
 #     tilde expansion を parse 後に展開するため、 これらを含む token の raw
 #     文字列は実際にコマンドへ渡される引数と一致する保証が無い。 また共有
 #     tokenizer の quote 状態 desync (#354) により複数 shell word が 1 token に
 #     merge され、 内側に危険 option (`--pre` 等) を隠して canonicalize_token の
-#     exact / prefix 一致を逃れうる。 head だけでなく全 token を対象に、 step 4
-#     (leading 代入列) より前に検査する。 1 つでも解析不能な token があれば
-#     実行形とする (判定内容の詳細は `token_is_unanalyzable` 関数コメント参照)。
+#     exact / prefix 一致を逃れうる。 1 つでも解析不能な token があれば実行形と
+#     する。 **検査は head と operand で非対称**であり、 2 箇所に分けて行う:
+#       (i) 本 step の一括検査は全 token を `operand` 基準 (rule (c) のうち
+#           「token 先頭の fd 数字列 + `<`/`>`」 と「固定開始 `[A-Za-z0-9_/.]`
+#           または `~/` を持つ token の glob `*`/`?`/`[`/`]` と先頭 `~`」 を
+#           許容する緩和つき) で行い、 step 4 (leading 代入列) より前に実施
+#           する。 緩和の根拠は位置推定ではなく「pathname expansion が literal
+#           prefix を保存するため、 固定開始を持つ token の展開結果は `-`
+#           始まりの列挙済み危険 option になり得ない」 という字句的不変条件。
+#      (ii) `head` 基準の厳格検査 (緩和なし) は step 5 の canonical 化直前に、
+#           launcher 剥がしを経て実際に head になった token へ行う (下記
+#           step 5 参照)。
+#     判定内容の詳細は `token_is_unanalyzable` 関数コメント参照。
 #   - step 4: segment 先頭の `NAME=VALUE` (leading 代入 slot) が存在すれば、 値に
 #     関わらず実行形とする (issue #339 2 巡目レビュー、 codex P1 must-fix)。 代入値が
 #     指すのは wrapper path だけでなく、 head コマンドの間接実行面を有効化する設定値
@@ -884,8 +1065,12 @@ token_is_unanalyzable() {
 #     代入 slot は segment 先頭に連続してのみ現れる (途中からは現れない) ため、 先頭
 #     token 1 つの判定で十分 (先頭が代入でなければそれ以降にも代入は無い)。 先頭 token
 #     が無い (空 segment) 場合も実行形。
-#   - step 5: head token の canonical 化が失敗 (single quote 外に `$VAR` 等の動的
-#     展開が残る) すれば実行形。
+#   - step 5: その時点の head token を `token_is_unanalyzable ... head` で厳格
+#     判定し (step 3 (ii)。 `./b*sh` の glob head・`~/bin/bash` の tilde head 等を
+#     捕捉する)、 解析不能なら実行形。 続けて head token の canonical 化が失敗
+#     (single quote 外に `$VAR` 等の動的展開が残る) すれば実行形。 この 2 つは
+#     step 7 の launcher 剥がし loop の内側で毎周回評価されるため、 剥がした
+#     結果として head になった token にも同じ厳格判定が適用される。
 #   - step 6: canonical head が無害 builtin (echo/true/false/pwd/type、 basename
 #     適用なし) に完全一致すれば mention 候補 (word-shape・keyword・builtin
 #     superset 検査より前に評価する)。 `test` / `[` は bash の算術評価による
@@ -940,16 +1125,18 @@ classify_wrapper_segment() {
   local _cw_idx=0
   local _cw_raw _cw_unq
 
-  # step 3: 全 token が静的 literal であることを検査する (issue #339 3/4 巡目
-  # レビュー、 codex P1 + security P2、 全て同根)。 quote 外の `$` / brace /
-  # glob / tilde expansion を含む token は展開結果を静的に決定できず、 また
-  # 共有 tokenizer の quote 状態 desync (#354) により複数 shell word が
-  # 1 token に merge され内側の危険 option (`--pre` 等) が exact / prefix
-  # 一致から隠れる経路もある。 head だけでなく全 token を対象とし、 leading
-  # 代入列の判定 (step 4) より前に行う (詳細は `token_is_unanalyzable`
-  # 関数コメント参照)。
+  # step 3 (一括検査、 operand 基準): 全 token が静的 literal であることを
+  # 検査する (issue #339 3/4/5 巡目レビュー、 codex P1 + security P2、 全て
+  # 同根)。 quote 外の `$` / brace / glob / tilde expansion を含む token は
+  # 展開結果を静的に決定できず、 また共有 tokenizer の quote 状態 desync
+  # (#354) により複数 shell word が 1 token に merge され内側の危険 option
+  # (`--pre` 等) が exact / prefix 一致から隠れる経路もある。 ここでは head の
+  # 実行面に影響しない operand 基準 (rule (c) を 2 点緩和) で全 token を検査
+  # し、 leading 代入列の判定 (step 4) より前に行う。 実際に head になった
+  # token の厳格判定は step 5 の canonical 化直前で別途行う (静的な位置推定は
+  # しない。 詳細は `token_is_unanalyzable` 関数コメント参照)。
   for _cw_raw in "${_cw_toks[@]}"; do
-    if token_is_unanalyzable "$_cw_raw"; then
+    if token_is_unanalyzable "$_cw_raw" operand; then
       unset _cw_toks
       return 0
     fi
@@ -978,6 +1165,17 @@ classify_wrapper_segment() {
   local _cw_araw _cw_aunq _cw_draw _cw_dcanon
   while :; do
     _cw_raw_head="${_cw_toks[$_cw_idx]}"
+
+    # step 3 (head 基準の厳格検査): step 7 の launcher 剥がしを経て「実際に
+    # head になった」 token に対してのみ、 rule (c) を緩和しない厳格判定を
+    # 行う (`./b*sh` が bash に展開しうる glob head や `~/bin/bash` の tilde
+    # head を捕捉する)。 静的な位置推定は行わず、 剥がしの各周回で都度評価
+    # する (詳細は `token_is_unanalyzable` 関数コメント参照)。
+    if token_is_unanalyzable "$_cw_raw_head" head; then
+      unset _cw_toks
+      return 0
+    fi
+
     if ! _cw_canon_head="$(canonicalize_token "$_cw_raw_head")"; then
       # step 5: canonical 化失敗 (動的展開が残る)。
       unset _cw_toks

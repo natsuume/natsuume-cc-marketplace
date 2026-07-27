@@ -532,9 +532,13 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     外の `$` を含む token は step 3 で既に実行形へ落ちているため、
     canonicalize_token が扱う `$` は double quote 内の残余ケースのみで
     ある。double quote 内の `$` は、直後が展開開始として有効な文字
-    (英数字 / `_` / `{` / `(` / `@` / `*` / `#` / `?` / `!` / `-` /
-    `$`) の場合のみ canonical 化失敗とし、それ以外 (行末アンカー等) は
-    literal 文字として扱う) に対して行い、
+    (英数字 / `_` / `{` / `(` / `[` / `@` / `*` / `#` / `?` / `!` /
+    `-` / `$`。`[` は bash が今も解釈する旧算術展開 `$[...]` を覆う
+    — `"marker$[1]"` は `marker1` へ展開されるため literal ではない)
+    の場合のみ canonical 化失敗とし、それ以外 (行末アンカー等) は
+    literal 文字として扱う。この 11 文字の表は実装側の単一 helper
+    (`dollar_starts_expansion`) に集約され、canonicalize_token と
+    step 3 の rule (d) が同じ表だけを参照する) に対して行い、
     head token のみさらに basename 正規化する。canonical 化は本 hook 内の
     専用 helper に閉じ、共有 parser (cmd-parser.sh) や push gate
     (block-pre-push.sh) の token 判定は変更しない。
@@ -573,16 +577,71 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
          `?` / `[` / `]`、tilde expansion の token 先頭 `~`、および
          `(` / `)` / `<` / `>` 等の shell 構文文字
        - (d) double quote 内に、展開開始として有効な文字 (英数字 /
-         `_` / `{` / `(` / `@` / `*` / `#` / `?` / `!` / `-` / `$`)
-         が続く `$`、または escape されていないバッククォートが現れる
+         `_` / `{` / `(` / `[` / `@` / `*` / `#` / `?` / `!` / `-` /
+         `$`) が続く `$`、または escape されていないバッククォートが
+         現れる
        bash は quote 外の `$` / brace / glob を parse 後に展開する
        ため、展開結果を静的に決定できない token を mention 判定の
        材料にしてはならない (token 文字列と実際にコマンドへ渡される
        引数が一致する保証が無い)。double quote 内で展開開始が続かない
        `$` (正規表現の行末アンカー `"marker$"` 等) と、quote 内の
        glob / brace 文字 (`rg -n 'a*b' <wrapper>` 等) は展開されない
-       ため literal として許容する。head だけでなく全 token を対象と
-       し、step 4 (canonical 化) 以降の判定より前に実施する
+       ため literal として許容する。
+
+       **この検査は head token と operand token で非対称である**。head
+       (= 実行面そのものを決める token) には上記 (a)〜(d) をそのまま
+       適用する厳格判定を行い、operand (= head の実行面に一切影響しない
+       token) には rule (c) のみ次の 2 点を緩和する ((a) / (b) / (d) は
+       operand でも不変):
+
+       - 緩和 1 (先頭 redirection): quote 外の `<` / `>` が、その文字
+         より前の文字がすべて 10 進数字 (0 文字も可、= token 先頭) で
+         ある位置に現れる場合は、解析不能の理由にしない。この token が
+         実 argv へ渡しうる word は「無し」か「全数字の word 1 つ」の
+         いずれかに限られ、どちらも `-` 始まりである危険 option
+         (`--pre` 等) にはなり得ないためである。内訳は、fd 番号が
+         実装上限内なら token 全体が redirection として消費されて
+         argv word が生じず、上限を超える数字列では bash が数字列を
+         通常の word として渡す (実測: bash 5.2.21 は
+         `2147483648>tgt ARG` で argv `[2147483648] [ARG]` を生み、
+         bash 3.2.57 は同形を "file descriptor out of range" として
+         redirection のまま扱いエラーにする)。一方 `--pre>x` の
+         ように語の途中に現れる `<` / `>` は、bash が `--pre` という
+         argv word と redirection に分割するため canonical 値
+         `--pre>x` が実 argv の `--pre` と乖離する。この乖離を防ぐ
+         ため語中の `<` / `>` は従来どおり実行形のまま維持する
+       - 緩和 2 (固定開始を持つ token の pathname / tilde expansion):
+         token が **固定開始 (fixed start)** — 1 文字目が
+         `[A-Za-z0-9_/.]` のいずれかである、または `~/` の 2 文字で
+         始まる — を持つ場合に限り、quote 外の glob 文字 `*` / `?` /
+         `[` / `]` と token 先頭の `~` を解析不能の理由にしない。
+         固定開始を持たない token (`-` 始まり、`*` 始まり、`[`
+         始まり、`~` 単独や `~name` 形、`<` / `>` 始まり等) では
+         従来どおり実行形とする。brace expansion の `{` / `}`、
+         `(` / `)`、`$`、バッククォートは operand でも緩和しない
+
+       緩和の根拠は「その token が operand 位置にあるはずだ」という
+       位置推定ではなく、**字句的不変条件**である: pathname expansion
+       は最初の glob メタ文字より前の literal prefix を必ず保存する
+       ため、固定開始 `[A-Za-z0-9_/.]` を持つ token の展開結果はすべて
+       同じ非 `-` 文字で始まり、`-` 始まりである列挙済み危険 option
+       (`--pre` / `--pre=` / `--hostname-bin` / `--hostname-bin=` /
+       `--compress-program` の `--co` prefix 一致 / `-exec` 系 /
+       `--ext-diff` / `--textconv`) のいずれにもなり得ない。brace
+       expansion は literal prefix を保存しない (`{--pre,x}` が
+       `--pre` を生む) ため緩和対象から外す。`~/` は `$HOME` + `/` +
+       残りへ展開されるため展開結果は必ず `/` を含む path 形であり、
+       exact 一致の危険 option とは一致しない。prefix 一致の option に
+       ついては、`$HOME` が `-` 始まりの異常環境であっても一致方向
+       (= deny 方向) にしか働かないため bypass にはならない。
+
+       head 判定に静的な位置推定は用いない。head 基準の厳格検査は
+       **launcher 剥がし (step 7) の結果として実際に head になった
+       token** に対して行う (`env cat ~/x/<wrapper>` なら `cat`)。
+       したがって本 step の一括検査は segment の全 token を operand
+       基準で行い (step 4 以降の判定より前に実施)、head 基準の厳格
+       検査は step 5 の canonical 化直前に、その時点の head token
+       1 つに対して行う
     4. leading 代入列 (segment 先頭の NAME=VALUE 連鎖) を処理する: 代入
        slot が 1 つでも存在すれば、値に関わらず実行形とする。代入値が
        指すのは wrapper path だけでなく、head コマンドの間接実行面を
@@ -591,9 +650,15 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        LESSOPEN は input preprocessor 等)、変数名の列挙ではなく代入
        slot の存在自体で判定する。処理後に head token が無い
        (assignment-only / 空) 場合も実行形
-    5. head token の canonical 化 (single/double quote 除去・backslash
-       escape 解決・fragment 連結。hook 専用 helper で行い共有 parser は
-       変更しない) が失敗する (動的展開 `$VAR` 等を含む) → 実行形。この
+    5. その時点の head token に対し、まず step 3 の検査を head 基準
+       (緩和なし) で行う → 解析不能なら実行形 (`./b*sh <wrapper>` の
+       glob head、`~/bin/bash <wrapper>` の tilde head 等をここで
+       捕捉する)。続いて head token の canonical 化 (single/double
+       quote 除去・backslash escape 解決・fragment 連結。hook 専用
+       helper で行い共有 parser は変更しない) が失敗する (動的展開
+       `$VAR` 等を含む) → 実行形。この 2 つは step 7 の launcher
+       剥がしの各周回で評価されるため、剥がした結果として head に
+       なった token にも同じ厳格判定が適用される。canonical 化の
        fail-closed 規則は head に限らない: 決定表のどの step であれ、
        mention 判定に必要な token の canonical 化が失敗した場合 (step
        12/13 の option 走査中の token を含む)、その時点で解析不能として
@@ -679,7 +744,25 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     等) が deny される false positive は、ANSI-C quote 形の危険 option を
     確実に捕捉するための代償として受容する。また、コマンド行に現れず
     呼び出し前に export された環境変数による間接実行面は本 hook から
-    観測できないため、cooperative 境界とする。
+    観測できないため、cooperative 境界とする。step 3 の緩和 2 が
+    operand で許容する `~/` 始まり token の展開結果も `$HOME` の値に
+    依存し、その値はコマンド行に現れず本 hook から観測できないため、
+    同じ受容範囲 (cooperative 境界) に属する。`$HOME` が異常値の環境
+    でも、上記の字句的不変条件により一致は deny 方向にしか働かない。
+
+    platform caveat (bash 3.2 系では tilde 規則が発火しない): 共有
+    tokenizer (`lib/cmd-parser.sh` の `tokenize_segment`) は結果配列を
+    `printf '%q'` + `eval` で書き戻す。bash 3.2.57 の `printf '%q'` は
+    先頭 `~` を escape せず (bash 5.2.21 は `\\~` にする)、書き戻しの
+    `eval` で tilde expansion が起きるため、bash 3.2 系 (macOS の
+    system bash) では `~` を含む token が展開済み path として step 3 の
+    検査に届く。結果として rule (c) の「token 先頭の `~`」も緩和 2 の
+    `~/` 分岐も bash 3.2 では発火せず、`cat ~root/run-codex-review.sh`
+    のような形の判定が bash 5 (実行形) と bash 3.2 (mention 候補) で
+    分かれる。差は緩和方向にのみ生じ、展開後 path でも basename 判定は
+    機能するため wrapper 起動・shell interpreter 起動・script 実行面
+    コマンドは両者とも実行形のままである (bypass ではない)。根本原因は
+    共有 parser 側にあり本 hook の変更スコープ外のため、#356 で追跡する。
     """
 
     def run_hook(
@@ -1947,6 +2030,180 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
+
+    def test_cat_mention_with_separated_output_redirection_is_allowed(
+        self,
+    ) -> None:
+        # 緩和 1: 単独 token `>` は token 先頭の redirection なので operand 許容。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh > out.txt"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_cat_mention_with_attached_output_redirection_is_allowed(
+        self,
+    ) -> None:
+        # 緩和 1: `>out.txt` も先頭 `>` なので argv word を生まず operand 許容。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh >out.txt"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_glob_path_operand_mention_is_allowed(self) -> None:
+        # 緩和 2: 固定開始 `p` を持つ operand の glob `*` は展開しても `-` 始まりに
+        # なり得ないため許容。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg -n marker plugins/*/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_tilde_plugin_cache_path_mention_is_allowed(self) -> None:
+        # 緩和 2: installed wrapper を指す正規形 `~/` 始まり operand を許容。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat ~/.claude/plugins/cache/natsuume-plugins/"
+                        "pre-push-review/5.3.1/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_tilde_path_operand_with_unknown_head_is_allowed(self) -> None:
+        # 緩和 2: 不明 head (`wc`) でも operand の `~/` path は mention のまま。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "wc -l ~/x/run-codex-review.sh"},
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_glob_head_launch_is_denied(self) -> None:
+        # head は厳格判定のまま: glob head は bash へ展開しうるので実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "./b*sh plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_tilde_head_launch_is_denied(self) -> None:
+        # head は厳格判定のまま: `~/` 始まりの head は実行面なので実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "~/bin/bash plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_rg_pre_option_survives_operand_relaxation_is_denied(self) -> None:
+        # operand 緩和後も step 12 の危険 option 検査 (rg --pre) は不変。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "rg --pre foo run-codex-review.sh"},
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_midword_redirection_operand_is_denied(self) -> None:
+        # 緩和 1 の境界: 語中の `>` は argv word (`--pre`) と乖離するため実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "rg -n marker --pre>x run-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_plain_bash_wrapper_launch_stays_denied(self) -> None:
+        # operand 緩和が基本形の interpreter 起動 deny を壊していないことの pin。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "bash plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_sed_mention_stays_denied_after_operand_relaxation(self) -> None:
+        # operand 緩和が step 12 の script 実行面コマンド deny を壊していない pin。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "sed -n 1p plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_double_quoted_legacy_arithmetic_expansion_is_denied(self) -> None:
+        # 修正 1: double quote 内の `$[` は旧算術展開なので rule (d) で実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        'rg -n "marker$[1]" '
+                        "plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
 
 
 if __name__ == "__main__":
