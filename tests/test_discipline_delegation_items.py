@@ -34,6 +34,20 @@ approve と親セッションの決定で確定):
 配送予算 (self-gate 前置き + 本体の合算が 8,000 UTF-16 units、残余 ~156 units)
 の制約があるため、スケルトン一括作成の bullet 文言のみ圧縮した canonical 文言
 を契約とする (ITEM_SKELETON をファイル別の辞書にする)。
+
+改訂 3 回目 (3 巡目レビュー (codex P1 x2 must-fix / correctness P2 x1 must-fix、
+後者は codex Finding 1 と同一バグ) への対応、Codex rescue の条件付き approve で
+確定):
+(1) 段落衝突の解消 — fable の SMALL_FIX_SENTENCE が旧アンカー「例外 (直接編集
+してよいもの)」を substring として含むため、Phase B で挿入される境界段落を
+find_paragraph_with が誤って拾う (保全ガードの誤 red) 経路があった。アンカーを
+太字 + コロンの段落先頭形 (DIRECT_EXCEPTION_PARAGRAPH_PREFIX) にし、
+`para.startswith(prefix)` の先頭一致 (find_paragraph_starting_with) へ変更して
+解消する。(2) 境界段落の判定を、bullet ブロック直後の段落を行末 rstrip 連結で
+正規化したうえで `SCALE_SENTENCE + SMALL_FIX_SENTENCE[name]` との完全一致に
+変更する (substring 包含 2 回では再文脈化 (別の文脈に同じ部分文字列が現れる)
+によるすり抜けを防げないため)。節外漂流ガードは不在検査のため substring 検索
+のまま維持する。
 """
 
 from __future__ import annotations
@@ -84,13 +98,15 @@ EXISTING_ITEM_IMPLEMENTATION = {
 EXISTING_ITEM_INVESTIGATION = "- 方針・仕様の検討・決定のための具体的な調査"
 EXISTING_ITEM_MECHANICAL = "- 機械的で並列化可能な作業 (一括修正、テスト実行と修正のループ等)"
 
-# 直接編集/直接作業してよいものの例外見出し (fable / sonnet と opus で文言が異なる)。
-DIRECT_EXCEPTION_HEADING = {
-    "discipline-fable.md": "例外 (直接編集してよいもの)",
-    "discipline-sonnet.md": "例外 (直接編集してよいもの)",
-    "discipline-opus.md": "委任しない作業 (直接行ってよいもの)",
+# 直接編集/直接作業してよいものの例外段落の先頭 (太字 + コロンまで。fable / sonnet
+# と opus で文言が異なる)。段落先頭一致で使うため、実ファイルの段落冒頭の整形
+# (`**...**:`) をそのまま含める。
+DIRECT_EXCEPTION_PARAGRAPH_PREFIX = {
+    "discipline-fable.md": "**例外 (直接編集してよいもの)**:",
+    "discipline-sonnet.md": "**例外 (直接編集してよいもの)**:",
+    "discipline-opus.md": "**委任しない作業 (直接行ってよいもの)**:",
 }
-# 直接編集/直接作業の例外見出しと同一段落に残るべき本文フレーズ。
+# 直接編集/直接作業の例外段落 (上記 prefix で始まる段落) に残るべき本文フレーズ。
 DIRECT_EXCEPTION_BODY_PHRASE = {
     "discipline-fable.md": "数行規模で仕様の曖昧さがない自明な修正",
     "discipline-sonnet.md": "この場合も verifier は不要",
@@ -205,10 +221,15 @@ def paragraph_after(lines: list[str], start_idx: int) -> str | None:
     return "\n".join(para_lines)
 
 
-def find_paragraph_with(section: str, marker: str) -> str | None:
-    """節内を空行区切りの段落に分割し、marker を含む最初の段落を返す。"""
+def find_paragraph_starting_with(section: str, prefix: str) -> str | None:
+    """節内を空行区切りの段落に分割し、prefix で始まる最初の段落を返す。
+
+    substring 包含 (旧 find_paragraph_with) では、境界段落の本文が偶然
+    アンカー文字列を含むだけで誤って一致してしまう (段落衝突) ため、段落先頭
+    一致に限定する。該当する段落が無ければ None。
+    """
     for para in section.split("\n\n"):
-        if marker in para:
+        if para.startswith(prefix):
             return para
     return None
 
@@ -268,6 +289,13 @@ class DelegationItemsAdditionTests(unittest.TestCase):
         self.assertEqual([], violations, f"委任項目の追加が未反映: {violations}")
 
     def test_scale_boundary_present(self) -> None:
+        """bullet ブロック直後の段落が規模境界の canonical 2 文と完全一致すること。
+
+        段落を行末 rstrip 連結 (行頭インデントは保持し、行間に区切り文字を挟ま
+        ない) で正規化したうえで `SCALE_SENTENCE + SMALL_FIX_SENTENCE[name]`
+        と完全一致するかを検査する。substring 包含 2 回では、無関係な文脈に
+        同じ部分文字列が現れる再文脈化ですり抜ける可能性があったため。
+        """
         violations = []
         for name, path in THREE_WAY.items():
             section = role_split_section(read(path))
@@ -283,11 +311,11 @@ class DelegationItemsAdditionTests(unittest.TestCase):
             if para is None:
                 violations.append(f"{name} (bullet ブロック直後に段落が無い)")
                 continue
+            normalized = "".join(line.rstrip() for line in para.splitlines())
             scale_sentence, small_fix_sentence = scale_boundary_phrases(name)
-            if scale_sentence not in para:
-                violations.append(f"{name} (規模境界の一文が直後の段落に無い)")
-            if small_fix_sentence not in para:
-                violations.append(f"{name} (小規模修正の扱いの一文が直後の段落に無い)")
+            expected = scale_sentence + small_fix_sentence
+            if normalized != expected:
+                violations.append(f"{name} (直後の段落が canonical 2 文と完全一致しない)")
         self.assertEqual([], violations, f"規模境界の記述が未反映: {violations}")
 
 
@@ -338,14 +366,14 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
             if section is None:
                 violations.append(f"{name} (role-split 節が見つからない)")
                 continue
-            heading = DIRECT_EXCEPTION_HEADING[name]
+            prefix = DIRECT_EXCEPTION_PARAGRAPH_PREFIX[name]
             body_phrase = DIRECT_EXCEPTION_BODY_PHRASE[name]
-            para = find_paragraph_with(section, heading)
+            para = find_paragraph_starting_with(section, prefix)
             if para is None:
-                violations.append(f"{name} (直接作業の例外見出しが節内に無い)")
+                violations.append(f"{name} (直接作業の例外段落 (prefix 先頭一致) が節内に無い)")
                 continue
             if body_phrase not in para:
-                violations.append(f"{name} (例外見出しと同一段落に本文フレーズが無い)")
+                violations.append(f"{name} (例外段落に本文フレーズが無い)")
         self.assertEqual(
             [], violations, f"直接作業の例外文言が失われている: {violations}"
         )
@@ -355,7 +383,8 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
 
         prefix / suffix を連結せず個別に検索する (連結境界での偶然一致を排除)。
         存在検査 (test_scale_boundary_present) と同じ scale_boundary_phrases
-        から検査フレーズを取得し、片側更新漏れを防ぐ。
+        から検査フレーズを取得し、片側更新漏れを防ぐ。不在検査のため substring
+        検索のまま維持する (完全一致は「無いこと」の検査には不適)。
         """
         violations = []
         for name, path in THREE_WAY.items():
