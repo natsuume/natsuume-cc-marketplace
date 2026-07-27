@@ -863,11 +863,19 @@ note_literal_contribution() {
 #     bash 3.2.57 は同形を "file descriptor out of range" として redirection
 #     のまま扱いエラーにする) では、 bash は数字列を通常の word として渡すが、
 #     漏れる word は必ず全数字である。
-#     一方 `--pre>x` のように語の途中に現れる `<` / `>` は、 bash が `--pre`
-#     という argv word と redirection に分割するため canonical 値 `--pre>x`
-#     が実 argv の `--pre` と乖離する (#353 と同根。 実測でも bash 5.2.21 /
-#     3.2.57 の双方が argv `[--pre] [ARG]` を生む)。 この乖離を防ぐため
-#     語中の `<` / `>` は従来どおり解析不能とする。
+#     語の途中に現れる `<` / `>` では、 bash は演算子より前の prefix だけを
+#     argv word として渡し、 残りを redirection の書き込み先にする
+#     (実測でも bash 5.2.21 / 3.2.57 の双方が `--pre>x ARG` から argv
+#     `[--pre] [ARG]` を生む)。 したがって canonical 値 `--pre>x` は実 argv の
+#     `--pre` と乖離する (#353 と同根)。 この乖離が判定を誤らせるのは argv
+#     word 側が危険 option になり得る場合だけなので、 語中の `<` / `>` は
+#     **その token が既に固定開始 (下記 緩和 2 の定義) を持つ場合に限り**
+#     許容する (緩和 1b)。 `<path>/run-codex-review.sh>out.txt` の argv word は
+#     `<path>/run-codex-review.sh` で非 `-` 始まりなので安全である一方、
+#     `--pre>x` / `-'-pre'>x` は最初の寄与文字が `-` で固定開始を持たないため
+#     従来どおり解析不能とする。 書き込み先が `-` 始まり
+#     (`<path>/run-codex-review.sh>--pre`) でも argv word には現れないため
+#     判定に影響しない。
 #   - **緩和 2 (固定開始を持つ token の pathname / tilde expansion)**: token が
 #     **固定開始 (fixed start)** — その token が **word へ最初に寄与する
 #     literal 文字** (quote 除去・backslash escape 解決を考慮した値の先頭
@@ -1056,6 +1064,18 @@ token_is_unanalyzable() {
             *[!0-9]*) ;;
             *) _tw_i=$((_tw_i+1)); continue ;;
           esac
+          if [ "$_tw_fixed_start" -eq 1 ]; then
+            # 緩和 1b (operand かつ固定開始): 語中の `<` / `>` であっても、
+            # bash が argv word として渡すのはこの演算子より前の prefix だけで
+            # ある (`<path>/run-codex-review.sh>out.txt` なら
+            # `<path>/run-codex-review.sh`)。 その prefix が固定開始を持つなら
+            # 展開結果は非 `-` 文字で始まり、 `-` 始まりの列挙済み危険 option に
+            # なり得ないため、 canonical 値との乖離が判定を誤らせない。
+            # `--pre>x` は最初の寄与文字が `-` で固定開始を持たないため、
+            # 従来どおりこの分岐に入らず解析不能 (実行形) となる。
+            _tw_i=$((_tw_i+1))
+            continue
+          fi
         fi
         # rule (c): 語中の `<` / `>` (bash は `--pre>x` を argv word `--pre` と
         # redirection に分割するため、 canonical 値が実 argv と乖離する)。
@@ -1571,7 +1591,7 @@ if [ "$AGENT_TYPE" != "pre-push-review:codex-reviewer" ]; then
 
 wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
 
-Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 次の形は read-only コマンドでも deny されます: path に `$VAR` 等の動的展開・コマンド置換・brace expansion (`{a,b}`)・`~user` 形が含まれる (展開結果を静的に決定できないため) / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。
+Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 たとえば次の形は read-only コマンドでも deny されます: path に `$VAR` 等の動的展開・コマンド置換・brace expansion (`{a,b}`)・`~user` 形が含まれる (展開結果を静的に決定できないため) / path が glob メタ文字で始まる (`*/run-codex-review.sh` 等。 `./*/run-codex-review.sh` のように `./` を前置すれば allow されます) / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
 
 対応:
   - `/pre-push-review:review` で 3 レビューを並列起動してください (推奨)
@@ -1587,7 +1607,7 @@ EOF
 
 wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
 
-Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 次の形は read-only コマンドでも deny されます: path に \`\$VAR\` 等の動的展開・コマンド置換・brace expansion (\`{a,b}\`)・\`~user\` 形が含まれる (展開結果を静的に決定できないため) / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。
+Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 たとえば次の形は read-only コマンドでも deny されます: path に \`\$VAR\` 等の動的展開・コマンド置換・brace expansion (\`{a,b}\`)・\`~user\` 形が含まれる (展開結果を静的に決定できないため) / path が glob メタ文字で始まる (\`*/run-codex-review.sh\` 等。 \`./*/run-codex-review.sh\` のように \`./\` を前置すれば allow されます) / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
 
 対応:
   - \`/pre-push-review:review\` で 3 レビューを並列起動してください (推奨)

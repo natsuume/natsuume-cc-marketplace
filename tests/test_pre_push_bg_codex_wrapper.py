@@ -605,11 +605,20 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
          通常の word として渡す (実測: bash 5.2.21 は
          `2147483648>tgt ARG` で argv `[2147483648] [ARG]` を生み、
          bash 3.2.57 は同形を "file descriptor out of range" として
-         redirection のまま扱いエラーにする)。一方 `--pre>x` の
-         ように語の途中に現れる `<` / `>` は、bash が `--pre` という
-         argv word と redirection に分割するため canonical 値
-         `--pre>x` が実 argv の `--pre` と乖離する。この乖離を防ぐ
-         ため語中の `<` / `>` は従来どおり実行形のまま維持する
+         redirection のまま扱いエラーにする)。語の途中に現れる
+         `<` / `>` は、bash が演算子より前の prefix だけを argv
+         word として渡し、残りを redirection の書き込み先にする
+         (`--pre>x` の argv word は `--pre`)。したがって canonical
+         値 `--pre>x` は実 argv の `--pre` と乖離する。この乖離が
+         判定を誤らせるのは argv word 側が危険 option になり得る
+         場合だけなので、語中の `<` / `>` は **その token が既に
+         固定開始 (下記 緩和 2 の定義) を持つ場合に限り** 許容し
+         (`<path>/run-codex-review.sh>out.txt` の argv word は
+         `<path>/run-codex-review.sh` で非 `-` 始まり)、持たない
+         場合は従来どおり実行形とする (`--pre>x` / `-'-pre'>x` は
+         最初の寄与文字が `-` なので実行形のまま)。redirection の
+         書き込み先が `-` 始まりでも argv word には現れないため
+         判定に影響しない
        - 緩和 2 (固定開始を持つ token の pathname / tilde expansion):
          token が **固定開始 (fixed start)** — その token が word へ
          最初に寄与する literal 文字 (quote 除去・backslash escape
@@ -778,6 +787,24 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     専用の本 hook からそもそも観測できない。したがって wrapper file の
     完全性は本 hook の保証範囲外であり、真の push gate である
     `block-pre-push.sh` の marker hash 検証が担う。
+
+    受容境界 (先頭 glob の operand): 固定開始を持たない token
+    (`*/run-codex-review.sh` / `*run-codex-review.sh` 等、先頭が
+    glob メタ文字である形) は operand でも実行形とする。これは
+    origin/master が allow していた形を含む既知の false positive
+    だが、安全側に倒す必要がある: pathname expansion は展開前の
+    段階では結果を確定できず、`--pre=` という名前のディレクトリが
+    存在すれば `*/x` は `--pre=/x` へ展開されうる。classifier が
+    照合するのは展開前の `*/x` であって展開結果ではないため、
+    prefix 一致の危険 option (`--pre=` / `--hostname-bin=` /
+    `--compress-program` の `--co`) を取りこぼす。回避形として
+    `./` を前置すれば固定開始 `.` を得て allow になる
+    (`cat ./*/run-codex-review.sh` / `git diff -- ./*run-codex-review.sh`)。
+    根本解決には、tokenizer の信頼性を検査する rule (a)/(b) と、
+    token 値を分類に使えるかを検査する rule (c)/(d) を分離し、
+    後者を「値を実際に消費する head・option 走査対象」に限定する
+    再設計が要る。この再設計は本 decision table の deny 契約
+    (先頭 glob operand の実行形 pin) の再決定を伴うため、#357 で扱う。
 
     platform caveat (bash 3.2 系では tilde 規則が発火しない): 共有
     tokenizer (`lib/cmd-parser.sh` の `tokenize_segment`) は結果配列を
@@ -2183,6 +2210,87 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": "rg -n marker --pre>x run-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_split_quoted_midword_redirection_operand_is_denied(self) -> None:
+        # 緩和 1b の境界: quote で分断しても最初の寄与文字が `-` なら実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "rg -n marker -'-pre'>x run-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_denied(result)
+
+    def test_midword_redirection_on_fixed_start_operand_is_allowed(self) -> None:
+        # 緩和 1b: 固定開始を持つ token の語中 `>` は argv word が非 `-` 始まり。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh>out.txt"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_midword_redirection_to_option_named_target_is_allowed(self) -> None:
+        # 緩和 1b: redirection の書き込み先が `-` 始まりでも argv word は prefix のみ。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "cat plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh>--pre"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_quoted_prefix_midword_redirection_is_allowed(self) -> None:
+        # 緩和 1b: quote された固定開始でも word への最初の寄与文字で判定する。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        'cat "plugins"/pre-push-review/hooks/scripts/'
+                        "run-codex-review.sh>out.txt"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_leading_glob_operand_workaround_with_dot_slash_is_allowed(self) -> None:
+        # leading glob の受容境界に対する回避形 (`./` 前置) が allow になる pin。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "cat ./*/run-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_leading_glob_operand_without_dot_slash_is_denied(self) -> None:
+        # 受容境界の pin: 先頭 glob は固定開始が無く `--pre=` 等へ展開しうる。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "cat */run-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
