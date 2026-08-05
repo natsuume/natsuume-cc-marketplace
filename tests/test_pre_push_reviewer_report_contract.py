@@ -114,20 +114,6 @@ class ReviewerParentSafeReportContractTest(unittest.TestCase):
                 self.assertIn("instruction contract", body)
                 self.assertIn("hard security boundary", body)
 
-    def test_documentation_states_verified_completion_payload_version(
-        self,
-    ) -> None:
-        body = self.read(PLUGIN_README)
-        self.assertIn(
-            "auto-mark の completion payload は Claude Code 2.1.211 "
-            "で実機検証済み",
-            body,
-        )
-        self.assertIn(
-            "`tool_response.status` がない場合は marker を書かず",
-            body,
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

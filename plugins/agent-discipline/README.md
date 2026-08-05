@@ -100,7 +100,7 @@ claude plugin install agent-discipline@natsuume-plugins
 - `agent_id` 付き UserPromptSubmit は subagent 経路として無音終了し、配送済み集合も変更しない。`jq` 不在 / 不正 JSON / session_id 不正 / state directory または atomic marker 書込失敗 / 全件配送済み / directory が空の場合も無音 `exit 0` する
 - SessionStart input に session_id が無い異常系だけは v0.12.0 からの既存挙動を保つため、marker 無しで全件配送する。正常系では出力 JSON を先に生成し、marker 更新に成功した後だけ stdout へ出す
 
-撤去手順: Claude Code 側で AskUserQuestion preview のスクロール問題が修正されたら、`hooks/prompts/temporary/` 配下の md を削除するだけで注入が消えます (スクリプトと hooks.json entry は残っても no-op)。完全撤去する場合のみ entry・スクリプト・temporary ディレクトリも削除します。いずれの場合も version bump が必要です。
+撤去手順: Claude Code 側で AskUserQuestion preview のスクロール問題 (一定行数を超える preview が「hidden XX lines」で隠され、ユーザが全文を確認できない) が修正されたら、`hooks/prompts/temporary/` 配下の md を削除するだけで注入が消えます (スクリプトと hooks.json entry は残っても no-op)。修正されたことは、長い preview を付けた AskUserQuestion を表示し、隠れた部分をスクロールで全文確認できることで確かめます。完全撤去する場合のみ entry・スクリプト・temporary ディレクトリも削除します。いずれの場合も version bump が必要です。
 
 #### resolve-model-on-prompt
 
@@ -359,7 +359,7 @@ agent-discipline は以下の 2 plugin を吸収統合しています:
 | `decompose-bash` (v0.1.1) | inject-always.sh の「物理層」 セクション | Bash コマンド分解の `additionalContext` 注入 |
 | `auto-followthrough` (v0.2.3) | inject-auto.sh + check-uncommitted-on-session-start.sh | auto mode 時の commit→push→PR→merge 自走 / 未コミット分類チェック |
 
-旧 plugin の機能はそのまま維持しています。 v0.1.0 時点では旧 `auto-followthrough` の hook 構造 (`SessionStart` + `UserPromptSubmit` + `PostToolBatch`) も継承していましたが、 v0.1.1 で `PostToolBatch` 経路を撤去 + during 系を `inject-always.sh` 側に移動し、 現在は `SessionStart` + `UserPromptSubmit` の 2 経路構成です (詳細は v0.1.1 changelog 参照)。 マーカー dir は `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されており、 v0.1.1 では `inject-auto.sh` の dedup marker 自体も不要になっているため、 旧 marker は OS の tmpfs/tmp cleanup で自然に消去されます。
+旧 plugin の機能はそのまま維持しています。 v0.1.0 時点では旧 `auto-followthrough` の hook 構造 (`SessionStart` + `UserPromptSubmit` + `PostToolBatch`) も継承していましたが、 v0.1.1 で `PostToolBatch` 経路を撤去 + during 系を `inject-always.sh` 側に移動し、 現在は `SessionStart` + `UserPromptSubmit` の 2 経路構成です。 マーカー dir は `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されており、 v0.1.1 では `inject-auto.sh` の dedup marker 自体も不要になっているため、 旧 marker は OS の tmpfs/tmp cleanup で自然に消去されます。
 
 旧 2 plugin は本 plugin 導入時に同 PR で削除済みです。
 

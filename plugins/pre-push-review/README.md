@@ -161,8 +161,6 @@ wrapper exit 0 だけで final marker を書くと、その後の report 正規�
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)
 
-auto-mark の completion payload は Claude Code 2.1.211 で実機検証済みです。`tool_response.status` がない場合は marker を書かず、旧 version / 未知 schema による恒久 deny と判別できる stderr 診断を出します。
-
 ### マーカーファイル
 
 すべて `<git-dir>` 配下に配置 (リポジトリ単位で共有、 ブランチ単位ではない):

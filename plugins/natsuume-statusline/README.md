@@ -59,7 +59,7 @@ claude plugin install natsuume-statusline@natsuume-plugins
 /natsuume-statusline:setup
 ```
 
-このコマンドは `~/.claude/settings.json` の `statusLine.command` を書き換えます。実行前に既存の `settings.json` 全体をタイムスタンプ付きでバックアップします。setup Skill は設定ファイルを backup 取得後に atomic replace で書き換え、書き換え後の strict parse に失敗した場合は backup から atomic restore します。parse 成功を確認するまで setup 完了を報告しません。
+このコマンドは `~/.claude/settings.json` の `statusLine.command` を書き換えます。実行前に既存の `settings.json` 全体をタイムスタンプ付きでバックアップします。書き換えは、生成した新しい設定 JSON を書き込み前に strict parse で検証し、検証に失敗した場合は `settings.json` を変更せずに終了します。検証を通過した場合のみ atomic な差し替えで反映し、backup からの復元手順は完了メッセージで案内します。
 
 plugin cache 配下から実行された場合は、`~/.claude/natsuume-statusline-entrypoint.sh` という安定した wrapper を設置し、`statusLine.command` はこの wrapper を指します。wrapper は実行時に最新版の `entrypoint.sh` を解決するため、`/plugin update` 後も**再 setup なしで statusline が追従**します。これは plugin cache が version 固有パス (`~/.claude/plugins/cache/<marketplace>/<plugin>/<VERSION>/...`) に展開され、かつ `statusLine.command` では `${CLAUDE_PLUGIN_ROOT}` 等が展開されない ([Claude Code bug #52079](https://github.com/anthropics/claude-code/issues/52079)) ため、version 固有パスを直接焼き込むと update で旧 dir が消えた際に statusline が無言で壊れる問題を避けるためです。(ローカル clone 等の安定パスから実行された場合は wrapper を介さず entrypoint を直接登録します。)
 
