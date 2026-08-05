@@ -63,6 +63,10 @@ RESOLVE_MODEL_ON_PROMPT_SH = SCRIPTS / "resolve-model-on-prompt.sh"
 MARKER = "<!-- rule:comment-currency -->"
 SIZE_BUDGET_UNITS = 8000
 EXPECTED_HEADING_TEXT = "説明は常に最新の内容のみ"
+# Markdown の ATX 見出し規則 (先頭インデントは 3 個以下の ASCII 空白まで) に
+# 合わせた見出し行判定。block_heading_line が返す改行を含まない単一行に対して
+# 使うため DOTALL 等は不要。
+HEADING_INDENT_PATTERN = re.compile(r"^( {0,3})(#.*)$")
 
 # 配送面のラベル。fable / subagent は固定ファイル、sonnet はマーカーを保持する
 # part を動的に解決する (resolve_face_path 参照)。
@@ -306,12 +310,21 @@ def block_heading_line(block: str) -> str | None:
 
 
 def block_starts_with_expected_heading(block: str) -> bool:
-    """block の先頭見出し行が `## ` で始まり、EXPECTED_HEADING_TEXT を含むか。"""
+    """block の先頭見出し行が `## ` で始まり、EXPECTED_HEADING_TEXT を含むか。
+
+    Markdown の ATX 見出し規則に合わせ、先頭インデントは 3 個以下の ASCII 空白
+    までのみ許容する。4 空白以上・タブ字下げの行は Markdown ではインデント付き
+    コードブロックとして描画され見出しとして機能しないため、無条件の lstrip
+    ではなく厳密な先頭空白判定で弾く。
+    """
     heading = block_heading_line(block)
     if heading is None:
         return False
-    stripped = heading.lstrip()
-    return stripped.startswith("## ") and EXPECTED_HEADING_TEXT in stripped
+    match = HEADING_INDENT_PATTERN.match(heading)
+    if match is None:
+        return False
+    content = match.group(2)
+    return content.startswith("## ") and EXPECTED_HEADING_TEXT in content
 
 
 def split_into_paragraphs(text: str) -> list[str]:
@@ -714,6 +727,22 @@ class HelperSyntheticContractTests(unittest.TestCase):
         block = rule_block(text)
         self.assertIsNotNone(block)
         self.assertIn("after comment (must remain inside the block)", block)
+
+    def test_heading_detection_follows_markdown_indentation_rule(self) -> None:
+        """見出し行の先頭インデントは Markdown の ATX 見出し規則 (3 個以下の
+        ASCII 空白まで) に従うこと。4 空白以上・タブ字下げの `## ...` 行は
+        Markdown ではインデント付きコードブロックとして描画されるため見出しと
+        して受理せず、3 空白以下の字下げは受理すること。
+        """
+        no_indent = f"## 10. {EXPECTED_HEADING_TEXT}"
+        three_spaces = f"   ## 10. {EXPECTED_HEADING_TEXT}"
+        four_spaces = f"    ## 10. {EXPECTED_HEADING_TEXT}"
+        tab_indent = f"\t## 10. {EXPECTED_HEADING_TEXT}"
+
+        self.assertTrue(block_starts_with_expected_heading(no_indent))
+        self.assertTrue(block_starts_with_expected_heading(three_spaces))
+        self.assertFalse(block_starts_with_expected_heading(four_spaces))
+        self.assertFalse(block_starts_with_expected_heading(tab_indent))
 
     def test_marker_must_be_a_standalone_line(self) -> None:
         """マーカーが prose 文中や inline code 中に偶発的に現れても、行全体
