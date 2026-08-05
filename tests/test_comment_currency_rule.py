@@ -22,11 +22,12 @@
    SubagentStart (inject-subagent-rules.sh の配送) — が実際に生成する
    additionalContext の最大構成が UTF-16 code units 8,000 以下 (inject-always.sh
    の `-gt 8000` 縮退条件と整合する境界) に収まること (判定は単一の共有述語
-   within_size_budget を使う)。段階的縮退ガードを持つ 2 経路 (inject-always.sh
-   系) は、縮退で落ちる要素が実際に残存していることも合否判定に組み込み、
-   「縮退後の payload がたまたま収まっただけ」を green にしない (UTF-8 locale
-   が確定できずこの証拠を確認できない場合は、この 2 経路のみ可視的に skip し、
-   残り 4 経路の検査は続行する)
+   within_size_budget を使う)。6 経路すべてこの検査を無条件に実行する。
+   段階的縮退ガードを持つ 2 経路 (inject-always.sh 系) はさらに、
+   inject-always.sh が明示的に許可する第一段縮退 ((参照パス) 行のみを落とす)
+   は許容しつつ、配送メモ (delivery-note.md) 本文の残存は無条件必須とする
+   (「縮退後の payload がたまたま収まっただけ」の本文喪失・第二段以降の
+   縮退を green にしない)
 4. ルール本文ブロック自身、および面ごとに解決した冒頭 HTML コメントヘッダが、
    面固有の静的自己準拠述語 (static_surface_*、定義直前のコメント参照) が
    定める禁止対象の経緯記述 (issue/PR 番号・年月日。大文字小文字や年月日単位
@@ -81,8 +82,9 @@ INJECT_SUBAGENT_RULES_SH = SCRIPTS / "inject-subagent-rules.sh"
 RESOLVE_MODEL_ON_PROMPT_SH = SCRIPTS / "resolve-model-on-prompt.sh"
 
 # inject-always.sh の段階的縮退 (8K 超過時) が最初に落とす要素の接頭辞。
-# additionalContext にこれが残っていれば、縮退の第 1 段階が発動していない
-# ことを確認できる。
+# inject-always.sh はこの行のみを落とす第一段縮退を明示的に許可しているため、
+# この行の欠落単独は fail 条件にしない (pre_degradation_missing_elements 参照)。
+# 深い checkout パス等で正当に発動しうる縮退を誤検知しないための境界。
 PATH_LINE_PREFIX = "(参照パス) "
 
 MARKER = "<!-- rule:comment-currency -->"
@@ -634,16 +636,31 @@ def resolve_face(
     return path, block, header, None
 
 
-def detect_utf8_locale() -> str | None:
-    """`locale -a` の出力から利用可能な UTF-8 locale を優先順
-    (C.UTF-8 系 → en_US.UTF-8 系) で 1 つ選んで返す。無ければ None を返す。
+def _utf8_locale_priority(name: str) -> int | None:
+    """name が UTF-8 系 locale 名なら優先順 (0 が最優先) を、そうでなければ
+    None を返す。大文字小文字・ハイフン有無の表記ゆらぎを無視して "utf8" を
+    含むかどうかで判定する。優先順は C.UTF-8 系 (0) → en_US.UTF-8 系 (1) →
+    その他の UTF-8 系 (2) の順。
+    """
+    normalized = name.lower().replace("-", "")
+    if "utf8" not in normalized:
+        return None
+    if normalized.startswith("c."):
+        return 0
+    if normalized.startswith("en_us."):
+        return 1
+    return 2
 
-    inject-always.sh の 8K 縮退ガードは `wc -m` で文字数を数えるが、これは
-    locale 依存であり、非 UTF-8 locale (例: 一部の CI 環境の既定 "C"/"POSIX")
-    では CJK テキストがマルチバイトのまま "文字" として数えられず、実際の
-    約 3 倍の長さとして計上されて縮退が誤って発動しうる。hook subprocess の
-    env にこの locale を固定することで、この wc -m の locale 依存によるサイズ
-    判定のブレを避ける。
+
+def detect_utf8_locale() -> str | None:
+    """`locale -a` の出力から利用可能な UTF-8 系 locale を優先順
+    (C.UTF-8 系 → en_US.UTF-8 系 → その他の UTF-8 系、_utf8_locale_priority
+    参照) で 1 つ選んで返す。無ければ None を返す。
+
+    戻り値は run_hook が hook subprocess の env (LC_ALL/LANG) に渡す
+    best-effort な補助にのみ使う。この関数が None を返しても、あるいは
+    subprocess 呼び出し自体が失敗しても、いずれの検査の実行可否・合否判定
+    にも影響しない (検査は常に無条件で実行する)。
     """
     try:
         result = subprocess.run(
@@ -658,18 +675,21 @@ def detect_utf8_locale() -> str | None:
     if result.returncode != 0:
         return None
     available = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    available_by_lower = {name.lower(): name for name in available}
-    # Linux (WSL2 含む) は "C.utf8" / "C.UTF-8"、macOS は "en_US.UTF-8" を
-    # 典型的に提供する。大文字小文字・ハイフン有無の表記ゆらぎを吸収したうえで、
-    # OS が実際に認識する元の表記 (available_by_lower の値) を返す。
-    for candidate in ("c.utf8", "c.utf-8", "en_us.utf8", "en_us.utf-8"):
-        if candidate in available_by_lower:
-            return available_by_lower[candidate]
-    return None
+    candidates = [
+        (priority, name)
+        for name in available
+        for priority in (_utf8_locale_priority(name),)
+        if priority is not None
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
 
 
 # `locale -a` はモジュール読み込み時に 1 回だけ実行する (hook 起動のたびに
-# 実行するとオーバーヘッドが積み重なるため)。
+# 実行するとオーバーヘッドが積み重なるため)。この値は run_hook が subprocess
+# env を設定する best-effort な補助にのみ使い、どの検査も gate しない。
 UTF8_LOCALE = detect_utf8_locale()
 
 
@@ -683,7 +703,11 @@ def run_hook(
 
     実リポジトリの ``${TMPDIR:-/tmp}/agent-discipline-state`` を汚さないよう、
     呼び出し側が用意した一時ディレクトリを TMPDIR として渡す。UTF8_LOCALE が
-    利用可能であれば LC_ALL/LANG に固定する (detect_utf8_locale 参照)。
+    利用可能であれば LC_ALL/LANG に固定する (detect_utf8_locale 参照) が、
+    これは hook script 内部 (`wc -m` 等) の locale 依存動作を安定させる
+    best-effort な補助にすぎず、この Python プロセス自身の subprocess 出力
+    デコードは encoding="utf-8" を明示し、親プロセスの locale 設定に依存
+    させない。
     """
     env = os.environ.copy()
     env["TMPDIR"] = tmp_dir
@@ -696,6 +720,7 @@ def run_hook(
         env=env,
         input=json.dumps(payload, ensure_ascii=False),
         text=True,
+        encoding="utf-8",
         capture_output=True,
         timeout=10,
         check=False,
@@ -764,25 +789,26 @@ def delivery_note_payload_text() -> str:
     return payload.strip()
 
 
-def pre_degradation_missing_elements(context: str) -> list[str]:
-    """inject-always.sh の段階的縮退 (8K 超過時に (参照パス) 行 → delivery-note
-    の順で落とす) で失われる要素が context から欠けていないかを確認する。
+def pre_degradation_missing_elements(context: str, note_payload: str) -> list[str]:
+    """inject-always.sh の段階的縮退のうち、配送メモ (delivery-note.md) 本文の
+    残存 (無条件必須) を context から確認する。
 
+    inject-always.sh は 8K 超過時にまず (参照パス) 行のみを落とす第一段縮退を
+    明示的に許可しているため、この行単独の欠落は fail 条件にしない (深い
+    checkout パス等での正当な縮退を誤検知しないため)。一方、配送メモ本文は
     段階的縮退ガードを持つ経路 (delivery_fable / delivery_sonnet_part1_self_gate)
-    のサイズ計測は、縮退後 payload がたまたま予算内に収まっただけの場合も
-    green になりうる (「optional 要素を落として収まった」盲点)。この述語は
-    縮退で落ちるはずの要素が実際に残存していることを確認し、「縮退なしで
-    予算内」であることを保証する。
+    のサイズ測定が「縮退後 payload がたまたま予算内に収まっただけ」の場合にも
+    green になりうる盲点を塞ぐ、本文喪失・第二段以降の縮退に対する唯一の
+    防衛線であるため、無条件必須とする。note_payload は呼び出し側が
+    delivery_note_payload_text() 等で用意した配送メモ本文の期待値を渡す
+    (この関数自体はファイル I/O を行わない)。
     """
     missing = []
-    if PATH_LINE_PREFIX not in context:
-        missing.append("(参照パス) 行が無い (縮退の疑い)")
-    note_payload = delivery_note_payload_text()
     if not note_payload:
-        # 抽出結果が空 (ヘッダのみ・空白のみのメモ) の場合、比較対象が空文字列に
-        # なり `not in` 判定が常に真になって検査が skip されてしまう
-        # (副作用として常に成功扱いになる)。空・空白のみの抽出結果はそれ自体を
-        # 「メモ本文の欠落」として fail-closed に扱う。
+        # note_payload が空 (ヘッダのみ・空白のみのメモから抽出された場合等)
+        # だと比較対象が空文字列になり `in` 判定が常に真になって検査が
+        # skip されてしまう (副作用として常に成功扱いになる)。空・空白のみの
+        # note_payload はそれ自体を「メモ本文の欠落」として fail-closed に扱う。
         missing.append("delivery-note.md から配送メモ本文を抽出できない (空・ヘッダのみの疑い)")
     elif note_payload not in context:
         missing.append("delivery-note.md の配送メモ本文が無い (縮退の疑い)")
@@ -951,18 +977,16 @@ class SizeBudgetTests(unittest.TestCase):
     one-shot 補正配送の計 6 経路)。fable one-shot 補正配送 (resolve-model-on-
     prompt.sh) は他経路と異なり段階的縮退ガードを持たないため、本テストでの
     検出が予算超過に対する唯一の防衛線になる。判定は共有述語 within_size_budget
-    を使う。
+    を使い、6 経路すべて無条件に実行する (locale 検出の成否によらず skip しない)。
 
     段階的縮退ガードを持つ 2 経路 (PRE_DEGRADATION_DELIVERY_BUILDERS の
-    fable / sonnet part 1) は、非縮退の証拠 ((参照パス) 行・delivery-note.md
-    の配送メモ本文が payload に残存していること) をサイズ予算検査・payload
-    内容検査の両方の合否判定に組み込む。UTF8_LOCALE が確定できる場合、証拠が
-    無ければ縮退後の payload がたまたま収まっただけの可能性があるため fail
-    する (証拠なしの green を許さない)。UTF8_LOCALE が確定できない場合は、
-    この 2 経路の assert のみ subTest 経由で可視的に skip し (silent green に
-    しない)、残り 4 経路 (locale 非感応) の検査は常に続行する。この統合により
-    旧来の独立した縮退なし検査は不要になったため削除した (差分は subTest の
-    skip メッセージとして同等の情報を提供する)。
+    fable / sonnet part 1) はさらに、配送メモ (delivery-note.md) 本文が
+    payload に残存していることをサイズ予算検査・payload 内容検査の両方の
+    合否判定に無条件で組み込む (pre_degradation_missing_elements 参照)。
+    inject-always.sh が明示的に許可する第一段縮退 ((参照パス) 行のみを落とす)
+    は許容し、この行単独の欠落は fail 条件にしない。UTF8_LOCALE (detect_utf8_
+    locale が best-effort に検出する UTF-8 系 locale) は run_hook が hook
+    subprocess の env を設定する補助にのみ使い、いずれの検査も gate しない。
     """
 
     DELIVERY_BUILDERS = {
@@ -995,52 +1019,36 @@ class SizeBudgetTests(unittest.TestCase):
         "fable one-shot 補正配送 (resolve-model-on-prompt.sh)": FABLE_MD,
     }
 
-    def _skip_if_degradation_evidence_unavailable(self, label: str) -> bool:
-        """label が段階的縮退ガード付き経路かつ UTF8_LOCALE 未検出なら、
-        subTest 経由で可視的に skip して True を返す。呼び出し側はこの場合
-        `continue` して次の経路へ進む (silent green にせず、他経路は継続する)。
-        """
-        if label not in PRE_DEGRADATION_DELIVERY_BUILDERS or UTF8_LOCALE is not None:
-            return False
-        with self.subTest(label=label):
-            self.skipTest(
-                "利用可能な UTF-8 locale (C.UTF-8 / en_US.UTF-8 系) が見つから"
-                "ず非縮退の証拠 ((参照パス) 行・配送メモ本文の残存) を確認でき"
-                "ないため、この経路のみ明示的に skip する (silent green にしな"
-                "い。他経路は継続する)"
-            )
-        return True
-
     def test_all_delivery_paths_within_budget(self) -> None:
         """各配送経路の additionalContext が配送予算 (SIZE_BUDGET_UNITS) 以下に
-        収まること。段階的縮退ガード付き 2 経路は非縮退の証拠も合否判定に
-        組み込む (クラス docstring 参照)。
+        収まること。段階的縮退ガード付き 2 経路は配送メモ本文の残存も合否
+        判定に組み込む (クラス docstring 参照)。6 経路すべて無条件に実行する。
         """
+        note_payload = delivery_note_payload_text()
         violations = []
         for label, builder in self.DELIVERY_BUILDERS.items():
-            if self._skip_if_degradation_evidence_unavailable(label):
-                continue
             with tempfile.TemporaryDirectory() as tmp_dir:
                 context = builder(tmp_dir)
             length = utf16_length(context)
             if not within_size_budget(length):
                 violations.append(f"{label}: 予算超過 ({length} units)")
             if label in PRE_DEGRADATION_DELIVERY_BUILDERS:
-                missing = pre_degradation_missing_elements(context)
+                missing = pre_degradation_missing_elements(context, note_payload)
                 if missing:
-                    violations.append(f"{label}: 非縮退の証拠が無い {missing}")
+                    violations.append(f"{label}: 配送メモ本文の証拠が無い {missing}")
         self.assertEqual(
             [],
             violations,
             f"配送予算 ({SIZE_BUDGET_UNITS} UTF-16 units 以下) を超過、または"
-            f"非縮退の証拠を確認できない経路: {violations}",
+            f"配送メモ本文の証拠を確認できない経路: {violations}",
         )
 
     def test_all_delivery_paths_include_source_file_content(self) -> None:
         """各配送経路の additionalContext に、その経路が配送する md ファイル
         (DELIVERY_PATH_SOURCE_FILES) の本文全体が実際に含まれること
-        (payload_content_missing 参照)。段階的縮退ガード付き 2 経路は非縮退の
-        証拠も合否判定に組み込む (クラス docstring 参照)。
+        (payload_content_missing 参照)。段階的縮退ガード付き 2 経路は配送メモ
+        本文の残存も合否判定に組み込む (クラス docstring 参照)。6 経路すべて
+        無条件に実行する。
 
         サイズ検査 (test_all_delivery_paths_within_budget) はサイズのみを
         見るため、hook が本文を欠落させた (それでいて長さだけは偶然予算内に
@@ -1050,10 +1058,9 @@ class SizeBudgetTests(unittest.TestCase):
         ファイルを都度読んで全文照合する) ため、確定本文の逐語に依存せず、
         現状ファイルでも今後の本文更新後でも自然に成立する。
         """
+        note_payload = delivery_note_payload_text()
         violations = []
         for label, builder in self.DELIVERY_BUILDERS.items():
-            if self._skip_if_degradation_evidence_unavailable(label):
-                continue
             with tempfile.TemporaryDirectory() as tmp_dir:
                 context = builder(tmp_dir)
             source_md = self.DELIVERY_PATH_SOURCE_FILES[label]
@@ -1061,15 +1068,36 @@ class SizeBudgetTests(unittest.TestCase):
             if missing:
                 violations.append(f"{label}: {missing}")
             if label in PRE_DEGRADATION_DELIVERY_BUILDERS:
-                missing_evidence = pre_degradation_missing_elements(context)
+                missing_evidence = pre_degradation_missing_elements(context, note_payload)
                 if missing_evidence:
-                    violations.append(f"{label}: 非縮退の証拠が無い {missing_evidence}")
+                    violations.append(f"{label}: 配送メモ本文の証拠が無い {missing_evidence}")
         self.assertEqual(
             [],
             violations,
-            f"配送経路の payload に本文内容が含まれていない、または非縮退の"
-            f"証拠を確認できない経路: {violations}",
+            f"配送経路の payload に本文内容が含まれていない、または配送メモ"
+            f"本文の証拠を確認できない経路: {violations}",
         )
+
+    def test_pre_degradation_check_runs_unconditionally_without_utf8_locale(
+        self,
+    ) -> None:
+        """UTF8_LOCALE が None (UTF-8 locale 検出失敗) であっても、配送予算・
+        配送メモ本文の各検査が skip されず実行されること。locale probe は
+        run_hook の env 設定にのみ使う best-effort な補助であり、検査自体の
+        実行可否には関与しない (detect_utf8_locale・run_hook 参照)。
+        """
+        global UTF8_LOCALE
+        original = UTF8_LOCALE
+        UTF8_LOCALE = None
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                context = delivery_fable(tmp_dir)
+        finally:
+            UTF8_LOCALE = original
+        length = utf16_length(context)
+        self.assertTrue(within_size_budget(length), f"予算超過 ({length} units)")
+        missing = pre_degradation_missing_elements(context, delivery_note_payload_text())
+        self.assertEqual([], missing, f"配送メモ本文の証拠が無い: {missing}")
 
 
 class RuleBlockSelfComplianceTests(unittest.TestCase):
@@ -1290,8 +1318,8 @@ class HelperSyntheticContractTests(unittest.TestCase):
         """全角空白 (U+3000) のみの行は ASCII 限定の空行判定では空行とみなされず、
         段落区切りにならないこと (soft-wrap の継続行として 1 段落に連結される)。
         連結後は文正規化 (strip_whitespace) が全角空白も除去するため、
-        canonical 文と一致すること。対比として、ASCII 空白のみの行は従来
-        どおり段落区切りになる (soft-wrap されない) ことも確認する。
+        canonical 文と一致すること。対比として、ASCII 空白のみの行は
+        引き続き段落区切りになる (soft-wrap されない) ことも確認する。
         """
         sentence = "AはBでありCである。"
         text_with_fullwidth_space_line = "AはB\n　\nでありCである。"
@@ -1347,6 +1375,39 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertEqual(SIZE_BUDGET_UNITS + 1, utf16_length(over_budget))
         self.assertTrue(within_size_budget(utf16_length(at_budget)))
         self.assertFalse(within_size_budget(utf16_length(over_budget)))
+
+    def test_pre_degradation_check_tolerates_path_line_removal(self) -> None:
+        """(参照パス) 行が欠落した payload であっても、配送メモ本文さえ残って
+        いれば pre_degradation_missing_elements は fail させないこと
+        (inject-always.sh が明示的に許可する第一段縮退への追従)。
+        """
+        note_payload = "synthetic delivery note body。"
+        context_without_path_line = f"body text without a path line\n\n{note_payload}\n"
+        self.assertNotIn(PATH_LINE_PREFIX, context_without_path_line)
+        self.assertEqual(
+            [],
+            pre_degradation_missing_elements(context_without_path_line, note_payload),
+        )
+
+    def test_pre_degradation_check_fails_when_note_body_missing(self) -> None:
+        """配送メモ本文が欠落した payload は、(参照パス) 行の有無に関わらず
+        pre_degradation_missing_elements を fail させること (本文喪失・
+        第二段以降の縮退を検出する唯一の防衛線)。
+        """
+        note_payload = "synthetic delivery note body。"
+        context_without_note = f"{PATH_LINE_PREFIX}/some/path\n\nunrelated body text\n"
+        self.assertNotEqual(
+            [], pre_degradation_missing_elements(context_without_note, note_payload)
+        )
+
+    def test_pre_degradation_check_fails_closed_on_empty_note_payload(self) -> None:
+        """note_payload 自体が空文字列 (delivery-note.md がヘッダのみ等で本文
+        を抽出できない場合) は、`in` 判定が常に真になり検査が事実上無効化
+        される事故を避けるため、それ自体を本文欠落として fail-closed に
+        扱うこと。
+        """
+        context = f"{PATH_LINE_PREFIX}/some/path\n\nany body text\n"
+        self.assertNotEqual([], pre_degradation_missing_elements(context, ""))
 
     def test_static_surface_predicate_catches_issue_prefix_variations(
         self,
