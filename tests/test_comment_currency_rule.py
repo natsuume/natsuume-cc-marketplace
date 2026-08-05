@@ -7,18 +7,25 @@
 
 1. ルールマーカーが規定回数だけ存在すること
 2. マーカーを保持するファイルを面ごとに一意に解決したうえで、そのルール本文
-   ブロック内に canonical 文言・例外文が含まれること (ファイル全文や複数
-   ファイルの連結への部分文字列一致では検査しない)
+   ブロックを段落分割 → 文分割 (「。」区切り) → 対称正規化 (ASCII 空白・
+   タブ・改行の除去) した文要素の集合に対し、canonical 文セットの各文が
+   完全一致で存在すること (部分文字列包含ではなく一致。否定的引用への埋め込み
+   で green になる経路を塞ぐ)
 3. 各配送経路 — SessionStart (inject-always.sh の fable 配送・sonnet part 1
    self-gate 配送)、UserPromptSubmit (inject-rules-part.sh の sonnet part 2/3
    self-gate 配送、resolve-model-on-prompt.sh の Fable one-shot 補正配送)、
    SubagentStart (inject-subagent-rules.sh の配送) — が実際に生成する
    additionalContext の最大構成が UTF-16 code units 8,000 未満に収まること
+   (判定は単一の共有述語 within_size_budget を使う)
 4. ルール本文ブロック自身、および面ごとに解決した冒頭 HTML コメントヘッダが、
-   禁止対象の経緯記述 (issue/PR 番号・年月日) を含まないこと (自己準拠)
+   禁止対象の経緯記述 (issue/PR 番号・年月日) を含まないこと (自己準拠)。
+   ヘッダはさらに既知ナラティブ語彙のブロックリストでも検査する (ルール本文は
+   禁止形式を引用言及するため対象外)
 
-面の解決・ブロック抽出・正規化などの共有ロジックは、実ファイルに依存しない
-synthetic な入力での自己テストも別途持つ。
+面の解決 (resolve_face) は失敗原因 (マーカー 0 件 / 複数 part / ブロック抽出
+不能 / ヘッダ欠落) を判別可能な形で返し、全検査の失敗メッセージに実際の原因が
+表示される。共有ロジックは、実ファイルに依存しない synthetic な入力での
+自己テストも別途持つ。
 """
 
 from __future__ import annotations
@@ -60,42 +67,71 @@ FACES = (
     "subagent-rules.md",
 )
 
-# 各面のルールブロック内で検査する canonical 識別文言 (部分文字列照合)。
-# fable / sonnet は同一文言、subagent 版のみ 3 番目の文言が異なる (「履歴は」接頭辞)。
-CANONICAL_PHRASES = {
+# 各面のルールブロックに存在すべき canonical 文 (rule:comment-currency の配送
+# 本文からの逐語抜粋)。文単位の完全一致で照合する (部分文字列包含ではない)。
+# 段落順序・同一段落性は固定しない。太字見出し接頭辞 (`**指示**: ` 等) は、実ファイルで
+# 同じ文に地続きで付いている場合のみ含める。
+CANONICAL_SENTENCES = {
     "always-fable.md": (
-        "過去の経緯・変更履歴の解説",
-        "出典としての issue/PR 番号参照",
-        "commit message・PR 説明・issue に置く",
-        "touch-time",
-        "変更履歴節",
+        # 中核指示文
+        "**指示**: コードコメント・docstring・README 等の説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説 (版数・日付・issue/PR 番号による過去の変更の記述、旧実装の説明、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照) を書かない。",
+        # 履歴置き場文
+        "履歴と検討経緯は commit message・PR 説明・issue に置く。",
+        # 例外文
+        "**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記は証拠の鮮度情報として許可する。",
+        # touch-time 文 (fable は 1 文)
+        "適用は touch-time — 新規作成・意味変更した説明ブロックに適用し、指示のない一括清掃や単純移設・整形での書き換え波及は行わない。",
+        # 対象外文
+        "commit message・PR 説明・issue body、および明示的に履歴を目的とする文書 (README の `### vX.Y.Z → vX.Y.Z` 変更履歴節を含む) は対象外。",
     ),
     "always-sonnet-{1,2,3}.md": (
-        "過去の経緯・変更履歴の解説",
-        "出典としての issue/PR 番号参照",
-        "commit message・PR 説明・issue に置く",
-        "touch-time",
-        "変更履歴節",
+        # 中核指示文
+        "説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説を書かない。",
+        # 禁止対象文
+        "禁止対象: 版数・日付・issue/PR 番号による過去の変更の記述 (「vX で追加」「#N で移設」等)、旧実装の説明 (「以前は〜だったが」)、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照。",
+        # 履歴置き場文
+        "履歴と検討経緯は commit message・PR 説明・issue に置く。",
+        # 例外文
+        "**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記 (「YYYY-MM-DD 実測」「バージョン X で確認」等) は証拠の鮮度情報として許可する。",
+        # touch-time 文 (sonnet は 2 文に分かれる。両方を要求する)
+        "適用は touch-time: 新規作成・意味を変更した説明ブロックに適用する。",
+        "単純移設・整形のみの変更で既存記述の書き換えに波及させず、指示のない一括清掃を行わない。",
+        # 対象外文
+        "commit message・PR 説明・issue body、および明示的に履歴を目的とする文書 (README の `### vX.Y.Z → vX.Y.Z` 変更履歴節を含む) は対象外。",
     ),
     "subagent-rules.md": (
-        "過去の経緯・変更履歴の解説",
-        "出典としての issue/PR 番号参照",
-        "履歴は commit message・PR 説明・issue に置く",
+        # 中核指示文
+        "説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説 (版数・日付・issue/PR 番号による過去の変更の記述、旧実装の説明、出典としての issue/PR 番号参照) を書かない。",
+        # 履歴置き場文
+        "履歴は commit message・PR 説明・issue に置く。",
+        # 例外文
+        "例外: 撤去条件付き暫定措置の「現在の不具合・撤去条件・確認方法」(導入日なし) と、現行の主張への検証日・検証環境の付記。",
     ),
-}
-
-# 例外 2 要素の canonical 文 (逐語)。段落分割を跨がず、soft-wrap (単一改行) には
-# 頑健な正規化のうえで部分文字列一致を検査する。
-CANONICAL_EXCEPTION_SENTENCE = {
-    "always-fable.md": "例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記は証拠の鮮度情報として許可する。",
-    "always-sonnet-{1,2,3}.md": "例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記 (「YYYY-MM-DD 実測」「バージョン X で確認」等) は証拠の鮮度情報として許可する。",
-    "subagent-rules.md": "例外: 撤去条件付き暫定措置の「現在の不具合・撤去条件・確認方法」(導入日なし) と、現行の主張への検証日・検証環境の付記。",
 }
 
 FORBIDDEN_ISSUE_NUMBER_PATTERN = re.compile(r"#[0-9]")
 FORBIDDEN_ISSUE_PREFIX = "issue #"
 # ISO 形式 (20XX-) に加え、20XX/ ・ 20XX. ・ 20XX年 の表記も禁止対象として明文化する。
 FORBIDDEN_DATE_PATTERN = re.compile(r"20[0-9]{2}[-/.年]")
+
+# ヘッダ限定の既知ナラティブ語彙ブロックリスト。既知形式の回帰ガードであり、
+# 網羅性を保証するものではない (未知の言い回しは検出できない)。ルールブロック
+# 本文には適用しない — 本文は禁止形式そのものを引用言及する
+# (例: 「旧実装の説明 (「以前は〜だったが」)」) ため、本文へ適用すると
+# 正当な記述を誤検出する。
+NARRATIVE_VOCABULARY_BLOCKLIST = (
+    "旧",
+    "以前",
+    "従来",
+    "当初",
+    "移設",
+    "分割した",
+    "分割された",
+    "分割前",
+    "分割に伴う",
+    "削除済み",
+    "一字一句無変更",
+)
 
 # ルールブロックの終端は、行頭の構造マーカー (`<!-- rule:` / `<!-- subagent-rule:`) に
 # 限定する。任意の `<!--` を境界にすると、ブロック内の説明用 HTML コメント (構造
@@ -120,6 +156,24 @@ def forbidden_history_matches(text: str) -> list[str]:
     return found
 
 
+def forbidden_narrative_vocabulary_matches(text: str) -> list[str]:
+    """text 内に既知のナラティブ語彙 (経緯記述の典型語) が含まれるかを判定する。
+
+    NARRATIVE_VOCABULARY_BLOCKLIST の定義どおり、既知形式の回帰ガードであり
+    網羅性の保証ではない。ヘッダ限定で使う (forbidden_header_matches 参照)。
+    """
+    return [word for word in NARRATIVE_VOCABULARY_BLOCKLIST if word in text]
+
+
+def forbidden_header_matches(text: str) -> list[str]:
+    """ヘッダ用の禁止判定述語: forbidden_history_matches にナラティブ語彙
+    ブロックリストを加えたもの。
+    """
+    return forbidden_history_matches(text) + forbidden_narrative_vocabulary_matches(
+        text
+    )
+
+
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -127,6 +181,15 @@ def read(path: Path) -> str:
 def utf16_length(text: str) -> int:
     """UTF-16 code unit 数を返す (配送予算の計測単位)。"""
     return len(text.encode("utf-16-le")) // 2
+
+
+def within_size_budget(length: int) -> bool:
+    """UTF-16 code unit 数が配送予算 (strict `< 8000`) に収まるかを判定する。
+
+    配送経路検査 (SizeBudgetTests) とちょうど 8,000 の境界 guard (synthetic
+    自己テスト) の両方がこの共有述語を呼ぶ (ローカルに比較式を再実装しない)。
+    """
+    return length < SIZE_BUDGET_UNITS
 
 
 def leading_html_comment(text: str) -> str | None:
@@ -157,11 +220,6 @@ def rule_block(text: str, marker: str = MARKER) -> str | None:
     return text[content_start:end]
 
 
-def normalize_soft_wrapped(text: str) -> str:
-    """行末の改行のみを吸収して連結する (行頭インデントは保持し、区切り文字を挟まない)。"""
-    return "".join(line.rstrip() for line in text.splitlines())
-
-
 def split_into_paragraphs(text: str) -> list[str]:
     """text を空行区切りの段落に分割する。
 
@@ -184,78 +242,113 @@ def split_into_paragraphs(text: str) -> list[str]:
     return paragraphs
 
 
-def block_contains_paragraph_with(block: str, canonical: str) -> bool:
-    """block を空行区切りの段落に分割し、いずれかの段落を正規化した文字列が
-    canonical を部分文字列として含むかを判定する。
+def strip_ascii_whitespace(text: str) -> str:
+    """text から ASCII 空白・タブ・改行 (CR/LF) をすべて除去する (対称正規化)。
 
-    段落ごとに個別に正規化してから照合するため、空行 (空白のみの行を含む) を
-    挟んで 2 段落にまたがる canonical 文字列は (各段落を正規化しても) 一致しない。
+    候補側 (ブロックから抽出した文) と canonical 側の双方に同じ関数を適用する
+    ことで、継続行の先頭インデントや句読点隣接の折返し空白による非対称を
+    解消する。段落分割 (split_into_paragraphs) の後に適用する — 空行・空白
+    のみの行を挟んだ 2 段落は、この関数を通す前の段階で既に別要素になって
+    いるため、ここで空白を除去しても再結合しない。
     """
-    return any(
-        canonical in normalize_soft_wrapped(p) for p in split_into_paragraphs(block)
-    )
+    return re.sub(r"[ \t\r\n]+", "", text)
 
 
-def resolve_marker_holder(named_texts: dict[str, str]) -> str | None:
-    """{ラベル: 本文} からマーカーを保持する唯一のラベルを返す。
+def block_sentence_set(block: str) -> set[str]:
+    """block を段落 → 文 (「。」区切り) に分割し、各文を strip_ascii_whitespace
+    で正規化した集合を返す。
 
-    マーカーを保持するラベルが 0 件または複数件の場合は fail-closed で None を返す。
+    段落分割を先に行うため、空行 (空白のみの行を含む) を挟んで 2 段落に
+    またがる文字列は 1 つの文として結合されない。
+    """
+    sentences: set[str] = set()
+    for paragraph in split_into_paragraphs(block):
+        for sentence in re.findall(r"[^。]*。", paragraph):
+            sentences.add(strip_ascii_whitespace(sentence))
+    return sentences
+
+
+def block_matches_canonical_sentence(block: str, canonical: str) -> bool:
+    """block 内のいずれかの文要素が canonical と完全一致するか (対称正規化後)。"""
+    return strip_ascii_whitespace(canonical) in block_sentence_set(block)
+
+
+def missing_canonical_sentences(block: str, canonicals: tuple[str, ...]) -> list[str]:
+    """canonicals のうち block 内に文要素として完全一致で存在しないものを返す。"""
+    sentences = block_sentence_set(block)
+    return [c for c in canonicals if strip_ascii_whitespace(c) not in sentences]
+
+
+def resolve_marker_holder(named_texts: dict[str, str]) -> tuple[str | None, str | None]:
+    """{ラベル: 本文} からマーカーを保持する唯一のラベルを解決する。
+
+    戻り値は (ラベル, 失敗理由)。成功時は (ラベル, None)。マーカーを保持する
+    ラベルが 0 件なら (None, "マーカーが 0 件")、複数件なら該当ラベルを含む
+    理由文字列を返す (fail-closed の理由を判別可能にする)。
     """
     holders = [label for label, text in named_texts.items() if MARKER in text]
-    if len(holders) != 1:
-        return None
-    return holders[0]
+    if len(holders) == 0:
+        return None, "マーカーが 0 件"
+    if len(holders) > 1:
+        return None, f"マーカーが複数 part に存在する ({', '.join(sorted(holders))})"
+    return holders[0], None
 
 
-def resolve_face_path(face: str) -> Path | None:
+def resolve_face_path(face: str) -> tuple[Path | None, str | None]:
     """配送面から、実際にマーカーを保持するファイルの Path を解決する。
 
-    fable / subagent は固定ファイル。sonnet はマーカーを保持する part がちょうど
-    1 つの場合のみそのファイルを返し、0 件・複数件は None (fail-closed) を返す。
+    戻り値は (path, 失敗理由)。fable / subagent は固定ファイルのため常に成功する。
+    sonnet はマーカーを保持する part がちょうど 1 つの場合のみ成功し、それ以外
+    (0 件・複数件) は resolve_marker_holder の理由をそのまま伝播する。
     """
     if face == "always-fable.md":
-        return FABLE_MD
+        return FABLE_MD, None
     if face == "subagent-rules.md":
-        return SUBAGENT_MD
+        return SUBAGENT_MD, None
     if face == "always-sonnet-{1,2,3}.md":
-        holder = resolve_marker_holder(
+        holder, reason = resolve_marker_holder(
             {name: read(path) for name, path in SONNET_MD.items()}
         )
-        return SONNET_MD[holder] if holder is not None else None
+        if reason is not None:
+            return None, reason
+        return SONNET_MD[holder], None
     raise ValueError(f"unknown face: {face}")
 
 
-def compose_face(text: str) -> tuple[str, str] | None:
-    """text から (ルールブロック, 冒頭ヘッダ) を解決する。
+def compose_face(text: str) -> tuple[str | None, str | None, str | None]:
+    """text から (ルールブロック, 冒頭ヘッダ, 失敗理由) を解決する。
 
-    ルールブロックが抽出できない場合、または冒頭 HTML コメントヘッダが
-    無い場合は None (fail-closed) を返す。ヘッダ未解決を「空のヘッダ」
-    (常に検査 pass) へ silent fallback しない — マーカー解決・ルール
-    ブロック抽出と同じ fail-closed 姿勢に揃える。
+    失敗理由は「ルールブロックが抽出できない (マーカー不在または境界検出失敗)」
+    「冒頭 HTML コメントヘッダが無い」のいずれかを判別可能にする。ヘッダ未解決を
+    「空のヘッダ」へ silent fallback しない (マーカー解決・ルールブロック抽出と
+    同じ fail-closed 姿勢に揃える)。
     """
     block = rule_block(text)
     if block is None:
-        return None
+        return None, None, "ルールブロックが抽出できない (マーカー不在または境界検出失敗)"
     header = leading_html_comment(text)
     if header is None:
-        return None
-    return block, header
+        return None, None, "冒頭 HTML コメントヘッダが無い"
+    return block, header, None
 
 
-def resolve_face(face: str) -> tuple[Path, str, str] | None:
-    """配送面から (path, ルールブロック, 冒頭ヘッダ) を解決する。
+def resolve_face(
+    face: str,
+) -> tuple[Path | None, str | None, str | None, str | None]:
+    """配送面から (path, ルールブロック, 冒頭ヘッダ, 失敗理由) を解決する。
 
-    path が解決できない、またはルールブロック・冒頭ヘッダのいずれかが
-    抽出できない場合は None (fail-closed) を返す。
+    失敗理由が None であれば成功 (path/block/header がすべて非 None)。失敗
+    理由は resolve_face_path (マーカー 0 件 / 複数 part) または compose_face
+    (ブロック抽出不能 / ヘッダ欠落) のいずれかに由来し、判別可能な文字列として
+    そのまま呼び出し側 (各検査の violation メッセージ) へ伝播する。
     """
-    path = resolve_face_path(face)
-    if path is None:
-        return None
-    composed = compose_face(read(path))
-    if composed is None:
-        return None
-    block, header = composed
-    return path, block, header
+    path, reason = resolve_face_path(face)
+    if reason is not None:
+        return None, None, None, reason
+    block, header, reason = compose_face(read(path))
+    if reason is not None:
+        return None, None, None, reason
+    return path, block, header, None
 
 
 def run_hook(
@@ -379,38 +472,20 @@ class MarkerPresenceTests(unittest.TestCase):
 
 
 class CanonicalBodyTests(unittest.TestCase):
-    """各配送面のルールブロック内に canonical 文言・例外文が含まれること。"""
+    """各配送面のルールブロックに canonical 文が文単位の完全一致で含まれること。"""
 
-    def test_canonical_phrases_present_in_rule_block(self) -> None:
+    def test_canonical_sentences_present_in_rule_block(self) -> None:
         violations = []
         for face in FACES:
-            resolved = resolve_face(face)
-            if resolved is None:
-                violations.append(
-                    f"{face} (面が解決できない: マーカー 0 件/複数件、またはブロック抽出不可)"
-                )
+            _path, block, _header, reason = resolve_face(face)
+            if reason is not None:
+                violations.append(f"{face} ({reason})")
                 continue
-            _path, block, _header = resolved
-            missing = [p for p in CANONICAL_PHRASES[face] if p not in block]
+            missing = missing_canonical_sentences(block, CANONICAL_SENTENCES[face])
             if missing:
                 violations.append(f"{face}: {missing}")
         self.assertEqual(
-            [], violations, f"ルールブロック内に canonical 文言が無い面: {violations}"
-        )
-
-    def test_exception_sentence_present_in_rule_block(self) -> None:
-        violations = []
-        for face in FACES:
-            resolved = resolve_face(face)
-            if resolved is None:
-                violations.append(f"{face} (面が解決できない)")
-                continue
-            _path, block, _header = resolved
-            canonical = CANONICAL_EXCEPTION_SENTENCE[face]
-            if not block_contains_paragraph_with(block, canonical):
-                violations.append(face)
-        self.assertEqual(
-            [], violations, f"例外 2 要素の canonical 文が段落内に無い面: {violations}"
+            [], violations, f"ルールブロックに canonical 文 (完全一致) が無い面: {violations}"
         )
 
 
@@ -422,7 +497,8 @@ class SizeBudgetTests(unittest.TestCase):
     (fable 向け always 配送・sonnet part 1/2/3 配送・subagent-rules 配送・fable
     one-shot 補正配送の計 6 経路)。fable one-shot 補正配送 (resolve-model-on-
     prompt.sh) は他経路と異なり段階的縮退ガードを持たないため、本テストでの
-    検出が予算超過に対する唯一の防衛線になる。
+    検出が予算超過に対する唯一の防衛線になる。判定は共有述語 within_size_budget
+    を使う。
     """
 
     DELIVERY_BUILDERS = {
@@ -446,7 +522,7 @@ class SizeBudgetTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 context = builder(tmp_dir)
             length = utf16_length(context)
-            if not (length < SIZE_BUDGET_UNITS):
+            if not within_size_budget(length):
                 violations.append(f"{label}: {length}")
         self.assertEqual(
             [],
@@ -461,11 +537,10 @@ class RuleBlockSelfComplianceTests(unittest.TestCase):
     def test_rule_blocks_free_of_history_references(self) -> None:
         violations = []
         for face in FACES:
-            resolved = resolve_face(face)
-            if resolved is None:
-                violations.append(f"{face} (面が解決できない)")
+            _path, block, _header, reason = resolve_face(face)
+            if reason is not None:
+                violations.append(f"{face} ({reason})")
                 continue
-            _path, block, _header = resolved
             found = forbidden_history_matches(block)
             if found:
                 violations.append(f"{face} ({', '.join(found)} を含む)")
@@ -475,20 +550,20 @@ class RuleBlockSelfComplianceTests(unittest.TestCase):
 class HeaderSelfComplianceTests(unittest.TestCase):
     """面ごとに解決した冒頭 HTML コメントヘッダが経緯記述を含まないこと。
 
-    ルールブロック自己準拠検査 (RuleBlockSelfComplianceTests) と同一の共有述語
-    (forbidden_history_matches) を使う。ヘッダ検査だけが禁止述語をインラインで
-    再実装すると検査項目が乖離しうる (例: `issue #` 接頭辞チェックの欠落) ため。
+    ルールブロック自己準拠検査 (RuleBlockSelfComplianceTests) の共有述語
+    (forbidden_history_matches) に、ヘッダ限定の既知ナラティブ語彙ブロック
+    リスト (forbidden_narrative_vocabulary_matches) を加えた
+    forbidden_header_matches を使う。
     """
 
     def test_headers_free_of_issue_numbers_and_dates(self) -> None:
         violations = []
         for face in FACES:
-            resolved = resolve_face(face)
-            if resolved is None:
-                violations.append(f"{face} (面が解決できない)")
+            _path, _block, header, reason = resolve_face(face)
+            if reason is not None:
+                violations.append(f"{face} ({reason})")
                 continue
-            _path, _block, header = resolved
-            found = forbidden_history_matches(header)
+            found = forbidden_header_matches(header)
             if found:
                 violations.append(f"{face} ({', '.join(found)} を含む)")
         self.assertEqual([], violations, f"ヘッダの自己準拠違反: {violations}")
@@ -498,21 +573,21 @@ class HelperSyntheticContractTests(unittest.TestCase):
     """実ファイルに依存しない synthetic 入力で、共有 helper 自身の挙動を固定する。"""
 
     def test_canonical_phrase_outside_block_is_not_matched(self) -> None:
-        """ブロック外にのみ存在する文言は、ブロック抽出後の照合では見つからない
-        こと (ファイル全文/連結検索への回帰を防ぐ)。
+        """ブロック外にのみ存在する文は、ブロック抽出後の文単位照合では
+        見つからないこと (ファイル全文/連結検索への回帰を防ぐ)。
         """
-        phrase = "synthetic-canonical-phrase"
+        sentence = "synthetic canonical sentence。"
         text = (
-            f"{phrase} (before marker, must not count)\n\n"
+            f"{sentence} (before marker, must not count)\n\n"
             f"{MARKER}\n"
             "## synthetic heading\n\n"
-            "block body without the phrase\n\n"
+            "block body without the sentence。\n\n"
             "---\n\n"
-            f"{phrase} (after boundary, must not count)\n"
+            f"{sentence} (after boundary, must not count)\n"
         )
         block = rule_block(text)
         self.assertIsNotNone(block)
-        self.assertNotIn(phrase, block)
+        self.assertFalse(block_matches_canonical_sentence(block, sentence))
 
     def test_non_structural_comment_does_not_truncate_block(self) -> None:
         """ブロック内の非構造 HTML コメント (`<!-- rule:` / `<!-- subagent-rule:`
@@ -531,46 +606,60 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertIn("after comment (must remain inside the block)", block)
 
     def test_marker_holder_resolution_is_fail_closed(self) -> None:
-        """マーカー保持ラベルが 0 件・複数件のときは解決が fail-closed (None) に
-        なり、ちょうど 1 件のときのみそのラベルを返すこと。
+        """マーカー保持ラベルが 0 件・複数件のときは解決が fail-closed になり、
+        失敗理由を判別できること。ちょうど 1 件のときのみそのラベルを返すこと。
         """
-        self.assertIsNone(
-            resolve_marker_holder({"a": "no marker here", "b": "still none"})
+        holder, reason = resolve_marker_holder(
+            {"a": "no marker here", "b": "still none"}
         )
-        self.assertIsNone(
-            resolve_marker_holder(
-                {"a": f"has {MARKER} once", "b": f"also has {MARKER}"}
-            )
-        )
-        self.assertEqual(
-            "a", resolve_marker_holder({"a": f"has {MARKER}", "b": "no marker"})
-        )
+        self.assertIsNone(holder)
+        self.assertIn("0 件", reason)
 
-    def test_exception_sentence_paragraph_boundary(self) -> None:
-        """canonical 文が段落分割 (空行) を跨ぐ場合は不一致、単一改行の soft-wrap
-        は一致すること。空白のみの空行 (完全な空文字列ではない空行) も同様に
-        段落区切りとして扱われ、不一致になること。
+        holder, reason = resolve_marker_holder(
+            {"a": f"has {MARKER} once", "b": f"also has {MARKER}"}
+        )
+        self.assertIsNone(holder)
+        self.assertIn("複数", reason)
+
+        holder, reason = resolve_marker_holder({"a": f"has {MARKER}", "b": "no marker"})
+        self.assertEqual("a", holder)
+        self.assertIsNone(reason)
+
+    def test_canonical_sentence_matching_is_symmetric_and_paragraph_aware(
+        self,
+    ) -> None:
+        """文単位の完全一致は、ASCII 空白位置での折返し・インデント付き継続行
+        には対称正規化により頑健に一致し、段落分割 (空行。空白のみの行を含む)
+        を跨ぐ場合は一致しないこと。
         """
         sentence = "AはBでありCである。"
         split_by_paragraph = "AはB\n\nでありCである。"
-        soft_wrapped = "AはB\nでありCである。"
+        wrapped_at_ascii_space = "AはB\nでありCである。"
+        indented_continuation = "AはB\n    であり C である。"
         split_by_whitespace_only_blank_line = "AはB\n   \nでありCである。"
 
-        self.assertFalse(block_contains_paragraph_with(split_by_paragraph, sentence))
-        self.assertTrue(block_contains_paragraph_with(soft_wrapped, sentence))
         self.assertFalse(
-            block_contains_paragraph_with(
+            block_matches_canonical_sentence(split_by_paragraph, sentence)
+        )
+        self.assertTrue(
+            block_matches_canonical_sentence(wrapped_at_ascii_space, sentence)
+        )
+        self.assertTrue(
+            block_matches_canonical_sentence(indented_continuation, sentence)
+        )
+        self.assertFalse(
+            block_matches_canonical_sentence(
                 split_by_whitespace_only_blank_line, sentence
             )
         )
 
     def test_exact_budget_boundary_fails_strict_less_than(self) -> None:
-        """ちょうど 8,000 UTF-16 units の文字列は strict 未満 (`< 8000`) 判定で
-        fail すること。
+        """ちょうど 8,000 UTF-16 units の文字列は共有述語 within_size_budget が
+        strict 未満 (`< 8000`) 判定で fail させること。
         """
         text = "あ" * SIZE_BUDGET_UNITS
         self.assertEqual(SIZE_BUDGET_UNITS, utf16_length(text))
-        self.assertFalse(utf16_length(text) < SIZE_BUDGET_UNITS)
+        self.assertFalse(within_size_budget(utf16_length(text)))
 
     def test_shared_forbidden_predicate_catches_issue_prefix_without_digit(
         self,
@@ -584,8 +673,9 @@ class HelperSyntheticContractTests(unittest.TestCase):
 
     def test_missing_header_fails_closed(self) -> None:
         """冒頭 HTML コメントヘッダを持たないテキストは、ルールブロック自体は
-        正常に抽出できても面の解決全体が fail-closed (None) になること
-        (空文字列への silent fallback をせず、ヘッダ検査を空振りさせない)。
+        正常に抽出できても面の解決全体が fail-closed になり、失敗理由に
+        ヘッダ欠落であることが判別できること (空文字列への silent fallback を
+        せず、ヘッダ検査を空振りさせない)。
         """
         # 先頭が `<!--` で始まらないテキスト (マーカー自身が `<!-- ... -->` の
         # 形をしているため、マーカーを先頭に置くと誤って「ヘッダあり」と
@@ -595,7 +685,21 @@ class HelperSyntheticContractTests(unittest.TestCase):
         # rule_block 単体は正常に抽出できることを先に確認しておく。
         self.assertIsNotNone(rule_block(text))
         self.assertIsNone(leading_html_comment(text))
-        self.assertIsNone(compose_face(text))
+        block, header, reason = compose_face(text)
+        self.assertIsNone(block)
+        self.assertIsNone(header)
+        self.assertIn("ヘッダ", reason)
+
+    def test_header_narrative_vocabulary_blocklist_catches_known_words(self) -> None:
+        """ヘッダ限定の既知ナラティブ語彙ブロックリストが、識別子述語では
+        検出できない自由記述の経緯語彙 (「旧」「以前」等) を検出すること。
+        ルールブロック用の共有述語 (forbidden_history_matches) 単体では
+        検出できないことも合わせて確認する。
+        """
+        text = "この実装は旧バージョンを置き換えたものである"
+        self.assertEqual([], forbidden_history_matches(text))
+        self.assertIn("旧", forbidden_narrative_vocabulary_matches(text))
+        self.assertIn("旧", forbidden_header_matches(text))
 
 
 if __name__ == "__main__":
