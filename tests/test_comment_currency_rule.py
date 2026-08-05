@@ -10,22 +10,30 @@
    出現として数えない
 2. マーカーを保持するファイルを面ごとに一意に解決したうえで、そのルール本文
    ブロックが「## 」見出し行 (「説明は常に最新の内容のみ」を含む) で始まり、
-   ブロックを段落分割 → 文分割 (「。」区切り) → 対称正規化 (ASCII 空白・
-   タブ・改行の除去) した文要素の集合に対し、canonical 文セットの各文が
-   完全一致で存在すること (部分文字列包含ではない)
+   必須の構造要素ラベル (太字見出し + コロン、面ごとに異なる) を含み、
+   canonical 文セット (文単位の完全一致) を含むこと。さらにブロック全体が、
+   段落構造を保持したまま対称正規化した後 CONFIRMED_BLOCK_TEXT (配送本文の
+   確定内容の正本) と完全一致すること — 文単位・見出し・ラベルの
+   個別検査は canonical 要素を保持したままの追記 (追加型矛盾) を見逃すため、
+   ブロック全体一致が最終的な契約になる
 3. 各配送経路 — SessionStart (inject-always.sh の fable 配送・sonnet part 1
    self-gate 配送)、UserPromptSubmit (inject-rules-part.sh の sonnet part 2/3
    self-gate 配送、resolve-model-on-prompt.sh の Fable one-shot 補正配送)、
    SubagentStart (inject-subagent-rules.sh の配送) — が実際に生成する
    additionalContext の最大構成が UTF-16 code units 8,000 以下 (inject-always.sh
    の `-gt 8000` 縮退条件と整合する境界) に収まること (判定は単一の共有述語
-   within_size_budget を使う)
+   within_size_budget を使う)。段階的縮退ガードを持つ 2 経路 (inject-always.sh
+   系) は、縮退で落ちる要素が実際に残存していることも確認し、「縮退後の
+   payload がたまたま収まっただけ」を green にしない
 4. ルール本文ブロック自身、および面ごとに解決した冒頭 HTML コメントヘッダが、
    面固有の静的自己準拠述語 (static_surface_*、定義直前のコメント参照) が
    定める禁止対象の経緯記述 (issue/PR 番号・年月日。大文字小文字や年月日単位
    前の空白の表記ゆらぎを含む) を含まないこと。ヘッダはさらに既知ナラティブ
    語彙のブロックリストでも検査する (ルール本文は禁止形式を引用言及するため
    対象外)
+5. agent-discipline plugin の version (plugin.json) が、この機能追加が要求
+   する下限以上であること (既存の version policy 検査は patch bump のみでも
+   green になるため、この機能追加固有の下限を独立に固定する)
 
 面の解決 (resolve_face) は失敗原因 (マーカー 0 件 / 複数 part / ブロック抽出
 不能 / ヘッダ欠落) を判別可能な形で返し、全検査の失敗メッセージに実際の原因が
@@ -47,6 +55,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "prompts"
 SCRIPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "scripts"
+AGENT_DISCIPLINE_PLUGIN_JSON = (
+    REPO_ROOT / "plugins" / "agent-discipline" / ".claude-plugin" / "plugin.json"
+)
+
+# rule:comment-currency 追加が要求する agent-discipline plugin の version の
+# 下限。ちょうど 0.25.0 には固定しない (以上判定のみ) — 次回以降の bump で
+# 恒久テストが壊れるのを避けるため、下限のみを契約とする。
+MINIMUM_AGENT_DISCIPLINE_VERSION = (0, 25, 0)
 
 FABLE_MD = PROMPTS / "always-fable.md"
 SONNET_MD = {
@@ -55,11 +71,17 @@ SONNET_MD = {
     "always-sonnet-3.md": PROMPTS / "always-sonnet-3.md",
 }
 SUBAGENT_MD = PROMPTS / "subagent-rules.md"
+DELIVERY_NOTE_MD = PROMPTS / "delivery-note.md"
 
 INJECT_ALWAYS_SH = SCRIPTS / "inject-always.sh"
 INJECT_RULES_PART_SH = SCRIPTS / "inject-rules-part.sh"
 INJECT_SUBAGENT_RULES_SH = SCRIPTS / "inject-subagent-rules.sh"
 RESOLVE_MODEL_ON_PROMPT_SH = SCRIPTS / "resolve-model-on-prompt.sh"
+
+# inject-always.sh の段階的縮退 (8K 超過時) が最初に落とす要素の接頭辞。
+# additionalContext にこれが残っていれば、縮退の第 1 段階が発動していない
+# ことを確認できる。
+PATH_LINE_PREFIX = "(参照パス) "
 
 MARKER = "<!-- rule:comment-currency -->"
 SIZE_BUDGET_UNITS = 8000
@@ -144,6 +166,22 @@ STRUCTURAL_ELEMENT_LABELS = {
     "always-fable.md": ("**なぜ**:", "**指示**:", "**境界**:"),
     "always-sonnet-{1,2,3}.md": ("**適用範囲**:", "**なぜ**:", "**境界**:", "**例**:"),
     "subagent-rules.md": ("**適用範囲**:", "**なぜ**:"),
+}
+
+# 配送する確定本文 3 面の全文 (マーカー直後から末尾まで、rule_block() の
+# 抽出単位と同一)。ブロック全体一致検査
+# (test_rule_block_matches_confirmed_body_exactly) の正本であり、この
+# 定数からそのまま各面の確定本文を逐語復元できる。
+CONFIRMED_BLOCK_TEXT = {
+    'always-fable.md': (
+        '\n## 10. 説明は常に最新の内容のみ\n\n**なぜ**: 履歴の正規の置き場は git log / PR / issue であり、コメント・README に書いた経緯は更新されず腐る。読者の多くは AI エージェントでリポジトリ内テキストを信頼ソースとして扱うため、古い経緯記述は誤誘導になる。セッションへ注入される文書では経緯記述がトークンと配送予算を恒常的に消費する。\n\n**指示**: コードコメント・docstring・README 等の説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説 (版数・日付・issue/PR 番号による過去の変更の記述、旧実装の説明、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照) を書かない。履歴と検討経緯は commit message・PR 説明・issue に置く。契約・制約は issue 参照に頼らずその場で完結して書き、コード変更で説明が古くなる場合は同時に更新する。適用は touch-time — 新規作成・意味変更した説明ブロックに適用し、指示のない一括清掃や単純移設・整形での書き換え波及は行わない。\n\n**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記は証拠の鮮度情報として許可する。commit message・PR 説明・issue body、および明示的に履歴を目的とする文書 (README の `### vX.Y.Z → vX.Y.Z` 変更履歴節を含む) は対象外。過去に言及しない現在形の設計理由の説明は禁止対象ではない。\n\n'
+    ),
+    'always-sonnet-{1,2,3}.md': (
+        '\n## 10. 説明は常に最新の内容のみ\n\n**適用範囲**: コードコメント・docstring・README 等、リポジトリ内の説明文書を新規作成・編集するすべての場面に適用する。\n\n説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説を書かない。禁止対象: 版数・日付・issue/PR 番号による過去の変更の記述 (「vX で追加」「#N で移設」等)、旧実装の説明 (「以前は〜だったが」)、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照。履歴と検討経緯は commit message・PR 説明・issue に置く。契約・制約は issue 参照に頼らず、その場で読んで完結するように書く。コード変更で対応する説明が古くなる場合は同時に更新する。\n\n適用は touch-time: 新規作成・意味を変更した説明ブロックに適用する。単純移設・整形のみの変更で既存記述の書き換えに波及させず、指示のない一括清掃を行わない。\n\n**なぜ**: 履歴の正規の置き場は git log / PR / issue であり、コメント・README に書いた経緯は更新されず腐る。読者の多くは AI エージェントでリポジトリ内テキストを信頼ソースとして扱うため、古い経緯記述は誤誘導になる。セッションへ注入される文書では経緯記述が毎セッションのトークンと配送予算を消費する。\n\n**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記 (「YYYY-MM-DD 実測」「バージョン X で確認」等) は証拠の鮮度情報として許可する。commit message・PR 説明・issue body、および明示的に履歴を目的とする文書 (README の `### vX.Y.Z → vX.Y.Z` 変更履歴節を含む) は対象外。過去に言及しない現在形の設計理由 (「なぜこうするか」「X 方式は〜のため使わない」) は禁止対象ではない。\n\n**例**:\n- 悪い例: リファクタリング時に「以前の実装を issue 対応で置き換えた」という経緯コメントを版数・issue 番号付きで書き添える\n- 良い例: 現在の実装が前提とする制約のみをコメントに書き、置き換えの経緯は commit message と PR 説明に書く\n'
+    ),
+    'subagent-rules.md': (
+        '\n## 5. 説明は常に最新の内容のみ\n\n**適用範囲**: コードコメント・docstring・README 等、リポジトリ内の説明文書を新規作成・編集するすべての場面に適用する。\n\n説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説 (版数・日付・issue/PR 番号による過去の変更の記述、旧実装の説明、出典としての issue/PR 番号参照) を書かない。履歴は commit message・PR 説明・issue に置く。契約・制約は issue 参照に頼らずその場で完結して書き、編集で説明が古くなる場合は同時に更新する。適用は touch-time — 新規作成・意味変更した説明ブロックに適用し、指示のない一括清掃を行わない。commit message・PR 説明・issue body と、明示的に履歴を目的とする文書 (README の変更履歴節を含む) は対象外。例外: 撤去条件付き暫定措置の「現在の不具合・撤去条件・確認方法」(導入日なし) と、現行の主張への検証日・検証環境の付記。過去に言及しない現在形の設計理由の説明は禁止対象ではない。\n\n**なぜ**: 履歴の正規の置き場は git であり、説明文書内の経緯は更新されず腐って後続の読者 (主に AI エージェント) を誤誘導する。\n'
+    ),
 }
 
 FORBIDDEN_ISSUE_NUMBER_PATTERN = re.compile(r"#[0-9]")
@@ -248,6 +286,16 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def parse_semver_triple(version: str) -> tuple[int, int, int]:
+    """"X.Y.Z..." 形式の文字列の先頭 3 要素を (major, minor, patch) の int
+    タプルに変換する (pre-release/build メタデータが付いていても patch の
+    数字部分のみを読む)。
+    """
+    major, minor, patch = version.split(".")[:3]
+    patch_number = re.match(r"[0-9]+", patch)
+    return int(major), int(minor), int(patch_number.group(0) if patch_number else "0")
+
+
 def utf16_length(text: str) -> int:
     """UTF-16 code unit 数を返す (配送予算の計測単位)。"""
     return len(text.encode("utf-16-le")) // 2
@@ -336,20 +384,31 @@ def is_ascii_blank_line(line: str) -> bool:
     Python 既定の `str.strip()` は全角空白 (U+3000) や NBSP 等の Unicode
     空白も除去するため、それらのみからなる行を誤って「空行」と判定して
     しまう。Markdown (CommonMark) の空行判定は ASCII 空白・タブのみを
-    非有意とするため、この関数はそれに合わせて ASCII 限定で判定する。
-    段落分割 (split_into_paragraphs)・見出し行検出 (block_heading_line) と
-    文正規化 (strip_ascii_whitespace) が同一の空白定義を共有するための
-    単一ソース。
+    非有意とするため、段落分割 (split_into_paragraphs) はこの ASCII 限定
+    判定を使う (全角空白のみの行は Markdown 上 soft-wrap の継続行になり、
+    新しい段落を作らないため)。
     """
     return BLANK_LINE_PATTERN.match(line) is not None
 
 
+def is_unicode_blank_line(line: str) -> bool:
+    """line が (全角空白・NBSP 等を含む) Unicode 空白のみ、または完全な
+    空文字列で構成されるかを判定する (Python 既定の `str.strip()` と同じ判定)。
+
+    段落分割 (is_ascii_blank_line、Markdown の空行判定に合わせ ASCII 限定)
+    とは別の目的 — 見出し行探索 (block_heading_line) では、Markdown 上の
+    段落境界とは独立に「視覚的に空白しかない行」を先頭候補から除外したい
+    ため、こちらは Unicode 全体で判定する。
+    """
+    return line.strip() == ""
+
+
 def block_heading_line(block: str) -> str | None:
-    """block 内の最初の非空行 (ASCII 空白・タブのみの行は空行扱い) を返す
+    """block 内の最初の非空行 (Unicode 空白のみの行は空行扱い) を返す
     (見出し行の検査に使う)。無ければ None。
     """
     for line in block.splitlines():
-        if not is_ascii_blank_line(line):
+        if not is_unicode_blank_line(line):
             return line
     return None
 
@@ -376,14 +435,15 @@ def split_into_paragraphs(text: str) -> list[str]:
     """text を空行区切りの段落に分割する。
 
     空行は完全な空文字列の行だけでなく、ASCII 空白・タブのみの行
-    (`^[ \\t]*$`、is_ascii_blank_line 参照) も区切りとみなす (厳密な
-    `\\n\\n` 一致では、空白入り空行を挟んだ 2 段落が 1 段落として扱われて
-    しまう)。全角空白 (U+3000) や NBSP 等の Unicode 空白のみの行は
-    Markdown 上は空行にならない (soft-wrap の継続行として扱われる) ため
-    区切りとみなさない — is_ascii_blank_line により、文正規化
-    (strip_ascii_whitespace) と同一の ASCII 限定空白定義を共有する。
-    連続する空行はまとめて 1 つの区切りとして扱い、前後の空行のみからなる
-    要素は含めない。
+    (行頭から行末までが ASCII 空白・タブのみ、is_ascii_blank_line 参照) も
+    区切りとみなす (厳密な二重改行一致では、空白入り空行を挟んだ 2 段落が
+    1 段落として扱われてしまう)。全角空白 (U+3000) や NBSP 等の Unicode
+    空白のみの行は Markdown 上は空行にならない (soft-wrap の継続行として
+    扱われる) ため区切りとみなさない (is_ascii_blank_line 参照)。段落内部の
+    空白 (全角空白を含む) は後続の文正規化 (strip_whitespace) が対称に
+    除去するため、ここでの ASCII 限定は段落境界の判定にのみ影響し、内容の
+    一致判定には影響しない。連続する空行はまとめて 1 つの区切りとして扱い、
+    前後の空行のみからなる要素は含めない。
     """
     paragraphs: list[str] = []
     current: list[str] = []
@@ -399,41 +459,45 @@ def split_into_paragraphs(text: str) -> list[str]:
     return paragraphs
 
 
-def strip_ascii_whitespace(text: str) -> str:
-    """text から ASCII 空白・タブ・改行 (CR/LF) をすべて除去する (対称正規化)。
+def strip_whitespace(text: str) -> str:
+    """text から Unicode 空白 (ASCII 空白・タブ・改行に加え、全角空白 U+3000・
+    NBSP 等を含む) をすべて除去する (対称正規化)。
 
-    候補側 (ブロックから抽出した文) と canonical 側の双方に同じ関数を適用する
-    ことで、継続行の先頭インデントや句読点隣接の折返し空白による非対称を
-    解消する。段落分割 (split_into_paragraphs) の後に適用する — 空行・空白
-    のみの行を挟んだ 2 段落は、この関数を通す前の段階で既に別要素になって
-    いるため、ここで空白を除去しても再結合しない。
+    候補側 (ブロックから抽出した文・段落) と canonical/confirmed body 側の
+    双方に同じ関数を適用することで、継続行の先頭インデントや句読点隣接の
+    折返し空白による非対称を解消する。段落分割 (split_into_paragraphs) の
+    後に適用する — 空行・空白のみの行を挟んだ 2 段落は、この関数を通す前の
+    段階で既に別要素になっているため、ここで空白を除去しても再結合しない。
+    段落分割自体は ASCII 限定の空行判定 (is_ascii_blank_line) のままだが、
+    全角空白のみの行は段落を割らずに同一段落へ soft-wrap 連結されたうえで
+    ここで除去されるため、比較両辺を対称に扱える。
     """
-    return re.sub(r"[ \t\r\n]+", "", text)
+    return re.sub(r"\s+", "", text)
 
 
 def block_sentence_set(block: str) -> set[str]:
-    """block を段落 → 文 (「。」区切り) に分割し、各文を strip_ascii_whitespace
+    """block を段落 → 文 (「。」区切り) に分割し、各文を strip_whitespace
     で正規化した集合を返す。
 
-    段落分割を先に行うため、空行 (空白のみの行を含む) を挟んで 2 段落に
-    またがる文字列は 1 つの文として結合されない。
+    段落分割を先に行うため、空行 (ASCII 空白のみの行を含む) を挟んで 2 段落
+    にまたがる文字列は 1 つの文として結合されない。
     """
     sentences: set[str] = set()
     for paragraph in split_into_paragraphs(block):
         for sentence in re.findall(r"[^。]*。", paragraph):
-            sentences.add(strip_ascii_whitespace(sentence))
+            sentences.add(strip_whitespace(sentence))
     return sentences
 
 
 def block_matches_canonical_sentence(block: str, canonical: str) -> bool:
     """block 内のいずれかの文要素が canonical と完全一致するか (対称正規化後)。"""
-    return strip_ascii_whitespace(canonical) in block_sentence_set(block)
+    return strip_whitespace(canonical) in block_sentence_set(block)
 
 
 def missing_canonical_sentences(block: str, canonicals: tuple[str, ...]) -> list[str]:
     """canonicals のうち block 内に文要素として完全一致で存在しないものを返す。"""
     sentences = block_sentence_set(block)
-    return [c for c in canonicals if strip_ascii_whitespace(c) not in sentences]
+    return [c for c in canonicals if strip_whitespace(c) not in sentences]
 
 
 def missing_structural_labels(block: str, labels: tuple[str, ...]) -> list[str]:
@@ -453,6 +517,20 @@ def missing_structural_labels(block: str, labels: tuple[str, ...]) -> list[str]:
         if pattern.search(block) is None:
             missing.append(label)
     return missing
+
+
+def normalize_block_for_exact_match(block: str) -> tuple[str, ...]:
+    """block を段落単位に正規化した文字列のタプルを返す (ブロック全体一致検査用)。
+
+    段落構造 (空行区切り、split_into_paragraphs による ASCII 限定判定) は
+    意味を持つ配送単位として保持し、各段落内部の空白のみを strip_whitespace
+    (対称正規化、Unicode 空白を含む) で除去する。この関数を実ファイル側・
+    CONFIRMED_BLOCK_TEXT 定数側の双方に適用することで対称性を保つ。段落の
+    個数・順序まで固定されるため、canonical 文・見出し・構造ラベルを全部
+    保持したまま新しい文や段落を追記する「追加型矛盾」(例: 「ただし、過去の
+    変更履歴を書いてよい。」を末尾に追記する) を見逃さない。
+    """
+    return tuple(strip_whitespace(p) for p in split_into_paragraphs(block))
 
 
 def resolve_marker_holder(named_texts: dict[str, str]) -> tuple[str | None, str | None]:
@@ -581,6 +659,47 @@ def delivery_sonnet_part1_self_gate(tmp_dir: str) -> str:
     return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir)
 
 
+def delivery_note_payload_text() -> str:
+    """delivery-note.md 本文からヘッダコメントを除いた配送ペイロード部分を返す。
+
+    inject-always.sh の NOTE 変数 (`$(cat delivery-note.md)`) がそのまま
+    additionalContext に埋め込まれるため、ヘッダコメント除去後のペイロード
+    文字列が context に残存していれば、この要素が縮退で落とされていないと
+    確認できる。
+    """
+    text = read(DELIVERY_NOTE_MD)
+    header = leading_html_comment(text)
+    payload = text[len(header):] if header else text
+    return payload.strip()
+
+
+def pre_degradation_missing_elements(context: str) -> list[str]:
+    """inject-always.sh の段階的縮退 (8K 超過時に (参照パス) 行 → delivery-note
+    の順で落とす) で失われる要素が context から欠けていないかを確認する。
+
+    段階的縮退ガードを持つ経路 (delivery_fable / delivery_sonnet_part1_self_gate)
+    のサイズ計測は、縮退後 payload がたまたま予算内に収まっただけの場合も
+    green になりうる (「optional 要素を落として収まった」盲点)。この述語は
+    縮退で落ちるはずの要素が実際に残存していることを確認し、「縮退なしで
+    予算内」であることを保証する。
+    """
+    missing = []
+    if PATH_LINE_PREFIX not in context:
+        missing.append("(参照パス) 行が無い (縮退の疑い)")
+    note_payload = delivery_note_payload_text()
+    if note_payload and note_payload not in context:
+        missing.append("delivery-note.md の配送メモ本文が無い (縮退の疑い)")
+    return missing
+
+
+# 段階的縮退ガードを持つ 2 経路 (inject-always.sh 系のみ。inject-rules-part.sh /
+# inject-subagent-rules.sh / resolve-model-on-prompt.sh は縮退ガードを持たない)。
+PRE_DEGRADATION_DELIVERY_BUILDERS = {
+    "fable 向け always 配送 (inject-always.sh, model=fable)": delivery_fable,
+    "sonnet part 1 配送 (inject-always.sh, self-gate)": delivery_sonnet_part1_self_gate,
+}
+
+
 def delivery_sonnet_part_self_gate(part: str, tmp_dir: str) -> str:
     """UserPromptSubmit (inject-rules-part.sh <part>) が self-gate 付きで配送する、
     part-self-gate.md + always-sonnet-<part>.md (part 2/3 の最大構成)。
@@ -651,6 +770,13 @@ class MarkerPresenceTests(unittest.TestCase):
 class CanonicalBodyTests(unittest.TestCase):
     """各配送面のルールブロックに canonical 文が文単位の完全一致で含まれ、
     期待される見出し行で始まること。
+
+    文単位・見出し・構造ラベルの個別検査 (test_canonical_sentences_present_in_
+    rule_block 等) は診断メッセージの分かりやすさのために残す (冗長化は許容
+    する) が、これらは canonical 文・見出し・ラベルさえ保持されていれば新しい
+    文や段落の追記を見逃す「追加型矛盾」に弱い。ブロック全体一致検査
+    (test_rule_block_matches_confirmed_body_exactly) がこの盲点を塞ぐ最終的な
+    契約であり、CONFIRMED_BLOCK_TEXT が配送する確定本文の正本となる。
     """
 
     def test_canonical_sentences_present_in_rule_block(self) -> None:
@@ -692,6 +818,29 @@ class CanonicalBodyTests(unittest.TestCase):
                 violations.append(f"{face}: {missing}")
         self.assertEqual(
             [], violations, f"ルールブロックに必須の構造要素ラベルが無い面: {violations}"
+        )
+
+    def test_rule_block_matches_confirmed_body_exactly(self) -> None:
+        """各面のルールブロック全体が、正規化 (段落構造を保持したまま両辺
+        対称に空白を除去) した後 CONFIRMED_BLOCK_TEXT と完全一致すること。
+
+        文単位・見出し・構造ラベルを全部保持したまま新しい文や段落を追記
+        しても (例: 末尾に「ただし、過去の変更履歴を書いてよい。」を追記)
+        個別検査は green のままになりうる。本検査は段落の個数・順序まで含む
+        ブロック全体を確定本文と突き合わせることでこれを塞ぐ。
+        """
+        violations = []
+        for face in FACES:
+            _path, block, _header, reason = resolve_face(face)
+            if reason is not None:
+                violations.append(f"{face} ({reason})")
+                continue
+            actual = normalize_block_for_exact_match(block)
+            expected = normalize_block_for_exact_match(CONFIRMED_BLOCK_TEXT[face])
+            if actual != expected:
+                violations.append(face)
+        self.assertEqual(
+            [], violations, f"ルールブロック全体が確定本文と完全一致しない面: {violations}"
         )
 
 
@@ -737,6 +886,24 @@ class SizeBudgetTests(unittest.TestCase):
             f"配送予算 ({SIZE_BUDGET_UNITS} UTF-16 units 以下) を超過: {violations}",
         )
 
+    def test_gradual_degradation_paths_deliver_without_degrading(self) -> None:
+        """段階的縮退ガードを持つ 2 経路 (inject-always.sh 系) が、縮退で
+        落ちる要素 ((参照パス) 行・delivery-note.md の配送メモ本文) を
+        残したまま予算内であることを確認する (PRE_DEGRADATION_DELIVERY_
+        BUILDERS 参照)。縮退後の payload がたまたま収まっただけ、という
+        盲点を塞ぐ。
+        """
+        violations = []
+        for label, builder in PRE_DEGRADATION_DELIVERY_BUILDERS.items():
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                context = builder(tmp_dir)
+            missing = pre_degradation_missing_elements(context)
+            if missing:
+                violations.append(f"{label}: {missing}")
+        self.assertEqual(
+            [], violations, f"縮退なし予算内の保証が崩れている経路: {violations}"
+        )
+
 
 class RuleBlockSelfComplianceTests(unittest.TestCase):
     """ルール本文ブロック自身が禁止対象の経緯記述を含まないこと (自己準拠)。"""
@@ -774,6 +941,28 @@ class HeaderSelfComplianceTests(unittest.TestCase):
             if found:
                 violations.append(f"{face} ({', '.join(found)} を含む)")
         self.assertEqual([], violations, f"ヘッダの自己準拠違反: {violations}")
+
+
+class AgentDisciplinePluginVersionFloorTests(unittest.TestCase):
+    """agent-discipline plugin の version が rule:comment-currency 追加分の
+    bump を満たすこと。
+
+    既存の version policy 検査 (scripts/check_plugin_versions.py) は変更
+    plugin の bump 発生の有無のみを見るため、patch bump のみ (例: 0.24.0 →
+    0.24.1) に留めても green になる。本テストはこの機能追加が要求する具体的
+    な version floor (0.25.0 以上) を独立に固定する。
+    """
+
+    def test_plugin_json_version_is_at_least_the_floor(self) -> None:
+        data = json.loads(read(AGENT_DISCIPLINE_PLUGIN_JSON))
+        version_str = data["version"]
+        version = parse_semver_triple(version_str)
+        floor_str = ".".join(str(part) for part in MINIMUM_AGENT_DISCIPLINE_VERSION)
+        self.assertGreaterEqual(
+            version,
+            MINIMUM_AGENT_DISCIPLINE_VERSION,
+            f"plugin.json の version {version_str} が {floor_str} 未満",
+        )
 
 
 class HelperSyntheticContractTests(unittest.TestCase):
@@ -933,15 +1122,17 @@ class HelperSyntheticContractTests(unittest.TestCase):
     def test_fullwidth_space_only_line_is_not_a_paragraph_boundary(self) -> None:
         """全角空白 (U+3000) のみの行は ASCII 限定の空行判定では空行とみなされず、
         段落区切りにならないこと (soft-wrap の継続行として 1 段落に連結される)。
-
-        Python 既定の `str.strip()` は全角空白や NBSP 等の Unicode 空白も
-        除去してしまうため、これらのみからなる行を誤って空行 (段落区切り) と
-        判定してしまう回帰を防ぐ。対比として、ASCII 空白のみの行は従来どおり
-        段落区切りになることも確認する。
+        連結後は文正規化 (strip_whitespace) が全角空白も除去するため、
+        canonical 文と一致すること。対比として、ASCII 空白のみの行は従来
+        どおり段落区切りになる (soft-wrap されない) ことも確認する。
         """
+        sentence = "AはBでありCである。"
         text_with_fullwidth_space_line = "AはB\n　\nでありCである。"
         paragraphs = split_into_paragraphs(text_with_fullwidth_space_line)
         self.assertEqual([text_with_fullwidth_space_line], paragraphs)
+        self.assertTrue(
+            block_matches_canonical_sentence(text_with_fullwidth_space_line, sentence)
+        )
 
         text_with_ascii_space_line = "AはB\n \nでありCである。"
         self.assertEqual(2, len(split_into_paragraphs(text_with_ascii_space_line)))
