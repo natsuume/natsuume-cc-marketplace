@@ -133,6 +133,16 @@ CANONICAL_SENTENCES = {
     ),
 }
 
+# 各面のルールブロックが持つべき構造要素ラベル (太字見出し + コロン)。規律の
+# 記述形式 (「意図 (なぜ) + 短い指示 + 境界 (いつ例外か)」等) が要求する見出しの
+# 存在を検査する。文言の内容 (CANONICAL_SENTENCES) とは別に、規律としての骨格
+# が欠落していないかを確認する。
+STRUCTURAL_ELEMENT_LABELS = {
+    "always-fable.md": ("**なぜ**:", "**指示**:", "**境界**:"),
+    "always-sonnet-{1,2,3}.md": ("**適用範囲**:", "**なぜ**:", "**境界**:", "**例**:"),
+    "subagent-rules.md": ("**適用範囲**:", "**なぜ**:"),
+}
+
 FORBIDDEN_ISSUE_NUMBER_PATTERN = re.compile(r"#[0-9]")
 # issue 参照接頭辞は大文字小文字を区別しない (「issue #」「Issue #」「ISSUE #」)。
 FORBIDDEN_ISSUE_PREFIX_PATTERN = re.compile(r"issue #", re.IGNORECASE)
@@ -250,11 +260,21 @@ def within_size_budget(length: int) -> bool:
 
 
 def leading_html_comment(text: str) -> str | None:
-    """ファイル冒頭の HTML コメントブロック (`<!--` 〜 `-->`) を返す。無ければ None。"""
+    """ファイル冒頭の HTML コメントブロック (`<!--` 〜 `-->`) を返す。無ければ None。
+
+    冒頭コメントが構造マーカー (`<!-- rule:` / `<!-- subagent-rule:` 形式)
+    そのものである場合は、記述的なヘッダではなくルール本文の構造マーカーと
+    みなし、ヘッダとしては受理しない (None を返す)。記述ヘッダが失われて
+    ファイル先頭が rule マーカーになった場合、compose_face 側で「ヘッダ欠落」
+    として fail-closed になる (空のヘッダへの silent fallback をしない)。
+    """
     match = re.match(r"\A<!--.*?-->", text, re.DOTALL)
     if match is None:
         return None
-    return match.group(0)
+    comment = match.group(0)
+    if STRUCTURAL_MARKER_PATTERN.match(comment):
+        return None
+    return comment
 
 
 def marker_line_pattern(marker: str = MARKER) -> re.Pattern[str]:
@@ -384,6 +404,16 @@ def missing_canonical_sentences(block: str, canonicals: tuple[str, ...]) -> list
     """canonicals のうち block 内に文要素として完全一致で存在しないものを返す。"""
     sentences = block_sentence_set(block)
     return [c for c in canonicals if strip_ascii_whitespace(c) not in sentences]
+
+
+def missing_structural_labels(block: str, labels: tuple[str, ...]) -> list[str]:
+    """labels のうち block 内に部分文字列として存在しないものを返す。
+
+    STRUCTURAL_ELEMENT_LABELS の各ラベル (太字見出し + コロン) が、規律の
+    記述形式が要求する段落として実在するかを検査する (部分文字列照合で足りる
+    — 見出し自体は短い定型句であり、文単位の完全一致は要求しない)。
+    """
+    return [label for label in labels if label not in block]
 
 
 def resolve_marker_holder(named_texts: dict[str, str]) -> tuple[str | None, str | None]:
@@ -611,6 +641,20 @@ class CanonicalBodyTests(unittest.TestCase):
             [], violations, f"ルールブロック先頭に期待される見出し行が無い面: {violations}"
         )
 
+    def test_rule_block_contains_required_structural_labels(self) -> None:
+        violations = []
+        for face in FACES:
+            _path, block, _header, reason = resolve_face(face)
+            if reason is not None:
+                violations.append(f"{face} ({reason})")
+                continue
+            missing = missing_structural_labels(block, STRUCTURAL_ELEMENT_LABELS[face])
+            if missing:
+                violations.append(f"{face}: {missing}")
+        self.assertEqual(
+            [], violations, f"ルールブロックに必須の構造要素ラベルが無い面: {violations}"
+        )
+
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class SizeBudgetTests(unittest.TestCase):
@@ -744,6 +788,22 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertFalse(block_starts_with_expected_heading(four_spaces))
         self.assertFalse(block_starts_with_expected_heading(tab_indent))
 
+    def test_structural_label_check_fails_when_why_paragraph_missing(self) -> None:
+        """「なぜ」段落 (`**なぜ**:`) を欠いた synthetic ブロックで、必須構造
+        要素ラベルの検査がその欠落を検出すること。
+        """
+        block_without_why = (
+            "## 10. synthetic heading\n\n"
+            "**指示**: do the thing。\n\n"
+            "**境界**: except when not。\n"
+        )
+        missing = missing_structural_labels(
+            block_without_why, STRUCTURAL_ELEMENT_LABELS["always-fable.md"]
+        )
+        self.assertIn("**なぜ**:", missing)
+        self.assertNotIn("**指示**:", missing)
+        self.assertNotIn("**境界**:", missing)
+
     def test_marker_must_be_a_standalone_line(self) -> None:
         """マーカーが prose 文中や inline code 中に偶発的に現れても、行全体
         一致 (行頭から行末までがマーカーのみ) でなければ検出されないこと。
@@ -849,9 +909,9 @@ class HelperSyntheticContractTests(unittest.TestCase):
         ヘッダ欠落であることが判別できること (空文字列への silent fallback を
         せず、ヘッダ検査を空振りさせない)。
         """
-        # 先頭が `<!--` で始まらないテキスト (マーカー自身が `<!-- ... -->` の
-        # 形をしているため、マーカーを先頭に置くと誤って「ヘッダあり」と
-        # 判定されてしまう。先頭に非コメントの地の文を置いて回避する)。
+        # 先頭が `<!--` で始まらない、ヘッダとなる HTML コメントが全く無い
+        # テキスト (マーカーが先頭に来て構造マーカーとして誤受理されるケースは
+        # test_leading_marker_line_is_not_accepted_as_header を参照)。
         text = f"no header here\n\n{MARKER}\n## synthetic heading\n\nblock body\n\n---\n"
         # fail-closed の原因がヘッダ欠如そのものであることを明確にするため、
         # rule_block 単体は正常に抽出できることを先に確認しておく。
@@ -861,6 +921,22 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertIsNone(block)
         self.assertIsNone(header)
         self.assertIn("ヘッダ", reason)
+
+    def test_leading_marker_line_is_not_accepted_as_header(self) -> None:
+        """ファイル先頭が記述的なヘッダではなく構造マーカー行そのもの
+        (`<!-- rule:` / `<!-- subagent-rule:` 形式) である場合、ヘッダとして
+        受理せず fail-closed (ヘッダ欠落扱い) になること (記述ヘッダが失われて
+        ファイル先頭が rule マーカーになった場合の検出)。
+        """
+        text = f"{MARKER}\n## synthetic heading\n\nblock body\n\n---\n"
+        self.assertIsNone(leading_html_comment(text))
+        block, header, reason = compose_face(text)
+        self.assertIsNone(block)
+        self.assertIsNone(header)
+        self.assertIn("ヘッダ", reason)
+
+        subagent_style_marker_text = "<!-- subagent-rule:report-facts -->\nbody\n"
+        self.assertIsNone(leading_html_comment(subagent_style_marker_text))
 
     def test_header_narrative_vocabulary_blocklist_catches_known_words(self) -> None:
         """ヘッダ限定の既知ナラティブ語彙ブロックリストが、識別子述語では
