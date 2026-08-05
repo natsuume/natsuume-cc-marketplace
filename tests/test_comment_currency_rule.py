@@ -326,10 +326,30 @@ def rule_block(text: str, marker: str = MARKER) -> str | None:
     return text[content_start:end]
 
 
+BLANK_LINE_PATTERN = re.compile(r"^[ \t]*$")
+
+
+def is_ascii_blank_line(line: str) -> bool:
+    """line が ASCII 空白・タブのみ (または完全な空文字列) で構成されるかを
+    判定する。
+
+    Python 既定の `str.strip()` は全角空白 (U+3000) や NBSP 等の Unicode
+    空白も除去するため、それらのみからなる行を誤って「空行」と判定して
+    しまう。Markdown (CommonMark) の空行判定は ASCII 空白・タブのみを
+    非有意とするため、この関数はそれに合わせて ASCII 限定で判定する。
+    段落分割 (split_into_paragraphs)・見出し行検出 (block_heading_line) と
+    文正規化 (strip_ascii_whitespace) が同一の空白定義を共有するための
+    単一ソース。
+    """
+    return BLANK_LINE_PATTERN.match(line) is not None
+
+
 def block_heading_line(block: str) -> str | None:
-    """block 内の最初の非空行を返す (見出し行の検査に使う)。無ければ None。"""
+    """block 内の最初の非空行 (ASCII 空白・タブのみの行は空行扱い) を返す
+    (見出し行の検査に使う)。無ければ None。
+    """
     for line in block.splitlines():
-        if line.strip() != "":
+        if not is_ascii_blank_line(line):
             return line
     return None
 
@@ -355,15 +375,20 @@ def block_starts_with_expected_heading(block: str) -> bool:
 def split_into_paragraphs(text: str) -> list[str]:
     """text を空行区切りの段落に分割する。
 
-    空行は完全な空文字列の行だけでなく、空白・タブのみの行 (`^[ \\t]+$`) も
-    区切りとみなす (厳密な `\\n\\n` 一致では、空白入り空行を挟んだ 2 段落が
-    1 段落として扱われてしまう)。連続する空行はまとめて 1 つの区切りとして
-    扱い、前後の空行のみからなる要素は含めない。
+    空行は完全な空文字列の行だけでなく、ASCII 空白・タブのみの行
+    (`^[ \\t]*$`、is_ascii_blank_line 参照) も区切りとみなす (厳密な
+    `\\n\\n` 一致では、空白入り空行を挟んだ 2 段落が 1 段落として扱われて
+    しまう)。全角空白 (U+3000) や NBSP 等の Unicode 空白のみの行は
+    Markdown 上は空行にならない (soft-wrap の継続行として扱われる) ため
+    区切りとみなさない — is_ascii_blank_line により、文正規化
+    (strip_ascii_whitespace) と同一の ASCII 限定空白定義を共有する。
+    連続する空行はまとめて 1 つの区切りとして扱い、前後の空行のみからなる
+    要素は含めない。
     """
     paragraphs: list[str] = []
     current: list[str] = []
     for line in text.split("\n"):
-        if line.strip() == "":
+        if is_ascii_blank_line(line):
             if current:
                 paragraphs.append("\n".join(current))
                 current = []
@@ -412,13 +437,22 @@ def missing_canonical_sentences(block: str, canonicals: tuple[str, ...]) -> list
 
 
 def missing_structural_labels(block: str, labels: tuple[str, ...]) -> list[str]:
-    """labels のうち block 内に部分文字列として存在しないものを返す。
+    """labels のうち、block 内のいずれの行の先頭 (空白 3 個以下の字下げまで
+    許容、タブ字下げは不可) にも現れないものを返す。
 
     STRUCTURAL_ELEMENT_LABELS の各ラベル (太字見出し + コロン) が、規律の
-    記述形式が要求する段落として実在するかを検査する (部分文字列照合で足りる
-    — 見出し自体は短い定型句であり、文単位の完全一致は要求しない)。
+    記述形式が要求する段落として実在するかを検査する。単純な部分文字列包含
+    では、実際の構造段落が削除されていても prose や例文中の偶発出現で
+    「ラベルあり」と誤判定される (false-green) ため、マーカー行アンカー化
+    (marker_line_pattern)・見出し字下げ規則 (HEADING_INDENT_PATTERN) と同じ
+    発想で行頭アンカーの一致に限定する。
     """
-    return [label for label in labels if label not in block]
+    missing = []
+    for label in labels:
+        pattern = re.compile(r"(?m)^ {0,3}" + re.escape(label))
+        if pattern.search(block) is None:
+            missing.append(label)
+    return missing
 
 
 def resolve_marker_holder(named_texts: dict[str, str]) -> tuple[str | None, str | None]:
@@ -810,6 +844,25 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertNotIn("**指示**:", missing)
         self.assertNotIn("**境界**:", missing)
 
+    def test_structural_label_check_requires_line_start_anchor(self) -> None:
+        """構造要素ラベルが行頭ではなく prose 文中にのみ偶発的に出現する
+        block では、そのラベルが「無い」ものとして検出されること (部分文字列
+        包含への回帰を防ぐ false-green ガード)。
+        """
+        block_with_prose_only_mention = (
+            "## 10. synthetic heading\n\n"
+            "This paragraph casually mentions **なぜ**: as an example phrase, "
+            "not as an actual why-paragraph heading。\n\n"
+            "**指示**: do the thing。\n\n"
+            "**境界**: except when not。\n"
+        )
+        missing = missing_structural_labels(
+            block_with_prose_only_mention, STRUCTURAL_ELEMENT_LABELS["always-fable.md"]
+        )
+        self.assertIn("**なぜ**:", missing)
+        self.assertNotIn("**指示**:", missing)
+        self.assertNotIn("**境界**:", missing)
+
     def test_marker_must_be_a_standalone_line(self) -> None:
         """マーカーが prose 文中や inline code 中に偶発的に現れても、行全体
         一致 (行頭から行末までがマーカーのみ) でなければ検出されないこと。
@@ -876,6 +929,22 @@ class HelperSyntheticContractTests(unittest.TestCase):
                 split_by_whitespace_only_blank_line, sentence
             )
         )
+
+    def test_fullwidth_space_only_line_is_not_a_paragraph_boundary(self) -> None:
+        """全角空白 (U+3000) のみの行は ASCII 限定の空行判定では空行とみなされず、
+        段落区切りにならないこと (soft-wrap の継続行として 1 段落に連結される)。
+
+        Python 既定の `str.strip()` は全角空白や NBSP 等の Unicode 空白も
+        除去してしまうため、これらのみからなる行を誤って空行 (段落区切り) と
+        判定してしまう回帰を防ぐ。対比として、ASCII 空白のみの行は従来どおり
+        段落区切りになることも確認する。
+        """
+        text_with_fullwidth_space_line = "AはB\n　\nでありCである。"
+        paragraphs = split_into_paragraphs(text_with_fullwidth_space_line)
+        self.assertEqual([text_with_fullwidth_space_line], paragraphs)
+
+        text_with_ascii_space_line = "AはB\n \nでありCである。"
+        self.assertEqual(2, len(split_into_paragraphs(text_with_ascii_space_line)))
 
     def test_budget_boundary_accepts_8000_and_rejects_8001(self) -> None:
         """ちょうど 8,000 UTF-16 units の文字列は共有述語 within_size_budget が
