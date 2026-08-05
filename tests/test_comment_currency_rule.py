@@ -9,9 +9,11 @@
 2. マーカーを保持するファイルを面ごとに一意に解決したうえで、そのルール本文
    ブロック内に canonical 文言・例外文が含まれること (ファイル全文や複数
    ファイルの連結への部分文字列一致では検査しない)
-3. 各配送経路 (SessionStart / UserPromptSubmit / SubagentStart の各 hook) が
-   実際に生成する additionalContext の最大構成が UTF-16 code units 8,000 未満に
-   収まること
+3. 各配送経路 — SessionStart (inject-always.sh の fable 配送・sonnet part 1
+   self-gate 配送)、UserPromptSubmit (inject-rules-part.sh の sonnet part 2/3
+   self-gate 配送、resolve-model-on-prompt.sh の Fable one-shot 補正配送)、
+   SubagentStart (inject-subagent-rules.sh の配送) — が実際に生成する
+   additionalContext の最大構成が UTF-16 code units 8,000 未満に収まること
 4. ルール本文ブロック自身、および面ごとに解決した冒頭 HTML コメントヘッダが、
    禁止対象の経緯記述 (issue/PR 番号・年月日) を含まないこと (自己準拠)
 
@@ -45,6 +47,7 @@ SUBAGENT_MD = PROMPTS / "subagent-rules.md"
 INJECT_ALWAYS_SH = SCRIPTS / "inject-always.sh"
 INJECT_RULES_PART_SH = SCRIPTS / "inject-rules-part.sh"
 INJECT_SUBAGENT_RULES_SH = SCRIPTS / "inject-subagent-rules.sh"
+RESOLVE_MODEL_ON_PROMPT_SH = SCRIPTS / "resolve-model-on-prompt.sh"
 
 MARKER = "<!-- rule:comment-currency -->"
 SIZE_BUDGET_UNITS = 8000
@@ -98,6 +101,23 @@ FORBIDDEN_DATE_PATTERN = re.compile(r"20[0-9]{2}[-/.年]")
 # 限定する。任意の `<!--` を境界にすると、ブロック内の説明用 HTML コメント (構造
 # マーカーではないもの) で意図せず切断されうるため。
 STRUCTURAL_MARKER_PATTERN = re.compile(r"(?m)^<!-- (?:rule|subagent-rule):")
+
+
+def forbidden_history_matches(text: str) -> list[str]:
+    """text 内に禁止対象の経緯記述 (issue/PR 番号・年月日) が含まれるかを判定する。
+
+    ルールブロック自己準拠検査・ヘッダ自己準拠検査の両方が共有する述語 (3 チェック:
+    `#[0-9]`・`issue #` 接頭辞・年月日形式)。片方だけが再実装されて検査項目が
+    乖離する (例: `issue #` チェックが片方から欠落する) のを防ぐ。
+    """
+    found = []
+    if FORBIDDEN_ISSUE_NUMBER_PATTERN.search(text):
+        found.append("#数字")
+    if FORBIDDEN_ISSUE_PREFIX in text:
+        found.append("issue #")
+    if FORBIDDEN_DATE_PATTERN.search(text):
+        found.append("年月日形式")
+    return found
 
 
 def read(path: Path) -> str:
@@ -268,6 +288,38 @@ def delivery_subagent(tmp_dir: str) -> str:
     return run_hook(INJECT_SUBAGENT_RULES_SH, {}, tmp_dir)
 
 
+def delivery_fable_one_shot_correction(tmp_dir: str) -> str:
+    """UserPromptSubmit (resolve-model-on-prompt.sh) が、判定不能だったセッションを
+    Fable と確定した際に配送する、self-heal + one-shot 補正 prefix +
+    always-fable.md の最大構成。
+
+    この経路は SessionStart 側の inject-always.sh のような段階的縮退ガード
+    (8K 超過時の delivery-note 省略等) を持たない単一構成のため、この契約テスト
+    での検出が予算超過に対する唯一の防衛線になる。
+    """
+    session_id = "size-budget-fable-correction"
+    state_dir = Path(tmp_dir) / "agent-discipline-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / f"pending-model-{session_id}").write_text("", encoding="utf-8")
+
+    transcript_path = Path(tmp_dir) / "transcript.jsonl"
+    transcript_path.write_text(
+        json.dumps(
+            {"type": "assistant", "message": {"model": "claude-fable-5"}},
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = {
+        "session_id": session_id,
+        "hook_event_name": "UserPromptSubmit",
+        "transcript_path": str(transcript_path),
+    }
+    return run_hook(RESOLVE_MODEL_ON_PROMPT_SH, payload, tmp_dir)
+
+
 class MarkerPresenceTests(unittest.TestCase):
     """rule:comment-currency マーカーが各配送面に規定回数だけ存在すること。"""
 
@@ -324,7 +376,14 @@ class CanonicalBodyTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class SizeBudgetTests(unittest.TestCase):
-    """各配送経路が実際に生成する additionalContext が配送予算未満に収まること。"""
+    """各配送経路が実際に生成する additionalContext が配送予算未満に収まること。
+
+    DELIVERY_BUILDERS のキーが計測対象の配送経路の一覧そのものである
+    (fable 向け always 配送・sonnet part 1/2/3 配送・subagent-rules 配送・fable
+    one-shot 補正配送の計 6 経路)。fable one-shot 補正配送 (resolve-model-on-
+    prompt.sh) は他経路と異なり段階的縮退ガードを持たないため、本テストでの
+    検出が予算超過に対する唯一の防衛線になる。
+    """
 
     DELIVERY_BUILDERS = {
         "fable 向け always 配送 (inject-always.sh, model=fable)": delivery_fable,
@@ -336,6 +395,9 @@ class SizeBudgetTests(unittest.TestCase):
             lambda tmp_dir: delivery_sonnet_part_self_gate("3", tmp_dir)
         ),
         "subagent-rules 配送 (inject-subagent-rules.sh)": delivery_subagent,
+        "fable one-shot 補正配送 (resolve-model-on-prompt.sh)": (
+            delivery_fable_one_shot_correction
+        ),
     }
 
     def test_all_delivery_paths_within_strict_budget(self) -> None:
@@ -356,17 +418,6 @@ class SizeBudgetTests(unittest.TestCase):
 class RuleBlockSelfComplianceTests(unittest.TestCase):
     """ルール本文ブロック自身が禁止対象の経緯記述を含まないこと (自己準拠)。"""
 
-    @staticmethod
-    def _forbidden_matches(text: str) -> list[str]:
-        found = []
-        if FORBIDDEN_ISSUE_NUMBER_PATTERN.search(text):
-            found.append("#数字")
-        if FORBIDDEN_ISSUE_PREFIX in text:
-            found.append("issue #")
-        if FORBIDDEN_DATE_PATTERN.search(text):
-            found.append("年月日形式")
-        return found
-
     def test_rule_blocks_free_of_history_references(self) -> None:
         violations = []
         for face in FACES:
@@ -375,14 +426,19 @@ class RuleBlockSelfComplianceTests(unittest.TestCase):
                 violations.append(f"{face} (面が解決できない)")
                 continue
             _path, block, _header = resolved
-            found = self._forbidden_matches(block)
+            found = forbidden_history_matches(block)
             if found:
                 violations.append(f"{face} ({', '.join(found)} を含む)")
         self.assertEqual([], violations, f"ルールブロックの自己準拠違反: {violations}")
 
 
 class HeaderSelfComplianceTests(unittest.TestCase):
-    """面ごとに解決した冒頭 HTML コメントヘッダが経緯記述を含まないこと。"""
+    """面ごとに解決した冒頭 HTML コメントヘッダが経緯記述を含まないこと。
+
+    ルールブロック自己準拠検査 (RuleBlockSelfComplianceTests) と同一の共有述語
+    (forbidden_history_matches) を使う。ヘッダ検査だけが禁止述語をインラインで
+    再実装すると検査項目が乖離しうる (例: `issue #` 接頭辞チェックの欠落) ため。
+    """
 
     def test_headers_free_of_issue_numbers_and_dates(self) -> None:
         violations = []
@@ -392,11 +448,7 @@ class HeaderSelfComplianceTests(unittest.TestCase):
                 violations.append(f"{face} (面が解決できない)")
                 continue
             _path, _block, header = resolved
-            found = []
-            if FORBIDDEN_ISSUE_NUMBER_PATTERN.search(header):
-                found.append("#数字")
-            if FORBIDDEN_DATE_PATTERN.search(header):
-                found.append("年月日形式")
+            found = forbidden_history_matches(header)
             if found:
                 violations.append(f"{face} ({', '.join(found)} を含む)")
         self.assertEqual([], violations, f"ヘッダの自己準拠違反: {violations}")
@@ -472,6 +524,16 @@ class HelperSyntheticContractTests(unittest.TestCase):
         text = "あ" * SIZE_BUDGET_UNITS
         self.assertEqual(SIZE_BUDGET_UNITS, utf16_length(text))
         self.assertFalse(utf16_length(text) < SIZE_BUDGET_UNITS)
+
+    def test_shared_forbidden_predicate_catches_issue_prefix_without_digit(
+        self,
+    ) -> None:
+        """「issue #」 (直後に数字を伴わない形式) は `#[0-9]` 単独では検出でき
+        ないが、共有述語 (forbidden_history_matches) では検出されること。
+        """
+        text = "this references issue #N generically, not a numbered issue"
+        self.assertIsNone(FORBIDDEN_ISSUE_NUMBER_PATTERN.search(text))
+        self.assertIn("issue #", forbidden_history_matches(text))
 
 
 if __name__ == "__main__":
