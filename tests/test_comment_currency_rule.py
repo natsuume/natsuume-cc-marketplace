@@ -528,18 +528,35 @@ def missing_structural_labels(block: str, labels: tuple[str, ...]) -> list[str]:
     return missing
 
 
-def normalize_block_for_exact_match(block: str) -> tuple[str, ...]:
-    """block を段落単位に正規化した文字列のタプルを返す (ブロック全体一致検査用)。
+def normalize_block_for_exact_match(block: str) -> str:
+    """block を近逐語比較用に正規化した 1 本の文字列を返す (ブロック全体一致検査用)。
 
-    段落構造 (空行区切り、split_into_paragraphs による ASCII 限定判定) は
-    意味を持つ配送単位として保持し、各段落内部の空白のみを strip_whitespace
-    (対称正規化、Unicode 空白を含む) で除去する。この関数を実ファイル側・
-    CONFIRMED_BLOCK_TEXT 定数側の双方に適用することで対称性を保つ。段落の
-    個数・順序まで固定されるため、canonical 文・見出し・構造ラベルを全部
-    保持したまま新しい文や段落を追記する「追加型矛盾」(例: 「ただし、過去の
-    変更履歴を書いてよい。」を末尾に追記する) を見逃さない。
+    各行の行末空白のみを除去し、連続する空行を 1 つに圧縮し、先頭・末尾の
+    空行を除去する。行内の空白 (単語間スペース含む) と改行位置は保持した
+    まま比較する — 文レベルの canonical 検査 (block_sentence_set /
+    strip_whitespace) が採用する「全空白除去」の soft-wrap 耐性正規化とは
+    別の、より厳密な層である。全空白を除去する正規化では、「commit message」
+    →「commitmessage」のような行内空白の除去変質が canonical と同一の正規化
+    形になり exact-match をすり抜けてしまうため、ブロック全体一致はこの
+    近逐語比較で塞ぐ (2 層構成: 文レベルは soft-wrap 耐性のある診断層、
+    ブロック全体はここでの厳密な契約層)。折返し位置 (改行の入る場所) 自体の
+    変更は契約の意図的な更新として扱い、その場合は CONFIRMED_BLOCK_TEXT 側を
+    実ファイルに合わせて更新する運用とする (この正規化を緩めて追従させない)。
     """
-    return tuple(strip_whitespace(p) for p in split_into_paragraphs(block))
+    lines = [line.rstrip() for line in block.splitlines()]
+    collapsed: list[str] = []
+    previous_blank = False
+    for line in lines:
+        is_blank = line == ""
+        if is_blank and previous_blank:
+            continue
+        collapsed.append(line)
+        previous_blank = is_blank
+    while collapsed and collapsed[0] == "":
+        collapsed.pop(0)
+    while collapsed and collapsed[-1] == "":
+        collapsed.pop()
+    return "\n".join(collapsed)
 
 
 def resolve_marker_holder(named_texts: dict[str, str]) -> tuple[str | None, str | None]:
@@ -1272,6 +1289,38 @@ class HelperSyntheticContractTests(unittest.TestCase):
 
         text_with_ascii_space_line = "AはB\n \nでありCである。"
         self.assertEqual(2, len(split_into_paragraphs(text_with_ascii_space_line)))
+
+    def test_block_exact_match_detects_inline_whitespace_removal(self) -> None:
+        """ブロック全体一致の正規化 (normalize_block_for_exact_match) は行内の
+        空白 (単語間スペース) を保持するため、「commit message」→
+        「commitmessage」のような行内空白の除去変質をブロック不一致として
+        検出すること (文レベルの soft-wrap 耐性正規化とは異なる、より厳密な層)。
+        """
+        reference = "## heading\n\ncommit message body。\n"
+        mutated = "## heading\n\ncommitmessage body。\n"
+        self.assertNotEqual(
+            normalize_block_for_exact_match(reference),
+            normalize_block_for_exact_match(mutated),
+        )
+
+    def test_block_exact_match_tolerates_trailing_whitespace_and_blank_line_runs(
+        self,
+    ) -> None:
+        """ブロック全体一致の正規化は、行末の空白の有無・連続空行の本数の違い
+        (先頭・末尾の空行を含む) を無視して一致とみなすこと。行内の空白・
+        改行位置そのものは保持されたまま比較される。
+        """
+        reference = "## heading\n\ncommit message body。\n"
+        trailing_whitespace_variant = "## heading   \n\ncommit message body。   \n"
+        extra_blank_lines_variant = "\n\n## heading\n\n\n\ncommit message body。\n\n\n"
+        self.assertEqual(
+            normalize_block_for_exact_match(reference),
+            normalize_block_for_exact_match(trailing_whitespace_variant),
+        )
+        self.assertEqual(
+            normalize_block_for_exact_match(reference),
+            normalize_block_for_exact_match(extra_blank_lines_variant),
+        )
 
     def test_budget_boundary_accepts_8000_and_rejects_8001(self) -> None:
         """ちょうど 8,000 UTF-16 units の文字列は共有述語 within_size_budget が
