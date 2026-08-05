@@ -53,14 +53,14 @@
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。",
-      "version": "0.25.0",
+      "version": "0.25.1",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
       "description": "UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う。",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     },
     {
@@ -74,7 +74,7 @@
       "name": "codex-advisor",
       "source": "./plugins/codex-advisor",
       "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧するプラグイン。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI)。",
-      "version": "2.0.2",
+      "version": "2.0.3",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {

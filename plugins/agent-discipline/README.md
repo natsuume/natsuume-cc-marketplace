@@ -4,9 +4,13 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.25.0
+v0.25.1
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.25.0 → v0.25.1 の変更点
+
+注入対象 md (`delivery-note.md` / `preamble-self-gate.md` / `always-sonnet-1.md` / `discipline-preamble-self-gate.md` / `discipline-preamble-fable.md` / `discipline-sonnet.md` / `discipline-fable.md` / `discipline-opus.md` / `temporary/askuserquestion-preview-workaround.md`) のヘッダコメントから issue/PR 番号・版数による経緯・変更履歴の記述を除去し、現行の役割・構成・制約のみの説明に書き換えた。`rule:comment-currency` (v0.25.0 で導入) の境界定義の先行適用。ルール本文は無変更 (#363)。
 
 ### v0.24.0 → v0.25.0 の変更点
 

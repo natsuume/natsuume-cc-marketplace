@@ -1,5 +1,5 @@
 <!--
-  agent-discipline: 配送メモ (issue #236)。8K ガードで落ちうるため ≈400 字以下に収める。
+  agent-discipline: 配送メモ。8K ガードで落ちうるため ≈400 字以下に収める。
   inject-always.sh が実行時に prompts ディレクトリの絶対パスを 1 行付加する。
 -->
 

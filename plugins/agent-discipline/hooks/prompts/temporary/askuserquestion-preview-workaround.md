@@ -1,7 +1,7 @@
 <!--
   agent-discipline: 暫定ルール — AskUserQuestion preview 不使用
   AskUserQuestion の preview 表示がスクロールできず、一定行数以上が「hidden XX lines」で
-  隠される Claude Code 側の問題への暫定対応 (2026-07-08 導入)。
+  隠される Claude Code 側の問題への暫定対応。
   撤去条件: Claude Code 側で preview のスクロール問題が修正されたら本ファイルを削除する
   (inject-temporary.sh は temporary/ 配下に md が無ければ何も注入しない)。
   撤去時も plugin version bump は必要。

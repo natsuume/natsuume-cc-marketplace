@@ -1,9 +1,8 @@
 <!--
-  agent-discipline: 常時適用ルール (SONNET 版、part 3/3、issue #236)
-  issue #236 (注入ペイロード分割) による always-sonnet.md 3 分割の 3 番目 (最終 part)。rule 本文・
-  rule ID マーカーは分割前から一字一句無変更。ヘッダコメント・part 表記・part 冒頭の説明文の
-  みが分割に伴う追加。ルール ID セットの完全一致の受入基準は part 1/3 (always-sonnet-1.md)
-  のヘッダコメントを参照。
+  agent-discipline: 常時適用ルール (SONNET 版、part 3/3、最終 part)
+  常時適用ルール (Sonnet 版) は part 1/3・part 2/3・part 3/3 の 3 ファイルで 1 セットを
+  構成する。ルール ID セットの完全一致の受入基準は part 1/3 (always-sonnet-1.md) の
+  ヘッダコメントを参照。
 -->
 
 # agent-discipline: 常時適用ルール (Sonnet) — part 3/3

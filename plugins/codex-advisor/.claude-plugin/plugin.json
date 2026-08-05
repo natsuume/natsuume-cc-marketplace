@@ -1,6 +1,6 @@
 {
   "name": "codex-advisor",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧するプラグイン。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI)。"
 }

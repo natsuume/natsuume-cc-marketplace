@@ -1,5 +1,5 @@
 <!--
-  ui-discipline: UI 実装規律 常時適用ルール (#197)
+  ui-discipline: UI 実装規律 常時適用ルール
   各ルールは「意図 (なぜ) + 短い指示 + 境界 (いつ例外か)」で記述する
   (agent-discipline の always prompt と同じ記述形式)。
   コード例・チェックリスト等の詳細実装パターンは ui-patterns skill が提供する。

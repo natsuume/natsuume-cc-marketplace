@@ -7,7 +7,7 @@
   設計契約: 基本形は discipline-sonnet.md を踏襲し、Opus 5 公式ガイド
   (prompting-claude-opus-5) の固有挙動 — 指示なしの自己検証・自己修正、サブエージェント
   委任への強い傾向、過剰検証によるトークン浪費 — に合わせて verifier 委任の既定と
-  委任粒度の既定だけを変える。委任根拠はコンテキスト分離で記述する (#192 決定事項 3 踏襲)。
+  委任粒度の既定だけを変える。委任根拠はコンテキスト分離で記述する。
   rule ID セットは discipline-fable.md / discipline-sonnet.md と完全一致させる
   (lint-prompt-sync.sh チェック 4)。
 -->
