@@ -5,12 +5,14 @@
 配送 3 面 (fable 向け常時適用ルール / sonnet 向け常時適用ルール / subagent 向け
 常時適用ルール) それぞれについて、次を検証する:
 
-1. ルールマーカーが規定回数だけ存在すること
+1. ルールマーカーが単独行 (行頭から行末までがマーカーのみの行) として規定
+   回数だけ存在すること。prose や inline code 内への偶発的な部分文字列一致は
+   出現として数えない
 2. マーカーを保持するファイルを面ごとに一意に解決したうえで、そのルール本文
+   ブロックが「## 」見出し行 (「説明は常に最新の内容のみ」を含む) で始まり、
    ブロックを段落分割 → 文分割 (「。」区切り) → 対称正規化 (ASCII 空白・
    タブ・改行の除去) した文要素の集合に対し、canonical 文セットの各文が
-   完全一致で存在すること (部分文字列包含ではなく一致。否定的引用への埋め込み
-   で green になる経路を塞ぐ)
+   完全一致で存在すること (部分文字列包含ではない)
 3. 各配送経路 — SessionStart (inject-always.sh の fable 配送・sonnet part 1
    self-gate 配送)、UserPromptSubmit (inject-rules-part.sh の sonnet part 2/3
    self-gate 配送、resolve-model-on-prompt.sh の Fable one-shot 補正配送)、
@@ -18,9 +20,11 @@
    additionalContext の最大構成が UTF-16 code units 8,000 未満に収まること
    (判定は単一の共有述語 within_size_budget を使う)
 4. ルール本文ブロック自身、および面ごとに解決した冒頭 HTML コメントヘッダが、
-   禁止対象の経緯記述 (issue/PR 番号・年月日) を含まないこと (自己準拠)。
-   ヘッダはさらに既知ナラティブ語彙のブロックリストでも検査する (ルール本文は
-   禁止形式を引用言及するため対象外)
+   面固有の静的自己準拠述語 (static_surface_*、定義直前のコメント参照) が
+   定める禁止対象の経緯記述 (issue/PR 番号・年月日。大文字小文字や年月日単位
+   前の空白の表記ゆらぎを含む) を含まないこと。ヘッダはさらに既知ナラティブ
+   語彙のブロックリストでも検査する (ルール本文は禁止形式を引用言及するため
+   対象外)
 
 面の解決 (resolve_face) は失敗原因 (マーカー 0 件 / 複数 part / ブロック抽出
 不能 / ヘッダ欠落) を判別可能な形で返し、全検査の失敗メッセージに実際の原因が
@@ -58,6 +62,7 @@ RESOLVE_MODEL_ON_PROMPT_SH = SCRIPTS / "resolve-model-on-prompt.sh"
 
 MARKER = "<!-- rule:comment-currency -->"
 SIZE_BUDGET_UNITS = 8000
+EXPECTED_HEADING_TEXT = "説明は常に最新の内容のみ"
 
 # 配送面のラベル。fable / subagent は固定ファイル、sonnet はマーカーを保持する
 # part を動的に解決する (resolve_face_path 参照)。
@@ -69,20 +74,24 @@ FACES = (
 
 # 各面のルールブロックに存在すべき canonical 文 (rule:comment-currency の配送
 # 本文からの逐語抜粋)。文単位の完全一致で照合する (部分文字列包含ではない)。
-# 段落順序・同一段落性は固定しない。太字見出し接頭辞 (`**指示**: ` 等) は、実ファイルで
-# 同じ文に地続きで付いている場合のみ含める。
+# 段落順序・同一段落性は固定しない。太字見出し接頭辞 (`**指示**: ` 等) は、
+# 実ファイルで同じ文に地続きで付いている場合のみ含める。
 CANONICAL_SENTENCES = {
     "always-fable.md": (
         # 中核指示文
         "**指示**: コードコメント・docstring・README 等の説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説 (版数・日付・issue/PR 番号による過去の変更の記述、旧実装の説明、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照) を書かない。",
         # 履歴置き場文
         "履歴と検討経緯は commit message・PR 説明・issue に置く。",
-        # 例外文
-        "**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記は証拠の鮮度情報として許可する。",
+        # 契約・制約文
+        "契約・制約は issue 参照に頼らずその場で完結して書き、コード変更で説明が古くなる場合は同時に更新する。",
         # touch-time 文 (fable は 1 文)
         "適用は touch-time — 新規作成・意味変更した説明ブロックに適用し、指示のない一括清掃や単純移設・整形での書き換え波及は行わない。",
+        # 例外文
+        "**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記は証拠の鮮度情報として許可する。",
         # 対象外文
         "commit message・PR 説明・issue body、および明示的に履歴を目的とする文書 (README の `### vX.Y.Z → vX.Y.Z` 変更履歴節を含む) は対象外。",
+        # 境界末尾文 (現在形の設計理由は禁止対象外)
+        "過去に言及しない現在形の設計理由の説明は禁止対象ではない。",
     ),
     "always-sonnet-{1,2,3}.md": (
         # 中核指示文
@@ -91,36 +100,48 @@ CANONICAL_SENTENCES = {
         "禁止対象: 版数・日付・issue/PR 番号による過去の変更の記述 (「vX で追加」「#N で移設」等)、旧実装の説明 (「以前は〜だったが」)、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照。",
         # 履歴置き場文
         "履歴と検討経緯は commit message・PR 説明・issue に置く。",
-        # 例外文
-        "**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記 (「YYYY-MM-DD 実測」「バージョン X で確認」等) は証拠の鮮度情報として許可する。",
+        # 契約・制約文 (sonnet は 2 文に分かれる。両方を要求する)
+        "契約・制約は issue 参照に頼らず、その場で読んで完結するように書く。",
+        "コード変更で対応する説明が古くなる場合は同時に更新する。",
         # touch-time 文 (sonnet は 2 文に分かれる。両方を要求する)
         "適用は touch-time: 新規作成・意味を変更した説明ブロックに適用する。",
         "単純移設・整形のみの変更で既存記述の書き換えに波及させず、指示のない一括清掃を行わない。",
+        # 例外文
+        "**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記 (「YYYY-MM-DD 実測」「バージョン X で確認」等) は証拠の鮮度情報として許可する。",
         # 対象外文
         "commit message・PR 説明・issue body、および明示的に履歴を目的とする文書 (README の `### vX.Y.Z → vX.Y.Z` 変更履歴節を含む) は対象外。",
+        # 境界末尾文 (現在形の設計理由は禁止対象外)
+        "過去に言及しない現在形の設計理由 (「なぜこうするか」「X 方式は〜のため使わない」) は禁止対象ではない。",
     ),
     "subagent-rules.md": (
         # 中核指示文
         "説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説 (版数・日付・issue/PR 番号による過去の変更の記述、旧実装の説明、出典としての issue/PR 番号参照) を書かない。",
         # 履歴置き場文
         "履歴は commit message・PR 説明・issue に置く。",
+        # 契約・制約文
+        "契約・制約は issue 参照に頼らずその場で完結して書き、編集で説明が古くなる場合は同時に更新する。",
+        # touch-time 文
+        "適用は touch-time — 新規作成・意味変更した説明ブロックに適用し、指示のない一括清掃を行わない。",
+        # 対象外文
+        "commit message・PR 説明・issue body と、明示的に履歴を目的とする文書 (README の変更履歴節を含む) は対象外。",
         # 例外文
         "例外: 撤去条件付き暫定措置の「現在の不具合・撤去条件・確認方法」(導入日なし) と、現行の主張への検証日・検証環境の付記。",
     ),
 }
 
 FORBIDDEN_ISSUE_NUMBER_PATTERN = re.compile(r"#[0-9]")
-FORBIDDEN_ISSUE_PREFIX = "issue #"
-# ISO 形式 (20XX-) に加え、20XX/ ・ 20XX. ・ 20XX年 の表記も禁止対象として明文化する。
-FORBIDDEN_DATE_PATTERN = re.compile(r"20[0-9]{2}[-/.年]")
+# issue 参照接頭辞は大文字小文字を区別しない (「issue #」「Issue #」「ISSUE #」)。
+FORBIDDEN_ISSUE_PREFIX_PATTERN = re.compile(r"issue #", re.IGNORECASE)
+# ISO 形式 (20XX-) に加え、20XX/ ・ 20XX. ・ 20XX年 の表記、および年 (月日) 単位と
+# 数字の間の ASCII 空白・タブを挟む表記ゆらぎ (「2026 年」等) も検出対象に含める。
+FORBIDDEN_DATE_PATTERN = re.compile(r"20[0-9]{2}[ \t]*[-/.年]")
 
-# ヘッダ限定の既知ナラティブ語彙ブロックリスト。既知形式の回帰ガードであり、
-# 網羅性を保証するものではない (未知の言い回しは検出できない)。ルールブロック
-# 本文には適用しない — 本文は禁止形式そのものを引用言及する
-# (例: 「旧実装の説明 (「以前は〜だったが」)」) ため、本文へ適用すると
-# 正当な記述を誤検出する。
+# ヘッダ限定の既知ナラティブ語彙ブロックリスト (2 文字以上の句のみ)。既知形式の
+# 回帰ガードであり、網羅性を保証するものではない。ルールブロック本文には適用
+# しない — 本文は禁止形式そのものを引用言及する
+# (例: 「旧実装の説明 (「以前は〜だったが」)」) ため、本文へ適用すると正当な
+# 記述を誤検出する。
 NARRATIVE_VOCABULARY_BLOCKLIST = (
-    "旧",
     "以前",
     "従来",
     "当初",
@@ -133,45 +154,77 @@ NARRATIVE_VOCABULARY_BLOCKLIST = (
     "一字一句無変更",
 )
 
+# 「旧」は 1 文字トークンであり、他の多文字句と異なり裸の部分文字列一致にすると
+# ナラティブと無関係な語 (固有名詞・他の複合語等) にも誤反応しうる。後続が
+# 「設計」「実装」「形式」「来」(旧来)、またはファイル名・識別子として典型的な
+# ASCII 英数字・記号の連なり (例:「旧always-sonnet.md」) の場合のみナラティブ句
+# として成立するとみなす。
+LEGACY_PREFIX_NARRATIVE_PATTERN = re.compile(
+    r"旧(?:設計|実装|形式|来|[A-Za-z0-9_.\-]+)"
+)
+
 # ルールブロックの終端は、行頭の構造マーカー (`<!-- rule:` / `<!-- subagent-rule:`) に
 # 限定する。任意の `<!--` を境界にすると、ブロック内の説明用 HTML コメント (構造
 # マーカーではないもの) で意図せず切断されうるため。
 STRUCTURAL_MARKER_PATTERN = re.compile(r"(?m)^<!-- (?:rule|subagent-rule):")
 
 
-def forbidden_history_matches(text: str) -> list[str]:
+# ============================================================================
+# 面固有の静的自己準拠述語 (static_surface_*)
+# ============================================================================
+# 以下の述語は、rule:comment-currency を配送する 3 つの静的ファイル
+# (always-fable.md / always-sonnet-{1,2,3}.md / subagent-rules.md) 自身の
+# ルールブロック・冒頭ヘッダにのみ適用する面固有の契約であり、ルール本文が
+# 説明文書一般に対して規定する規律の実装ではない。
+#
+# 特に、ルールの境界条項は「現行の主張への検証日・検証環境の付記」を一般の
+# 説明文書では証拠の鮮度情報として許可するが、この static_surface_* 述語群は
+# その一般例外をこの 3 つの静的配送面には適用しない意図的な厳格化 (面固有契約)
+# であり、一般規律の検査ではない。これら 3 ファイルはルールそのもののメタ記述
+# であり、日付を伴う正当な検証注記が本来生じない性質の文書であるため、出現する
+# 日付形式はすべて経緯記述の疑いとして一律に禁止する。
+# ============================================================================
+
+
+def static_surface_history_matches(text: str) -> list[str]:
     """text 内に禁止対象の経緯記述 (issue/PR 番号・年月日) が含まれるかを判定する。
 
     ルールブロック自己準拠検査・ヘッダ自己準拠検査の両方が共有する述語 (3 チェック:
-    `#[0-9]`・`issue #` 接頭辞・年月日形式)。片方だけが再実装されて検査項目が
-    乖離する (例: `issue #` チェックが片方から欠落する) のを防ぐ。
+    `#[0-9]`・`issue #` 接頭辞 (大文字小文字を区別しない)・年月日形式)。片方だけが
+    再実装されて検査項目が乖離する (例: `issue #` チェックが片方から欠落する) のを
+    防ぐ。
     """
     found = []
     if FORBIDDEN_ISSUE_NUMBER_PATTERN.search(text):
         found.append("#数字")
-    if FORBIDDEN_ISSUE_PREFIX in text:
+    if FORBIDDEN_ISSUE_PREFIX_PATTERN.search(text):
         found.append("issue #")
     if FORBIDDEN_DATE_PATTERN.search(text):
         found.append("年月日形式")
     return found
 
 
-def forbidden_narrative_vocabulary_matches(text: str) -> list[str]:
+def static_surface_narrative_vocabulary_matches(text: str) -> list[str]:
     """text 内に既知のナラティブ語彙 (経緯記述の典型語) が含まれるかを判定する。
 
-    NARRATIVE_VOCABULARY_BLOCKLIST の定義どおり、既知形式の回帰ガードであり
-    網羅性の保証ではない。ヘッダ限定で使う (forbidden_header_matches 参照)。
+    NARRATIVE_VOCABULARY_BLOCKLIST (2 文字以上の句) は裸の部分文字列一致、
+    「旧」は LEGACY_PREFIX_NARRATIVE_PATTERN による句境界付きの一致で判定する。
+    既知形式の回帰ガードであり網羅性の保証ではない。ヘッダ限定で使う
+    (static_surface_header_matches 参照)。
     """
-    return [word for word in NARRATIVE_VOCABULARY_BLOCKLIST if word in text]
+    found = [word for word in NARRATIVE_VOCABULARY_BLOCKLIST if word in text]
+    if LEGACY_PREFIX_NARRATIVE_PATTERN.search(text):
+        found.append("旧")
+    return found
 
 
-def forbidden_header_matches(text: str) -> list[str]:
-    """ヘッダ用の禁止判定述語: forbidden_history_matches にナラティブ語彙
+def static_surface_header_matches(text: str) -> list[str]:
+    """ヘッダ用の禁止判定述語: static_surface_history_matches にナラティブ語彙
     ブロックリストを加えたもの。
     """
-    return forbidden_history_matches(text) + forbidden_narrative_vocabulary_matches(
+    return static_surface_history_matches(
         text
-    )
+    ) + static_surface_narrative_vocabulary_matches(text)
 
 
 def read(path: Path) -> str:
@@ -200,15 +253,39 @@ def leading_html_comment(text: str) -> str | None:
     return match.group(0)
 
 
-def rule_block(text: str, marker: str = MARKER) -> str | None:
-    """marker の直後から、次の行頭構造マーカー・`---` 行・EOF 手前までを返す。
-
-    marker が本文中に存在しない場合は None を返す。
+def marker_line_pattern(marker: str = MARKER) -> re.Pattern[str]:
+    """marker を単独行として検出する正規表現を返す (行頭〜行末が marker のみ、
+    末尾の ASCII 空白・タブは許容する)。
     """
-    start = text.find(marker)
-    if start < 0:
+    return re.compile(r"(?m)^" + re.escape(marker) + r"[ \t]*$")
+
+
+def count_marker_lines(text: str, marker: str = MARKER) -> int:
+    """marker が単独行として出現する回数を返す。
+
+    行全体一致で判定するため、prose 文中や inline code (`` `...` ``) 内への
+    偶発的な部分文字列一致は出現として数えない。
+    """
+    return len(marker_line_pattern(marker).findall(text))
+
+
+def marker_line_present(text: str, marker: str = MARKER) -> bool:
+    """marker が単独行として text 内に存在するか。"""
+    return marker_line_pattern(marker).search(text) is not None
+
+
+def rule_block(text: str, marker: str = MARKER) -> str | None:
+    """marker が単独行として出現する箇所の直後から、次の行頭構造マーカー・
+    `---` 行・EOF 手前までを返す。
+
+    marker は行全体一致 (行頭から行末までが marker のみ) でのみ検出する —
+    prose 文中や inline code 内への偶発的な部分文字列一致をブロック開始とは
+    みなさない。marker が本文中に単独行として存在しない場合は None を返す。
+    """
+    match = marker_line_pattern(marker).search(text)
+    if match is None:
         return None
-    content_start = start + len(marker)
+    content_start = match.end()
     boundary_candidates = []
     next_marker_match = STRUCTURAL_MARKER_PATTERN.search(text, content_start)
     if next_marker_match is not None:
@@ -218,6 +295,23 @@ def rule_block(text: str, marker: str = MARKER) -> str | None:
         break
     end = min(boundary_candidates) if boundary_candidates else len(text)
     return text[content_start:end]
+
+
+def block_heading_line(block: str) -> str | None:
+    """block 内の最初の非空行を返す (見出し行の検査に使う)。無ければ None。"""
+    for line in block.splitlines():
+        if line.strip() != "":
+            return line
+    return None
+
+
+def block_starts_with_expected_heading(block: str) -> bool:
+    """block の先頭見出し行が `## ` で始まり、EXPECTED_HEADING_TEXT を含むか。"""
+    heading = block_heading_line(block)
+    if heading is None:
+        return False
+    stripped = heading.lstrip()
+    return stripped.startswith("## ") and EXPECTED_HEADING_TEXT in stripped
 
 
 def split_into_paragraphs(text: str) -> list[str]:
@@ -282,11 +376,12 @@ def missing_canonical_sentences(block: str, canonicals: tuple[str, ...]) -> list
 def resolve_marker_holder(named_texts: dict[str, str]) -> tuple[str | None, str | None]:
     """{ラベル: 本文} からマーカーを保持する唯一のラベルを解決する。
 
-    戻り値は (ラベル, 失敗理由)。成功時は (ラベル, None)。マーカーを保持する
-    ラベルが 0 件なら (None, "マーカーが 0 件")、複数件なら該当ラベルを含む
-    理由文字列を返す (fail-closed の理由を判別可能にする)。
+    マーカーは単独行としてのみ検出する (marker_line_present)。戻り値は
+    (ラベル, 失敗理由)。成功時は (ラベル, None)。マーカーを保持するラベルが
+    0 件なら (None, "マーカーが 0 件")、複数件なら該当ラベルを含む理由文字列
+    を返す (fail-closed の理由を判別可能にする)。
     """
-    holders = [label for label, text in named_texts.items() if MARKER in text]
+    holders = [label for label, text in named_texts.items() if marker_line_present(text)]
     if len(holders) == 0:
         return None, "マーカーが 0 件"
     if len(holders) > 1:
@@ -454,25 +549,27 @@ def delivery_fable_one_shot_correction(tmp_dir: str) -> str:
 
 
 class MarkerPresenceTests(unittest.TestCase):
-    """rule:comment-currency マーカーが各配送面に規定回数だけ存在すること。"""
+    """rule:comment-currency マーカーが各配送面に規定回数だけ単独行として存在すること。"""
 
     def test_fable_marker_appears_exactly_once(self) -> None:
-        count = read(FABLE_MD).count(MARKER)
+        count = count_marker_lines(read(FABLE_MD))
         self.assertEqual(1, count, f"always-fable.md 内のマーカー出現数: {count}")
 
     def test_sonnet_marker_appears_exactly_once_across_parts(self) -> None:
-        total = sum(read(path).count(MARKER) for path in SONNET_MD.values())
+        total = sum(count_marker_lines(read(path)) for path in SONNET_MD.values())
         self.assertEqual(
             1, total, f"always-sonnet-{{1,2,3}}.md 合計のマーカー出現数: {total}"
         )
 
     def test_subagent_marker_appears_exactly_once(self) -> None:
-        count = read(SUBAGENT_MD).count(MARKER)
+        count = count_marker_lines(read(SUBAGENT_MD))
         self.assertEqual(1, count, f"subagent-rules.md 内のマーカー出現数: {count}")
 
 
 class CanonicalBodyTests(unittest.TestCase):
-    """各配送面のルールブロックに canonical 文が文単位の完全一致で含まれること。"""
+    """各配送面のルールブロックに canonical 文が文単位の完全一致で含まれ、
+    期待される見出し行で始まること。
+    """
 
     def test_canonical_sentences_present_in_rule_block(self) -> None:
         violations = []
@@ -486,6 +583,19 @@ class CanonicalBodyTests(unittest.TestCase):
                 violations.append(f"{face}: {missing}")
         self.assertEqual(
             [], violations, f"ルールブロックに canonical 文 (完全一致) が無い面: {violations}"
+        )
+
+    def test_rule_block_starts_with_expected_heading(self) -> None:
+        violations = []
+        for face in FACES:
+            _path, block, _header, reason = resolve_face(face)
+            if reason is not None:
+                violations.append(f"{face} ({reason})")
+                continue
+            if not block_starts_with_expected_heading(block):
+                violations.append(face)
+        self.assertEqual(
+            [], violations, f"ルールブロック先頭に期待される見出し行が無い面: {violations}"
         )
 
 
@@ -541,7 +651,7 @@ class RuleBlockSelfComplianceTests(unittest.TestCase):
             if reason is not None:
                 violations.append(f"{face} ({reason})")
                 continue
-            found = forbidden_history_matches(block)
+            found = static_surface_history_matches(block)
             if found:
                 violations.append(f"{face} ({', '.join(found)} を含む)")
         self.assertEqual([], violations, f"ルールブロックの自己準拠違反: {violations}")
@@ -551,9 +661,9 @@ class HeaderSelfComplianceTests(unittest.TestCase):
     """面ごとに解決した冒頭 HTML コメントヘッダが経緯記述を含まないこと。
 
     ルールブロック自己準拠検査 (RuleBlockSelfComplianceTests) の共有述語
-    (forbidden_history_matches) に、ヘッダ限定の既知ナラティブ語彙ブロック
-    リスト (forbidden_narrative_vocabulary_matches) を加えた
-    forbidden_header_matches を使う。
+    (static_surface_history_matches) に、ヘッダ限定の既知ナラティブ語彙ブロック
+    リスト (static_surface_narrative_vocabulary_matches) を加えた
+    static_surface_header_matches を使う。
     """
 
     def test_headers_free_of_issue_numbers_and_dates(self) -> None:
@@ -563,7 +673,7 @@ class HeaderSelfComplianceTests(unittest.TestCase):
             if reason is not None:
                 violations.append(f"{face} ({reason})")
                 continue
-            found = forbidden_header_matches(header)
+            found = static_surface_header_matches(header)
             if found:
                 violations.append(f"{face} ({', '.join(found)} を含む)")
         self.assertEqual([], violations, f"ヘッダの自己準拠違反: {violations}")
@@ -605,9 +715,26 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertIsNotNone(block)
         self.assertIn("after comment (must remain inside the block)", block)
 
+    def test_marker_must_be_a_standalone_line(self) -> None:
+        """マーカーが prose 文中や inline code 中に偶発的に現れても、行全体
+        一致 (行頭から行末までがマーカーのみ) でなければ検出されないこと。
+        """
+        prose_mention = f"この文書では {MARKER} という形式のマーカーについて説明する。\n"
+        inline_code_mention = f"マーカーの例: `{MARKER}` を参照。\n"
+        standalone_line = f"{MARKER}\n"
+
+        self.assertEqual(0, count_marker_lines(prose_mention))
+        self.assertEqual(0, count_marker_lines(inline_code_mention))
+        self.assertEqual(1, count_marker_lines(standalone_line))
+
+        self.assertIsNone(rule_block(prose_mention + "body\n"))
+        self.assertIsNotNone(rule_block(standalone_line + "body\n---\n"))
+
     def test_marker_holder_resolution_is_fail_closed(self) -> None:
         """マーカー保持ラベルが 0 件・複数件のときは解決が fail-closed になり、
         失敗理由を判別できること。ちょうど 1 件のときのみそのラベルを返すこと。
+        マーカーは単独行としてのみ検出されるため、synthetic テキストでも
+        マーカーを単独行で配置する (mid-sentence 埋め込みは「0 件」扱いになる)。
         """
         holder, reason = resolve_marker_holder(
             {"a": "no marker here", "b": "still none"}
@@ -616,12 +743,14 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertIn("0 件", reason)
 
         holder, reason = resolve_marker_holder(
-            {"a": f"has {MARKER} once", "b": f"also has {MARKER}"}
+            {"a": f"prefix\n{MARKER}\nsuffix", "b": f"prefix\n{MARKER}\nsuffix"}
         )
         self.assertIsNone(holder)
         self.assertIn("複数", reason)
 
-        holder, reason = resolve_marker_holder({"a": f"has {MARKER}", "b": "no marker"})
+        holder, reason = resolve_marker_holder(
+            {"a": f"prefix\n{MARKER}\nsuffix", "b": "no marker"}
+        )
         self.assertEqual("a", holder)
         self.assertIsNone(reason)
 
@@ -661,15 +790,29 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertEqual(SIZE_BUDGET_UNITS, utf16_length(text))
         self.assertFalse(within_size_budget(utf16_length(text)))
 
-    def test_shared_forbidden_predicate_catches_issue_prefix_without_digit(
+    def test_static_surface_predicate_catches_issue_prefix_variations(
         self,
     ) -> None:
-        """「issue #」 (直後に数字を伴わない形式) は `#[0-9]` 単独では検出でき
-        ないが、共有述語 (forbidden_history_matches) では検出されること。
+        """「issue #」は直後に数字を伴わない形式・大文字小文字の表記ゆらぎ
+        (「Issue #」「ISSUE #」) のいずれでも static_surface_history_matches で
+        検出されること (`#[0-9]` 単独では検出できない)。
         """
-        text = "this references issue #N generically, not a numbered issue"
-        self.assertIsNone(FORBIDDEN_ISSUE_NUMBER_PATTERN.search(text))
-        self.assertIn("issue #", forbidden_history_matches(text))
+        no_digit = "this references issue #N generically, not a numbered issue"
+        self.assertIsNone(FORBIDDEN_ISSUE_NUMBER_PATTERN.search(no_digit))
+        self.assertIn("issue #", static_surface_history_matches(no_digit))
+        self.assertIn(
+            "issue #", static_surface_history_matches("See Issue #42 for context")
+        )
+        self.assertIn(
+            "issue #", static_surface_history_matches("See ISSUE #42 for context")
+        )
+
+    def test_static_surface_predicate_catches_date_with_internal_space(self) -> None:
+        """年月日形式は、年 (月日) 単位と数字の間に ASCII 空白を挟む表記
+        (「2026 年」等) も検出対象に含むこと。
+        """
+        self.assertIn("年月日形式", static_surface_history_matches("2026 年に実装した"))
+        self.assertIn("年月日形式", static_surface_history_matches("2026-08-05 実測"))
 
     def test_missing_header_fails_closed(self) -> None:
         """冒頭 HTML コメントヘッダを持たないテキストは、ルールブロック自体は
@@ -692,14 +835,49 @@ class HelperSyntheticContractTests(unittest.TestCase):
 
     def test_header_narrative_vocabulary_blocklist_catches_known_words(self) -> None:
         """ヘッダ限定の既知ナラティブ語彙ブロックリストが、識別子述語では
-        検出できない自由記述の経緯語彙 (「旧」「以前」等) を検出すること。
-        ルールブロック用の共有述語 (forbidden_history_matches) 単体では
-        検出できないことも合わせて確認する。
+        検出できない自由記述の経緯語彙 (多文字句「以前」等、句境界付きの「旧」)
+        を検出すること。ルールブロック用の共有述語
+        (static_surface_history_matches) 単体では検出できないことも合わせて
+        確認する。
         """
-        text = "この実装は旧バージョンを置き換えたものである"
-        self.assertEqual([], forbidden_history_matches(text))
-        self.assertIn("旧", forbidden_narrative_vocabulary_matches(text))
-        self.assertIn("旧", forbidden_header_matches(text))
+        text = "この実装は旧実装を置き換えたものである"
+        self.assertEqual([], static_surface_history_matches(text))
+        self.assertIn("旧", static_surface_narrative_vocabulary_matches(text))
+        self.assertIn("旧", static_surface_header_matches(text))
+
+    def test_narrative_vocabulary_legacy_prefix_requires_qualifying_continuation(
+        self,
+    ) -> None:
+        """「旧」は後続が設計/実装/形式/来、またはファイル名・識別子的な連なり
+        の場合のみナラティブ句として検出され、無関係な後続 (仮名遣い等) では
+        検出されないこと。多文字句 (「以前」等) は引き続き裸の部分文字列一致で
+        検出されること (境界付けの対象外)。
+        """
+        self.assertIn(
+            "旧", static_surface_narrative_vocabulary_matches("旧実装の説明を読む")
+        )
+        self.assertIn(
+            "旧", static_surface_narrative_vocabulary_matches("旧設計を踏襲している")
+        )
+        self.assertIn(
+            "旧", static_surface_narrative_vocabulary_matches("旧形式のまま残す")
+        )
+        self.assertIn(
+            "旧", static_surface_narrative_vocabulary_matches("旧来の方式を使う")
+        )
+        self.assertIn(
+            "旧",
+            static_surface_narrative_vocabulary_matches(
+                "旧always-sonnet.md を参照のこと"
+            ),
+        )
+        self.assertNotIn(
+            "旧",
+            static_surface_narrative_vocabulary_matches("これは旧仮名遣いの例だ"),
+        )
+        self.assertIn(
+            "以前", static_surface_narrative_vocabulary_matches("以前はこうだった")
+        )
 
 
 if __name__ == "__main__":
