@@ -1,6 +1,6 @@
 {
   "name": "session-handoff",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (/clear・startup 後) にその内容を自動注入するプラグイン。/session-handoff:setup で natsuume-statusline のキャッシュ連携を登録する。"
 }

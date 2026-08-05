@@ -4,107 +4,7 @@
 
 ## バージョン
 
-v0.6.0
-
-### v0.5.3 → v0.6.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest と `apply_patch` adapter を削除し、Claude Code 版の 4 hook は無変更。
-
-### v0.5.2 → v0.5.3 の変更点 (#148)
-
-- 編集対象が Git worktree 外にある場合は `code-format` を無音で skip し、無関係な祖先 config を拾った formatter / package runner の起動を防止した
-- worktree 内の untracked file は従来どおり自動 format の対象に保ち、repository 境界の integration test で両方の挙動を固定した
-
-### v0.5.1 → v0.5.2 の変更点 (#147)
-
-- config-root 探索の開始ディレクトリを Python の `os.path.realpath` で正規化し、symlink 経由の workspace path でもリンク先 repo の設定ファイルと `.git` 境界を探索するようにした
-- GNU 固有の `realpath -m` は導入せず、既存の Python 3 依存を使って Linux (WSL2) / macOS の同一挙動を維持した
-- symlink 設置場所に config がないケースと通常の real path の両方を integration test で固定した
-
-### v0.5.0 → v0.5.1 の変更点 (#146)
-
-- commit parser の `cd` state を各 git invocation の検出時点で固定し、commit より後に現れる `cd` が先行 commit を repo override と誤判定して block-commit-lint を deny / post-commit-lint を skip する問題を修正
-- commit より前の `cd` と、2 つの commit の間にある `cd` は、後続 commit に対する repo override として引き続き fail-closed に扱う
-
-### v0.4.1 → v0.5.0 の変更点
-
-- Codex の `apply_patch` payload から追加/削除行と複数の変更対象 path を抽出する adapter を追加した。ignore コメントの新規挿入 block と編集後 format を Claude Code / Codex の同じ hook script で実行する
-- Codex plugin manifest と adapter fixture test を追加した
-
-### v0.4.0 → v0.4.1 の変更点
-
-plugin description (plugin.json / marketplace.json / リポジトリ README の一覧テーブル) を 1〜2 文に短縮しました。hook の動作変更はありません。
-
-### v0.3.3 → v0.4.0 の変更点
-
-- **config-root 探索の表記と実装を一致させ、モダンな設定形式を追加 (#65)**
-  - `find-config-root.sh` の MARKERS に ESLint flat config の TS 変種 (`eslint.config.{mts,cts}`)、Prettier の新しめの形式 (`.prettierrc.{json5,ts}` / `prettier.config.{ts,mts,cts}`) を追加
-  - README の探索表のグロブ表記 `.prettierrc*` (全 `.prettierrc.*` に対応と誤読される) を実装の固定リストと一致する実列挙に修正。`package.json` の `eslintConfig`/`prettier`、`pyproject.toml` の `[tool.ruff]` も検出する旨を明記
-- **lint 実行ループの stale RC を防止 (#66)**
-  - `block-commit-lint.sh` / `post-commit-lint.sh` の lint 実行 `case` に `*) continue ;;` を追加し、各イテレーション冒頭で `RC=0` を初期化。将来 linter を追加した際に RC が前イテレーションの値を持ち越す経路を塞ぐ (現状は実害なしの防御強化)
-- **fail-open / fail-closed ポリシーを各 hook に明示 (#67)**
-  - `block-ignore-lint-comment.sh` に `policy: fail-open (defense-in-depth)` ラベルと根拠、`block-commit-lint.sh` に `policy: fail-closed` ラベルを追加。両者のポリシー差が意図的であることを明文化
-- **異常終了を可視化する診断 EXIT trap を追加 (#68)**
-  - `common.sh` に `install_auto_lint_exit_trap` を追加 (sibling の pre-push-review `lib/exit-trap.sh` と同型)。hook が非ゼロで異常終了した場合に stderr へ通知し、tmpfile 掃除も同ハンドラに集約
-  - これは「真の fail-closed 化」ではない点を明記: deny は stdout JSON が担い exit code ではないため deny 前の crash は fail-open に倒れ、SIGKILL/OOM では trap 自体走らない。crash 経路は極めて低頻度のため可視化に限定
-- ローカルに残存していた `lib/__pycache__` を掃除 (#69; git 追跡対象外・配布物には元々非混入のため repo の追跡内容は不変)
-
-### v0.3.2 → v0.3.3 の変更点
-
-- README の `## バージョン` 表記と changelog を実 version に同期 (#47 で 0.3.2 に bump された際に README 更新が漏れていた)。機能変更なし。
-
-### v0.3.1 → v0.3.2 の変更点 (#47)
-
-- **末尾 `\<改行>` (line continuation) による lint skip bypass を修正**
-  - `git commit\<改行>` のように末尾に line continuation が付いた入力では、bash の `$(...)` が trailing newline を削除する仕様により hook 取得時点で `git commit\` へ壊れ、commit subcommand 検知が外れて lint が skip される経路があった (`block-commit-lint.sh` / `post-commit-lint.sh`)
-  - jq 取得直後に末尾 `\<改行>` を復元する inline 処理を追加し、line continuation 正規化を macOS bash 3.2.57 互換の純 bash + sed fallback 実装に統一 (pre-push-review v0.8.0 と同種の横展開)
-
-### v0.3.0 → v0.3.1 の変更点
-
-- **`git commit -m "$(cat <<'EOF' ... EOF)"` パターンの誤検出を解消 (`parse-commit-command.py`)**
-  - Claude Code が複数行コミットメッセージを渡すための標準的な heredoc + command substitution 形式が、parser の「`$(...)` を含むコマンドは fail closed」guard に巻き込まれて常に deny される問題を修正
-  - parser に `_strip_safe_heredocs` 前処理を追加: 以下 **3 条件すべて** を満たす substitution のみ空文字列リテラル `""` に置換してから既存の `$(...)` / backtick チェックに通す
-    1. delimiter が quote 済み (`<<'DELIM'` または `<<"DELIM"`) であること: bash が本文を verbatim 扱いし、本文内の expansion が一切行われない (= `cat` の出力結果が事実上の静的文字列になる) ことを保証
-    2. substitution 全体が double-quoted string `"..."` で囲まれていること: word splitting を抑制し、substitution 結果を 1 つの word に固定
-    3. substitution が `-m` / `--message` / `--message=` の **value 位置** に置かれていること: bash の flag parser が「直後は値」と確定的に扱う位置に substitution があれば、結果が command/subcommand token に昇格する経路は構文的に存在しなくなる
-  - 条件 (2) (3) は codex review 指摘で 2 段階に追加した safety。条件 (1) のみだと `$(cat <<'EOF'\ngit\nEOF\n) commit -m msg` のように substitution の出力が bash の shell parse に流れ込んで `git commit ...` として実行される bypass 経路ができる。条件 (2) で word splitting は抑制できるが、`"$(cat <<'EOF'\ngit\nEOF\n)" commit -m msg` のように quoted substitution の結果が command token になる形は依然 bash で実行されるため、条件 (3) で「flag parser のスコープ内」に位置を限定することで完全に塞いだ
-  - **unquoted delimiter (`<<DELIM`)** や、heredoc 後ろに追加 substitution を置く形式、 surrounding `"..."` が無い形式、 `-m`/`--message` 以外の文脈に置かれた substitution、 複数の閉じ delimiter 候補を持つ payload (`-m "$(cat <<'EOF'\nfake\nEOF\nrm -rf /\nEOF\n)"`) はいずれも whitelist にマッチせず、 既存の fail-closed deny で弾かれる
-  - 加えて、同一コマンド内で `cat` を function として再定義するパターン (`cat() { ... }; git commit -m "$(cat <<...)"` や `function cat { ... }; ...`) も検出して whitelist 適用前に deny に倒す。 これは `$(cat <<...)` の `cat` が system cat ではなく定義された function を呼ぶ可能性 (= heredoc 本文が verbatim 出力されず副作用が走る) を塞ぐため。 ただし alias (`alias cat=evil`) / PATH manipulation (`PATH=/evil:$PATH`) / sourced script 経由の function inheritance は静的検出できないため未対応 (= **documented limitation**)。 本 hook の threat model は「典型的な bug / sloppiness による未 lint commit の防止」であり、 攻撃者意図を持った adversarial bypass の完全防御は対象外
-  - bash 側 (`block-commit-lint.sh` / `post-commit-lint.sh`) で行っていた `\\<newline>` → space および `\n` → `;` の正規化は parser 内 (`_normalize_command`) に集約。heredoc は real newline に依存するため bash 側で先に潰してはいけないことを契約として明示。CRLF (`\r\n`) → LF (`\n`) の正規化も `_normalize_command` 冒頭に組み込み、Windows / WSL クライアント経由で渡された input でも heredoc 検出が正しく動くようにした
-
-### v0.2.1 → v0.3.0 の変更点
-
-- **`git commit` 直後の non-blocking lint フィードバックを追加 (`post-commit-lint.sh`)**
-  - PostToolUse / Bash で `git commit` invocation を検出し、現 HEAD コミットの変更ファイルを ESLint / Ruff に再投入する
-  - lint エラーがあれば `{"decision": "block", "reason": ...}` を返し、Claude のターン context に lint 出力を注入する (tool 自体は実行済みのため "non-blocking" な feedback)
-  - これにより `block-commit-lint.sh` (PreToolUse) を bypass した経路 (プラグイン一時無効化、subagent 経由の commit、対応外の lint rule など) に対しても後追いで気付ける
-  - `git diff-tree HEAD` には `-m` フラグを付け、merge commit (2 parent 以上) でも各 parent との diff が列挙されるようにしている
-  - Bash 全体の exit_code は見ない (compound command `git commit && git push` で push 失敗時に commit lint をすり抜けないため)。代わりに「現在の HEAD を常に再 lint する」セマンティクスで動作する (commit 失敗時は前回 HEAD が再 lint されるが副次効果として許容)
-  - 必須ツール (jq / python3 / git) が欠ける場合は silent skip する (`block-commit-lint.sh` のような fail-closed deny は使えないため)
-- **`lib/build-lint-plan.py` の `VALID_SOURCES` に `head` を追加**
-  - lint plan 構築器を staged / working / head の 3 source 対応に拡張
-  - 既存 hook の挙動は変わらない (post-commit-lint.sh からのみ head source を投入する)
-- **`lib/common.sh` に `prepend_source_label` を共通化**
-  - `block-commit-lint.sh` と `post-commit-lint.sh` で完全同一だった helper 関数を移動 (DRY)
-  - 将来 source を追加する際の修正漏れリスクを削減
-
-### v0.2.0 → v0.2.1 の変更点
-
-- **macOS 標準 `/bin/bash` 3.2 互換化**: `block-commit-lint.sh` から bash 4+ 専用機能 (連想配列) を除去
-  - lint plan 構築 (ファイル → ソース集合のマッピング、(linter, config-root) でのグルーピング、linter 表示名解決) を新規 Python helper `lib/build-lint-plan.py` に委譲
-  - shell 側は indexed array と jq の TSV iteration のみで完結
-  - bash version check を削除し、必須依存は jq / python3 (3.7+) に整理
-- `mktemp` 呼び出しを template 引数明示形式 (`"${TMPDIR:-/tmp}/auto-lint-check.XXXXXX"`) に修正し、macOS/BSD でも動作するように
-- 非 UTF-8 ファイル名の扱いを修正: lint 対象拡張子の判定を byte 段階で行い、対象外ファイルは silent skip、対象ファイルのみ UTF-8 デコードを試みて失敗時は fail-closed deny に倒す
-
-### v0.1.1 → v0.2.0 の変更点
-
-- **lint 検査のタイミングを「ファイル編集前 (PreToolUse / Edit)」から「`git commit` 直前 (PreToolUse / Bash)」に移行**
-  - 旧 `auto-lint-check.sh` (Edit/Write/MultiEdit 単位の編集後予測 lint) を廃止
-  - 新 `block-commit-lint.sh` を追加: Bash 経由で `git commit` が実行される直前に staged ファイルを lint する
-  - これにより「中間状態が lint clean にならない一連の編集」が deny で stuck する問題が解消される (関連する変更を 1 つの MultiEdit にまとめる必要が無くなる)
-  - 編集予測ロジック (`predict-content.py`) を削除
-- 編集時の ignore コメント挿入禁止 (`block-ignore-lint-comment.sh`) と編集後の自動フォーマット (`code-format.sh`) は従来通り PreToolUse / PostToolUse で動作する
+v0.6.1
 
 ## 概要
 
@@ -133,6 +33,8 @@ plugin description (plugin.json / marketplace.json / リポジトリ README の�
 claude plugin marketplace add natsuume/natsuume-cc-marketplace
 claude plugin install auto-lint-check@natsuume-plugins
 ```
+
+本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
 ## 機能一覧
 
@@ -327,6 +229,11 @@ auto-lint-check/
 - `git`
 - `python3` (block-ignore-lint-comment.sh の差分検出、block-commit-lint.sh / post-commit-lint.sh の commit コマンド解析および lint plan 構築。block-commit-lint では不在時 fail closed で deny、post-commit-lint では silent skip)
 - 利用したい linter / formatter (`eslint`, `prettier`, `ruff` または `uvx`)
+
+## 既知の制約
+
+- ignore コメント検知と commit 前 lint は Bash コマンド文字列と staged ファイルの静的解析ベースのため、alias・PATH 操作・sourced script 経由の function 継承のような間接経路は検出できません。threat model は典型的なバグや不注意による未 lint commit の防止であり、攻撃者意図を持った adversarial bypass の完全防御は対象外です。
+- `block-commit-lint` の deny は stdout JSON が担い、exit code ではありません。deny 判定より前に hook 自体が crash した場合は fail-open に倒れます (SIGKILL / OOM では trap も実行されません)。crash 経路は可視化のみを行います。
 
 ## 関連情報
 

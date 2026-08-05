@@ -4,48 +4,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.6.2
-
-### v0.6.1 → v0.6.2 の変更点
-
-共有 lib cmd-parser.sh の同期更新 (#354。escaped backslash の quote 状態漏れ修正)。
-
-### v0.6.0 → v0.6.1 の変更点
-
-rebase-workflow Skill の一括コマンド例 (bash-decompose 違反) を削除し、`origin/HEAD` の stale 対策 (`git fetch --prune` / `git remote set-head origin --auto` の先行実行) を追加した。
-
-### v0.5.3 → v0.6.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest を削除し、Claude Code 版の 3 hook と rebase-workflow Skill は無変更。
-
-### v0.5.2 → v0.5.3 の変更点 (#141)
-
-- 隣接 quote で command / refspec を分断する形と git / gh alias が検出対象外であることを既知の制約へ追記
-- 本 hook は cooperative な agent が生成する通常形の誤操作を防ぐものであり、意図的な難読化や alias 展開までを扱う security sandbox ではないという保証境界を明文化
-
-### v0.5.1 → v0.5.2 の変更点 (#139)
-
-- 3 hook の jq parse error を明示的に非ゼロ終了へ伝播し、共有 EXIT trap の診断が確実に stderr へ出るよう修正
-- 最初の `exit-trap.sh` 読み込み前にも caller 内の最小 bootstrap trap を設置し、同 library 自体の欠損・構文エラーも無音の exit 0 に戻さないよう修正
-- `cmd-parser.sh` / `default-branch.sh` の source status と必須関数 API を読み込み直後に検証し、配布欠損や不完全な更新による command not found が後続の正常分岐で隠れないよう修正
-- jq / library / 必須関数の異常系 18 ケースと正常系 6 ケースを process boundary から検証する受入テストを追加
-
-### v0.5.0 → v0.5.1 の変更点 (#140)
-
-- target-mismatch の `git -C <dir>` 検出を token ベースの global option walk に変更し、`git blame -C` / `git log -C` / `git diff -C` のような subcommand-local option を repo 切替と誤認して後続の commit / push / PR 作成を deny する false positive を解消
-- global `-C`、引用付き `"-C"`、`-c <name=value>` 後の `-C`、`--git-dir` / `--work-tree` は引き続き target-mismatch として fail-closed に deny
-
-### v0.4.2 → v0.5.0 の変更点
-
-- Codex plugin manifest を追加し、3 つの default branch 保護 hook と rebase Skill を Claude Code / Codex で共有できるようにした
-
-### v0.4.1 → v0.4.2 の変更点
-
-plugin description (plugin.json / marketplace.json / リポジトリ README の一覧テーブル) を 1〜2 文に短縮しました。あわせて PR deny の記述を実挙動 (master/main を head とする PR 作成のみ deny) に合わせて正確化。hook の動作変更はありません。
-
-### v0.4.0 → v0.4.1 の変更点
-
-plugin description (plugin.json / marketplace.json) を人間向けの簡潔な概要に刷新しました (変更履歴・実装詳細は本 README のバージョン節へ集約)。hook の動作変更はありません。
+v0.6.3
 
 ## 概要
 
@@ -53,79 +12,14 @@ plugin description (plugin.json / marketplace.json) を人間向けの簡潔な�
 
 加えて、rebase によるリモート default branch 取り込みワークフローを Skill として提供します。
 
-### v0.3.2 → v0.4.0 の変更点 (#135, #136, #137)
-
-- **3 hook (push/commit/pr) の検出方式を segment/token ベースに刷新**: v0.3.x までは COMMAND 文字列の改行を無条件に `;` へ正規化してから quote 非対応の regex で invocation を検出していた。この方式は quote 内・heredoc 内の「コマンド例文」(複数行コミットメッセージ中の `git push origin master` 等) を実コマンドと誤認して deny する false-positive を持っていた:
-  - `git commit -m "note: run\ngit push origin master\nto publish"` (改行を含むコミットメッセージ) が push hook に deny される (#135)
-  - heredoc / JSON 文字列内の `gh pr create --head master` という文字列が pr hook に deny される (#136)
-  - 複数行コミットメッセージ本文中の `cd /other && git commit ...` のような例文が commit hook に deny される (#137)
-- 修正は pre-push-review/block-pre-push.sh と同じ `cmd-parser.sh` (`split_command` + `tokenize_segment`) ベースの検出への移植。大まかな流れ: segment 分割 → subshell `(...)` / brace group `{...}` のグループ unwrap → `$(...)` / `<(...)` / `>(...)` / バッククォート内の置換 shape 保守的 deny → token level invocation 検出 (env-var assignment skip → `git`/`gh` 判定 → global option walk) → target-mismatch 判定、という単一パイプラインに統一
-- 共有 lib `cmd-parser.sh` の `split_command` に潜在していたバグを修正: quote (`'...'`/`"..."`) 内の生改行がそのまま segment に残っていたため、呼び出し側の `while IFS= read -r line; do ... done < <(split_command ...)` が segment 内部の改行を次 segment との境界と誤認し、1 segment が複数行に分裂する実害があった (quote 内改行は paren/brace depth 内の改行と同様に空白 1 文字へ正規化して 1 segment のまま保持するよう修正)。pre-push-review / enforce-draft-pr の `cmd-parser.sh` へも byte-identical で sync
-- 新たに **グループ unwrap** (`(cd /other; git push origin feature)` / `{ cd /other; git push origin feature; }` のような subshell / brace group 内の target-mismatch を検出) と **置換 shape の保守的 deny** (`echo $(git push origin master)` / バッククォート版を deny) に対応。旧実装ではこれらは素通りしていた
-- **レビュー (codex / code-reviewer / security-reviewer) で実測確認された bug を同一 version 内で追加修正 (計 5 件)**:
-  1. **target-mismatch scope が invocation の後続引数まで含み誤 deny (code-reviewer High)**: `git push origin cd` (`cd` という名のブランチ) / `git commit -m cd` / `gh pr create --title cd` のような、たまたま `cd` を含む refspec / コミットメッセージ / オプション値が target-mismatch の `cd` 検出に誤ヒットしていた。scope の最終要素を「segment 全体」から「先頭 token (env assignment 含む) から subcommand token (`push`/`commit`/`create`) までの invocation prefix」に narrowing して修正
-  2. **group 内の生改行が空白化され separator 情報が失われ bypass (security-reviewer High)**: `(echo prep<改行>git push origin master)` が無出力 allow になっていた。原因は `cmd-parser.sh` の `split_command` が paren/brace depth 内の改行を空白に正規化していたため、group unwrap の再分割時に separator を復元できなかったこと。paren/brace depth 内 (かつ quote 外) の改行を `;` に正規化するよう修正 (quote 内改行の空白化は維持。3 プラグインの `cmd-parser.sh` へ byte-identical で sync)
-  3. **`strip_squoted_text` が dquote 内アポストロフィを squote 境界と誤認し bypass (security-reviewer High)**: `echo "it's $(git push origin master) don't"` のように dquote 内に英文アポストロフィが 2 つ以上あると、naive な `sed -E "s/'[^']*'/ /g"` がその間 (= `$(git push ...)` を含む範囲) を squote 領域と誤認して空白化し、opener-anchored 検出 (下記) が発火しなくなっていた。quote 文脈 (dquote 内では `'` を toggle しない) を追跡する純 bash の文字 walk に置き換えて修正
-  4. **group unwrap の「最後の閉じ文字」ヒューリスティックが redirection target 内の `)` を誤選択し bypass (codex P1 / code-reviewer High)**: `(git push origin master) >/tmp/out` (閉じ `)` 直後に redirection が続く形) や `(git push origin master) > $(mktemp)` (redirection target 自体が `$(...)` を含み `)` が複数ある形) で、「segment 内の最後の `)`/`}` で切る」文字列ヒューリスティックが誤った位置で切ってしまい、token が破損して refspec 比較を素通りしていた。quote 文脈 + depth 追跡で「対応する閉じ文字」を正確に特定する `find_group_close` helper に置き換えて修正。閉じ文字より後の suffix (redirection 等) は**破棄せず**独立した worklist 要素として扱う (`(echo hi) > $(git push origin master)` のように redirection target の置換内に隠れた invocation も、後段の置換 shape check に到達させて deny するため)
-  5. **codex rescue の再レビューで「quote された command substitution は README 明記のみ」という方針が非承認となり、dquote 内 invocation の opener-anchored 保守的 deny を追加実装 (F6)**: `echo "$(git push origin master)"` のように dquote 内で実行される `$(...)` / `<(...)` / `>(...)` を、substitution opener 自身 (`$(`/`<(`/`>(`) を左境界とした第 2 パスの regex (検査対象は `strip_squoted_text` で single quote 領域のみ空白化したテキスト) で検出して deny する。境界を bare `(`/`;`/`&`/`|` に広げず backtick も opener に含めないのは、コミットメッセージ規約の本文例文や markdown code span を誤検出しないため (詳細は下記「既知の制約」参照)
-- 既知の制約を 5 点追記 (下記「既知の制約」参照): シェルラッパー経由の検出対象外、置換 shape 検出のスコープ、dquote 内 command substitution 検出の残存範囲 (backtick 置換 / opener 非直後の invocation)、quote されていない heredoc body 行頭の例文、quote 数が奇数の複数行文字列
-
-### v0.3.1 → v0.3.2 の変更点 (marketplace audit drift cleanup)
-
-- **README 内 version 見出しを `v0.3.0` → `v0.3.2` に同期** (#114 で `v0.3.1` を name のみ bump して README badge と changelog backfill を漏らした self-introduced drift を解消、 本 PR で再修正)
-- **plugin.json / marketplace.json / root README plugin 表の同期維持**: bump 対象 3 箇所のうち README が drift していた点を marketplace 全体 audit で検出して再収束
-
-### v0.3.0 → v0.3.1 の変更点 (#114, cross-plugin sync)
-
-- **関連プラグイン pre-push-review の記述を v2.0.0 仕様に同期**: `## 関連プラグイン` の pre-push-review 行が「push 前に `/code-review` (旧名 `/simplify`) → `/codex:review --scope branch` を強制」 という v1.x 以前の旧記述だったため、 v2.0.0 の「`/pre-push-review:review` slash command で 3 レビュー (`/code-review` + codex review wrapper + `pre-push-review:security-reviewer` subagent) を並列起動」 に書き換え。 documentation のみの修正で hook / 動作は不変
-
-### v0.2.4 → v0.3.0 の変更点 (#61, #62, #63, #60)
-
-- **3 hook に診断 EXIT trap を追加 (#61)**: sibling の pre-push-review (`lib/exit-trap.sh`) と同型の `install_exit_trap` を `lib/exit-trap.sh` として導入。hook が予期せず非ゼロで終了 (jq クラッシュ / signal / シェル展開失敗等) した場合に stderr へ通知し、PreToolUse 仕様「その他 exit code で続行」による default branch 保護の無音 fail-open を可視化する。trap は exit code を変えないため deny/allow 挙動は不変
-- **false-positive deny を既知の制約に明記 (#62)**: `git checkout <default> -- <pathspec>` (ファイル復元) と remote 名が `master`/`main` の push が誤って deny される件を文書化 (security gate は保守側に倒す方針のため修正せず明記)
-- **共通 lib テーブル / ディレクトリ構成を実態に合わせ更新 (#63)**: `default-branch.sh` の全関数を列挙し、ベンダリングしている `cmd-parser.sh` と新規 `exit-trap.sh` を追記。cmd-parser.sh は pre-push-review から byte-identical でベンダリングしている旨を明記
-- **README の version 見出し / changelog を実 version に追随 (#60)**: 見出しが v0.2.0 のまま実 version とドリフトしていたため v0.3.0 に更新し、欠落していた v0.2.1〜v0.2.4 の changelog を backfill
-
-### v0.2.3 → v0.2.4 の変更点 (#92)
-
-- rebase-workflow の `SKILL.md` frontmatter の無効なキー `when-to-use` (kebab-case) を有効な `when_to_use` (snake_case) に修正
-
-### v0.2.2 → v0.2.3 の変更点 (#47, cross-plugin)
-
-- **末尾 `\<LF>` (line continuation) による検知 bypass を修正**: bash の `$(...)` が trailing newline を trim する仕様で `"command":"git push origin master\<LF>"` 等が取得時点で壊れ default branch 保護を素通りする経路を、jq 取得直後の復元処理で 3 hook (commit/push/pr) に塞いだ。あわせて line continuation 正規化を macOS bash 3.2 互換実装に統一
-
-### v0.2.1 → v0.2.2 の変更点 (#46)
-
-- 共通 lib `cmd-parser.sh` を pre-push-review v0.8.0 の canonical 実装に sync (byte-identical ベンダリングの同期)
-
-### v0.2.0 → v0.2.1 の変更点 (#42)
-
-- macOS 互換性 fix (cmd-parser.sh canonical) への追随 version bump、およびプラグイン配下を変更したら version を必ず bump するルールを CLAUDE.md に追加
-
-### v0.1.0 → v0.2.0 の変更点
-
-- **commit / push / PR の 3 経路を全て deny 対象に拡張** (旧版は push のみ):
-  - `git commit` (デフォルトブランチ上で実行された場合)
-  - `git push` (引数の有無に関わらず、デフォルトブランチを更新する経路すべて)
-  - `gh pr create` (head が master/main になるケース、`--head` 明示時も含む)
-- 旧版の push 検出 regex は `git push <remote> master` のような明示引数形式しか拾えず、`git push` 単独 / `git push origin` 等の引数省略形 (= upstream 設定で master を更新する形) を素通りさせていました。v0.2.0 ではカレントブランチを `git symbolic-ref --short HEAD` で取得し「master/main 上にいるなら全 push 系を deny」「他ブランチからは引数の master/main トークンで判定」の 2 軸で網羅的に検出します。push 検出は `git -C dir push` / `git -c push.default=current push` のような git global option 経由の形式も拾えるよう OPT-aware にしています。
-- **target-mismatch prefix の保守的 deny**: 対象 repo / branch を切り替える前段を含むコマンドは、hook 実行時の cwd / カレントブランチと実コマンドの target が乖離して default branch 保護を素通りさせる経路になります。3 hook すべてで `has_target_mismatch_prefix` 検出を入れ、対象 repo / branch に切り替えた上で別 Bash 呼び出しとして実行するよう促します:
-  - 対象 repo を切り替える形: `cd /other && git push` / `git -C /other push` / `GIT_DIR=/foo/.git git push`
-  - 対象 branch を切り替える形: `git switch master && git commit` / `git checkout main && git push` / `git switch -c master && ...` (新規作成も同列)
-  - subshell / brace group / command substitution 越し: `(cd /other; git commit)` / `{ cd /other; git push; }` / `$(cd /other; git ...)` (`()` / `{}` を空白に正規化してから検出)
-  - redirection 演算子直結: `cd>/dev/null /other && git push` / `cd</dev/null /other && ...` (cd の右境界に `<>` を含める)
-  
-  pre-push-review (v0.1.0 で pre-commit-review v0.4.0 から push 境界に移行) の cd 許容方針とは別軸の防御で、本プラグインは default branch 保護が責務。
-- 共通 lib (`hooks/scripts/lib/default-branch.sh`) に `current_branch` / `is_default_branch` / `emit_deny` / `has_target_mismatch_prefix` / `TARGET_MISMATCH_DENY_REASON` を集約し、3 hook 間で判定ロジック・deny ペイロード形式・メッセージ文言がドリフトしないようにしています。
-
-> v0.1.0 までは `gh pr create` への `--draft` 自動付与もこのプラグインに含まれていましたが、責務分離のため [enforce-draft-pr](../enforce-draft-pr/) プラグインに切り出しました。draft 強制を使いたい場合はそちらを別途インストールしてください。
-
 ## インストール
 
 ```bash
 claude plugin marketplace add natsuume/natsuume-cc-marketplace
 claude plugin install git-guardrails@natsuume-plugins
 ```
+
+本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
 ## 機能一覧
 

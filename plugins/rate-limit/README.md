@@ -2,24 +2,11 @@
 
 Claude (エージェント自身) が、セッション内でサブスクリプションの usage limit (5 時間セッション枠・週次枠の使用率と reset 時刻) をユーザ操作なしで取得できる `/rate-limit:status` Skill を提供するプラグインです。加えて、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻・plan 種別) を `codex app-server` RPC 経由で取得する `/rate-limit:codex-status` Skill も提供します。こちらは公式ドキュメント化済みの RPC (`account/rateLimits/read`) を使うため、`/rate-limit:status` の経路② のような非公式依存はありません。
 
+本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
+
 ## バージョン
 
-v0.5.0
-
-### v0.4.0 → v0.5.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止し、`setup-codex` Skill を削除した。`codex-status` Skill (codex app-server RPC で codex の rate limit を取得する Claude Code 機能) は無変更で存続する。
-
-### v0.3.0 → v0.4.0 の変更点
-
-- `/rate-limit:status` (経路② oauth-endpoint) の出力 `extras` に `limits` を追加 (#307)。endpoint の `limits` 配列 (Fable 等の model-scoped weekly limit を含む) を raw passthrough で報告し、`SKILL.md` に読み方と報告手順 (severity が normal 以外・is_active な entry の強調) を定義
-
-### v0.2.0 → v0.3.0 の変更点
-
-- Codex plugin manifest を追加し、`codex-status` Skill の app-server RPC を Codex marketplace からも利用可能にした
-- `status` / `codex-status` Skill の script path を SKILL.md の実パスから解決する形式にし、hook 専用環境変数への依存を除いた。Claude statusLine wrapper は互換性差分として明示した
-- `setup-codex` の direct config 編集を backup 後の atomic replace と strict parse 失敗時の
-  atomic restore に限定し、parse 成功時だけ完了を報告する transaction 契約を追加した
+v0.5.1
 
 ## 取得経路
 

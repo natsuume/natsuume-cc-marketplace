@@ -6,25 +6,7 @@ context 使用率が閾値を超えたときに handoff ドキュメントの作
 
 ## バージョン
 
-v0.3.0
-
-### v0.2.0 → v0.3.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest、Codex-only PreCompact adapter
-(`save-codex-handoff.sh`)、opt-in helper (`setup-codex-summary.sh` / `lib/codex-summary-opt-in.sh`) を
-削除した。Claude Code 版の検知 hook・注入 hook・setup Skill の Claude Code 経路は無変更。
-
-### v0.1.0 → v0.2.0 の変更点
-
-- Codex plugin manifest と Codex-only PreCompact adapter を追加した。`auto|manual` compaction の
-  直前に transcript 末尾を read-only/ephemeral な nested Codex で要約し、pending handoff を
-  atomic 保存して `SessionStart(source=compact|resume)` の同一 session 注入経路へ接続する
-- Codex hook input では厳密な context 使用率を取得できないため、Claude Code と同じ 60% trigger
-  ではなく「compaction 直前」を代替 trigger とした。保証差・fail-open 条件・fixture 検証範囲を
-  本 README に明記した
-- nested Codex が親 session と異なる default provider/account へ transcript を送る可能性があるため、
-  producer を既定無効にした。git-dir 内の exact v1 owner-only marker を inspect → provider/privacy
-  明示承認 → action-bound token の workflow で enable/disable する
+v0.3.1
 
 ## 機能概要
 
@@ -158,6 +140,8 @@ context 使用率キャッシュの producer が未構成の場合は、続け�
 ```
 /session-handoff:setup
 ```
+
+本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
 ## 機能一覧
 

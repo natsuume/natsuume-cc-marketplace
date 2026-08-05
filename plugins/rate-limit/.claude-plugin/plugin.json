@@ -1,6 +1,6 @@
 {
   "name": "rate-limit",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する /rate-limit:status Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する /rate-limit:codex-status Skill を提供するプラグイン。/rate-limit:setup で statusline キャッシュ連携を登録する。"
 }
