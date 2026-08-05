@@ -1,6 +1,6 @@
 {
   "name": "ui-discipline",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う。"
 }

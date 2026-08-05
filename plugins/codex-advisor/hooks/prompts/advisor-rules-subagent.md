@@ -1,5 +1,5 @@
 <!--
-  codex-advisor: subagent 向け相談規律 (issue #219)
+  codex-advisor: subagent 向け相談規律
   配送は SubagentStart hook (inject-advisor-rules-subagent.sh) が全 subagent に行う。
   通常 subagent は Codex wrapper を直接起動せず、相談 request を親へ返す。
 -->

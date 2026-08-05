@@ -1,10 +1,8 @@
 <!--
-  agent-discipline: 常時適用ルール (SONNET 版、part 1/3、issue #236)
-  issue #236 (注入ペイロード分割) により、単一ファイルだった always-sonnet.md を rule 境界で
-  3 分割した 1 番目 (旧 always-sonnet.md は削除済み)。rule 本文・rule ID マーカーは分割前から
-  一字一句無変更。3 part (このファイル / always-sonnet-2.md / always-sonnet-3.md) が揃って
-  1 つのルールセットを構成する。ルール ID セットは always-fable.md と完全一致させること
-  (受入基準、3 part の和集合で判定)。
+  agent-discipline: 常時適用ルール (SONNET 版、part 1/3)
+  3 part 構成 (このファイル / always-sonnet-2.md / always-sonnet-3.md) の 1 番目。3 part が
+  揃って 1 つのルールセットを構成する。ルール ID セットは always-fable.md と完全一致させること
+  (受入基準、3 part の和集合で判定。lint-prompt-sync.sh チェック 1 が検証する)。
 -->
 
 # agent-discipline: 常時適用ルール (Sonnet) — part 1/3

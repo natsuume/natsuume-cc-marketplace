@@ -1,11 +1,10 @@
 <!--
   agent-discipline: 分業規律 (FABLE 版)
-  #193 で fable-discipline/hooks/prompts/discipline-body.md から本文無変更で移設。
   Fable メインセッション向けの分業・検証規律本文 (セクション 1〜4)。
   配送は inject-always.sh (SessionStart) と resolve-model-on-prompt.sh (判定不能セッションの
   one-shot 補正) が、常時適用ルールと合わせて 1 回のモデル判定で行う。
-  #194 で rule マーカーを付与 (Sonnet 版 discipline-sonnet.md と ID セットを完全一致させる。
-  一致は lint-prompt-sync.sh のチェック対象に #195 で追加予定)。
+  rule ID セットは Sonnet 版 discipline-sonnet.md と完全一致させる (lint-prompt-sync.sh
+  チェック 4 が検証する)。
 -->
 
 <!-- rule:role-split -->

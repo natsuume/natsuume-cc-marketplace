@@ -1,9 +1,9 @@
 <!--
-  codex-advisor: 利用規律 (issue #219、#241、#291)
+  codex-advisor: 利用規律
   各ルールは「意図 (なぜ) + 指示 + 境界」で記述する (agent-discipline / ui-discipline と同形式)。
   配送は SessionStart hook (inject-advisor-rules.sh) が常時行う。
-  サイズ制約: 全文で 8,000 文字 (UTF-16 code unit 基準の inline 閾値の安全マージン込み運用値、
-  #236 調査) を超えないこと。超えると persisted-output 化され注入が 2KB プレビューに劣化する。
+  サイズ制約: 全文で 8,000 文字 (UTF-16 code unit 基準の inline 閾値の安全マージン込み運用値)
+  を超えないこと。超えると persisted-output 化され注入が 2KB プレビューに劣化する。
 -->
 
 # codex-advisor: Codex 利用規律
