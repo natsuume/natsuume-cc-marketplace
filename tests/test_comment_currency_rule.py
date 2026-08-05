@@ -23,8 +23,10 @@
    additionalContext の最大構成が UTF-16 code units 8,000 以下 (inject-always.sh
    の `-gt 8000` 縮退条件と整合する境界) に収まること (判定は単一の共有述語
    within_size_budget を使う)。段階的縮退ガードを持つ 2 経路 (inject-always.sh
-   系) は、縮退で落ちる要素が実際に残存していることも確認し、「縮退後の
-   payload がたまたま収まっただけ」を green にしない
+   系) は、縮退で落ちる要素が実際に残存していることも合否判定に組み込み、
+   「縮退後の payload がたまたま収まっただけ」を green にしない (UTF-8 locale
+   が確定できずこの証拠を確認できない場合は、この 2 経路のみ可視的に skip し、
+   残り 4 経路の検査は続行する)
 4. ルール本文ブロック自身、および面ごとに解決した冒頭 HTML コメントヘッダが、
    面固有の静的自己準拠述語 (static_surface_*、定義直前のコメント参照) が
    定める禁止対象の経緯記述 (issue/PR 番号・年月日。大文字小文字や年月日単位
@@ -951,13 +953,16 @@ class SizeBudgetTests(unittest.TestCase):
     検出が予算超過に対する唯一の防衛線になる。判定は共有述語 within_size_budget
     を使う。
 
-    UTF8_LOCALE 未検出時の skip は test_gradual_degradation_paths_deliver_
-    without_degrading (縮退の有無を hook 側の wc -m locale 依存判定に頼る唯一
-    のテスト) に限定する。それ以外のテスト (サイズ予算・payload 内容検査) は
-    Python 側で UTF-16 長を計測するため locale に依存せず、locale の有無に
-    関わらず常に実行する — クラス全体を skip すると、縮退ガード無し経路の
-    唯一の防衛線であるサイズ検査までもが「green 報告なしの skip」に埋もれる
-    盲点が生じるため。
+    段階的縮退ガードを持つ 2 経路 (PRE_DEGRADATION_DELIVERY_BUILDERS の
+    fable / sonnet part 1) は、非縮退の証拠 ((参照パス) 行・delivery-note.md
+    の配送メモ本文が payload に残存していること) をサイズ予算検査・payload
+    内容検査の両方の合否判定に組み込む。UTF8_LOCALE が確定できる場合、証拠が
+    無ければ縮退後の payload がたまたま収まっただけの可能性があるため fail
+    する (証拠なしの green を許さない)。UTF8_LOCALE が確定できない場合は、
+    この 2 経路の assert のみ subTest 経由で可視的に skip し (silent green に
+    しない)、残り 4 経路 (locale 非感応) の検査は常に続行する。この統合により
+    旧来の独立した縮退なし検査は不要になったため削除した (差分は subTest の
+    skip メッセージとして同等の情報を提供する)。
     """
 
     DELIVERY_BUILDERS = {
@@ -990,24 +995,52 @@ class SizeBudgetTests(unittest.TestCase):
         "fable one-shot 補正配送 (resolve-model-on-prompt.sh)": FABLE_MD,
     }
 
+    def _skip_if_degradation_evidence_unavailable(self, label: str) -> bool:
+        """label が段階的縮退ガード付き経路かつ UTF8_LOCALE 未検出なら、
+        subTest 経由で可視的に skip して True を返す。呼び出し側はこの場合
+        `continue` して次の経路へ進む (silent green にせず、他経路は継続する)。
+        """
+        if label not in PRE_DEGRADATION_DELIVERY_BUILDERS or UTF8_LOCALE is not None:
+            return False
+        with self.subTest(label=label):
+            self.skipTest(
+                "利用可能な UTF-8 locale (C.UTF-8 / en_US.UTF-8 系) が見つから"
+                "ず非縮退の証拠 ((参照パス) 行・配送メモ本文の残存) を確認でき"
+                "ないため、この経路のみ明示的に skip する (silent green にしな"
+                "い。他経路は継続する)"
+            )
+        return True
+
     def test_all_delivery_paths_within_budget(self) -> None:
+        """各配送経路の additionalContext が配送予算 (SIZE_BUDGET_UNITS) 以下に
+        収まること。段階的縮退ガード付き 2 経路は非縮退の証拠も合否判定に
+        組み込む (クラス docstring 参照)。
+        """
         violations = []
         for label, builder in self.DELIVERY_BUILDERS.items():
+            if self._skip_if_degradation_evidence_unavailable(label):
+                continue
             with tempfile.TemporaryDirectory() as tmp_dir:
                 context = builder(tmp_dir)
             length = utf16_length(context)
             if not within_size_budget(length):
-                violations.append(f"{label}: {length}")
+                violations.append(f"{label}: 予算超過 ({length} units)")
+            if label in PRE_DEGRADATION_DELIVERY_BUILDERS:
+                missing = pre_degradation_missing_elements(context)
+                if missing:
+                    violations.append(f"{label}: 非縮退の証拠が無い {missing}")
         self.assertEqual(
             [],
             violations,
-            f"配送予算 ({SIZE_BUDGET_UNITS} UTF-16 units 以下) を超過: {violations}",
+            f"配送予算 ({SIZE_BUDGET_UNITS} UTF-16 units 以下) を超過、または"
+            f"非縮退の証拠を確認できない経路: {violations}",
         )
 
     def test_all_delivery_paths_include_source_file_content(self) -> None:
         """各配送経路の additionalContext に、その経路が配送する md ファイル
         (DELIVERY_PATH_SOURCE_FILES) の本文全体が実際に含まれること
-        (payload_content_missing 参照)。
+        (payload_content_missing 参照)。段階的縮退ガード付き 2 経路は非縮退の
+        証拠も合否判定に組み込む (クラス docstring 参照)。
 
         サイズ検査 (test_all_delivery_paths_within_budget) はサイズのみを
         見るため、hook が本文を欠落させた (それでいて長さだけは偶然予算内に
@@ -1019,42 +1052,23 @@ class SizeBudgetTests(unittest.TestCase):
         """
         violations = []
         for label, builder in self.DELIVERY_BUILDERS.items():
+            if self._skip_if_degradation_evidence_unavailable(label):
+                continue
             with tempfile.TemporaryDirectory() as tmp_dir:
                 context = builder(tmp_dir)
             source_md = self.DELIVERY_PATH_SOURCE_FILES[label]
             missing = payload_content_missing(context, source_md)
             if missing:
                 violations.append(f"{label}: {missing}")
+            if label in PRE_DEGRADATION_DELIVERY_BUILDERS:
+                missing_evidence = pre_degradation_missing_elements(context)
+                if missing_evidence:
+                    violations.append(f"{label}: 非縮退の証拠が無い {missing_evidence}")
         self.assertEqual(
-            [], violations, f"配送経路の payload に本文内容が含まれていない: {violations}"
-        )
-
-    def test_gradual_degradation_paths_deliver_without_degrading(self) -> None:
-        """段階的縮退ガードを持つ 2 経路 (inject-always.sh 系) が、縮退で
-        落ちる要素 ((参照パス) 行・delivery-note.md の配送メモ本文) を
-        残したまま予算内であることを確認する (PRE_DEGRADATION_DELIVERY_
-        BUILDERS 参照)。縮退後の payload がたまたま収まっただけ、という
-        盲点を塞ぐ。
-
-        縮退の有無は hook 側の `wc -m` (locale 依存) 判定に依存するため、
-        このテストのみ UTF8_LOCALE 未検出時に skip する (他のテストは
-        Python 側の UTF-16 長計測のみに依存し locale 非依存のため対象外)。
-        """
-        if UTF8_LOCALE is None:
-            self.skipTest(
-                "利用可能な UTF-8 locale (C.UTF-8 / en_US.UTF-8 系) が見つから"
-                "ないため skip する (wc -m の locale 依存による縮退判定の"
-                "環境依存 red を避けるため)"
-            )
-        violations = []
-        for label, builder in PRE_DEGRADATION_DELIVERY_BUILDERS.items():
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                context = builder(tmp_dir)
-            missing = pre_degradation_missing_elements(context)
-            if missing:
-                violations.append(f"{label}: {missing}")
-        self.assertEqual(
-            [], violations, f"縮退なし予算内の保証が崩れている経路: {violations}"
+            [],
+            violations,
+            f"配送経路の payload に本文内容が含まれていない、または非縮退の"
+            f"証拠を確認できない経路: {violations}",
         )
 
 
