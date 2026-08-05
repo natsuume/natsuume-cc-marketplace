@@ -172,6 +172,15 @@ STRUCTURAL_ELEMENT_LABELS = {
 # 抽出単位と同一)。ブロック全体一致検査
 # (test_rule_block_matches_confirmed_body_exactly) の正本であり、この
 # 定数からそのまま各面の確定本文を逐語復元できる。
+#
+# 配置先の決定 (契約): sonnet 面の配置先は always-sonnet-2.md とする (3 part
+# (always-sonnet-{1,2,3}.md) のうち配送予算の残余が最大のため)。ルール番号
+# ("## N.") は 3 part 集合全体で一意に振られ、単一 part 内での連番性は
+# 要求しない — always-sonnet-2.md は既存ルール 3〜6 を持つため、本ルールの
+# 見出し番号がその直後の連番になるとは限らない。FACES / CANONICAL_SENTENCES /
+# STRUCTURAL_ELEMENT_LABELS の "always-sonnet-{1,2,3}.md" キーは、マーカーを
+# 保持する part を動的に解決する (resolve_face_path 参照) ため、この配置先
+# 決定自体をテストの検査対象として固定するものではない。
 CONFIRMED_BLOCK_TEXT = {
     'always-fable.md': (
         '\n## 10. 説明は常に最新の内容のみ\n\n**なぜ**: 履歴の正規の置き場は git log / PR / issue であり、コメント・README に書いた経緯は更新されず腐る。読者の多くは AI エージェントでリポジトリ内テキストを信頼ソースとして扱うため、古い経緯記述は誤誘導になる。セッションへ注入される文書では経緯記述がトークンと配送予算を恒常的に消費する。\n\n**指示**: コードコメント・docstring・README 等の説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説 (版数・日付・issue/PR 番号による過去の変更の記述、旧実装の説明、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照) を書かない。履歴と検討経緯は commit message・PR 説明・issue に置く。契約・制約は issue 参照に頼らずその場で完結して書き、コード変更で説明が古くなる場合は同時に更新する。適用は touch-time — 新規作成・意味変更した説明ブロックに適用し、指示のない一括清掃や単純移設・整形での書き換え波及は行わない。\n\n**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記は証拠の鮮度情報として許可する。commit message・PR 説明・issue body、および明示的に履歴を目的とする文書 (README の `### vX.Y.Z → vX.Y.Z` 変更履歴節を含む) は対象外。過去に言及しない現在形の設計理由の説明は禁止対象ではない。\n\n'
@@ -606,6 +615,45 @@ def resolve_face(
     return path, block, header, None
 
 
+def detect_utf8_locale() -> str | None:
+    """`locale -a` の出力から利用可能な UTF-8 locale を優先順
+    (C.UTF-8 系 → en_US.UTF-8 系) で 1 つ選んで返す。無ければ None を返す。
+
+    inject-always.sh の 8K 縮退ガードは `wc -m` で文字数を数えるが、これは
+    locale 依存であり、非 UTF-8 locale (例: 一部の CI 環境の既定 "C"/"POSIX")
+    では CJK テキストがマルチバイトのまま "文字" として数えられず、実際の
+    約 3 倍の長さとして計上されて縮退が誤って発動しうる。hook subprocess の
+    env にこの locale を固定することで、この wc -m の locale 依存によるサイズ
+    判定のブレを避ける。
+    """
+    try:
+        result = subprocess.run(
+            ["locale", "-a"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    available = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    available_by_lower = {name.lower(): name for name in available}
+    # Linux (WSL2 含む) は "C.utf8" / "C.UTF-8"、macOS は "en_US.UTF-8" を
+    # 典型的に提供する。大文字小文字・ハイフン有無の表記ゆらぎを吸収したうえで、
+    # OS が実際に認識する元の表記 (available_by_lower の値) を返す。
+    for candidate in ("c.utf8", "c.utf-8", "en_us.utf8", "en_us.utf-8"):
+        if candidate in available_by_lower:
+            return available_by_lower[candidate]
+    return None
+
+
+# `locale -a` はモジュール読み込み時に 1 回だけ実行する (hook 起動のたびに
+# 実行するとオーバーヘッドが積み重なるため)。
+UTF8_LOCALE = detect_utf8_locale()
+
+
 def run_hook(
     script: Path,
     payload: dict[str, str],
@@ -615,10 +663,14 @@ def run_hook(
     """hook script を隔離 TMPDIR で実行し、additionalContext を返す。
 
     実リポジトリの ``${TMPDIR:-/tmp}/agent-discipline-state`` を汚さないよう、
-    呼び出し側が用意した一時ディレクトリを TMPDIR として渡す。
+    呼び出し側が用意した一時ディレクトリを TMPDIR として渡す。UTF8_LOCALE が
+    利用可能であれば LC_ALL/LANG に固定する (detect_utf8_locale 参照)。
     """
     env = os.environ.copy()
     env["TMPDIR"] = tmp_dir
+    if UTF8_LOCALE is not None:
+        env["LC_ALL"] = UTF8_LOCALE
+        env["LANG"] = UTF8_LOCALE
     result = subprocess.run(
         ["/bin/bash", str(script), *(args or [])],
         cwd=REPO_ROOT,
@@ -659,6 +711,38 @@ def delivery_sonnet_part1_self_gate(tmp_dir: str) -> str:
     return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir)
 
 
+def first_level1_heading_line(text: str) -> str | None:
+    """text 内の最初の「# 」(レベル 1 見出し) 行を返す。無ければ None。
+
+    配送 payload の内容検査で、その経路が配送する md ファイルの識別力のある
+    行として使う。ファイル全文がそのまま additionalContext に埋め込まれる
+    経路であれば、この行は常に payload 内に現れるはずであり、確定本文の
+    逐語には依存しない (現状ファイルでも、今後の本文更新後でも自然に成立する)。
+    """
+    for line in text.splitlines():
+        if line.startswith("# "):
+            return line
+    return None
+
+
+def payload_content_missing(context: str, source_md: Path) -> list[str]:
+    """context (hook が生成した additionalContext) に、source_md の識別力の
+    ある行 (先頭の「# 」見出し行) が実際に含まれているかを検査する。
+
+    サイズ (UTF-16 code unit 数) のみの検査では、hook が本文を欠落させた
+    (それでいて長さだけは偶然予算内に収まる) 出力でも green になってしまう
+    ため、実際に配送対象ファイルの内容が payload に含まれることを別途保証
+    する。
+    """
+    text = read(source_md)
+    heading = first_level1_heading_line(text)
+    if heading is None:
+        return [f"{source_md.name} に「# 」見出し行が無く識別行を特定できない"]
+    if heading not in context:
+        return [f"{source_md.name} の見出し行が payload に含まれない"]
+    return []
+
+
 def delivery_note_payload_text() -> str:
     """delivery-note.md 本文からヘッダコメントを除いた配送ペイロード部分を返す。
 
@@ -687,7 +771,13 @@ def pre_degradation_missing_elements(context: str) -> list[str]:
     if PATH_LINE_PREFIX not in context:
         missing.append("(参照パス) 行が無い (縮退の疑い)")
     note_payload = delivery_note_payload_text()
-    if note_payload and note_payload not in context:
+    if not note_payload:
+        # 抽出結果が空 (ヘッダのみ・空白のみのメモ) の場合、比較対象が空文字列に
+        # なり `not in` 判定が常に真になって検査が skip されてしまう
+        # (副作用として常に成功扱いになる)。空・空白のみの抽出結果はそれ自体を
+        # 「メモ本文の欠落」として fail-closed に扱う。
+        missing.append("delivery-note.md から配送メモ本文を抽出できない (空・ヘッダのみの疑い)")
+    elif note_payload not in context:
         missing.append("delivery-note.md の配送メモ本文が無い (縮退の疑い)")
     return missing
 
@@ -857,6 +947,14 @@ class SizeBudgetTests(unittest.TestCase):
     を使う。
     """
 
+    def setUp(self) -> None:
+        if UTF8_LOCALE is None:
+            self.skipTest(
+                "利用可能な UTF-8 locale (C.UTF-8 / en_US.UTF-8 系) が見つから"
+                "ないため skip する (wc -m の locale 依存によるサイズ判定の"
+                "環境依存 red を避けるため)"
+            )
+
     DELIVERY_BUILDERS = {
         "fable 向け always 配送 (inject-always.sh, model=fable)": delivery_fable,
         "sonnet part 1 配送 (inject-always.sh, self-gate)": delivery_sonnet_part1_self_gate,
@@ -872,6 +970,21 @@ class SizeBudgetTests(unittest.TestCase):
         ),
     }
 
+    # DELIVERY_BUILDERS と同一のラベルキーで、各経路が実際に配送する md
+    # ファイルを対応付ける (payload の内容検査用)。
+    DELIVERY_PATH_SOURCE_FILES = {
+        "fable 向け always 配送 (inject-always.sh, model=fable)": FABLE_MD,
+        "sonnet part 1 配送 (inject-always.sh, self-gate)": SONNET_MD["always-sonnet-1.md"],
+        "sonnet part 2 配送 (inject-rules-part.sh 2, self-gate)": SONNET_MD[
+            "always-sonnet-2.md"
+        ],
+        "sonnet part 3 配送 (inject-rules-part.sh 3, self-gate)": SONNET_MD[
+            "always-sonnet-3.md"
+        ],
+        "subagent-rules 配送 (inject-subagent-rules.sh)": SUBAGENT_MD,
+        "fable one-shot 補正配送 (resolve-model-on-prompt.sh)": FABLE_MD,
+    }
+
     def test_all_delivery_paths_within_budget(self) -> None:
         violations = []
         for label, builder in self.DELIVERY_BUILDERS.items():
@@ -884,6 +997,28 @@ class SizeBudgetTests(unittest.TestCase):
             [],
             violations,
             f"配送予算 ({SIZE_BUDGET_UNITS} UTF-16 units 以下) を超過: {violations}",
+        )
+
+    def test_all_delivery_paths_include_source_file_content(self) -> None:
+        """各配送経路の additionalContext に、その経路が配送する md ファイル
+        (DELIVERY_PATH_SOURCE_FILES) の内容が実際に含まれること。
+
+        サイズ検査 (test_all_delivery_paths_within_budget) はサイズのみを
+        見るため、hook が本文を欠落させた (それでいて長さだけは偶然予算内に
+        収まる) 出力でも green になる盲点がある。判定は動的に行う (対象 md
+        ファイルを都度読んで識別行を抽出する) ため、確定本文の逐語に依存
+        せず、現状ファイルでも今後の本文更新後でも自然に成立する。
+        """
+        violations = []
+        for label, builder in self.DELIVERY_BUILDERS.items():
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                context = builder(tmp_dir)
+            source_md = self.DELIVERY_PATH_SOURCE_FILES[label]
+            missing = payload_content_missing(context, source_md)
+            if missing:
+                violations.append(f"{label}: {missing}")
+        self.assertEqual(
+            [], violations, f"配送経路の payload に本文内容が含まれていない: {violations}"
         )
 
     def test_gradual_degradation_paths_deliver_without_degrading(self) -> None:
