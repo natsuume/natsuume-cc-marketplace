@@ -535,30 +535,37 @@ def missing_structural_labels(block: str, labels: tuple[str, ...]) -> list[str]:
 def normalize_block_for_exact_match(block: str) -> str:
     """block を近逐語比較用に正規化した 1 本の文字列を返す (ブロック全体一致検査用)。
 
-    各行の行末空白のみを除去し、連続する空行を 1 つに圧縮し、先頭・末尾の
-    空行を除去する。行内の空白 (単語間スペース含む) と改行位置は保持した
-    まま比較する — 文レベルの canonical 検査 (block_sentence_set /
-    strip_whitespace) が採用する「全空白除去」の soft-wrap 耐性正規化とは
-    別の、より厳密な層である。全空白を除去する正規化では、「commit message」
+    各行の行末の ASCII 空白・タブのみを除去し (is_ascii_blank_line と同じ
+    CommonMark 準拠の空行定義を空行判定にも一貫して使う)、空行が連続する区間を
+    1 行に圧縮し、先頭・末尾の空行を除去する。行内の空白 (単語間スペース含む)
+    と改行位置は保持したまま比較する — 文レベルの canonical 検査
+    (block_sentence_set / strip_whitespace) が採用する「全 Unicode 空白除去」の
+    soft-wrap 耐性正規化とは別の、より厳密な層である。空行判定・行末除去の
+    双方を ASCII 限定にすることで、全角空白 (U+3000) 等 ASCII 以外の空白のみで
+    構成される行は「内容行」として保持される (Markdown 上この種の行は空行に
+    ならず soft-wrap の継続行として段落を連結する意味を持つため、空行区切りを
+    この種の行へ置換する変質は不一致として検出する必要がある。デフォルトの
+    `str.rstrip()` は Unicode 空白も除去するため、これを使うとそのような行が
+    空文字列に潰れて空行と誤認され、変質を素通りしてしまう)。「commit message」
     →「commitmessage」のような行内空白の除去変質が canonical と同一の正規化
-    形になり exact-match をすり抜けてしまうため、ブロック全体一致はこの
-    近逐語比較で塞ぐ (2 層構成: 文レベルは soft-wrap 耐性のある診断層、
-    ブロック全体はここでの厳密な契約層)。折返し位置 (改行の入る場所) 自体の
-    変更は契約の意図的な更新として扱い、その場合は CONFIRMED_BLOCK_TEXT 側を
-    実ファイルに合わせて更新する運用とする (この正規化を緩めて追従させない)。
+    形になり exact-match をすり抜ける問題も、全空白を除去しないことで塞ぐ
+    (2 層構成: 文レベルは soft-wrap 耐性のある診断層、ブロック全体はここでの
+    厳密な契約層)。折返し位置 (改行の入る場所) 自体の変更は契約の意図的な
+    更新として扱い、その場合は CONFIRMED_BLOCK_TEXT 側を実ファイルに合わせて
+    更新する運用とする (この正規化を緩めて追従させない)。
     """
-    lines = [line.rstrip() for line in block.splitlines()]
+    lines = [line.rstrip(" \t") for line in block.splitlines()]
     collapsed: list[str] = []
     previous_blank = False
     for line in lines:
-        is_blank = line == ""
+        is_blank = is_ascii_blank_line(line)
         if is_blank and previous_blank:
             continue
         collapsed.append(line)
         previous_blank = is_blank
-    while collapsed and collapsed[0] == "":
+    while collapsed and is_ascii_blank_line(collapsed[0]):
         collapsed.pop(0)
-    while collapsed and collapsed[-1] == "":
+    while collapsed and is_ascii_blank_line(collapsed[-1]):
         collapsed.pop()
     return "\n".join(collapsed)
 
@@ -698,22 +705,26 @@ def run_hook(
     payload: dict[str, str],
     tmp_dir: str,
     args: list[str] | None = None,
+    locale: str | None = UTF8_LOCALE,
 ) -> str:
     """hook script を隔離 TMPDIR で実行し、additionalContext を返す。
 
     実リポジトリの ``${TMPDIR:-/tmp}/agent-discipline-state`` を汚さないよう、
-    呼び出し側が用意した一時ディレクトリを TMPDIR として渡す。UTF8_LOCALE が
+    呼び出し側が用意した一時ディレクトリを TMPDIR として渡す。locale が
     利用可能であれば LC_ALL/LANG に固定する (detect_utf8_locale 参照) が、
     これは hook script 内部 (`wc -m` 等) の locale 依存動作を安定させる
     best-effort な補助にすぎず、この Python プロセス自身の subprocess 出力
     デコードは encoding="utf-8" を明示し、親プロセスの locale 設定に依存
-    させない。
+    させない。既定値 (locale=UTF8_LOCALE) は関数定義時点の検出済み値に
+    束縛されるため、呼び出し側が明示的に locale 引数を渡さない限り、この後
+    グローバル UTF8_LOCALE が (テスト等で) 書き換えられても影響を受けない
+    (env pin の決定性を、locale probe 結果の後からの変更から切り離すため)。
     """
     env = os.environ.copy()
     env["TMPDIR"] = tmp_dir
-    if UTF8_LOCALE is not None:
-        env["LC_ALL"] = UTF8_LOCALE
-        env["LANG"] = UTF8_LOCALE
+    if locale is not None:
+        env["LC_ALL"] = locale
+        env["LANG"] = locale
     result = subprocess.run(
         ["/bin/bash", str(script), *(args or [])],
         cwd=REPO_ROOT,
@@ -1081,22 +1092,39 @@ class SizeBudgetTests(unittest.TestCase):
     def test_pre_degradation_check_runs_unconditionally_without_utf8_locale(
         self,
     ) -> None:
-        """UTF8_LOCALE が None (UTF-8 locale 検出失敗) であっても、配送予算・
-        配送メモ本文の各検査が skip されず実行されること。locale probe は
-        run_hook の env 設定にのみ使う best-effort な補助であり、検査自体の
-        実行可否には関与しない (detect_utf8_locale・run_hook 参照)。
+        """UTF8_LOCALE が None (locale probe 失敗) をシミュレートしても、fable
+        配送経路の hook 出力が実検出済み locale で pin した場合と同一であり、
+        予算・配送メモ本文の各検査が skip されず実行されること。
+
+        run_hook の locale 引数は既定で (関数定義時点で束縛されるため、この後
+        グローバル UTF8_LOCALE を書き換えても) 検出済みの値を使い続ける。この
+        独立性により、hook subprocess の起動 env はこのシミュレーション中も
+        実検出済み locale で決定的に pin されたままになり、検査結果が test
+        実行環境の ambient locale (既定 locale) に左右されない。
         """
+        with tempfile.TemporaryDirectory() as tmp_dir_pinned:
+            pinned_context = delivery_fable(tmp_dir_pinned)
+
         global UTF8_LOCALE
         original = UTF8_LOCALE
         UTF8_LOCALE = None
         try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                context = delivery_fable(tmp_dir)
+            with tempfile.TemporaryDirectory() as tmp_dir_simulated:
+                simulated_context = delivery_fable(tmp_dir_simulated)
         finally:
             UTF8_LOCALE = original
-        length = utf16_length(context)
+
+        self.assertEqual(
+            pinned_context,
+            simulated_context,
+            "UTF8_LOCALE=None のシミュレーション下で hook の出力が変化した"
+            " (env pin がグローバルの書き換えに追従してしまっている疑い)",
+        )
+        length = utf16_length(simulated_context)
         self.assertTrue(within_size_budget(length), f"予算超過 ({length} units)")
-        missing = pre_degradation_missing_elements(context, delivery_note_payload_text())
+        missing = pre_degradation_missing_elements(
+            simulated_context, delivery_note_payload_text()
+        )
         self.assertEqual([], missing, f"配送メモ本文の証拠が無い: {missing}")
 
 
@@ -1362,6 +1390,25 @@ class HelperSyntheticContractTests(unittest.TestCase):
         self.assertEqual(
             normalize_block_for_exact_match(reference),
             normalize_block_for_exact_match(extra_blank_lines_variant),
+        )
+
+    def test_block_exact_match_detects_blank_line_replaced_by_fullwidth_space_line(
+        self,
+    ) -> None:
+        """段落を区切る空行を、全角空白 (U+3000) のみの行へ置換した変質は
+        ブロック不一致として検出すること。全角空白のみの行は Markdown 上は
+        空行にならず soft-wrap の継続行として段落を連結してしまうため、この
+        置換は「段落が 1 つに統合される」実質的な内容変更であり、既定の
+        `str.rstrip()` (Unicode 空白まで除去する) を使った空行判定ではこの
+        行が空文字列に潰れて見分けが付かなくなる (見逃す) ことの回帰ガード。
+        """
+        reference = "## heading\n\ncommit message body。\n"
+        blank_line_replaced_with_fullwidth_space = (
+            "## heading\n　\ncommit message body。\n"
+        )
+        self.assertNotEqual(
+            normalize_block_for_exact_match(reference),
+            normalize_block_for_exact_match(blank_line_replaced_with_fullwidth_space),
         )
 
     def test_budget_boundary_accepts_8000_and_rejects_8001(self) -> None:
