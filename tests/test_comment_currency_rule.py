@@ -162,14 +162,38 @@ def normalize_soft_wrapped(text: str) -> str:
     return "".join(line.rstrip() for line in text.splitlines())
 
 
+def split_into_paragraphs(text: str) -> list[str]:
+    """text を空行区切りの段落に分割する。
+
+    空行は完全な空文字列の行だけでなく、空白・タブのみの行 (`^[ \\t]+$`) も
+    区切りとみなす (厳密な `\\n\\n` 一致では、空白入り空行を挟んだ 2 段落が
+    1 段落として扱われてしまう)。連続する空行はまとめて 1 つの区切りとして
+    扱い、前後の空行のみからなる要素は含めない。
+    """
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for line in text.split("\n"):
+        if line.strip() == "":
+            if current:
+                paragraphs.append("\n".join(current))
+                current = []
+        else:
+            current.append(line)
+    if current:
+        paragraphs.append("\n".join(current))
+    return paragraphs
+
+
 def block_contains_paragraph_with(block: str, canonical: str) -> bool:
     """block を空行区切りの段落に分割し、いずれかの段落を正規化した文字列が
     canonical を部分文字列として含むかを判定する。
 
-    段落ごとに個別に正規化してから照合するため、空行を挟んで 2 段落にまたがる
-    canonical 文字列は (各段落を正規化しても) 一致しない。
+    段落ごとに個別に正規化してから照合するため、空行 (空白のみの行を含む) を
+    挟んで 2 段落にまたがる canonical 文字列は (各段落を正規化しても) 一致しない。
     """
-    return any(canonical in normalize_soft_wrapped(p) for p in block.split("\n\n"))
+    return any(
+        canonical in normalize_soft_wrapped(p) for p in split_into_paragraphs(block)
+    )
 
 
 def resolve_marker_holder(named_texts: dict[str, str]) -> str | None:
@@ -201,20 +225,36 @@ def resolve_face_path(face: str) -> Path | None:
     raise ValueError(f"unknown face: {face}")
 
 
+def compose_face(text: str) -> tuple[str, str] | None:
+    """text から (ルールブロック, 冒頭ヘッダ) を解決する。
+
+    ルールブロックが抽出できない場合、または冒頭 HTML コメントヘッダが
+    無い場合は None (fail-closed) を返す。ヘッダ未解決を「空のヘッダ」
+    (常に検査 pass) へ silent fallback しない — マーカー解決・ルール
+    ブロック抽出と同じ fail-closed 姿勢に揃える。
+    """
+    block = rule_block(text)
+    if block is None:
+        return None
+    header = leading_html_comment(text)
+    if header is None:
+        return None
+    return block, header
+
+
 def resolve_face(face: str) -> tuple[Path, str, str] | None:
     """配送面から (path, ルールブロック, 冒頭ヘッダ) を解決する。
 
-    path が解決できない、またはルールブロックが抽出できない場合は None
-    (fail-closed) を返す。冒頭ヘッダを持たないファイルは空文字列を返す。
+    path が解決できない、またはルールブロック・冒頭ヘッダのいずれかが
+    抽出できない場合は None (fail-closed) を返す。
     """
     path = resolve_face_path(face)
     if path is None:
         return None
-    text = read(path)
-    block = rule_block(text)
-    if block is None:
+    composed = compose_face(read(path))
+    if composed is None:
         return None
-    header = leading_html_comment(text) or ""
+    block, header = composed
     return path, block, header
 
 
@@ -508,14 +548,21 @@ class HelperSyntheticContractTests(unittest.TestCase):
 
     def test_exception_sentence_paragraph_boundary(self) -> None:
         """canonical 文が段落分割 (空行) を跨ぐ場合は不一致、単一改行の soft-wrap
-        は一致すること。
+        は一致すること。空白のみの空行 (完全な空文字列ではない空行) も同様に
+        段落区切りとして扱われ、不一致になること。
         """
         sentence = "AはBでありCである。"
         split_by_paragraph = "AはB\n\nでありCである。"
         soft_wrapped = "AはB\nでありCである。"
+        split_by_whitespace_only_blank_line = "AはB\n   \nでありCである。"
 
         self.assertFalse(block_contains_paragraph_with(split_by_paragraph, sentence))
         self.assertTrue(block_contains_paragraph_with(soft_wrapped, sentence))
+        self.assertFalse(
+            block_contains_paragraph_with(
+                split_by_whitespace_only_blank_line, sentence
+            )
+        )
 
     def test_exact_budget_boundary_fails_strict_less_than(self) -> None:
         """ちょうど 8,000 UTF-16 units の文字列は strict 未満 (`< 8000`) 判定で
@@ -534,6 +581,21 @@ class HelperSyntheticContractTests(unittest.TestCase):
         text = "this references issue #N generically, not a numbered issue"
         self.assertIsNone(FORBIDDEN_ISSUE_NUMBER_PATTERN.search(text))
         self.assertIn("issue #", forbidden_history_matches(text))
+
+    def test_missing_header_fails_closed(self) -> None:
+        """冒頭 HTML コメントヘッダを持たないテキストは、ルールブロック自体は
+        正常に抽出できても面の解決全体が fail-closed (None) になること
+        (空文字列への silent fallback をせず、ヘッダ検査を空振りさせない)。
+        """
+        # 先頭が `<!--` で始まらないテキスト (マーカー自身が `<!-- ... -->` の
+        # 形をしているため、マーカーを先頭に置くと誤って「ヘッダあり」と
+        # 判定されてしまう。先頭に非コメントの地の文を置いて回避する)。
+        text = f"no header here\n\n{MARKER}\n## synthetic heading\n\nblock body\n\n---\n"
+        # fail-closed の原因がヘッダ欠如そのものであることを明確にするため、
+        # rule_block 単体は正常に抽出できることを先に確認しておく。
+        self.assertIsNotNone(rule_block(text))
+        self.assertIsNone(leading_html_comment(text))
+        self.assertIsNone(compose_face(text))
 
 
 if __name__ == "__main__":
