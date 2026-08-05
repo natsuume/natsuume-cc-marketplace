@@ -711,35 +711,23 @@ def delivery_sonnet_part1_self_gate(tmp_dir: str) -> str:
     return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir)
 
 
-def first_level1_heading_line(text: str) -> str | None:
-    """text 内の最初の「# 」(レベル 1 見出し) 行を返す。無ければ None。
-
-    配送 payload の内容検査で、その経路が配送する md ファイルの識別力のある
-    行として使う。ファイル全文がそのまま additionalContext に埋め込まれる
-    経路であれば、この行は常に payload 内に現れるはずであり、確定本文の
-    逐語には依存しない (現状ファイルでも、今後の本文更新後でも自然に成立する)。
-    """
-    for line in text.splitlines():
-        if line.startswith("# "):
-            return line
-    return None
-
-
 def payload_content_missing(context: str, source_md: Path) -> list[str]:
-    """context (hook が生成した additionalContext) に、source_md の識別力の
-    ある行 (先頭の「# 」見出し行) が実際に含まれているかを検査する。
+    """context (hook が生成した additionalContext) に、source_md の本文全体が
+    実際に含まれているかを検査する。
 
-    サイズ (UTF-16 code unit 数) のみの検査では、hook が本文を欠落させた
-    (それでいて長さだけは偶然予算内に収まる) 出力でも green になってしまう
-    ため、実際に配送対象ファイルの内容が payload に含まれることを別途保証
-    する。
+    サイズ (UTF-16 code unit 数) のみの検査、あるいは先頭見出し行 1 行のみの
+    照合では、見出しだけ含んで本文の大半を欠落させた payload や、self-gate
+    前置き等の別要素が同じ見出しを引用しているだけの payload でも green に
+    なってしまう。6 経路すべての実 payload を確認したところ、各 hook は
+    対応する md ファイル (冒頭のヘッダコメントを含む全文) を `$(cat ...)`
+    でそのまま埋め込んでおり、bash のコマンド置換が末尾の改行を除去する
+    以外は逐語一致する (空白・改行の変形は発生しない) ため、正規化なしの
+    単純な substring 包含で判定できる。ヘッダコメントを除外する必要もない
+    — 実 payload にヘッダコメントを含む全文がそのまま現れるため。
     """
     text = read(source_md)
-    heading = first_level1_heading_line(text)
-    if heading is None:
-        return [f"{source_md.name} に「# 」見出し行が無く識別行を特定できない"]
-    if heading not in context:
-        return [f"{source_md.name} の見出し行が payload に含まれない"]
+    if text.rstrip("\n") not in context:
+        return [f"{source_md.name} の本文全体が payload に含まれない"]
     return []
 
 
@@ -945,15 +933,15 @@ class SizeBudgetTests(unittest.TestCase):
     prompt.sh) は他経路と異なり段階的縮退ガードを持たないため、本テストでの
     検出が予算超過に対する唯一の防衛線になる。判定は共有述語 within_size_budget
     を使う。
-    """
 
-    def setUp(self) -> None:
-        if UTF8_LOCALE is None:
-            self.skipTest(
-                "利用可能な UTF-8 locale (C.UTF-8 / en_US.UTF-8 系) が見つから"
-                "ないため skip する (wc -m の locale 依存によるサイズ判定の"
-                "環境依存 red を避けるため)"
-            )
+    UTF8_LOCALE 未検出時の skip は test_gradual_degradation_paths_deliver_
+    without_degrading (縮退の有無を hook 側の wc -m locale 依存判定に頼る唯一
+    のテスト) に限定する。それ以外のテスト (サイズ予算・payload 内容検査) は
+    Python 側で UTF-16 長を計測するため locale に依存せず、locale の有無に
+    関わらず常に実行する — クラス全体を skip すると、縮退ガード無し経路の
+    唯一の防衛線であるサイズ検査までもが「green 報告なしの skip」に埋もれる
+    盲点が生じるため。
+    """
 
     DELIVERY_BUILDERS = {
         "fable 向け always 配送 (inject-always.sh, model=fable)": delivery_fable,
@@ -1001,13 +989,16 @@ class SizeBudgetTests(unittest.TestCase):
 
     def test_all_delivery_paths_include_source_file_content(self) -> None:
         """各配送経路の additionalContext に、その経路が配送する md ファイル
-        (DELIVERY_PATH_SOURCE_FILES) の内容が実際に含まれること。
+        (DELIVERY_PATH_SOURCE_FILES) の本文全体が実際に含まれること
+        (payload_content_missing 参照)。
 
         サイズ検査 (test_all_delivery_paths_within_budget) はサイズのみを
         見るため、hook が本文を欠落させた (それでいて長さだけは偶然予算内に
-        収まる) 出力でも green になる盲点がある。判定は動的に行う (対象 md
-        ファイルを都度読んで識別行を抽出する) ため、確定本文の逐語に依存
-        せず、現状ファイルでも今後の本文更新後でも自然に成立する。
+        収まる) 出力でも green になる盲点がある。見出し 1 行のみの照合でも、
+        見出しだけ含んで本文を欠落させた payload や別要素が同じ見出しを
+        引用しているだけの payload を見逃す。判定は動的に行う (対象 md
+        ファイルを都度読んで全文照合する) ため、確定本文の逐語に依存せず、
+        現状ファイルでも今後の本文更新後でも自然に成立する。
         """
         violations = []
         for label, builder in self.DELIVERY_BUILDERS.items():
@@ -1027,7 +1018,17 @@ class SizeBudgetTests(unittest.TestCase):
         残したまま予算内であることを確認する (PRE_DEGRADATION_DELIVERY_
         BUILDERS 参照)。縮退後の payload がたまたま収まっただけ、という
         盲点を塞ぐ。
+
+        縮退の有無は hook 側の `wc -m` (locale 依存) 判定に依存するため、
+        このテストのみ UTF8_LOCALE 未検出時に skip する (他のテストは
+        Python 側の UTF-16 長計測のみに依存し locale 非依存のため対象外)。
         """
+        if UTF8_LOCALE is None:
+            self.skipTest(
+                "利用可能な UTF-8 locale (C.UTF-8 / en_US.UTF-8 系) が見つから"
+                "ないため skip する (wc -m の locale 依存による縮退判定の"
+                "環境依存 red を避けるため)"
+            )
         violations = []
         for label, builder in PRE_DEGRADATION_DELIVERY_BUILDERS.items():
             with tempfile.TemporaryDirectory() as tmp_dir:
