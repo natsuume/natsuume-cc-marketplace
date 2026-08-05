@@ -17,8 +17,9 @@
    self-gate 配送)、UserPromptSubmit (inject-rules-part.sh の sonnet part 2/3
    self-gate 配送、resolve-model-on-prompt.sh の Fable one-shot 補正配送)、
    SubagentStart (inject-subagent-rules.sh の配送) — が実際に生成する
-   additionalContext の最大構成が UTF-16 code units 8,000 未満に収まること
-   (判定は単一の共有述語 within_size_budget を使う)
+   additionalContext の最大構成が UTF-16 code units 8,000 以下 (inject-always.sh
+   の `-gt 8000` 縮退条件と整合する境界) に収まること (判定は単一の共有述語
+   within_size_budget を使う)
 4. ルール本文ブロック自身、および面ごとに解決した冒頭 HTML コメントヘッダが、
    面固有の静的自己準拠述語 (static_surface_*、定義直前のコメント参照) が
    定める禁止対象の経緯記述 (issue/PR 番号・年月日。大文字小文字や年月日単位
@@ -130,6 +131,8 @@ CANONICAL_SENTENCES = {
         "commit message・PR 説明・issue body と、明示的に履歴を目的とする文書 (README の変更履歴節を含む) は対象外。",
         # 例外文
         "例外: 撤去条件付き暫定措置の「現在の不具合・撤去条件・確認方法」(導入日なし) と、現行の主張への検証日・検証環境の付記。",
+        # 境界末尾文 (現在形の設計理由は禁止対象外。fable/sonnet の境界末尾文の compact 版)
+        "過去に言及しない現在形の設計理由の説明は禁止対象ではない。",
     ),
 }
 
@@ -251,12 +254,14 @@ def utf16_length(text: str) -> int:
 
 
 def within_size_budget(length: int) -> bool:
-    """UTF-16 code unit 数が配送予算 (strict `< 8000`) に収まるかを判定する。
+    """UTF-16 code unit 数が配送予算 (8,000 以下) に収まるかを判定する。
 
-    配送経路検査 (SizeBudgetTests) とちょうど 8,000 の境界 guard (synthetic
-    自己テスト) の両方がこの共有述語を呼ぶ (ローカルに比較式を再実装しない)。
+    判定は inject-always.sh の `-gt 8000` 縮退条件 (ちょうど 8,000 units は
+    縮退させず受理する) と整合させる。配送経路検査 (SizeBudgetTests) とちょうど
+    8,000 の境界 guard (synthetic 自己テスト) の両方がこの共有述語を呼ぶ
+    (ローカルに比較式を再実装しない)。
     """
-    return length < SIZE_BUDGET_UNITS
+    return length <= SIZE_BUDGET_UNITS
 
 
 def leading_html_comment(text: str) -> str | None:
@@ -658,7 +663,8 @@ class CanonicalBodyTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class SizeBudgetTests(unittest.TestCase):
-    """各配送経路が実際に生成する additionalContext が配送予算未満に収まること。
+    """各配送経路が実際に生成する additionalContext が配送予算 (8,000 UTF-16
+    units 以下) に収まること。
 
     DELIVERY_BUILDERS のキーが計測対象の配送経路の一覧そのものである
     (fable 向け always 配送・sonnet part 1/2/3 配送・subagent-rules 配送・fable
@@ -683,7 +689,7 @@ class SizeBudgetTests(unittest.TestCase):
         ),
     }
 
-    def test_all_delivery_paths_within_strict_budget(self) -> None:
+    def test_all_delivery_paths_within_budget(self) -> None:
         violations = []
         for label, builder in self.DELIVERY_BUILDERS.items():
             with tempfile.TemporaryDirectory() as tmp_dir:
@@ -694,7 +700,7 @@ class SizeBudgetTests(unittest.TestCase):
         self.assertEqual(
             [],
             violations,
-            f"配送予算 ({SIZE_BUDGET_UNITS} UTF-16 units 未満) を超過: {violations}",
+            f"配送予算 ({SIZE_BUDGET_UNITS} UTF-16 units 以下) を超過: {violations}",
         )
 
 
@@ -871,13 +877,17 @@ class HelperSyntheticContractTests(unittest.TestCase):
             )
         )
 
-    def test_exact_budget_boundary_fails_strict_less_than(self) -> None:
+    def test_budget_boundary_accepts_8000_and_rejects_8001(self) -> None:
         """ちょうど 8,000 UTF-16 units の文字列は共有述語 within_size_budget が
-        strict 未満 (`< 8000`) 判定で fail させること。
+        受理し (inject-always.sh の `-gt 8000` 縮退条件と整合)、8,001 units は
+        拒否すること。
         """
-        text = "あ" * SIZE_BUDGET_UNITS
-        self.assertEqual(SIZE_BUDGET_UNITS, utf16_length(text))
-        self.assertFalse(within_size_budget(utf16_length(text)))
+        at_budget = "あ" * SIZE_BUDGET_UNITS
+        over_budget = "あ" * (SIZE_BUDGET_UNITS + 1)
+        self.assertEqual(SIZE_BUDGET_UNITS, utf16_length(at_budget))
+        self.assertEqual(SIZE_BUDGET_UNITS + 1, utf16_length(over_budget))
+        self.assertTrue(within_size_budget(utf16_length(at_budget)))
+        self.assertFalse(within_size_budget(utf16_length(over_budget)))
 
     def test_static_surface_predicate_catches_issue_prefix_variations(
         self,
