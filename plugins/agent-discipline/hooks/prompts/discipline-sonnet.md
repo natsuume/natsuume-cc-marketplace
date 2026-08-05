@@ -1,7 +1,7 @@
 <!--
   agent-discipline: 分業規律 (SONNET 版)
   対象読者: 非 Fable かつ非 Opus のモデル (Sonnet / Haiku 等) のメインセッション。Opus 系メイン
-  セッションには discipline-opus.md が配送される (判定不能時の self-gate 暫定配送では従来どおり
+  セッションには discipline-opus.md が配送される (判定不能時の self-gate 暫定配送では
   本ファイルを使う)。判定不能セッションにも discipline-preamble-self-gate.md 付きで配送される。
   設計契約: 基本形は discipline-fable.md を踏襲する。委任根拠はコンテキスト分離 + fresh
   context の検証独立性で記述し、モデル能力の非対称を根拠にしない。verifier 委任は「非自明な

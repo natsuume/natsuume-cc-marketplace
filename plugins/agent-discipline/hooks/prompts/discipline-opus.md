@@ -1,7 +1,7 @@
 <!--
   agent-discipline: 分業規律 (OPUS 版)
   対象読者: Opus 系モデル (Opus 5 等) のメインセッション。配送は inject-discipline.sh の
-  3-way 分岐 (fable / opus / その他非 Fable) が行う。判定不能セッションには従来どおり
+  3-way 分岐 (fable / opus / その他非 Fable) が行う。判定不能セッションには
   discipline-sonnet.md が self-gate 前置きで暫定配送され、opus 確定時に本ファイルが
   one-shot 補正で届く。
   設計契約: 基本形は discipline-sonnet.md を踏襲し、Opus 5 公式ガイド
