@@ -4,9 +4,13 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.24.0
+v0.25.0
 
 (注: v0.7.4 〜 v0.11.0 の変更点節は本 README に未追記の既存 drift。各バージョンの変更内容はリポジトリ README の plugin 一覧テーブルおよび各 PR を参照)
+
+### v0.24.0 → v0.25.0 の変更点
+
+常時適用ルールに `rule:comment-currency` (説明は常に最新の内容のみ) を追加した。コードコメント・docstring・README 等の説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説を書かないことを規定する。`always-fable.md` (ルール 10)・`always-sonnet-2.md` (ルール 10)・`subagent-rules.md` (ルール 5) にマーカー付きで配送する。
 
 ### v0.23.0 → v0.24.0 の変更点
 

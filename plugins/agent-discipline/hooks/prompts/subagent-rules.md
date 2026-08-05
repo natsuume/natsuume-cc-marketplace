@@ -1,15 +1,14 @@
 <!--
-  agent-discipline: subagent 向け常時適用ルール (issue #221)
+  agent-discipline: subagent 向け常時適用ルール
   配送は SubagentStart hook (inject-subagent-rules.sh) が全 subagent に行う
   (agent_type / モデル判定の分岐なし。SubagentStart hook は Claude Code 2.0.43+ で発火)。
   構成: 常時適用ルールのうち subagent にも適用される bash-decompose (always-sonnet-1.md と
   同一の rule ID マーカーを維持) + subagent 固有の 3 ブロック (報告の事実性 / default-deny /
   エスカレーション。subagent-rule: プレフィクスのマーカーを使う)。
-  rule: プレフィクスのマーカー ID は always-sonnet-{1,2,3}.md の ID セットの和集合のサブセット
-  であること (issue #236 で always-sonnet.md が 3 part に分割されたため母集合を和集合化。
-  lint-prompt-sync.sh チェック 5 が検証する)。subagent-rule: プレフィクスのマーカーは
-  チェック 5 の対象外。このヘッダコメントにはマーカーのリテラル表記を書かない
-  (lint の抽出 grep に誤マッチさせないため)。
+  rule: プレフィクスのマーカー ID は、3 ファイル構成の always-sonnet-{1,2,3}.md の ID セットの
+  和集合のサブセットであること (lint-prompt-sync.sh チェック 5 が検証する)。subagent-rule:
+  プレフィクスのマーカーはチェック 5 の対象外。このヘッダコメントにはマーカーのリテラル
+  表記を書かない (lint の抽出 grep に誤マッチさせないため)。
 -->
 
 # agent-discipline: subagent 向け常時適用ルール
@@ -61,3 +60,12 @@ Bash コマンドは可能な限り分解し、それぞれを独立した Bash 
 **返却フォーマット**: (1) 判断を仰ぐ事項 (質問形式で 1 文) (2) 該当する発動条件 (3) 完了済み作業と成果物の所在 (diff・tool result 等の根拠を添える) (4) 選択肢と判断材料 (5) 何が決まれば続行できるか。
 
 **なぜ**: 正規の出口が無いと、実作業者は失敗回避のために手順を即興しがちになる。エスカレーションを正規終了として定義することで、判断を親セッションに返す経路が保証される。
+
+<!-- rule:comment-currency -->
+## 5. 説明は常に最新の内容のみ
+
+**適用範囲**: コードコメント・docstring・README 等、リポジトリ内の説明文書を新規作成・編集するすべての場面に適用する。
+
+説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説 (版数・日付・issue/PR 番号による過去の変更の記述、旧実装の説明、出典としての issue/PR 番号参照) を書かない。履歴は commit message・PR 説明・issue に置く。契約・制約は issue 参照に頼らずその場で完結して書き、編集で説明が古くなる場合は同時に更新する。適用は touch-time — 新規作成・意味変更した説明ブロックに適用し、指示のない一括清掃を行わない。commit message・PR 説明・issue body と、明示的に履歴を目的とする文書 (README の変更履歴節を含む) は対象外。例外: 撤去条件付き暫定措置の「現在の不具合・撤去条件・確認方法」(導入日なし) と、現行の主張への検証日・検証環境の付記。過去に言及しない現在形の設計理由の説明は禁止対象ではない。
+
+**なぜ**: 履歴の正規の置き場は git であり、説明文書内の経緯は更新されず腐って後続の読者 (主に AI エージェント) を誤誘導する。
