@@ -46,6 +46,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -75,6 +76,7 @@ SONNET_MD = {
 }
 SUBAGENT_MD = PROMPTS / "subagent-rules.md"
 DELIVERY_NOTE_MD = PROMPTS / "delivery-note.md"
+PREAMBLE_SELF_GATE_MD = PROMPTS / "preamble-self-gate.md"
 
 INJECT_ALWAYS_SH = SCRIPTS / "inject-always.sh"
 INJECT_RULES_PART_SH = SCRIPTS / "inject-rules-part.sh"
@@ -699,6 +701,47 @@ def detect_utf8_locale() -> str | None:
 # env を設定する best-effort な補助にのみ使い、どの検査も gate しない。
 UTF8_LOCALE = detect_utf8_locale()
 
+# import 時点の probe 結果の不変 snapshot。run_hook の locale 既定値が定義時
+# 束縛であることの契約検査 (RunnerLocaleDefaultBindingTests) の期待値にのみ
+# 使う。UTF8_LOCALE と異なり、テストからの一時的な書き換え対象にしない。
+UTF8_LOCALE_AT_IMPORT = UTF8_LOCALE
+
+
+def detect_non_utf8_locale() -> str | None:
+    """`locale -a` の出力から制御用の単一バイト locale を優先順 (C → POSIX)
+    で 1 つ選んで返す。確認できなければ None を返す。
+
+    locale fallback 経路の実走検証 (LocaleFallbackDeliveryTests) が、テスト
+    プロセスの ambient (os.environ) の LC_ALL/LANG へ一時設定する制御用
+    locale の選定にのみ使う。
+    契約: 候補は C と POSIX のみに限定する。任意の「非 UTF-8 系」まで許容
+    すると、マルチバイト非 UTF-8 locale (EUC-JP 等) が選ばれた場合に
+    `wc -m` の計上がバイト基準になる保証が無く、縮退発動の前提が崩れて
+    製品欠陥なしの red を作るため。C / POSIX は文字 = 1 バイトが保証される。
+    `locale -a` の実行失敗・タイムアウト・非ゼロ終了・候補ゼロはすべて
+    None を返し、呼び出し側が理由付きの明示 skip に変換する (silent green に
+    しない)。ホスト locale の環境生成による代替は行わない (検証はホストに
+    実在する locale のみで行う)。
+    """
+    try:
+        result = subprocess.run(
+            ["locale", "-a"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    available = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if "C" in available:
+        return "C"
+    if "POSIX" in available:
+        return "POSIX"
+    return None
+
 
 def run_hook(
     script: Path,
@@ -711,6 +754,9 @@ def run_hook(
 
     実リポジトリの ``${TMPDIR:-/tmp}/agent-discipline-state`` を汚さないよう、
     呼び出し側が用意した一時ディレクトリを TMPDIR として渡す。locale が
+    None の場合は LC_ALL/LANG を設定せず、呼び出し元プロセスの ambient を
+    subprocess へ継承させる (locale 未指定 fallback。この経路の実走検証は
+    LocaleFallbackDeliveryTests が ambient を制御して行う)。locale が
     利用可能であれば LC_ALL/LANG に固定する (detect_utf8_locale 参照) が、
     これは hook script 内部 (`wc -m` 等) の locale 依存動作を安定させる
     best-effort な補助にすぎず、この Python プロセス自身の subprocess 出力
@@ -748,22 +794,32 @@ def run_hook(
     return data["hookSpecificOutput"]["additionalContext"]
 
 
-def delivery_fable(tmp_dir: str) -> str:
-    """SessionStart (inject-always.sh) が fable 判定時に配送する additionalContext。"""
+def delivery_fable(tmp_dir: str, locale: str | None = UTF8_LOCALE) -> str:
+    """SessionStart (inject-always.sh) が fable 判定時に配送する additionalContext。
+
+    locale は run_hook へそのまま渡す (既定は定義時点で束縛された検出済み
+    UTF-8 locale。locale fallback 検証だけが None を明示指定し、run_hook に
+    LC_ALL/LANG を設定させず、テストが制御した ambient を継承させる)。
+    """
     payload = {
         "session_id": "size-budget-fable",
         "hook_event_name": "SessionStart",
         "model": "claude-fable-5",
     }
-    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir)
+    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
 
 
-def delivery_sonnet_part1_self_gate(tmp_dir: str) -> str:
+def delivery_sonnet_part1_self_gate(
+    tmp_dir: str, locale: str | None = UTF8_LOCALE
+) -> str:
     """SessionStart (inject-always.sh) がモデル判定不能時に配送する、self-gate
     前置き + always-sonnet-1.md (part 1 の最大構成)。
+
+    locale は run_hook へそのまま渡す (既定と None の意味は delivery_fable と
+    同じ契約)。
     """
     payload = {"session_id": "size-budget-sonnet-1", "hook_event_name": "SessionStart"}
-    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir)
+    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
 
 
 def payload_content_missing(context: str, source_md: Path) -> list[str]:
@@ -1126,6 +1182,173 @@ class SizeBudgetTests(unittest.TestCase):
             simulated_context, delivery_note_payload_text()
         )
         self.assertEqual([], missing, f"配送メモ本文の証拠が無い: {missing}")
+
+
+class RunnerLocaleDefaultBindingTests(unittest.TestCase):
+    """run_hook の locale 既定値が import 時の probe 結果へ定義時束縛されて
+    いることの独立契約検査。
+
+    配送出力の比較では束縛方式を検証しない — UTF-8 系 ambient のホストでは
+    束縛方式に依らず出力が一致しうるため、比較は判別力を持たない。既定値
+    そのものを、import 時に保存した不変 snapshot (UTF8_LOCALE_AT_IMPORT) と
+    突き合わせる。probe の再実行もしない (再実行は一時的な失敗という別の
+    不確実性を期待値に持ち込むため)。
+    """
+
+    def test_run_hook_locale_default_is_bound_at_definition_time(self) -> None:
+        runner_default = inspect.signature(run_hook).parameters["locale"].default
+        self.assertEqual(
+            UTF8_LOCALE_AT_IMPORT,
+            runner_default,
+            "run_hook の locale 既定値が import 時の検出値と一致しない"
+            " (定義時束縛の後退の疑い)",
+        )
+
+
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+class LocaleFallbackDeliveryTests(unittest.TestCase):
+    """UTF-8 locale が env に固定されない hook 起動経路 (locale fallback) の実走検証。
+
+    既存の SizeBudgetTests は hook subprocess の LC_ALL/LANG を検出済み UTF-8
+    locale に固定して起動するため、「非 UTF-8 locale では inject-always.sh の
+    `wc -m` がバイト計上になり縮退が発動する」経路はどのケースでも実走しない。
+    本クラスはその経路を、ambient locale に依存せず決定的に実走させる:
+
+    - 制御用 locale: detect_non_utf8_locale が `locale -a` から選ぶ単一バイト
+      locale (C / POSIX) を、テストが os.environ の LC_ALL/LANG へ一時設定し
+      (元々キーが無かった状態も含めて try/finally で完全復元)、builder には
+      locale=None を渡す。run_hook 自身は locale を上書きせず、テストが制御
+      した ambient を hook subprocess が env の copy 経由で継承する (= locale
+      未指定 fallback 分岐の実走)。ambient は区間内でテストが明示制御する
+      ため、テスト実行環境の既定 locale には依存しない
+    - 対象経路: 段階的縮退ガードを持つ 2 経路 (inject-always.sh の fable 配送 /
+      sonnet part 1 self-gate 配送) のみ。他 4 経路はサイズ計測を持たず locale
+      で挙動が変わらないため対象外
+    - 期待挙動: 非 UTF-8 locale では `wc -m` が日本語 payload をバイト数
+      (UTF-8 で 1 文字 3 バイト前後) で計上するため、現行 payload は必ず
+      8,000 を超え、二段縮退 ((参照パス) 行の除去 → 配送メモ全体の除去) が
+      発動して ESSENTIAL (自己修復指示 + CORE) だけが配送される。CORE を
+      構成する各 md の全文が残存し、sonnet part 1 self-gate 経路の CORE は
+      preamble-self-gate.md と always-sonnet-1.md の両方を含む。検査は文言の
+      逐語固定ではなく縮退機構の意味的検証とする:
+      (a) hook が正常終了し additionalContext を持つ有効な JSON を返す
+      (b) 配送メモ (delivery-note.md) 本文が payload に存在しない
+      (c) (参照パス) 行が payload に存在しない
+      (d) その経路の CORE を構成する各 md の全文が payload に残存する
+      (ESSENTIAL 不落)
+      (e) payload が自己修復指示 (「(自己修復)」) で始まる
+    - 前提の明示: 本検査は「バイト計上では現行 payload が必ず予算を超える」
+      という現行サイズを前提とする。payload がバイト計上でも 8,000 以下まで
+      縮小した場合は縮退が発動せず (b)(c) が red になるため、その時点で本
+      契約を見直す
+    - skip 境界: 制御用の単一バイト locale (C / POSIX) がホストで確認できない
+      場合 (detect_non_utf8_locale が None) のみ、理由付きの明示 skip とする。
+      locale 由来の skip 条件はこれ以外に設けない (クラスに付く jq 可用性の
+      skip guard は hook 統合テスト共通の環境前提であり、本契約の対象外として
+      維持する)
+    - 既存検査への不干渉: UTF-8 固定で実行される既存の予算・内容・縮退証拠
+      検査の合否と設計 (定義時束縛の locale 固定・無条件実行) は変更しない
+    """
+
+    def _deliver_under_non_utf8_locale(self, builder) -> str:
+        """制御用単一バイト locale を ambient に一時設定し、locale=None で
+        builder を実行して additionalContext を返す。
+
+        run_hook 自身は locale を上書きせず、テストが制御した ambient
+        LC_ALL/LANG を hook subprocess が継承する (locale 未指定 fallback
+        分岐の実走)。detect_non_utf8_locale が None の場合は理由付きで
+        skipTest する。locale の検出と skip 判定は環境変更より前に行い、
+        環境変更は builder 1 回の実行区間に限定し、元々キーが無かった状態も
+        含めて完全復元する。
+        """
+        locale = detect_non_utf8_locale()
+        if locale is None:
+            self.skipTest(
+                "制御用の単一バイト locale (C / POSIX) がホストで確認できないため skip"
+            )
+        keys = ("LC_ALL", "LANG")
+        saved = {key: os.environ[key] for key in keys if key in os.environ}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            try:
+                os.environ["LC_ALL"] = locale
+                os.environ["LANG"] = locale
+                return builder(tmp_dir, None)
+            finally:
+                for key in keys:
+                    if key in saved:
+                        os.environ[key] = saved[key]
+                    else:
+                        os.environ.pop(key, None)
+
+    def test_fable_delivery_degrades_to_essential_under_non_utf8_locale(
+        self,
+    ) -> None:
+        """fable 配送がバイト計上の縮退で ESSENTIAL のみになること (a)〜(e)。"""
+        context = self._deliver_under_non_utf8_locale(delivery_fable)
+        # (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
+        note_payload = delivery_note_payload_text()
+        self.assertTrue(
+            note_payload, "delivery-note.md から配送メモ本文を抽出できない (空・ヘッダのみの疑い)"
+        )
+        self.assertNotIn(
+            note_payload,
+            context,
+            "配送メモ本文が縮退後も payload に残存している"
+            " (バイト計上での二段縮退が発動していない疑い)",
+        )
+        self.assertNotIn(
+            PATH_LINE_PREFIX,
+            context,
+            "(参照パス) 行が縮退後も payload に残存している (第一段縮退が発動していない疑い)",
+        )
+        self.assertEqual(
+            [],
+            payload_content_missing(context, FABLE_MD),
+            "ルール md 全文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
+        )
+        self.assertTrue(
+            context.startswith("(自己修復)"),
+            "payload が自己修復指示で始まっていない",
+        )
+
+    def test_sonnet_part1_delivery_degrades_to_essential_under_non_utf8_locale(
+        self,
+    ) -> None:
+        """sonnet part 1 self-gate 配送がバイト計上の縮退で ESSENTIAL のみに
+        なること (a)〜(e)。(d) の CORE は preamble-self-gate.md +
+        always-sonnet-1.md の 2 ファイルで構成される。
+        """
+        context = self._deliver_under_non_utf8_locale(delivery_sonnet_part1_self_gate)
+        # (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
+        note_payload = delivery_note_payload_text()
+        self.assertTrue(
+            note_payload, "delivery-note.md から配送メモ本文を抽出できない (空・ヘッダのみの疑い)"
+        )
+        self.assertNotIn(
+            note_payload,
+            context,
+            "配送メモ本文が縮退後も payload に残存している"
+            " (バイト計上での二段縮退が発動していない疑い)",
+        )
+        self.assertNotIn(
+            PATH_LINE_PREFIX,
+            context,
+            "(参照パス) 行が縮退後も payload に残存している (第一段縮退が発動していない疑い)",
+        )
+        self.assertEqual(
+            [],
+            payload_content_missing(context, SONNET_MD["always-sonnet-1.md"]),
+            "ルール md 全文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
+        )
+        self.assertEqual(
+            [],
+            payload_content_missing(context, PREAMBLE_SELF_GATE_MD),
+            "self-gate 前置きが縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
+        )
+        self.assertTrue(
+            context.startswith("(自己修復)"),
+            "payload が自己修復指示で始まっていない",
+        )
 
 
 class RuleBlockSelfComplianceTests(unittest.TestCase):
