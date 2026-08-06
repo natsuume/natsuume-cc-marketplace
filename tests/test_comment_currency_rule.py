@@ -700,13 +700,19 @@ def detect_utf8_locale() -> str | None:
 # env を設定する best-effort な補助にのみ使い、どの検査も gate しない。
 UTF8_LOCALE = detect_utf8_locale()
 
+# import 時点の probe 結果の不変 snapshot。run_hook の locale 既定値が定義時
+# 束縛であることの契約検査 (RunnerLocaleDefaultBindingTests) の期待値にのみ
+# 使う。UTF8_LOCALE と異なり、テストからの一時的な書き換え対象にしない。
+UTF8_LOCALE_AT_IMPORT = UTF8_LOCALE
+
 
 def detect_non_utf8_locale() -> str | None:
     """`locale -a` の出力から制御用の単一バイト locale を優先順 (C → POSIX)
     で 1 つ選んで返す。確認できなければ None を返す。
 
-    locale fallback 経路の実走検証 (LocaleFallbackDeliveryTests) が hook
-    subprocess の LC_ALL/LANG に明示固定する制御用 locale の選定にのみ使う。
+    locale fallback 経路の実走検証 (LocaleFallbackDeliveryTests) が、テスト
+    プロセスの ambient (os.environ) の LC_ALL/LANG へ一時設定する制御用
+    locale の選定にのみ使う。
     契約: 候補は C と POSIX のみに限定する。任意の「非 UTF-8 系」まで許容
     すると、マルチバイト非 UTF-8 locale (EUC-JP 等) が選ばれた場合に
     `wc -m` の計上がバイト基準になる保証が無く、縮退発動の前提が崩れて
@@ -747,6 +753,9 @@ def run_hook(
 
     実リポジトリの ``${TMPDIR:-/tmp}/agent-discipline-state`` を汚さないよう、
     呼び出し側が用意した一時ディレクトリを TMPDIR として渡す。locale が
+    None の場合は LC_ALL/LANG を設定せず、呼び出し元プロセスの ambient を
+    subprocess へ継承させる (locale 未指定 fallback。この経路の実走検証は
+    LocaleFallbackDeliveryTests が ambient を制御して行う)。locale が
     利用可能であれば LC_ALL/LANG に固定する (detect_utf8_locale 参照) が、
     これは hook script 内部 (`wc -m` 等) の locale 依存動作を安定させる
     best-effort な補助にすぎず、この Python プロセス自身の subprocess 出力
@@ -788,7 +797,8 @@ def delivery_fable(tmp_dir: str, locale: str | None = UTF8_LOCALE) -> str:
     """SessionStart (inject-always.sh) が fable 判定時に配送する additionalContext。
 
     locale は run_hook へそのまま渡す (既定は定義時点で束縛された検出済み
-    UTF-8 locale。locale fallback 検証だけが非 UTF-8 locale を明示指定する)。
+    UTF-8 locale。locale fallback 検証だけが None を明示指定し、run_hook に
+    LC_ALL/LANG を設定させず、テストが制御した ambient を継承させる)。
     """
     payload = {
         "session_id": "size-budget-fable",
@@ -804,7 +814,8 @@ def delivery_sonnet_part1_self_gate(
     """SessionStart (inject-always.sh) がモデル判定不能時に配送する、self-gate
     前置き + always-sonnet-1.md (part 1 の最大構成)。
 
-    locale は run_hook へそのまま渡す (delivery_fable と同じ契約)。
+    locale は run_hook へそのまま渡す (既定と None の意味は delivery_fable と
+    同じ契約)。
     """
     payload = {"session_id": "size-budget-sonnet-1", "hook_event_name": "SessionStart"}
     return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
@@ -1144,13 +1155,10 @@ class SizeBudgetTests(unittest.TestCase):
         グローバル UTF8_LOCALE を書き換えても) 検出済みの値を使い続ける。この
         独立性により、hook subprocess の起動 env はこのシミュレーション中も
         実検出済み locale で決定的に pin されたままになり、検査結果が test
-        実行環境の ambient locale (既定 locale) に左右されない。共有 runner の
-        既定経路 (delivery_subagent) も同じ比較で検査する。
+        実行環境の ambient locale (既定 locale) に左右されない。
         """
         with tempfile.TemporaryDirectory() as tmp_dir_pinned:
             pinned_context = delivery_fable(tmp_dir_pinned)
-        with tempfile.TemporaryDirectory() as tmp_dir_subagent_pinned:
-            pinned_subagent_context = delivery_subagent(tmp_dir_subagent_pinned)
 
         global UTF8_LOCALE
         original = UTF8_LOCALE
@@ -1158,8 +1166,6 @@ class SizeBudgetTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp_dir_simulated:
                 simulated_context = delivery_fable(tmp_dir_simulated)
-            with tempfile.TemporaryDirectory() as tmp_dir_subagent_simulated:
-                simulated_subagent_context = delivery_subagent(tmp_dir_subagent_simulated)
         finally:
             UTF8_LOCALE = original
 
@@ -1169,13 +1175,6 @@ class SizeBudgetTests(unittest.TestCase):
             "UTF8_LOCALE=None のシミュレーション下で hook の出力が変化した"
             " (env pin がグローバルの書き換えに追従してしまっている疑い)",
         )
-        self.assertEqual(
-            pinned_subagent_context,
-            simulated_subagent_context,
-            "UTF8_LOCALE=None のシミュレーション下で共有 runner の既定経路"
-            " (delivery_subagent) の出力が変化した"
-            " (env pin がグローバルの書き換えに追従してしまっている疑い)",
-        )
         length = utf16_length(simulated_context)
         self.assertTrue(within_size_budget(length), f"予算超過 ({length} units)")
         missing = pre_degradation_missing_elements(
@@ -1183,22 +1182,25 @@ class SizeBudgetTests(unittest.TestCase):
         )
         self.assertEqual([], missing, f"配送メモ本文の証拠が無い: {missing}")
 
-        # run_hook 自身の locale 既定値が検出済み値のまま定義時束縛されている
-        # ことを直接検査する。delivery_fable は locale を明示引数として渡す
-        # ため、上記の出力比較だけでは共有 runner の既定束縛の後退 (遅延参照
-        # 化) を検出できない。locale 引数を渡さない他の配送 builder はこの
-        # 既定に依存し続けるため、既定値そのものを保全対象にする。比較対象は
-        # 可変なモジュールグローバル (original) ではなく、その場で再実行した
-        # probe 結果 (detect_utf8_locale()) にする — original は既にこの時点で
-        # 値をコピー済みの固定値であり、可変グローバルとの比較は書き換え検知
-        # として機能しない。同一ホストでは決定的な probe 結果のほうが基準として
-        # 意味を持つ。
+
+class RunnerLocaleDefaultBindingTests(unittest.TestCase):
+    """run_hook の locale 既定値が import 時の probe 結果へ定義時束縛されて
+    いることの独立契約検査。
+
+    配送出力の比較では束縛方式を検証しない — UTF-8 系 ambient のホストでは
+    束縛方式に依らず出力が一致しうるため、比較は判別力を持たない。既定値
+    そのものを、import 時に保存した不変 snapshot (UTF8_LOCALE_AT_IMPORT) と
+    突き合わせる。probe の再実行もしない (再実行は一時的な失敗という別の
+    不確実性を期待値に持ち込むため)。
+    """
+
+    def test_run_hook_locale_default_is_bound_at_definition_time(self) -> None:
         runner_default = inspect.signature(run_hook).parameters["locale"].default
-        expected_default = detect_utf8_locale()
         self.assertEqual(
-            expected_default,
+            UTF8_LOCALE_AT_IMPORT,
             runner_default,
-            "run_hook の locale 既定値が定義時束縛の検出済み値から変わっている",
+            "run_hook の locale 既定値が import 時の検出値と一致しない"
+            " (定義時束縛の後退の疑い)",
         )
 
 
@@ -1212,8 +1214,12 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
     本クラスはその経路を、ambient locale に依存せず決定的に実走させる:
 
     - 制御用 locale: detect_non_utf8_locale が `locale -a` から選ぶ単一バイト
-      locale (C / POSIX) を run_hook の locale 引数で LC_ALL/LANG に明示固定
-      する。テスト実行環境の既定 locale には依存しない
+      locale (C / POSIX) を、テストが os.environ の LC_ALL/LANG へ一時設定し
+      (元々キーが無かった状態も含めて try/finally で完全復元)、builder には
+      locale=None を渡す。run_hook 自身は locale を上書きせず、テストが制御
+      した ambient を hook subprocess が env の copy 経由で継承する (= locale
+      未指定 fallback 分岐の実走)。ambient は区間内でテストが明示制御する
+      ため、テスト実行環境の既定 locale には依存しない
     - 対象経路: 段階的縮退ガードを持つ 2 経路 (inject-always.sh の fable 配送 /
       sonnet part 1 self-gate 配送) のみ。他 4 経路はサイズ計測を持たず locale
       で挙動が変わらないため対象外
@@ -1241,17 +1247,34 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
     """
 
     def _deliver_under_non_utf8_locale(self, builder) -> str:
-        """非 UTF-8 locale を固定して builder を実行し additionalContext を返す。
+        """制御用単一バイト locale を ambient に一時設定し、locale=None で
+        builder を実行して additionalContext を返す。
 
-        detect_non_utf8_locale が None の場合は理由付きで skipTest する。
+        run_hook 自身は locale を上書きせず、テストが制御した ambient
+        LC_ALL/LANG を hook subprocess が継承する (locale 未指定 fallback
+        分岐の実走)。detect_non_utf8_locale が None の場合は理由付きで
+        skipTest する。locale の検出と skip 判定は環境変更より前に行い、
+        環境変更は builder 1 回の実行区間に限定し、元々キーが無かった状態も
+        含めて完全復元する。
         """
         locale = detect_non_utf8_locale()
         if locale is None:
             self.skipTest(
                 "制御用の単一バイト locale (C / POSIX) がホストで確認できないため skip"
             )
+        keys = ("LC_ALL", "LANG")
+        saved = {key: os.environ[key] for key in keys if key in os.environ}
         with tempfile.TemporaryDirectory() as tmp_dir:
-            return builder(tmp_dir, locale)
+            try:
+                os.environ["LC_ALL"] = locale
+                os.environ["LANG"] = locale
+                return builder(tmp_dir, None)
+            finally:
+                for key in keys:
+                    if key in saved:
+                        os.environ[key] = saved[key]
+                    else:
+                        os.environ.pop(key, None)
 
     def test_fable_delivery_degrades_to_essential_under_non_utf8_locale(
         self,
