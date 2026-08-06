@@ -46,6 +46,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -700,6 +701,24 @@ def detect_utf8_locale() -> str | None:
 UTF8_LOCALE = detect_utf8_locale()
 
 
+def detect_non_utf8_locale() -> str | None:
+    """`locale -a` の出力から制御用の単一バイト locale を優先順 (C → POSIX)
+    で 1 つ選んで返す。確認できなければ None を返す。
+
+    locale fallback 経路の実走検証 (LocaleFallbackDeliveryTests) が hook
+    subprocess の LC_ALL/LANG に明示固定する制御用 locale の選定にのみ使う。
+    契約: 候補は C と POSIX のみに限定する。任意の「非 UTF-8 系」まで許容
+    すると、マルチバイト非 UTF-8 locale (EUC-JP 等) が選ばれた場合に
+    `wc -m` の計上がバイト基準になる保証が無く、縮退発動の前提が崩れて
+    製品欠陥なしの red を作るため。C / POSIX は文字 = 1 バイトが保証される。
+    `locale -a` の実行失敗・タイムアウト・非ゼロ終了・候補ゼロはすべて
+    None を返し、呼び出し側が理由付きの明示 skip に変換する (silent green に
+    しない)。ホスト locale の環境生成による代替は行わない (検証はホストに
+    実在する locale のみで行う)。
+    """
+    raise NotImplementedError("Phase B で実装する")
+
+
 def run_hook(
     script: Path,
     payload: dict[str, str],
@@ -748,22 +767,30 @@ def run_hook(
     return data["hookSpecificOutput"]["additionalContext"]
 
 
-def delivery_fable(tmp_dir: str) -> str:
-    """SessionStart (inject-always.sh) が fable 判定時に配送する additionalContext。"""
+def delivery_fable(tmp_dir: str, locale: str | None = UTF8_LOCALE) -> str:
+    """SessionStart (inject-always.sh) が fable 判定時に配送する additionalContext。
+
+    locale は run_hook へそのまま渡す (既定は定義時点で束縛された検出済み
+    UTF-8 locale。locale fallback 検証だけが非 UTF-8 locale を明示指定する)。
+    """
     payload = {
         "session_id": "size-budget-fable",
         "hook_event_name": "SessionStart",
         "model": "claude-fable-5",
     }
-    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir)
+    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
 
 
-def delivery_sonnet_part1_self_gate(tmp_dir: str) -> str:
+def delivery_sonnet_part1_self_gate(
+    tmp_dir: str, locale: str | None = UTF8_LOCALE
+) -> str:
     """SessionStart (inject-always.sh) がモデル判定不能時に配送する、self-gate
     前置き + always-sonnet-1.md (part 1 の最大構成)。
+
+    locale は run_hook へそのまま渡す (delivery_fable と同じ契約)。
     """
     payload = {"session_id": "size-budget-sonnet-1", "hook_event_name": "SessionStart"}
-    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir)
+    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
 
 
 def payload_content_missing(context: str, source_md: Path) -> list[str]:
@@ -1126,6 +1153,79 @@ class SizeBudgetTests(unittest.TestCase):
             simulated_context, delivery_note_payload_text()
         )
         self.assertEqual([], missing, f"配送メモ本文の証拠が無い: {missing}")
+
+        # run_hook 自身の locale 既定値が検出済み値のまま定義時束縛されている
+        # ことを直接検査する。delivery_fable は locale を明示引数として渡す
+        # ため、上記の出力比較だけでは共有 runner の既定束縛の後退 (遅延参照
+        # 化) を検出できない。locale 引数を渡さない他の配送 builder はこの
+        # 既定に依存し続けるため、既定値そのものを保全対象にする。
+        runner_default = inspect.signature(run_hook).parameters["locale"].default
+        self.assertEqual(
+            original,
+            runner_default,
+            "run_hook の locale 既定値が定義時束縛の検出済み値から変わっている",
+        )
+
+
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+class LocaleFallbackDeliveryTests(unittest.TestCase):
+    """UTF-8 locale が env に固定されない hook 起動経路 (locale fallback) の実走検証。
+
+    既存の SizeBudgetTests は hook subprocess の LC_ALL/LANG を検出済み UTF-8
+    locale に固定して起動するため、「非 UTF-8 locale では inject-always.sh の
+    `wc -m` がバイト計上になり縮退が発動する」経路はどのケースでも実走しない。
+    本クラスはその経路を、ambient locale に依存せず決定的に実走させる:
+
+    - 制御用 locale: detect_non_utf8_locale が `locale -a` から選ぶ単一バイト
+      locale (C / POSIX) を run_hook の locale 引数で LC_ALL/LANG に明示固定
+      する。テスト実行環境の既定 locale には依存しない
+    - 対象経路: 段階的縮退ガードを持つ 2 経路 (inject-always.sh の fable 配送 /
+      sonnet part 1 self-gate 配送) のみ。他 4 経路はサイズ計測を持たず locale
+      で挙動が変わらないため対象外
+    - 期待挙動: 非 UTF-8 locale では `wc -m` が日本語 payload をバイト数
+      (UTF-8 で 1 文字 3 バイト前後) で計上するため、現行 payload は必ず
+      8,000 を超え、二段縮退 ((参照パス) 行の除去 → 配送メモ全体の除去) が
+      発動して ESSENTIAL (自己修復指示 + ルール md 全文) だけが配送される。
+      検査は文言の逐語固定ではなく縮退機構の意味的検証とする:
+      (a) hook が正常終了し additionalContext を持つ有効な JSON を返す
+      (b) 配送メモ (delivery-note.md) 本文が payload に存在しない
+      (c) (参照パス) 行が payload に存在しない
+      (d) その経路のルール md 全文が payload に残存する (ESSENTIAL 不落)
+      (e) payload が自己修復指示 (「(自己修復)」) で始まる
+    - 前提の明示: 本検査は「バイト計上では現行 payload が必ず予算を超える」
+      という現行サイズを前提とする。payload がバイト計上でも 8,000 以下まで
+      縮小した場合は縮退が発動せず (b)(c) が red になるため、その時点で本
+      契約を見直す
+    - skip 境界: 制御用の単一バイト locale (C / POSIX) がホストで確認できない
+      場合 (detect_non_utf8_locale が None) のみ、理由付きの明示 skip とする。
+      locale 由来の skip 条件はこれ以外に設けない (クラスに付く jq 可用性の
+      skip guard は hook 統合テスト共通の環境前提であり、本契約の対象外として
+      維持する)
+    - 既存検査への不干渉: UTF-8 固定で実行される既存の予算・内容・縮退証拠
+      検査の合否と設計 (定義時束縛の locale 固定・無条件実行) は変更しない
+    """
+
+    def _deliver_under_non_utf8_locale(self, builder) -> str:
+        """非 UTF-8 locale を固定して builder を実行し additionalContext を返す。
+
+        detect_non_utf8_locale が None の場合は理由付きで skipTest する。
+        Phase B で実装する。
+        """
+        raise NotImplementedError("Phase B で実装する")
+
+    def test_fable_delivery_degrades_to_essential_under_non_utf8_locale(
+        self,
+    ) -> None:
+        """fable 配送がバイト計上の縮退で ESSENTIAL のみになること (a)〜(e)。"""
+        raise NotImplementedError("Phase B で実装する")
+
+    def test_sonnet_part1_delivery_degrades_to_essential_under_non_utf8_locale(
+        self,
+    ) -> None:
+        """sonnet part 1 self-gate 配送がバイト計上の縮退で ESSENTIAL のみに
+        なること (a)〜(e)。(d) のルール md は always-sonnet-1.md。
+        """
+        raise NotImplementedError("Phase B で実装する")
 
 
 class RuleBlockSelfComplianceTests(unittest.TestCase):
