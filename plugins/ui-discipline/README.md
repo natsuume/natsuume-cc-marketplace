@@ -4,23 +4,7 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## バージョン
 
-v0.4.2
-
-### v0.4.1 → v0.4.2 の変更点
-
-注入対象 md (`ui-rules.md`) のヘッダコメントから issue 番号による経緯記述を除去し、現行の役割・構成のみの説明に書き換えた。ルール本文は無変更 (#363)。
-
-### v0.4.0 → v0.4.1 の変更点
-
-ui-patterns skill の実装完了前チェックリストを「見落としやすい項目の再確認 (そのタスクで触れたルールに対応する項目だけを確認する)」に位置づけ変更した。
-
-### v0.3.0 → v0.4.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止した。`codex/` 配下の manifest・prompt・inject script を削除し、Claude Code 版の SessionStart / SubagentStart hook と ui-patterns Skill は無変更。
-
-### v0.2.1 → v0.3.0 の変更点
-
-- Codex plugin manifest を追加し、SessionStart/SubagentStart hook と ui-patterns Skill を Claude Code / Codex で共有できるようにした
+v0.4.3
 
 ## 概要
 
@@ -42,6 +26,8 @@ UI 実装は「共通化すべきか」「表示/非表示をどう決めるか�
 claude plugin marketplace add natsuume/natsuume-cc-marketplace
 claude plugin install ui-discipline@natsuume-plugins
 ```
+
+本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
 ## 配送する 10 ルール
 

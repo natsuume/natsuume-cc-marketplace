@@ -18,202 +18,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v5.3.2
-
-(前身: `pre-commit-review` v0.4.0)
-
-### v5.3.1 → v5.3.2 の変更点
-
-- cmd-parser.sh の escaped backslash pattern arity 不一致による quote 状態漏れ (push 検出 fail-open) を修正 (#354)
-
-### v5.3.0 → v5.3.1 の変更点
-
-- `block-bg-codex-wrapper.sh` の segment 分類を read-only allowlist 方式から 14-step の順序付き決定表による executable 位置分類へ転換 (issue #339)。`rg` 等の引数として wrapper ファイル名を参照しただけの read-only コマンドが deny される誤検知を解消した。fail-open は「外部コマンド形の不明 head の引数参照」1 経路に限定され、shell keyword / builtin superset・launcher prefix・代入 slot の存在・危険 option (canonical token 値で判定)・indirection・pipe chain 検査は fail-closed を維持する。加えて、共有 parser の depth / quote 状態が実 shell 意味論と乖離した segment・token (複数コマンドの merge、複数 shell word の merge、ANSI-C quoting) は解析不能として実行形に倒す
-
-### v5.2.0 → v5.3.0 の変更点
-
-Claude Opus 5 System Card の実測に基づき、code-reviewer / security-reviewer の effort=medium 固定を撤廃した。
-
-- 両 reviewer の frontmatter から `effort: medium` を削除した (`model: opus` の固定は維持)。effort はセッション既定を継承する
-- 理由: System Card の実測 (高難度の検証・調査タスクは effort とともに性能がスケールする。§8.5 FrontierBench / §8.10.1 HLE) に基づき、agent-discipline v0.23.0 で分業規律の Opus 5 effort=medium 固定が撤廃されたことに追随した (v5.0.0 で effort を固定した理由は同規律の旧文面)
-- 高 effort 継承時の自己修正ループ対策 (System Card §6.2.1) として、両 reviewer の body に「各候補の検証は 1 回で完了し、検証済み finding の再検証ループに入らず、レビュータスクのスコープ内に留まる」較正文を追加した
-- 契約テストを更新した: `tests/test_subagent_model_pins.py` の frontmatter 検査を「model: opus + effort: medium」から「model: opus のみ (effort キー行の不在)」へ変更し、`tests/test_opus5_effort_unpin.py` に reviewer body 較正文と本 README 現状参照節の整合の検査を追加した
-
-### v5.1.1 → v5.2.0 の変更点 (issue #337)
-
-codex-reviewer が Bash timeout の background 自動移行後に review 結果を回収できるようになった。従来は `tools` が `Bash` のみだったため、Bash tool が timeout してラッパー実行を background へ自動移行させると codex review 自体は完走していても subagent 側に回収手段が無く、正規の parent-safe report を返せず push gate が詰まっていた。
-
-- `agents/codex-reviewer.md` の frontmatter `tools` を `Bash, TaskOutput, Read` に拡張した (TaskOutput / Read は下記回収専用)
-- `## Background-move recovery` セクションを新設した: Bash 結果が background 移行を報告した直後に task ID と output file path を記録し、同一 task ID に対して `TaskOutput (block=true)` で terminal state まで bounded に poll する (初回自動回収は TaskOutput 呼び出し 5 回・各呼び出しはツールの最大 timeout までを予算とする)。report が truncated な場合のみ記録済み output file path を Read で補完する。回収成功時は既存の parent-safe report 契約 (`Status: pass` / `Status: findings` / `Status: execution-failed`) へ normalize する
-- 境界条件 3 種で `Status: execution-failed` を返す: task ID 喪失、回収予算超過 (この場合は codex review が background で継続中である旨と、診断専用の単発 status check のためにこの同じ subagent を resume できる旨を report に記載する。resume は marker を昇格できず、push gate を満たすには新規 reviewer run が必要)、TaskOutput が task を見失った場合
-- background 移行はそれ自体では wrapper failure (non-zero exit) ではないことを明記し、両者を排他的な扱いに固定した
-- `## Constraints` の旧 `Bash` のみ前提の文言 2 箇所を、`Bash, TaskOutput, Read` 構成 (TaskOutput / Read は上記回収専用、Edit / Write / Skill / Task は引き続き非許可) に合わせて改訂した
-- 後方互換のある機能追加 (tools 拡張は既存の wrapper-only 実行サーフェスを維持したままの回収経路追加) のため minor bump
-
-### v5.1.0 → v5.1.1 の変更点
-
-code-reviewer / security-reviewer subagent の report contract に、自由記述フィールド (Cause class / Violated invariant / Impact / Fix direction) を 1 文に制限する長さ較正を追加した。
-
-### v5.0.0 → v5.1.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止した。将来の再監査用に保存していた Codex 用 named profile template・setup script・`review-codex` Skill source・SubagentStop adapter source を削除した。Claude Code 版の 3 subagent 起動フロー、marker 契約、codex-reviewer subagent (codex review wrapper を foreground 起動する Claude Code 機能) は無変更。
-
-### v4.2.2 → v5.0.0 の変更点
-
-- **互換破壊**: code-reviewer / security-reviewer が model: opus (+ effort: medium) を要求するようになった。Opus 5 を利用できないプラン・model 制限環境では既定の 3 subagent 並列フローが起動に失敗する (fallback は下記)
-- Opus 5 を利用できない環境では code-reviewer / security-reviewer を `model: "sonnet"` の明示で、Sonnet 制限環境では codex-reviewer を利用可能な非 Fable モデル (例: `model: "opus"`) の明示で、それぞれ単独再起動する fallback が使える (呼び出し側の model 指定は frontmatter より優先され、marker は subagent の agent_type に対して発行されるため fallback でも機能するが、実効モデルは既定と異なる)
-- code-reviewer / security-reviewer の frontmatter を `model: opus` + `effort: medium` に、codex-reviewer の frontmatter を `model: sonnet` に固定した (従来の `model: inherit` を廃止)
-- `/pre-push-review:review` の 3 起動仕様、単独再起動の案内、`block-pre-push.sh` / `block-bg-codex-wrapper.sh` の deny メッセージに、起動すべき model (`model: "opus"` / `model: "sonnet"`) を明示した
-- code-reviewer / security-reviewer の自己フィルタ (`Identify ONLY` / confidence 8/10 閾値での `Drop anything`) を廃止し、Exclusions を通過した候補を `Confidence: high | medium | low` で較正して全件報告する契約に変更した。選別は親セッションの分類パスに委ね、`/pre-push-review:review` の修正フローに `Confidence: low` 候補の分類指針を追加した
-- 理由: Claude 5 世代の運用制約 (Fable はサブエージェント禁止、Opus 5 は effort medium 固定、Sonnet 系はサブエージェント推奨) と、`CLAUDE_CODE_SUBAGENT_MODEL` 環境固定の廃止により、Fable セッションでは model 未指定の Agent 起動が agent-discipline の hook に deny されるため。あわせて Opus 5 / Sonnet 5 の literal な指示追従傾向により、confidence 閾値での自己フィルタが recall を下げる懸念に対応した
-- 既知の制約: marker は reviewer subagent の agent_type に対して発行され、実効モデルを検証しない。`CLAUDE_CODE_SUBAGENT_MODEL` は起動時の model 指定・frontmatter より優先され、`CLAUDE_CODE_EFFORT_LEVEL` は frontmatter の effort より優先されるため、これらを設定した環境では opus + effort medium の保証が失われる。本プラグインはこれらの環境変数を設定しない運用を前提とする
-
-### v4.2.1 → v4.2.2 の変更点 (issue #280)
-
-- `/pre-push-review:review` の呼び出し側が branch 差分を Phase A / Phase B / 判定不能に分類し、code-reviewer と security-reviewer の起動 prompt に現在の Phase を渡すようにした。Phase A のテスト一括先行は spec-first 2 段階の仕様であり、それ自体を finding にしないことを明示した
-- Phase を確信を持って判定できない場合は質問で作業を止めず、従来どおり Phase 文脈なしで起動する。reviewer の選択・順序・引数は従来の確定的フローを維持する
-- Codex CLI と公式 companion を調査し、通常の branch review と custom focus text を同時に渡せないことを確認したため、Phase 文脈は code / security reviewer のみに限定した。codex-reviewer の prompt、agent 定義、`run-codex-review.sh`、marker 仕様は変更していない
-
-### v4.2.0 → v4.2.1 の変更点 (issue #134)
-
-- command keyword 内の quote / escape、`git -c alias.*`、wrapper file 名の quote 分断が cooperative gate の検出対象外であることを明文化した
-- 本 plugin は Claude が生成する通常形の push をレビュー gate に通すための規律であり、意図的な難読化や alias 展開までを扱う security sandbox ではないという保証境界を追記した
-
-### v4.1.6 → v4.2.0 の変更点 (issue #279)
-
-- `/pre-push-review:review` の finding 対応を「具体的な failure scenario への変換 → 現在の codebase での裏取り → valid / invalid / needs-user-decision の 3 値分類」から始めるフローへ拡張した。invalid は成立しない根拠を記録して修正せず、設計・仕様判断が必要な finding は `AskUserQuestion` 後に扱いを決める
-- failure scenario の不成立を積極的に確認できた場合だけ invalid とし、確信が持てない場合は fail-safe で valid 側に倒す。findings が 0 件なら分類をスキップする
-- marker は「現在の差分に対するレビュー実行と freshness」の証明であり、approve や findings 0 件の証明ではないことを明文化した。codex-reviewer の修正対象 finding に対する既存の rescue 3 観点 approve ゲートは維持する
-
-### v4.1.5 → v4.1.6 の変更点 (issue #131)
-
-- `auto-mark.sh` の code / security marker を、同一ディレクトリの一時 file へ hash を書き切ってから atomic rename で公開する方式に変更した。途中終了・disk full・rename 失敗時に空または部分書き込みの final marker を公開せず、既存 marker を保持して不要な再レビュー要求を防ぐ
-- rename 失敗を fault injection した integration test で、既存 marker の保持と一時 file の best-effort cleanup を固定した。Codex marker は従来どおり review wrapper の pending attestation を final marker へ atomic rename する
-
-### v4.1.4 → v4.1.5 の変更点 (issue #130)
-
-- `git push -df` / `git push -fd` のような bundled short option 内の `-d` を delete push として認識し、remote branch 削除を別 branch commit の push と誤認して deny する false positive を解消した
-- value-taking `-o` / `--push-option` の値、long option 内の `d`、および `--` 以降の `-d` refspec は delete flag と扱わず、別 branch refspec の fail-closed deny を維持した
-
-### v4.1.3 → v4.1.4 の変更点 (issue #129)
-
-- `block-pre-push.sh` の事前 shape check で shell interpreter の positional script path と `-c` command string を区別し、`bash ./scripts/push-deploy-notifications.sh` のように path に `push` を含むだけの script 実行を誤 deny しないようにした
-- `bash -c`、`env` / `time` 等の wrapper、`bash -s` の stdin、`bash -i` と `--rcfile` / `--init-file` の初期化ファイル実行は、従来どおり fail-closed に deny する
-
-### v4.1.2 → v4.1.3 の変更点 (issue #294)
-
-- issue #294 の対象 worktree を再調査し、SubagentStart / SubagentStop が発火して worktree 専用 git-dir に launch tombstone と3マーカーを書いていたことを確認した。当初の「hook が一度も発火していない」という推定は、main `.git` 直下を marker storage とみなしたことによる保存先の取り違えだった
-- `block-pre-push.sh` の deny メッセージへ実際の marker storage と `git rev-parse --absolute-git-dir` による確認手順を追加し、linked worktree で main `.git` の stale marker を誤参照して手動 override する再発経路を塞いだ
-- linked worktree の lifecycle marker が worktree 専用 git-dir に保存され、common git-dir 直下には書かれないことを integration test で固定した
-
-### v4.1.1 → v4.1.2 の変更点 (issue #127)
-
-- `block-pre-push.sh` が quote-aware な token 解析で確定した push segment の 0 始まり index と全 segment を `resolve_push_target` へ渡すようにし、resolver 内の quote 非対応 regex による push segment 再探索を撤廃した
-- `git commit -m "let's push it" && cd sub && git push` のように、手前の quote 内へ `push` という語を含むコマンドでも、実際の push target である `sub` を解決するようにした。index の形式・範囲が不正な場合や非-push segment を指す場合は fail-closed に解析失敗とする
-
-### v4.1.0 → v4.1.1 の変更点 (issue #128)
-
-- `block-pre-push.sh` が `jq` を見つけられない場合に無条件で pass-through していた経路を修正し、`git push` を valid な deny JSON で fail-closed にブロックするようにした。push と無関係な Bash 呼び出しは、従来どおり `jq` を要求せず通過する
-- deny メッセージで `jq` のインストールと `git push` の再実行を案内し、環境依存の失敗から復旧できるようにした
-
-### v4.0.1 → v4.1.0 の変更点 (issue #285)
-
-- レビュー完了検知を PostToolUse から subagent lifecycle hook (SubagentStart / SubagentStop) へ完全移行した。Claude Code v2.1.198 以降は Agent tool が既定で background 起動になり、PostToolUse は起動受理時 (`status: "async_launched"`) に 1 回発火するのみで完了時には発火しないため、v4.0.x の completion 検証は async 起動 harness で marker を永遠に書けず push gate が恒久 deny になっていた
-- SubagentStart で「agent_id + 開始時 review hash」の launch attestation を one-shot 記録し、SubagentStop で (a) attestation の存在と一回限りの消費 (b) 開始時 hash と現在 hash の一致 (c) `last_assistant_message` 内の単一 `Status: pass|findings` 行 (d) `stop_hook_active == false` をすべて検証した場合のみ marker を書く。SendMessage resume 後の再 stop・レビュー開始後の差分変更・重複 stop は fail-closed に遮断する (codex-reviewer は従来どおり wrapper pending attestation の現在 hash 一致も要求)
-- 旧 PostToolUse completion 経路と hooks.json の PostToolUse 配線を撤去した (PostToolUseFailure による codex pending 破棄は補助掃除経路として維持)
-- attestation の消費時に launch tombstone (`.claude-pre-push-done-<agent_id>`、無期限保持) を排他作成し、同一 agent_id での SubagentStart 再発火 (SendMessage resume 等) による attestation 再鋳造を遮断した (agent_id 1 つにつきフル review 1 回。再レビューは新規 spawn で行う)。Start は既存 attestation の上書きも禁止し、attestation / tombstone の作成は排他 `ln` の create-if-absent で行う。attestation の消費は tombstone の存在を確認できた場合のみ行い、ストレージ障害等で tombstone を作れなかった stop では遷移を次の stop まで保留する。逆に既存 tombstone を検出した stop は、残存 attestation (過去の stop で rm に失敗した名残) を再利用せず掃除だけを再試行し、marker を書かない (one-shot 消費の保証を rm の成否ではなく tombstone の存在に束縛する)。codex-reviewer の terminal な拒否 stop (attestation 無し / 既存 tombstone) では git-dir 共有の pending attestation も破棄し、resume の wrapper 再実行が書き直した pending を後続の別 stop が昇格する経路を塞ぐ
-
-### v4.0.0 → v4.0.1 の変更点 (issue #281)
-
-- 3 reviewer に共通の parent-safe report 契約を追加し、 finding ID、priority、confidence、location、cause class、violated invariant、impact、verification、fix direction、disposition を親 session へ返す形式に統一した
-- `codex-reviewer` が wrapper の stdout / stderr を verbatim relay する挙動を廃止した。raw output は subagent context / transcript に留め、親へは各 finding を抽象化した summary、または正規化した execution failure だけを返す
-- `code-reviewer` / `security-reviewer` も、内部では具体的な failure / attack scenario を検証しつつ、実行可能な command、再利用可能な payload、具体的な環境値、段階的な再現・回避手順を final report へ含めない
-- repository-normalized `Severity: P1|P2|P3` と upstream の `Source severity` を分離した。source P0 は `Severity: P1` + `Source severity: P0` + `must-fix-before-push` に無損失写像し、ローカル label 体系に P0 が無くても criticality を落とさない
-- exact detail を使った追加検証は、親へ raw detail を返す代わりに同一 reviewer subagent を resume して行い、結果だけを parent-safe report で返す
-- `/pre-push-review:review` の 3 delegation prompt も parent-safe report を明示的に要求し、codex wrapper の stdout / stderr をまとめて返す旧指示を削除した。3 Agent call は `run_in_background: false` を明記し、Claude Code の background-default 時にも launch を review 完了と誤認しない
-- 親の user-facing summary から agent ID、output file、transcript path、raw tool metadata を除外し、review の方針判断に不要な orchestration detail も context isolation の対象にした
-- `auto-mark.sh` は Agent PostToolUse の `tool_response.status=completed` と final `content[].text` の単一 `Status: pass|findings` を両方確認した場合だけ 3 reviewer の marker を書くようにした。`async_launched`、`Status: execution-failed`、status 欠落・重複・未知値は marker を書かず、push gate を deny のまま維持する
-- auto-mark の completion payload は Claude Code 2.1.211 で実機検証済み。`tool_response.status` がない場合は marker を書かず、旧 version / 未知 schema による恒久 deny と判別できる stderr 診断を出す
-- Codex wrapper の final marker 直書きを廃止し、review 開始時点の hash を atomic な pending attestation に保存する方式へ変更した。auto-mark は attestation と current hash の一致を確認し、codex-reviewer の parent-safe report 成功後にのみ final marker へ atomic rename する。report 失敗・PostToolUseFailure・hash mismatch では pending を破棄する
-- agent 定義・command・auto-mark の contract / integration test を追加し、必須 field、raw detail relay 禁止規律、foreground completion の fail-closed 判定を固定した
-
-### v3.1.4 → v4.0.0 の変更点 (互換破壊あり / issue #267)
-
-- **agent_type 検証 gate を追加 (fail-closed)**: `block-bg-codex-wrapper.sh` が hook payload トップレベルの `agent_type` を検証し、 `pre-push-review:codex-reviewer` (namespace 付き完全一致) 以外からの `run-codex-review.sh` wrapper 起動を deny するようにした。 **互換破壊**: hook payload に `agent_type` を含めない旧 Claude Code では、 正規フロー経由の wrapper 起動も deny される。 本 gate は Claude Code 2.1.211 で実機検証済み (= 動作要件の検証済み最低 version)
-- **agent_type gate の発火対象を実行形コマンドのみに限定 (codex review P2 指摘への追加修正 / fail-closed 分類)**: substring `run-codex-review.sh` を含む segment を `split_command` / `tokenize_segment` / `skip_env_assignments` / `unquote_token` (cmd-parser.sh) で 3 規則に分類し、 wrapper を実行せず言及するだけの read-only コマンド (`cat` / `head` / `tail` / `grep` / `git diff` 等の言及 allowlist) は gate 対象外にした。 interpreter 起動・コマンド置換 (`$(...)` / バッククォート / `<(...)` / `>(...)`) を含む形・不明コマンドのみを実行形として gate し、 分類不能・想定外の形は fail-closed に実行形として扱う (regression: 従来は substring 一致のみで無害な言及コマンドまで deny していた)。 コマンド置換等の間接実行を検出した場合は、 `&` / `|` が wrapper 呼び出しに隣接していなくても位置を問わず deny するようにした (indirection 経由は substring を含む segment と実際に wrapper を実行する segment の対応関係を parser が追跡できないため)
-- **indirection 判定を quote-aware に修正 (codex review High 指摘)**: 上記の規則 1 (indirection) が生 substring 一致 (`*'$('*` 等) だったため、 `grep -n '$(' run-codex-review.sh` のような wrapper 監査コマンドの引用符内 literal まで indirection と誤分類する regression があった。 `segment_has_indirection` 関数を追加し、 single quote 内・escape 済み (`\$(` 等) の literal は indirection から除外し、 double quote 内の実コマンド置換 (`"$(...)"` / バッククォート) は bash が実際に展開するため引き続き indirection として扱うようにした
-- **mention 扱い segment の pipe 接続先を chain 全体で検査するよう修正 (codex review 指摘)**: `cat run-codex-review.sh | bash` のように、 substring を含む segment (`cat ...`) が規則 2 で言及扱いに分類されても、 pipe 接続先の `bash` が wrapper の内容を stdin 経由で実行できてしまう regression があった。 `mention_safe_segment` / `pipe_chain_all_mention_safe` 関数を追加し、 言及扱い segment が属する pipe chain (`|` のみで両方向に連続する極大区間、 `&&` / `||` / `;` / `&` で途切れる) 内の他の全 segment (substring を含まないものも含む) に mention-safe 判定 (indirection 不在 + allowlist / git 特例一致) を要求するようにした。 隣接 1 段でなく chain 全体を見るのは、 `cat wrapper | head -100 | bash` のように allowlist コマンドを 1 段挟むと隣接判定だけでは素通りするため (上流側 `bash gen.sh | grep -f - wrapper` も同様に検査する)。 `cat wrapper | grep "$(bash)"` のように allowlist head でもコマンド置換の内側が pipe の stdin を読んで実行できるため、 neighbor の indirection も同じ chain 走査で検査する
-- **git 特例の subcommand 集合から `grep` を除外 (codex review 指摘)**: `git grep` は `--open-files-in-pager[=<cmd>]` / `-O<cmd>` option で外部プログラムを起動できるため、 言及扱いの git 特例 subcommand 集合 (`diff` / `log` / `show` / `status` / `ls-files` / `rev-parse` / `cat-file`) から `grep` を外した。 単体コマンドの `grep` は引き続き allowlist に残るため、 `git log -- file | grep pattern` のように単体 `grep` へ差し替えて使うことができる
-- bg / pipeline deny の文言を、 gate 通過後にのみ到達する codex-reviewer subagent 向けに更新し、 直接実行の再実行を案内する文言 (「デフォルト false で再実行してください」等) を廃止した
-- `agents/codex-reviewer.md` の frontmatter `description` から wrapper のパスと marker 実装詳細を削除し、 起動条件 (呼び出しタイミングと subagent_type) 中心の記述に縮小した (手順詳細は body のみに保持)
-- `block-pre-push.sh` の deny メッセージで、 一部マーカーのみ失効している場合の該当 subagent 単独再起動を正規案内化した (`commands/review.md` も同じ案内で整合)
-- `run-codex-review.sh` ヘッダの stale な記述 (v1.1.0 時代の「deny メッセージで wrapper 直接実行を案内する」という記述) を、 v3.0.0 以降の subagent 経由起動 + v4.0.0 の agent_type gate という現行実態に更新した (実行コードの変更なし)
-
-### v3.1.3 → v3.1.4 の変更点
-
-- 実機 E2E により、Codex 0.144.4 の `spawn_agent` は `agent_type` selector を公開せず、project custom agent の停止 event も `agent_type=default` になることを確認した。generic agent は role 固有の heading/footer を複製できるため、出力文字列だけで reviewer identity を認証することはできない
-- `SubagentStop` hook の matcher と script を 3 named type の完全一致に戻し、`agent_type=default` は marker を書かない fail-closed 契約にした。`review-codex` Skill も `agent_type` selector が無い runtime で generic agent を起動せず、marker を生成せず停止する
-- 現行 Codex runtime では安全な reviewer identity 契約を構築できないため、Codex marketplace の配布状態を `excluded` にした。Codex entry、manifest、Skill、hook は生成せず、Claude Code 版 v3.1.4 は従来どおり配布する。Codex 用 named profile template と adapter source は、selector を公開する将来 runtime の再検証用に保存する
-
-### v3.1.2 → v3.1.3 の変更点
-
-- Claude Code も `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` を持つため、plugin env の存在で Codex を識別する方式を廃止し、hook payload の非空 `turn_id` で runtime を識別するよう修正した。Codex marker storage は `PLUGIN_DATA` を優先し、未設定時は `CLAUDE_PLUGIN_DATA` を互換 fallback として使う。選択した path が空・relative path なら `.git` へ fallback せず fail-closed を維持する
-
-### v3.1.1 → v3.1.2 の変更点
-
-- Codex の既定 workspace-write sandbox では `.git` が read-only のため、Codex marker を writable な `PLUGIN_DATA/pre-push-review/markers/<repo-key>/` へ移した。`repo-key` は physical git-dir の絶対 path を SHA-256 にして repository / linked worktree を分離し、`PLUGIN_DATA` が使えない場合は `.git` へ fallback せず push gate を fail-closed に deny する。Claude Code の `.git` storage、marker filename、review hash、gate 契約は変更していない
-
-### v3.1.0 → v3.1.1 の変更点
-
-- Codex v0.144.4 が custom agent の `name` に hyphen を受理しないため、Codex の 3 agent type を underscore 形式へ変更した。既存 setup との互換性のため TOML filename は hyphen 形式のまま維持し、marker filename と hash 契約も変更していない
-
-### v3.0.5 → v3.1.0 の変更点
-
-- Codex plugin manifest と `review-codex` Skill を追加した。初期実装では Claude agents の review contract を参照して Codex native subagent 3 本を並列実行した
-- Codex の review 完了後に既存 diff hash / marker lib を使う `mark-review.sh` を追加し、Claude 側と同じ push gate を共有した。現行実装では project custom agent + SubagentStop hook による自動 marker を正規フローとし、この helper は通常フローから外れている
-- push deny の復旧案内に Codex の `$pre-push-review:review-codex` を追加した。初期実装で Skill orchestration に依存していた完了検知は、現行実装では Codex runtime の lifecycle payload と role 固有 report footer の検証へ置換されている
-
-### v3.0.4 → v3.0.5 の変更点 (#126)
-
-- マーカー hash の入力に HEAD / merge-base の commit OID 束縛行を追加しました。add→revert で net diff がレビュー時点の値に戻っても、commit 列が変わっていればマーカーが失効します (それまでは未レビューの commit A + revert B が既存マーカーで push できました)。diff は `--no-ext-diff --no-textconv` 付きで取得し、staged / unstaged diff の取得失敗も hash 計算全体の失敗として fail-closed に伝播します
-- 空 push の早期 skip 判定を「hash == 空入力の sha256」から tree OID / plumbing ベースの判定関数 `is_empty_push` / `is_empty_push_in` (lib/diff-hash.sh) に分離・厳格化しました。全 commit が empty commit (tree 変更なし、merge 非含有) の鎖のみ skip し、「commit A + A の revert」だけを積んだ fresh branch がマーカー検証なしで push できた同根の穴を塞ぎます。空 commit のみの push (issue claim 手順等) は従来どおりレビュー無しで通ります
-- 計算式変更に伴い、既存マーカーは更新後最初の push で一度失効します (再レビュー 1 回で回復)
-
-### v3.0.3 → v3.0.4 の変更点
-
-plugin description (plugin.json / marketplace.json / リポジトリ README の一覧テーブル) を 1〜2 文に短縮しました。hook の動作変更はありません。
-
-### v3.0.2 → v3.0.3 の変更点
-
-hooks.json の description を簡潔な概要に刷新しました (変更履歴・設計経緯は本 README のバージョン節へ集約する方針に統一。hook の動作変更はありません)。
-
-### v3.0.1 → v3.0.2 の変更点
-
-plugin description (plugin.json / marketplace.json) を人間向けの簡潔な概要に刷新しました (変更履歴・実装詳細は本 README のバージョン節へ集約)。hook の動作変更はありません。
-
-### v3.0.0 → v3.0.1 の変更点
-
-共有 lib cmd-parser.sh の split_command のバグを修正しました: quote (`'...'`/`"..."`) 内の生改行がそのまま segment に残っていたため、呼び出し側の `while IFS= read -r line; do ... done < <(split_command ...)` が segment 内部の改行を次 segment との境界と誤認し、1 segment が複数行に分裂する潜在バグがありました (quote 内改行は空白 1 文字に正規化して 1 segment のまま保持するよう修正)。git-guardrails / enforce-draft-pr の cmd-parser.sh へも byte-identical で sync。挙動修正のみで本プラグインの hook の deny/allow 判定ロジックは不変です。
-
-### v2.0.1 → v3.0.0 の変更点 (互換破壊あり)
-
-- **`agents/code-reviewer.md` を新設**: v2.x の Skill `/code-review` (Anthropic bundled skill / read-only correctness バグ検出) に相当する self-contained subagent。 prompt は標準 skill と独立に管理 (security-reviewer と同じ理由: 主 session から直接 skill を呼ぶと turn が終了、 subagent 内から呼んでも nested subagent 制約で sub-task が動かないため)。 tools は `Bash, Read, Glob, Grep, LS` で `Skill` / `Task` を含まない (= 標準 skill を invoke できない構造的防御)。
-- **`agents/codex-reviewer.md` を新設**: codex review wrapper (`run-codex-review.sh`) を foreground で 1 回起動するだけの最小 subagent。 tools は `Bash` のみで、 wrapper の output (codex review の verdict / findings) を markdown report として親 session に返す。v3.0.0 当時は wrapper が codex-reviewed marker を書いたが、v4.0.1 で pending attestation + auto-mark 昇格へ変更した。v5.2.0 で tools を `Bash, TaskOutput, Read` に拡張し、Bash timeout による background 移行後の回収経路 (詳細は上記バージョン節) を追加した。
-- **`commands/review.md` を 3 subagent 並列発出に書き換え**: Skill (`code-review`) + Bash (codex wrapper) + Agent (security-reviewer) の 3 経路混在を、 Agent x 3 (code-reviewer + codex-reviewer + security-reviewer) に統一しました。
-- **`auto-mark.sh` の検知ロジックを Skill → Agent に移行 + name-only 受理を廃止**: PRECHECK\_RE と case 文から Skill `code-review` / `security-review` の検知を全廃。v3.0.0 当時は namespace 付き code/security reviewer のみを検知し、codex marker は wrapper が書いた。v4.0.1 では正規 report Status を検証できるようになったため namespace 付き codex-reviewer も検知対象へ加え、pending attestation を final marker へ昇格する。name-only (`code-reviewer` / `security-reviewer` / `codex-reviewer`) は他 plugin の同名 agent との衝突を避けるため引き続き受理しない。
-- **`block-pre-push.sh` の deny メッセージを 3 Agent 案内に書き換え**: Skill (`code-review`) と Bash (codex wrapper) の fallback 起動コマンドを Agent x 3 に置換。 wrapper の絶対パス埋め込み (CODEX_WRAPPER_PATH) も削除しました (subagent 経由で起動するため不要)。
-- **後方互換 / 移行**: 既存の `.claude-pre-push-code-reviewed` / `.claude-pre-push-codex-reviewed` / `.claude-pre-push-security-reviewed` marker file 名と hash 計算式は不変です。 v2.x で実行済みの marker は v3.0.0 でも hash が一致する限り有効。 v2.x ユーザは v3.0.0 アップグレード後の最初の push で「`/pre-push-review:review` を実行してください」 と案内され、 そこから 3 subagent が走ります。
-- **major bump にした理由**: ユーザフロー変更 (Skill / Bash 経路の廃止、 Agent 統一) と auto-mark の検知契約変更 (Skill 検知の全廃) を伴うため major。 marker file 名と hash 計算式は不変なので、 既存 marker は hash 一致時に引き続き有効。
-
-### 過去の変更点
-
-詳細な経緯と過去の version 履歴は git log を参照してください。 代表的なマイルストーン:
-
-- **v2.0.1**: post-v2 cleanup。 README 見出しレベル / `lib/exit-trap.sh` docstring / keywords を整理。 `auto-mark.sh` に substring pre-filter を追加。
-- **v2.0.0**: `/pre-push-review:review` slash command 新設 (3 レビュー並列発出の確定的フロー)。 `/simplify` (cleanup-only) マーカー削除し 3 軸 defense-in-depth に純化。 CC version 依存の fail-open 緩和 (`lib/first-party-review.sh`) も削除して 3 マーカー常時必須化。 `lib/codex-companion-resolver.sh` の sort -V fallback を POSIX numeric field sort に置換。
-- **v1.1.0**: codex review を `/codex:review` slash command 経由から bash wrapper (`run-codex-review.sh`) 経由に切替え、 bg 起動による silent failure 経路を構造排除。 wrapper を `run_in_background: true` / shell-level `&` `|` で起動する経路は `block-bg-codex-wrapper.sh` が deny。
-- **v1.0.0**: Claude Code の bundled skill 分岐 (v2.1.147 で `/code-review` が read-only バグ検出器に分離、 v2.1.154 で `/simplify` が cleanup-only として再導入) に追随し、 push gate を 3 → 4 マーカーに拡張。 第一者 (Anthropic) レビューを CC version 依存の fail-open 緩和で実装。
-- **v0.x**: pre-commit 境界から push 境界への移行、 redirection / pipeline / wrapper / target-override などの parser 強化、 macOS bash 3.2 互換、 EXIT trap による silent failure 可視化、 tag reachability check 等。
+v5.3.3
 
 ## インストール
 
@@ -231,6 +36,8 @@ claude plugin install codex@openai-codex
 ### 依存コマンド
 
 `jq` は push gate の必須依存です。`jq` が見つからない環境では、未レビューの push を通さないため `block-pre-push.sh` が `git push` を fail-closed に deny し、インストール後の再実行を案内します。push と無関係な Bash 呼び出しは影響を受けません。
+
+現行の Codex runtime では安全な reviewer identity 契約を構築できないため、本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
 ## 機能一覧
 
@@ -368,6 +175,8 @@ wrapper exit 0 だけで final marker を書くと、その後の report 正規�
 | `.claude-pre-push-done-<agent_id>` | attestation 消費時に排他作成される launch tombstone (v4.1.0 新設)。同一 agent_id での SubagentStart 再発火 (resume 等) による attestation 再鋳造を遮断する。再レビューは新規 spawn (新しい agent_id) で行う | 無期限保持 (prune しない)。resume の成立期間は transcript 保持期間 (cleanupPeriodDays で延長可能) に従うため、期限付き掃除では遮断に穴が開く。1 件 64 byte で実害なし |
 
 > **v2.x → v3.0.0 アップグレード時の注意**: v2.x で実行済みの 3 マーカー (code-reviewed / codex-reviewed / security-reviewed) は v3.0.0 でも hash が一致する限り有効です。 marker file 名と hash 計算式は不変なので追加の cleanup は不要です。
+
+マーカーは reviewer subagent の agent_type に対して発行され、実効モデルは検証しません。`CLAUDE_CODE_SUBAGENT_MODEL` は起動時の model 指定や agent frontmatter より優先されるため、この環境変数を設定した環境では既定 model での実行保証が失われます。本プラグインはこの環境変数を設定しない運用を前提とします。
 
 ### Agents
 

@@ -4,26 +4,7 @@ GitHub の issue/PR タイムラインから AI タスクのリードタイム (
 
 ## バージョン
 
-v0.2.0
-
-### v0.1.3 → v0.2.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止した。repo-analytics はもともと Codex 配布対象外だったため、Claude Code 版の leadtime Skill・生成物への影響はない。
-
-### v0.1.2 → v0.1.3 の変更点 (#301, #305)
-
-- `exclusions.prTimelineOverflow[].linkedIssues` を最終分類後に確定し、別の qualifying PR で `mainSeries` に入った issue、着手マーカー無し、NOT_PLANNED など overflow が分類除外の原因ではない issue の過大申告を解消した
-- completion は証明できるが PR timeline overflow により ready 時刻だけが不明な着手済み issue を `exclusions.prReadyTimeUnknown` に分離し、open issue は `censored` から除外した。これにより全 `censored[].elapsedHoursLowerBound` の下限値解釈を維持する
-- 集計 script / Skill / test の bug fix のため Claude Code version を patch bump した。repo-analytics は Codex 配布対象外なので Codex version / install surface は変更しない
-
-### v0.1.1 → v0.1.2 の変更点 (#298)
-
-- issue timeline が merge 済みと示す PR の収集 snapshot が古い場合、単一 PR を再取得して行全体を更新し、overflow を再検査するようにした
-- 再取得の成功・失敗を `collection-diagnostics.json` に記録し、失敗時は旧 snapshot を維持したまま測定上の限界へ開示する fail-closed 経路を追加した
-
-### v0.1.0 → v0.1.1 の変更点 (#300)
-
-- leadtime 収集の認証確認と全 GitHub API query を `github.com` に固定し、`GH_HOST` が GitHub Enterprise を指す環境でも別 host の同名リポジトリを silent に分析しないようにした
+v0.2.1
 
 ## 概要
 
@@ -35,6 +16,8 @@ AI エージェントによるタスク実行が定着すると、「1 タスク
 claude plugin marketplace add natsuume/natsuume-cc-marketplace
 claude plugin install repo-analytics@natsuume-plugins
 ```
+
+本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
 ## 機能一覧
 
@@ -78,7 +61,7 @@ repo-analytics/
 
 ## 必要な実行環境
 
-- `gh` CLI (github.com に認証済み: `gh auth status --hostname github.com` が通ること)
+- `gh` CLI (github.com に認証済み: `gh auth status --hostname github.com` が通ること)。全 GitHub API query は `GH_HOST` の設定に依らず github.com へ固定されます
 - Python 3.11+ (標準ライブラリのみで動作)
 - `jq 1.5+` (SKILL.md の収集手順で JSONL の overflow 検知・置換に使用)
 - Claude Code (Artifact 発行・WebSearch が利用可能なセッション)

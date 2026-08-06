@@ -200,8 +200,7 @@ class ReviewerCalibrationTests(unittest.TestCase):
 class ReviewerDocConsistencyTests(unittest.TestCase):
     """pre-push-review README の現状参照節が撤廃後の構成と整合すること。
 
-    変更履歴 (changelog) 節の過去記録は改変対象外であり、以下の検査文字列は
-    現状参照節 (Agents 節の動作 bullet) にのみ現れる書式を選んでいる。
+    検査文字列は現状参照節 (Agents 節の動作 bullet) に現れる書式を選んでいる。
     """
 
     def test_reference_prose_does_not_assert_retired_effort_pin(self) -> None:

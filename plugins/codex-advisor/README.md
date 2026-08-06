@@ -6,46 +6,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v2.0.3
-
-### v2.0.2 → v2.0.3 の変更点
-
-注入対象 md (`advisor-rules.md` / `advisor-rules-subagent.md`) のヘッダコメントから issue 番号による経緯記述を除去し、現行の役割・構成・制約のみの説明に書き換えた。ルール本文は無変更 (#363)。
-
-### v2.0.1 → v2.0.2 の変更点
-
-lifecycle hook の runner footer / attestation 解析を、コードフェンス行・空白行を無視した実質末尾行方式へ頑健化し、成功 runner の retry-required 誤判定を解消した (#348)。3 runner md に footer をフェンスで囲まない出力契約を明記した。
-
-### v2.0.0 → v2.0.1 の変更点
-
-`advisor-rules.md` の checkpoint 必須 4 項目と async 起動時の結果回収手順を、`/codex-advisor:consult` skill を正本とする参照に置換した (残余義務と起動安全項目は維持しつつ注入サイズを削減した)。
-
-### v1.1.0 → v2.0.0 の変更点
-
-- **互換破壊**: 3 runner が model: sonnet を要求するようになった。Sonnet を利用できない model 制限環境では runner 起動が失敗する (回避は既知の制約を参照)
-- 3 runner (`advisor-runner` / `rescue-runner` / `review-runner`) の frontmatter を `model: sonnet` に固定した (従来の `model: inherit` を廃止)
-- `/codex-advisor:consult` skill、`hooks/prompts/advisor-rules.md`、`hooks/prompts/advisor-rules-subagent.md`、`manage-codex-runners.mjs` の deny メッセージ、3 runner 本文の親向け起動契約に、起動すべき model (`model: "sonnet"`) を明示した
-- 理由: Claude 5 世代の運用制約 (Fable はサブエージェント禁止、Sonnet 系はサブエージェント推奨) と、`CLAUDE_CODE_SUBAGENT_MODEL` 環境固定の廃止により、Fable セッションでは model 未指定の Agent 起動が agent-discipline の hook に deny されるため
-
-### v1.0.0 → v1.1.0 の変更点
-
-- `pre-push-review:codex-reviewer` の `Status: pass|findings` と、成功した `codex-advisor:review-runner` を同じ session cadence へ加算し、前回の根本方針 checkpoint から 5 サイクル完了すると main session の Stop と次の一般 / pre-push Codex review 起動を block する gate を追加した
-- cadence 用 advisor request に、元の Goal / 受入基準・制約、直近 5 サイクルの findings / 修正 / 反復傾向、現在の仮説・アプローチ、根本方針を変えるべきかという 1 問を必須化した
-- `advisor-runner` の予約 metadata (`Codex-Advisor-Review-Cadence`) で qualifying consultation の成功だけを証明し、通常の advisor 相談ではカウンターを reset しない。外部 service が利用不能な qualifying attempt は既存の fail-open 方針に従って block を解除し、報告を必須とする
-
-後方互換のある機能追加なので Claude Code version を minor bump しました。本 plugin は Codex marketplace では excluded のため、Codex version は変更していません。
-
-### v0.3.0 → v1.0.0 の変更点
-
-- rescue / review / advisor の role 固有 runner (`codex-advisor:rescue-runner` / `review-runner` / `advisor-runner`) を追加し、Codex model 起動を main session から隔離した
-- PreToolUse gate が `codex-companion.mjs task|review|adversarial-review` と `run-codex-advisor.sh` の直接実行を deny し、対応 runner へ reroute する。公式 legacy rescue agent も例外にしない
-- runner は起動前の companion job 集合を記録する。rescue / advisor は detached task の job ID、review は tracking 喪失時の job 集合差分を使い、`status` / `result` で terminal result を回収する
-- SubagentStart / SubagentStop / Stop の session-scoped state machine を追加した。tracking failure は 1 回だけ retry し、2 回目の失敗、cancel、未 install / 未認証、入力不正は terminal にする。SessionStart / SessionEnd で同じ session の stale state を掃除する
-- `/codex-advisor:consult` の Claude Code 経路を main session の wrapper Bash から `codex-advisor:advisor-runner` Agent へ変更した。この直接実行契約の削除が major bump の理由である
-
-v0.3.0 で追加した Codex host の PTY stdin / direct read-only process は source tree 内に維持しています。ただし本 plugin は Codex marketplace では excluded であり、v1.0.0 の install surface 変更は Claude Code 固有です。
-
-v0.2.0 でプラグインのスコープを「advisor 相談規律」から「codex 利用規律全般」へ拡張し、`/codex:rescue` の thread 選択自律化 (`rule:rescue-thread`、issue #241) を含むようになりました。rescue はレビューループ外の設計相談でも多用されるため、相談規律と同じ SessionStart 注入で配送します。
+v2.0.4
 
 ## 機構
 
@@ -86,6 +47,8 @@ v0.2.0 でプラグインのスコープを「advisor 相談規律」から「co
 - API 版 advisor はツールなしで動きます。本プラグインの Codex は read-only sandbox でリポジトリを自分で読んで裏取りできます
 - API 版のエラー設計 (advisor 失敗時も executor は続行) を踏襲し、Codex 不通時は相談なしで続行 + ユーザ報告します
 - API 版の advice block は「executor より高知能な advisor」を前提に助言を重く扱わせますが、本プラグインの呼び出し元は advisor と同等以上のモデル (Fable 等) でもありうるため、助言はフラットに扱う規律に変更しています。advisor の価値は知能差ではなく、別モデル系統からの独立した第二視点です
+
+本プラグイン自体は Claude Code 専用で、Codex marketplace では配布していません (OpenAI Codex は advisor として呼び出す外部 CLI であり、配布物ではありません)。
 
 ## 依存
 

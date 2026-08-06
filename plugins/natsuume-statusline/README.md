@@ -4,28 +4,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.10.0
-
-### v0.9.2 → v0.10.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest と `setup-codex` Skill を削除し、Claude Code 版の statusline 本体・setup Skill は無変更。
-
-### v0.9.1 → v0.9.2 の変更点 (#158)
-
-- ANSI SGR を除外した文字数ではなく terminal cell 幅を使い、CJK Wide/Fullwidth、主要 emoji、結合文字・variation selector・ZWJを考慮して statusline の幅を判定するようにした
-- 全角文字を追加すると上限を超える場合はその直前で prefix truncate し、日本語の path / repo / branch 名で1行目が折り返して後続行を崩す問題を修正した。UTF-8対応Bashではshell内で計算し、macOS Bash 3.2などmultibyte substringを使えない環境だけPython 3標準ライブラリへfallbackしてbyte途中の切断を防ぐ
-
-### v0.9.0 → v0.9.1 の変更点 (#159)
-
-- GitHub namespace cache の `gh api user` / `gh api user/orgs` を並行実行し、それぞれ2秒で打ち切る portable watchdog を追加した。GNU `timeout` に依存せず Linux (WSL2) / macOS で同じ上限を適用する
-- cache miss の同時描画を `mkdir` lock で1 refresh に集約し、異常終了で残った30秒超の lock は再取得する。refresh 成功時の user/org 出力と24時間 cache は維持する
-
-### v0.8.0 → v0.9.0 の変更点
-
-- Codex plugin manifest と `setup-codex` Skill を追加した。Codex では任意 shell statusline を構築できないため、`/statusline` / `tui.status_line` の組み込み repository・branch・context・rate limit 項目で近似する
-- 独自 3 行 layout、gauge/color、statusline callback は原理的な互換性差分として台帳に登録した
-- direct config 編集を backup 後の atomic replace と strict parse 失敗時の atomic restore に限定し、
-  parse 成功前に setup 完了を報告しない transaction 契約を追加した
+v0.10.1
 
 ## 表示内容
 
@@ -80,9 +59,11 @@ claude plugin install natsuume-statusline@natsuume-plugins
 /natsuume-statusline:setup
 ```
 
-このコマンドは `~/.claude/settings.json` の `statusLine.command` を書き換えます。実行前に既存の `settings.json` 全体をタイムスタンプ付きでバックアップします。
+このコマンドは `~/.claude/settings.json` の `statusLine.command` を書き換えます。実行前に既存の `settings.json` 全体をタイムスタンプ付きでバックアップします。書き換えは、生成した新しい設定 JSON を書き込み前に strict parse で検証し、検証に失敗した場合は `settings.json` を変更せずに終了します。検証を通過した場合のみ atomic な差し替えで反映し、backup からの復元手順は完了メッセージで案内します。
 
 plugin cache 配下から実行された場合は、`~/.claude/natsuume-statusline-entrypoint.sh` という安定した wrapper を設置し、`statusLine.command` はこの wrapper を指します。wrapper は実行時に最新版の `entrypoint.sh` を解決するため、`/plugin update` 後も**再 setup なしで statusline が追従**します。これは plugin cache が version 固有パス (`~/.claude/plugins/cache/<marketplace>/<plugin>/<VERSION>/...`) に展開され、かつ `statusLine.command` では `${CLAUDE_PLUGIN_ROOT}` 等が展開されない ([Claude Code bug #52079](https://github.com/anthropics/claude-code/issues/52079)) ため、version 固有パスを直接焼き込むと update で旧 dir が消えた際に statusline が無言で壊れる問題を避けるためです。(ローカル clone 等の安定パスから実行された場合は wrapper を介さず entrypoint を直接登録します。)
+
+本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
 ## 機能一覧
 

@@ -4,42 +4,7 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 ## バージョン
 
-v0.4.0
-
-### v0.3.1 → v0.4.0 の変更点
-
-Codex 配布対応 (marketplace 移植) を廃止した。Codex plugin manifest を削除し、Claude Code 版の update-default-branch Skill は無変更。
-
-### v0.3.0 → v0.3.1 の変更点 (issue #164)
-
-- default branch 名を読む前に `git fetch --prune origin` → `git remote set-head origin --auto` → `git symbolic-ref refs/remotes/origin/HEAD` を必ず順番に実行し、remote 側の rename 後も stale な local `origin/HEAD` を成功扱いしないようにした
-- fetch / remote HEAD 再検出が失敗した場合は既存の `origin/HEAD` へ fallback せず中断し、旧 default branch を無音で「最新化」する経路を塞いだ
-- remote-tracking ref の prune を default branch 検出前へ移し、後段の重複 fetch を削除した。stale `origin/HEAD` を持つ実 Git fixture で master → main の再検出を固定した
-
-### v0.2.1 → v0.3.0 の変更点
-
-- Codex plugin manifest を追加し、同じ update-default-branch Skill を Claude Code / Codex で共有できるようにした
-- Skill 内の実行主体表現を Claude 固有名から platform-neutral な「実行中のエージェント」に変更した
-
-### v0.2.0 → v0.2.1 の変更点
-
-plugin description (plugin.json / marketplace.json / リポジトリ README の一覧テーブル) を 1〜2 文に短縮し、plugin.json と marketplace.json 間の文面ドリフトを統一しました。機能変更はありません。
-
-### v0.1.2 → v0.2.0 の変更点
-
-- **実行モデルを「1 手順 = 1 つの素朴な git コマンド」に再設計**: 旧版の「一連のスクリプト例」(複数手順を `$(...)` / `if` / シェル変数で合成した単一 Bash スクリプト) は、同居する他プラグインの PreToolUse hook (auto-lint-check の block-commit-lint 等) に fail-closed で deny され実行不能だった。コマンド置換やメッセージ文字列中の `commit` という単語が、hook の「静的解析できない構文は安全側で deny する」検査に構造的に引っかかるため。新版は各手順を単独の git コマンドとして実行し、手順間の状態 (元ブランチ名・デフォルトブランチ名・削除対象) は Claude が会話コンテキストで保持してリテラル値を埋め込む方式に変更 (decompose-bash プラグインの分解方針とも整合)。
-- **state file (`.git/.update-default-branch-state`) を廃止**: シェル変数が Bash 呼び出し間で消える問題への対処として導入していたが、状態を会話コンテキストで保持する新方式では不要になった。
-- `awk` / `sed` への依存を撤廃 (出力の抽出・整形は Claude が直接行う)。
-- ブランチ名のリテラル埋め込みは **single quote 必須** とし、シェルメタ文字を含む合法なブランチ名 (`feature;id` 等) での誤実行を防止 (codex review P2 対応)。`'` を含むブランチ名は実行中止 + ユーザー確認。
-
-### v0.1.1 → v0.1.2 の変更点
-
-- **ルート README の version 表記を本プラグインの最新と同期** (#47b00d6 / #0360f07 / #d0e5225 系の一括フォローアップ): ルート `README.md` の plugin 一覧の version が `0.1.2` に揃った。 本 README 直下の version 見出しが `v0.1.0` のまま残っていた drift を解消。
-- SKILL.md の frontmatter 修正と内部リンク整備 (動作影響なし、 documentation only)。
-
-### v0.1.0 → v0.1.1 の変更点
-
-- **SKILL.md のステップを独立化して堅牢化**: worktree 競合 / detached HEAD / `symbolic-ref` 失敗の各エッジケースをハンドリングし、 失敗時のトラブルシュート手順を専用節に整理。 手順 4 (`git fetch --prune`) と手順 5 (`[gone]` 抽出) を `if` 連結から独立 step に分離して中断時の復旧経路を明確化。
+v0.4.1
 
 ## 概要
 
@@ -57,6 +22,8 @@ plugin description (plugin.json / marketplace.json / リポジトリ README の�
 claude plugin marketplace add natsuume/natsuume-cc-marketplace
 claude plugin install update-default-branch@natsuume-plugins
 ```
+
+本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
 ## 機能一覧
 
