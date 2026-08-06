@@ -76,6 +76,7 @@ SONNET_MD = {
 }
 SUBAGENT_MD = PROMPTS / "subagent-rules.md"
 DELIVERY_NOTE_MD = PROMPTS / "delivery-note.md"
+PREAMBLE_SELF_GATE_MD = PROMPTS / "preamble-self-gate.md"
 
 INJECT_ALWAYS_SH = SCRIPTS / "inject-always.sh"
 INJECT_RULES_PART_SH = SCRIPTS / "inject-rules-part.sh"
@@ -1226,12 +1227,15 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
     - 期待挙動: 非 UTF-8 locale では `wc -m` が日本語 payload をバイト数
       (UTF-8 で 1 文字 3 バイト前後) で計上するため、現行 payload は必ず
       8,000 を超え、二段縮退 ((参照パス) 行の除去 → 配送メモ全体の除去) が
-      発動して ESSENTIAL (自己修復指示 + ルール md 全文) だけが配送される。
-      検査は文言の逐語固定ではなく縮退機構の意味的検証とする:
+      発動して ESSENTIAL (自己修復指示 + CORE) だけが配送される。CORE を
+      構成する各 md の全文が残存し、sonnet part 1 self-gate 経路の CORE は
+      preamble-self-gate.md と always-sonnet-1.md の両方を含む。検査は文言の
+      逐語固定ではなく縮退機構の意味的検証とする:
       (a) hook が正常終了し additionalContext を持つ有効な JSON を返す
       (b) 配送メモ (delivery-note.md) 本文が payload に存在しない
       (c) (参照パス) 行が payload に存在しない
-      (d) その経路のルール md 全文が payload に残存する (ESSENTIAL 不落)
+      (d) その経路の CORE を構成する各 md の全文が payload に残存する
+      (ESSENTIAL 不落)
       (e) payload が自己修復指示 (「(自己修復)」) で始まる
     - 前提の明示: 本検査は「バイト計上では現行 payload が必ず予算を超える」
       という現行サイズを前提とする。payload がバイト計上でも 8,000 以下まで
@@ -1311,7 +1315,8 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
         self,
     ) -> None:
         """sonnet part 1 self-gate 配送がバイト計上の縮退で ESSENTIAL のみに
-        なること (a)〜(e)。(d) のルール md は always-sonnet-1.md。
+        なること (a)〜(e)。(d) の CORE は preamble-self-gate.md +
+        always-sonnet-1.md の 2 ファイルで構成される。
         """
         context = self._deliver_under_non_utf8_locale(delivery_sonnet_part1_self_gate)
         # (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
@@ -1334,6 +1339,11 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
             [],
             payload_content_missing(context, SONNET_MD["always-sonnet-1.md"]),
             "ルール md 全文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
+        )
+        self.assertEqual(
+            [],
+            payload_content_missing(context, PREAMBLE_SELF_GATE_MD),
+            "self-gate 前置きが縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
         )
         self.assertTrue(
             context.startswith("(自己修復)"),
