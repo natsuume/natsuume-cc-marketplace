@@ -716,7 +716,24 @@ def detect_non_utf8_locale() -> str | None:
     しない)。ホスト locale の環境生成による代替は行わない (検証はホストに
     実在する locale のみで行う)。
     """
-    raise NotImplementedError("Phase B で実装する")
+    try:
+        result = subprocess.run(
+            ["locale", "-a"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    available = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if "C" in available:
+        return "C"
+    if "POSIX" in available:
+        return "POSIX"
+    return None
 
 
 def run_hook(
@@ -1127,10 +1144,13 @@ class SizeBudgetTests(unittest.TestCase):
         グローバル UTF8_LOCALE を書き換えても) 検出済みの値を使い続ける。この
         独立性により、hook subprocess の起動 env はこのシミュレーション中も
         実検出済み locale で決定的に pin されたままになり、検査結果が test
-        実行環境の ambient locale (既定 locale) に左右されない。
+        実行環境の ambient locale (既定 locale) に左右されない。共有 runner の
+        既定経路 (delivery_subagent) も同じ比較で検査する。
         """
         with tempfile.TemporaryDirectory() as tmp_dir_pinned:
             pinned_context = delivery_fable(tmp_dir_pinned)
+        with tempfile.TemporaryDirectory() as tmp_dir_subagent_pinned:
+            pinned_subagent_context = delivery_subagent(tmp_dir_subagent_pinned)
 
         global UTF8_LOCALE
         original = UTF8_LOCALE
@@ -1138,6 +1158,8 @@ class SizeBudgetTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp_dir_simulated:
                 simulated_context = delivery_fable(tmp_dir_simulated)
+            with tempfile.TemporaryDirectory() as tmp_dir_subagent_simulated:
+                simulated_subagent_context = delivery_subagent(tmp_dir_subagent_simulated)
         finally:
             UTF8_LOCALE = original
 
@@ -1145,6 +1167,13 @@ class SizeBudgetTests(unittest.TestCase):
             pinned_context,
             simulated_context,
             "UTF8_LOCALE=None のシミュレーション下で hook の出力が変化した"
+            " (env pin がグローバルの書き換えに追従してしまっている疑い)",
+        )
+        self.assertEqual(
+            pinned_subagent_context,
+            simulated_subagent_context,
+            "UTF8_LOCALE=None のシミュレーション下で共有 runner の既定経路"
+            " (delivery_subagent) の出力が変化した"
             " (env pin がグローバルの書き換えに追従してしまっている疑い)",
         )
         length = utf16_length(simulated_context)
@@ -1158,10 +1187,16 @@ class SizeBudgetTests(unittest.TestCase):
         # ことを直接検査する。delivery_fable は locale を明示引数として渡す
         # ため、上記の出力比較だけでは共有 runner の既定束縛の後退 (遅延参照
         # 化) を検出できない。locale 引数を渡さない他の配送 builder はこの
-        # 既定に依存し続けるため、既定値そのものを保全対象にする。
+        # 既定に依存し続けるため、既定値そのものを保全対象にする。比較対象は
+        # 可変なモジュールグローバル (original) ではなく、その場で再実行した
+        # probe 結果 (detect_utf8_locale()) にする — original は既にこの時点で
+        # 値をコピー済みの固定値であり、可変グローバルとの比較は書き換え検知
+        # として機能しない。同一ホストでは決定的な probe 結果のほうが基準として
+        # 意味を持つ。
         runner_default = inspect.signature(run_hook).parameters["locale"].default
+        expected_default = detect_utf8_locale()
         self.assertEqual(
-            original,
+            expected_default,
             runner_default,
             "run_hook の locale 既定値が定義時束縛の検出済み値から変わっている",
         )
@@ -1209,15 +1244,45 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
         """非 UTF-8 locale を固定して builder を実行し additionalContext を返す。
 
         detect_non_utf8_locale が None の場合は理由付きで skipTest する。
-        Phase B で実装する。
         """
-        raise NotImplementedError("Phase B で実装する")
+        locale = detect_non_utf8_locale()
+        if locale is None:
+            self.skipTest(
+                "制御用の単一バイト locale (C / POSIX) がホストで確認できないため skip"
+            )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            return builder(tmp_dir, locale)
 
     def test_fable_delivery_degrades_to_essential_under_non_utf8_locale(
         self,
     ) -> None:
         """fable 配送がバイト計上の縮退で ESSENTIAL のみになること (a)〜(e)。"""
-        raise NotImplementedError("Phase B で実装する")
+        context = self._deliver_under_non_utf8_locale(delivery_fable)
+        # (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
+        note_payload = delivery_note_payload_text()
+        self.assertTrue(
+            note_payload, "delivery-note.md から配送メモ本文を抽出できない (空・ヘッダのみの疑い)"
+        )
+        self.assertNotIn(
+            note_payload,
+            context,
+            "配送メモ本文が縮退後も payload に残存している"
+            " (バイト計上での二段縮退が発動していない疑い)",
+        )
+        self.assertNotIn(
+            PATH_LINE_PREFIX,
+            context,
+            "(参照パス) 行が縮退後も payload に残存している (第一段縮退が発動していない疑い)",
+        )
+        self.assertEqual(
+            [],
+            payload_content_missing(context, FABLE_MD),
+            "ルール md 全文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
+        )
+        self.assertTrue(
+            context.startswith("(自己修復)"),
+            "payload が自己修復指示で始まっていない",
+        )
 
     def test_sonnet_part1_delivery_degrades_to_essential_under_non_utf8_locale(
         self,
@@ -1225,7 +1290,32 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
         """sonnet part 1 self-gate 配送がバイト計上の縮退で ESSENTIAL のみに
         なること (a)〜(e)。(d) のルール md は always-sonnet-1.md。
         """
-        raise NotImplementedError("Phase B で実装する")
+        context = self._deliver_under_non_utf8_locale(delivery_sonnet_part1_self_gate)
+        # (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
+        note_payload = delivery_note_payload_text()
+        self.assertTrue(
+            note_payload, "delivery-note.md から配送メモ本文を抽出できない (空・ヘッダのみの疑い)"
+        )
+        self.assertNotIn(
+            note_payload,
+            context,
+            "配送メモ本文が縮退後も payload に残存している"
+            " (バイト計上での二段縮退が発動していない疑い)",
+        )
+        self.assertNotIn(
+            PATH_LINE_PREFIX,
+            context,
+            "(参照パス) 行が縮退後も payload に残存している (第一段縮退が発動していない疑い)",
+        )
+        self.assertEqual(
+            [],
+            payload_content_missing(context, SONNET_MD["always-sonnet-1.md"]),
+            "ルール md 全文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
+        )
+        self.assertTrue(
+            context.startswith("(自己修復)"),
+            "payload が自己修復指示で始まっていない",
+        )
 
 
 class RuleBlockSelfComplianceTests(unittest.TestCase):
