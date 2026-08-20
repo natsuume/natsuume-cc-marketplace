@@ -197,11 +197,14 @@ class StalePrSnapshotRefreshContractTests(unittest.TestCase):
 def _extract_selection_block(text, field_name):
     """GraphQL テンプレートから field の選択セット (brace 対応区間) を切り出す。
 
-    field 名の初出位置から最初の `{` を選択セットの開始とし、brace の深さが
-    0 に戻る位置までを返す。引数リスト (`(...)`) は brace を含まないため
-    開始判定に影響しない。field が見つからない・brace が閉じない場合は
-    ValueError を送出する。
+    GraphQL コメント (`#` から行末まで) は選択セットの契約検査の対象外のため、
+    切り出し前に除去する (コメント文中の field 名や brace が検査を誤らせない
+    ようにする)。field 名の初出位置から最初の `{` を選択セットの開始とし、
+    brace の深さが 0 に戻る位置までを返す。引数リスト (`(...)`) は brace を
+    含まないため開始判定に影響しない。field が見つからない・brace が閉じない
+    場合は ValueError を送出する。
     """
+    text = re.sub(r"#[^\n]*", "", text)
     start = text.index(field_name)
     open_brace = text.index("{", start)
     depth = 0

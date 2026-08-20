@@ -18,7 +18,10 @@ query($owner: String!, $name: String!, $endCursor: String) {
           first: 100
           itemTypes: [READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT]
         ) {
-          totalCount
+          # PullRequestTimelineItemsConnection.totalCount は itemTypes を無視して
+          # 全 timeline item 数を返すため (検証日: 2026-08-20)、フィルタ後件数の
+          # filteredCount を totalCount へ alias して取得する
+          totalCount: filteredCount
           nodes {
             __typename
             ... on ReadyForReviewEvent {
