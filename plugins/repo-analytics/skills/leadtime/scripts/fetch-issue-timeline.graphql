@@ -6,7 +6,10 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
         after: $endCursor
         itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ISSUE_COMMENT, CLOSED_EVENT, REOPENED_EVENT]
       ) {
-        totalCount
+        # PR 側の PullRequestTimelineItemsConnection.totalCount が itemTypes を
+        # 無視する非対称が実測されているため (検証日: 2026-08-20)、全テンプレートで
+        # 一様にフィルタ後件数の filteredCount を totalCount へ alias して取得する
+        totalCount: filteredCount
         pageInfo {
           hasNextPage
           endCursor

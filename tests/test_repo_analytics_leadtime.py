@@ -194,6 +194,73 @@ class StalePrSnapshotRefreshContractTests(unittest.TestCase):
             self.assertIn(contract_fragment, skill)
 
 
+def _extract_selection_block(text, field_name):
+    """GraphQL テンプレートから field の選択セット (brace 対応区間) を切り出す。
+
+    GraphQL コメント (`#` から行末まで) は選択セットの契約検査の対象外のため、
+    切り出し前に除去する (コメント文中の field 名や brace が検査を誤らせない
+    ようにする)。field 名の初出位置から最初の `{` を選択セットの開始とし、
+    brace の深さが 0 に戻る位置までを返す。引数リスト (`(...)`) は brace を
+    含まないため開始判定に影響しない。field が見つからない・brace が閉じない
+    場合は ValueError を送出する。
+    """
+    text = re.sub(r"#[^\n]*", "", text)
+    start = text.index(field_name)
+    open_brace = text.index("{", start)
+    depth = 0
+    for position in range(open_brace, len(text)):
+        if text[position] == "{":
+            depth += 1
+        elif text[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : position + 1]
+    raise ValueError(f"unbalanced braces after {field_name!r}")
+
+
+class TimelineItemsFilteredCountAliasContractTests(unittest.TestCase):
+    """timelineItems の件数取得が filteredCount alias であることの契約 (issue #375)。
+
+    GitHub GraphQL の `PullRequestTimelineItemsConnection.totalCount` は
+    `itemTypes` フィルタを無視して全 timeline item 数を返す (フィルタ後件数は
+    `filteredCount`)。裸の `totalCount` を取得すると overflow 判定
+    (`totalCount > len(nodes)`) に実質すべての PR が該当するため、
+    4 テンプレートとも `totalCount: filteredCount` の alias で取得し、
+    JSONL 契約のフィールド名 (`timelineItems.totalCount`) は不変に保つ。
+    """
+
+    _TIMELINE_TEMPLATES = (
+        "fetch-issues.graphql",
+        "fetch-issue-timeline.graphql",
+        "fetch-prs.graphql",
+        "fetch-pr-snapshot.graphql",
+    )
+
+    def test_timeline_items_alias_total_count_to_filtered_count(self):
+        for template_name in self._TIMELINE_TEMPLATES:
+            with self.subTest(template=template_name):
+                text = (_SCRIPTS_DIR / template_name).read_text(encoding="utf-8")
+                block = _extract_selection_block(text, "timelineItems")
+                self.assertRegex(block, r"\btotalCount\s*:\s*filteredCount\b")
+                # alias の無い裸の totalCount が残っていないこと
+                self.assertNotRegex(block, r"\btotalCount\b(?!\s*:\s*filteredCount)")
+
+    def test_closing_issues_references_keep_plain_total_count(self):
+        # closingIssuesReferences (IssueConnection) は itemTypes フィルタを
+        # 持たず filteredCount フィールドも存在しないため、裸の totalCount を
+        # 維持する (filteredCount へ alias すると query が invalid になる)。
+        for template_name in (
+            "fetch-prs.graphql",
+            "fetch-pr-snapshot.graphql",
+            "fetch-pr-closing-issues.graphql",
+        ):
+            with self.subTest(template=template_name):
+                text = (_SCRIPTS_DIR / template_name).read_text(encoding="utf-8")
+                block = _extract_selection_block(text, "closingIssuesReferences")
+                self.assertRegex(block, r"\btotalCount\b(?!\s*:)")
+                self.assertNotIn("filteredCount", block)
+
+
 # ---------------------------------------------------------------------------
 # fixture helpers (dict を組み立てるだけ。外部ファイル・ネットワーク・git は使わない)
 # ---------------------------------------------------------------------------
