@@ -10,11 +10,12 @@
 > claude plugin install pre-push-codex-review@natsuume-plugins
 > ```
 >
-> 移行手順:
+> 移行手順 (この順序で行うと、 review cadence の欠落と codex gate の空白のどちらも生じません):
 >
-> 1. `claude plugin update pre-push-review` で v6.0.0 へ更新する
-> 2. codex review gate を維持する場合は上記コマンドで `pre-push-codex-review` を install する (維持しない場合はこの手順は不要)
-> 3. `.claude-pre-push-code-reviewed` / `.claude-pre-push-security-reviewed` マーカーの名前と hash 計算式は変わらないため、 既存マーカーは hash が一致する限りそのまま有効です。 `.claude-pre-push-codex-reviewed` は本プラグインからは参照されなくなります
+> 1. codex-advisor を併用している場合、 先に `claude plugin update codex-advisor` で v2.1.0 以上 (旧 reviewer の cadence 互換受理を含む版) へ更新する
+> 2. push 時の codex review gate を維持する場合、 `claude plugin install pre-push-codex-review@natsuume-plugins` を実行する
+> 3. `claude plugin update pre-push-review` で v6.0.0 へ更新する
+> 4. `.claude-pre-push-code-reviewed` / `.claude-pre-push-security-reviewed` マーカーの名前と hash 計算式は変わらないため、 既存マーカーは hash が一致する限りそのまま有効です。 `.claude-pre-push-codex-reviewed` は本プラグインからは参照されなくなります (マーカーの名前・格納先は不変のため移行操作は不要です)
 
 `git push` を実行する前に **2 レビュー** を必ず実行させ、 未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。 2 レビューはどちらも subagent 経由で実行されます:
 

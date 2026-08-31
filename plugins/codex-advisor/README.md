@@ -62,7 +62,7 @@ v2.1.0
 
 ## 既知の制約
 
-- review cadence は同一 Claude Code session 内の `pre-push-codex-review:codex-reviewer` (`Status: pass|findings`) と、成功した `codex-advisor:review-runner` を数える。失敗・cancel・不正 report、別 session、pre-push の code-reviewer / security-reviewer は対象外である。advisor が利用不能な場合は qualifying attempt で gate を解除するため、助言取得そのものではなく「5 サイクル以内に根本方針相談を試行すること」が外部障害時の保証上限になる
+- review cadence は同一 Claude Code session 内の `pre-push-codex-review:codex-reviewer` (`Status: pass|findings`) と、成功した `codex-advisor:review-runner` を数える。失敗・cancel・不正 report、別 session、pre-push の code-reviewer / security-reviewer は対象外である。advisor が利用不能な場合は qualifying attempt で gate を解除するため、助言取得そのものではなく「5 サイクル以内に根本方針相談を試行すること」が外部障害時の保証上限になる。旧 codex gate を持つ `pre-push-review` (v6.0.0 未満) との併用互換のため、旧 reviewer namespace `pre-push-review:codex-reviewer` も互換 alias として同じ cadence 計数対象に含む
 - `rule:rescue-thread` は openai-codex plugin (v1.0.6 で確認) の rescue.md の「`--resume` / `--fresh` 指定時は thread 選択を質問しない」挙動を前提とします。外部 plugin の将来更新でこの前提が壊れた場合は規律の見直しが必要です
 - ユーザが `/codex:rescue` の本文を直接指定し、かつ対象の rescue がセッション内で最新の再開可能 task でなくなっている場合 (間に consult 等の Codex task が terminal 状態になった場合)、規律は安全側の degraded mode (`--fresh` + 本文無改変転送、thread 文脈の連続性なし) に倒れます。誤 thread 再開の防止と rescue.md の verbatim 転送契約を文脈の連続性より優先するためで、継続文脈が必要な場合は再依頼時に本文へ含めてください
 - 3 runner は model: sonnet を frontmatter で固定しているが、model 制限環境で sonnet が利用できない場合は runner の起動自体が失敗し、review cadence の `unavailable` 記録に到達できない。この場合は呼び出し側の Agent tool で利用可能な非 Fable モデルを `model` に明示して runner を再実行する (呼び出し側指定は frontmatter より優先される)

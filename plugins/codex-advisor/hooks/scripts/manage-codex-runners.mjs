@@ -29,7 +29,35 @@ const RUNNERS = Object.freeze({
   advisor: "codex-advisor:advisor-runner",
 });
 const LEGACY_RESCUE = "codex:codex-rescue";
-const PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer";
+const PRE_PUSH_CODEX_REVIEWER_CANONICAL = "pre-push-codex-review:codex-reviewer";
+// 撤去条件付き暫定措置: 旧 pre-push-review (codex gate を持つ v6.0.0 未満) の
+// reviewer namespace。(i) 現在の問題: この namespace の SubagentStart /
+// SubagentStop を canonical と同じ cadence 加算対象として受理しないと、旧
+// pre-push-review を canonical と独立に update した環境で旧 reviewer の
+// lifecycle イベントが cadence に届かなくなり、review cadence の計数が
+// silent に欠落する。(ii) 撤去条件: codex-advisor の documented support
+// floor が旧 codex gate を持つ pre-push-review を除外する major release
+// (3.0.0 以降)。(iii) 確認方法: legacy 互換のテスト群 (旧 namespace の
+// cadence 計数・checkpoint gate を検証するテスト) を同時に削除・更新する。
+const PRE_PUSH_CODEX_REVIEWER_LEGACY = "pre-push-review:codex-reviewer";
+const PRE_PUSH_CODEX_REVIEWERS = new Set([
+  PRE_PUSH_CODEX_REVIEWER_CANONICAL,
+  PRE_PUSH_CODEX_REVIEWER_LEGACY,
+]);
+// 撤去条件付き暫定措置: 旧 pre-push-review (codex gate を持つ v6.0.0 未満) の
+// codex review wrapper basename。(i) 現在の問題: canonical basename
+// (run-pre-push-codex-review.sh) だけを分類すると、旧 pre-push-review を
+// canonical と独立に update した環境では旧 wrapper 起動が cadence 加算対象と
+// して認識されず、review cadence の計数が silent に欠落する。(ii) 撤去条件:
+// codex-advisor の documented support floor が旧 codex gate を持つ
+// pre-push-review を除外する major release (3.0.0 以降)。(iii) 確認方法:
+// legacy 互換のテスト群 (旧 wrapper basename の分類を検証するテスト) を同時に
+// 削除・更新する。
+const PRE_PUSH_CODEX_WRAPPER_ENTRYPOINTS = {
+  "run-pre-push-codex-review.sh":
+    "pre-push-codex-review run-pre-push-codex-review.sh",
+  "run-codex-review.sh": "pre-push-review (legacy) run-codex-review.sh",
+};
 const RETRY_LIMIT = 1;
 const REVIEW_CADENCE_LIMIT = 5;
 const REVIEW_CADENCE_OPERATION = "review-cadence";
@@ -438,10 +466,10 @@ function classifyModelLaunch(command) {
     if (script === "run-codex-advisor.sh") {
       return { operation: "advisor", entrypoint: "run-codex-advisor.sh" };
     }
-    if (script === "run-pre-push-codex-review.sh") {
+    if (Object.hasOwn(PRE_PUSH_CODEX_WRAPPER_ENTRYPOINTS, script)) {
       return {
         operation: "review",
-        entrypoint: "pre-push-codex-review run-pre-push-codex-review.sh",
+        entrypoint: PRE_PUSH_CODEX_WRAPPER_ENTRYPOINTS[script],
         cadenceOnly: true,
       };
     }
@@ -518,7 +546,7 @@ function handlePreToolUse(input) {
 }
 
 function handleSubagentStart(input) {
-  if (input.agent_type === PRE_PUSH_CODEX_REVIEWER) {
+  if (PRE_PUSH_CODEX_REVIEWERS.has(input.agent_type)) {
     if (
       typeof input.session_id !== "string" ||
       typeof input.agent_id !== "string" ||
@@ -672,7 +700,7 @@ function handleSubagentStop(input) {
     return null;
   }
 
-  if (input.agent_type === PRE_PUSH_CODEX_REVIEWER) {
+  if (PRE_PUSH_CODEX_REVIEWERS.has(input.agent_type)) {
     return handlePrePushSubagentStop(input);
   }
 

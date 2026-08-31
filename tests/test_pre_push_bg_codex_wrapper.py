@@ -2500,5 +2500,68 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             self.assert_allowed(result)
 
 
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+class BlockBgCodexWrapperLegacyBasenameNonInterferenceTest(unittest.TestCase):
+    """新旧 wrapper basename の非干渉契約 (issue #378 分離後の互換 alias 検証)。
+
+    旧 pre-push-review (codex gate を持つ v6.0.0 未満) の codex review wrapper
+    basename は `run-codex-review.sh` で、本 plugin の wrapper basename
+    `run-pre-push-codex-review.sh` とは別名である。本 hook の粗フィルタは
+    substring `run-pre-push-codex-review.sh` の有無だけで発火するため、旧
+    basename のみを含む Bash コマンドには発火せず allow のまま (basename
+    非干渉設計) であることを固定する。
+    """
+
+    def run_hook(
+        self, payload: dict[str, object], cwd: Path
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["bash", str(HOOK)],
+            input=json.dumps(payload).encode("utf-8"),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+        )
+
+    def assert_allowed(self, result: subprocess.CompletedProcess[bytes]) -> None:
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout, b"")
+
+    def test_legacy_wrapper_basename_launch_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "bash plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_legacy_wrapper_basename_launch_with_agent_type_is_still_allowed(
+        self,
+    ) -> None:
+        # 本 hook は canonical wrapper (run-pre-push-codex-review.sh) だけを
+        # 対象とするため、agent_type の有無・値に関わらず旧 basename には
+        # 発火しない。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "bash plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+                "agent_type": "pre-push-review:codex-reviewer",
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+
 if __name__ == "__main__":
     unittest.main()

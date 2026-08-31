@@ -27,6 +27,8 @@ claude plugin install codex@openai-codex
 claude plugin install pre-push-review@natsuume-plugins
 ```
 
+codex-advisor を併用する場合は v2.1.0 以上 (本 plugin の reviewer namespace を cadence 計数対象に含む版) を使用してください。
+
 ### 依存コマンド
 
 `jq` は push gate の必須依存です。`jq` が見つからない環境では、未レビューの push を通さないため `block-pre-push-codex.sh` が `git push` を fail-closed に deny し、インストール後の再実行を案内します。push と無関係な Bash 呼び出しは影響を受けません。
