@@ -25,10 +25,13 @@
  *     `Codex-Runner-Status: success` かつ footer 直前の実質行が
  *     `Codex-Advisor-Review-Cadence: satisfied` である場合、または footer が
  *     `Codex-Runner-Status: terminal-failure` かつ同行が `unavailable` である場合
- *   - fail-open: PostToolUseFailure (`tool_name` が `Agent` または `Task` で、
- *     `tool_input.subagent_type` が `codex-advisor:advisor-runner`) が checkpoint
- *     要求中に発火した場合、`unavailable` 相当としてカウンターを reset する
- *     (codex-advisor 未 install 環境で checkpoint が解除不能な block にならないため)
+ *   - fail-open: PostToolUseFailure (`tool_name` が `Agent` または `Task`、
+ *     `tool_input.subagent_type` が `codex-advisor:advisor-runner`、かつ
+ *     `tool_input.prompt` が文字列で `<review_cycle_checkpoint>` を含む — checkpoint
+ *     相談の起動失敗であること) が checkpoint 要求中に発火した場合、`unavailable`
+ *     相当としてカウンターを reset する (codex-advisor 未 install 環境で checkpoint が
+ *     解除不能な block にならないため)。通常の advisor 相談 (request に
+ *     `<review_cycle_checkpoint>` を含まない) の起動失敗では reset しない
  *
  * enforcement:
  *   - PreToolUse (Bash): checkpoint 要求中 (完了 review が 5 回に達している間) は、
@@ -41,8 +44,10 @@
  *     不確実性 / course-correction の問い) を案内する
  *
  * SubagentStart: `STATUS_LINE_COUNTED_REVIEWERS` の 2 reviewer のみ起動記録が必要
- * (hooks.json の SubagentStart matcher もこの 2 つのみ配送する)。起動時の agent_id を
- * `activeReviewerAgentIds` へ記録し、対応する SubagentStop がその agent_id を消費する。
+ * (hooks.json の SubagentStart matcher もこの 2 つのみ配送する)。matcher 配送だけに
+ * 依存せず、`input.agent_type` が `STATUS_LINE_COUNTED_REVIEWERS` に含まれることを
+ * script 内でも再検証してから記録する。起動時の agent_id を `activeReviewerAgentIds`
+ * へ記録し、対応する SubagentStop がその agent_id を消費する。
  *
  * state: 既定では UID ごとの一時 directory
  * (`$TMPDIR相当/pre-push-codex-review-<uid>/cadence-state/`) 配下に、session ごとの
@@ -412,7 +417,8 @@ function handleSubagentStart(input) {
   if (
     typeof input.session_id !== "string" ||
     typeof input.agent_id !== "string" ||
-    !/^[A-Za-z0-9._-]{1,128}$/.test(input.agent_id)
+    !/^[A-Za-z0-9._-]{1,128}$/.test(input.agent_id) ||
+    !STATUS_LINE_COUNTED_REVIEWERS.has(input.agent_type)
   ) {
     return null;
   }
@@ -483,15 +489,27 @@ function handleSubagentStop(input) {
   return null;
 }
 
+/**
+ * checkpoint 相談 (request に `<review_cycle_checkpoint>` を含む) の起動失敗だけを
+ * fail-open reset の対象にする。同じ `${ADVISOR_CHECKPOINT_RUNNER}` でも通常の advisor
+ * 相談 (checkpoint request ではない) の起動失敗はここでは扱わない — checkpoint 要求中で
+ * あっても、通常相談の失敗を「checkpoint 充足相当」として reset してはならないため。
+ */
+function isCheckpointConsultationPrompt(toolInput) {
+  const prompt = toolInput?.prompt;
+  return typeof prompt === "string" && prompt.includes("<review_cycle_checkpoint>");
+}
+
 function handlePostToolUseFailure(input) {
   if (input.tool_name !== "Agent" && input.tool_name !== "Task") return null;
   if (input.tool_input?.subagent_type !== ADVISOR_CHECKPOINT_RUNNER) return null;
+  if (!isCheckpointConsultationPrompt(input.tool_input)) return null;
   if (typeof input.session_id !== "string") return null;
   const state = readState(input.session_id);
   if (!state?.checkpointRequired) return null;
   removeState(input.session_id);
   process.stderr.write(
-    `[pre-push-codex-review] ${ADVISOR_CHECKPOINT_RUNNER} の起動に失敗したため、review cadence の checkpoint を fail-open で reset しました。\n`,
+    `[pre-push-codex-review] ${ADVISOR_CHECKPOINT_RUNNER} の checkpoint 相談 (request に <review_cycle_checkpoint> を含む) の起動に失敗したため、review cadence の checkpoint を fail-open で reset しました。\n`,
   );
   return null;
 }

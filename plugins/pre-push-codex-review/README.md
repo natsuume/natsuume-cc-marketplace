@@ -84,7 +84,7 @@ review cadence の state 管理と enforcement を担う node script です。�
 - **PreToolUse** (matcher: `Bash`): checkpoint 要求中 (完了 review が 5 回に達している間) に review 起動形 (`codex-companion.mjs review|adversarial-review`、`run-pre-push-codex-review.sh`、`run-codex-job.sh review`) を検出すると deny する
 - **SubagentStart** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer)$`): 起動した agent_id を review cadence state へ記録する
 - **SubagentStop** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer|codex-advisor:(review|advisor)-runner)$`): 計数対象 reviewer の成功 review を加算し、`codex-advisor:advisor-runner` の checkpoint 充足 attestation でカウンターを reset する
-- **PostToolUseFailure** (matcher: `Agent|Task`): `codex-advisor:advisor-runner` の起動失敗を fail-open で checkpoint 充足とみなし、checkpoint 要求中ならカウンターを reset する
+- **PostToolUseFailure** (matcher: `Agent|Task`): checkpoint 相談 (起動 request の `tool_input.prompt` に `<review_cycle_checkpoint>` を含む) の `codex-advisor:advisor-runner` 起動失敗を fail-open で checkpoint 充足とみなし、checkpoint 要求中ならカウンターを reset する。同じ `codex-advisor:advisor-runner` でも通常の advisor 相談の起動失敗は reset しない
 - **Stop**: checkpoint 要求中は main session の停止を block し、`codex-advisor:advisor-runner` の foreground 起動を案内する
 - **SessionEnd**: この session の review cadence state を削除する
 
@@ -135,7 +135,7 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 1. advisor runner が checkpoint request の成功を `Codex-Advisor-Review-Cadence: satisfied` で証明したとき
 2. advisor runner が checkpoint request を完了できないことを `unavailable` で証明したとき (terminal-failure)
-3. `codex-advisor:advisor-runner` の起動自体が失敗したとき (PostToolUseFailure。fail-open — codex-advisor 未 install 環境で checkpoint が解除不能な block にならないようにする)
+3. checkpoint 相談 (相談 request に `<review_cycle_checkpoint>` を含む) の `codex-advisor:advisor-runner` 起動自体が失敗したとき (PostToolUseFailure。fail-open — codex-advisor 未 install 環境で checkpoint が解除不能な block にならないようにする)。`<review_cycle_checkpoint>` を含まない通常の advisor 相談の起動失敗はこの経路に含まれない
 
 ### state
 
@@ -145,7 +145,7 @@ review cadence の state は session ごとに 1 ファイル (ファイル名�
 
 ### codex-advisor 連携
 
-checkpoint の実行には `codex-advisor` plugin の install が必要です。未 install の環境では `codex-advisor:advisor-runner` の起動自体が失敗し、PostToolUseFailure hook がその失敗を fail-open として扱ってカウンターを reset するため、block は解除されて続行できます。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
+checkpoint の実行には `codex-advisor` plugin の install が必要です。未 install の環境ではチェックポイント相談の `codex-advisor:advisor-runner` 起動自体が失敗し、PostToolUseFailure hook がその失敗 (相談 request に `<review_cycle_checkpoint>` を含む場合のみ) を fail-open として扱ってカウンターを reset するため、block は解除されて続行できます。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
 
 ## pre-push-review core との併用設計
 
