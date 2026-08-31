@@ -364,5 +364,149 @@ class PreMergeGateMissingDependencyTest(unittest.TestCase):
             self.assertIn("gh", output["permissionDecisionReason"])
 
 
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq"),
+    "gate integration requires bash and jq",
+)
+class PreMergeGateTargetResolutionTest(unittest.TestCase):
+    """merge 対象 PR の解決契約 (fail-closed)。
+
+    gate はフラグ文法を解析しないため、「`gh pr merge` の直後に置かれた対象指定」
+    だけを受理し、それ以外の曖昧な形 (フラグ先行の位置に現れる非フラグトークン・
+    複数の `gh pr merge` 連続列) は照合対象を一意に決められないものとして deny する。
+    フラグのみの形は従来どおり current branch 解決 (gh 委譲) に委ねる。
+
+    行継続 `\\<改行>` は bash が **削除** して前後のトークンを連結するため、gate も
+    削除して連続列を検出する (空白への置換では `gh pr me\\<改行>rge` を取りこぼす)。
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        temporary_path = Path(self.temporary.name)
+        self.work = temporary_path / "work"
+        self.work.mkdir()
+
+        self.fake_bin_dir = temporary_path / "fake-bin"
+        self.fake_bin_dir.mkdir()
+        gh_path = self.fake_bin_dir / "gh"
+        gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
+        gh_path.chmod(
+            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
+        # 既定では 「現 head SHA に一致するレビューコメントが在る」 状態にする。
+        # 対象解決の失敗が 「レビュー済みでも deny される」 ことを示すため。
+        self.configure_fake_gh(review_bodies=[codex_review_comment(HEAD_SHA)])
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def configure_fake_gh(self, *, review_bodies: list[str]) -> None:
+        config = {
+            "payload": {
+                "headRefOid": HEAD_SHA,
+                "reviews": [{"body": body} for body in review_bodies],
+            },
+            "fail": False,
+        }
+        (self.fake_bin_dir / "gh-config.json").write_text(
+            json.dumps(config, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def run_gate(self, command: str) -> subprocess.CompletedProcess[bytes]:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        env = os.environ.copy()
+        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        return subprocess.run(
+            ["bash", str(GATE)],
+            cwd=self.work,
+            input=json.dumps(payload).encode("utf-8"),
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
+        if not result.stdout.strip():
+            return None
+        response = json.loads(result.stdout)
+        return response["hookSpecificOutput"]["permissionDecision"]
+
+    def test_denies_non_flag_token_after_flags(self) -> None:
+        """フラグ先行形は、対象指定かフラグの値かを判別できないため deny。"""
+        cases = {
+            "squash_then_number": f"gh pr merge --squash {PR_NUMBER}",
+            "flag_value_shape": f"gh pr merge --body text {PR_NUMBER}",
+        }
+        for label, command in cases.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
+    def test_denies_multiple_merge_sequences(self) -> None:
+        """1 呼び出しに複数の merge があると照合対象が一意に決まらないため deny。"""
+        cases = {
+            "and_chain": (
+                f"gh pr merge {PR_NUMBER} --squash && gh pr merge 456 --squash"
+            ),
+            "semicolon_chain": (
+                f"gh pr merge {PR_NUMBER} --squash; gh pr merge 456 --squash"
+            ),
+        }
+        for label, command in cases.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
+    def test_denies_branch_name_target(self) -> None:
+        """PR 番号にも URL にも解釈できない対象指定は deny。"""
+        result = self.run_gate("gh pr merge my-feature-branch --squash")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
+    def test_line_continuation_inside_merge_sequence_is_detected(self) -> None:
+        """行継続で分断された `gh pr merge` も連続列として検出する。"""
+        self.configure_fake_gh(review_bodies=[])
+        command = f"gh pr me\\\nrge {PR_NUMBER} --squash"
+        result = self.run_gate(command)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
+    def test_line_continuation_form_passes_with_matching_comment(self) -> None:
+        """行継続形でも、一致コメントが在れば decision を出さない。"""
+        command = f"gh pr me\\\nrge {PR_NUMBER} --squash"
+        result = self.run_gate(command)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIsNone(self.decision(result))
+
+    def test_flag_only_forms_resolve_via_current_branch(self) -> None:
+        """対象指定が無い形は current branch 解決 (gh 委譲) に委ね、
+        一致コメントが在れば decision を出さない。"""
+        cases = {
+            "flag_only": "gh pr merge --squash",
+            "flag_then_separator": "gh pr merge --squash && echo merged",
+            "flag_then_semicolon": "gh pr merge --squash; git switch master",
+            "bare": "gh pr merge",
+        }
+        for label, command in cases.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIsNone(self.decision(result), f"case={label}")
+
+    def test_number_target_with_trailing_separator_is_resolved(self) -> None:
+        """対象指定の直後に区切りが続く形でも対象を取り出して照合する。"""
+        self.configure_fake_gh(review_bodies=[])
+        result = self.run_gate(f"gh pr merge {PR_NUMBER}; git switch master")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
+
 if __name__ == "__main__":
     unittest.main()

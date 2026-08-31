@@ -27,6 +27,8 @@ codex-advisor を併用する場合は v2.2.0 以上 (本 plugin の reviewer na
 
 `jq` と `gh` は merge gate の必須依存です。いずれかが見つからない環境では、未レビューの merge を通さないため `block-pre-merge.sh` が `gh pr merge` を fail-closed に deny し、インストール後の再実行を案内します。merge と無関係な Bash 呼び出しは影響を受けません。
 
+ただし `jq` 不在時はコマンド文字列を取り出せず判定が hook payload 全体に対する粗い文字列フィルタに落ちるため、merge と無関係でも `gh` / `pr` / `merge` に類する文字列を含むコマンドが稀に deny されることがあります (`jq` を install すると解消します)。
+
 ## 機能一覧
 
 ### Hooks
@@ -40,7 +42,7 @@ codex-advisor を併用する場合は v2.2.0 以上 (本 plugin の reviewer na
 1. Bash コマンド文字列に `gh pr merge` の連続列を含む場合のみ関与する。含まないコマンドには関与しない (無出力)。連続列の検出は粗い文字列判定であり、フラグ文法の解析や invocation の厳密な分類は行わない (quoted な言及等で誤爆した場合はコマンドの言い換えで回避できる)
 2. 関与したコマンドに `--auto` または `--admin` の文字列を含む場合は deny する (遅延 merge 予約と保護 bypass はサポート外。粗い文字列検出でよく、レビューコメントの有無に依らない)
 3. merge 対象 PR の現在の head SHA を gh で取得し、PR 上のレビューコメントに機械可読 header (`<!-- codex-review: head=<full head SHA> status=pass|findings -->`) を持ち head SHA が完全一致するものが存在するかを確認する。存在すれば無出力で終了し (既定の許可フローに委ねる)、存在しなければ deny して `pre-merge-codex-review:codex-reviewer` subagent の実行を案内する
-4. 対象 PR の解決 (コマンドの対象指定 or current branch) と head SHA の取得は gh に委ねる。gh / jq が見つからない・PR を解決できない・取得や照合に失敗した・head SHA が得られない場合はすべて deny する (fail-closed)
+4. 対象 PR の解決 (コマンドの対象指定 or current branch) と head SHA の取得は gh に委ねる。gate 自身はフラグ文法を解析せず、`gh pr merge` の**直後**に置かれた PR 番号 / PR URL だけを対象指定として受理して gh に渡す。フラグのみの形 (`gh pr merge --squash`) は対象指定なしとして gh の current branch 解決に委ねる。それ以外の曖昧な形 — フラグの後ろに現れる非フラグトークン (`gh pr merge --squash 123`)、PR 番号にも URL にも解釈できない指定 (branch 名等)、1 呼び出しに複数の `gh pr merge` — はどの PR を照合すべきか一意に決まらないため deny する。gh / jq が見つからない・PR を解決できない・取得や照合に失敗した・head SHA が得られない場合もすべて deny する (fail-closed)
 5. gate が出す permissionDecision は deny のみである (allow / updatedInput は出さない。通過時は無出力で既定の許可フローを維持する)
 
 #### 2. block-bg-codex-wrapper (PreToolUse, matcher: `Bash`)
@@ -79,6 +81,8 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 - **TOCTOU 窓は防がない**: gate 確認後から実 merge までの間に head が更新される競合窓は防ぎません (レビューコメントの SHA は gate 確認時点の head と照合されます)
 - **`--auto` / `--admin` は常に deny**: 遅延 merge 予約 (gate 確認と実 merge の分離) と保護 bypass はサポート外です。必要な場合は plugin を無効化して実行してください
 - **粗い検出による誤爆**: `gh pr merge` の連続列を quoted な文字列として含むだけのコマンド (コミットメッセージへの言及等) も関与対象になります。誤 deny された場合はコマンドを言い換えて回避してください
+- **連続列判定はフラグ介在形に一致しない**: サブコマンドの語間にフラグが入る正規の呼び出し形 (`gh -R owner/repo pr merge 123` 等) は `gh pr merge` の連続列を含まないため gate が関与せず、この形の merge は観測できません。gate を通したい場合は語を連続させた形 (`gh pr merge 123 -R owner/repo`) を使ってください
+- **base 変更 (retarget) は失効として検出しない**: レビューコメントの照合は head SHA のみで行います。PR の base branch を変更しても head SHA は変わらないため、レビュー対象の差分 (merge-base..head) が変わっても既存のレビューコメントは有効なまま扱われます
 
 ## pre-push-review / pre-push-codex-review との併用設計
 

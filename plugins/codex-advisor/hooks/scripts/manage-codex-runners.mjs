@@ -9,7 +9,7 @@
  * - PreToolUse: Codex model の起動を role 固有 runner だけに限定する
  * - SubagentStart / SubagentStop: runner の active / retry / terminal 遷移を記録する
  * - Stop: 未回収の runner がある間は main session の終了を block する
- * - review cadence: 一般 / pre-push Codex review の成功 5 回ごとに根本方針 advisor
+ * - review cadence: 一般 / pre-push / pre-merge Codex review の成功 5 回ごとに根本方針 advisor
  *   checkpoint を要求する
  * - SessionStart: stale runner state、SessionEnd: runner + cadence state を掃除する
  *
@@ -40,9 +40,13 @@ const PRE_PUSH_CODEX_REVIEWER_CANONICAL = "pre-push-codex-review:codex-reviewer"
 // (3.0.0 以降)。(iii) 確認方法: legacy 互換のテスト群 (旧 namespace の
 // cadence 計数・checkpoint gate を検証するテスト) を同時に削除・更新する。
 const PRE_PUSH_CODEX_REVIEWER_LEGACY = "pre-push-review:codex-reviewer";
-const PRE_PUSH_CODEX_REVIEWERS = new Set([
+// pre-merge-codex-review plugin の codex review subagent。pre-push-codex-review と同じ役割
+// (Codex review) を PR マージ前レビューとして提供するため、review cadence の計数対象に含める。
+const PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer";
+const CADENCE_COUNTED_REVIEWERS = new Set([
   PRE_PUSH_CODEX_REVIEWER_CANONICAL,
   PRE_PUSH_CODEX_REVIEWER_LEGACY,
+  PRE_MERGE_CODEX_REVIEWER,
 ]);
 // 撤去条件付き暫定措置: 旧 pre-push-review (codex gate を持つ v6.0.0 未満) の
 // codex review wrapper basename。(i) 現在の問題: canonical basename
@@ -546,7 +550,7 @@ function handlePreToolUse(input) {
 }
 
 function handleSubagentStart(input) {
-  if (PRE_PUSH_CODEX_REVIEWERS.has(input.agent_type)) {
+  if (CADENCE_COUNTED_REVIEWERS.has(input.agent_type)) {
     if (
       typeof input.session_id !== "string" ||
       typeof input.agent_id !== "string" ||
@@ -700,7 +704,7 @@ function handleSubagentStop(input) {
     return null;
   }
 
-  if (PRE_PUSH_CODEX_REVIEWERS.has(input.agent_type)) {
+  if (CADENCE_COUNTED_REVIEWERS.has(input.agent_type)) {
     return handlePrePushSubagentStop(input);
   }
 
