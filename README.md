@@ -42,7 +42,7 @@ Claude Code 側で fable-risk-labeler を install していた場合は、plugin
 | [auto-lint-check](#auto-lint-check) | 0.6.1 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
 | [pre-push-review](#pre-push-review) | 6.0.0 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
 | [pre-push-codex-review](#pre-push-codex-review) | 1.0.0 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
-| [pre-merge-codex-review](#pre-merge-codex-review) | 1.0.0 | `gh pr merge` 前に PR の merge-base..head 全差分への codex review 完了を強制する merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
+| [pre-merge-codex-review](#pre-merge-codex-review) | 1.0.0 | `gh pr merge` 前に codex review 完了 (head SHA 付き PR レビューコメント) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
 | [update-default-branch](#update-default-branch) | 0.4.1 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.10.1 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.25.2 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
@@ -211,7 +211,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## pre-merge-codex-review
 
-`gh pr merge` を実行する前に codex review (OpenAI クロスモデルレビュー) の完了を必ず実行させ、未レビューな PR が merge されるのを構造的にブロックするプラグインです。レビュー対象は PR の merge-base..head 全差分で、marker は repo / PR 番号 / merge-base OID / head OID / 全差分 hash の 5 key に束縛されます。個人環境 (ChatGPT Plus の codex CLI) 向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させます。push 毎の codex review を要求する [pre-push-codex-review](#pre-push-codex-review) との併用は前提としていません。
+`gh pr merge` を実行する前に codex review (OpenAI クロスモデルレビュー) の完了を確認するプラグインです。codex-reviewer subagent がレビュー結果を「レビュー時の head SHA を記録した機械可読 header 付きの PR レビュー」として投稿し、merge gate は「PR に現在の head SHA と一致する codex review コメントが在るか」だけを検査します (在れば通常の許可フローへ、無ければ deny)。個人環境 (ChatGPT Plus の codex CLI) 向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させます。push 毎の codex review を要求する [pre-push-codex-review](#pre-push-codex-review) との併用は前提としていません。
 
 詳細な gate 手順・マーカー仕様・既知の制約は [plugins/pre-merge-codex-review/README.md](plugins/pre-merge-codex-review/README.md) を参照してください。
 

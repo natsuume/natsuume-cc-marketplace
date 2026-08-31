@@ -45,7 +45,7 @@
     {
       "name": "pre-merge-codex-review",
       "source": "./plugins/pre-merge-codex-review",
-      "description": "gh pr merge 前に codex review (OpenAI クロスモデルレビュー) の完了を強制する merge gate プラグイン。marker を repo / PR 番号 / merge-base OID / head OID / 全差分 hash の 5 key に束縛し、未レビューな PR の merge を構造的にブロックする。個人環境向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させる。",
+      "description": "gh pr merge 前に codex review (OpenAI クロスモデルレビュー) の完了を確認する軽量 merge gate プラグイン。レビュー結果は head SHA 記録付きの PR レビューコメントとして投稿され、gate は現在の head と一致するコメントの有無だけを検査する。個人環境向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させる。",
       "version": "1.0.0",
       "keywords": ["merge", "review", "quality", "codex", "openai", "subagent", "pr-diff", "gate"]
     },
