@@ -1,5 +1,5 @@
 {
-  "description": "codex-advisor の配送・runner 強制経路: SessionStart / SubagentStart で利用規律を additionalContext として注入する。PreToolUse は rescue / review / advisor の Codex model 起動を role 固有 foreground runner だけに限定し、SubagentStart / SubagentStop / Stop が一般 review と pre-push-codex-review:codex-reviewer (旧 pre-push-review:codex-reviewer を互換 alias として受理) を共有 cadence へ加算して5回ごとの根本方針 advisor checkpoint を管理する。SessionStart / SessionEnd は同一 session の runner state / cadence state を lifecycle に沿って扱う。設計判断は issue #219 / #291 と plugin README を参照。",
+  "description": "codex-advisor の配送・runner 強制経路: SessionStart / SubagentStart で利用規律を additionalContext として注入する。PreToolUse は rescue / review / advisor の Codex model 起動を role 固有 foreground runner だけに限定し、SubagentStart / SubagentStop / Stop が一般 review と pre-push-codex-review:codex-reviewer / pre-merge-codex-review:codex-reviewer (旧 pre-push-review:codex-reviewer を互換 alias として受理) を共有 cadence へ加算して5回ごとの根本方針 advisor checkpoint を管理する。SessionStart / SessionEnd は同一 session の runner state / cadence state を lifecycle に沿って扱う。設計判断は issue #219 / #291 と plugin README を参照。",
   "hooks": {
     "SessionStart": [
       {
@@ -46,7 +46,7 @@
         ]
       },
       {
-        "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue|pre-push-codex-review:codex-reviewer|pre-push-review:codex-reviewer)$",
+        "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue|pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer|pre-push-review:codex-reviewer)$",
         "hooks": [
           {
             "type": "command",
@@ -57,7 +57,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue|pre-push-codex-review:codex-reviewer|pre-push-review:codex-reviewer)$",
+        "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue|pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer|pre-push-review:codex-reviewer)$",
         "hooks": [
           {
             "type": "command",

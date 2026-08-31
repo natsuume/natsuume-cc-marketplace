@@ -1,6 +1,6 @@
 ---
 name: consult
-description: OpenAI Codex を advisor として相談し、実質的な作業前・完了宣言前・行き詰まり・方針転換・reconcile・pre-pushを含むCodex review 5サイクルごとの根本方針 checkpointで plan / course-correction助言を受け取る。「Codex に相談」「セカンドオピニオン」「Codex の意見」依頼でも使う
+description: OpenAI Codex を advisor として相談し、実質的な作業前・完了宣言前・行き詰まり・方針転換・reconcile・pre-push・pre-mergeを含むCodex review 5サイクルごとの根本方針 checkpointで plan / course-correction助言を受け取る。「Codex に相談」「セカンドオピニオン」「Codex の意見」依頼でも使う
 ---
 
 # /codex-advisor:consult — Codex への相談
@@ -39,7 +39,7 @@ OpenAI Codex に相談プロンプトを渡し、助言テキストを受け取�
 
 ### Codex review 5 サイクルごとの根本方針 checkpoint
 
-lifecycle hook が一般reviewと`pre-push-codex-review:codex-reviewer`の共有cadenceに基づいて
+lifecycle hook が一般review、`pre-push-codex-review:codex-reviewer`、`pre-merge-codex-review:codex-reviewer`の共有cadenceに基づいて
 checkpointを要求した場合は、通常の `<context>` に要約を散在させず、次のblockを追加する。
 
 ```xml

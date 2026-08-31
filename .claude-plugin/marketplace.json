@@ -43,6 +43,13 @@
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
+      "name": "pre-merge-codex-review",
+      "source": "./plugins/pre-merge-codex-review",
+      "description": "gh pr merge 前に codex review (OpenAI クロスモデルレビュー) の完了を確認する軽量 merge gate プラグイン。レビュー結果は head SHA 記録付きの PR レビューコメントとして投稿され、gate は現在の head と一致するコメントの有無だけを検査する。個人環境向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させる。",
+      "version": "1.0.0",
+      "keywords": ["merge", "review", "quality", "codex", "openai", "subagent", "pr-diff", "gate"]
+    },
+    {
       "name": "update-default-branch",
       "source": "./plugins/update-default-branch",
       "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。",
@@ -81,7 +88,7 @@
       "name": "codex-advisor",
       "source": "./plugins/codex-advisor",
       "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧するプラグイン。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI)。",
-      "version": "2.1.0",
+      "version": "2.2.0",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {
