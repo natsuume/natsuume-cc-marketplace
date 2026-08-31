@@ -39,7 +39,7 @@
       "name": "pre-push-codex-review",
       "source": "./plugins/pre-push-codex-review",
       "description": "git push 前に codex review (OpenAI クロスモデルレビュー) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、codex review を経ていない commit が remote に到達するのを構造的にブロックする。pre-push-review core (code + security の 2 レビュー gate) との併用で 3 レビュー構成になる。",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
