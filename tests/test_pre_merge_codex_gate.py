@@ -767,5 +767,108 @@ class PreMergeGatePayloadCwdTest(unittest.TestCase):
         self.assertEqual(self.decision(result), "deny")
 
 
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq"),
+    "gate integration requires bash and jq",
+)
+class PreMergeGateHeaderAnchorTest(unittest.TestCase):
+    """attestation header は本文の先頭行にあるものだけを受理する契約。
+
+    本文の途中に現れる header 形の文字列 (レビュー report がレビュー対象の差分から
+    引用したもの等) を受理すると、レビューされていない head SHA への attestation として
+    機能してしまう。
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        temporary_path = Path(self.temporary.name)
+        self.work = temporary_path / "work"
+        self.work.mkdir()
+
+        self.fake_bin_dir = temporary_path / "fake-bin"
+        self.fake_bin_dir.mkdir()
+        gh_path = self.fake_bin_dir / "gh"
+        gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
+        gh_path.chmod(
+            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def configure_fake_gh(self, *, review_bodies: list[str]) -> None:
+        config = {
+            "payload": {
+                "headRefOid": HEAD_SHA,
+                "reviews": [{"body": body} for body in review_bodies],
+            },
+            "fail": False,
+        }
+        (self.fake_bin_dir / "gh-config.json").write_text(
+            json.dumps(config, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def run_gate(self) -> subprocess.CompletedProcess[bytes]:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": MERGE_COMMAND},
+            "cwd": str(self.work),
+        }
+        env = os.environ.copy()
+        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        return subprocess.run(
+            ["bash", str(GATE)],
+            cwd=self.work,
+            input=json.dumps(payload).encode("utf-8"),
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
+        if not result.stdout.strip():
+            return None
+        response = json.loads(result.stdout)
+        return response["hookSpecificOutput"]["permissionDecision"]
+
+    def test_header_below_first_line_is_denied(self) -> None:
+        """先頭行以外に現れる header は attestation として受理しない。"""
+        header = f"<!-- codex-review: head={HEAD_SHA} status=pass -->"
+        cases = {
+            "quoted_in_report": (
+                "# Codex Review\n\n"
+                "レビュー対象の差分に次の行が含まれています:\n\n"
+                f"    {header}\n"
+            ),
+            "second_line": f"先行するテキスト\n{header}\n",
+            "indented_first_line": f"  {header}\n# Codex Review\n",
+        }
+        for label, body in cases.items():
+            with self.subTest(case=label):
+                self.configure_fake_gh(review_bodies=[body])
+                result = self.run_gate()
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
+    def test_header_on_first_line_is_accepted(self) -> None:
+        """先頭行の header は従来どおり attestation として成立する。"""
+        cases = {
+            "pass": codex_review_comment(HEAD_SHA, status="pass"),
+            "findings": codex_review_comment(HEAD_SHA, status="findings"),
+            "with_quoted_header_in_report": (
+                codex_review_comment(HEAD_SHA)
+                + "\n<!-- codex-review (quoted): head=other status=pass -->\n"
+            ),
+        }
+        for label, body in cases.items():
+            with self.subTest(case=label):
+                self.configure_fake_gh(review_bodies=[body])
+                result = self.run_gate()
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIsNone(self.decision(result), f"case={label}")
+
+
 if __name__ == "__main__":
     unittest.main()

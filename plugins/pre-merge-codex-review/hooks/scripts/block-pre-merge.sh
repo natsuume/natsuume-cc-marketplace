@@ -213,13 +213,18 @@ gh の認証・バージョンと PR の状態を確認してから、もう一�
     ;;
 esac
 
+# header は本文の **先頭行** にあるものだけを attestation として扱う。 本文の途中に現れる
+# header 形の文字列 (レビュー report がレビュー対象の差分から引用したもの等) を受理すると、
+# 別 SHA の attestation として機能してしまうため。
 MATCHED=$(printf '%s' "$PR_JSON" | jq -r --arg head "$HEAD_SHA" '
   [
     .reviews[]?
     | (.body // "")
+    | (split("\n")[0] // "")
+    | rtrimstr("\r")
     | select(
-        contains("<!-- codex-review: head=" + $head + " status=pass -->")
-        or contains("<!-- codex-review: head=" + $head + " status=findings -->")
+        startswith("<!-- codex-review: head=" + $head + " status=pass -->")
+        or startswith("<!-- codex-review: head=" + $head + " status=findings -->")
       )
   ] | length
 ' 2>/dev/null) || MATCHED=""

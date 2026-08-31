@@ -98,25 +98,34 @@ if [ "$LOCAL_HEAD" != "$HEAD_SHA" ]; then
   fail "ローカル HEAD (${LOCAL_HEAD}) が PR #${PR_NUMBER} の head (${HEAD_SHA}) と一致しません。 未 push の commit がある場合は push し、 remote が先行している場合は fetch / pull してから再実行してください。"
 fi
 
+# working tree が dirty なら実行しない。 codex の review は merge-base からの diff を
+# working tree 込みで見るため、 dirty のままでは 「head SHA を記録しながら、 その head とは
+# 異なる内容をレビューする」 乖離が生じ、 投稿するコメントが実態を表さなくなる。
+WORKTREE_STATUS=$(git status --porcelain 2>/dev/null) || fail "git status の実行に失敗しました。 repo の状態を確認してから再実行してください。"
+if [ -n "$WORKTREE_STATUS" ]; then
+  fail "working tree に未コミットの変更があります。 codex review は working tree を含む差分を見るため、 dirty のままでは PR の head (${HEAD_SHA}) と異なる内容をレビューした記録を残すことになります。 変更を commit するか \`git stash\` してから再実行してください。"
+fi
+
 # codex companion には base を **branch ref** (`origin/<baseRefName>`) として渡す
-# (companion 経由で codex に渡る base は branch 名として扱われるため)。 一方でレビュー範囲の
-# 正しさは wrapper 側で担保する: ローカルの `origin/<baseRefName>` が PR の実 base commit
-# (baseRefOid) を指していることを確認し、 ずれていれば 1 度だけ fetch して再確認する。 それでも
-# 一致しなければ、 誤った範囲や空の差分をレビューして 「レビュー済み」 コメントを残すことに
-# なるため実行しない。
+# (companion 経由で codex に渡る base は branch 名として扱われるため)。 レビュー範囲の正しさは
+# wrapper 側で担保する: PR が記録する base commit (`baseRefOid`) が、 ローカルの
+# `origin/<baseRefName>` から到達可能 (ancestor) であることを確認する。 base branch は PR 作成後
+# も進むため完全一致は要求しない (一致を要求すると、 base が 1 commit 進んだだけの PR で
+# レビューが永久に実行できなくなる)。 到達不能なら 1 度だけ fetch して再判定し、 それでも
+# 到達不能なら 「ローカルの base が PR の base branch を表していない」 状態なので、 誤った範囲を
+# レビューして 「レビュー済み」 コメントを残さないよう実行しない。
 BASE_REF="origin/${BASE_NAME}"
 
-base_ref_oid_matches() {
-  local local_oid
-  local_oid=$(git rev-parse --verify --quiet "refs/remotes/origin/${BASE_NAME}") || return 1
-  [ "$local_oid" = "$BASE_OID" ]
+base_oid_is_in_origin_base() {
+  git rev-parse --verify --quiet "refs/remotes/origin/${BASE_NAME}" >/dev/null 2>&1 || return 1
+  git merge-base --is-ancestor "$BASE_OID" "refs/remotes/origin/${BASE_NAME}" 2>/dev/null
 }
 
-if ! base_ref_oid_matches; then
-  note "ローカルの ${BASE_REF} が PR の base commit (${BASE_OID}) と一致しないため fetch します。"
+if ! base_oid_is_in_origin_base; then
+  note "PR の base commit (${BASE_OID}) がローカルの ${BASE_REF} に含まれないため fetch します。"
   git fetch origin "$BASE_NAME" >&2 || fail "\`git fetch origin ${BASE_NAME}\` に失敗しました。 ネットワークと remote の状態を確認してから再実行してください。"
-  if ! base_ref_oid_matches; then
-    fail "ローカルの ${BASE_REF} が PR #${PR_NUMBER} の base commit (${BASE_OID}) と一致しません (fetch 後も不一致)。 base branch が更新中か、 PR の base が別 remote を指している可能性があります。 \`git fetch origin ${BASE_NAME}\` と PR の base 設定を確認してから再実行してください。"
+  if ! base_oid_is_in_origin_base; then
+    fail "PR #${PR_NUMBER} の base commit (${BASE_OID}) が fetch 後もローカルの ${BASE_REF} に含まれません。 ローカルの base ref が PR の base branch (${BASE_NAME}) を表していない可能性があります (別 remote を指す PR / base branch の force-push 等)。 remote の設定と \`git fetch origin ${BASE_NAME}\` の結果を確認してから再実行してください。"
   fi
 fi
 
@@ -159,9 +168,13 @@ if grep -qiE '^[[:space:]]*(no material findings|no findings|no issues found)[[:
   STATUS="pass"
 fi
 
+# report 本文が header 形の文字列を含む場合 (レビュー対象の差分に header 形のコードが含まれ、
+# report がそれを引用した場合等) は無害化してから埋め込む。 merge gate は本文 **先頭行** の
+# header だけを attestation として扱うが、 引用された header 形をそのまま残すと読み手にとって
+# 「別 SHA の attestation」 に見える紛らわしい本文になるため。
 {
   printf '<!-- codex-review: head=%s status=%s -->\n' "$HEAD_SHA" "$STATUS"
-  cat "$REVIEW_OUT"
+  sed 's/<!-- codex-review:/<!-- codex-review (quoted):/g' "$REVIEW_OUT"
 } > "$COMMENT_BODY"
 
 # 長すぎる本文は PR コメントの上限で投稿が失敗するため、 行単位で切り詰める (header 行は
