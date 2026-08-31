@@ -71,9 +71,6 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 with open(os.path.join(HERE, "gh-config.json"), encoding="utf-8") as fp:
     config = json.load(fp)
 
-with open(os.path.join(HERE, "gh-calls.log"), "a", encoding="utf-8") as fp:
-    fp.write(json.dumps(sys.argv[1:]) + "\\n")
-
 if config.get("fail"):
     print("fake-gh: injected failure", file=sys.stderr)
     sys.exit(1)
@@ -104,7 +101,6 @@ class PreMergeCodexGateTest(unittest.TestCase):
 
         self.fake_bin_dir = temporary_path / "fake-bin"
         self.fake_bin_dir.mkdir()
-        self.gh_log = self.fake_bin_dir / "gh-calls.log"
         gh_path = self.fake_bin_dir / "gh"
         gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
         gh_path.chmod(

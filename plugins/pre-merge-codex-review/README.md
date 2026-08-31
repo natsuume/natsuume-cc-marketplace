@@ -84,7 +84,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 
 本 plugin は単独 install で自立動作し、`pre-push-review` core (`git push` 前の code review / security review gate) と併用しても push gate に一切影響しません。push gate (`git push`) と merge gate (`gh pr merge`) は独立した PreToolUse hook であり、互いの判定に関知しません。
 
-本 plugin は個人環境 (ChatGPT Plus の codex CLI) 向けに「merge 前に 1 回だけ codex review」を運用する設計です。push の都度 codex review を要求する会社環境向け `pre-push-codex-review` との併用は前提としていません。会社環境では `pre-push-codex-review` のみを install してください。
+本 plugin は個人環境 (ChatGPT Plus の codex CLI) 向けに「merge 前に 1 回だけ codex review」を運用する設計です。push の都度 codex review を要求する会社環境向け `pre-push-codex-review` との併用は前提としていません。会社環境では codex 系 2 plugin のうち `pre-push-codex-review` の側を install し、本 plugin は install しないでください (`pre-push-review` core は会社環境でもそのまま併用します)。
 
 ## 共有 lib の同一性
 
