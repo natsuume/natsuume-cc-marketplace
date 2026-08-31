@@ -137,6 +137,7 @@ class PreMergeCodexGateTest(unittest.TestCase):
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {"command": command},
+            "cwd": str(self.work),
         }
         env = os.environ.copy()
         env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -417,6 +418,7 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {"command": command},
+            "cwd": str(self.work),
         }
         env = os.environ.copy()
         env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -485,14 +487,20 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertIsNone(self.decision(result))
 
-    def test_flag_only_forms_resolve_via_current_branch(self) -> None:
-        """対象指定が無い形は current branch 解決 (gh 委譲) に委ね、
+    def test_canonical_forms_are_accepted(self) -> None:
+        """受理正規形 (`gh pr merge [<number>] [flags]`) は照合フローへ進み、
         一致コメントが在れば decision を出さない。"""
         cases = {
-            "flag_only": "gh pr merge --squash",
-            "flag_then_separator": "gh pr merge --squash && echo merged",
-            "flag_then_semicolon": "gh pr merge --squash; git switch master",
             "bare": "gh pr merge",
+            "flag_only": "gh pr merge --squash",
+            "number_only": f"gh pr merge {PR_NUMBER}",
+            "number_and_flags": (
+                f"gh pr merge {PR_NUMBER} --squash --delete-branch"
+            ),
+            "short_flag": f"gh pr merge {PR_NUMBER} -d",
+            "flag_with_value": (
+                f"gh pr merge {PR_NUMBER} --match-head-commit={HEAD_SHA}"
+            ),
         }
         for label, command in cases.items():
             with self.subTest(case=label):
@@ -500,12 +508,20 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertIsNone(self.decision(result), f"case={label}")
 
-    def test_number_target_with_trailing_separator_is_resolved(self) -> None:
-        """対象指定の直後に区切りが続く形でも対象を取り出して照合する。"""
-        self.configure_fake_gh(review_bodies=[])
-        result = self.run_gate(f"gh pr merge {PR_NUMBER}; git switch master")
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
+    def test_trailing_separator_forms_are_denied(self) -> None:
+        """後続コマンドとの連結は正規形に一致しないため deny する。"""
+        cases = {
+            "and_chain": "gh pr merge --squash && echo merged",
+            "semicolon_chain": "gh pr merge --squash; git switch master",
+            "number_then_semicolon": (
+                f"gh pr merge {PR_NUMBER}; git switch master"
+            ),
+        }
+        for label, command in cases.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
 
 
 @unittest.skipUnless(
@@ -555,6 +571,7 @@ class PreMergeGateRepoScopeTest(unittest.TestCase):
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {"command": command},
+            "cwd": str(self.work),
         }
         env = os.environ.copy()
         env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -615,24 +632,139 @@ class PreMergeGateRepoScopeTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertEqual(self.decision(result), "deny", f"case={label}")
 
-    def test_redirection_does_not_break_target_resolution(self) -> None:
-        """リダイレクトは引数ではないため、対象指定なしの merge として扱う。"""
+    def test_non_canonical_forms_are_denied(self) -> None:
+        """正規形に一致しない関与形は、gate の解釈と shell 実挙動が乖離しうるため
+        レビューコメントの有無に依らず一律 deny する。"""
         cases = {
-            "stdout": "gh pr merge --squash > /tmp/merge.log",
-            "stdout_attached": "gh pr merge --squash >/tmp/merge.log",
-            "stdout_and_stderr": "gh pr merge --squash > /tmp/merge.log 2>&1",
+            "redirect_stdout": "gh pr merge --squash > /tmp/merge.log",
+            "redirect_attached": "gh pr merge --squash >/tmp/merge.log",
+            "redirect_stderr": "gh pr merge --squash 2>&1",
+            "redirect_multi_digit_fd": "gh pr merge --squash 10> /tmp/m.log",
+            "redirect_append_fd": "gh pr merge --squash 22>>/tmp/m.log",
+            "redirect_input": "gh pr merge --squash </tmp/in.txt",
+            "number_with_redirect": (
+                f"gh pr merge {PR_NUMBER} --squash > /tmp/m.log"
+            ),
+            "pipe_chain": f"gh pr merge {PR_NUMBER} | tee /tmp/merge.log",
+            "background": f"gh pr merge {PR_NUMBER} &",
+            "quoted_flag_value": 'gh pr merge --subject "merge it"',
+            "single_quoted": "gh pr merge --subject 'merge it'",
+            "command_substitution": "gh pr merge $(cat /tmp/pr-number)",
+            "variable_expansion": "gh pr merge $PR_NUMBER --squash",
+            "two_numbers": f"gh pr merge {PR_NUMBER} 456",
         }
         for label, command in cases.items():
             with self.subTest(case=label):
                 result = self.run_gate(command)
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIsNone(self.decision(result), f"case={label}")
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
 
-    def test_number_target_with_redirection_is_resolved(self) -> None:
-        """リダイレクト付きでも直後の番号指定は対象として受理する。"""
-        result = self.run_gate(f"gh pr merge {PR_NUMBER} --squash > /tmp/m.log")
+
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq"),
+    "gate integration requires bash and jq",
+)
+class PreMergeGatePayloadCwdTest(unittest.TestCase):
+    """照合を実行する repo の決定契約。
+
+    Bash tool の cwd は tool 呼び出しをまたいで持続するため、hook プロセス自身の cwd が
+    merge 実行位置と一致するとは限らない。hook payload の `cwd` があればその位置で gh を
+    実行し、無い場合のみ自プロセスの cwd で実行する。payload の `cwd` が存在しない
+    ディレクトリを指す場合は、どの repo を照合すべきか決められないため deny する。
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        temporary_path = Path(self.temporary.name)
+        self.work = temporary_path / "work"
+        self.work.mkdir()
+        self.other_repo = temporary_path / "other-repo"
+        self.other_repo.mkdir()
+
+        self.fake_bin_dir = temporary_path / "fake-bin"
+        self.fake_bin_dir.mkdir()
+        gh_path = self.fake_bin_dir / "gh"
+        gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
+        gh_path.chmod(
+            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
+        self.configure_fake_gh(review_bodies=[codex_review_comment(HEAD_SHA)])
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def configure_fake_gh(self, *, review_bodies: list[str]) -> None:
+        config = {
+            "payload": {
+                "headRefOid": HEAD_SHA,
+                "reviews": [{"body": body} for body in review_bodies],
+            },
+            "fail": False,
+        }
+        (self.fake_bin_dir / "gh-config.json").write_text(
+            json.dumps(config, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def run_gate(
+        self, command: str, payload_cwd: str | None
+    ) -> subprocess.CompletedProcess[bytes]:
+        payload: dict[str, object] = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        if payload_cwd is not None:
+            payload["cwd"] = payload_cwd
+        env = os.environ.copy()
+        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        return subprocess.run(
+            ["bash", str(GATE)],
+            cwd=self.work,
+            input=json.dumps(payload).encode("utf-8"),
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
+        if not result.stdout.strip():
+            return None
+        response = json.loads(result.stdout)
+        return response["hookSpecificOutput"]["permissionDecision"]
+
+    def test_payload_cwd_is_used_for_matching(self) -> None:
+        """payload の cwd が別ディレクトリでも、そこで gh を実行して照合する。"""
+        result = self.run_gate(MERGE_COMMAND, str(self.other_repo))
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertIsNone(self.decision(result))
+
+    def test_payload_cwd_without_matching_comment_denies(self) -> None:
+        """payload cwd 指定時も照合は実行され、一致コメントが無ければ deny する。"""
+        self.configure_fake_gh(review_bodies=[])
+        result = self.run_gate(MERGE_COMMAND, str(self.other_repo))
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
+    def test_missing_payload_cwd_denies(self) -> None:
+        """payload に cwd が無ければ照合対象 repo を決められないため deny する
+        (hook プロセスの cwd への fallback は持たない)。"""
+        result = self.run_gate(MERGE_COMMAND, None)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
+    def test_relative_payload_cwd_denies(self) -> None:
+        """payload cwd が絶対パスでなければ照合対象 repo を特定できないため deny。"""
+        result = self.run_gate(MERGE_COMMAND, "other-repo")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
+    def test_nonexistent_payload_cwd_denies(self) -> None:
+        """payload cwd が存在しなければ照合対象 repo を決められないため deny。"""
+        missing = str(self.other_repo / "does-not-exist")
+        result = self.run_gate(MERGE_COMMAND, missing)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
 
 
 if __name__ == "__main__":

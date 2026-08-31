@@ -39,11 +39,11 @@ codex-advisor を併用する場合は v2.2.0 以上 (本 plugin の reviewer na
 
 次の手順で merge を確認します:
 
-1. Bash コマンド文字列に `gh pr merge` の連続列を含む場合のみ関与する。含まないコマンドには関与しない (無出力)。連続列の検出は粗い文字列判定であり、フラグ文法の解析や invocation の厳密な分類は行わない (quoted な言及等で誤爆した場合はコマンドの言い換えで回避できる)
-2. 関与したコマンドに `--auto` または `--admin` の文字列を含む場合は deny する (遅延 merge 予約と保護 bypass はサポート外。粗い文字列検出でよく、レビューコメントの有無に依らない)
-3. merge 対象 PR の現在の head SHA を gh で取得し、PR 上のレビューコメントに機械可読 header (`<!-- codex-review: head=<full head SHA> status=pass|findings -->`) を持ち head SHA が完全一致するものが存在するかを確認する。存在すれば無出力で終了し (既定の許可フローに委ねる)、存在しなければ deny して `pre-merge-codex-review:codex-reviewer` subagent の実行を案内する
-4. 照合は **hook プロセスの cwd の repo** の文脈で行うため、実際に merge される repo がそこから動きうる形はすべて deny する: `--repo` / `-R` の文字列を含む merge、`gh pr merge` で始まらないコマンド (前置コマンドの連結・`cd` の後置き・環境変数の前置き。連続列より後ろの連結 `gh pr merge 123 && ...` は許容)、1 呼び出しに複数の `gh pr merge`
-5. 対象 PR の解決 (コマンドの対象指定 or current branch) と head SHA の取得は gh に委ねる。gate 自身はフラグ文法を解析せず、`gh pr merge` の**直後**に置かれた PR 番号だけを対象指定として受理して gh に渡す (別 repo を指しうる URL 指定と branch 名指定は deny)。フラグのみの形 (`gh pr merge --squash`) は対象指定なしとして gh の current branch 解決に委ね、リダイレクト (`> file` / `2>&1` 等) は引数ではないため走査対象から除外する。フラグの後ろに現れる非フラグトークン (`gh pr merge --squash 123`) は、フラグの値か対象指定かを判別できないため deny する。gh / jq が見つからない・PR を解決できない・取得や照合に失敗した・head SHA が得られない場合もすべて deny する (fail-closed)
+1. Bash コマンド文字列に `gh pr merge` の連続列を含む場合のみ関与する。含まないコマンドには関与しない (無出力)。連続列の検出は粗い文字列判定であり、quoted な言及等で誤爆した場合はコマンドの言い換えで回避できる
+2. 関与したコマンドに `--auto` / `--admin` (遅延 merge 予約・保護 bypass) または `--repo` / `-R` (別 repo の PR を merge しうる repo selector) の文字列を含む場合は deny する (粗い文字列検出でよく、レビューコメントの有無に依らない)
+3. 関与したコマンドが **受理正規形** `gh pr merge [<number>] [flags...]` に完全一致するかを確認する。番号を置けるのは `gh pr merge` の直後の 1 語だけで、それ以降は `-` 始まりのフラグのみを許す。一致しない関与形 — リダイレクト (`> file` / `2>&1` / `10> file` 等)、シェル演算子による連結 (`&&` / `||` / `;` / `|` / `&`)、quote、`$` 展開、フラグより後ろの数字、複数の merge、前置コマンド — は **一律 deny** する (gate の解釈と shell の実挙動が乖離しうるため。リダイレクトや連結を外した単独コマンドへの言い換えで対応する)
+4. 照合する repo は hook payload の `cwd` (merge が実行されるディレクトリ) を正本とする。`cwd` の欠落・空・非絶対パス・不在ディレクトリ・移動不能はいずれも deny する (hook プロセスの cwd への fallback は持たない)
+5. 対象 PR の解決と head SHA の取得は gh に委ねる (正規形で番号があればその番号、無ければ current branch の PR)。PR 上のレビューコメントに機械可読 header (`<!-- codex-review: head=<full head SHA> status=pass|findings -->`) を持ち head SHA が完全一致するものが存在すれば無出力で終了し (既定の許可フローに委ねる)、存在しなければ deny する。gh / jq が見つからない・PR を解決できない・取得や照合に失敗した・head SHA が得られない場合もすべて deny する (fail-closed)
 6. deny 時は `pre-merge-codex-review:codex-reviewer` subagent の実行を案内する。レビューは current branch の PR に対して実行・投稿されるため、別 PR を番号指定して merge する場合は、先にその PR のブランチへ `git switch` してから subagent を起動する必要がある旨も併せて案内する
 7. gate が出す permissionDecision は deny のみである (allow / updatedInput は出さない。通過時は無出力で既定の許可フローを維持する)
 
@@ -74,7 +74,7 @@ wrapper はレビュー完了時に、結果を `gh pr review --comment` で対�
 
 **ファイル**: `agents/codex-reviewer.md`
 
-codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foreground で 1 回起動し、wrapper の stdout / stderr を subagent context 内で評価して parent-safe markdown report に抽象化する最小 subagent です。wrapper は **current branch の PR** を gh で解決し、その PR の実 base との merge-base..head 全差分に対して codex review を実行して、完了時に結果を当該 PR のレビューとして投稿します (ローカル HEAD が PR の head SHA と一致しない場合は、投稿する head SHA と実際にレビューした内容が食い違うため実行せず中断します)。別の PR をレビューさせたい場合は、その PR のブランチへ `git switch` してから起動してください。tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
+codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foreground で 1 回起動し、wrapper の stdout / stderr を subagent context 内で評価して parent-safe markdown report に抽象化する最小 subagent です。wrapper は **current branch の PR** を gh で解決し、その PR の実 base との merge-base..head 全差分に対して codex review を実行して、完了時に結果を当該 PR のレビューとして投稿します (ローカル HEAD が PR の head SHA と一致しない場合は、投稿する head SHA と実際にレビューした内容が食い違うため実行せず中断します)。別の PR をレビューさせたい場合は、その PR のブランチへ `git switch` してから起動してください。レビュー範囲は wrapper 側で束縛します: ローカルの `origin/<base>` が PR の base commit (`baseRefOid`) を指すことを確認し、ずれていれば 1 度だけ `git fetch origin <base>` して再確認します (それでも一致しなければレビューも投稿も行いません)。merge-base..HEAD の差分が空の場合も、何も見ていない「レビュー済み」コメントを残さないため中断します。tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
 
 ## 既知の制約
 
@@ -86,6 +86,8 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 - **連続列判定はフラグ介在形に一致しない**: サブコマンドの語間にフラグが入る呼び出し形 (`gh -R owner/repo pr merge 123` 等) は `gh pr merge` の連続列を含まないため gate が関与せず、この形の merge は観測できません。別 repo の PR を merge する場合はその repo のディレクトリへ移動し、`gh pr merge` を先頭に置いた単独コマンドとして番号指定 (`gh pr merge 123`) か current branch 指定 (`gh pr merge --squash`) で実行してください (repo selector 付きの形は gate が deny します)
 - **レビューは current branch の PR にのみ投稿される**: codex-reviewer subagent が実行する wrapper は current branch の PR を対象にレビューし、その PR にコメントを投稿します。別 PR を番号指定した merge が deny されたときは、先にその PR のブランチへ `git switch` してから subagent を起動してください (別ブランチのまま起動すると、レビューが current branch の PR に付いて codex の利用枠だけを消費し、目的の merge は deny のままになります)
 - **base 変更 (retarget) は失効として検出しない**: レビューコメントの照合は head SHA のみで行います。PR の base branch を変更しても head SHA は変わらないため、レビュー対象の差分 (merge-base..head) が変わっても既存のレビューコメントは有効なまま扱われます
+- **受理正規形の外側は拡張しない (stop rule)**: gate が解釈するのは `gh pr merge [<number>] [flags...]` の単独正規形だけです。正規形外の形 (リダイレクト・連結・quote・変数展開等) を許可する parser 拡張は行いません。「除去して近似する」処理は shell の実挙動との乖離を生み、未レビュー merge を通す穴になるためで、必要な操作は単独コマンドへの言い換えで対応してください
+- **merge queue による暗黙の遅延 merge は検出しない**: merge queue が有効な base branch では `--auto` を付けなくても merge が queue 経由の遅延実行になりえますが、gate はこれを検出しません (遅延 merge はサポート外です)
 
 ## pre-push-review / pre-push-codex-review との併用設計
 

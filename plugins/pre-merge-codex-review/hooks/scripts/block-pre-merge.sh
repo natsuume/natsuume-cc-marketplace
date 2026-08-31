@@ -24,25 +24,28 @@
 #    subagent の実行を案内する。 status は pass / findings のどちらでも「レビュー済み」
 #    として成立する (merge の approve や findings 0 件の証明ではない)。
 #
-# ## 対象 PR の解決 (repo スコープの一本化)
+# ## 受理正規形 (allow 判定の唯一の経路)
 #
-# 照合は **hook プロセスの cwd の repo** の文脈で行うため (`gh pr view` を cwd で実行する)、
-# 実際に merge される repo がそこから動きうる形はすべて deny する。 対象 PR の解決と head SHA
-# の取得自体は gh に委ね、 本 script はフラグ文法を解析しない:
-#   - `--repo` / `-R` の文字列を含む → 別 repo の PR を merge しうるため deny する
-#   - 正規化済みコマンドが `gh pr merge` で始まらない (前置コマンド連結・`cd` ・環境変数の
-#     前置き等) → 実際の merge 対象 repo が cwd と食い違いうるため deny する。 連続列より
-#     後ろの連結 (`gh pr merge 123 && ...`) は照合対象に影響しないので許容する
-#   - `gh pr merge` の連続列が 2 回以上ある → どの PR を照合すべきか一意に決まらないため
-#     deny する
-#   - 連続列の後ろのトークンを、 リダイレクト (演算子と書き込み先) を除いたうえで、 シェル
-#     演算子 (`&&` / `||` / `;` / `|` / `&`) の手前まで順に見る:
-#       - 走査範囲のトークンがすべて `-` 始まり (フラグ) → 対象指定なしとして `gh pr view`
-#         の current branch 解決に委ねる
-#       - 最初の非フラグトークンが連続列の**直後**にある → 全数字 (PR 番号) のときだけ
-#         その値を `gh pr view` に渡す。 URL や branch 名は別 repo を指しうるため deny する
-#       - 最初の非フラグトークンが直後以外の位置にある (例: `gh pr merge --squash 123`)
-#         → フラグの値なのか対象指定なのかを本 script は判別できないため deny する
+# 関与したコマンドのうち、 照合フロー (gh での SHA 照合) へ進めるのは **受理正規形に完全
+# 一致** するものだけである。 それ以外の関与形はすべて deny する。 正規形は正規化後の
+# コマンド文字列全体が次の構成に一致することを指す:
+#
+#   gh pr merge [<全数字 1 語>] [<`-` 始まりのフラグ>]...
+#
+# 数字は `gh pr merge` の直後の 1 語に限る (フラグより後ろの数字はフラグの値と区別できない)。
+# リダイレクト・シェル演算子 (`&&` / `||` / `;` / `|` / `&`)・quote・`$` 展開・その他の
+# トークンを含む形は、 本 script の解釈と shell の実挙動が乖離しうるため一律 deny する。
+# 「除去して近似する」 のではなく 「解釈できる形だけを受理する」 ことで、 乖離による
+# false-allow を構造的に消す設計であり、 正規形の外側を許可する拡張は行わない (利用者は
+# 単独コマンドへの言い換えで対応する)。
+#
+# 加えて、 照合 repo を一本化するため次も deny する:
+#   - `--repo` / `-R` の文字列を含む → 別 repo の PR を merge しうる
+#   - `--auto` / `--admin` の文字列を含む → 遅延 merge 予約・保護 bypass
+#
+# 対象 PR の解決と head SHA の取得自体は gh に委ねる。 gh は **merge が実行される repo**
+# (hook payload の `cwd`) で実行する。 `cwd` の欠落・空・非絶対パス・不在ディレクトリ・
+# cd 不能はいずれも 「どの repo を照合すべきか決められない」 ため deny する。
 #
 # ## permissionDecision
 #
@@ -89,6 +92,8 @@ COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
 # 空白列を単一空白へ畳む。
 COMMAND="${COMMAND//\\$'\n'/}"
 NORMALIZED=$(printf '%s' "$COMMAND" | tr '\n\r\t' ';; ' | tr -s ' ')
+NORMALIZED="${NORMALIZED# }"
+NORMALIZED="${NORMALIZED% }"
 
 # 関与条件の本判定 (粗い連続列検出)。
 case "$NORMALIZED" in
@@ -121,107 +126,75 @@ case "$NORMALIZED" in
     ;;
 esac
 
-# 同一コマンド内に `gh pr merge` の連続列が複数あると、 どの PR を照合すれば merge 全体を
-# 検証したことになるかが決まらない。 1 つでも未レビューの merge を通さないため deny する。
-MERGE_SEQUENCE_COUNT=0
-SEQUENCE_SCAN="$NORMALIZED"
-while :; do
-  case "$SEQUENCE_SCAN" in
-    *"gh pr merge"*)
-      SEQUENCE_SCAN="${SEQUENCE_SCAN#*gh pr merge}"
-      MERGE_SEQUENCE_COUNT=$((MERGE_SEQUENCE_COUNT+1))
-      ;;
-    *) break ;;
-  esac
-done
-if [ "$MERGE_SEQUENCE_COUNT" -gt 1 ]; then
-  deny "マージをブロックしました。 同一の Bash 呼び出しに \`gh pr merge\` が複数含まれています。
+# 受理正規形との完全一致を要求する。 一致しない関与コマンド (前置コマンドの連結・複数
+# merge・リダイレクト・シェル演算子・quote・`$` 展開・フラグより後ろの数字等) は、 本 script
+# の解釈と shell の実挙動が乖離しうるため一律 deny する。
+if ! printf '%s' "$NORMALIZED" \
+  | grep -qE '^gh pr merge( [0-9]+)?( -[A-Za-z0-9=/._:@+-]+)*$'; then
+  deny "マージをブロックしました。 本 gate が解釈できるのは \`gh pr merge [<number>] [flags]\` の単独正規形だけです (対象 PR の番号を置けるのは \`gh pr merge\` の直後のみ、 それ以降は \`-\` 始まりのフラグのみ)。
 
-本 gate は 1 回の呼び出しにつき 1 つの対象 PR を照合するため、 複数 merge が混在するとどの PR を検証したのか一意に決まりません。
+リダイレクト (\`> file\` / \`2>&1\` 等)・他コマンドとの連結 (\`&&\` / \`||\` / \`;\` / \`|\` / \`&\`)・quote・変数展開・複数の merge を含む形は、 gate の解釈と実際の shell の挙動が食い違いうるため受理しません。
 
-merge は 1 回の Bash 呼び出しにつき 1 つにして、 それぞれ個別に実行してください。"
+リダイレクトや連結を外した単独コマンドに言い換えて再実行してください (例: \`gh pr merge 123 --squash\` / \`gh pr merge --squash\`)。"
   exit 0
 fi
 
-# merge は単独コマンドとして先頭に置かれていることを要求する。 前置コマンドの連結
-# (`cd other-repo; gh pr merge 123` / `FOO=bar gh pr merge 123` 等) は、 実際に merge が
-# 行われる repo と本 gate が照合に使う repo (hook プロセスの cwd) が食い違いうるため deny する。
-# 連続列より **後ろ** の連結 (`gh pr merge 123 && ...`) は照合対象に影響しないので許容する。
-TRIMMED="${NORMALIZED# }"
-case "$TRIMMED" in
-  "gh pr merge") ;;
-  "gh pr merge "*) ;;
-  *)
-    deny "マージをブロックしました。 \`gh pr merge\` は単独のコマンドとして実行してください (前置コマンドとの連結・\`cd\` の後置き・環境変数の前置き等は、 実際に merge される repo と本 gate が照合する repo が食い違う経路になります)。
-
-対象 repo のディレクトリで作業している状態にしてから、 \`gh pr merge\` を先頭に置いた単独のコマンドとして実行してください (\`gh pr merge 123 --squash\` の後ろに別コマンドを連結する形は許容されます)。"
-    exit 0
-    ;;
-esac
-
-# 連続列の後ろのトークンを走査して対象指定を取り出す (フラグ文法は解析しない)。
+# 正規形に一致した時点で、 対象指定は 「`gh pr merge` の直後の全数字 1 語」 か 「無し」 の
+# どちらかに確定している。 前者ならその番号を gh に渡し、 後者は gh の current branch 解決に
+# 委ねる。
 TARGET=""
-REST="${TRIMMED#gh pr merge}"
-case "$REST" in
-  " "*) REST="${REST# }" ;;
-  *) REST="" ;;
-esac
-# リダイレクト演算子とその書き込み先は引数ではないため走査対象から外す (除去しないと
-# `gh pr merge --squash > /tmp/log` の `/tmp/log` を対象指定と誤認する)。 除去は演算子から
-# 後ろに続く filename-safe な文字列までに限り、 想定外の shape はそのまま残して後段の分類で
-# deny 側に倒す。
-REST=$(printf '%s' "$REST" \
-  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>|>|<)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')
-# シェル演算子 (`&&` / `||` / `;` / `|` / `&`) から後ろは別コマンドなので走査対象から外す。
-REST="${REST%%[&|;]*}"
-# リダイレクト除去で生じた空白を畳み直し、 先頭の空白を落とす。
-REST=$(printf '%s' "$REST" | tr -s ' ')
+REST="${NORMALIZED#gh pr merge}"
 REST="${REST# }"
-
-TOKEN_POSITION=0
-while [ -n "$REST" ]; do
-  TOKEN="${REST%% *}"
-  case "$REST" in
-    *" "*) REST="${REST#* }" ;;
-    *) REST="" ;;
-  esac
-  [ -n "$TOKEN" ] || continue
-  case "$TOKEN" in
-    -*)
-      TOKEN_POSITION=$((TOKEN_POSITION+1))
-      continue
-      ;;
-  esac
-  # `-` で始まらない最初のトークン。 連続列の直後にある場合だけ対象指定として受理する。
-  if [ "$TOKEN_POSITION" -ne 0 ]; then
-    deny "マージをブロックしました。 merge 対象の PR を一意に特定できません (\`${TOKEN}\` がフラグの値なのか対象 PR の指定なのかを本 gate は判別できません)。
-
-対象 PR を指定する場合は \`gh pr merge <number>\` のように \`gh pr merge\` の直後に置いてください (フラグはその後ろに並べます。 例: \`gh pr merge 123 --squash\`)。 対象 PR のブランチに切り替えたうえで対象指定を省略する形 (\`gh pr merge --squash\`) も使えます。"
-    exit 0
-  fi
-  case "$TOKEN" in
-    *[!0-9]*)
-      deny "マージをブロックしました。 merge 対象の PR を一意に特定できません (\`gh pr merge\` の直後の語 \`${TOKEN}\` は PR 番号ではありません)。
-
-本 gate は対象 PR の解決を gh に委ねますが、 照合はコマンドを実行する repo の文脈で行うため、 別 repo を指しうる URL 指定や branch 名指定は受理しません。 対象 PR は同じ repo 内の番号 (\`gh pr merge 123\`) で指定するか、 対象 PR のブランチに切り替えて対象指定を省略する形 (\`gh pr merge --squash\`) を使ってください。"
-      exit 0
-      ;;
-    *) TARGET="$TOKEN" ;;
-  esac
-  break
-done
+FIRST_TOKEN="${REST%% *}"
+case "$FIRST_TOKEN" in
+  ""|-*) ;;
+  *) TARGET="$FIRST_TOKEN" ;;
+esac
 
 if ! command -v gh >/dev/null 2>&1; then
   deny "マージをブロックしました。 gh が見つからないため、 対象 PR の head SHA と codex review コメントを取得できません。 gh CLI をインストール (および \`gh auth login\`) してから、もう一度 gh pr merge を実行してください。"
   exit 0
 fi
 
-PR_JSON=""
-if [ -n "$TARGET" ]; then
-  PR_JSON=$(gh pr view "$TARGET" --json headRefOid,reviews 2>/dev/null) || PR_JSON=""
-else
-  PR_JSON=$(gh pr view --json headRefOid,reviews 2>/dev/null) || PR_JSON=""
+# merge が実行される repo は Bash tool の cwd (hook payload の `cwd`) であり、 hook プロセス
+# 自身の cwd とは限らない (Bash tool の cwd は tool 呼び出しをまたいで持続するため、 前の
+# 呼び出しで別 repo に移動していることがある)。 payload の `cwd` を照合 repo の正本とし、
+# 欠落・空・非絶対パス・不在ディレクトリ・cd 不能はいずれも deny する (自プロセスの cwd への
+# fallback は持たない。 別 repo の PR を照合して未レビュー merge を通す経路を作らないため)。
+PAYLOAD_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null) || PAYLOAD_CWD=""
+CWD_PROBLEM=""
+case "$PAYLOAD_CWD" in
+  "") CWD_PROBLEM="hook payload に cwd がありません" ;;
+  /*)
+    if [ ! -d "$PAYLOAD_CWD" ]; then
+      CWD_PROBLEM="hook payload の cwd (\`${PAYLOAD_CWD}\`) がディレクトリとして存在しません"
+    elif ! (cd "$PAYLOAD_CWD") 2>/dev/null; then
+      CWD_PROBLEM="hook payload の cwd (\`${PAYLOAD_CWD}\`) に移動できません (権限を確認してください)"
+    fi
+    ;;
+  *) CWD_PROBLEM="hook payload の cwd (\`${PAYLOAD_CWD}\`) が絶対パスではありません" ;;
+esac
+if [ -n "$CWD_PROBLEM" ]; then
+  deny "マージをブロックしました。 ${CWD_PROBLEM}。
+
+本 gate は merge が実行されるディレクトリの repo でレビューコメントを照合します。 そのディレクトリを特定できないと、 別 repo の PR を照合して未レビューの merge を通してしまう可能性があるため、 判定せず deny します。
+
+merge 対象 repo のディレクトリが存在しアクセスできる状態にしてから、もう一度 gh pr merge を実行してください。"
+  exit 0
 fi
+
+# gh を merge 対象 repo の位置で実行する。 コマンド置換のサブシェル内で `cd` するため、
+# 本プロセスの cwd は変わらない。
+run_gh_pr_view() {
+  cd "$PAYLOAD_CWD" || return 1
+  if [ -n "$1" ]; then
+    gh pr view "$1" --json headRefOid,reviews 2>/dev/null
+  else
+    gh pr view --json headRefOid,reviews 2>/dev/null
+  fi
+}
+
+PR_JSON=$(run_gh_pr_view "$TARGET") || PR_JSON=""
 
 if [ -z "$PR_JSON" ]; then
   deny "マージをブロックしました。 merge 対象 PR の情報を gh から取得できませんでした (PR を解決できない / 認証が切れている / ネットワーク不通 等)。
