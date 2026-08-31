@@ -1,0 +1,6 @@
+{
+  "name": "pre-merge-codex-review",
+  "version": "1.0.0",
+  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
+  "description": "`gh pr merge` の実行前に codex review (OpenAI クロスモデルレビュー) の完了を強制するプラグイン。PR 単位の marker (repo / PR 番号 / merge-base / head OID / 全差分 hash の束縛) と実 PR metadata の照合により、codex review を経ていない merge を構造的にブロックする。個人環境向けに push 毎ではなく merge 前 1 回の codex review 運用を成立させる。"
+}
