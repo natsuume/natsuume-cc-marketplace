@@ -104,20 +104,10 @@ case "$BASE_NAME" in
   -*) fail "PR の base branch 名 (${BASE_NAME}) が \`-\` で始まっています。 git コマンドのオプションとして解釈される値は受け付けません。" ;;
 esac
 git check-ref-format --branch "$BASE_NAME" >/dev/null 2>&1 || fail "PR の base branch 名 (${BASE_NAME}) が git の branch 名規則を満たしません。 gh の応答が想定形式と異なるため中断します。"
-# ref 名として妥当でも、 下流の外部プロセス (codex companion → codex CLI) がこの値をどう解釈
-# するかは本 wrapper から検証できない。 shell のメタ文字だけを狭く拒否する (Unicode を含む
-# 一般的な branch 名はそのまま通す)。
-BASE_NAME_FORBIDDEN_CHARS='$`"'"'"';&|<>()!'
-_forbidden_index=0
-while [ "$_forbidden_index" -lt "${#BASE_NAME_FORBIDDEN_CHARS}" ]; do
-  _forbidden_char="${BASE_NAME_FORBIDDEN_CHARS:$_forbidden_index:1}"
-  case "$BASE_NAME" in
-    *"$_forbidden_char"*)
-      fail "PR の base branch 名 (${BASE_NAME}) に shell のメタ文字 (\`${_forbidden_char}\`) が含まれています。 下流の外部プロセスでの解釈を検証できないため中断します。"
-      ;;
-  esac
-  _forbidden_index=$((_forbidden_index+1))
-done
+# ref 名として妥当なら追加の文字制限は課さない。 base の値は git へ argv で渡り、 codex
+# companion へも argv (shell 非経由) で渡って JSON-RPC の値として codex CLI に届くため、
+# shell が再解釈する経路が無い。 独自の文字 denylist を置くと、 `feat(api)/x` のような
+# git 的に合法な branch 名を持つ PR を恒久的に弾いてしまう。
 
 # ローカル HEAD と PR head の一致確認。 不一致のままレビューすると、 投稿する header の
 # head SHA (= PR の head) と実際にレビューした内容が食い違うため実行しない。
