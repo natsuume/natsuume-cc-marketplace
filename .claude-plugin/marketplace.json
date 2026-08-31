@@ -43,6 +43,13 @@
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
+      "name": "pre-merge-codex-review",
+      "source": "./plugins/pre-merge-codex-review",
+      "description": "gh pr merge 前に codex review (OpenAI クロスモデルレビュー) の完了を強制する merge gate プラグイン。marker を repo / PR 番号 / merge-base OID / head OID / 全差分 hash の 5 key に束縛し、未レビューな PR の merge を構造的にブロックする。個人環境向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させる。",
+      "version": "1.0.0",
+      "keywords": ["merge", "review", "quality", "codex", "openai", "subagent", "pr-diff", "gate"]
+    },
+    {
       "name": "update-default-branch",
       "source": "./plugins/update-default-branch",
       "description": "PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン。",
