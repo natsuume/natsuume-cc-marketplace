@@ -3,29 +3,30 @@
 # 公式 codex プラグインの `codex-companion.mjs` を **install 形態 (cache / marketplace
 # clone) に依存せず** に発見する共通ユーティリティ。
 #
-# 用途: pre-push-review v1.1.0 で `/codex:review` slash command 経由ではなく、 codex
-# companion を **直接 Bash で叩く wrapper** (run-codex-review.sh) を案内する設計に変えた
-# (背景は run-codex-review.sh のヘッダ参照)。 wrapper / hook script はいずれも codex
-# プラグインの ${CLAUDE_PLUGIN_ROOT} を直接参照できないため、 ここで自前 path 解決を行う。
+# 用途: 本 plugin の codex review wrapper (run-pre-push-codex-review.sh) は
+# `/codex:review` slash command を経由せず codex companion を **直接 Bash で叩く**
+# (背景は run-pre-push-codex-review.sh のヘッダ参照)。 wrapper / hook script はいずれも
+# codex プラグインの ${CLAUDE_PLUGIN_ROOT} を直接参照できないため、 ここで自前 path 解決
+# を行う。
 #
-# ## 本ファイルの由来 (codex-advisor plugin 側の注記、issue #219)
+# ## canonical とコピーの関係
 #
-# 本ファイルは `plugins/pre-push-review/hooks/scripts/lib/codex-companion-resolver.sh`
-# からのコピーである。 Claude Code plugin は他 plugin のファイルを ${CLAUDE_PLUGIN_ROOT}
-# 越しに参照できない (plugin 間でファイルを共有する仕組みがない) ため、 companion 解決
-# ロジックを必要とする各 plugin (pre-push-review / codex-advisor) が同一内容を自前で
-# 保持する。 関数名・探索順序・sort ロジックは一切変更していない (1 文字も変えない方針)。
-# 将来 pre-push-review 側で本ロジックが更新された場合、 本ファイルへの反映は手動で追従
-# する必要がある。
+# 本ファイルは pre-push-codex-review plugin が canonical で、 codex-advisor plugin
+# (`plugins/codex-advisor/scripts/lib/codex-companion-resolver.sh`) が byte-identical な
+# コピーを保持して追従する。 Claude Code plugin は他 plugin のファイルを
+# ${CLAUDE_PLUGIN_ROOT} 越しに参照できない (plugin 間でファイルを共有する仕組みがない)
+# ため、 companion 解決ロジックを必要とする各 plugin が同一内容を自前で持つ。 canonical
+# 側を変更したらコピー側も同じ PR で更新する (同一性は tests/test_shared_lib_copies.py が
+# 検査する)。
 #
 # ## なぜ resolver を別 lib に切り出すか
 #
-# 現状 caller は run-codex-review.sh の 1 つのみだが、 path 解決ロジック (versioned cache
-# の semver 降順探索 + marketplace clone へのフォールバック + 環境差吸収) は run-codex-review.sh
-# 本体の review 実行責務とは独立した concern。 named unit として lib に切り出すことで、
-# run-codex-review.sh 本体が「companion を呼んで marker を書く」 という主目的に集中でき
-# 可読性が上がる (= 「現時点で責務が明確に分かれている」 ことが lib 化の根拠であり、 「将来
-# の柔軟性のために」 ではない)。
+# 現状 caller は run-pre-push-codex-review.sh の 1 つのみだが、 path 解決ロジック
+# (versioned cache の semver 降順探索 + marketplace clone へのフォールバック + 環境差吸収)
+# は run-pre-push-codex-review.sh 本体の review 実行責務とは独立した concern。 named unit
+# として lib に切り出すことで、 run-pre-push-codex-review.sh 本体が「companion を呼んで
+# pending attestation を書く」 という主目的に集中でき可読性が上がる (= 「現時点で責務が
+# 明確に分かれている」 ことが lib 化の根拠であり、 「将来の柔軟性のために」 ではない)。
 #
 # ## 探索順序と semver 解釈
 #
@@ -43,19 +44,18 @@
 #    add` で clone した状態 (= unversioned working tree) の path。 ローカル開発ユース
 #    ケース等で cache が無いことが起きうるため、 セーフティネットとして用意する。
 #
-# **semver 降順** で最新を選ぶ。 v2.0.0 で `_pre_push_review_semver_desc_sort_dirs` (POSIX
-# numeric field sort `sort -t. -k1,1nr -k2,2nr -k3,3nr` + 純数値 X.Y.Z basename フィルタ) を
-# 単一経路として採用。 v1.x までは `sort -V -r 2>/dev/null || sort -r` で lex 降順に fallback
-# していたが、 lex 順では `1.2 > 1.10` となり codex 1.10+ release 時に BSD sort 環境で古い
-# `1.2.x` が選ばれる silent failure 経路があった (audit #5)。 v2.0.0 では GNU `sort -V` 試行
-# を廃止し POSIX field sort 一本に統一することで、 GNU sort / BSD sort / busybox いずれでも
-# 同じ正しい挙動になる。
+# **semver 降順** で最新を選ぶ。 `_pre_push_review_semver_desc_sort_dirs` (POSIX numeric
+# field sort `sort -t. -k1,1nr -k2,2nr -k3,3nr` + 純数値 X.Y.Z basename フィルタ) を単一
+# 経路として使う。 GNU `sort -V` を試行しない理由は、 非対応環境での lex 降順 fallback だと
+# `1.2 > 1.10` と判定され、 codex 1.10 以降で BSD sort 環境が古い `1.2.x` を選ぶ silent
+# failure になるため。 POSIX field sort 一本に統一することで、 GNU sort / BSD sort /
+# busybox いずれでも同じ正しい挙動になる。
 #
 # ## 失敗時の挙動
 #
 # 全候補で companion が見つからなければ非ゼロ exit。 caller は人間可読なエラーメッセージ
 # を出して中断する責務を持つ (= 「codex プラグインが install されていない」 と判明できる)。
-# silent skip は **しない** (pre-push-review の loop discipline 維持の観点で、 「codex
+# silent skip は **しない** (pre-push-codex-review の loop discipline 維持の観点で、 「codex
 # review が実行できない」 ことを silent に通すと未レビュー push の経路を作る)。
 
 # _pre_push_review_semver_desc_sort_dirs <cache_root>

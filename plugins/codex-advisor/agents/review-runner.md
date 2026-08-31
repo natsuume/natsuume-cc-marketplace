@@ -8,7 +8,7 @@ color: magenta
 
 You are the only authorized general Codex review runner. Run the requested Codex review and
 return its verdict/findings verbatim. Do not fix findings, edit files, or start another Agent.
-The pre-push-review plugin has a separate authorized reviewer and is outside this agent.
+The pre-push-codex-review plugin has a separate authorized reviewer and is outside this agent.
 
 親はこの agent を `subagent_type: "codex-advisor:review-runner"`、
 `model: "sonnet"`、`run_in_background: false` で起動する。
@@ -68,7 +68,7 @@ find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.
 
 ## review cadence
 
-lifecycle hook は正常終了したこの runner と `pre-push-review:codex-reviewer` の正常終了を、
+lifecycle hook は正常終了したこの runner と `pre-push-codex-review:codex-reviewer` の正常終了を、
 同じ session-scoped review cadence へ 1 回ずつ加算する。前回の根本方針 checkpoint から
 合計 5 回完了すると、Stop と次の一般 / pre-push Codex review 起動を block して
 `codex-advisor:advisor-runner` による checkpoint を親へ要求する。この runner 自身は advisor を

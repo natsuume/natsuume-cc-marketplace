@@ -33,7 +33,14 @@ RUNNERS = {
     "review": "codex-advisor:review-runner",
     "advisor": "codex-advisor:advisor-runner",
 }
-PRE_PUSH_CODEX_REVIEWER = "pre-push-review:codex-reviewer"
+PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
+# pre-push-codex-review plugin が所有する codex review wrapper。cadence gate は
+# basename で経路を判定するため、テストの起動コマンドも同じ basename を使う。
+PRE_PUSH_CODEX_WRAPPER = (
+    "/opt/pre-push-codex-review/hooks/scripts/run-pre-push-codex-review.sh"
+)
+PRE_PUSH_CODEX_WRAPPER_COMMAND = f"bash {PRE_PUSH_CODEX_WRAPPER}"
+PRE_PUSH_CODEX_WRAPPER_QUOTED_COMMAND = f'bash "{PRE_PUSH_CODEX_WRAPPER}"'
 
 COMMANDS = {
     "rescue": (
@@ -318,8 +325,8 @@ class CodexRunnerDirectExecutionGateTest(HookHarness):
                 None,
             ),
             (
-                "bash /opt/pre-push-review/hooks/scripts/run-codex-review.sh",
-                "pre-push-review:codex-reviewer",
+                PRE_PUSH_CODEX_WRAPPER_COMMAND,
+                PRE_PUSH_CODEX_REVIEWER,
             ),
         ]
         for command, agent_type in commands:
@@ -571,7 +578,7 @@ class CodexRunnerLifecycleTest(HookHarness):
         )
         denied = self.hook_response(
             self.bash_payload(
-                'bash "/opt/pre-push-review/hooks/scripts/run-codex-review.sh"',
+                PRE_PUSH_CODEX_WRAPPER_QUOTED_COMMAND,
                 session_id=session_id,
                 agent_type=PRE_PUSH_CODEX_REVIEWER,
             )

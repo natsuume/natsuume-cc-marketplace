@@ -1,44 +1,34 @@
 #!/bin/bash
-# run-codex-review.sh
-# pre-push-review v1.1.0 で導入された **codex review の定型実行 wrapper**。 v3.0.0 以降は
-# `pre-push-review:codex-reviewer` subagent が本 wrapper を foreground 起動する設計に統一
-# されている。 v4.0.0 では block-bg-codex-wrapper.sh の agent_type gate により、 同 subagent
-# 以外 (メインセッションの直接 Bash 実行等) からの起動は deny される。
+# run-pre-push-codex-review.sh
+# **codex review の定型実行 wrapper**。 `pre-push-codex-review:codex-reviewer` subagent が
+# 本 wrapper を foreground 起動する設計で、 block-bg-codex-wrapper.sh の agent_type gate に
+# より、 同 subagent 以外 (メインセッションの直接 Bash 実行等) からの起動は deny される。
 #
-# ## なぜ wrapper を介すか (v1.0.0 → v1.1.0 の設計変更背景)
+# ## なぜ wrapper を介すか
 #
-# v1.0.0 以前は deny メッセージで `/codex:review --wait --scope branch` (slash command) を
-# 案内していたが、 `/codex:review` の review.md (codex プラグイン公式定義) は AskUserQuestion
+# 公式 codex プラグインの `/codex:review` slash command 定義 (review.md) は AskUserQuestion
 # 分岐で **「review が小さい場合のみ wait 推奨、 それ以外は background 推奨」** という方針を
-# Claude に prompt する設計だった。 結果として:
+# Claude に prompt する。 slash command 経由で案内すると:
 #   - Claude が AskUserQuestion で 「Run in background」 を選択
 #   - Bash tool の `run_in_background: true` で codex companion を起動
-#   - block-bg-codex-review.sh が deny → review 1 サイクル無駄
-# のループが頻発した。 さらに block-bg-codex-review.sh の検知漏れ経路 (parser bug 等)
-# があると background 起動が完走して marker が永久に書かれない silent failure になる。
+#   - background 起動を検知する gate が deny → review 1 サイクル無駄
+# のループが起きる。 さらに検知漏れ経路 (parser bug 等) があると background 起動が完走して
+# codex-reviewer が review 出力を観察できない silent failure になる。
 #
-# wrapper 方式に切り替えると:
+# wrapper 方式では:
 #   1. Claude は wrapper を Bash で呼ぶだけ (Skill expand を経由しない)
 #   2. wrapper 内で `--wait --scope branch` を **hardcode** するため background 起動の余地がない
 #   3. wrapper が完了時に review 対象 hash の pending attestation を書き、
 #      codex-reviewer の parent-safe report 完了後に auto-mark.sh が final marker へ昇格する
 # = Claude の自由度を絞ることで「bg 起動による silent failure」 を構造的に排除する。
 #
-# ## なぜ slash command 定義の patch 拡張ではなく wrapper か (過去の検討記録)
-#
-# v1.0.0 までは公式 codex プラグインの `/codex:review` slash command 定義 (`review.md`) を
-# sed で patch する補助プラグインを用意し、 Skill 経由起動を有効化する方式を採用していた。
-# 同じ抽象の延長で「review.md から AskUserQuestion ブロックを削除する patch を追加 →
-# background 推奨を消す」 という方向もあり得たが、 v1.1.0 は wrapper 方式に切り替えた。 理由:
-#   - **PostToolUse detection が原理的に bg 起動を捕捉できない問題は patch では解けない**:
-#     Claude が `/codex:review` Skill expand 後に `Bash({run_in_background: true})` を返す
-#     経路は、 review.md の AskUserQuestion を消したとしても Claude が独自判断で取りうる
-#     (review.md の Background flow 例の方が消えない限り)。 patch を増やせば増やすほど公式
-#     プラグイン定義との drift が広がり、 codex プラグイン側の version 追従コストが増える
-#   - **hash-bound attestation の構造的価値**: wrapper が review 開始時点の hash を保持するため、
-#     review 中に branch state が変わっても auto-mark.sh は current hash 不一致で final marker
-#     への昇格を拒否できる。wrapper exit 0 だけで final marker を書かず、parent-safe report の
-#     正常完了も要求することで review 実行と親への安全な結果配送を両方完了条件にする
+# 公式 slash command 定義を patch して Skill 経由起動を有効化する方式を採らないのは、
+# (1) Claude が Skill expand 後に `Bash({run_in_background: true})` を返す経路は patch では
+# 塞げない (2) patch を増やすほど公式プラグイン定義との drift が広がり version 追従コストが
+# 増える、 の 2 点による。 wrapper が review 開始時点の hash を保持することで、 review 中に
+# branch state が変わっても auto-mark.sh は current hash 不一致で final marker への昇格を
+# 拒否できる。 wrapper exit 0 だけで final marker を書かず parent-safe report の正常完了も
+# 要求することで、 review 実行と親への安全な結果配送の両方を完了条件にする。
 #
 # ## pending attestation / marker 昇格ポリシー
 #
@@ -50,10 +40,9 @@
 #   - codex review の output 形式 (markdown の `Verdict: approve` 行) は spec ではなく
 #     companion の実装詳細で、 将来変わりうる。 文字列 grep ベースの verdict 判定は脆い
 #   - 「review が指摘を出したら必ず修正してから push」 の判断は Claude の自律性に委ねる方
-#     が運用上自然 (security-reviewer subagent も verdict 判定なしで完了時に marker を書く)
-#   - Claude が指摘を無視して push した場合は、 修正に伴う差分変化で他 2 マーカー (code-review /
-#     security) が失効し、 そちらで loop が回る (本 marker 単独では loop を強制しないが、 v2.0.0 で
-#     3 マーカー全体としては修正を経由する設計に倒れる)
+#     が運用上自然
+#   - Claude が指摘を無視して push した場合は、 修正に伴う差分変化でマーカーが失効し、
+#     次の push で再び review が要求される
 #
 # exit 非 0 (codex review 失敗 / 中断) のときは pending attestation を書かない。起動時に
 # stale pending を削除するため、過去 run の attestation を後続 report が誤利用しない。
@@ -70,42 +59,43 @@
 #
 # wrapper は dirty 判定 / base 検出 / branch / ハッシュ計算 / pending path を **すべて起動時の
 # cwd** で行う (= 「いま居る repo に対して codex review を実行する」 と記録する)。 auto-mark.sh
-# と同じセマンティクスで、 block-pre-push.sh の target-resolver (`cd subrepo && git push` /
+# と同じセマンティクスで、 block-pre-push-codex.sh の target-resolver (`cd subrepo && git push` /
 # `git -C subrepo push` などから push target cwd を解決する) とは非対称。
 #
-# 通常運用 (= session cwd が push 対象 repo と一致) では wrapper と block-pre-push.sh が
+# 通常運用 (= session cwd が push 対象 repo と一致) では wrapper と block-pre-push-codex.sh が
 # 同じ cwd を見るため marker は正しく照合される。 一方、 ユーザが multi-repo workflow で
 # session cwd を A、 push target を B (`cd B && git push` 等) にした場合、 Claude が
 # session cwd A のまま wrapper を起動すると wrapper は A の pending attestation を書き、
-# auto-mark.sh も A の marker を更新し、 block-pre-push.sh
+# auto-mark.sh も A の marker を更新し、 block-pre-push-codex.sh
 # は B の marker を要求するため **hash 不一致で deny** に倒れる (= fail-closed)。 これは
 # auto-mark.sh と同じ安全性質 (= 「push する repo をその cwd で review し直す」 という正しい
 # 挙動を強制するだけで、 未レビュー push を通す bypass にはならない) で、 セキュリティ上
 # の問題ではない。 ただし運用前提として「**wrapper は push 対象 repo の cwd で実行する**」
 # を守る必要がある (= multi-repo で push target を override する場合は、 wrapper も同じ
-# target_cwd で実行する: 例えば `cd subrepo && bash <plugin>/hooks/scripts/run-codex-review.sh`)。
+# target_cwd で実行する: 例えば
+# `cd subrepo && bash <plugin>/hooks/scripts/run-pre-push-codex-review.sh`)。
 #
 # ## hooks/scripts/ 配下に置く理由 (hook ではないのに)
 #
 # 厳密には本 script は `hooks` event に bind されない通常の shell script だが、 既存の lib /
-# helper と path を揃えて参照しやすくするため `hooks/scripts/` 配下に置く。 plugin.json の
+# helper と path を揃えて参照しやすくするため `hooks/scripts/` 配下に置く。 hooks.json の
 # `hooks` 配列には登録しない。 deny メッセージで案内する起動 path は
-# `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-codex-review.sh`。
+# `${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-pre-push-codex-review.sh`。
 
 set -e
 
-_RUN_CODEX_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/diff-hash.sh
-source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/diff-hash.sh"
+source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
-source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/markers.sh"
+source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/markers.sh"
 # shellcheck source=lib/codex-companion-resolver.sh
-source "$_RUN_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
+source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
 
 # ## wrapper では `install_exit_trap` (lib/exit-trap.sh) を **使わない** 理由
 #
-# block-pre-push.sh / auto-mark.sh は通常パスが全て exit 0 (deny は JSON 経由) で、
+# block-pre-push-codex.sh / auto-mark.sh は通常パスが全て exit 0 (deny は JSON 経由) で、
 # `install_exit_trap` の trap は 「真に予期せぬ非ゼロ exit」 のみを diagnostic で
 # 通知する暗黙の contract で動いている。 これに対し本 wrapper は **想定済みの error
 # パス全てで `fail()` → exit 1** を返す設計 (detached HEAD / not a git repo / BASE
@@ -128,9 +118,9 @@ ATTESTATION_TMP=""
 trap 'rm -f "$ATTESTATION_TMP" 2>/dev/null || true' EXIT
 
 # stderr に人間可読のエラーを出して非ゼロ exit する helper。 set -e と組み合わせて使う。
-# EXIT trap で MARKER_TMP の cleanup が走るため fail() 内では明示削除しない。
+# EXIT trap で ATTESTATION_TMP の cleanup が走るため fail() 内では明示削除しない。
 fail() {
-  printf '%s\n' "[run-codex-review] $1" >&2
+  printf '%s\n' "[run-pre-push-codex-review] $1" >&2
   exit 1
 }
 
@@ -141,7 +131,7 @@ rm -f "$PENDING_PATH" || fail "stale codex pending attestation を削除でき�
 
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || fail "detached HEAD では codex review を実行できません。 ブランチを切ってから再実行してください。"
 
-# default branch (master/main) では本プラグインは gate しない設計 (block-pre-push.sh が
+# default branch (master/main) では本プラグインは gate しない設計 (block-pre-push-codex.sh が
 # git-guardrails に委譲して skip する)。 wrapper も同じ前提に従い 「review 不要」 として
 # **exit 0** で抜ける (= fail にしない)。 fail (exit 1) にすると Bash tool 呼び出しが
 # `tool_response.is_error = true` で返るため、 Claude が 「失敗 → 再実行」 ループに乗る経路
@@ -149,7 +139,7 @@ BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || fail "detached HEAD で�
 # 抜けるのが gate 全体の意図 (= 「review 不要」 を正常終了で伝える) と一致する。
 case "$BRANCH" in
   master|main)
-    printf '[run-codex-review] default branch (%s) では本プラグインは gate しません。 codex review は実行不要です。\n' "$BRANCH" >&2
+    printf '[run-pre-push-codex-review] default branch (%s) では本プラグインは gate しません。 codex review は実行不要です。\n' "$BRANCH" >&2
     exit 0
     ;;
 esac
@@ -170,7 +160,7 @@ BASE=$(detect_base_branch) || fail "default branch を検出できませんで�
 # 直書きすると、 dirty 時の exit 1 で `set -e` がトリガーされて script 全体が即 exit し、
 # `_diff_unstaged=$?` の代入も後段の fail() も実行されない (EXIT trap の 「予期せぬエラー」
 # 経路に倒れて diagnostic が壊れる)。 `|| _diff_x=$?` パターンで `||` 右辺に exit code を
-# 取ることで `set -e` を回避しつつ exit code を捕捉する (codex review v1.1.0 fix で導入)。
+# 取ることで `set -e` を回避しつつ exit code を捕捉する。
 _diff_unstaged=0
 git diff --quiet 2>/dev/null || _diff_unstaged=$?
 _diff_staged=0
@@ -182,16 +172,15 @@ if [ "$_diff_unstaged" -ne 0 ] || [ "$_diff_staged" -ne 0 ]; then
   fail "working tree が dirty です (staged または unstaged 変更あり)。 git status で確認 → commit してから再実行してください。 \`/codex:review --scope branch\` は committed 部分のみを review するため、 dirty 状態で attestation を書くと commit 後の状態と hash 衝突を起こす経路があります。"
 fi
 
-# 空 push (レビュー対象となる変更が無い) なら review 実行不要。 これは block-pre-push.sh
-# も同条件で markers gate を skip する挙動と整合する (判定条件・fail-closed 方針・正当性は
-# lib/diff-hash.sh ヘッダの「空 push 判定」セクションを参照)。
+# 空 push (レビュー対象となる変更が無い) なら review 実行不要。 これは
+# block-pre-push-codex.sh も同条件で markers gate を skip する挙動と整合する (判定条件・
+# fail-closed 方針・正当性は lib/diff-hash.sh ヘッダの「空 push 判定」セクションを参照)。
 if is_empty_push "$BASE"; then
   # 進捗 / 完了メッセージは全て stderr に統一する (caller である Bash tool は stdout を
   # tool_response.stdout として受け取るため、 codex review の出力 vs wrapper の status を
-  # 分離して扱える設計に倒す)。 v1.1.0 の初版では 1 行のみ stdout に出していたが、
-  # E16 の指摘で他の status (L131, L132, L153) と一致させた。
-  printf '[run-codex-review] レビュー対象となる変更が無い (空 push) ため codex review は実行不要です。\n' >&2
-  # pending attestation は書かない (空 push 時は block-pre-push.sh が gate を skip するため不要)。
+  # 分離して扱える設計に倒す)。
+  printf '[run-pre-push-codex-review] レビュー対象となる変更が無い (空 push) ため codex review は実行不要です。\n' >&2
+  # pending attestation は書かない (空 push 時は block-pre-push-codex.sh が gate を skip するため不要)。
   exit 0
 fi
 HASH=$(compute_review_hash "$BASE") || fail "branch diff hash の計算に失敗しました。"
@@ -205,8 +194,8 @@ COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つか�
 #
 # 正常完了 (exit 0) のときだけ pending attestation を書く設計。失敗時はエラーメッセージを
 # 出して attestation を書かずに非ゼロ exit する (fail() が exit 1 する)。
-printf '[run-codex-review] codex companion: %s\n' "$COMPANION" >&2
-printf '[run-codex-review] running: node %s review --wait --scope branch\n' "$COMPANION" >&2
+printf '[run-pre-push-codex-review] codex companion: %s\n' "$COMPANION" >&2
+printf '[run-pre-push-codex-review] running: node %s review --wait --scope branch\n' "$COMPANION" >&2
 
 # `if !` で node の成否を直接捕捉する。 set +e / set -e の dance や exit code 変数を使わない:
 # - set -e 配下では `node ...` が非ゼロ exit すると script 全体が即終了するため、 失敗時に
@@ -225,6 +214,6 @@ umask 077
 printf '%s' "$HASH" > "$ATTESTATION_TMP" || fail "codex pending attestation の一時ファイル書き込みに失敗しました。"
 mv "$ATTESTATION_TMP" "$PENDING_PATH" || fail "codex pending attestation の atomic rename に失敗しました。"
 ATTESTATION_TMP=""
-printf '[run-codex-review] codex pending attestation を更新しました: %s\n' "$PENDING_PATH" >&2
+printf '[run-pre-push-codex-review] codex pending attestation を更新しました: %s\n' "$PENDING_PATH" >&2
 
 exit 0

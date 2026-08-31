@@ -29,7 +29,7 @@ const RUNNERS = Object.freeze({
   advisor: "codex-advisor:advisor-runner",
 });
 const LEGACY_RESCUE = "codex:codex-rescue";
-const PRE_PUSH_CODEX_REVIEWER = "pre-push-review:codex-reviewer";
+const PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer";
 const RETRY_LIMIT = 1;
 const REVIEW_CADENCE_LIMIT = 5;
 const REVIEW_CADENCE_OPERATION = "review-cadence";
@@ -438,10 +438,10 @@ function classifyModelLaunch(command) {
     if (script === "run-codex-advisor.sh") {
       return { operation: "advisor", entrypoint: "run-codex-advisor.sh" };
     }
-    if (script === "run-codex-review.sh") {
+    if (script === "run-pre-push-codex-review.sh") {
       return {
         operation: "review",
-        entrypoint: "pre-push-review run-codex-review.sh",
+        entrypoint: "pre-push-codex-review run-pre-push-codex-review.sh",
         cadenceOnly: true,
       };
     }

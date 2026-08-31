@@ -5,8 +5,8 @@ pre-push-review / codex-advisor の各 subagent は現在 `model: inherit` で�
 code-reviewer / security-reviewer は `model: opus` に固定し (effort は Claude Opus 5
 System Card 準拠の撤廃により pin せずセッション既定を継承する)、
 wrapper 起動や job tracking が主目的の codex-reviewer / codex-advisor の 3 runner は
-`model: sonnet` に固定する。あわせて、起動仕様 (review.md の Agent 起動、
-block-pre-push.sh / block-bg-codex-wrapper.sh の deny メッセージ、
+`model: sonnet` に固定する。あわせて、起動仕様 (両 plugin の review.md の Agent 起動、
+block-pre-push.sh / block-pre-push-codex.sh / block-bg-codex-wrapper.sh の deny メッセージ、
 manage-codex-runners.mjs の deny メッセージ、codex-advisor のドキュメント群) にも
 正準文字列 `model: "opus"` / `model: "sonnet"` を明示し、親セッションや利用者が
 起動時に期待すべきモデルを迷わず判断できるようにする。
@@ -16,8 +16,8 @@ security-reviewer は検出した finding を confidence 込みで全件報告�
 分類パスに委ねる契約へ変更する。review.md の修正フローには low confidence finding の
 分類指針 (`Confidence: low`) を追加する。
 
-本テストは spec-first Phase A で実装前の red テストとして追加する。Phase B で上記の
-frontmatter・起動仕様・reviewer 本文が実装されると green になる。
+codex review 経路は plugin `pre-push-codex-review` が所有するため、codex-reviewer の
+agent 定義・起動仕様・deny メッセージの検証対象はそちらの plugin を指す。
 """
 
 from __future__ import annotations
@@ -29,14 +29,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PRE_PUSH = ROOT / "plugins" / "pre-push-review"
+PRE_PUSH_CODEX = ROOT / "plugins" / "pre-push-codex-review"
 CODEX_ADVISOR = ROOT / "plugins" / "codex-advisor"
 
 CODE_REVIEWER = PRE_PUSH / "agents" / "code-reviewer.md"
 SECURITY_REVIEWER = PRE_PUSH / "agents" / "security-reviewer.md"
-CODEX_REVIEWER = PRE_PUSH / "agents" / "codex-reviewer.md"
+CODEX_REVIEWER = PRE_PUSH_CODEX / "agents" / "codex-reviewer.md"
 REVIEW_COMMAND = PRE_PUSH / "commands" / "review.md"
+CODEX_REVIEW_COMMAND = PRE_PUSH_CODEX / "commands" / "review.md"
 BLOCK_PRE_PUSH = PRE_PUSH / "hooks" / "scripts" / "block-pre-push.sh"
-BLOCK_BG_CODEX_WRAPPER = PRE_PUSH / "hooks" / "scripts" / "block-bg-codex-wrapper.sh"
+BLOCK_PRE_PUSH_CODEX = PRE_PUSH_CODEX / "hooks" / "scripts" / "block-pre-push-codex.sh"
+BLOCK_BG_CODEX_WRAPPER = (
+    PRE_PUSH_CODEX / "hooks" / "scripts" / "block-bg-codex-wrapper.sh"
+)
 
 ADVISOR_RUNNER = CODEX_ADVISOR / "agents" / "advisor-runner.md"
 RESCUE_RUNNER = CODEX_ADVISOR / "agents" / "rescue-runner.md"
@@ -59,11 +64,21 @@ SONNET_AGENTS = {
 }
 ALL_PINNED_AGENTS = {**OPUS_AGENTS, **SONNET_AGENTS}
 
-# 変更仕様 2: review.md の起動仕様が近傍に明示すべき model。
-REVIEWER_LAUNCH_MODELS = {
-    "code-reviewer": "opus",
-    "security-reviewer": "opus",
-    "codex-reviewer": "sonnet",
+# 変更仕様 2: 各 review.md の起動仕様が近傍に明示すべき model。core の
+# `/pre-push-review:review` は 2 起動仕様、codex 経路を持つ
+# `/pre-push-codex-review:review` は core 併用時の 3 起動仕様を発出する。
+CORE_LAUNCH_MODELS = {
+    "pre-push-review:code-reviewer": "opus",
+    "pre-push-review:security-reviewer": "opus",
+}
+CODEX_LAUNCH_MODELS = {
+    "pre-push-review:code-reviewer": "opus",
+    "pre-push-review:security-reviewer": "opus",
+    "pre-push-codex-review:codex-reviewer": "sonnet",
+}
+LAUNCH_SPEC_COMMANDS = {
+    REVIEW_COMMAND: CORE_LAUNCH_MODELS,
+    CODEX_REVIEW_COMMAND: CODEX_LAUNCH_MODELS,
 }
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
@@ -149,35 +164,51 @@ class AgentFrontmatterModelPinTest(unittest.TestCase):
 
 
 class ReviewCommandLaunchSpecModelAnnotationTest(unittest.TestCase):
-    """変更仕様 2: review.md の 3 起動仕様が同一行内 60 文字以内で model を明示する。"""
+    """変更仕様 2: 両 plugin の review.md の起動仕様が同一行内 60 文字以内で model を明示する。"""
 
     def test_launch_spec_declares_model_within_60_chars_of_subagent_type(self) -> None:
-        body = read(REVIEW_COMMAND)
-        for reviewer, model in REVIEWER_LAUNCH_MODELS.items():
-            with self.subTest(reviewer=reviewer, model=model):
-                pattern = (
-                    rf'subagent_type: "pre-push-review:{reviewer}".{{0,60}}'
-                    rf'model: "{model}"'
-                )
-                self.assertIsNotNone(
-                    re.search(pattern, body),
-                    f"{reviewer} launch spec is missing a nearby model: \"{model}\"",
-                )
+        for command, launch_models in LAUNCH_SPEC_COMMANDS.items():
+            body = read(command)
+            for subagent_type, model in launch_models.items():
+                with self.subTest(
+                    command=str(command.relative_to(ROOT)),
+                    subagent_type=subagent_type,
+                    model=model,
+                ):
+                    pattern = (
+                        rf'subagent_type: "{re.escape(subagent_type)}".{{0,60}}'
+                        rf'model: "{model}"'
+                    )
+                    self.assertIsNotNone(
+                        re.search(pattern, body),
+                        f"{subagent_type} launch spec is missing a nearby "
+                        f'model: "{model}" in {command}',
+                    )
 
 
 class BlockPrePushMarkerTableModelAnnotationTest(unittest.TestCase):
-    """変更仕様 2: block-pre-push.sh の deny メッセージ内マーカー対応表が model を明示する。"""
+    """変更仕様 2: 各 push gate の deny メッセージが reviewer ごとの model を明示する。
+
+    core の block-pre-push.sh は code / security の 2 マーカー対応表を、codex 経路の
+    block-pre-push-codex.sh は codex-reviewer の単独再走案内を持ち、どちらも起動時に
+    指定すべき model をその場で明示する。
+    """
 
     def test_marker_correspondence_table_declares_model_per_reviewer(self) -> None:
         body = read(BLOCK_PRE_PUSH)
         expected_literals = (
             'subagent_type="pre-push-review:code-reviewer", model="opus"',
-            'subagent_type="pre-push-review:codex-reviewer", model="sonnet"',
             'subagent_type="pre-push-review:security-reviewer", model="opus"',
         )
         for literal in expected_literals:
             with self.subTest(literal=literal):
                 self.assertIn(literal, body)
+
+    def test_codex_gate_deny_message_declares_codex_reviewer_model(self) -> None:
+        self.assertIn(
+            'subagent_type="pre-push-codex-review:codex-reviewer", model="sonnet"',
+            read(BLOCK_PRE_PUSH_CODEX),
+        )
 
 
 class BlockBgCodexWrapperModelAnnotationTest(unittest.TestCase):
@@ -186,7 +217,7 @@ class BlockBgCodexWrapperModelAnnotationTest(unittest.TestCase):
     def test_agent_type_gate_deny_message_declares_codex_reviewer_model(self) -> None:
         body = read(BLOCK_BG_CODEX_WRAPPER)
         self.assertIn(
-            'subagent_type="pre-push-review:codex-reviewer", model="sonnet"', body
+            'subagent_type="pre-push-codex-review:codex-reviewer", model="sonnet"', body
         )
 
     def test_restart_guidance_lines_naming_codex_reviewer_declare_model(self) -> None:
@@ -208,19 +239,21 @@ class BlockBgCodexWrapperModelAnnotationTest(unittest.TestCase):
         """codex review P2 網羅性指摘: agent_type 欠落経路と不一致経路の両方が model を持つ。
 
         両 deny メッセージ (agent_type 欠落 / agent_type 不一致) はそれぞれ独立した
-        REASON heredoc であり、どちらも `subagent_type="pre-push-review:codex-reviewer",
-        model="sonnet"` の案内を含む必要がある。1 回だけの出現では欠落経路のみ・
+        REASON heredoc であり、どちらも
+        `subagent_type="pre-push-codex-review:codex-reviewer", model="sonnet"` の
+        案内を含む必要がある。1 回だけの出現では欠落経路のみ・
         不一致経路のみのいずれかが model 注記を欠いたまま残っている可能性を見逃すため、
         出現回数を 2 以上で assert する。
         """
         body = read(BLOCK_BG_CODEX_WRAPPER)
-        literal = 'subagent_type="pre-push-review:codex-reviewer", model="sonnet"'
+        literal = 'subagent_type="pre-push-codex-review:codex-reviewer", model="sonnet"'
         self.assertGreaterEqual(body.count(literal), 2)
 
     def test_no_model_less_legacy_restart_guidance_remains(self) -> None:
         """model 注記の無い旧形式の起動案内が残っていないことを確認する。"""
         self.assertNotIn(
-            'subagent_type="pre-push-review:codex-reviewer" を起動', read(BLOCK_BG_CODEX_WRAPPER)
+            'subagent_type="pre-push-codex-review:codex-reviewer" を起動',
+            read(BLOCK_BG_CODEX_WRAPPER),
         )
 
 

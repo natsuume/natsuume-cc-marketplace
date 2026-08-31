@@ -37,16 +37,17 @@ Claude Code 側で fable-risk-labeler を install していた場合は、plugin
 
 | プラグイン | バージョン | 説明 |
 |-----------|------------:|------|
-| [git-guardrails](#git-guardrails) | 0.6.3 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
+| [git-guardrails](#git-guardrails) | 0.6.4 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.5.2 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.6.1 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 5.3.3 | `git push` 前に 3 つのレビュー (code review / codex review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-review](#pre-push-review) | 6.0.0 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-codex-review](#pre-push-codex-review) | 1.0.0 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
 | [update-default-branch](#update-default-branch) | 0.4.1 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.10.1 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.25.2 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [ui-discipline](#ui-discipline) | 0.4.3 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.6.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
-| [codex-advisor](#codex-advisor) | 2.0.4 | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧する。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI) |
+| [codex-advisor](#codex-advisor) | 2.1.0 | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧する。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.1 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.3.1 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.2 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
@@ -131,24 +132,22 @@ ignore コメント挿入を編集時に禁止し、 `git commit` 直前に stag
 
 ## pre-push-review
 
-`git push` を実行する前に **3 subagent によるレビュー** (`pre-push-review:code-reviewer` = self-contained correctness バグ検出 + `pre-push-review:codex-reviewer` = codex review wrapper を foreground 起動して結果を parent-safe report に抽象化 + `pre-push-review:security-reviewer` = self-contained security review) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです (`pre-commit-review` の後継)。Anthropic 系 (code-reviewer) と OpenAI 系 (codex-reviewer) の **独立した 2 つのバグレビュー** を重ねる defense-in-depth 構成で、security review が並走することで脆弱性経路も同じ最終形を観点でレビューします。
+`git push` を実行する前に **2 subagent によるレビュー** (`pre-push-review:code-reviewer` = self-contained correctness バグ検出 + `pre-push-review:security-reviewer` = self-contained security review) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです (`pre-commit-review` の後継)。codex review (OpenAI クロスモデルレビュー) の gate は [pre-push-codex-review](#pre-push-codex-review) プラグインが独立して担当します。両プラグインを併用すると、Anthropic 系 (code-reviewer) と OpenAI 系 (codex review) の **独立した 2 つのバグレビュー** に security review を加えた 3 レビュー構成になり、脆弱性経路も同じ最終形を観点でレビューされます。
 
-**v3.0.0 で 3 レビューすべてを subagent 経由に統一**しました (互換破壊あり)。v2.x の Skill `/code-review` と Bash 直接起動の codex review wrapper を、それぞれ `pre-push-review:code-reviewer` / `pre-push-review:codex-reviewer` subagent に置換しています。これにより:
+2 レビューはいずれも subagent 経由で実行されます。これにより:
 
 - **context isolation**: reviewer は raw stdout / stderr、実行可能な command、具体的な再現手順を subagent context に留め、親 session には severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけを返します。追加検証が必要な場合は同じ subagent を resume し、raw detail を親へ流さず結果だけを再要約します。これは agent prompt と contract test で固定する **instruction contract** であり、report 本文を機械検査して情報流出を遮断する **hard security boundary** ではありません。
-- **起動・marker 発行経路の単一化**: 3 軸とも `Agent` / `Task` tool で起動し、`auto-mark.sh` が SubagentStart の launch attestation (開始時 hash の one-shot 記録) と SubagentStop の parent-safe report・hash 束縛を検証して marker を発行します (v4.1.0 で PostToolUse 検知から移行。background 起動でも完了を捕捉)。Codex wrapper は review 開始時点の hash を pending attestation に束縛し、正規 report 完了後にだけ final marker へ昇格します。
-- **`auto-mark.sh` の簡略化と namespace prefix 必須化**: PRECHECK_RE / case 文は subagent_type が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` (**namespace prefix 必須**) の完全一致のみを検知する形に縮みました。v2.x の name-only 受理は廃止 (他 plugin の同名 subagent が push gate marker を誤って書く bypass 経路を構造排除)。Skill 検知も全廃。
-- **`/pre-push-review:review` slash command は 3 subagent 並列発出に書き換え**: deny メッセージとともに案内され、Claude はコマンド本文に固定された 3 `Agent` / `Task` tool call を 1 つのアシスタントメッセージ内で並列発出するだけです。順序揺れや起動漏れによる無駄ループが構造的に排除されます。wall-clock は最遅レビュー 1 本の時間で完了します。
+- **起動・marker 発行経路の単一化**: 2 軸とも `Agent` / `Task` tool で起動し、`auto-mark.sh` が SubagentStart の launch attestation (開始時 hash の one-shot 記録) と SubagentStop の parent-safe report・hash 束縛を検証して marker を発行します (background 起動でも完了を捕捉)。
+- **namespace prefix 必須の subagent 検知**: `auto-mark.sh` の matcher は subagent_type が `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` の完全一致 (**namespace prefix 必須**) のみを検知します (他 plugin の同名 subagent が push gate marker を誤って書く bypass 経路を構造排除)。
+- **`/pre-push-review:review` slash command は 2 subagent 並列発出**: deny メッセージとともに案内され、Claude はコマンド本文に固定された 2 `Agent` / `Task` tool call を 1 つのアシスタントメッセージ内で並列発出するだけです。順序揺れや起動漏れによる無駄ループが構造的に排除されます。wall-clock は最遅レビュー 1 本の時間で完了します。
 
-codex review は v1.1.0 で `/codex:review` slash command 経由から bash wrapper (`run-codex-review.sh`) 経由 foreground 起動 hardcode に切り替えました (Claude が bg を選んで marker を書けず silent failure する経路を構造排除)。v3.0.0 では wrapper の起動を `pre-push-review:codex-reviewer` subagent 内に閉じ込め、v4.0.1 では wrapper output を親へ verbatim relay せず parent-safe report に抽象化する契約を追加しています。security-reviewer / code-reviewer subagent を **self-contained** に保つのは、標準 skill (`/security-review` / `/code-review`) を主 session から直接呼ぶと turn が終了し、subagent 内から invoke しても nested subagent 制約に阻まれるためです。各 subagent は自前の prompt で single-pass review します。修正により branch 全差分 + 未コミット差分が変わると必須マーカーが自動失効するため、Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
+security-reviewer / code-reviewer subagent を **self-contained** に保つのは、標準 skill (`/security-review` / `/code-review`) を主 session から直接呼ぶと turn が終了し、subagent 内から invoke しても nested subagent 制約に阻まれるためです。各 subagent は自前の prompt で single-pass review します。修正により branch 全差分 + 未コミット差分が変わると必須マーカーが自動失効するため、Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
 
 Linked worktree では marker、launch attestation、tombstone を main `.git` 直下ではなく、`git rev-parse --absolute-git-dir` が返す worktree 専用 git-dir (`.git/worktrees/<name>/`) に保存します。push deny メッセージは実際の marker storage を表示するため、main `.git` に残る別 worktree の marker と取り違えずに状態を確認できます。
 
-v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです。cleanup-only な性質上「edits が無くなるまでループ」が必要で並列化に乗らず、cleanup ステップを drop して bug 検出 + bug 検出 (OpenAI) + security の 3 軸に純化しています。CC version 依存の fail-open 緩和 (`lib/first-party-review.sh`) も同時に削除し、3 マーカーは常にすべて必須です。
-
 ### 設計上のメリット
 
-- **commit 履歴の意味的解像度を保てる**: 初期実装 / `/code-review`・codex review 指摘修正 / security 指摘修正をそれぞれ独立 commit として記録できる (`git log` / `blame` / `bisect` の精度が上がる)。`pre-commit-review` ではこれらすべてが 1 commit に圧縮されていた
+- **commit 履歴の意味的解像度を保てる**: 初期実装 / code review 指摘修正 / security 指摘修正をそれぞれ独立 commit として記録できる (`git log` / `blame` / `bisect` の精度が上がる)。`pre-commit-review` ではこれらすべてが 1 commit に圧縮されていた
 - **WIP / checkpoint commit の自由度**: 中間 commit を自由に重ねられるため、長時間 uncommitted 状態による作業損失リスクが減る
 - **Web UI / IDE 経由の PR 作成にも対応**: push 段階で gate するため、PR 作成手段 (`gh CLI` / Web UI / IDE / API) のいずれを使われても **precondition (remote branch の存在) を破壊** することで構造的に PR 成立を阻止できる
 - **多 commit PR の review 回数削減**: PR 全差分に対して 1 周のループで済む (実測ベースで 40-48% の review 回数削減見込み。1-commit PR では同等)
@@ -159,21 +158,53 @@ v1.x の `/simplify` (cleanup-only) マーカーは v2.0.0 で削除済みです
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、3 マーカーが commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。deny メッセージは Claude Code の `/pre-push-review:review` を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
-| `block-bg-codex-wrapper` | PreToolUse (`Bash`) | `run-codex-review.sh` wrapper を Bash tool option `run_in_background: true` または shell-level `&` / `|` で起動する経路を deny する。v3.0.0 では wrapper は通常 `pre-push-review:codex-reviewer` subagent 内から foreground 起動されるが、subagent 内 Bash でも本 hook は発火するため bg 起動防御は引き続き有効 |
-| `auto-mark` | SubagentStart / SubagentStop (reviewer matcher) + PostToolUseFailure (`Agent\|Task`) | 3 reviewer subagent の開始時に launch attestation (開始時 hash の one-shot 記録) を書き、完了時 (SubagentStop) に agent_type・attestation の一回限りの消費・parent-safe report の単一 `Status: pass\|findings` 行・開始時 hash と現在 hash の一致をすべて検証して対応するマーカーへハッシュを書き込む (v4.1.0 で PostToolUse 検知から移行。background 起動でも完了を捕捉し、resume 後の再 stop・レビュー開始後の差分変更は fail-closed に遮断)。codex マーカーは wrapper の pending attestation の一致も要求して final marker へ昇格。PostToolUseFailure では残った codex pending を破棄する |
+| `block-pre-push` | PreToolUse (`Bash`) | `git push` を検知し、2 マーカーが commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。deny メッセージは Claude Code の `/pre-push-review:review` を案内する。default branch (master/main) 上の push は git-guardrails に委譲して skip |
+| `auto-mark` | SubagentStart / SubagentStop (reviewer matcher) | 2 reviewer subagent の開始時に launch attestation (開始時 hash の one-shot 記録) を書き、完了時 (SubagentStop) に agent_type・attestation の一回限りの消費・parent-safe report の単一 `Status: pass\|findings` 行・開始時 hash と現在 hash の一致をすべて検証して対応するマーカーへハッシュを書き込む (background 起動でも完了を捕捉し、resume 後の再 stop・レビュー開始後の差分変更は fail-closed に遮断) |
 
 #### Agents
 
 | Agent 名 | 説明 |
 |---------|------|
 | `code-reviewer` | `git push` 前のレビューループの code review (correctness バグ検出) ステップで起動する self-contained subagent (v3.0.0 で追加)。 logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す。 v2.x までの Skill `/code-review` を置換 |
-| `codex-reviewer` | `git push` 前のレビューループの codex review ステップで起動する最小 subagent (v3.0.0 で追加)。内部で `hooks/scripts/run-codex-review.sh` wrapper を foreground で 1 回起動し、raw output は subagent context に留めて parent-safe report へ抽象化する。wrapper の pending attestation は正規 report 完了後に `auto-mark.sh` が codex-reviewed marker へ昇格する。v2.x までの Bash 直接起動を置換 |
 | `security-reviewer` | `git push` 前のレビューループの security review ステップで起動する self-contained subagent。 input validation / authn / crypto / injection / data exposure の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す。 標準 `/security-review` skill を invoke しないのは、 直接呼ぶと主 session の turn が終了し、 subagent 内から呼んでも標準 skill が要求する nested subagent (Task tool) が Claude Code の制約で動かないため |
 
 ### キーワード
 
-`push` `review` `quality` `codex` `code-review` `security-review` `subagent` `branch-diff` `pr-diff` `parallel`
+`push` `review` `quality` `code-review` `security-review` `subagent` `branch-diff` `pr-diff` `parallel`
+
+---
+
+## pre-push-codex-review
+
+`git push` を実行する前に **codex review** (OpenAI クロスモデルレビュー) の完了を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。単独 install で自立動作し、[pre-push-review](#pre-push-review) core (code review / security review の 2 レビュー gate) と併用すると code / codex / security の 3 レビュー構成になります。
+
+修正や commit 列の変更 (add→revert / amend / rebase 含む) により「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」のハッシュが変わると codex マーカーは自動失効し、Claude は `pre-push-codex-review:codex-reviewer` subagent を再走させる以外に push を通す手段がありません。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `block-pre-push-codex` | PreToolUse (`Bash`) | `git push` を検知し、codex マーカーが commit 列 + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。push 検出・複合コマンド解析・target 解決・dirty-tree gate・空 push 判定・default branch 上での skip (git-guardrails への委譲) は、単独 install でも自立動作できるよう pre-push-review core の `block-pre-push.sh` と同等の判定を独立に実装している |
+| `block-bg-codex-wrapper` | PreToolUse (`Bash`) | codex review wrapper (`run-pre-push-codex-review.sh`) の起動を検証し、`agent_type` が `pre-push-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ deny する。background 起動では subagent が wrapper の stdout / stderr を完全に観察できないため、foreground 起動を強制する |
+| `auto-mark` | SubagentStart / SubagentStop (matcher: `^pre-push-codex-review:codex-reviewer$`) | `pre-push-codex-review:codex-reviewer` subagent の実行完了を検知し、開始時 hash の launch attestation・完了時の一致検証・wrapper が書いた pending attestation との一致をすべて満たした場合のみ codex マーカーを書く |
+
+#### Agents
+
+| Agent 名 | 説明 |
+|---------|------|
+| `codex-reviewer` | codex review wrapper (`run-pre-push-codex-review.sh`) を foreground で 1 回起動し、wrapper の stdout / stderr を subagent context 内で評価して parent-safe markdown report に抽象化する最小 subagent。tools は `Bash, TaskOutput, Read` に制限し、model は `sonnet` に固定する |
+
+### pre-push-review core との併用設計
+
+単独 install でも自立動作するため、共通 gate ロジック (push 検出・target 解決・dirty-tree gate 等) は pre-push-review core と独立に実装しています。deny メッセージも自分が検証するマーカーのみに言及し、core の deny メッセージにも codex マーカーへの言及はありません。両 plugin を併用した場合、`git push` を含む Bash 呼び出しは両方の PreToolUse hook を通過し、どちらか一方でも deny を返せば push は成立しません。
+
+`hooks/scripts/lib/cmd-parser.sh` / `target-resolver.sh` / `diff-hash.sh` は pre-push-review core が canonical で、本プラグインはその byte-identical なコピーを保持します。逆に `hooks/scripts/lib/codex-companion-resolver.sh` は本プラグインが canonical で、[codex-advisor](#codex-advisor) がそのコピーを保持し追従します。
+
+### キーワード
+
+`push` `review` `quality` `codex` `openai` `subagent` `branch-diff` `gate`
 
 ---
 
@@ -333,9 +364,9 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) パターン (実行役のモデルが戦略的な岐路で別の高知能モデルに相談し、plan / course-correction の助言を受け取って続行する構成) を Claude Code に移植し、OpenAI Codex を助言役として利用するプラグインです。本家は Anthropic API のサーバーサイド機能で advisor が Claude モデル限定のため、hook + skill + wrapper script として再構成しています。
 
-Codex は read-only sandbox でリポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコード差分の finding 取得へ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-review](#pre-push-review) が担当します。
+Codex は read-only sandbox でリポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコード差分の finding 取得へ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-codex-review](#pre-push-codex-review) が担当します。
 
-v1.1.0 では `pre-push-review:codex-reviewer` の正常終了と成功した一般 Codex review を session ごとに合算し、5 サイクル完了後は main session の Stop と次の一般 / pre-push Codex review 起動を block します。解除には、元の Goal / 制約、5 サイクルの findings と修正の傾向、現在の仮説を材料に根本方針・問題設定・設計境界・検証戦略を問い直す advisor checkpoint が必要です。通常の advisor 相談ではカウンターを解除しません。
+v1.1.0 では `pre-push-codex-review:codex-reviewer` の正常終了と成功した一般 Codex review を session ごとに合算し、5 サイクル完了後は main session の Stop と次の一般 / pre-push Codex review 起動を block します。解除には、元の Goal / 制約、5 サイクルの findings と修正の傾向、現在の仮説を材料に根本方針・問題設定・設計境界・検証戦略を問い直す advisor checkpoint が必要です。通常の advisor 相談ではカウンターを解除しません。
 
 v1.0.0 では rescue / review / advisor を `codex-advisor:rescue-runner` / `review-runner` / `advisor-runner` の role 固有 foreground subagent に統一しました。main session や通常 subagent から companion / wrapper を直接実行すると PreToolUse hook が deny し、Stop hook が対応 runner への reroute、active Agent の completion 回収、1 回だけの retry を要求します。
 
