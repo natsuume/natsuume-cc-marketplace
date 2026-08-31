@@ -41,7 +41,7 @@ codex-advisor を併用する場合は v2.2.0 以上 (本 plugin の reviewer na
 
 1. Bash コマンド文字列に `gh pr merge` の連続列を含む場合のみ関与する。含まないコマンドには関与しない (無出力)。連続列の検出は粗い文字列判定であり、quoted な言及等で誤爆した場合はコマンドの言い換えで回避できる
 2. 関与したコマンドに `--auto` / `--admin` (遅延 merge 予約・保護 bypass) または `--repo` / `-R` (別 repo の PR を merge しうる repo selector) の文字列を含む場合は deny する (粗い文字列検出でよく、レビューコメントの有無に依らない)
-3. 関与したコマンドが **受理正規形** `gh pr merge [<number>] [flags...]` に完全一致するかを確認する。番号を置けるのは `gh pr merge` の直後の 1 語だけで、それ以降は `-` 始まりのフラグのみを許す。一致しない関与形 — リダイレクト (`> file` / `2>&1` / `10> file` 等)、シェル演算子による連結 (`&&` / `||` / `;` / `|` / `&`)、quote、`$` 展開、フラグより後ろの数字、複数の merge、前置コマンド — は **一律 deny** する (gate の解釈と shell の実挙動が乖離しうるため。リダイレクトや連結を外した単独コマンドへの言い換えで対応する)
+3. 関与したコマンドが **受理正規形** `gh pr merge [<number>] [flags...]` に完全一致するかを確認する (照合の前に、コマンド前後の空行・空白・区切りだけは落とす)。番号を置けるのは `gh pr merge` の直後の 1 語だけで、それ以降は長フラグ (`--name` / `--name=value`) と単文字の短フラグ (`-d` 等) のみを許す。短フラグの束ね形 (`-dR` 等) は受理しない (束の中に repo selector を隠すと `--repo` / `-R` の文字列検出をすり抜けるため)。一致しない関与形 — リダイレクト (`> file` / `2>&1` / `10> file` 等)、シェル演算子による連結 (`&&` / `||` / `;` / `|` / `&`)、quote、`$` 展開、フラグより後ろの数字、複数の merge、前置コマンド — は **一律 deny** する (gate の解釈と shell の実挙動が乖離しうるため。リダイレクトや連結を外した単独コマンドへの言い換えで対応する)
 4. 照合する repo は hook payload の `cwd` (merge が実行されるディレクトリ) を正本とする。`cwd` の欠落・空・非絶対パス・不在ディレクトリ・移動不能はいずれも deny する (hook プロセスの cwd への fallback は持たない)
 5. 対象 PR の解決と head SHA の取得は gh に委ねる (正規形で番号があればその番号、無ければ current branch の PR)。PR 上のレビューコメントのうち、**本文の先頭行**が機械可読 header (`<!-- codex-review: head=<full head SHA> status=pass|findings -->`) で始まり head SHA が完全一致するものが存在すれば無出力で終了し (既定の許可フローに委ねる)、存在しなければ deny する。gh / jq が見つからない・PR を解決できない・取得や照合に失敗した・head SHA が得られない場合もすべて deny する (fail-closed)
 6. deny 時は `pre-merge-codex-review:codex-reviewer` subagent の実行を案内する。レビューは current branch の PR に対して実行・投稿されるため、別 PR を番号指定して merge する場合は、先にその PR のブランチへ `git switch` してから subagent を起動する必要がある旨も併せて案内する
@@ -79,7 +79,8 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 
 - **working tree が dirty なら中断**: codex のレビューは working tree を含む差分を見るため、未コミット変更があると head SHA を記録しながら別内容をレビューすることになります (commit / stash を案内します)
 - **base の妥当性**: PR が記録する base commit (`baseRefOid`) がローカルの `origin/<base>` から到達可能 (ancestor) であることを確認します。到達不能なら 1 度だけ `git fetch origin <base>` して再判定し、それでも到達不能ならレビューも投稿も行いません。base branch は PR 作成後も進むため完全一致は要求せず、レビュー範囲の anchor は `git merge-base HEAD origin/<base>` (GitHub の PR diff と同じ範囲) を使います
-- **空 diff の中断**: merge-base..HEAD の差分が空の場合も、何も見ていない「レビュー済み」コメントを残さないため中断しますtools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
+- **空 diff の中断**: merge-base..HEAD の差分が空の場合も、何も見ていない「レビュー済み」コメントを残さないため中断します
+- **投稿直前の再検証**: codex review 完了後・投稿前に HEAD と working tree の状態を再確認し、レビュー実行中に変化していれば投稿せず中断します (レビューした内容と記録する head SHA の乖離を残さないため)tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
 
 ## 既知の制約
 

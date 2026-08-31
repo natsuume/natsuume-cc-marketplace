@@ -7,16 +7,18 @@
 # ## 何をするか
 #
 # 1. current branch の PR を gh で解決し、 head SHA・base branch・base commit SHA を取得する
-# 2. ローカル HEAD が PR の head SHA と一致することを確認する (一致しなければ、 レビュー
-#    対象と PR の内容が食い違うため実行しない)
-# 3. ローカルの `origin/<base>` が PR の base commit と一致することを確認する (ずれていれば
-#    1 度だけ fetch して再確認し、 それでも一致しなければ実行しない)。 さらに merge-base..HEAD
-#    の差分が空でないことを確認する (空のままレビューすると、 何も見ていない 「レビュー済み」
-#    コメントを残すことになるため)
+#    (取得値は git コマンドへ渡す前に形式を検証する)
+# 2. ローカル HEAD が PR の head SHA と一致し、 working tree が clean であることを確認する
+#    (どちらかを欠くと、 head SHA を記録しながら別内容をレビューした記録を残すことになる)
+# 3. PR が記録する base commit がローカルの `origin/<base>` から到達可能 (ancestor) である
+#    ことを確認する (到達不能なら 1 度だけ fetch して再判定し、 それでも到達不能なら実行
+#    しない)。 さらに merge-base..HEAD の差分が空でないことを確認する (空のままレビューすると、
+#    何も見ていない 「レビュー済み」 コメントを残すことになるため)
 # 4. PR の実 base との merge-base..HEAD 全差分に対して codex review を foreground 実行する
 #    (codex companion に `--base origin/<base>` を渡すと merge-base からの branch diff になる)
-# 5. 完了時に、 機械可読 header + review report を `gh pr review --comment` で PR レビューと
-#    して投稿する
+# 5. 投稿の直前に HEAD と working tree の状態を再確認し、 レビュー中に変化していれば投稿
+#    しない (レビューした内容と記録する head SHA の乖離を残さないため)
+# 6. 機械可読 header + review report を `gh pr review --comment` で PR レビューとして投稿する
 #
 # 投稿する本文の形式:
 #
@@ -91,6 +93,11 @@ BASE_OID=$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid // empty')
 [ -n "$BASE_NAME" ] || fail "PR の base branch を取得できませんでした (gh の応答に baseRefName が含まれていません)。"
 [ -n "$BASE_OID" ] || fail "PR の base commit SHA を取得できませんでした (gh の応答に baseRefOid が含まれていません)。"
 
+# gh の応答値はそのまま git コマンドの引数になるため、 形式を検証してから使う (`-` 始まりの
+# 値が option として解釈される経路と、 想定外の文字を含む ref 名を排除する)。
+printf '%s' "$BASE_OID" | grep -qE '^[0-9a-f]{40}$' || fail "PR の base commit SHA (${BASE_OID}) が 40 桁の 16 進数ではありません。 gh の応答が想定形式と異なるため中断します。"
+printf '%s' "$BASE_NAME" | grep -qE '^[A-Za-z0-9._][A-Za-z0-9._/-]*$' || fail "PR の base branch 名 (${BASE_NAME}) が想定する文字集合 (英数字と \`.\` \`_\` \`/\` \`-\`、 先頭は \`-\` 以外) に収まりません。 gh の応答が想定形式と異なるため中断します。"
+
 # ローカル HEAD と PR head の一致確認。 不一致のままレビューすると、 投稿する header の
 # head SHA (= PR の head) と実際にレビューした内容が食い違うため実行しない。
 LOCAL_HEAD=$(git rev-parse HEAD 2>/dev/null) || fail "ローカル HEAD の SHA を取得できませんでした。"
@@ -103,7 +110,7 @@ fi
 # 異なる内容をレビューする」 乖離が生じ、 投稿するコメントが実態を表さなくなる。
 WORKTREE_STATUS=$(git status --porcelain 2>/dev/null) || fail "git status の実行に失敗しました。 repo の状態を確認してから再実行してください。"
 if [ -n "$WORKTREE_STATUS" ]; then
-  fail "working tree に未コミットの変更があります。 codex review は working tree を含む差分を見るため、 dirty のままでは PR の head (${HEAD_SHA}) と異なる内容をレビューした記録を残すことになります。 変更を commit するか \`git stash\` してから再実行してください。"
+  fail "working tree に未コミットの変更があります (追跡対象の変更・未追跡ファイルのいずれも対象)。 codex review は working tree を含む差分を見るため、 dirty のままでは PR の head (${HEAD_SHA}) と異なる内容をレビューした記録を残すことになります。 追跡対象の変更は commit するか \`git stash\` で退避し、 未追跡ファイルは commit するか repo 外への移動・削除で片付けてから再実行してください (\`git status --porcelain\` の出力が空になる状態が条件です)。"
 fi
 
 # codex companion には base を **branch ref** (`origin/<baseRefName>`) として渡す
@@ -160,11 +167,13 @@ fi
 cat "$REVIEW_OUT"
 
 # findings の有無は codex review 出力の 「指摘なし」 表現の有無で判定する保守的な heuristic。
-# 判定できない場合は findings 側に倒す (「findings 0 件」 を誤って主張しないため)。
-# status は merge gate の判定には影響しない (pass / findings のどちらでも「レビュー済み」
-# として成立する) ため、 誤判定は記録の精度の問題に留まる。
+# 判定できない場合は findings 側に倒す (「findings 0 件」 を誤って主張しないため)。 探索範囲を
+# report の末尾数行に限るのは、 レビュー対象の差分から引用された 「指摘なし」 表現 (report の
+# 中程に現れる) を結論と取り違えないため。 status は merge gate の判定には影響しない
+# (pass / findings のどちらでも「レビュー済み」として成立する) ため、 誤判定は記録の精度の
+# 問題に留まる。
 STATUS="findings"
-if grep -qiE '^[[:space:]]*(no material findings|no findings|no issues found)[[:space:].!]*$' "$REVIEW_OUT"; then
+if tail -n 5 "$REVIEW_OUT" | grep -qiE '^[[:space:]]*(no material findings|no findings|no issues found)[[:space:].!]*$'; then
   STATUS="pass"
 fi
 
@@ -185,6 +194,18 @@ awk -v budget="$MAX_COMMENT_BODY_CHARS" '
   { print }
 ' "$COMMENT_BODY" > "$COMMENT_BODY.capped" || fail "レビュー本文の整形に失敗しました。"
 mv "$COMMENT_BODY.capped" "$COMMENT_BODY" || fail "レビュー本文の差し替えに失敗しました。"
+
+# 投稿直前の再検証。 レビュー実行中に commit / checkout / 編集が入ると、 記録する head SHA と
+# 実際にレビューした内容が乖離する。 投稿は 「この head SHA の内容をレビューした」 という
+# 記録なので、 状態が変わっていたら投稿せず中断する (再実行すれば新しい状態でレビューし直す)。
+POST_REVIEW_HEAD=$(git rev-parse HEAD 2>/dev/null) || fail "投稿前の HEAD 再確認に失敗しました。 レビュー結果は投稿していません。"
+if [ "$POST_REVIEW_HEAD" != "$HEAD_SHA" ]; then
+  fail "codex review の実行中に HEAD が変わりました (${HEAD_SHA} → ${POST_REVIEW_HEAD})。 レビューした内容と記録する head SHA が食い違うため投稿しません。 HEAD が PR の head と一致する状態で再実行してください。"
+fi
+POST_REVIEW_STATUS=$(git status --porcelain 2>/dev/null) || fail "投稿前の working tree 再確認に失敗しました。 レビュー結果は投稿していません。"
+if [ -n "$POST_REVIEW_STATUS" ]; then
+  fail "codex review の実行中に working tree が変更されました。 レビューした内容と記録する head SHA が食い違うため投稿しません。 working tree が clean な状態で再実行してください。"
+fi
 
 # レビュー完了の記録を PR に投稿する。 gh の確認出力は stderr へ回して stdout を review
 # report だけに保つ。

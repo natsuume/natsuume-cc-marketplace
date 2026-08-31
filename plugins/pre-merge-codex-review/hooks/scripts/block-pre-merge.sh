@@ -126,12 +126,35 @@ case "$NORMALIZED" in
     ;;
 esac
 
+# 先頭・末尾の separator (末尾改行や前後の空行が正規化で `;` になったもの) と空白を落とす。
+# コマンドの前後に付くだけの区切りは実行内容に影響しないため、 正規形照合の前に取り除く
+# (**内部** の separator は複数コマンドの連結を意味するので、 落とさず deny の材料に残す)。
+while :; do
+  case "$NORMALIZED" in
+    " "*) NORMALIZED="${NORMALIZED# }" ;;
+    ";"*) NORMALIZED="${NORMALIZED#;}" ;;
+    *) break ;;
+  esac
+done
+while :; do
+  case "$NORMALIZED" in
+    *" ") NORMALIZED="${NORMALIZED% }" ;;
+    *";") NORMALIZED="${NORMALIZED%;}" ;;
+    *) break ;;
+  esac
+done
+
 # 受理正規形との完全一致を要求する。 一致しない関与コマンド (前置コマンドの連結・複数
 # merge・リダイレクト・シェル演算子・quote・`$` 展開・フラグより後ろの数字等) は、 本 script
 # の解釈と shell の実挙動が乖離しうるため一律 deny する。
+#
+# フラグとして受理するのは長フラグ (`--name` / `--name=value`) と **単文字** 短フラグ
+# (`-d` 等) のみ。 短フラグの束ね形 (`-dR` 等) を受理しないのは、 束の中に repo selector
+# (`-R`) を隠すと `--repo` / `-R` の文字列検出をすり抜けて別 repo の PR を merge できて
+# しまうため。
 if ! printf '%s' "$NORMALIZED" \
-  | grep -qE '^gh pr merge( [0-9]+)?( -[A-Za-z0-9=/._:@+-]+)*$'; then
-  deny "マージをブロックしました。 本 gate が解釈できるのは \`gh pr merge [<number>] [flags]\` の単独正規形だけです (対象 PR の番号を置けるのは \`gh pr merge\` の直後のみ、 それ以降は \`-\` 始まりのフラグのみ)。
+  | grep -qE '^gh pr merge( [0-9]+)?(( --[A-Za-z0-9][A-Za-z0-9=/._:@+-]*)|( -[A-Za-z0-9]))*$'; then
+  deny "マージをブロックしました。 本 gate が解釈できるのは \`gh pr merge [<number>] [flags]\` の単独正規形だけです (対象 PR の番号を置けるのは \`gh pr merge\` の直後のみ、 それ以降は長フラグ \`--name\` / \`--name=value\` か単文字の短フラグ \`-d\` のみ。 \`-dR\` のような短フラグの束ね形は受理しません)。
 
 リダイレクト (\`> file\` / \`2>&1\` 等)・他コマンドとの連結 (\`&&\` / \`||\` / \`;\` / \`|\` / \`&\`)・quote・変数展開・複数の merge を含む形は、 gate の解釈と実際の shell の挙動が食い違いうるため受理しません。
 

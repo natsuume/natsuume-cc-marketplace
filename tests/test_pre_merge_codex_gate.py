@@ -508,6 +508,58 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertIsNone(self.decision(result), f"case={label}")
 
+    def test_single_char_short_flags_are_accepted(self) -> None:
+        """単文字の短フラグは正規形として受理する。"""
+        cases = {
+            "delete_branch": f"gh pr merge {PR_NUMBER} -d",
+            "squash": f"gh pr merge {PR_NUMBER} -s",
+            "multiple_single_char": f"gh pr merge {PR_NUMBER} -s -d",
+            "no_target": "gh pr merge -s",
+        }
+        for label, command in cases.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIsNone(self.decision(result), f"case={label}")
+
+    def test_bundled_short_flags_are_denied(self) -> None:
+        """短フラグの束ね形は deny する。
+
+        束の中に repo selector (`-R`) を隠すと `--repo` / `-R` の文字列検出をすり抜けて
+        別 repo の PR を merge できてしまうため、束ね形自体を正規形から外す。
+        """
+        cases = {
+            "bundle_with_repo_and_value": (
+                f"gh pr merge {PR_NUMBER} -dR owner/other"
+            ),
+            "bundle_with_repo": f"gh pr merge {PR_NUMBER} -sR",
+            "bundle_without_repo": f"gh pr merge {PR_NUMBER} -sd",
+            "bundle_no_target": "gh pr merge -dR owner/other",
+        }
+        for label, command in cases.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
+    def test_edge_separators_are_trimmed(self) -> None:
+        """コマンドの前後にある空行・空白は正規形照合の前に落とす
+        (前後の区切りは実行内容に影響しないため)。"""
+        cases = {
+            "trailing_newline": f"gh pr merge {PR_NUMBER} --squash\n",
+            "leading_newline": f"\ngh pr merge {PR_NUMBER} --squash",
+            "surrounding_blank_lines": (
+                f"\n\ngh pr merge {PR_NUMBER} --squash\n\n"
+            ),
+            "surrounding_spaces": f"  gh pr merge {PR_NUMBER} --squash  ",
+            "trailing_semicolon": f"gh pr merge {PR_NUMBER} --squash;",
+        }
+        for label, command in cases.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIsNone(self.decision(result), f"case={label}")
+
     def test_trailing_separator_forms_are_denied(self) -> None:
         """後続コマンドとの連結は正規形に一致しないため deny する。"""
         cases = {
