@@ -10,10 +10,14 @@ pre-merge-codex-review は単独 install でも自立動作するため、push g
 - `hooks/scripts/lib/codex-companion-resolver.sh` は `pre-push-codex-review`
   (`plugins/pre-push-codex-review/hooks/scripts/lib/`) が canonical で、
   pre-merge-codex-review 側はその byte-identical なコピーを保つ。
-- reviewer 一式 4 ファイル (`hooks/scripts/block-bg-codex-wrapper.sh` /
-  `hooks/scripts/auto-mark.sh` / `hooks/scripts/run-pre-merge-codex-review.sh` /
-  `agents/codex-reviewer.md`) は `pre-push-codex-review` の対応ファイルと、
-  namespace 文字列・wrapper basename・marker prefix の置換を除き同型を保つ。
+- reviewer 一式 3 ファイル (`hooks/scripts/block-bg-codex-wrapper.sh` /
+  `hooks/scripts/auto-mark.sh` / `agents/codex-reviewer.md`) は
+  `pre-push-codex-review` の対応ファイルと、namespace 文字列・wrapper basename・
+  marker prefix の置換を除き同型を保つ。
+- wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) は、review 対象の決定
+  (default base 検出ではなく実 PR base) と attestation の内容 (単一 hash ではなく
+  5 key) が pre-push 系と本質的に異なるため、同一性検査の対象外として pre-merge
+  専用に独立実装する (実質差分を持つ部品を無理に共通化しない)。
 
 pre-merge-codex-review 側の対象ファイルは Phase A 時点でまだ存在しない
 (plugin.json / hooks.json / README.md の骨格 3 ファイルのみが存在する) ため、
@@ -66,10 +70,6 @@ REVIEWER_FILE_PAIRS = (
         PUSH_CODEX_ROOT / "hooks" / "scripts" / "auto-mark.sh",
     ),
     (
-        MERGE_ROOT / "hooks" / "scripts" / "run-pre-merge-codex-review.sh",
-        PUSH_CODEX_ROOT / "hooks" / "scripts" / "run-pre-push-codex-review.sh",
-    ),
-    (
         MERGE_ROOT / "agents" / "codex-reviewer.md",
         PUSH_CODEX_ROOT / "agents" / "codex-reviewer.md",
     ),
@@ -78,6 +78,9 @@ REVIEWER_FILE_PAIRS = (
 # 双方向正規化ペア: (merge 側の文字列, push 側の文字列, placeholder)。
 # より長く具体的なパターンを先に適用することで、短いパターン (namespace) が
 # 先に部分文字列を消費してしまう順序依存を避ける。
+# wrapper basename ペアは、wrapper ファイル自体が検査対象外 (独立実装) でも、
+# 検査対象の他ファイル (block-bg-codex-wrapper.sh 等) 内の wrapper 名への言及を
+# 正規化するために必要である。
 NORMALIZATION_PAIRS = (
     (
         "run-pre-merge-codex-review.sh",

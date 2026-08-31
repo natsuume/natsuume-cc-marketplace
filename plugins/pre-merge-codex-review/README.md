@@ -40,12 +40,13 @@ codex-advisor を併用する場合は v2.2.0 以上 (本 plugin の reviewer na
 1. 粗フィルタ (`gh` / `pr` / `merge` の存在) を通過したコマンドを `lib/cmd-parser.sh` でトークン化し、`gh pr merge <PR 番号 | URL 等>` 相当の invocation を検出する。解析不能な形 (未対応の quote / heredoc / indirection 構文等) は保守的に deny する
 2. `--auto` (auto-merge 予約) を検出した場合は marker の有無に関わらず常に deny する。`--auto` は GitHub 側が条件成立を待って後から実 merge するため、予約時点のローカル gate 判定と実 merge 実行のタイミングが分離し、ローカル gate の射程外になる。この経路は fail-closed に deny する
 3. marker (`.claude-pre-merge-codex-reviewed`) を読み、`repo` / `pr` / `merge_base` / `head` / `diff_hash` の 5 key が揃っているかを確認する。marker が無い、または key が欠けていれば deny する
-4. `gh` で merge 対象 PR の実 metadata (PR 番号 / head commit OID / リポジトリ identity) を取得する。取得に失敗したら deny する
-5. marker の `repo` / `pr` / `head` を実 metadata と照合し、1 つでも不一致なら deny する
-6. marker の `merge_base` が base branch との現在の merge-base OID と一致するかを検証する
-7. marker の `diff_hash` を、`lib/diff-hash.sh` の `compute_review_hash_in` と同じ計算式で merge-base..head 全差分から再計算した hash と照合する
-8. ローカル branch HEAD が remote PR head と一致することを検証する
-9. 1〜8 のいずれかで不一致・取得失敗・判定不能があれば deny する (fail-closed)。すべて一致した場合のみ allow し、merge コマンドへ `--match-head-commit <レビュー済み head OID>` を自動付与する (enforce-draft-pr と同型の offset 挿入 + updatedInput 方式)。gate 検証後から実 merge までの間に remote head が更新される TOCTOU は、GitHub 側の `--match-head-commit` 検証が遮断する
+4. `gh pr view [<対象指定>] --json <fields>` で merge 対象 PR の実 metadata (PR 番号 / head commit OID / リポジトリ identity) を取得する。`gh pr merge` の対象指定 (PR 番号 / URL / branch / 省略) は位置引数としてそのまま転送し、`-R` / `--repo` による repo 指定の値も転送する。取得に失敗したら deny する
+5. merge 対象 PR の `isMergeQueueEnabled` (base branch が merge queue を要求するか) を `gh api graphql` で取得し、true なら marker の状態に関わらず deny する (このフィールドは `gh pr view --json` では取得できないため GraphQL を直接使う)。gh は merge queue 必須 branch への `gh pr merge` を `--auto` の有無に依らず即時 merge せず遅延実行 (checks 未完了なら auto-merge 有効化、完了済みなら enqueue) に倒すため、`--auto` と同じ理由でローカル gate の射程外になる
+6. marker の `repo` / `pr` / `head` を実 metadata と照合し、1 つでも不一致なら deny する
+7. marker の `merge_base` が base branch との現在の merge-base OID と一致するかを検証する
+8. marker の `diff_hash` を、`lib/diff-hash.sh` の `compute_review_hash_in` と同じ計算式で merge-base..head 全差分から再計算した hash と照合する
+9. ローカル branch HEAD が remote PR head と一致することを検証する
+10. 1〜9 のいずれかで不一致・取得失敗・判定不能があれば deny する (fail-closed)。すべて一致した場合のみ allow し、merge コマンドの `merge` サブコマンドトークン末尾直後へ ` --match-head-commit <レビュー済み head OID>` を自動挿入する (enforce-draft-pr と同型の offset 挿入 + updatedInput 方式。挿入以外は 1 バイトも変更しない)。コマンドが既に `--match-head-commit` (分離形 / `=` 連結形) を指定している場合は、その値がレビュー済み head OID と一致するときのみ allow してコマンドを書き換えず、異なる OID を指定しているときは deny する。gate 検証後から実 merge までの間に remote head が更新される TOCTOU は、GitHub 側の `--match-head-commit` 検証が遮断する
 
 #### 2. block-bg-codex-wrapper (PreToolUse, matcher: `Bash`)
 
@@ -85,6 +86,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 ## 既知の制約
 
 - **`--auto` は常に deny**: `gh pr merge --auto` は GitHub 側が条件成立を待って後から実 merge を行うため、ローカル gate が判定できるのは予約操作の時点だけであり、実際の merge 実行を検証できません。この経路はサポート外として常に deny します
+- **merge queue 必須の base branch への merge も常に deny**: gh は merge queue が必須の branch への `gh pr merge` を `--auto` の有無に依らず即時 merge せず遅延実行 (checks 未完了なら auto-merge 有効化、完了済みなら enqueue) に倒すため、予約時点と実 merge 実行が分離し、`--auto` と同じ理由でサポート外として deny します。判定には gh 自身が enqueue 判定に使う PR の GraphQL field `isMergeQueueEnabled` を用います (marker の有無に依らず deny)。merge queue をバイパスする `--admin` を付けた場合も同様に deny します
 - **base tip の前進のみでは marker は失効しない**: base branch の tip だけが進み、PR の head commit と merge-base OID が変わらない場合 (= marker の 5 key がすべて維持される場合) は marker を失効させません。この状態で他の変更が base に同時に merge されたことによる semantic conflict (テキスト上は衝突しないが意味的に矛盾する変更) は本 plugin の検証範囲外です
 
 ## pre-push-review / pre-push-codex-review との併用設計
@@ -99,7 +101,9 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 
 `hooks/scripts/lib/codex-companion-resolver.sh` は `pre-push-codex-review` (`plugins/pre-push-codex-review/hooks/scripts/lib/`) が canonical で、本 plugin はその byte-identical なコピーを保持します。
 
-reviewer 一式 4 ファイル (`hooks/scripts/block-bg-codex-wrapper.sh` / `hooks/scripts/auto-mark.sh` / `hooks/scripts/run-pre-merge-codex-review.sh` / `agents/codex-reviewer.md`) は `pre-push-codex-review` の対応ファイルと、namespace 文字列 (`pre-push-codex-review` ↔ `pre-merge-codex-review`)・wrapper basename (`run-pre-push-codex-review.sh` ↔ `run-pre-merge-codex-review.sh`)・marker prefix (`.claude-pre-push-` ↔ `.claude-pre-merge-`) の置換を除き同型です。
+reviewer 一式 3 ファイル (`hooks/scripts/block-bg-codex-wrapper.sh` / `hooks/scripts/auto-mark.sh` / `agents/codex-reviewer.md`) は `pre-push-codex-review` の対応ファイルと、namespace 文字列 (`pre-push-codex-review` ↔ `pre-merge-codex-review`)・wrapper basename (`run-pre-push-codex-review.sh` ↔ `run-pre-merge-codex-review.sh`)・marker prefix (`.claude-pre-push-` ↔ `.claude-pre-merge-`) の置換を除き同型です。
+
+codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) は、review 対象の決定 (default base 検出ではなく実 PR base) と attestation の内容 (単一 hash ではなく 5 key) が pre-push 系と本質的に異なるため、同一性検査の対象外として pre-merge 専用に独立実装します (実質差分を持つ部品を無理に共通化しない)。
 
 `hooks/scripts/lib/markers.sh` は plugin ごとにマーカー集合が異なるため、同一性検査の対象外です。
 
@@ -113,7 +117,7 @@ reviewer 一式 4 ファイル (`hooks/scripts/block-bg-codex-wrapper.sh` / `hoo
 | `hooks/scripts/block-pre-merge.sh` | merge gate 本体 (PreToolUse) |
 | `hooks/scripts/block-bg-codex-wrapper.sh` | codex review wrapper の background 起動検知 (PreToolUse) |
 | `hooks/scripts/auto-mark.sh` | codex マーカーの自動発行 (SubagentStart / SubagentStop / PostToolUseFailure) |
-| `hooks/scripts/run-pre-merge-codex-review.sh` | codex review wrapper 本体 (basename は `pre-push-codex-review` の wrapper と別名) |
+| `hooks/scripts/run-pre-merge-codex-review.sh` | codex review wrapper 本体 (pre-merge 専用の独立実装。basename は `pre-push-codex-review` の wrapper と別名) |
 | `hooks/scripts/lib/cmd-parser.sh` | Bash command のセグメント分割・tokenize (`pre-push-review` からの byte-identical コピー) |
 | `hooks/scripts/lib/target-resolver.sh` | (`pre-push-review` からの byte-identical コピー。本 plugin では merge target の解決に用いる) |
 | `hooks/scripts/lib/diff-hash.sh` | レビューハッシュ計算 (`pre-push-review` からの byte-identical コピー) |
