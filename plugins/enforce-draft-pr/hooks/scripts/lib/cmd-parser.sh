@@ -78,7 +78,7 @@
 # ## 2 つの正規化バリエーション
 #
 #   - `normalize_line_continuations`         : `\<LF>` を **削除** (bash 実挙動と一致)
-#       caller: block-bg-codex-review.sh / auto-mark.sh
+#       caller: regex match の前処理を行う各 plugin の hook
 #       理由 : これらは regex match の前処理。 隣接トークン (`--back\<LF>ground` →
 #              `--background`) を連結する必要がある。
 #   - `normalize_line_continuations_to_space`: `\<LF>` を **空白** に置換

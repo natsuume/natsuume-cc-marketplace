@@ -6,7 +6,7 @@
 
 ## バージョン
 
-v1.0.0
+v1.0.1
 
 ## インストール
 
@@ -21,7 +21,7 @@ claude plugin install pre-merge-codex-review@natsuume-plugins
 claude plugin install codex@openai-codex
 ```
 
-codex-advisor を併用する場合は v2.2.0 以上 (本 plugin の reviewer namespace を cadence 計数対象に含む版) を使用してください。
+review cadence (Codex review 一定回数ごとの checkpoint 強制) の計数は pre-push-codex-review (v2.0.0 以上) の lifecycle hook が担います。本 plugin は pre-push-codex-review との同時 install を前提としないため、本 plugin 単独構成 (個人環境) では review cadence は適用されません (明示的な仕様です)。
 
 ### 依存コマンド
 
@@ -123,5 +123,4 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 ## 関連プラグイン
 
 - [pre-push-review](../pre-push-review/): `git push` 前の push gate (code review / security review の 2 マーカー)。本 plugin の merge gate とは独立に動作し、併用しても互いの gate に影響しません
-- [pre-push-codex-review](../pre-push-codex-review/): 会社環境向けの push 毎 codex review gate。本 plugin と同時に install しない前提です
-- [codex-advisor](../codex-advisor/): review cadence の計数対象に `pre-merge-codex-review:codex-reviewer` の namespace を含みます (v2.2.0 以上)
+- [pre-push-codex-review](../pre-push-codex-review/): 会社環境向けの push 毎 codex review gate。本 plugin と同時に install しない前提です。review cadence の計数対象に `pre-merge-codex-review:codex-reviewer` の namespace を含みます (v2.0.0 以上) が、本 plugin 単独構成では review cadence 自体が適用されません

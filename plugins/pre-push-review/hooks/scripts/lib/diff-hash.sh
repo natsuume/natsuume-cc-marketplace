@@ -3,8 +3,8 @@
 # pre-push-review プラグインで使う「現在のブランチ全差分」のハッシュ計算と
 # 空 push 判定を共通化する。
 #
-# auto-mark.sh / run-codex-review.sh が書き込むハッシュと block-pre-push.sh が検証する
-# ハッシュが 1 文字でも乖離するとマーカーは永遠に一致せず push が通らなくなる致命的な
+# 本 lib を共有する各 plugin の marker 書き込み hook / wrapper が書き込むハッシュと
+# push gate が検証するハッシュが 1 文字でも乖離するとマーカーは永遠に一致せず push が通らなくなる致命的な
 # バグになる。計算式の単一ソースとしてここに集約し、各スクリプトから source して呼び出す。
 #
 # ## ハッシュ計算式 (v3.0.5 / issue #126)
@@ -26,7 +26,7 @@
 #     恒久的に残る)。HEAD の commit OID は親 commit 連鎖を再帰的に束縛するため、
 #     add→revert / amend / rebase / squash など commit 列が変わるあらゆる操作で
 #     マーカーが失効する
-#   - merge-base 束縛行 (issue #126 の codex review 指摘で追加): HEAD 束縛だけでは
+#   - merge-base 束縛行: HEAD 束縛だけでは
 #     「origin/<base> の force-rewrite でレビュー範囲の境界だけが変わる」ケース
 #     (HEAD と net diff は不変のまま origin/<base>..HEAD に未レビュー commit が
 #     入り込む) で stale marker が生き残る。レビュー範囲の両端 (merge-base, HEAD)
@@ -67,7 +67,7 @@
 #   4. index が clean (`git diff-index --quiet --cached HEAD`)
 #   5. working tree が clean (`git diff-files --quiet`)
 #
-# porcelain diff の空検査を使わない理由 (codex review 指摘): textconv / external
+# porcelain diff の空検査を使わない理由: textconv / external
 # diff driver は異なる blob を同一テキストにレンダリングでき、「diff 出力が空」は
 # 「tree が同一」を含意しない。tree OID の直接比較と plumbing (diff-index /
 # diff-files は textconv / external driver を適用しない) で判定する。
@@ -86,12 +86,12 @@
 #
 # ## 利用側
 #
-#   - block-pre-push.sh: dirty-tree gate 通過後・ハッシュ計算前に is_empty_push_in で
-#     空 push を skip し、それ以外は compute_review_hash_in で 3 マーカーを検証する
-#   - run-codex-review.sh: is_empty_push で空 push を skip し、それ以外は
-#     compute_review_hash のハッシュで Codex pending attestation を書く
-#   - auto-mark.sh: compute_review_hash のハッシュで code / security marker を書き、
-#     Codex pending attestation の一致を検証して final marker へ昇格する
+#   - push gate hook: dirty-tree gate 通過後・ハッシュ計算前に is_empty_push_in で
+#     空 push を skip し、それ以外は compute_review_hash_in でマーカーを検証する
+#   - wrapper: is_empty_push で空 push を skip し、それ以外は compute_review_hash の
+#     ハッシュで中間 attestation を書く
+#   - marker 書き込み hook: compute_review_hash のハッシュで marker を書き、
+#     中間 attestation との一致を検証して final marker へ昇格する
 
 # detect_base_branch [<target_cwd>]
 # 出力: default branch 名 (master/main 等)、検出失敗時は空文字列を返し非ゼロで exit
@@ -172,7 +172,7 @@ compute_review_hash_in() {
 }
 
 # is_empty_push <base>
-# is_empty_push_in "" <base> と等価。run-codex-review.sh が現在の cwd に対して使う。
+# is_empty_push_in "" <base> と等価。wrapper が現在の cwd に対して使う。
 is_empty_push() {
   local base="$1"
   is_empty_push_in "" "$base"
@@ -214,7 +214,7 @@ is_empty_push_in() {
   # 範囲が空 (= push すべき新規 commit が無い) 場合も skip 条件を満たす (ループが
   # 0 回で素通りする)。
   # 一致検査は外部コマンド (grep 等) に依存せず pure bash で行う: この lib は
-  # hook 経由だけでなくセッション shell から実行される run-codex-review.sh からも
+  # hook 経由だけでなくセッション shell から実行される wrapper からも
   # source されるため、呼び出し元環境の alias / 関数 export / PATH 差し替えで
   # gate 判定が変わる余地を作らない。OID は hex のみで空白・glob 文字を含まない
   # ため、素の word splitting で安全に列挙できる。

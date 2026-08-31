@@ -11,14 +11,14 @@
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
       "description": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。",
-      "version": "0.6.4",
+      "version": "0.6.5",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
       "name": "enforce-draft-pr",
       "source": "./plugins/enforce-draft-pr",
       "description": "gh pr create に --draft を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft で作成させ、レビューを経て ready 化する運用を支える。",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
@@ -32,7 +32,7 @@
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "git push 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "6.0.0",
+      "version": "6.0.1",
       "keywords": ["push", "review", "quality", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
@@ -46,7 +46,7 @@
       "name": "pre-merge-codex-review",
       "source": "./plugins/pre-merge-codex-review",
       "description": "gh pr merge 前に codex review (OpenAI クロスモデルレビュー) の完了を確認する軽量 merge gate プラグイン。レビュー結果は head SHA 記録付きの PR レビューコメントとして投稿され、gate は現在の head と一致するコメントの有無だけを検査する。個人環境向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させる。",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "keywords": ["merge", "review", "quality", "codex", "openai", "subagent", "pr-diff", "gate"]
     },
     {
@@ -87,8 +87,8 @@
     {
       "name": "codex-advisor",
       "source": "./plugins/codex-advisor",
-      "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧するプラグイン。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI)。",
-      "version": "2.2.0",
+      "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧するプラグイン。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI)。",
+      "version": "3.0.0",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {

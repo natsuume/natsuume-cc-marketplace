@@ -19,7 +19,7 @@ SECURITY_MARKER_NAME=".claude-pre-push-security-reviewed"
 # issue #285: SubagentStart が書く launch attestation (agent_id ごとに 1 ファイル) の prefix。
 # auto-mark.sh の SubagentStart/SubagentStop 契約が「開始時 review hash」を束縛するために使う。
 LAUNCH_ATTESTATION_PREFIX=".claude-pre-push-launch-"
-# issue #285 (codex review P1 指摘): SendMessage による resume で SubagentStart が
+# issue #285: SendMessage による resume で SubagentStart が
 # 同一 agent_id で再発火する環境では、 attestation の「作り直し」がフル review を経ない
 # まま開始 hash を更新してしまう (= resume 後の再 stop が誤って marker を書ける経路)。
 # tombstone は「この agent_id は一度 SubagentStop (stop_hook_active=false) まで到達した」

@@ -90,7 +90,8 @@ Codex-Advisor-Review-Cadence: satisfied
 qualifying request だが plugin / Node 未 install、未認証、timeout 等で Codex を利用できず
 terminal failure になった場合は、既存の fail-open 境界を deadlock させないため直前行を
 `Codex-Advisor-Review-Cadence: unavailable` とする。通常相談が偶然方針に触れても
-カウンター解除を自己判断しない。この予約行がない report は lifecycle hook が不正と扱う。この
+`satisfied` と自己判断しない。この予約行がない report は lifecycle hook が不正と扱う。この
+attestation は pre-push-codex-review plugin の review cadence enforcement が消費する。この
 予約行を含む末尾の footer 一式も、下の ## failure と footer 節と同様にコードフェンス・引用
 ブロックで囲まない。
 
