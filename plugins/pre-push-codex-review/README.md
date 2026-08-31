@@ -55,7 +55,7 @@ push 前レビューを **同じアシスタントメッセージで並列に** 
 
 **ファイル**: `hooks/scripts/block-bg-codex-wrapper.sh`
 
-codex review wrapper (`run-codex-review.sh`) の起動を検証する PreToolUse hook です。hook payload トップレベルの `agent_type` が `pre-push-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ fail-closed に deny します。foreground 起動を強制する理由は、background 起動では `pre-push-codex-review:codex-reviewer` subagent が wrapper の stdout / stderr (= codex review の verdict / findings) を完全に観察できず、正しい parent-safe report を組み立てられないためです。
+codex review wrapper (`run-pre-push-codex-review.sh`) の起動を検証する PreToolUse hook です。hook payload トップレベルの `agent_type` が `pre-push-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ fail-closed に deny します。wrapper の basename を `pre-push-review` core の wrapper (`run-codex-review.sh`) と別名にしているのは、codex gate を持つ版の core と本 plugin が併存する環境で、互いの wrapper 検出 gate (basename ベース) が相手の wrapper 起動を deny し合う干渉を塞ぐためです。foreground 起動を強制する理由は、background 起動では `pre-push-codex-review:codex-reviewer` subagent が wrapper の stdout / stderr (= codex review の verdict / findings) を完全に観察できず、正しい parent-safe report を組み立てられないためです。
 
 #### 3. auto-mark (SubagentStart / SubagentStop, matcher: `^pre-push-codex-review:codex-reviewer$`)
 
@@ -84,7 +84,7 @@ codex review wrapper (`run-codex-review.sh`) の起動を検証する PreToolUse
 
 **ファイル**: `agents/codex-reviewer.md`
 
-codex review wrapper (`hooks/scripts/run-codex-review.sh`) を foreground で 1 回起動し、wrapper の stdout / stderr を subagent context 内で評価して parent-safe markdown report に抽象化する最小 subagent です。
+codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foreground で 1 回起動し、wrapper の stdout / stderr を subagent context 内で評価して parent-safe markdown report に抽象化する最小 subagent です。
 
 **動作**:
 
@@ -119,7 +119,7 @@ codex review wrapper (`hooks/scripts/run-codex-review.sh`) を foreground で 1 
 | `hooks/scripts/block-pre-push-codex.sh` | push gate 本体 (PreToolUse) |
 | `hooks/scripts/block-bg-codex-wrapper.sh` | codex review wrapper の background 起動検知 (PreToolUse) |
 | `hooks/scripts/auto-mark.sh` | codex マーカーの自動発行 (SubagentStart / SubagentStop / PostToolUseFailure) |
-| `hooks/scripts/run-codex-review.sh` | codex review wrapper 本体 |
+| `hooks/scripts/run-pre-push-codex-review.sh` | codex review wrapper 本体 (basename は core の wrapper と別名) |
 | `hooks/scripts/lib/cmd-parser.sh` | Bash command のセグメント分割・tokenize (core からの byte-identical コピー) |
 | `hooks/scripts/lib/target-resolver.sh` | push target cwd の解決 (core からの byte-identical コピー) |
 | `hooks/scripts/lib/diff-hash.sh` | レビューハッシュ計算・空 push 判定 (core からの byte-identical コピー) |
