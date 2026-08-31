@@ -83,7 +83,13 @@ deny() {
   }'
 }
 
-COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')
+# jq が payload の解析に失敗した場合 (壊れた JSON 等) は、 抽出結果が空になるのを 「merge と
+# 無関係」 と読み替えず deny する。 ここに到達している時点で raw payload は粗フィルタを通って
+# おり、 merge コマンドを含む可能性があるため、 判定不能を通過させない (fail-closed)。
+if ! COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty'); then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"マージをブロックしました。 hook payload を解析できず、 codex review 済みかを検証できません。 コマンドを言い換えて再実行しても解消しない場合は、 plugin の不具合として報告してください。"}}'
+  exit 0
+fi
 [ -n "$COMMAND" ] || exit 0
 
 # 正規化: 行継続 `\<改行>` は bash 実挙動と同じく **削除** して前後のトークンを連結する

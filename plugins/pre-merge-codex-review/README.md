@@ -94,6 +94,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 - **base 変更 (retarget) は失効として検出しない**: レビューコメントの照合は head SHA のみで行います。PR の base branch を変更しても head SHA は変わらないため、レビュー対象の差分 (merge-base..head) が変わっても既存のレビューコメントは有効なまま扱われます
 - **受理正規形の外側は拡張しない (stop rule)**: gate が解釈するのは `gh pr merge [<number>] [flags...]` の単独正規形だけです。正規形外の形 (リダイレクト・連結・quote・変数展開等) を許可する parser 拡張は行いません。「除去して近似する」処理は shell の実挙動との乖離を生み、未レビュー merge を通す穴になるためで、必要な操作は単独コマンドへの言い換えで対応してください
 - **照合 repo は hook payload の `cwd` に従う**: gate は payload の `cwd` が指す repo でレビューコメントを照合します。payload の `cwd` が実際にコマンドを実行する shell の cwd と乖離する環境では、gate は payload 側の repo を照合し、その乖離自体は検出できません
+- **remote `origin` = PR の repository が前提 (fork 構成は非対応)**: wrapper はレビュー範囲の base をローカルの `origin/<base>` で解決するため、remote `origin` が PR の属する repository を指す個人環境を前提とします。fork からの PR (origin と PR の repository が異なる構成) には対応しません
 - **merge queue による暗黙の遅延 merge は検出しない**: merge queue が有効な base branch では `--auto` を付けなくても merge が queue 経由の遅延実行になりえますが、gate はこれを検出しません (遅延 merge はサポート外です)
 
 ## pre-push-review / pre-push-codex-review との併用設計

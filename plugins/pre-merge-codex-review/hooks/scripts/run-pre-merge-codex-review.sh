@@ -96,7 +96,14 @@ BASE_OID=$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid // empty')
 # gh の応答値はそのまま git コマンドの引数になるため、 形式を検証してから使う (`-` 始まりの
 # 値が option として解釈される経路と、 想定外の文字を含む ref 名を排除する)。
 printf '%s' "$BASE_OID" | grep -qE '^[0-9a-f]{40}$' || fail "PR の base commit SHA (${BASE_OID}) が 40 桁の 16 進数ではありません。 gh の応答が想定形式と異なるため中断します。"
-printf '%s' "$BASE_NAME" | grep -qE '^[A-Za-z0-9._][A-Za-z0-9._/-]*$' || fail "PR の base branch 名 (${BASE_NAME}) が想定する文字集合 (英数字と \`.\` \`_\` \`/\` \`-\`、 先頭は \`-\` 以外) に収まりません。 gh の応答が想定形式と異なるため中断します。"
+# branch 名は先頭 `-` を拒否したうえで、 妥当性の判定を git 自身の ref 名規則に委ねる
+# (独自の ASCII allowlist を置くと、 有効な Unicode branch 名の PR を恒久的に弾いてしまう)。
+# 先頭 `-` の拒否を先に行うことで、 値が `git check-ref-format` のオプションとして解釈される
+# 余地も塞ぐ。
+case "$BASE_NAME" in
+  -*) fail "PR の base branch 名 (${BASE_NAME}) が \`-\` で始まっています。 git コマンドのオプションとして解釈される値は受け付けません。" ;;
+esac
+git check-ref-format --branch "$BASE_NAME" >/dev/null 2>&1 || fail "PR の base branch 名 (${BASE_NAME}) が git の branch 名規則を満たしません。 gh の応答が想定形式と異なるため中断します。"
 
 # ローカル HEAD と PR head の一致確認。 不一致のままレビューすると、 投稿する header の
 # head SHA (= PR の head) と実際にレビューした内容が食い違うため実行しない。
@@ -116,29 +123,41 @@ fi
 # codex companion には base を **branch ref** (`origin/<baseRefName>`) として渡す
 # (companion 経由で codex に渡る base は branch 名として扱われるため)。 レビュー範囲の正しさは
 # wrapper 側で担保する: PR が記録する base commit (`baseRefOid`) が、 ローカルの
-# `origin/<baseRefName>` から到達可能 (ancestor) であることを確認する。 base branch は PR 作成後
+# remote-tracking ref から到達可能 (ancestor) であることを確認する。 base branch は PR 作成後
 # も進むため完全一致は要求しない (一致を要求すると、 base が 1 commit 進んだだけの PR で
 # レビューが永久に実行できなくなる)。 到達不能なら 1 度だけ fetch して再判定し、 それでも
 # 到達不能なら 「ローカルの base が PR の base branch を表していない」 状態なので、 誤った範囲を
 # レビューして 「レビュー済み」 コメントを残さないよう実行しない。
+#
+# ref の指定は 2 系統を使い分ける: wrapper 内の git 操作はすべて完全修飾
+# (`refs/remotes/origin/<base>`) で行い、 companion へ渡す `--base` だけは shorthand
+# (`origin/<base>`) を使う (codex は branch 名を期待するため)。 shorthand は
+# `refs/heads/origin/<base>` という名前のローカル branch があるとそちらへ解決されうるので、
+# その shadow branch が存在する場合は 「検証した ref と codex がレビューする ref が乖離する」
+# ため実行しない。
 BASE_REF="origin/${BASE_NAME}"
+BASE_REF_FULL="refs/remotes/origin/${BASE_NAME}"
+
+if git show-ref --verify --quiet "refs/heads/${BASE_REF}"; then
+  fail "ローカルに \`${BASE_REF}\` という名前の branch があります。 この名前は remote-tracking ref (\`${BASE_REF_FULL}\`) を隠し、 wrapper が検証する ref と codex がレビューする ref が食い違う原因になります。 当該ローカル branch を改名 (\`git branch -m ${BASE_REF} <new-name>\`) または削除 (\`git branch -D ${BASE_REF}\`) してから再実行してください。"
+fi
 
 base_oid_is_in_origin_base() {
-  git rev-parse --verify --quiet "refs/remotes/origin/${BASE_NAME}" >/dev/null 2>&1 || return 1
-  git merge-base --is-ancestor "$BASE_OID" "refs/remotes/origin/${BASE_NAME}" 2>/dev/null
+  git rev-parse --verify --quiet "$BASE_REF_FULL" >/dev/null 2>&1 || return 1
+  git merge-base --is-ancestor "$BASE_OID" "$BASE_REF_FULL" 2>/dev/null
 }
 
 if ! base_oid_is_in_origin_base; then
-  note "PR の base commit (${BASE_OID}) がローカルの ${BASE_REF} に含まれないため fetch します。"
+  note "PR の base commit (${BASE_OID}) がローカルの ${BASE_REF_FULL} に含まれないため fetch します。"
   git fetch origin "$BASE_NAME" >&2 || fail "\`git fetch origin ${BASE_NAME}\` に失敗しました。 ネットワークと remote の状態を確認してから再実行してください。"
   if ! base_oid_is_in_origin_base; then
-    fail "PR #${PR_NUMBER} の base commit (${BASE_OID}) が fetch 後もローカルの ${BASE_REF} に含まれません。 ローカルの base ref が PR の base branch (${BASE_NAME}) を表していない可能性があります (別 remote を指す PR / base branch の force-push 等)。 remote の設定と \`git fetch origin ${BASE_NAME}\` の結果を確認してから再実行してください。"
+    fail "PR #${PR_NUMBER} の base commit (${BASE_OID}) が fetch 後もローカルの ${BASE_REF_FULL} に含まれません。 ローカルの base ref が PR の base branch (${BASE_NAME}) を表していない可能性があります (別 remote を指す PR / base branch の force-push 等)。 remote の設定と \`git fetch origin ${BASE_NAME}\` の結果を確認してから再実行してください。"
   fi
 fi
 
 # レビュー対象範囲 (merge-base..HEAD) に差分が無い状態でレビューすると、 何も見ていない
 # 「レビュー済み」 コメントを PR に残すことになるため実行しない。
-MERGE_BASE=$(git merge-base HEAD "$BASE_REF" 2>/dev/null) || fail "HEAD と ${BASE_REF} の merge-base を解決できませんでした (shallow clone / 履歴の不足が考えられます)。 \`git fetch --unshallow\` 等で履歴を補ってから再実行してください。"
+MERGE_BASE=$(git merge-base HEAD "$BASE_REF_FULL" 2>/dev/null) || fail "HEAD と ${BASE_REF_FULL} の merge-base を解決できませんでした (shallow clone / 履歴の不足が考えられます)。 \`git fetch --unshallow\` 等で履歴を補ってから再実行してください。"
 if git diff --quiet "$MERGE_BASE" HEAD 2>/dev/null; then
   fail "レビュー対象の差分が空です (merge-base ${MERGE_BASE} と HEAD が同一内容)。 PR に差分がある状態で再実行してください。"
 fi

@@ -922,5 +922,54 @@ class PreMergeGateHeaderAnchorTest(unittest.TestCase):
                 self.assertIsNone(self.decision(result), f"case={label}")
 
 
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq"),
+    "gate integration requires bash and jq",
+)
+class PreMergeGateMalformedPayloadTest(unittest.TestCase):
+    """payload を解析できない場合の fail-closed 契約。
+
+    粗フィルタを通過した payload の解析に失敗したときに「merge と無関係」と読み替えて
+    通過させると、未レビュー merge が素通りする。解析できない状態は deny に倒す。
+    """
+
+    def run_gate(self, raw_payload: bytes) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["bash", str(GATE)],
+            input=raw_payload,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=ROOT,
+        )
+
+    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
+        if not result.stdout.strip():
+            return None
+        response = json.loads(result.stdout)
+        return response["hookSpecificOutput"]["permissionDecision"]
+
+    def test_malformed_payload_with_merge_shape_is_denied(self) -> None:
+        """粗フィルタにかかる形の壊れた JSON は deny する。"""
+        cases = {
+            "truncated": b'{"tool_input": {"command": "gh pr merge 123"',
+            "not_json": b'gh pr merge 123 --squash',
+            "trailing_garbage": (
+                b'{"tool_input": {"command": "gh pr merge 123"}} }}'
+            ),
+        }
+        for label, raw in cases.items():
+            with self.subTest(case=label):
+                result = self.run_gate(raw)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
+    def test_malformed_payload_without_merge_shape_is_ignored(self) -> None:
+        """粗フィルタにかからない壊れた payload には関与しない (無出力)。"""
+        result = self.run_gate(b'{"tool_input": {"command": "printf hello"')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout, b"")
+
+
 if __name__ == "__main__":
     unittest.main()
