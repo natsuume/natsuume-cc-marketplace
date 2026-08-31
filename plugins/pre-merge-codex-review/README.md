@@ -78,7 +78,7 @@ wrapper はレビュー完了時に、結果を `gh pr review --comment` で対�
 codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foreground で 1 回起動し、wrapper の stdout / stderr を subagent context 内で評価して parent-safe markdown report に抽象化する最小 subagent です。wrapper は **current branch の PR** を gh で解決し、その PR の実 base との merge-base..head 全差分に対して codex review を実行して、完了時に結果を当該 PR のレビューとして投稿します (ローカル HEAD が PR の head SHA と一致しない場合は、投稿する head SHA と実際にレビューした内容が食い違うため実行せず中断します)。別の PR をレビューさせたい場合は、その PR のブランチへ `git switch` してから起動してください。レビュー範囲と対象内容は wrapper 側で束縛します:
 
 - **working tree が dirty なら中断**: codex のレビューは working tree を含む差分を見るため、未コミット変更があると head SHA を記録しながら別内容をレビューすることになります (commit / stash を案内します)
-- **base の妥当性**: PR が記録する base commit (`baseRefOid`) がローカルの `origin/<base>` から到達可能 (ancestor) であることを確認します。到達不能なら 1 度だけ `git fetch origin <base>` して再判定し、それでも到達不能ならレビューも投稿も行いません。base branch は PR 作成後も進むため完全一致は要求せず、レビュー範囲の anchor は `git merge-base HEAD origin/<base>` (GitHub の PR diff と同じ範囲) を使います
+- **base の妥当性**: PR が記録する base commit (`baseRefOid`) がローカルの `origin/<base>` から到達可能 (ancestor) であることを確認します。到達不能なら 1 度だけ明示 refspec (`git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>`) で fetch して再判定し、それでも到達不能ならレビューも投稿も行いません。base branch は PR 作成後も進むため完全一致は要求せず、レビュー範囲の anchor は `git merge-base HEAD origin/<base>` (GitHub の PR diff と同じ範囲) を使います
 - **空 diff の中断**: merge-base..HEAD の差分が空の場合も、何も見ていない「レビュー済み」コメントを残さないため中断します
 - **投稿直前の再検証**: codex review 完了後・投稿前に HEAD と working tree の状態を再確認し、レビュー実行中に変化していれば投稿せず中断します (レビューした内容と記録する head SHA の乖離を残さないため)tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
 

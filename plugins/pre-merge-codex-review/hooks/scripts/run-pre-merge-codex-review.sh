@@ -104,6 +104,20 @@ case "$BASE_NAME" in
   -*) fail "PR の base branch 名 (${BASE_NAME}) が \`-\` で始まっています。 git コマンドのオプションとして解釈される値は受け付けません。" ;;
 esac
 git check-ref-format --branch "$BASE_NAME" >/dev/null 2>&1 || fail "PR の base branch 名 (${BASE_NAME}) が git の branch 名規則を満たしません。 gh の応答が想定形式と異なるため中断します。"
+# ref 名として妥当でも、 下流の外部プロセス (codex companion → codex CLI) がこの値をどう解釈
+# するかは本 wrapper から検証できない。 shell のメタ文字だけを狭く拒否する (Unicode を含む
+# 一般的な branch 名はそのまま通す)。
+BASE_NAME_FORBIDDEN_CHARS='$`"'"'"';&|<>()!'
+_forbidden_index=0
+while [ "$_forbidden_index" -lt "${#BASE_NAME_FORBIDDEN_CHARS}" ]; do
+  _forbidden_char="${BASE_NAME_FORBIDDEN_CHARS:$_forbidden_index:1}"
+  case "$BASE_NAME" in
+    *"$_forbidden_char"*)
+      fail "PR の base branch 名 (${BASE_NAME}) に shell のメタ文字 (\`${_forbidden_char}\`) が含まれています。 下流の外部プロセスでの解釈を検証できないため中断します。"
+      ;;
+  esac
+  _forbidden_index=$((_forbidden_index+1))
+done
 
 # ローカル HEAD と PR head の一致確認。 不一致のままレビューすると、 投稿する header の
 # head SHA (= PR の head) と実際にレビューした内容が食い違うため実行しない。
@@ -131,16 +145,19 @@ fi
 #
 # ref の指定は 2 系統を使い分ける: wrapper 内の git 操作はすべて完全修飾
 # (`refs/remotes/origin/<base>`) で行い、 companion へ渡す `--base` だけは shorthand
-# (`origin/<base>`) を使う (codex は branch 名を期待するため)。 shorthand は
-# `refs/heads/origin/<base>` という名前のローカル branch があるとそちらへ解決されうるので、
-# その shadow branch が存在する場合は 「検証した ref と codex がレビューする ref が乖離する」
-# ため実行しない。
+# (`origin/<base>`) を使う (codex は branch 名を期待するため)。 shorthand の解決は
+# `refs/<name>` → `refs/tags/<name>` → `refs/heads/<name>` → remote-tracking の順に候補を見る
+# ため、 これら先行 namespace に `origin/<base>` という名前の ref があると remote-tracking ref
+# が隠され、 「wrapper が検証する ref」 と 「codex がレビューする ref」 が乖離する。 該当する
+# ref が 1 つでも存在する場合は実行しない。
 BASE_REF="origin/${BASE_NAME}"
 BASE_REF_FULL="refs/remotes/origin/${BASE_NAME}"
 
-if git show-ref --verify --quiet "refs/heads/${BASE_REF}"; then
-  fail "ローカルに \`${BASE_REF}\` という名前の branch があります。 この名前は remote-tracking ref (\`${BASE_REF_FULL}\`) を隠し、 wrapper が検証する ref と codex がレビューする ref が食い違う原因になります。 当該ローカル branch を改名 (\`git branch -m ${BASE_REF} <new-name>\`) または削除 (\`git branch -D ${BASE_REF}\`) してから再実行してください。"
-fi
+for _shadow_ref in "refs/${BASE_REF}" "refs/tags/${BASE_REF}" "refs/heads/${BASE_REF}"; do
+  if git show-ref --verify --quiet "$_shadow_ref"; then
+    fail "ローカルに \`${_shadow_ref}\` があります。 この ref は shorthand \`${BASE_REF}\` の解決で remote-tracking ref (\`${BASE_REF_FULL}\`) より先に選ばれ、 wrapper が検証する ref と codex がレビューする ref が食い違う原因になります。 当該 ref を改名または削除してから再実行してください。"
+  fi
+done
 
 base_oid_is_in_origin_base() {
   git rev-parse --verify --quiet "$BASE_REF_FULL" >/dev/null 2>&1 || return 1
@@ -149,7 +166,9 @@ base_oid_is_in_origin_base() {
 
 if ! base_oid_is_in_origin_base; then
   note "PR の base commit (${BASE_OID}) がローカルの ${BASE_REF_FULL} に含まれないため fetch します。"
-  git fetch origin "$BASE_NAME" >&2 || fail "\`git fetch origin ${BASE_NAME}\` に失敗しました。 ネットワークと remote の状態を確認してから再実行してください。"
+  # 明示 refspec で fetch する。 refspec を省略すると single-branch clone 等では FETCH_HEAD
+  # しか更新されず、 再判定が読む完全修飾 ref が更新されないまま恒久的に fail する。
+  git fetch origin "+refs/heads/${BASE_NAME}:${BASE_REF_FULL}" >&2 || fail "\`git fetch origin +refs/heads/${BASE_NAME}:${BASE_REF_FULL}\` に失敗しました。 ネットワークと remote の状態を確認してから再実行してください。"
   if ! base_oid_is_in_origin_base; then
     fail "PR #${PR_NUMBER} の base commit (${BASE_OID}) が fetch 後もローカルの ${BASE_REF_FULL} に含まれません。 ローカルの base ref が PR の base branch (${BASE_NAME}) を表していない可能性があります (別 remote を指す PR / base branch の force-push 等)。 remote の設定と \`git fetch origin ${BASE_NAME}\` の結果を確認してから再実行してください。"
   fi
