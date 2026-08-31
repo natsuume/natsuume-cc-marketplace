@@ -29,7 +29,7 @@ claude plugin install codex@openai-codex
 claude plugin install pre-push-review@natsuume-plugins
 ```
 
-codex-advisor を併用する場合は v2.1.0 以上 (本 plugin の reviewer namespace を cadence 計数対象に含む版) を使用してください。
+checkpoint 実行の companion として `codex-advisor` を併用する場合は **v3.0.0 以上**を使用してください。companion の役割は checkpoint の実行 (`codex-advisor:advisor-runner` の起動と attestation の発行) のみであり、review cadence の計数・enforcement は本 plugin (v2.0.0 以上) が単独で担います。cadence を自身で持つ v2.x 系の `codex-advisor` と本 plugin を併用すると、独立した cadence カウンターが二重に走り、それぞれが review 起動 deny / main session の Stop block を行うため非推奨です。
 
 ### 依存コマンド
 
@@ -135,7 +135,7 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 1. advisor runner が checkpoint request の成功を `Codex-Advisor-Review-Cadence: satisfied` で証明したとき
 2. advisor runner が checkpoint request を完了できないことを `unavailable` で証明したとき (terminal-failure)
-3. checkpoint 相談 (相談 request に `<review_cycle_checkpoint>` を含む) の `codex-advisor:advisor-runner` が実行を開始した後に失敗したとき (PostToolUseFailure。fail-open — codex-advisor 未 install 環境で checkpoint が解除不能な block にならないようにする)。`<review_cycle_checkpoint>` を含まない通常の advisor 相談の起動失敗、およびユーザ interrupt による abort (`is_interrupt: true`) はこの経路に含まれない。`codex-advisor:advisor-runner` という agent 自体が存在せず起動が実行開始前の validation で拒否された場合はこの hook が発火せず自動解除されないため、[state](#state) の手動 reset (state ファイル削除) で解除する
+3. checkpoint 相談 (相談 request に `<review_cycle_checkpoint>` を含む) の `codex-advisor:advisor-runner` の起動失敗が PostToolUseFailure として本 script に到達したとき (fail-open — codex-advisor 未 install 環境で checkpoint が解除不能な block にならないようにする)。`<review_cycle_checkpoint>` を含まない通常の advisor 相談の起動失敗、およびユーザ interrupt による abort (`is_interrupt: true`) はこの経路に含まれない。起動失敗が本 script に到達しない失敗形・環境では自動解除されないため、その場合は [state](#state) の手動 reset (state ファイル削除) で解除する
 
 ### state
 
@@ -145,7 +145,7 @@ review cadence の state は session ごとに 1 ファイル (ファイル名�
 
 ### codex-advisor 連携
 
-checkpoint の実行には `codex-advisor` plugin の install が必要です。`codex-advisor:advisor-runner` が実行を開始した後に失敗した場合 (未認証・timeout 等) は、PostToolUseFailure hook がその失敗 (相談 request に `<review_cycle_checkpoint>` を含む場合のみ) を fail-open として扱ってカウンターを reset するため、block は解除されて続行できます。一方、codex-advisor 未 install で `codex-advisor:advisor-runner` という agent 自体が存在しない場合は、起動が実行開始前の validation で拒否され PostToolUseFailure 自体が発火しないため自動解除されません。この場合は codex-advisor plugin の install が必要であることをユーザに報告したうえで、[state](#state) の手動 reset (state ファイル削除) で解除してください。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
+checkpoint の実行には `codex-advisor` plugin の install が必要です。まず必ず `codex-advisor:advisor-runner` の foreground 起動を試みてください。起動失敗 (未認証・timeout・plugin 未 install 等) が PostToolUseFailure として本 script に到達すれば (相談 request に `<review_cycle_checkpoint>` を含む場合のみ)、fail-open としてカウンターを reset するため block は解除されて続行できます。起動を試みた後も block が解除されない場合は、codex-advisor plugin の install が必要であることをユーザに報告したうえで、[state](#state) の手動 reset (state ファイル削除) で解除してください。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
 
 ## pre-push-review core との併用設計
 

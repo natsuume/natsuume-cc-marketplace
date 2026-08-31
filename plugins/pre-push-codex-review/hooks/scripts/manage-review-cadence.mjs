@@ -31,14 +31,11 @@
  *     相談の起動失敗であること) が checkpoint 要求中に発火した場合、`unavailable`
  *     相当としてカウンターを reset する (codex-advisor 未 install 環境で checkpoint が
  *     解除不能な block にならないため)。通常の advisor 相談 (request に
- *     `<review_cycle_checkpoint>` を含まない) の起動失敗では reset しない。
- *     PostToolUseFailure は Claude Code hooks の契約上 2 つの限界を持つ: (a) `is_interrupt`
- *     が true (ユーザの Esc/Ctrl+C による abort) の場合は reset しない (cancel はカウンターを
- *     reset しないという契約との整合) (b) 起動が受理される前に validation で拒否された失敗
- *     (agent_type が存在しない等) ではこの hook 自体が発火しないため、codex-advisor 未
- *     install 環境で advisor-runner という agent 自体が存在しない場合は自動 reset されない
- *     ことがある。その場合は相談できないことと codex-advisor の install が必要なことを
- *     ユーザに報告する運用で補う
+ *     `<review_cycle_checkpoint>` を含まない) の起動失敗では reset しない。`is_interrupt` が
+ *     true (ユーザの Esc/Ctrl+C による abort) の場合も reset しない (cancel はカウンターを
+ *     reset しないという契約との整合)。この起動失敗が PostToolUseFailure として本 script に
+ *     到達すれば fail-open で自動 reset される。到達しない失敗形・環境では自動 reset されない
+ *     ため、その場合は state の手動 reset (state ファイル削除) が解除手段になる
  *
  * enforcement:
  *   - PreToolUse (Bash): checkpoint 要求中 (完了 review が 5 回に達している間) は、
@@ -532,7 +529,7 @@ function handleStop(input) {
   if (!state?.checkpointRequired) return null;
   return {
     decision: "block",
-    reason: `Codex review が前回の根本方針 checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet", run_in_background: false で foreground 起動してください。相談 request の <review_cycle_checkpoint> には次の 4 項目を省略せず含めます: Goal と受入基準・制約 / 直近 ${REVIEW_CADENCE_LIMIT} サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。通常の advisor 相談では解除されません。相談 request に <review_cycle_checkpoint> を含む checkpoint 相談の起動失敗に限り、その起動失敗をもって解除されます (fail-open)。ただし ${ADVISOR_CHECKPOINT_RUNNER} が存在しない等、起動が受理される前に validation で拒否された場合はこの hook 自体が発火せず自動解除されません — その場合は codex-advisor plugin の install が必要であることをユーザに報告してください。`,
+    reason: `Codex review が前回の根本方針 checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。まず必ず ${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet", run_in_background: false で foreground 起動してください。相談 request の <review_cycle_checkpoint> には次の 4 項目を省略せず含めます: Goal と受入基準・制約 / 直近 ${REVIEW_CADENCE_LIMIT} サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。通常の advisor 相談では解除されません。起動に失敗した場合、その起動失敗が fail-open reset を発火させることがあります。起動を試みた後も block が解除されない場合に限り、codex-advisor plugin の install が必要であることをユーザに報告してください (state の手動 reset 手順は plugin README に記載)。`,
   };
 }
 
