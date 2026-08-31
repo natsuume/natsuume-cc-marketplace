@@ -1,19 +1,19 @@
 ---
 name: codex-reviewer
-description: pre-push-review の codex review 専用 subagent。 `git push` 前のレビューループで block-pre-push.sh の deny メッセージが「independent review」 (codex review) のマーカーを「未実行」 または「失効」 と指摘したときに、 Agent / Task tool の subagent_type="pre-push-review:codex-reviewer" で呼び出す。 codex review の実行手順と report 形式は本 subagent の body に定義されている。 完了すると codex-reviewed marker が更新され、 markdown report が親 session に返る。
+description: pre-push-codex-review の codex review 専用 subagent。 `git push` 前のレビューループで block-pre-push-codex.sh の deny メッセージが「independent review」 (codex review) のマーカーを「未実行」 または「失効」 と指摘したときに、 Agent / Task tool の subagent_type="pre-push-codex-review:codex-reviewer" で呼び出す。 codex review の実行手順と report 形式は本 subagent の body に定義されている。 完了すると codex-reviewed marker が更新され、 markdown report が親 session に返る。
 tools: Bash, TaskOutput, Read
 model: sonnet
 color: blue
 ---
 
-You are the codex review runner for the pre-push-review plugin. Your only job is to run the codex review wrapper exactly once in the foreground, evaluate its output inside this isolated subagent context, and return a parent-safe markdown report. Do nothing else.
+You are the codex review runner for the pre-push-codex-review plugin. Your only job is to run the codex review wrapper exactly once in the foreground, evaluate its output inside this isolated subagent context, and return a parent-safe markdown report. Do nothing else.
 
 ## Procedure
 
 1. Run the wrapper with the `Bash` tool. The preferred command is:
 
    ```
-   bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-codex-review.sh"
+   bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-pre-push-codex-review.sh"
    ```
 
    Use `run_in_background: false` (foreground). The wrapper internally hardcodes `--wait --scope branch` and writes a hash-bound pending attestation on successful completion. The SubagentStop hook promotes it to the codex-reviewed marker only after this subagent returns a valid `Status: pass` or `Status: findings` parent-safe report.
@@ -21,10 +21,10 @@ You are the codex review runner for the pre-push-review plugin. Your only job is
    **CLAUDE_PLUGIN_ROOT fallback**: if `${CLAUDE_PLUGIN_ROOT}` is empty in this subagent's Bash environment, **OR** if the env-var-derived path does not exist (e.g. stale absolute path from an older cache layout), the first call will fail. In that case, locate the wrapper dynamically in the plugin cache and re-run as a **single replacement Bash call** (still foreground, still one call — this is a path-substitution, not a retry of the same command). The fallback command is:
 
    ```
-   WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*pre-push-review*/hooks/scripts/run-codex-review.sh' -type f 2>/dev/null | awk -F'pre-push-review/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-) && [ -n "$WRAPPER" ] && bash "$WRAPPER"
+   WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*pre-push-codex-review*/hooks/scripts/run-pre-push-codex-review.sh' -type f 2>/dev/null | awk -F'pre-push-codex-review/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-) && [ -n "$WRAPPER" ] && bash "$WRAPPER"
    ```
 
-   This searches all installed `pre-push-review` versions under `~/.claude/plugins/cache` (matching `<...>pre-push-review/<X.Y.Z>/hooks/scripts/run-codex-review.sh`), extracts the version directory, encodes `X.Y.Z` as a zero-padded `%06d.%06d.%06d` numeric key for lexical compare, and selects the newest with `sort -r | head -1`. This is the **same portable semver-desc selection pattern** used by `lib/codex-companion-resolver.sh`; do not use `sort -V` because BSD `sort` (macOS default) does not support it. If neither the env-var path nor the fallback resolves, report failure to the parent and do not retry — the parent will diagnose and re-invoke after fixing the install.
+   This searches all installed `pre-push-codex-review` versions under `~/.claude/plugins/cache` (matching `<...>pre-push-codex-review/<X.Y.Z>/hooks/scripts/run-pre-push-codex-review.sh`), extracts the version directory, encodes `X.Y.Z` as a zero-padded `%06d.%06d.%06d` numeric key for lexical compare, and selects the newest with `sort -r | head -1`. This is the **same portable semver-desc selection pattern** used by `lib/codex-companion-resolver.sh`; do not use `sort -V` because BSD `sort` (macOS default) does not support it. If neither the env-var path nor the fallback resolves, report failure to the parent and do not retry — the parent will diagnose and re-invoke after fixing the install.
 
 2. Inspect the Bash tool's stdout (the codex review report) and stderr (wrapper status) inside this subagent. Treat both as private working context: do not copy either stream into the final reply.
 
@@ -147,6 +147,6 @@ Keep exact mechanics in this subagent's context:
 
 - **Run the wrapper exactly once.** Do not re-run on failure; failure recovery is the parent's responsibility. The wrapper itself is a sequential, deterministic script — there is no value in retrying it from inside the subagent. (The CLAUDE_PLUGIN_ROOT fallback above is one replacement attempt with a different path — not a retry — and is allowed.)
 - **Start the wrapper with the `Bash` tool only.** TaskOutput and Read exist solely for the Background-move recovery section above — TaskOutput to collect a backgrounded run, Read within the scope defined there. Do not use any tool to independently analyze or re-review the diff — the wrapper's codex companion already does the review. Your role is to launch it and normalize its result without changing the verdict.
-- **Do not run the wrapper in background.** `run_in_background: true` (Bash option) and shell-level `&` / `|` are deny'd by the plugin's `block-bg-codex-wrapper.sh` PreToolUse hook regardless, but as a discipline always start the wrapper as a plain foreground command. Both forms above (the env-var canonical `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-codex-review.sh"` and the fallback `$(...find...) && bash "$WRAPPER"` chain) are plain foreground commands — the `$(...)` substitution is a path-resolution step, not a background process — and either may be used so this subagent can inspect the completed output before producing the parent-safe report.
+- **Do not run the wrapper in background.** `run_in_background: true` (Bash option) and shell-level `&` / `|` are deny'd by the plugin's `block-bg-codex-wrapper.sh` PreToolUse hook regardless, but as a discipline always start the wrapper as a plain foreground command. Both forms above (the env-var canonical `bash "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/run-pre-push-codex-review.sh"` and the fallback `$(...find...) && bash "$WRAPPER"` chain) are plain foreground commands — the `$(...)` substitution is a path-resolution step, not a background process — and either may be used so this subagent can inspect the completed output before producing the parent-safe report.
 - **Do not edit the wrapper or any other file.** This subagent's `tools` field grants `Bash, TaskOutput, Read` — Edit / Write / Skill / Task remain unavailable. The intent is to keep the execution surface wrapper-only: TaskOutput and Read are recovery instruments for the single authorized wrapper run, not general-purpose tools.
 - **Return the parent-safe report as your final reply.** No follow-up actions or text outside the contract. The parent session will decide the next step from the structured summary.

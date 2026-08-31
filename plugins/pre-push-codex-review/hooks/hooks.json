@@ -1,0 +1,53 @@
+{
+  "description": "pre-push-codex-review の配送経路: PreToolUse (Bash) で codex 未レビューの git push を deny (block-pre-push-codex.sh)、codex review wrapper の background 起動を deny (block-bg-codex-wrapper.sh)。SubagentStart で launch attestation を書き、SubagentStop で report / hash 検証を経て codex marker を更新する。PostToolUseFailure では Codex pending attestation を破棄する。マーカー仕様・保証差は plugin README を参照。",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-pre-push-codex.sh"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-bg-codex-wrapper.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "^pre-push-codex-review:codex-reviewer$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^pre-push-codex-review:codex-reviewer$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

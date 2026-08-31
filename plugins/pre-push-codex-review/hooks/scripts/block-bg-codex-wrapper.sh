@@ -1,7 +1,8 @@
 #!/bin/bash
 # block-bg-codex-wrapper.sh
-# `run-codex-review.sh` wrapper の background 起動、 および `pre-push-review:codex-reviewer`
-# subagent 以外からの起動を deny する PreToolUse フック。
+# `run-pre-push-codex-review.sh` wrapper の background 起動、 および
+# `pre-push-codex-review:codex-reviewer` subagent 以外からの起動を deny する PreToolUse
+# フック。
 #
 # policy: 本 hook 全体は fail-open (PreToolUse / defense-in-depth 補助)。 jq 不在等の
 #   環境失敗時は silent に exit 0 で抜けて allow に倒す (= 環境失敗で「合法な wrapper
@@ -9,7 +10,7 @@
 #   segment 分類 (下記「検知ロジック」節) は fail-closed で判定する。
 #   (a) **fail-open 経路の限定**: 本 hook が意図的に allow へ倒す fail-open 経路は
 #       「外部コマンド形の不明 head による引数・quoted 文字列としての言及」
-#       (issue #339 の決定表 step 14、 例: `rg -n 'run-codex-review.sh' dir/`) の
+#       (決定表 step 14、 例: `rg -n 'run-pre-push-codex-review.sh' dir/`) の
 #       1 経路のみに限定される。 それ以外 (agent_type 欠落・不一致、 canonical 化
 #       失敗、 word-shape / keyword / builtin superset 該当、 wrapper basename 一致
 #       等) はすべて fail-closed (実行形扱い) で deny する。
@@ -17,21 +18,19 @@
 #       boundary ではなく、 cooperative 利用を前提とした補助 gate である。 任意の
 #       未知 launcher (`frobnicate <wrapper>` 等) や動的にコマンド文字列を構築する
 #       経路への完全性は保証しない (= 意図的に攻め切らない設計判断。 詳細は下記
-#       「検知ロジック」節および `classify_wrapper_segment` の呼び出し元である
-#       対象テストクラス `BlockBgCodexWrapperExecPositionClassificationTest` の
-#       docstring 14-step 決定表を参照)。
-#   (c) **真の push gate は block-pre-push.sh**: 本 hook が抜けても (= 上記 (a) の
-#       fail-open 経路や jq 不在等の環境失敗経路)、 真の保証は block-pre-push.sh が
+#       「検知ロジック」節および `classify_wrapper_segment` の関数コメントの
+#       14-step 決定表を参照)。
+#   (c) **真の push gate は block-pre-push-codex.sh**: 本 hook が抜けても (= 上記 (a) の
+#       fail-open 経路や jq 不在等の環境失敗経路)、 真の保証は block-pre-push-codex.sh が
 #       marker hash check (= fail-closed) で行うため、 未レビュー push は
-#       block-pre-push.sh が別途ブロックする。
+#       block-pre-push-codex.sh が別途ブロックする。
 #
 # ## なぜ必要か
 #
-# v1.1.0 で codex review は wrapper script (run-codex-review.sh) 経由に切替えた。当時は
-# wrapper 自身が完了時に codex marker を書いていたが、v4.0.1 では review 開始時点の hash を
-# pending attestation に書き、codex-reviewer の parent-safe report 完了後に auto-mark.sh が
-# final marker へ昇格する設計へ変更した。それでも **wrapper を Bash tool の
-# `run_in_background: true` で起動すると regression が発生する**:
+# wrapper は完了時に review 開始時点の hash を pending attestation に書き、
+# codex-reviewer の parent-safe report 完了後に auto-mark.sh が final marker へ昇格する。
+# この設計でも **wrapper を Bash tool の `run_in_background: true` で起動すると
+# regression が発生する**:
 #   - wrapper 内部の `node codex-companion.mjs review --wait --scope branch` は foreground で
 #     完走するが、codex-reviewer subagent の Agent tool は先に完了しうる
 #   - **codex-reviewer subagent が wrapper の stdout / stderr (= codex review の verdict /
@@ -41,70 +40,17 @@
 #   - final marker は report 成功前には発行されないので push gate bypass にはならないが、
 #     後から stale pending attestation だけが残り、review 完了を正しく配送できない
 #
-# v1.0.0 までは PreToolUse の `block-bg-codex-review.sh` が `run_in_background: true` を deny
-# して同類の問題を防いでいたが、 v1.1.0 で Skill 経由 `/codex:review` 廃止に伴い不要として
-# 削除した。 しかし wrapper を bg で起動するという新経路に対する gate が欠如していたため、
-# 本 hook を再導入する。
-#
-# v3.0.0 で codex review は `pre-push-review:codex-reviewer` subagent 経由の起動に統一されたが、
-# 当時は **メインセッションが wrapper を直接 Bash 実行しても同じく marker が書かれてしまい**、
-# subagent 経由での起動は agents/codex-reviewer.md の指示文という prompt 規律だけで担保されて
-# いた (issue #267)。 メインセッションによる直接実行は subagent が持つ context isolation
-# (詳細出力を subagent context に閉じ込め、 親 session には report だけを返す設計) を毀損する。
-# v4.0.0 で agent_type gate (下記) を追加し、 `pre-push-review:codex-reviewer` subagent 以外から
-# の wrapper 起動を fail-closed に deny するようにした。v4.0.1 では direct wrapper が作れる
-# のは pending attestation までで、対応する正規 Agent report がなければ final marker には
-# ならないが、raw review output の親 context 流入と、不正な caller が残す pending artifact を
-# 防ぐため caller gate は引き続き必要。
-#
-# その後の codex review (P2 指摘) で、 agent_type gate が command 文字列に
-# `run-codex-review.sh` substring を含むだけで無条件に発火するため、 wrapper を実行せず
-# 言及するだけの無害なコマンド (`cat` / `git diff` / `grep` 等) まで deny される regression が
-# 見つかった。 これを受け、 gate の前段に「実行形 segment 分類」 を追加し、 実行形 segment が
-# 1 つも無いコマンドは agent_type gate 自体を skip するようにした (下記「検知ロジック」参照)。
-#
-# issue #339 でこの「実行形 segment 分類」 をさらに改良した。 従来の read-only allowlist
-# 方式 (allowlist 外の不明コマンドは fail-closed で実行形扱い) は、 `rg -n
-# 'run-codex-review.sh' dir/` のような「不明コマンドへの単なる引数参照」 まで実行形として
-# deny する false positive (issue 実測) を生んでいた。 これを、 「head token が実際に
-# どこにあるか」 を canonical token 値ベースで判定する executable 位置方式に転換した
-# (下記「検知ロジック」規則 2/3、 `classify_wrapper_segment` / `canonicalize_token` 関数
-# コメント、 および正本である `tests/test_pre_push_bg_codex_wrapper.py` の
-# `BlockBgCodexWrapperExecPositionClassificationTest` docstring の 14-step 決定表を参照)。
-# Phase B 2 巡目レビューで、 (1) leading / launcher 剥がし後の代入 slot 判定を「値に
-# wrapper substring を含むか」 から「代入 slot が 1 つでも存在するか」 へ変更 (代入値は
-# wrapper path 以外にも GIT_EXTERNAL_DIFF / RIPGREP_CONFIG_PATH / LESSOPEN 等、 head
-# コマンドの間接実行面を有効化する設定値でありうるため、 変数名列挙ではなく存在自体で
-# 判定する構造的な閉じ方に変更)、 (2) `split_command` の depth 追跡と実際の shell 意味論が
-# 乖離し複数コマンドが 1 segment に merge される場合 (未対応の `(` / `{` 等) の解析不能
-# 判定 (`segment_is_unanalyzable`、 新 step 2) を追加、 (3) `canonicalize_token` の
-# double quote 内 escaped backslash 判定の case pattern arity 不一致を修正、 の 3 点を
-# 反映した。 Phase B 3 巡目レビューで、 (4) 無害 builtin allowlist から算術評価の再評価
-# 面を持つ `test` / `[` を除去、 (5) rg の危険 option に `--hostname-bin` を追加、 (6)
-# 共有 tokenizer の quote 状態 desync (#354) で複数 shell word が 1 token に merge
-# される経路を検知する token 単位の単一 shell word 検査 (`token_is_unanalyzable`、 新
-# step 3) を追加、 (7) `segment_is_unanalyzable` に ANSI-C quoting (`$'`) の検出を
-# 追加、 (8) `canonicalize_token` の `$` 判定を「直後が展開開始として有効な文字の場合
-# のみ失敗」 へ精密化、 の 5 点をさらに反映した。 Phase B 4 巡目レビューで、 3 巡目の
-# `$` 判定緩和が bash の他の quoting form (`$"..."` locale 翻訳、 `$[...]` 旧算術
-# 展開) と、 parse 後に展開される brace expansion (`{`/`}`) / pathname expansion
-# (`*`/`?`/`[`/`]`) を取りこぼしていたことを受け、 `token_is_unanalyzable` (step 3)
-# を「単一 shell word 検査」 から「静的 literal 検査」 へ一般化した (個別構文の列挙
-# ではなく、 mention 判定に使ってよい token は静的に決定できる literal 値である、 と
-# いう積極要件に転換。 詳細は `token_is_unanalyzable` 関数コメント参照)。 Phase B
-# 5 巡目レビューで、 (9) `$` の展開開始文字表が 3 箇所に複製され `[` (旧算術展開
-# `$[...]`) が全箇所から欠落していた drift を、 単一の正本 helper
-# `dollar_starts_expansion` へ集約して解消、 (10) 4 巡目の静的 literal 検査が
-# token の位置を問わず適用され、 head の実行面に影響しない operand 位置の
-# read-only 形 (`cat <path>/run-codex-review.sh > out.txt` / glob path / `~/`
-# 始まりの plugin-cache path 等) まで master 比で deny に退行していた問題を、
-# `token_is_unanalyzable` の第 2 引数 (`head` / `operand`) による非対称化で
-# 解消、 の 2 点を反映した。
+# また、 メインセッションが wrapper を直接 Bash 実行すると、 subagent が持つ context
+# isolation (詳細出力を subagent context に閉じ込め、 親 session には report だけを返す
+# 設計) が毀損される。 direct wrapper 実行が作れるのは pending attestation までで、
+# 対応する正規 Agent report がなければ final marker にはならないが、 raw review output の
+# 親 context 流入と、 不正な caller が残す pending artifact を防ぐため caller gate
+# (下記 1.) が必要になる。
 #
 # ## 検知ロジック
 #
 # 0. **segment 分類** (実行形のみ gate、 fail-closed): command を `split_command` で
-#    segment 分割し、 substring `run-codex-review.sh` を含む各 segment を次の規則で
+#    segment 分割し、 substring `run-pre-push-codex-review.sh` を含む各 segment を次の規則で
 #    分類する。 **実行形 segment が 1 つも無ければ、 agent_type gate も bg / pipeline 判定も
 #    skip して allow する** (= wrapper を実行せず言及するだけの read-only コマンドは deny
 #    しない)。
@@ -117,27 +63,26 @@
 #        ものは非 indirection とする (詳細は `segment_has_indirection` 関数コメント参照)。
 #        これらの内部は本 parser が安全に解析できないため保守的に実行形とし、 command 全体
 #        の INDIRECTION フラグを立てる (下記 2. で使用)。
-#      - **規則 1.5 (解析可能性検査、 決定表 step 2、 issue #339 2/3 巡目)**: 規則 1 に
-#        該当しない segment に対し `segment_is_unanalyzable` (戻り値 0 = 解析不能、 1 =
-#        解析可能) を評価する。 `split_command` は quote 外の group delimiter
-#        (`(`/`)`/`{`/`}`) の depth が非 0 の間、 separator 候補文字 (`;`/`|`/`&`/改行)
-#        を real separator ではなく segment 内の literal として保持する仕様のため、
-#        未対応の `(` 等があると本来複数コマンドになるはずの入力が 1 segment に merge
-#        され、 head token が実コマンドを代表しなくなる (例: `echo ( ; bash <wrapper>`
-#        は `echo` が harmless builtin のため誤って mention 扱いされかねない)。 quote 外
-#        に ANSI-C quoting の開始 (`$'`) が現れる場合も、 本検査がその内部意味論を模さず
-#        quote 状態が乖離するため同様に解析不能とする。 解析不能なら実行形とし
-#        `classify_wrapper_segment` の呼び出し自体を skip する (詳細は
+#      - **規則 1.5 (解析可能性検査、 決定表 step 2)**: 規則 1 に該当しない segment に対し
+#        `segment_is_unanalyzable` (戻り値 0 = 解析不能、 1 = 解析可能) を評価する。
+#        `split_command` は quote 外の group delimiter (`(`/`)`/`{`/`}`) の depth が非 0 の
+#        間、 separator 候補文字 (`;`/`|`/`&`/改行) を real separator ではなく segment 内の
+#        literal として保持する仕様のため、 未対応の `(` 等があると本来複数コマンドになる
+#        はずの入力が 1 segment に merge され、 head token が実コマンドを代表しなくなる
+#        (例: `echo ( ; bash <wrapper>` は `echo` が harmless builtin のため誤って mention
+#        扱いされかねない)。 quote 外に ANSI-C quoting の開始 (`$'`) が現れる場合も、 本検査
+#        がその内部意味論を模さず quote 状態が乖離するため同様に解析不能とする。 解析不能
+#        なら実行形とし `classify_wrapper_segment` の呼び出し自体を skip する (詳細は
 #        `segment_is_unanalyzable` 関数コメント参照)。
-#      - **規則 2/3 (executable 位置分類、 issue #339)**: 規則 1 / 1.5 に該当しない segment
-#        は `classify_wrapper_segment` (戻り値 0 = 実行形、 1 = mention 候補) が判定する。
+#      - **規則 2/3 (executable 位置分類)**: 規則 1 / 1.5 に該当しない segment は
+#        `classify_wrapper_segment` (戻り値 0 = 実行形、 1 = mention 候補) が判定する。
 #        判定は「canonical token 値」 (single/double quote 除去・backslash escape 解決・
 #        fragment 連結を行った shell word の静的な値。 `canonicalize_token` 関数参照) に
 #        対して行う 14-step の順序付き決定表であり、 概略は次のとおり: 全 token が静的
 #        literal であること (`token_is_unanalyzable`。 quote 外の `$`・brace
 #        expansion・pathname expansion・tilde expansion は bash が parse 後に展開
 #        するため、 これらを含む token は展開結果を静的に決定できず解析不能とする。
-#        共有 tokenizer の quote 状態 desync #354 で複数 word が 1 token に merge
+#        共有 tokenizer の quote 状態 desync で複数 word が 1 token に merge
 #        され危険 option を隠す経路も同じ検査で塞ぐ。 検査は head と operand で
 #        非対称で、 head は厳格、 operand は「token 先頭の fd 数字列 + `<`/`>`」 と
 #        「固定開始を持つ token の glob と先頭 `~`」 の 2 点のみ許容する。 固定開始
@@ -165,8 +110,7 @@
 #        不在の場合のみ mention 候補、 それ以外の git はすべて実行形 / ここまでで実行形と
 #        確定しなかった head (無害 builtin・git 特例・外部コマンド形の不明 head) が
 #        mention 候補、 という順序で評価する。 詳細な各 step の根拠・境界条件は
-#        `classify_wrapper_segment` 関数コメントと、 正本である
-#        `BlockBgCodexWrapperExecPositionClassificationTest` docstring を参照する。
+#        `classify_wrapper_segment` 関数コメントを参照する。
 #        **mention 候補 segment の pipe chain 検査**: mention 候補と判定された segment に
 #        ついても、 その segment が属する pipe chain (両方向に separator が `|` である限り
 #        連続する segment の極大区間、 `&&` / `||` / `;` / `&` で途切れる。 `split_command`
@@ -174,7 +118,7 @@
 #        内の他の全 segment (substring を含まないものも含む) が `mention_safe_segment`
 #        (indirection 不在 + read-only allowlist / git 特例一致。 exact 判定のまま維持し
 #        basename 正規化は適用しない — 中心 segment の判定との非対称は受容境界) を満たす
-#        ことを要求する (`pipe_chain_all_mention_safe` 関数、 現行のまま変更していない)。
+#        ことを要求する (`pipe_chain_all_mention_safe` 関数)。
 #        隣接 1 段でなく chain 全体を見るのは、 `cat wrapper | head -100 | bash` のように
 #        allowlist コマンドを 1 段挟むと隣接判定だけでは素通りするため (上流側 `bash
 #        gen.sh | grep -f - wrapper` も同様に保守的に検査する)。 また `cat wrapper | grep
@@ -187,31 +131,29 @@
 #        して wrapper path が現れる形 (`echo stub > <wrapper>` / `cat x >> <wrapper>` 等)
 #        は operand として扱い、 mention 候補のままとする (= allow しうる)。 根拠は 3 点:
 #        (1) 本 hook の責務は wrapper の **起動** を gate することに限定され、 wrapper
-#        file への書き込みは対象外であること、 (2) origin/master も
-#        `cat x > <wrapper>` / `cat x >> <wrapper>` を allow しており「wrapper への
-#        書き込みは deny される」 という不変条件はそもそも成立していないこと (base が
-#        `echo stub > <wrapper>` を deny していたのは設計意図ではなく、 read-only
-#        allowlist に `echo` が入っていなかった副作用である)、 (3) Write / Edit tool
-#        経由の書き込みは Bash tool 専用の本 hook からそもそも観測できないこと。
-#        wrapper file の完全性は本 hook の保証範囲外であり、 真の push gate である
-#        `block-pre-push.sh` の marker hash 検証が担う。
-# 1. **agent_type gate** (v4.0.0 / issue #267 / fail-closed): 実行形 segment が 1 つでも
-#    ある場合のみ到達する。 command に `run-codex-review.sh` substring を含む場合、 hook
-#    payload のトップレベル `agent_type` が `pre-push-review:codex-reviewer` に完全一致しな
+#        file への書き込みは対象外であること、 (2) 「wrapper への書き込みは deny される」
+#        という不変条件はそもそも成立していないこと (`cat x > <wrapper>` /
+#        `cat x >> <wrapper>` は read-only allowlist の head を持つため allow される)、
+#        (3) Write / Edit tool 経由の書き込みは Bash tool 専用の本 hook からそもそも
+#        観測できないこと。 wrapper file の完全性は本 hook の保証範囲外であり、 真の
+#        push gate である `block-pre-push-codex.sh` の marker hash 検証が担う。
+# 1. **agent_type gate** (fail-closed): 実行形 segment が 1 つでもある場合のみ到達する。
+#    command に `run-pre-push-codex-review.sh` substring を含む場合、 hook payload の
+#    トップレベル `agent_type` が `pre-push-codex-review:codex-reviewer` に完全一致しな
 #    ければ deny する (欠落・別値いずれも deny)。 一致した場合のみ後続の bg / pipeline 判定へ
 #    進む。 **実機検証済み (Claude Code 2.1.211)**: メインセッションの Bash では `agent_type`
-#    がペイロードに含まれず、 plugin subagent の Bash では namespace 付き
-#    `pre-push-review:codex-reviewer` が届くことを確認した。
-# 2. **bg / pipeline 検知** (従来ロジック + indirection 拡張): Bash tool option
-#    `tool_input.run_in_background == true` の場合、 または wrapper を含む segment に
-#    **隣接** する shell-level の `&` / `|` で連結している場合に deny する。 加えて、 上記 0.
-#    の INDIRECTION フラグが立っている場合は、 隣接判定に加えて command 全体の separator を
-#    **位置を問わず** 走査し、 単独 `&` / `|` が 1 つでもあれば deny する (コマンド置換で
-#    wrapper 起動を隠した場合、 substring を含む segment と実際に wrapper を実行する segment
-#    が別 segment になり得るため、 隣接判定だけでは
-#    `WRAPPER=$(find ... run-codex-review.sh ...) && bash "$WRAPPER" | tee log` のような形を
-#    素通りしてしまう)。 wrapper の起動は通常 `bash <abs-path>/run-codex-review.sh` の形
-#    (deny メッセージで案内) なので、 path のどこかに `run-codex-review.sh` が現れる前提。
+#    がペイロードに含まれず、 plugin subagent の Bash では namespace 付きの
+#    agent_type が届くことを確認した。
+# 2. **bg / pipeline 検知**: Bash tool option `tool_input.run_in_background == true` の場合、
+#    または wrapper を含む segment に **隣接** する shell-level の `&` / `|` で連結している
+#    場合に deny する。 加えて、 上記 0. の INDIRECTION フラグが立っている場合は、 隣接判定に
+#    加えて command 全体の separator を **位置を問わず** 走査し、 単独 `&` / `|` が 1 つでも
+#    あれば deny する (コマンド置換で wrapper 起動を隠した場合、 substring を含む segment と
+#    実際に wrapper を実行する segment が別 segment になり得るため、 隣接判定だけでは
+#    `WRAPPER=$(find ... run-pre-push-codex-review.sh ...) && bash "$WRAPPER" | tee log` の
+#    ような形を素通りしてしまう)。 wrapper の起動は通常
+#    `bash <abs-path>/run-pre-push-codex-review.sh` の形 (deny メッセージで案内) なので、
+#    path のどこかに `run-pre-push-codex-review.sh` が現れる前提。
 #    substring match なので、 ユーザ独自の wrapper alias (例: `bash my-codex.sh`) は対象外
 #    (= cooperative 利用前提)。
 
@@ -227,7 +169,7 @@ source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
 # いる)。
 # shellcheck source=lib/cmd-parser.sh
 source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/cmd-parser.sh"
-install_exit_trap "block-bg-codex-wrapper" "run-codex-review wrapper の background 起動 deny が機能していない可能性があり、 codex-reviewer が review 結果を観察できず parent-safe report を正しく返せないかもしれません。"
+install_exit_trap "block-bg-codex-wrapper" "run-pre-push-codex-review wrapper の background 起動 deny が機能していない可能性があり、 codex-reviewer が review 結果を観察できず parent-safe report を正しく返せないかもしれません。"
 
 INPUT=$(cat)
 
@@ -244,15 +186,15 @@ case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
 # 行継続 `\<改行>` を **削除** して隣接 token を連結する (bash 実挙動と一致)。 これを
 # やらないと `bash .../run-codex-revie\<LF>w.sh` のような書き方で substring match
-# (`run-codex-review.sh`) を bypass される経路が残る。 fast-path で line continuation を
+# (`run-pre-push-codex-review.sh`) を bypass される経路が残る。 fast-path で line continuation を
 # 含まない 99% の入力は `$(...)` fork を回避する (cmd-parser.sh 関数内に fast-path あり)。
 case "$COMMAND" in
   *\\$'\n'*) COMMAND=$(normalize_line_continuations "$COMMAND") ;;
 esac
 
-# 粗フィルタ: command 文字列に `run-codex-review.sh` が含まれなければ即抜け (fork なし)。
+# 粗フィルタ: command 文字列に `run-pre-push-codex-review.sh` が含まれなければ即抜け (fork なし)。
 case "$COMMAND" in
-  *run-codex-review.sh*) ;;
+  *run-pre-push-codex-review.sh*) ;;
   *) exit 0 ;;
 esac
 
@@ -260,7 +202,7 @@ esac
 # cmd-parser は `&` を一律 separator として扱うため、 redirection 内の `&` を parallel
 # separator と誤認して false-positive deny を起こす経路を塞ぐ目的 (block-pre-push.sh と
 # 同じ理由・同じ sed パターン)。 特に deny message が案内する
-# `bash run-codex-review.sh > codex.log 2>&1` (= 推奨 logging 形式) を素通させるため必須。
+# `bash run-pre-push-codex-review.sh > codex.log 2>&1` (= 推奨 logging 形式) を素通させるため必須。
 # segment 分類 (下記) も同じ split を使うため、 split_command より前に済ませる。
 COMMAND=$(printf '%s' "$COMMAND" \
   | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')
@@ -282,7 +224,7 @@ done < <(split_command "$COMMAND")
 # プロセス置換 `<(` `>(`) を検出、 1 = 未検出。
 #
 # 規則 1 の生 substring 判定 (`*'$('*` 等) は、 引用符内の literal な文字列 (例:
-# `grep -n '$(' run-codex-review.sh` のような wrapper 監査コマンド) まで indirection と
+# `grep -n '$(' run-pre-push-codex-review.sh` のような wrapper 監査コマンド) まで indirection と
 # 誤分類する false positive があった (codex review High 指摘)。 本関数は segment 文字列を
 # 1 文字ずつ走査し、 in_single / in_double / (backslash による) escaped の状態を追跡して
 # 以下のみを indirection と判定する:
@@ -294,7 +236,7 @@ done < <(split_command "$COMMAND")
 #     escape されていない場合 (プロセス置換は unquoted の文脈でのみ有効なため)
 # escape (`\`) は single quote 内では literal 文字として扱い (次の文字を escape しない)、
 # それ以外 (unquoted / double quote 内) では次の 1 文字を escape して読み飛ばす。
-# substring `run-codex-review.sh` を含む segment に対してのみ呼ばれる低頻度パスのため、
+# substring `run-pre-push-codex-review.sh` を含む segment に対してのみ呼ばれる低頻度パスのため、
 # 1 文字ループの性能コストは許容する (cmd-parser.sh の split_command / tokenize_segment と
 # 同じ設計判断)。 bash 3.2 互換 (mapfile / declare -A / `${var,,}` を使わない)。
 segment_has_indirection() {
@@ -530,7 +472,7 @@ mention_safe_segment() {
 # 修正 1 (issue #267 codex review 指摘): 規則 2 で言及扱いに分類された segment (SEGMENTS
 # 配列の index で指定) が属する pipe chain — 両方向に separator が `|` である限り連続する
 # segment の極大連続区間 (`&&` / `||` / `;` / `&` で途切れる) — を走査し、 当該 segment 以外
-# の全 segment (substring `run-codex-review.sh` を含まないものも含む) が
+# の全 segment (substring `run-pre-push-codex-review.sh` を含まないものも含む) が
 # `mention_safe_segment` を満たすことを確認する。 1 つでも満たさない segment があれば 1
 # (false) を返す。 その segment が `segment_has_indirection` にも該当する場合は、 呼び出し元
 # (メインの分類 loop) が INDIRECTION フラグも連動して立てられるよう、 グローバル変数
@@ -842,10 +784,10 @@ note_literal_contribution() {
 # **head / operand の非対称 (issue #339 5 巡目レビュー、 code P1)**: 4 巡目
 # 時点では rule (c) を token の位置に依らず適用していたため、 head の実行面に
 # 一切影響しない operand 位置の token でも実行形 (deny) に倒れ、 origin/master
-# では allow だった read-only 形 (`cat <path>/run-codex-review.sh > out.txt`、
-# `cat plugins/*/hooks/scripts/run-codex-review.sh`、
-# `cat ~/.claude/plugins/cache/.../run-codex-review.sh`、
-# `wc -l ~/x/run-codex-review.sh`) が退行していた。 とくに `~/` 始まりの
+# では allow だった read-only 形 (`cat <path>/run-pre-push-codex-review.sh > out.txt`、
+# `cat plugins/*/hooks/scripts/run-pre-push-codex-review.sh`、
+# `cat ~/.claude/plugins/cache/.../run-pre-push-codex-review.sh`、
+# `wc -l ~/x/run-pre-push-codex-review.sh`) が退行していた。 とくに `~/` 始まりの
 # plugin-cache path は installed wrapper を参照する正規の書き方であり、
 # issue #339 が解消対象としている false positive クラスそのものである
 # (deny メッセージが「read-only コマンドは deny されない」 と案内するため、
@@ -870,11 +812,11 @@ note_literal_contribution() {
 #     `--pre` と乖離する (#353 と同根)。 この乖離が判定を誤らせるのは argv
 #     word 側が危険 option になり得る場合だけなので、 語中の `<` / `>` は
 #     **その token が既に固定開始 (下記 緩和 2 の定義) を持つ場合に限り**
-#     許容する (緩和 1b)。 `<path>/run-codex-review.sh>out.txt` の argv word は
-#     `<path>/run-codex-review.sh` で非 `-` 始まりなので安全である一方、
+#     許容する (緩和 1b)。 `<path>/run-pre-push-codex-review.sh>out.txt` の argv word は
+#     `<path>/run-pre-push-codex-review.sh` で非 `-` 始まりなので安全である一方、
 #     `--pre>x` / `-'-pre'>x` は最初の寄与文字が `-` で固定開始を持たないため
 #     従来どおり解析不能とする。 書き込み先が `-` 始まり
-#     (`<path>/run-codex-review.sh>--pre`) でも argv word には現れないため
+#     (`<path>/run-pre-push-codex-review.sh>--pre`) でも argv word には現れないため
 #     判定に影響しない。
 #   - **緩和 2 (固定開始を持つ token の pathname / tilde expansion)**: token が
 #     **固定開始 (fixed start)** — その token が **word へ最初に寄与する
@@ -1067,8 +1009,8 @@ token_is_unanalyzable() {
           if [ "$_tw_fixed_start" -eq 1 ]; then
             # 緩和 1b (operand かつ固定開始): 語中の `<` / `>` であっても、
             # bash が argv word として渡すのはこの演算子より前の prefix だけで
-            # ある (`<path>/run-codex-review.sh>out.txt` なら
-            # `<path>/run-codex-review.sh`)。 その prefix が固定開始を持つなら
+            # ある (`<path>/run-pre-push-codex-review.sh>out.txt` なら
+            # `<path>/run-pre-push-codex-review.sh`)。 その prefix が固定開始を持つなら
             # 展開結果は非 `-` 文字で始まり、 `-` 始まりの列挙済み危険 option に
             # なり得ないため、 canonical 値との乖離が判定を誤らせない。
             # `--pre>x` は最初の寄与文字が `-` で固定開始を持たないため、
@@ -1364,7 +1306,7 @@ classify_wrapper_segment() {
   local _cw_base="${_cw_canon_head##*/}"
 
   case "$_cw_base" in
-    run-codex-review.sh)
+    run-pre-push-codex-review.sh)
       unset _cw_toks
       return 0
       ;;
@@ -1527,7 +1469,7 @@ HAS_INDIRECTION=0
 for _cls_i in "${!SEGMENTS[@]}"; do
   _cls_seg="${SEGMENTS[$_cls_i]}"
   case "$_cls_seg" in
-    *run-codex-review.sh*) ;;
+    *run-pre-push-codex-review.sh*) ;;
     *) continue ;;
   esac
 
@@ -1577,41 +1519,41 @@ if [ "$HAS_EXEC_SEGMENT" -eq 0 ]; then
 fi
 
 # agent_type 検証 gate (fail-closed): wrapper 起動を許可する呼び出し元は
-# `pre-push-review:codex-reviewer` subagent のみ。 hook payload のトップレベル `agent_type`
+# `pre-push-codex-review:codex-reviewer` subagent のみ。 hook payload のトップレベル `agent_type`
 # が完全一致しない場合 (欠落含む) は deny する。 一致した場合のみ後続の bg / pipeline 判定
 # へ進む。 jq 不在時は既に上の `command -v jq` チェックで fail-open 済みのため、 ここに到達
 # する時点で jq は利用可能。
 AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
-if [ "$AGENT_TYPE" != "pre-push-review:codex-reviewer" ]; then
+if [ "$AGENT_TYPE" != "pre-push-codex-review:codex-reviewer" ]; then
   if [ -z "$AGENT_TYPE" ]; then
     REASON=$(cat <<'EOF'
-プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper は `pre-push-review:codex-reviewer` subagent 経由でのみ起動できます。
+プッシュ前レビューをブロックしました。 `run-pre-push-codex-review.sh` wrapper は `pre-push-codex-review:codex-reviewer` subagent 経由でのみ起動できます。
 
 理由: 本 hook の payload に `agent_type` が含まれていません (欠落)。 これはメインセッションが wrapper を直接 Bash 実行した場合、 または `agent_type` を hook payload に含めない旧 Claude Code を使用している場合に発生します。
 
 wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
 
-Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 たとえば次の形は read-only コマンドでも deny されます: path に `$VAR` 等の動的展開・コマンド置換・brace expansion (`{a,b}`)・`~user` 形が含まれる (展開結果を静的に決定できないため) / path が glob メタ文字で始まる (`*/run-codex-review.sh` 等。 `./*/run-codex-review.sh` のように `./` を前置すれば allow されます) / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
+Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 たとえば次の形は read-only コマンドでも deny されます: path に `$VAR` 等の動的展開・コマンド置換・brace expansion (`{a,b}`)・`~user` 形が含まれる (展開結果を静的に決定できないため) / path が glob メタ文字で始まる (`*/run-pre-push-codex-review.sh` 等。 `./*/run-pre-push-codex-review.sh` のように `./` を前置すれば allow されます) / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
 
 対応:
-  - `/pre-push-review:review` で 3 レビューを並列起動してください (推奨)
-  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-review:codex-reviewer", model="sonnet" を起動してください
+  - `/pre-push-codex-review:review` で push 前レビューを並列起動してください (推奨)
+  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-codex-review:codex-reviewer", model="sonnet" を起動してください
   - 上記を行っても `agent_type` 欠落が解消しない場合は、 Claude Code を 2.1.211 以上へ更新してください (本 gate は Claude Code 2.1.211 で実機検証済みです)
 EOF
 )
   else
     REASON=$(cat <<EOF
-プッシュ前レビューをブロックしました。 \`run-codex-review.sh\` wrapper は \`pre-push-review:codex-reviewer\` subagent 経由でのみ起動できます。
+プッシュ前レビューをブロックしました。 \`run-pre-push-codex-review.sh\` wrapper は \`pre-push-codex-review:codex-reviewer\` subagent 経由でのみ起動できます。
 
-理由: 検出された \`agent_type\` は \`${AGENT_TYPE}\` で、 \`pre-push-review:codex-reviewer\` と一致しません。 メインセッションが wrapper を直接 Bash 実行した場合や、 \`agent_type\` を hook payload に含めない旧 Claude Code を使用している場合にも同様の deny になります。
+理由: 検出された \`agent_type\` は \`${AGENT_TYPE}\` で、 \`pre-push-codex-review:codex-reviewer\` と一致しません。 メインセッションが wrapper を直接 Bash 実行した場合や、 \`agent_type\` を hook payload に含めない旧 Claude Code を使用している場合にも同様の deny になります。
 
 wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
 
-Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 たとえば次の形は read-only コマンドでも deny されます: path に \`\$VAR\` 等の動的展開・コマンド置換・brace expansion (\`{a,b}\`)・\`~user\` 形が含まれる (展開結果を静的に決定できないため) / path が glob メタ文字で始まる (\`*/run-codex-review.sh\` 等。 \`./*/run-codex-review.sh\` のように \`./\` を前置すれば allow されます) / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
+Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せず、 静的に決まる literal path で使ってください。 たとえば次の形は read-only コマンドでも deny されます: path に \`\$VAR\` 等の動的展開・コマンド置換・brace expansion (\`{a,b}\`)・\`~user\` 形が含まれる (展開結果を静的に決定できないため) / path が glob メタ文字で始まる (\`*/run-pre-push-codex-review.sh\` 等。 \`./*/run-pre-push-codex-review.sh\` のように \`./\` を前置すれば allow されます) / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
 
 対応:
-  - \`/pre-push-review:review\` で 3 レビューを並列起動してください (推奨)
-  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-review:codex-reviewer", model="sonnet" を起動してください
+  - \`/pre-push-codex-review:review\` で push 前レビューを並列起動してください (推奨)
+  - codex review 単独が必要な場合は Agent / Task tool で subagent_type="pre-push-codex-review:codex-reviewer", model="sonnet" を起動してください
   - お使いの Claude Code が \`agent_type\` を正しく送信しない場合は 2.1.211 以上へ更新してください (本 gate は Claude Code 2.1.211 で実機検証済みです)
 EOF
 )
@@ -1628,7 +1570,7 @@ fi
 
 # 2 種類の bg 起動経路を検知する:
 #   (1) Bash tool option `run_in_background: true`
-#   (2) shell-level backgrounding (`bash run-codex-review.sh &`) や pipeline (`bash run-codex-review.sh | tee log`)
+#   (2) shell-level backgrounding (`bash run-pre-push-codex-review.sh &`) や pipeline (`bash run-pre-push-codex-review.sh | tee log`)
 #       — Bash tool option は false だが shell が wrapper を bg / 並列起動して主 session が
 #       review 結果を観察しない経路。 block-pre-push.sh も同じ理由で単独 `&` / `|` を deny
 #       している (markers gate 検証後の race 経路も同型)。
@@ -1639,12 +1581,12 @@ RUN_IN_BG=$(printf '%s' "$INPUT" | jq -r '.tool_input.run_in_background // false
 # **隣接** (直前 / 直後) separator が `&` (background) または `|` (pipeline) のときだけ
 # deny する。 SEPARATORS[i-1] が segment[i] の直前、 SEPARATORS[i] が segment[i] の直後を
 # 指す (= split_command が segment と separator を交互に出力する仕様)。 wrapper と無関係な
-# segment 間の `&` / `|` (例: `bash run-codex-review.sh && echo done | tee log`) は false
+# segment 間の `&` / `|` (例: `bash run-pre-push-codex-review.sh && echo done | tee log`) は false
 # positive にしない。 `&&` / `||` / `;` は逐次実行なので race にならず許容。
 _SHELL_BG=0
 for i in "${!SEGMENTS[@]}"; do
   case "${SEGMENTS[$i]}" in
-    *run-codex-review.sh*) ;;
+    *run-pre-push-codex-review.sh*) ;;
     *) continue ;;
   esac
   # 直前 separator (SEPARATORS[i-1], i==0 なら無し)
@@ -1662,11 +1604,11 @@ for i in "${!SEGMENTS[@]}"; do
 done
 
 # INDIRECTION フラグが立っている場合、 隣接判定だけでは不十分。 コマンド置換の内部に
-# 隠れた wrapper 起動 (`WRAPPER=$(find ... run-codex-review.sh ...)`) と、 実際に wrapper を
+# 隠れた wrapper 起動 (`WRAPPER=$(find ... run-pre-push-codex-review.sh ...)`) と、 実際に wrapper を
 # 実行する別 segment (`bash "$WRAPPER"`) は別 segment になり得るため、 隣接判定は
 # substring を含む segment (前者) しか見ておらず、 実行 segment (後者) に隣接する `|` /
 # `&` を見逃す。 そのため command 全体の SEPARATORS を **位置を問わず** 走査し、 単独
-# `&` / `|` が 1 つでもあれば deny する。 例: `WRAPPER=$(find ... run-codex-review.sh ...) &&
+# `&` / `|` が 1 つでもあれば deny する。 例: `WRAPPER=$(find ... run-pre-push-codex-review.sh ...) &&
 # bash "$WRAPPER" | tee log` は隣接判定 (substring 含有 segment の直後は `&&`) だけでは
 # 素通りするが、 本チェックが末尾の `|` を検出して deny する。
 if [ "$HAS_INDIRECTION" -eq 1 ] && [ "$_SHELL_BG" -eq 0 ]; then
@@ -1684,31 +1626,31 @@ fi
 
 if [ "$RUN_IN_BG" = "true" ]; then
   REASON=$(cat <<'EOF'
-プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper を `run_in_background: true` で起動することはできません。
+プッシュ前レビューをブロックしました。 `run-pre-push-codex-review.sh` wrapper を `run_in_background: true` で起動することはできません。
 
 理由: wrapper 自身は codex review を foreground で実行しますが、 Bash tool の `run_in_background: true` で起動すると **codex-reviewer subagent は wrapper の stdout / stderr (= codex review の verdict / findings) を観察できないまま完了しうる**ため、parent-safe report を正しく組み立てられません。v4.0.1 以降は wrapper が pending attestation を書いても、正規 report 成功前に final marker へ昇格しないため push gate bypass にはなりませんが、review cycle と report delivery が分離し、stale pending だけが残る不正な完了になります。
 
-対応: `run_in_background: true` を使わず、 wrapper を plain foreground の単独コマンドとして再実行してください。 wrapper は内部で codex companion を `--wait` で foreground 起動するため、 Bash 呼び出し自体が review 完了まで block しますが、 これが本プラグインの想定する正しい使い方です (= review 結果を観察してから push 判断する)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
+対応: `run_in_background: true` を使わず、 wrapper を plain foreground の単独コマンドとして再実行してください。 wrapper は内部で codex companion を `--wait` で foreground 起動するため、 Bash 呼び出し自体が review 完了まで block しますが、 これが本プラグインの想定する正しい使い方です (= review 結果を観察してから push 判断する)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-codex-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
 EOF
 )
 elif [ "$HAS_INDIRECTION" -eq 1 ]; then
   REASON=$(cat <<'EOF'
-プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper を shell-level の `&` (background) や `|` (pipeline) で起動することはできません。
+プッシュ前レビューをブロックしました。 `run-pre-push-codex-review.sh` wrapper を shell-level の `&` (background) や `|` (pipeline) で起動することはできません。
 
-理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動したり、output を別 process が変換したりするため、 **codex-reviewer subagent が wrapper の verdict / findings を観察しない / 不完全にしか観察しない** 経路ができます。pending attestation と schema 上の report だけが揃っても、report の根拠となる review output を完全に観察した保証がないため、foreground review 要件に反します。
+理由: `bash run-pre-push-codex-review.sh &` のような shell-level backgrounding、 `bash run-pre-push-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動したり、output を別 process が変換したりするため、 **codex-reviewer subagent が wrapper の verdict / findings を観察しない / 不完全にしか観察しない** 経路ができます。pending attestation と schema 上の report だけが揃っても、report の根拠となる review output を完全に観察した保証がないため、foreground review 要件に反します。
 
 本コマンドはコマンド置換 `$(...)` 等の間接実行 (indirection) を含むため、 `&` / `|` が wrapper 呼び出しの直前・直後に隣接していなくても **位置を問わず** deny しています (indirection 経由の実行は、 substring を含む segment と実際に wrapper を実行する segment の対応関係を本 parser が追跡できないため、 保守的に deny する必要があります)。
 
-対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
+対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-pre-push-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-codex-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
 EOF
 )
 else
   REASON=$(cat <<'EOF'
-プッシュ前レビューをブロックしました。 `run-codex-review.sh` wrapper を shell-level の `&` (background) や `|` (pipeline) で起動することはできません。
+プッシュ前レビューをブロックしました。 `run-pre-push-codex-review.sh` wrapper を shell-level の `&` (background) や `|` (pipeline) で起動することはできません。
 
-理由: `bash run-codex-review.sh &` のような shell-level backgrounding、 `bash run-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動したり、output を別 process が変換したりするため、 **codex-reviewer subagent が wrapper の verdict / findings を観察しない / 不完全にしか観察しない** 経路ができます。pending attestation と schema 上の report だけが揃っても、report の根拠となる review output を完全に観察した保証がないため、foreground review 要件に反します。
+理由: `bash run-pre-push-codex-review.sh &` のような shell-level backgrounding、 `bash run-pre-push-codex-review.sh | tee log` のような pipeline で wrapper を起動すると、 Bash tool option `run_in_background: false` で呼び出しても shell が wrapper を別 process で並列起動したり、output を別 process が変換したりするため、 **codex-reviewer subagent が wrapper の verdict / findings を観察しない / 不完全にしか観察しない** 経路ができます。pending attestation と schema 上の report だけが揃っても、report の根拠となる review output を完全に観察した保証がないため、foreground review 要件に反します。
 
-対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
+対応: `&` / `|` を外して wrapper を plain foreground の単独コマンドとして再実行するか、 `&&` (success-and) / `;` (sequential) で連結してください。 logging が必要なら file redirection (`bash run-pre-push-codex-review.sh > codex.log 2>&1`) で代替できます (= wrapper 完了後に file を読めば review 結果を観察可能)。 この deny メッセージを親 session が report 経由で見た場合は、 wrapper を直接起動せず `pre-push-codex-review:codex-reviewer` subagent (model: "sonnet") を再起動してください。
 EOF
 )
 fi

@@ -1,6 +1,6 @@
-"""pre-push-review:codex-reviewer の background-move 回収契約テスト (issue #337)。
+"""pre-push-codex-review:codex-reviewer の background-move 回収契約テスト (issue #337)。
 
-`pre-push-review:codex-reviewer` subagent は tools が `Bash` のみのため、Claude Code
+`pre-push-codex-review:codex-reviewer` subagent は tools が `Bash` のみのため、Claude Code
 の Bash tool が timeout 時にプロセスを kill せず background へ自動移行させる現仕様下
 では、移行後の出力を回収する手段が構造的に無い。Codex review 本体は完走している
 のに subagent は正規 report (`Status: pass|findings`) を返せない。
@@ -11,7 +11,7 @@
 single-run 契約は不変。
 
 本テストは spec-first Phase A で実装前の red テストとして追加する。Phase B で
-`plugins/pre-push-review/agents/codex-reviewer.md` が改訂されると green になる。
+`plugins/pre-push-codex-review/agents/codex-reviewer.md` が改訂されると green になる。
 
 本改訂は、初版に対するレビュー指摘 (assert が非識別的で無関係な既存文言にも
 誤マッチしうる、境界 3 種が個別に固定されておらず 1 つの assert で束ねられていた、
@@ -113,7 +113,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CODEX_REVIEWER = ROOT / "plugins" / "pre-push-review" / "agents" / "codex-reviewer.md"
+CODEX_REVIEWER = (
+    ROOT / "plugins" / "pre-push-codex-review" / "agents" / "codex-reviewer.md"
+)
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 

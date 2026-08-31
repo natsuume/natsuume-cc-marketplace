@@ -1,9 +1,10 @@
 """block-bg-codex-wrapper.sh の agent_type 検証 gate (fail-closed) 契約テスト
 (issue #267)。
 
-契約: agent_type 検証 gate (fail-closed): command に run-codex-review.sh を含む Bash
-実行は、hook payload のトップレベル agent_type が pre-push-review:codex-reviewer に
-完全一致する場合のみ許可。欠落 (= メインセッション or agent_type 未対応の旧 Claude
+契約: agent_type 検証 gate (fail-closed): command に run-pre-push-codex-review.sh を
+含む Bash 実行は、hook payload のトップレベル agent_type が
+pre-push-codex-review:codex-reviewer に完全一致する場合のみ許可。
+欠落 (= メインセッション or agent_type 未対応の旧 Claude
 Code)・不一致はいずれも deny。既存の bg / pipeline deny は agent_type 一致時も維持。
 jq 不在等の環境失敗は既存どおり fail-open (本テストの対象外)。
 
@@ -25,16 +26,17 @@ ROOT = Path(__file__).resolve().parents[1]
 HOOK = (
     ROOT
     / "plugins"
-    / "pre-push-review"
+    / "pre-push-codex-review"
     / "hooks"
     / "scripts"
     / "block-bg-codex-wrapper.sh"
 )
 
 WRAPPER_COMMAND = (
-    "bash /opt/claude/plugins/pre-push-review/hooks/scripts/run-codex-review.sh"
+    "bash /opt/claude/plugins/pre-push-codex-review/hooks/scripts/"
+    "run-pre-push-codex-review.sh"
 )
-CODEX_REVIEWER_AGENT_TYPE = "pre-push-review:codex-reviewer"
+CODEX_REVIEWER_AGENT_TYPE = "pre-push-codex-review:codex-reviewer"
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
@@ -138,7 +140,7 @@ class BlockBgCodexWrapperAgentTypeGateTest(unittest.TestCase):
 class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
     """実行形 segment 分類 (codex review P2 指摘の regression 修正) のテスト。
 
-    substring `run-codex-review.sh` を含んでいても、 wrapper を実行せず言及する
+    substring `run-pre-push-codex-review.sh` を含んでいても、 wrapper を実行せず言及する
     だけの read-only コマンド (cat / git diff / grep 等) は agent_type gate の対象外
     (allow) とし、 interpreter 起動・コマンド置換を含む形・不明コマンドのみを実行形
     として gate する契約を固定する。
@@ -174,8 +176,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -188,8 +190,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "git diff -- plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "git diff -- plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -204,8 +206,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "grep -n marker plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh | head -5"
+                        "grep -n marker plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh | head -5"
                     )
                 },
             }
@@ -219,8 +221,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "sed -n '1,50p' plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "sed -n '1,50p' plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -233,7 +235,7 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        r"find . -name run-codex-review.sh -exec bash {} \;"
+                        r"find . -name run-pre-push-codex-review.sh -exec bash {} \;"
                     )
                 },
             }
@@ -246,7 +248,7 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "git -c core.pager=x diff run-codex-review.sh"
+                    "command": "git -c core.pager=x diff run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -261,7 +263,7 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         'WRAPPER=$(find "$HOME/.claude/plugins/cache" '
-                        "-path '*run-codex-review.sh' -type f | head -1) "
+                        "-path '*run-pre-push-codex-review.sh' -type f | head -1) "
                         '&& bash "$WRAPPER"'
                     )
                 },
@@ -278,7 +280,7 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         'WRAPPER=$(find "$HOME/.claude/plugins/cache" '
-                        "-path '*run-codex-review.sh' -type f | head -1) "
+                        "-path '*run-pre-push-codex-review.sh' -type f | head -1) "
                         '&& bash "$WRAPPER"'
                     )
                 },
@@ -298,7 +300,7 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         'WRAPPER=$(find "$HOME/.claude/plugins/cache" '
-                        "-path '*run-codex-review.sh' -type f | head -1) "
+                        "-path '*run-pre-push-codex-review.sh' -type f | head -1) "
                         '&& bash "$WRAPPER" | tee /tmp/log.txt'
                     )
                 },
@@ -312,7 +314,7 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "cat $(bash run-codex-review.sh)"},
+                "tool_input": {"command": "cat $(bash run-pre-push-codex-review.sh)"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
@@ -325,8 +327,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "grep -n '$(' plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "grep -n '$(' plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -340,8 +342,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        'grep -n "\\$(" plugins/pre-push-review/hooks/scripts/'
-                        "run-codex-review.sh"
+                        'grep -n "\\$(" plugins/pre-push-codex-review/hooks/scripts/'
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -354,8 +356,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "grep -n '`' plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "grep -n '`' plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -368,8 +370,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "grep -n '<(' plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "grep -n '<(' plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -384,8 +386,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        'cat "$(bash plugins/pre-push-review/hooks/scripts/'
-                        'run-codex-review.sh)"'
+                        'cat "$(bash plugins/pre-push-codex-review/hooks/scripts/'
+                        'run-pre-push-codex-review.sh)"'
                     )
                 },
             }
@@ -400,8 +402,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh | bash"
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh | bash"
                     )
                 },
             }
@@ -418,8 +420,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh | head -100 | bash"
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh | head -100 | bash"
                     )
                 },
             }
@@ -437,8 +439,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "bash gen-pattern.sh | grep -n -f - "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -453,8 +455,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh | grep -n marker | head -5"
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh | grep -n marker | head -5"
                     )
                 },
             }
@@ -471,8 +473,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        'run-codex-review.sh | grep "$(bash)"'
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        'run-pre-push-codex-review.sh | grep "$(bash)"'
                     )
                 },
             }
@@ -488,8 +490,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "git grep -n marker -- "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -507,8 +509,8 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "git log --oneline -- "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh | head -5"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh | head -5"
                     )
                 },
             }
@@ -520,7 +522,7 @@ class BlockBgCodexWrapperExecFormClassificationTest(unittest.TestCase):
 class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     """issue #339: executable 位置分類の契約テスト。
 
-    wrapper 名 (`run-codex-review.sh`) を含む segment の分類を、read-only
+    wrapper 名 (`run-pre-push-codex-review.sh`) を含む segment の分類を、read-only
     allowlist 方式 (不明コマンド = fail-closed で実行形) から executable 位置方式へ
     転換する。分類は「canonical token 値」(行継続正規化後の shell word に対し、
     single/double quote 除去・backslash escape 解決・fragment 連結を行った
@@ -613,8 +615,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
          判定を誤らせるのは argv word 側が危険 option になり得る
          場合だけなので、語中の `<` / `>` は **その token が既に
          固定開始 (下記 緩和 2 の定義) を持つ場合に限り** 許容し
-         (`<path>/run-codex-review.sh>out.txt` の argv word は
-         `<path>/run-codex-review.sh` で非 `-` 始まり)、持たない
+         (`<path>/run-pre-push-codex-review.sh>out.txt` の argv word は
+         `<path>/run-pre-push-codex-review.sh` で非 `-` 始まり)、持たない
          場合は従来どおり実行形とする (`--pre>x` / `-'-pre'>x` は
          最初の寄与文字が `-` なので実行形のまま)。redirection の
          書き込み先が `-` 始まりでも argv word には現れないため
@@ -719,7 +721,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         substring があれば当然実行形だが、builtin superset 該当時点で
         実行形のためこの検査は宣言的な補強である)
     11. head の basename (step 11 以降でのみ basename を適用する) が
-        wrapper 名 (run-codex-review.sh) に完全一致 → 実行形。shell
+        wrapper 名 (run-pre-push-codex-review.sh) に完全一致 → 実行形。shell
         interpreter (bash/sh/dash/zsh/ksh) が head で wrapper substring と
         共存 → 実行形 (option の精密解析はしない)
     12. script/対話内実行面を持つ sed/awk/xargs/less/more/parallel →
@@ -763,7 +765,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
 
     option 走査中に canonical 化が失敗した token は、それが option 位置か
     operand 位置かを静的に区別できないため一律に実行形とする。動的 path
-    operand を含む read-only mention (`git diff -- "$DIR/run-codex-review.sh"`
+    operand を含む read-only mention (`git diff -- "$DIR/run-pre-push-codex-review.sh"`
     等) が deny される false positive は、ANSI-C quote 形の危険 option を
     確実に捕捉するための代償として受容する。また、コマンド行に現れず
     呼び出し前に export された環境変数による間接実行面は本 hook から
@@ -789,7 +791,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     `block-pre-push.sh` の marker hash 検証が担う。
 
     受容境界 (先頭 glob の operand): 固定開始を持たない token
-    (`*/run-codex-review.sh` / `*run-codex-review.sh` 等、先頭が
+    (`*/run-pre-push-codex-review.sh` / `*run-pre-push-codex-review.sh` 等、先頭が
     glob メタ文字である形) は operand でも実行形とする。これは
     origin/master が allow していた形を含む既知の false positive
     だが、安全側に倒す必要がある: pathname expansion は展開前の
@@ -799,7 +801,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     prefix 一致の危険 option (`--pre=` / `--hostname-bin=` /
     `--compress-program` の `--co`) を取りこぼす。回避形として
     `./` を前置すれば固定開始 `.` を得て allow になる
-    (`cat ./*/run-codex-review.sh` / `git diff -- ./*run-codex-review.sh`)。
+    (`cat ./*/run-pre-push-codex-review.sh` /
+    `git diff -- ./*run-pre-push-codex-review.sh`)。
     根本解決には、tokenizer の信頼性を検査する rule (a)/(b) と、
     token 値を分類に使えるかを検査する rule (c)/(d) を分離し、
     後者を「値を実際に消費する head・option 走査対象」に限定する
@@ -813,7 +816,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     `eval` で tilde expansion が起きるため、bash 3.2 系 (macOS の
     system bash) では `~` を含む token が展開済み path として step 3 の
     検査に届く。結果として rule (c) の「token 先頭の `~`」も緩和 2 の
-    `~/` 分岐も bash 3.2 では発火せず、`cat ~root/run-codex-review.sh`
+    `~/` 分岐も bash 3.2 では発火せず、`cat ~root/run-pre-push-codex-review.sh`
     のような形の判定が bash 5 (実行形) と bash 3.2 (mention 候補) で
     分かれる。差は緩和方向にのみ生じ、展開後 path でも basename 判定は
     機能するため wrapper 起動・shell interpreter 起動・script 実行面
@@ -852,8 +855,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg -n 'run-codex-review.sh' "
-                        "plugins/pre-push-review/hooks/scripts"
+                        "rg -n 'run-pre-push-codex-review.sh' "
+                        "plugins/pre-push-codex-review/hooks/scripts"
                     )
                 },
             }
@@ -867,8 +870,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg -n marker plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "rg -n marker plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -880,7 +883,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "echo run-codex-review.sh"},
+                "tool_input": {"command": "echo run-pre-push-codex-review.sh"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
@@ -890,7 +893,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "find . -name run-codex-review.sh"},
+                "tool_input": {"command": "find . -name run-pre-push-codex-review.sh"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
@@ -902,8 +905,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "sort plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "sort plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -917,8 +920,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg -n marker plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh | head -5"
+                        "rg -n marker plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh | head -5"
                     )
                 },
             }
@@ -934,8 +937,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg -e '--pre' plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "rg -e '--pre' plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -947,7 +950,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "rg --pre bash run-codex-review.sh"},
+                "tool_input": {"command": "rg --pre bash run-pre-push-codex-review.sh"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
@@ -958,7 +961,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "rg --pre=bash marker run-codex-review.sh"
+                    "command": "rg --pre=bash marker run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -970,7 +973,10 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "sort --compress-program=gzip run-codex-review.sh"
+                    "command": (
+                        "sort --compress-program=gzip "
+                        "run-pre-push-codex-review.sh"
+                    )
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -983,7 +989,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        r"find . -name run-codex-review.sh -execdir bash {} \;"
+                        r"find . -name run-pre-push-codex-review.sh -execdir bash {} \;"
                     )
                 },
             }
@@ -997,8 +1003,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "source plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "source plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1012,8 +1018,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        ". plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        ". plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1027,8 +1033,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "exec bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "exec bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1042,8 +1048,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "bash -c 'bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh'"
+                        "bash -c 'bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh'"
                     )
                 },
             }
@@ -1057,8 +1063,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "env FOO=1 bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "env FOO=1 bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1072,8 +1078,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "timeout 60 bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "timeout 60 bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1088,8 +1094,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "timeout -s TERM 60 bash "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1103,8 +1109,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "nice bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "nice bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1118,8 +1124,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "nohup bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "nohup bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1133,8 +1139,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "command bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "command bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1148,8 +1154,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "WRAPPER=plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "WRAPPER=plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1163,7 +1169,10 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "GIT_EXTERNAL_DIFF=./run-codex-review.sh git diff"
+                    "command": (
+                        "GIT_EXTERNAL_DIFF=./run-pre-push-codex-review.sh "
+                        "git diff"
+                    )
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -1176,8 +1185,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1191,8 +1200,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "zsh plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "zsh plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1206,8 +1215,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg -l marker plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh | bash"
+                        "rg -l marker plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh | bash"
                     )
                 },
             }
@@ -1219,7 +1228,11 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "echo run-codex-review.sh | xargs bash"},
+                "tool_input": {
+                    "command": (
+                        "echo run-pre-push-codex-review.sh | xargs bash"
+                    )
+                },
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
@@ -1231,8 +1244,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg '--pre' bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "rg '--pre' bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1246,8 +1259,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg --'pre' foo plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "rg --'pre' foo plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1262,8 +1275,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "git diff --'ext-diff' "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1277,7 +1290,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "find . -name run-codex-review.sh '-exec' bash '{}' ';'"
+                        "find . -name run-pre-push-codex-review.sh "
+                        "'-exec' bash '{}' ';'"
                     )
                 },
             }
@@ -1291,8 +1305,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "eval 'bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh'"
+                        "eval 'bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh'"
                     )
                 },
             }
@@ -1306,8 +1320,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "command eval 'bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh'"
+                        "command eval 'bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh'"
                     )
                 },
             }
@@ -1321,8 +1335,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "builtin eval 'bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh'"
+                        "builtin eval 'bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh'"
                     )
                 },
             }
@@ -1336,8 +1350,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "time /bin/bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "time /bin/bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1351,8 +1365,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "! bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "! bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1366,8 +1380,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "/bin/bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "/bin/bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1382,8 +1396,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "/usr/bin/rg --pre bash "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1398,8 +1412,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "/usr/bin/sudo bash "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1413,8 +1427,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "sudo bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "sudo bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1428,7 +1442,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "sudo GIT_EXTERNAL_DIFF=./run-codex-review.sh git diff"
+                        "sudo GIT_EXTERNAL_DIFF=./run-pre-push-codex-review.sh git diff"
                     )
                 },
             }
@@ -1440,7 +1454,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "echo X=run-codex-review.sh"},
+                "tool_input": {"command": "echo X=run-pre-push-codex-review.sh"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
@@ -1452,8 +1466,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "frobnicate plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "frobnicate plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1467,8 +1481,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        '"$CMD" plugins/pre-push-review/hooks/scripts/'
-                        "run-codex-review.sh"
+                        '"$CMD" plugins/pre-push-codex-review/hooks/scripts/'
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1482,8 +1496,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "(cd /tmp && bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh)"
+                        "(cd /tmp && bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh)"
                     )
                 },
             }
@@ -1497,8 +1511,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "{ bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh; }"
+                        "{ bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh; }"
                     )
                 },
             }
@@ -1512,8 +1526,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "if true; then bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh; fi"
+                        "if true; then bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh; fi"
                     )
                 },
             }
@@ -1527,8 +1541,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "export WRP=plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "export WRP=plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1542,8 +1556,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "declare -x WRP=plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh"
+                        "declare -x WRP=plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1557,8 +1571,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "coproc bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "coproc bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1572,8 +1586,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "trap 'bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh' EXIT"
+                        "trap 'bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh' EXIT"
                     )
                 },
             }
@@ -1587,8 +1601,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        ">codex.log bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh"
+                        ">codex.log bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1603,8 +1617,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "timeout 1,5 grep -n marker plugins/pre-push-review/"
-                        "hooks/scripts/run-codex-review.sh"
+                        "timeout 1,5 grep -n marker plugins/pre-push-codex-review/"
+                        "hooks/scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1618,8 +1632,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "sort --compress-prog=gzip plugins/pre-push-review/"
-                        "hooks/scripts/run-codex-review.sh"
+                        "sort --compress-prog=gzip plugins/pre-push-codex-review/"
+                        "hooks/scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1631,7 +1645,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "type run-codex-review.sh"},
+                "tool_input": {"command": "type run-pre-push-codex-review.sh"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
@@ -1643,8 +1657,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg -l marker plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh | jq ."
+                        "rg -l marker plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh | jq ."
                     )
                 },
             }
@@ -1658,8 +1672,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "command grep -n marker plugins/pre-push-review/"
-                        "hooks/scripts/run-codex-review.sh"
+                        "command grep -n marker plugins/pre-push-codex-review/"
+                        "hooks/scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1674,8 +1688,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "[ -f plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh ]"
+                        "[ -f plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh ]"
                     )
                 },
             }
@@ -1689,8 +1703,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "git difftool plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh"
+                        "git difftool plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1704,7 +1718,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "find . -name run-codex-review.sh $'-exec' bash "
+                        "find . -name run-pre-push-codex-review.sh $'-exec' bash "
                         "'{}' ';'"
                     )
                 },
@@ -1719,8 +1733,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg $'--pre' bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh"
+                        "rg $'--pre' bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1735,8 +1749,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "sort $'--compress-program=gzip' "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1751,8 +1765,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "git diff $'--ext-diff' "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1767,8 +1781,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        r'rg "\-\-pre" plugins/pre-push-review/hooks/'
-                        r"scripts/run-codex-review.sh"
+                        r'rg "\-\-pre" plugins/pre-push-codex-review/hooks/'
+                        r"scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1782,8 +1796,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "sort --co=gzip plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh"
+                        "sort --co=gzip plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1798,8 +1812,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "RIPGREP_CONFIG_PATH=/tmp/rgcfg rg -n marker "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1814,8 +1828,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "GIT_PAGER=cat git diff -- "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1829,8 +1843,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "FOO=1 grep -n marker plugins/pre-push-review/"
-                        "hooks/scripts/run-codex-review.sh"
+                        "FOO=1 grep -n marker plugins/pre-push-codex-review/"
+                        "hooks/scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1845,8 +1859,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "echo ( ; bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh"
+                        "echo ( ; bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1860,8 +1874,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "echo { ; bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh"
+                        "echo { ; bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1876,8 +1890,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        r'rg "\\$HOME" plugins/pre-push-review/hooks/'
-                        r"scripts/run-codex-review.sh"
+                        r'rg "\\$HOME" plugins/pre-push-codex-review/hooks/'
+                        r"scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1892,8 +1906,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "[ -v 'arr[$(bash plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh)]' ]"
+                        "[ -v 'arr[$(bash plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh)]' ]"
                     )
                 },
             }
@@ -1908,8 +1922,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "rg --hostname-bin bash foo "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1924,8 +1938,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "rg --hostname-bin=bash foo "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1941,8 +1955,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         r'rg "x\\" --pre bash '
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1957,8 +1971,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        'rg -n "foo bar" plugins/pre-push-review/hooks/'
-                        "scripts/run-codex-review.sh"
+                        'rg -n "foo bar" plugins/pre-push-codex-review/hooks/'
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1972,8 +1986,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        r"echo $'\'' ; bash plugins/pre-push-review/"
-                        r"hooks/scripts/run-codex-review.sh"
+                        r"echo $'\'' ; bash plugins/pre-push-codex-review/"
+                        r"hooks/scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -1987,8 +2001,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        'rg -n "marker$" plugins/pre-push-review/hooks/'
-                        "scripts/run-codex-review.sh"
+                        'rg -n "marker$" plugins/pre-push-codex-review/hooks/'
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2003,8 +2017,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         'rg $"--pre=bash" marker '
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2019,8 +2033,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "rg {--pre=bash,--pre=bash} marker "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2035,8 +2049,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "rg --pr?=bash marker "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2051,8 +2065,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "rg $[1] marker "
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2065,7 +2079,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": 'rg -n marker "$HOME/run-codex-review.sh"'
+                    "command": 'rg -n marker "$HOME/run-pre-push-codex-review.sh"'
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2079,8 +2093,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "rg -n 'a*b' plugins/pre-push-review/hooks/"
-                        "scripts/run-codex-review.sh"
+                        "rg -n 'a*b' plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2096,8 +2110,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh > out.txt"
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh > out.txt"
                     )
                 },
             }
@@ -2113,8 +2127,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh >out.txt"
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh >out.txt"
                     )
                 },
             }
@@ -2130,7 +2144,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "rg -n marker plugins/*/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2145,8 +2159,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         "cat ~/.claude/plugins/cache/natsuume-plugins/"
-                        "pre-push-review/5.3.1/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "pre-push-codex-review/1.0.0/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2158,7 +2172,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "wc -l ~/x/run-codex-review.sh"},
+                "tool_input": {"command": "wc -l ~/x/run-pre-push-codex-review.sh"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
@@ -2170,8 +2184,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "./b*sh plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "./b*sh plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2185,8 +2199,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "~/bin/bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "~/bin/bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2198,7 +2212,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "rg --pre foo run-codex-review.sh"},
+                "tool_input": {"command": "rg --pre foo run-pre-push-codex-review.sh"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
@@ -2209,7 +2223,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "rg -n marker --pre>x run-codex-review.sh"
+                    "command": "rg -n marker --pre>x run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2221,7 +2235,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "rg -n marker -'-pre'>x run-codex-review.sh"
+                    "command": "rg -n marker -'-pre'>x run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2234,8 +2248,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh>out.txt"
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh>out.txt"
                     )
                 },
             }
@@ -2249,8 +2263,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh>--pre"
+                        "cat plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh>--pre"
                     )
                 },
             }
@@ -2264,8 +2278,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        'cat "plugins"/pre-push-review/hooks/scripts/'
-                        "run-codex-review.sh>out.txt"
+                        'cat "plugins"/pre-push-codex-review/hooks/scripts/'
+                        "run-pre-push-codex-review.sh>out.txt"
                     )
                 },
             }
@@ -2278,7 +2292,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "cat ./*/run-codex-review.sh"
+                    "command": "cat ./*/run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2290,7 +2304,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "cat */run-codex-review.sh"
+                    "command": "cat */run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2303,8 +2317,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "bash plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "bash plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2318,8 +2332,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "sed -n 1p plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "sed -n 1p plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2334,8 +2348,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_input": {
                     "command": (
                         'rg -n "marker$[1]" '
-                        "plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2349,7 +2363,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat 'plugins'/*/hooks/scripts/run-codex-review.sh"
+                        "cat 'plugins'/*/hooks/scripts/run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2363,7 +2377,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        'cat "plugins"/*/hooks/scripts/run-codex-review.sh'
+                        'cat "plugins"/*/hooks/scripts/run-pre-push-codex-review.sh'
                     )
                 },
             }
@@ -2376,7 +2390,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "cat 'my dir'/*/run-codex-review.sh"
+                    "command": "cat 'my dir'/*/run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2388,7 +2402,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "cat \\plugins/*/run-codex-review.sh"
+                    "command": "cat \\plugins/*/run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2400,7 +2414,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "rg -n marker '-'-pre* run-codex-review.sh"
+                    "command": "rg -n marker '-'-pre* run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2412,7 +2426,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": "rg -n marker '--pre'* run-codex-review.sh"
+                    "command": "rg -n marker '--pre'* run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2424,7 +2438,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
-                    "command": 'rg -n marker "--pre"* run-codex-review.sh'
+                    "command": 'rg -n marker "--pre"* run-pre-push-codex-review.sh'
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2437,8 +2451,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat *.sh plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "cat *.sh plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2450,7 +2464,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
-                "tool_input": {"command": "cat [a]x/run-codex-review.sh"},
+                "tool_input": {"command": "cat [a]x/run-pre-push-codex-review.sh"},
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
@@ -2462,8 +2476,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "echo stub > plugins/pre-push-review/hooks/scripts/"
-                        "run-codex-review.sh"
+                        "echo stub > plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
                     )
                 },
             }
@@ -2477,10 +2491,73 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": (
-                        "cat x >> plugins/pre-push-review/hooks/scripts/"
+                        "cat x >> plugins/pre-push-codex-review/hooks/scripts/"
+                        "run-pre-push-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+class BlockBgCodexWrapperLegacyBasenameNonInterferenceTest(unittest.TestCase):
+    """新旧 wrapper basename の非干渉契約 (issue #378 分離後の互換 alias 検証)。
+
+    旧 pre-push-review (codex gate を持つ v6.0.0 未満) の codex review wrapper
+    basename は `run-codex-review.sh` で、本 plugin の wrapper basename
+    `run-pre-push-codex-review.sh` とは別名である。本 hook の粗フィルタは
+    substring `run-pre-push-codex-review.sh` の有無だけで発火するため、旧
+    basename のみを含む Bash コマンドには発火せず allow のまま (basename
+    非干渉設計) であることを固定する。
+    """
+
+    def run_hook(
+        self, payload: dict[str, object], cwd: Path
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["bash", str(HOOK)],
+            input=json.dumps(payload).encode("utf-8"),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+        )
+
+    def assert_allowed(self, result: subprocess.CompletedProcess[bytes]) -> None:
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout, b"")
+
+    def test_legacy_wrapper_basename_launch_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "bash plugins/pre-push-review/hooks/scripts/"
                         "run-codex-review.sh"
                     )
                 },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_legacy_wrapper_basename_launch_with_agent_type_is_still_allowed(
+        self,
+    ) -> None:
+        # 本 hook は canonical wrapper (run-pre-push-codex-review.sh) だけを
+        # 対象とするため、agent_type の有無・値に関わらず旧 basename には
+        # 発火しない。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "bash plugins/pre-push-review/hooks/scripts/"
+                        "run-codex-review.sh"
+                    )
+                },
+                "agent_type": "pre-push-review:codex-reviewer",
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)

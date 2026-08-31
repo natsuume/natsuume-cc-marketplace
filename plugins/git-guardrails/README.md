@@ -4,7 +4,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.6.3
+v0.6.4
 
 ## 概要
 
@@ -188,7 +188,8 @@ git-guardrails/
 ## 関連プラグイン
 
 - [enforce-draft-pr](../enforce-draft-pr/) — `gh pr create` 時に `--draft` を自動付与 (任意導入)
-- [pre-push-review](../pre-push-review/) — push 前に 3 レビュー (`/code-review` + codex review wrapper + `pre-push-review:security-reviewer` subagent) を `/pre-push-review:review` slash command で並列起動して強制 (本プラグインのブランチ判定とは別軸の防御)
+- [pre-push-review](../pre-push-review/) — push 前に 2 レビュー (`pre-push-review:code-reviewer` + `pre-push-review:security-reviewer` subagent) を `/pre-push-review:review` slash command で並列起動して強制する core (本プラグインのブランチ判定とは別軸の防御)
+- [pre-push-codex-review](../pre-push-codex-review/) — push 前に codex review (OpenAI クロスモデルレビュー) の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる
 
 ## 関連情報
 

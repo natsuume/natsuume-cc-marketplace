@@ -2,26 +2,19 @@
 # markers.sh
 # pre-push-review プラグインのレビューマーカーファイル名を単一ソース化する。
 #
-# block-pre-push.sh が読み (3 マーカーのハッシュ検証)、 auto-mark.sh が final marker を
-# 書き込む。run-codex-review.sh は Codex review 完了時の pending attestation を書き、
-# auto-mark.sh が parent-safe report の正常完了後に final marker へ昇格する。各 path が
-# 1 文字でも乖離すると
-# マーカーは永遠に一致せず push が通らなくなる致命バグになるため、 ここに集約する。
+# block-pre-push.sh が読み (2 マーカーのハッシュ検証)、 auto-mark.sh が final marker を
+# 書き込む。各 path が 1 文字でも乖離するとマーカーは永遠に一致せず push が通らなくなる
+# 致命バグになるため、 ここに集約する。
 #
-# ## v2.0.0: 3 マーカー構成
+# ## 2 マーカー構成
 #
-# - CODE_REVIEWED_MARKER ← /code-review (Anthropic read-only バグ検出)
-# - CODEX_MARKER         ← codex review (OpenAI バグ検出 / wrapper script 経由)
+# - CODE_REVIEWED_MARKER ← code-reviewer subagent (self-contained correctness バグ検出)
 # - SECURITY_MARKER      ← security-reviewer subagent (self-contained security review)
 #
-# /simplify (cleanup-only Anthropic skill) のマーカーは v1.x で扱っていたが、 v2.0.0 で
-# 削除した。 v2.0.0 は 3 レビューを `/pre-push-review:review` slash command 経由で並列起動
-# する確定的フローに切替えたため、 cleanup ステップを廃止して bug 検出 + codex + security の
-# 3 軸 defense-in-depth に純化している。
+# 2 マーカーは常に全て必須で、 `/pre-push-review:review` slash command が 2 subagent を
+# 並列起動する確定的フローで更新される。
 
 CODE_REVIEWED_MARKER_NAME=".claude-pre-push-code-reviewed"
-CODEX_MARKER_NAME=".claude-pre-push-codex-reviewed"
-CODEX_PENDING_MARKER_NAME=".claude-pre-push-codex-reviewed.pending"
 SECURITY_MARKER_NAME=".claude-pre-push-security-reviewed"
 # issue #285: SubagentStart が書く launch attestation (agent_id ごとに 1 ファイル) の prefix。
 # auto-mark.sh の SubagentStart/SubagentStop 契約が「開始時 review hash」を束縛するために使う。
@@ -58,19 +51,6 @@ marker_path() {
 # 出力: code-reviewed マーカー (/code-review = read-only バグ検出) の path
 code_reviewed_marker_path() {
   marker_path "$1" "$CODE_REVIEWED_MARKER_NAME"
-}
-
-# 引数: <git-dir>
-# 出力: codex-reviewed マーカーの path
-codex_marker_path() {
-  marker_path "$1" "$CODEX_MARKER_NAME"
-}
-
-# 引数: <git-dir>
-# 出力: codex review wrapper が書く pending attestation の path。
-# auto-mark.sh が parent-safe report の正常完了後にのみ final marker へ昇格する。
-codex_pending_marker_path() {
-  marker_path "$1" "$CODEX_PENDING_MARKER_NAME"
 }
 
 # 引数: <git-dir>

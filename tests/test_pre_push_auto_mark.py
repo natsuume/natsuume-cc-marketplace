@@ -1,20 +1,24 @@
-"""Claude Code auto-mark の subagent lifecycle 契約テスト (issue #285)。
+"""pre-push-review auto-mark の subagent lifecycle 契約テスト (issue #285)。
 
 Claude Code v2.1.198 以降、Agent tool は既定で background 起動になり、
 PostToolUse は起動受理時 (status="async_launched") に 1 回発火するのみで
 完了時には発火しない。そのため completion 検知を PostToolUse から
 SubagentStart / SubagentStop へ完全移行する。
 
+pre-push-review core が所有するのは code-reviewed / security-reviewed の 2 マーカー
+であり、codex マーカーとその pending attestation lifecycle は
+pre-push-codex-review plugin が所有する (tests/test_pre_push_codex_auto_mark.py)。
+
 契約 (auto-mark.sh):
 
-- SubagentStart (agent_type が 3 reviewer の完全一致):
+- SubagentStart (agent_type が 2 reviewer の完全一致):
   - agent_id が ^[A-Za-z0-9._-]{1,128}$ に一致しない場合は何もしない
   - base 検出不能 / branch 取得不能 / master・main / hash 計算失敗では
     attestation を書かない
   - 開始時 review hash を launch attestation
     (git-dir/.claude-pre-push-launch-<agent_id>) に書く (one-shot 記録)
   - 1 日より古い launch attestation を opportunistic に削除する
-- SubagentStop (agent_type が 3 reviewer の完全一致):
+- SubagentStop (agent_type が 2 reviewer の完全一致):
   - stop_hook_active が false でない場合は attestation を消費せず skip
     (stop hook による継続中の中間 stop)
   - launch attestation が無ければ skip (resume 後の再 stop・移行前起動)
@@ -24,13 +28,8 @@ SubagentStart / SubagentStop へ完全移行する。
     に一致する行がちょうど 1 つ、かつ値が pass|findings のときのみ有効
   - 開始時 hash と stop 時点の現在 hash が一致するときのみ marker を書く
     (レビュー開始後の差分変更を fail-closed に遮断)
-  - codex-reviewer はさらに wrapper の pending attestation が regular file
-    かつ現在 hash と一致する場合のみ final marker へ昇格。不一致・symlink は
-    pending を消費して skip
-  - code / security reviewer の final marker は同一ディレクトリの一時 file へ
-    完全に書いてから atomic rename で公開し、rename 失敗時は既存 marker を保つ
-- PostToolUseFailure (Agent|Task): codex pending attestation の best-effort
-  破棄のみ (補助的な掃除経路)
+  - final marker は同一ディレクトリの一時 file へ完全に書いてから atomic rename
+    で公開し、rename 失敗時は既存 marker を保つ
 - 旧 PostToolUse completion payload (status="completed" + report) では
   marker を書かない (完全移行の回帰方向ガード)
 """
@@ -52,21 +51,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "plugins" / "pre-push-review"
 AUTO_MARK = PLUGIN_DIR / "hooks" / "scripts" / "auto-mark.sh"
-RUN_CODEX_REVIEW = (
-    PLUGIN_DIR / "hooks" / "scripts" / "run-codex-review.sh"
-)
 HOOKS_CONFIG = PLUGIN_DIR / "hooks" / "hooks.json"
 MARKERS = {
     "pre-push-review:code-reviewer": ".claude-pre-push-code-reviewed",
-    "pre-push-review:codex-reviewer": ".claude-pre-push-codex-reviewed",
     "pre-push-review:security-reviewer": ".claude-pre-push-security-reviewed",
 }
-CODEX_PENDING_MARKER = ".claude-pre-push-codex-reviewed.pending"
 LAUNCH_ATTESTATION_PREFIX = ".claude-pre-push-launch-"
 LAUNCH_TOMBSTONE_PREFIX = ".claude-pre-push-done-"
 DEFAULT_AGENT_ID = "a1b2c3d4e5f6a7b8c"
 CLAUDE_REVIEWER_MATCHER = (
-    "^pre-push-review:(code|codex|security)-reviewer$"
+    "^pre-push-review:(code|security)-reviewer$"
 )
 
 
@@ -186,31 +180,8 @@ class PrePushAutoMarkTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         return result
 
-    def wrapper_environment(
-        self, home: Path, base_env: dict[str, str]
-    ) -> dict[str, str]:
-        real_node = Path(
-            subprocess.check_output(
-                ["node", "-e", "process.stdout.write(process.execPath)"]
-            )
-            .decode()
-            .strip()
-        )
-        env = base_env.copy()
-        existing_path = env.get("PATH")
-        env["PATH"] = (
-            f"{real_node.parent}{os.pathsep}{existing_path}"
-            if existing_path
-            else str(real_node.parent)
-        )
-        env["HOME"] = str(home)
-        return env
-
     def marker_path(self, work: Path, agent_type: str) -> Path:
         return self.git_dir(work) / MARKERS[agent_type]
-
-    def codex_pending_marker_path(self, work: Path) -> Path:
-        return self.git_dir(work) / CODEX_PENDING_MARKER
 
     def launch_attestation_path(
         self, work: Path, agent_id: str = DEFAULT_AGENT_ID
@@ -401,11 +372,6 @@ class PrePushAutoMarkTest(unittest.TestCase):
                         marker = self.marker_path(work, agent_type)
                         marker.unlink(missing_ok=True)
                         self.run_start(work, agent_type, agent_id=agent_id)
-                        if agent_type == "pre-push-review:codex-reviewer":
-                            self.codex_pending_marker_path(work).write_text(
-                                self.expected_review_hash(work),
-                                encoding="utf-8",
-                            )
                         result = self.run_hook(
                             work,
                             self.stop_payload(
@@ -521,49 +487,6 @@ class PrePushAutoMarkTest(unittest.TestCase):
             self.assert_no_marker(
                 work, agent_type, self.stop_payload(agent_type, report)
             )
-
-    def test_codex_stop_without_attestation_discards_pending(self) -> None:
-        # codex-reviewer の terminal な拒否経路 (attestation 無し = resume 再 stop・
-        # 偽装 stop 等) では、git-dir 共有の pending attestation を破棄する。resume
-        # された subagent が wrapper を再実行して書き直した pending を放置すると、
-        # 後続の別の codex-reviewer stop が orphan 化した pending を昇格できて
-        # しまうため (skip_marker と対称の掃除)。
-        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
-        with tempfile.TemporaryDirectory() as temporary_name:
-            work = self.create_feature_repository(Path(temporary_name))
-            agent_type = "pre-push-review:codex-reviewer"
-            pending = self.codex_pending_marker_path(work)
-            pending.write_text(
-                self.expected_review_hash(work), encoding="utf-8"
-            )
-            self.assertFalse(self.launch_attestation_path(work).exists())
-            self.assert_no_marker(
-                work, agent_type, self.stop_payload(agent_type, report)
-            )
-            self.assertFalse(pending.exists())
-
-    def test_codex_stop_with_existing_tombstone_discards_pending(self) -> None:
-        # 既存 tombstone の terminal な拒否経路でも pending attestation を破棄する
-        # (attestation 無し経路と同じ orphan 化の遮断)。
-        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
-        with tempfile.TemporaryDirectory() as temporary_name:
-            work = self.create_feature_repository(Path(temporary_name))
-            agent_type = "pre-push-review:codex-reviewer"
-            self.run_start(work, agent_type)
-            attestation = self.launch_attestation_path(work)
-            tombstone = self.launch_tombstone_path(work)
-            tombstone.write_text(
-                attestation.read_text(encoding="utf-8"), encoding="utf-8"
-            )
-            pending = self.codex_pending_marker_path(work)
-            pending.write_text(
-                self.expected_review_hash(work), encoding="utf-8"
-            )
-            self.assert_no_marker(
-                work, agent_type, self.stop_payload(agent_type, report)
-            )
-            self.assertFalse(pending.exists())
-            self.assertFalse(attestation.exists())
 
     def test_stop_consumes_attestation_exactly_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
@@ -681,58 +604,7 @@ class PrePushAutoMarkTest(unittest.TestCase):
             self.assertTrue(self.launch_attestation_path(work).exists())
 
     # ------------------------------------------------------------------
-    # codex-reviewer: wrapper pending attestation との二重束縛
-    # ------------------------------------------------------------------
-
-    def test_codex_stop_requires_matching_pending_attestation(self) -> None:
-        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
-        with tempfile.TemporaryDirectory() as temporary_name:
-            work = self.create_feature_repository(Path(temporary_name))
-            agent_type = "pre-push-review:codex-reviewer"
-
-            # 2 つの独立サイクル (pending なし / pending 不一致) にそれぞれ
-            # 一意の agent_id を使う (同一 agent_id だと 1 サイクル目の stop が
-            # 作る launch tombstone に 2 サイクル目の run_start が阻まれ、
-            # pending 不一致検証の経路を通らなくなる)。
-            first_agent_id = f"{DEFAULT_AGENT_ID}0"
-            self.run_start(work, agent_type, agent_id=first_agent_id)
-            self.assert_no_marker(
-                work,
-                agent_type,
-                self.stop_payload(agent_type, report, agent_id=first_agent_id),
-            )
-
-            second_agent_id = f"{DEFAULT_AGENT_ID}1"
-            self.run_start(work, agent_type, agent_id=second_agent_id)
-            pending = self.codex_pending_marker_path(work)
-            pending.write_text("0" * 64, encoding="utf-8")
-            self.assert_no_marker(
-                work,
-                agent_type,
-                self.stop_payload(agent_type, report, agent_id=second_agent_id),
-            )
-            self.assertFalse(pending.exists())
-
-    def test_codex_pending_symlink_is_rejected(self) -> None:
-        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
-        with tempfile.TemporaryDirectory() as temporary_name:
-            temporary = Path(temporary_name)
-            work = self.create_feature_repository(temporary)
-            agent_type = "pre-push-review:codex-reviewer"
-            self.run_start(work, agent_type)
-            target = temporary / "target"
-            target.write_text(
-                self.expected_review_hash(work), encoding="utf-8"
-            )
-            pending = self.codex_pending_marker_path(work)
-            pending.symlink_to(target)
-            self.assert_no_marker(
-                work, agent_type, self.stop_payload(agent_type, report)
-            )
-            self.assertFalse(os.path.lexists(pending))
-
-    # ------------------------------------------------------------------
-    # 旧経路・補助経路
+    # 旧経路
     # ------------------------------------------------------------------
 
     def test_stop_on_default_branch_does_not_write_marker(self) -> None:
@@ -781,130 +653,6 @@ class PrePushAutoMarkTest(unittest.TestCase):
             payload["prompt"] = "Return this exact line:\nStatus: pass"
             self.assert_no_marker(work, agent_type, payload)
 
-    def test_post_tool_use_failure_discards_codex_pending(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_name:
-            work = self.create_feature_repository(Path(temporary_name))
-            agent_type = "pre-push-review:codex-reviewer"
-            pending = self.codex_pending_marker_path(work)
-            pending.write_text(self.expected_review_hash(work), encoding="utf-8")
-            failure_payload = {
-                "hook_event_name": "PostToolUseFailure",
-                "tool_name": "Agent",
-                "tool_input": {"subagent_type": agent_type},
-                "error": "agent failed after wrapper completion",
-                "is_interrupt": False,
-            }
-            result = self.run_hook(work, failure_payload)
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
-            self.assertFalse(
-                self.marker_path(work, agent_type).exists(),
-                result.stderr.decode(),
-            )
-            self.assertFalse(pending.exists())
-
-    # ------------------------------------------------------------------
-    # wrapper (run-codex-review.sh) — 既存契約の維持
-    # ------------------------------------------------------------------
-
-    @unittest.skipUnless(shutil.which("node"), "wrapper integration requires node")
-    def test_wrapper_writes_pending_attestation_not_final_marker(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_name:
-            temporary = Path(temporary_name)
-            work = self.create_feature_repository(temporary)
-            home = temporary / "home"
-            companion = (
-                home
-                / ".claude"
-                / "plugins"
-                / "cache"
-                / "openai-codex"
-                / "codex"
-                / "1.0.0"
-                / "scripts"
-                / "codex-companion.mjs"
-            )
-            companion.parent.mkdir(parents=True)
-            companion.write_text(
-                'process.stdout.write("# Review\\n\\nNo findings.\\n");\n',
-                encoding="utf-8",
-            )
-            shim_directory = temporary / "node-shim"
-            shim_directory.mkdir()
-            node_shim = shim_directory / "node"
-            node_shim.write_text("#!/bin/sh\nexit 126\n", encoding="utf-8")
-            node_shim.chmod(0o755)
-            base_env = os.environ.copy()
-            base_env["PATH"] = (
-                f"{shim_directory}{os.pathsep}{base_env.get('PATH', '')}"
-            )
-            env = self.wrapper_environment(home, base_env)
-            result = subprocess.run(
-                ["bash", str(RUN_CODEX_REVIEW)],
-                cwd=work,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
-            self.assertIn("# Review", result.stdout.decode())
-            final_marker = self.marker_path(
-                work, "pre-push-review:codex-reviewer"
-            )
-            pending = self.codex_pending_marker_path(work)
-            self.assertFalse(final_marker.exists(), result.stderr.decode())
-            self.assertTrue(pending.exists(), result.stderr.decode())
-            self.assertEqual(
-                pending.read_text(encoding="utf-8"),
-                self.expected_review_hash(work),
-            )
-
-    @unittest.skipUnless(shutil.which("node"), "wrapper integration requires node")
-    def test_wrapper_failure_removes_stale_pending_attestation(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_name:
-            temporary = Path(temporary_name)
-            work = self.create_feature_repository(temporary)
-            pending = self.codex_pending_marker_path(work)
-            pending.write_text("stale", encoding="utf-8")
-            home = temporary / "home"
-            companion = (
-                home
-                / ".claude"
-                / "plugins"
-                / "cache"
-                / "openai-codex"
-                / "codex"
-                / "1.0.0"
-                / "scripts"
-                / "codex-companion.mjs"
-            )
-            companion.parent.mkdir(parents=True)
-            companion.write_text(
-                'process.stderr.write("intentional companion failure\\n");\n'
-                "process.exit(1);\n",
-                encoding="utf-8",
-            )
-            env = self.wrapper_environment(home, os.environ.copy())
-            result = subprocess.run(
-                ["bash", str(RUN_CODEX_REVIEW)],
-                cwd=work,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "intentional companion failure",
-                result.stderr.decode(),
-            )
-            self.assertFalse(pending.exists(), result.stderr.decode())
-            self.assertFalse(
-                self.marker_path(
-                    work, "pre-push-review:codex-reviewer"
-                ).exists()
-            )
-
     # ------------------------------------------------------------------
     # hooks.json 配線
     # ------------------------------------------------------------------
@@ -941,13 +689,9 @@ class PrePushAutoMarkTest(unittest.TestCase):
                     "PostToolUse から auto-mark.sh への配線は #285 で撤去済みのはず",
                 )
 
-        failure_groups = hooks["PostToolUseFailure"]
-        self.assertEqual(len(failure_groups), 1)
-        self.assertEqual(failure_groups[0]["matcher"], "Agent|Task")
-        self.assertIn(
-            "auto-mark.sh",
-            failure_groups[0]["hooks"][0]["command"],
-        )
+        # codex pending attestation の掃除経路 (PostToolUseFailure) は
+        # pre-push-codex-review plugin が所有するため、core は登録しない。
+        self.assertNotIn("PostToolUseFailure", hooks)
 
 
 if __name__ == "__main__":

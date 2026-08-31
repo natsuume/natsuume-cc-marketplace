@@ -1,8 +1,8 @@
 #!/bin/bash
 # mark-review.sh - marker writer の低レベル診断 helper (通常フローでは使用しない)。
 #
-# auto-mark.sh が Agent/Task の完了 payload と wrapper pending attestation の一致を検証して
-# 3 reviewer の marker を書く。通常の利用者は本 helper を直接呼ばない。hash/marker の計算確認
+# auto-mark.sh が subagent lifecycle hook の launch attestation と report を検証して
+# 2 reviewer の marker を書く。通常の利用者は本 helper を直接呼ばない。hash/marker の計算確認
 # や保守時の診断専用として残す。
 
 set -e
@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/lib/diff-hash.sh"
 source "$SCRIPT_DIR/lib/markers.sh"
 
 usage() {
-  printf '%s\n' "usage: mark-review.sh code|codex|security|all" >&2
+  printf '%s\n' "usage: mark-review.sh code|security|all" >&2
 }
 
 if [ "$#" -ne 1 ]; then
@@ -23,7 +23,7 @@ if [ "$#" -ne 1 ]; then
 fi
 
 case "$1" in
-  code|codex|security|all) ;;
+  code|security|all) ;;
   *)
     usage
     exit 2
@@ -78,15 +78,11 @@ case "$1" in
   code)
     write_marker code_reviewed_marker_path
     ;;
-  codex)
-    write_marker codex_marker_path
-    ;;
   security)
     write_marker security_marker_path
     ;;
   all)
     write_marker code_reviewed_marker_path
-    write_marker codex_marker_path
     write_marker security_marker_path
     ;;
 esac

@@ -1,11 +1,11 @@
 #!/bin/bash
-# block-pre-push.sh
-# git push を未レビューの状態でブロックする PreToolUse フック。
+# block-pre-push-codex.sh
+# codex review 未実行の状態での git push をブロックする PreToolUse フック。
 #
 # policy: fail-closed (PreToolUse / push gate)
 #   未レビュー push を通さないため、判定不能・想定外状況は deny に倒す。対照:
 #   PostToolUse 側の auto-mark.sh は fail-open。同じ失敗が Pre=deny / Post=skip という
-#   非対称は意図的 (#90)。
+#   非対称は意図的。
 #
 # ## なぜ push 境界か
 #
@@ -31,13 +31,22 @@
 # 4. 解決不能 (subshell / pushd / wrapper 等) は保守的 deny
 # 5. 解決した target cwd 上で:
 #    - default branch (master/main) なら git-guardrails に委譲して skip
-#    - 空 push (全 commit が empty commit の鎖) なら markers gate を skip
+#    - 空 push (全 commit が empty commit の鎖) なら marker gate を skip
 #    - commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを計算
-#    - 2 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義: code-reviewed /
-#      security-reviewed) と一致しなければ deny。 2 マーカーは常に全て必須。
+#    - codex マーカー (markers.sh の `CODEX_MARKER_NAME` で定義) と一致しなければ deny
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
 #    引用符付き引数 / `push.default=matching` 環境での bare push 等は deny
 # 7. dirty-tree (target cwd の) は deny
+#
+# ## 検証するマーカーの範囲
+#
+# 本 gate は codex マーカー 1 つだけを検証する。 pre-push-review core が発行する
+# code-reviewed / security-reviewed マーカーは core 側の `block-pre-push.sh` が独立に
+# 検証するため、 本 gate は関知しないし deny メッセージでも言及しない。 両 plugin を
+# 併用した場合、 `git push` を含む Bash 呼び出しは両方の PreToolUse hook を通過し、
+# どちらか一方でも deny を返せば push は成立しない (AND 合成)。 push 検出・複合コマンド
+# 解析・target 解決・dirty-tree gate 等の共通ロジックを core と共有せず本 script が独立に
+# 実装しているのは、 本 plugin が単独 install でも自立動作するための要件による。
 #
 # ## サポート外 / 限界
 #
@@ -56,7 +65,7 @@
 _PRE_PUSH_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/exit-trap.sh
 source "$_PRE_PUSH_REVIEW_SCRIPT_DIR/lib/exit-trap.sh"
-install_exit_trap "block-pre-push" "本 hook は fail-closed 設計のため、 通常は markers 不一致を deny JSON で返して exit 0 で抜けますが、 今回は途中で異常終了しています。 push gate が機能していない可能性があるため、"
+install_exit_trap "block-pre-push-codex" "本 hook は fail-closed 設計のため、 通常は markers 不一致を deny JSON で返して exit 0 で抜けますが、 今回は途中で異常終了しています。 push gate が機能していない可能性があるため、"
 
 INPUT=$(cat)
 
@@ -667,23 +676,20 @@ if ! git -C "$TARGET_CWD" diff --quiet 2>/dev/null || ! git -C "$TARGET_CWD" dif
 
 本プラグインは「push される committed 部分」が確実にレビュー済みであることを保証するため、push 前に working tree が clean であることを要求します。
 
-\`git -C "${TARGET_CWD}" status\` で変更を確認して commit し、\`/pre-push-review:review\` で 2 review を再走させてから push してください。
+\`git -C "${TARGET_CWD}" status\` で変更を確認して commit し、\`/pre-push-codex-review:review\` で codex review を再走させてから push してください。
 EOF
 )
   deny "$REASON"
   exit 0
 fi
 
-if CODE_REVIEWED_MARKER=$(code_reviewed_marker_path "$GIT_DIR") &&
-  SECURITY_MARKER=$(security_marker_path "$GIT_DIR"); then
-  MARKER_STORAGE_DIR=${CODE_REVIEWED_MARKER%/*}
-  CODE_REVIEWED_HASH=$([ -f "$CODE_REVIEWED_MARKER" ] && cat "$CODE_REVIEWED_MARKER" 2>/dev/null)
-  SECURITY_HASH=$([ -f "$SECURITY_MARKER" ] && cat "$SECURITY_MARKER" 2>/dev/null)
+if CODEX_MARKER=$(codex_marker_path "$GIT_DIR"); then
+  MARKER_STORAGE_DIR=${CODEX_MARKER%/*}
+  CODEX_HASH=$([ -f "$CODEX_MARKER" ] && cat "$CODEX_MARKER" 2>/dev/null)
 else
   # storage 解決不能時 (git-dir が空になる等の想定外ケースへの防御) は .git へ
-  # fallback せず全 marker を missing として後段の gate を fail-closed にする。
-  CODE_REVIEWED_HASH=""
-  SECURITY_HASH=""
+  # fallback せず marker を missing として後段の gate を fail-closed にする。
+  CODEX_HASH=""
   MARKER_STORAGE_DIR="解決不能 (git-dir を確認してください)"
 fi
 
@@ -746,8 +752,10 @@ is_fresh() {
   [ -n "$1" ] && [ "$1" = "$CURRENT_HASH" ]
 }
 
-# code-reviewed / security-reviewed の 2 マーカーを全必須化する単純 gate。
-if is_fresh "$CODE_REVIEWED_HASH" && is_fresh "$SECURITY_HASH"; then
+# codex マーカーのみを必須とする gate。 code review / security review のマーカーは
+# pre-push-review core が独立に検証するため、 本 gate は関知しない (両 plugin 併用時は
+# 2 つの PreToolUse hook の AND 合成で push 可否が決まる)。
+if is_fresh "$CODEX_HASH"; then
   exit 0
 fi
 
@@ -761,11 +769,10 @@ format_status() {
     printf '⚠ 失効 (差分または commit 列が変わったため再実行が必要)'
   fi
 }
-CODE_REVIEWED_STATUS=$(format_status "$CODE_REVIEWED_HASH")
-SECURITY_STATUS=$(format_status "$SECURITY_HASH")
+CODEX_STATUS=$(format_status "$CODEX_HASH")
 
 REASON=$(cat <<EOF
-プッシュをブロックしました。 push 前に 2 レビューを実行してください。
+プッシュをブロックしました。 push 前に codex review を実行してください。
 
 target: ${TARGET_CWD}
 ブランチ: ${BRANCH} (基準: origin/${BASE})
@@ -773,20 +780,19 @@ marker storage: ${MARKER_STORAGE_DIR}
 
 linked worktree では marker / launch attestation は main \`.git\` 直下ではなく、worktree 専用 git-dir (\`.git/worktrees/<name>/\`) に保存されます。target で \`git rev-parse --absolute-git-dir\` を実行し、上記 storage と一致することを確認してください。
 
-レビュー状態 (下記 2 つすべてが「✓ 最新の差分でレビュー済み」 になると push が許可されます):
-  correctness review : $CODE_REVIEWED_STATUS
-  security review    : $SECURITY_STATUS
+レビュー状態 (下記が「✓ 最新の差分でレビュー済み」 になると本 gate は push を許可します):
+  independent review (codex) : $CODEX_STATUS
 
-**\`/pre-push-review:review\`** (2 namespaced custom agent を並列起動) を使ってください。
+**\`/pre-push-codex-review:review\`** (namespaced custom agent を並列起動) を使ってください。 pre-push-review core を併用している環境では、 同じコマンドが core の code review / security review も同時に起動します。
 
-一部のマーカーのみ「未実行」 / 「失効」 の場合は、 該当レビューの subagent だけを Agent / Task tool で単独再起動してもかまいません (全 2 subagent の再走も可)。 マーカーと subagent_type の対応:
-  - correctness review (code-reviewed)  → subagent_type="pre-push-review:code-reviewer", model="opus"
-  - security review (security-reviewed) → subagent_type="pre-push-review:security-reviewer", model="opus"
+codex review だけを単独で再走させる場合は、 Agent / Task tool で subagent_type="pre-push-codex-review:codex-reviewer", model="sonnet" を起動してください。
 
 model 未指定の Agent 起動は Fable セッションでは agent-discipline の hook に deny されるため、上記の model を常に明示してください。
 
+codex review を \`run-pre-push-codex-review.sh\` wrapper の直接実行で代行することはできません (block-bg-codex-wrapper.sh の agent_type 検証 gate が \`pre-push-codex-review:codex-reviewer\` subagent 以外からの起動を deny します)。
+
 修正後に branch 差分が変わるとマーカーは自動失効します。同じ正規フローで再走させ、
-全マーカーが ✓ になったら \`git push\` を再試行してください。
+マーカーが ✓ になったら \`git push\` を再試行してください。
 EOF
 )
 

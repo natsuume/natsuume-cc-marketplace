@@ -1,0 +1,6 @@
+{
+  "name": "pre-push-codex-review",
+  "version": "1.0.0",
+  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
+  "description": "git push 前に codex review (OpenAI クロスモデルレビュー) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、codex review を経ていない commit が remote に到達するのを構造的にブロックする。pre-push-review core (code + security の 2 レビュー gate) との併用で 3 レビュー構成になる。"
+}

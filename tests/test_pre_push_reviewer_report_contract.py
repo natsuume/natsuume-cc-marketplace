@@ -1,11 +1,10 @@
-"""pre-push-review reviewer の parent-safe report 契約テスト (issue #281)。
+"""pre-push reviewer の parent-safe report 契約テスト。
 
 Fable-sensitive な実行可能詳細は reviewer subagent の context に留め、親 session
-には修正要否を判断できる構造化 summary だけを返す。3 reviewer の agent 定義と
-orchestration command が同じ契約を維持し、raw stdout / stderr や再現 recipe を
-親へ relay する指示へ退行しないことを固定する。
-
-本テストは TDD Phase A で実装前の red テストとして追加する。
+には修正要否を判断できる構造化 summary だけを返す。code / security reviewer
+(pre-push-review) と codex-reviewer (pre-push-codex-review) の 3 reviewer は
+plugin をまたいで同じ契約を維持し、orchestration command とあわせて raw stdout /
+stderr や再現 recipe を親へ relay する指示へ退行しないことを固定する。
 """
 
 from __future__ import annotations
@@ -16,9 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "pre-push-review"
+CODEX_PLUGIN = ROOT / "plugins" / "pre-push-codex-review"
 AGENTS = {
     "Code": PLUGIN / "agents" / "code-reviewer.md",
-    "Codex": PLUGIN / "agents" / "codex-reviewer.md",
+    "Codex": CODEX_PLUGIN / "agents" / "codex-reviewer.md",
     "Security": PLUGIN / "agents" / "security-reviewer.md",
 }
 COMMAND = PLUGIN / "commands" / "review.md"
