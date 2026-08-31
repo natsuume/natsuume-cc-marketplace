@@ -37,18 +37,18 @@ Claude Code 側で fable-risk-labeler を install していた場合は、plugin
 
 | プラグイン | バージョン | 説明 |
 |-----------|------------:|------|
-| [git-guardrails](#git-guardrails) | 0.6.4 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
-| [enforce-draft-pr](#enforce-draft-pr) | 0.5.2 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
+| [git-guardrails](#git-guardrails) | 0.6.5 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
+| [enforce-draft-pr](#enforce-draft-pr) | 0.5.3 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.6.1 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 6.0.0 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
-| [pre-push-codex-review](#pre-push-codex-review) | 1.0.0 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
-| [pre-merge-codex-review](#pre-merge-codex-review) | 1.0.0 | `gh pr merge` 前に codex review 完了 (head SHA 付き PR レビューコメント) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
+| [pre-push-review](#pre-push-review) | 6.0.1 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-codex-review](#pre-push-codex-review) | 2.0.0 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
+| [pre-merge-codex-review](#pre-merge-codex-review) | 1.0.1 | `gh pr merge` 前に codex review 完了 (head SHA 付き PR レビューコメント) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
 | [update-default-branch](#update-default-branch) | 0.4.1 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.10.1 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.25.2 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [ui-discipline](#ui-discipline) | 0.4.3 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.6.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
-| [codex-advisor](#codex-advisor) | 2.2.0 | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧する。pre-pushを含むCodex review 5サイクルごとの根本方針 advisor checkpointも強制する (要 openai-codex plugin + Codex CLI) |
+| [codex-advisor](#codex-advisor) | 3.0.0 | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧する。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.1 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.3.1 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.2 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
@@ -190,6 +190,8 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 | `block-pre-push-codex` | PreToolUse (`Bash`) | `git push` を検知し、codex マーカーが commit 列 + branch 全差分 + 未コミット差分のハッシュと一致しない場合に deny を返す。push 検出・複合コマンド解析・target 解決・dirty-tree gate・空 push 判定・default branch 上での skip (git-guardrails への委譲) は、単独 install でも自立動作できるよう pre-push-review core の `block-pre-push.sh` と同等の判定を独立に実装している |
 | `block-bg-codex-wrapper` | PreToolUse (`Bash`) | codex review wrapper (`run-pre-push-codex-review.sh`) の起動を検証し、`agent_type` が `pre-push-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ deny する。background 起動では subagent が wrapper の stdout / stderr を完全に観察できないため、foreground 起動を強制する |
 | `auto-mark` | SubagentStart / SubagentStop (matcher: `^pre-push-codex-review:codex-reviewer$`) | `pre-push-codex-review:codex-reviewer` subagent の実行完了を検知し、開始時 hash の launch attestation・完了時の一致検証・wrapper が書いた pending attestation との一致をすべて満たした場合のみ codex マーカーを書く |
+| `inject-review-cadence-rules` | SessionStart | review cadence 規律 (`hooks/prompts/review-cadence-rules.md`) を `additionalContext` として常時注入する |
+| `manage-review-cadence` | PreToolUse (`Bash`) / SubagentStart / SubagentStop / PostToolUseFailure / Stop / SessionEnd | review cadence の state 管理と enforcement。`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の成功 review と `codex-advisor:review-runner` の成功 review を session ごとに合算し、5 サイクル完了で次の review 起動 (PreToolUse) と main session の停止 (Stop) を block する。reset は `codex-advisor:advisor-runner` の checkpoint 充足 attestation、または checkpoint 相談の起動失敗 (PostToolUseFailure、fail-open) で行う。詳細は [plugin README](plugins/pre-push-codex-review/README.md#review-cadence) を参照 |
 
 #### Agents
 
@@ -379,7 +381,7 @@ Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tool
 
 Codex は read-only sandbox でリポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコード差分の finding 取得へ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-codex-review](#pre-push-codex-review) が担当します。
 
-v1.1.0 では `pre-push-codex-review:codex-reviewer` の正常終了と成功した一般 Codex review を session ごとに合算し、5 サイクル完了後は main session の Stop と次の一般 / pre-push Codex review 起動を block します。解除には、元の Goal / 制約、5 サイクルの findings と修正の傾向、現在の仮説を材料に根本方針・問題設定・設計境界・検証戦略を問い直す advisor checkpoint が必要です。通常の advisor 相談ではカウンターを解除しません。
+Codex review の review cadence (`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の成功 review と `codex-advisor:review-runner` の成功 review を session ごとに合算し、5 サイクル完了後に main session の Stop と次の review 起動を block する enforcement) は [pre-push-codex-review](#pre-push-codex-review) plugin が担います。codex-advisor は checkpoint の実行主体として `codex-advisor:advisor-runner` を提供し、元の Goal / 制約、直近 5 サイクルの review 履歴、現在の方針を材料に根本方針・問題設定・設計境界・検証戦略を問い直す助言を返して `Codex-Advisor-Review-Cadence` attestation を発行します。通常の advisor 相談ではカウンターを解除しません。
 
 v1.0.0 では rescue / review / advisor を `codex-advisor:rescue-runner` / `review-runner` / `advisor-runner` の role 固有 foreground subagent に統一しました。main session や通常 subagent から companion / wrapper を直接実行すると PreToolUse hook が deny し、Stop hook が対応 runner への reroute、active Agent の completion 回収、1 回だけの retry を要求します。
 
@@ -399,7 +401,7 @@ Claude Code からの利用には [公式 codex plugin](https://github.com/opena
 |---------|---------|------|
 | `inject-advisor-rules` | SessionStart | メインセッション向けの相談・rescue thread・role 固有 runner 規律を `additionalContext` として常時注入する |
 | `inject-advisor-rules-subagent` | SubagentStart | 通常 subagent 向けの許可境界と、直接 wrapper ではなく相談 request を親へ返す規律を注入する |
-| `manage-codex-runners` | SessionStart / SessionEnd / PreToolUse / SubagentStart / SubagentStop / Stop | 直接実行 gate、UID + session-scoped state、active 回収、bounded retry、一般 / pre-push共通の5 reviewごとの根本方針 checkpoint、stale cleanupを管理する |
+| `manage-codex-runners` | SessionStart / SessionEnd / PreToolUse / SubagentStart / SubagentStop / Stop | 直接実行 gate、UID + session-scoped state、active 回収、bounded retry、stale cleanup を管理する。advisor-runner の SubagentStop は review cadence attestation footer 行の欠落も retry 対象にする (cadence の計数・enforcement 自体は [pre-push-codex-review](#pre-push-codex-review) が担う) |
 
 #### Skills
 

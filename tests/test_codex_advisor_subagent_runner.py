@@ -34,20 +34,18 @@ RUNNERS = {
     "review": "codex-advisor:review-runner",
     "advisor": "codex-advisor:advisor-runner",
 }
+# レビュー系 subagent の namespace。review の起動・計数は pre-push-codex-review /
+# pre-merge-codex-review plugin の責務であり、codex-advisor の SubagentStart /
+# SubagentStop matcher・hooks.json はこれらに関知しない (マッチしない)。
 PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
-# 旧 pre-push-review (codex gate を持つ v6.0.0 未満) の reviewer namespace。互換
-# alias として canonical と同じ cadence 計数対象になることをテストで固定する。
 PRE_PUSH_CODEX_REVIEWER_LEGACY = "pre-push-review:codex-reviewer"
-# pre-push-codex-review plugin が所有する codex review wrapper。cadence gate は
-# basename で経路を判定するため、テストの起動コマンドも同じ basename を使う。
+PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
+# codex-advisor 自身の PreToolUse gate (classifyModelLaunch) が分類しないコマンド例
+# として使う、pre-push-codex-review plugin が所有する codex review wrapper。
 PRE_PUSH_CODEX_WRAPPER = (
     "/opt/pre-push-codex-review/hooks/scripts/run-pre-push-codex-review.sh"
 )
 PRE_PUSH_CODEX_WRAPPER_COMMAND = f"bash {PRE_PUSH_CODEX_WRAPPER}"
-PRE_PUSH_CODEX_WRAPPER_QUOTED_COMMAND = f'bash "{PRE_PUSH_CODEX_WRAPPER}"'
-# 旧 pre-push-review が所有していた codex review wrapper の basename。
-LEGACY_PRE_PUSH_CODEX_WRAPPER = "/opt/pre-push-review/hooks/scripts/run-codex-review.sh"
-LEGACY_PRE_PUSH_CODEX_WRAPPER_COMMAND = f"bash {LEGACY_PRE_PUSH_CODEX_WRAPPER}"
 
 COMMANDS = {
     "rescue": (
@@ -213,47 +211,6 @@ class HookHarness(unittest.TestCase):
             {
                 "hook_event_name": "Stop",
                 "session_id": session_id,
-                "stop_hook_active": False,
-            }
-        )
-
-    def pre_push_codex_start(
-        self,
-        *,
-        session_id: str,
-        agent_id: str,
-        agent_type: str = PRE_PUSH_CODEX_REVIEWER,
-    ) -> dict[str, object] | None:
-        return self.hook_response(
-            {
-                "hook_event_name": "SubagentStart",
-                "session_id": session_id,
-                "agent_id": agent_id,
-                "agent_type": agent_type,
-            }
-        )
-
-    def pre_push_codex_stop(
-        self,
-        status: str,
-        *,
-        session_id: str,
-        agent_id: str,
-        extra_status: str | None = None,
-        agent_type: str = PRE_PUSH_CODEX_REVIEWER,
-    ) -> dict[str, object] | None:
-        lines = ["# Codex Review", "", f"Status: {status}"]
-        if extra_status is not None:
-            lines.extend(["", f"Status: {extra_status}"])
-        if status == "pass":
-            lines.append("Findings: 0")
-        return self.hook_response(
-            {
-                "hook_event_name": "SubagentStop",
-                "session_id": session_id,
-                "agent_id": agent_id,
-                "agent_type": agent_type,
-                "last_assistant_message": "\n".join(lines),
                 "stop_hook_active": False,
             }
         )
@@ -529,312 +486,27 @@ class CodexRunnerLifecycleTest(HookHarness):
             self.main_stop("session-legacy"), RUNNERS["rescue"]
         )
 
-    def complete_review_cycle(
-        self,
-        cycle: int,
-        *,
-        session_id: str = "session-cadence",
-    ) -> None:
-        agent_id = f"review-{cycle}"
-        self.subagent_start(
-            "review", session_id=session_id, agent_id=agent_id
-        )
-        self.subagent_stop(
-            "review",
-            "success",
-            session_id=session_id,
-            agent_id=agent_id,
-            job_id=f"review-job-{cycle}",
-        )
-
-    def complete_pre_push_review_cycle(
-        self,
-        cycle: int,
-        *,
-        session_id: str = "session-pre-push-cadence",
-        status: str = "pass",
-        agent_type: str = PRE_PUSH_CODEX_REVIEWER,
-    ) -> None:
-        agent_id = f"pre-push-codex-{cycle}"
-        self.pre_push_codex_start(
-            session_id=session_id,
-            agent_id=agent_id,
-            agent_type=agent_type,
-        )
-        self.pre_push_codex_stop(
-            status,
-            session_id=session_id,
-            agent_id=agent_id,
-            agent_type=agent_type,
-        )
-
-    def test_five_pre_push_codex_reviews_require_root_strategy_advisor(self) -> None:
-        session_id = "session-pre-push-cadence"
-        for cycle in range(1, 5):
-            self.complete_pre_push_review_cycle(
-                cycle,
-                session_id=session_id,
-                status="findings" if cycle < 4 else "pass",
-            )
-            self.assertIsNone(self.main_stop(session_id))
-
-        self.complete_pre_push_review_cycle(5, session_id=session_id)
-        self.assert_stop_blocked(
-            self.main_stop(session_id), RUNNERS["advisor"]
-        )
-
-        sixth_agent = "pre-push-codex-sixth"
-        self.pre_push_codex_start(
-            session_id=session_id,
-            agent_id=sixth_agent,
-        )
-        denied = self.hook_response(
-            self.bash_payload(
-                PRE_PUSH_CODEX_WRAPPER_QUOTED_COMMAND,
-                session_id=session_id,
-                agent_type=PRE_PUSH_CODEX_REVIEWER,
-            )
-        )
-        self.assert_denied(denied, RUNNERS["advisor"])
-
-    def test_legacy_pre_push_reviewer_namespace_increments_cadence(self) -> None:
-        # 旧 pre-push-review (codex gate を持つ v6.0.0 未満) の reviewer
-        # namespace でも、canonical namespace と同じく review cadence が
-        # 加算されることを固定する。
-        session_id = "session-legacy-pre-push-cadence"
-        self.complete_pre_push_review_cycle(
-            1,
-            session_id=session_id,
-            agent_type=PRE_PUSH_CODEX_REVIEWER_LEGACY,
-        )
-        cadence_records = [
-            record
-            for record in self.state_records()
-            if record["sessionId"] == session_id
-            and record["operation"] == "review-cadence"
-        ]
-        self.assertEqual(1, len(cadence_records))
-        self.assertEqual(1, cadence_records[0]["completedReviews"])
-
-    def test_five_legacy_pre_push_codex_reviews_require_root_strategy_advisor(
-        self,
-    ) -> None:
-        # 旧 namespace の成功 review 5 回でも checkpoint gate (Stop block) が
-        # 発動することを固定する。
-        session_id = "session-legacy-pre-push-cadence-checkpoint"
-        for cycle in range(1, 5):
-            self.complete_pre_push_review_cycle(
-                cycle,
-                session_id=session_id,
-                status="findings" if cycle < 4 else "pass",
-                agent_type=PRE_PUSH_CODEX_REVIEWER_LEGACY,
-            )
-            self.assertIsNone(self.main_stop(session_id))
-
-        self.complete_pre_push_review_cycle(
-            5, session_id=session_id, agent_type=PRE_PUSH_CODEX_REVIEWER_LEGACY
-        )
-        self.assert_stop_blocked(
-            self.main_stop(session_id), RUNNERS["advisor"]
-        )
-
-        # checkpoint 発動後は、旧 wrapper basename (run-codex-review.sh) の
-        # 起動も deny されることを固定する。
-        sixth_agent = "legacy-pre-push-codex-sixth"
-        self.pre_push_codex_start(
-            session_id=session_id,
-            agent_id=sixth_agent,
-            agent_type=PRE_PUSH_CODEX_REVIEWER_LEGACY,
-        )
-        denied = self.hook_response(
-            self.bash_payload(
-                LEGACY_PRE_PUSH_CODEX_WRAPPER_COMMAND,
-                session_id=session_id,
-                agent_type=PRE_PUSH_CODEX_REVIEWER_LEGACY,
-            )
-        )
-        self.assert_denied(denied, RUNNERS["advisor"])
-
-    def test_legacy_pre_push_codex_wrapper_launch_is_not_denied_before_checkpoint(
-        self,
-    ) -> None:
-        # checkpoint 未発動の間は、旧 wrapper basename の起動を codex-advisor
-        # 自身は deny しない (agent_type 一致・basename 一致の起動可否判定は
-        # pre-push-codex-review / pre-push-review 側の gate が担う)。
-        session_id = "session-legacy-pre-push-wrapper-no-checkpoint"
-        response = self.hook_response(
-            self.bash_payload(
-                LEGACY_PRE_PUSH_CODEX_WRAPPER_COMMAND,
-                session_id=session_id,
-                agent_type=PRE_PUSH_CODEX_REVIEWER_LEGACY,
-            )
-        )
-        self.assertIsNone(response)
-
-    def test_failed_or_invalid_pre_push_review_does_not_increment_cadence(self) -> None:
-        session_id = "session-pre-push-failed"
-        for cycle in range(1, 6):
-            agent_id = f"failed-pre-push-{cycle}"
-            self.pre_push_codex_start(
-                session_id=session_id,
-                agent_id=agent_id,
-            )
-            self.pre_push_codex_stop(
-                "execution-failed",
-                session_id=session_id,
-                agent_id=agent_id,
-            )
-        self.assertIsNone(self.main_stop(session_id))
-
-        agent_id = "invalid-pre-push-status"
-        self.pre_push_codex_start(
-            session_id=session_id,
-            agent_id=agent_id,
-        )
-        self.pre_push_codex_stop(
-            "pass",
-            session_id=session_id,
-            agent_id=agent_id,
-            extra_status="findings",
-        )
-        self.assertIsNone(self.main_stop(session_id))
-
-    def test_general_and_pre_push_reviews_share_the_same_cadence(self) -> None:
-        session_id = "session-mixed-cadence"
-        for cycle in range(1, 5):
-            self.complete_pre_push_review_cycle(cycle, session_id=session_id)
-        self.complete_review_cycle(5, session_id=session_id)
-        self.assert_stop_blocked(
-            self.main_stop(session_id), RUNNERS["advisor"]
-        )
-
-    def test_five_successful_reviews_require_root_strategy_advisor(self) -> None:
-        session_id = "session-cadence"
-        for cycle in range(1, 5):
-            self.complete_review_cycle(cycle, session_id=session_id)
-            self.assertIsNone(self.main_stop(session_id))
-
-        self.complete_review_cycle(5, session_id=session_id)
-        response = self.main_stop(session_id)
-        self.assert_stop_blocked(response, RUNNERS["advisor"])
-        assert response is not None
-        self.assertIn("5 回", response["reason"])
-        self.assertIn("根本方針", response["reason"])
-
-        self.subagent_start(
-            "review", session_id=session_id, agent_id="review-sixth"
-        )
-        denied = self.hook_response(
-            self.bash_payload(
-                COMMANDS["review"],
-                session_id=session_id,
-                agent_type=RUNNERS["review"],
-            )
-        )
-        self.assert_denied(denied, RUNNERS["advisor"])
-
-    def test_only_attested_cadence_advice_resets_review_count(self) -> None:
-        session_id = "session-cadence-attestation"
-        for cycle in range(1, 6):
-            self.complete_review_cycle(cycle, session_id=session_id)
-
-        self.subagent_start(
-            "advisor", session_id=session_id, agent_id="ordinary-advisor"
-        )
-        self.subagent_stop(
-            "advisor",
-            "success",
-            session_id=session_id,
-            agent_id="ordinary-advisor",
-        )
-        self.assert_stop_blocked(
-            self.main_stop(session_id), RUNNERS["advisor"]
-        )
-
-        self.subagent_start(
-            "advisor", session_id=session_id, agent_id="cadence-advisor"
-        )
-        self.subagent_stop(
-            "advisor",
-            "success",
-            session_id=session_id,
-            agent_id="cadence-advisor",
-            review_cadence="satisfied",
-        )
-        self.assertIsNone(self.main_stop(session_id))
-
-        for cycle in range(6, 10):
-            self.complete_review_cycle(cycle, session_id=session_id)
-            self.assertIsNone(self.main_stop(session_id))
-        self.complete_review_cycle(10, session_id=session_id)
-        self.assert_stop_blocked(
-            self.main_stop(session_id), RUNNERS["advisor"]
-        )
-
-    def test_unavailable_attested_cadence_attempt_does_not_deadlock(self) -> None:
-        session_id = "session-cadence-unavailable"
-        for cycle in range(1, 6):
-            self.complete_review_cycle(cycle, session_id=session_id)
-
-        self.subagent_start(
-            "advisor", session_id=session_id, agent_id="advisor-unavailable"
-        )
-        self.subagent_stop(
-            "advisor",
-            "terminal-failure",
-            session_id=session_id,
-            agent_id="advisor-unavailable",
-            review_cadence="unavailable",
-        )
-        self.assertIsNone(self.main_stop(session_id))
-
-    def test_session_end_cleans_review_cadence_state(self) -> None:
-        session_id = "session-cadence-cleanup"
-        self.complete_review_cycle(1, session_id=session_id)
-        self.assertNotEqual([], self.state_records())
-        self.hook_response(
-            {
-                "hook_event_name": "SessionEnd",
-                "session_id": session_id,
-            }
-        )
-        records = [
-            record
-            for record in self.state_records()
-            if record["sessionId"] == session_id
-        ]
-        self.assertEqual([], records)
-
-    def test_session_start_preserves_review_cadence_across_resume(self) -> None:
-        session_id = "session-cadence-resume"
-        for cycle in range(1, 5):
-            self.complete_review_cycle(cycle, session_id=session_id)
-
+    def test_session_start_cleans_only_its_own_state(self) -> None:
+        self.subagent_start("rescue", session_id="session-a")
+        self.subagent_start("review", session_id="session-b")
         self.hook_response(
             {
                 "hook_event_name": "SessionStart",
-                "session_id": session_id,
-                "source": "resume",
+                "session_id": "session-a",
             }
         )
-        self.complete_review_cycle(5, session_id=session_id)
-        self.assert_stop_blocked(
-            self.main_stop(session_id), RUNNERS["advisor"]
-        )
+        records = self.state_records()
+        self.assertEqual(1, len(records))
+        self.assertEqual("session-b", records[0]["sessionId"])
 
 
 class CodexRunnerFooterRobustnessTest(HookHarness):
-    """issue #348 Phase A: footer 解析頑健化 (フェンス・空白行) の固定テスト。
+    """footer 解析頑健化 (フェンス・空白行) の固定テスト。
 
-    現行実装の parseRunnerFooter / parseReviewCadenceAttestation は、末尾から
-    の固定行オフセット (`lines.slice(-3)` / `lines.at(-4)`) で footer を照合
-    する。そのため runner が footer をコードフェンス (``` / ~~~) で囲んだり、
-    footer 行間に空白行を挟んだりすると、成功した実行が誤って
-    `retry-required` と判定される (issue #348)。Phase B では「末尾から
-    フェンス行・空白行を無視した実質末尾の連続 3 行 (attestation はその直前の
-    実質行)」で照合するよう頑健化する。本クラスは Phase B 適用前後の挙動差分
-    を固定する。分類は実測 (このファイルの probe を現行実装に対して実行した
-    結果) に基づく。
+    parseRunnerFooter / parseReviewCadenceAttestation は、footer をコード
+    フェンス (``` / ~~~) で囲んだり footer 行間に空白行を挟んだりしても、
+    末尾からフェンス行・空白行を無視した実質末尾の連続 3 行 (attestation は
+    その直前の実質行) として照合する。本クラスはその挙動を固定する。
     """
 
     def stop_with_report(
@@ -974,14 +646,9 @@ class CodexRunnerFooterRobustnessTest(HookHarness):
         self.stop_with_report("rescue", report)
         self.assertEqual([], self.records_for("session-a", "rescue"))
 
-    def test_fenced_review_success_footer_terminates_and_advances_cadence(
-        self,
-    ) -> None:
-        """修正前 fail: review runner の footer をフェンスで囲むと、現行実装
-        は footer 解析に失敗するため review record が retry-required のまま
-        残り、review cadence の completedReviews も加算されない (実測で確認)。
-        Phase B 後は state 終端 (record 削除) に加えて review cadence が
-        +1 される。
+    def test_fenced_review_success_footer_terminates_state(self) -> None:
+        """review runner の footer をフェンスで囲んでも success 終端 (record
+        削除) になる。
         """
         self.subagent_start("review")
         report = "\n".join(
@@ -994,9 +661,6 @@ class CodexRunnerFooterRobustnessTest(HookHarness):
         )
         self.stop_with_report("review", report)
         self.assertEqual([], self.records_for("session-a", "review"))
-        cadence_records = self.records_for("session-a", "review-cadence")
-        self.assertEqual(1, len(cadence_records))
-        self.assertEqual(1, cadence_records[0]["completedReviews"])
 
     def test_ordinary_text_between_footer_lines_stays_retry_required(
         self,
@@ -1103,24 +767,19 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
         self.assertIn("複数", contents)
         self.assertIn("推測", contents)
 
-    def test_review_cadence_contract_requires_root_strategy_checkpoint(self) -> None:
-        review_runner = (PLUGIN / "agents" / "review-runner.md").read_text(
-            encoding="utf-8"
-        )
+    def test_advisor_report_carries_review_cadence_attestation_contract(self) -> None:
+        """advisor-runner の footer は review cadence attestation 予約行を
+        含む契約を維持する (enforcement 自体は pre-push-codex-review plugin
+        の責務)。
+        """
         advisor_runner = (PLUGIN / "agents" / "advisor-runner.md").read_text(
             encoding="utf-8"
         )
-        rules = RULES.read_text(encoding="utf-8")
         consult = CONSULT.read_text(encoding="utf-8")
 
-        self.assertIn("5", rules)
-        self.assertIn("根本方針", rules)
-        self.assertIn("次の review", rules)
         self.assertIn("Codex-Advisor-Review-Cadence", advisor_runner)
         self.assertIn("review_cycle_checkpoint", advisor_runner)
         self.assertIn("review_cycle_checkpoint", consult)
-        self.assertIn("5 回", review_runner)
-        self.assertIn(PRE_PUSH_CODEX_REVIEWER, rules)
 
     def test_injected_advisor_rules_stay_below_inline_size_limit(self) -> None:
         contents = RULES.read_text(encoding="utf-8")
@@ -1158,27 +817,35 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
                     any("manage-codex-runners.mjs" in command for command in commands),
                     commands,
                 )
+        # review の起動・計数は pre-push-codex-review / pre-merge-codex-review
+        # plugin の責務であり、codex-advisor の hooks.json は reviewer
+        # namespace に関知しない。
         serialized = json.dumps(hooks, ensure_ascii=False)
-        self.assertIn(PRE_PUSH_CODEX_REVIEWER, serialized)
+        self.assertNotIn(PRE_PUSH_CODEX_REVIEWER, serialized)
+        self.assertNotIn(PRE_PUSH_CODEX_REVIEWER_LEGACY, serialized)
+        self.assertNotIn(PRE_MERGE_CODEX_REVIEWER, serialized)
 
     def test_reviewer_matcher_fullmatches_known_namespaces_only(self) -> None:
         # SubagentStart / SubagentStop の matcher を正規表現としてコンパイルし、
-        # canonical / legacy 両 reviewer namespace に fullmatch し、類似の
-        # 未承認 namespace には match しないことを固定する (issue #378 分離後の
-        # 互換 alias regression 防止)。
+        # role 固有 runner namespace にのみ fullmatch し、review 系 reviewer
+        # namespace (canonical / legacy いずれも) や類似の未承認 namespace には
+        # match しないことを固定する (review の計数は pre-push-codex-review /
+        # pre-merge-codex-review plugin の責務であり、codex-advisor は関知
+        # しない)。
         manifest = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
         hooks = manifest["hooks"]
         accepted = (
             *RUNNERS.values(),
             "codex:codex-rescue",
-            PRE_PUSH_CODEX_REVIEWER,
-            PRE_PUSH_CODEX_REVIEWER_LEGACY,
         )
         rejected = (
             "pre-push-review:code-reviewer",
             "my-pre-push-codex-review:codex-reviewer",
             "pre-push-codex-review:code-reviewer",
             "PRE-PUSH-REVIEW:codex-reviewer",
+            PRE_PUSH_CODEX_REVIEWER,
+            PRE_PUSH_CODEX_REVIEWER_LEGACY,
+            PRE_MERGE_CODEX_REVIEWER,
         )
         for event in ("SubagentStart", "SubagentStop"):
             with self.subTest(event=event):

@@ -1,6 +1,26 @@
 {
-  "description": "pre-push-codex-review の配送経路: PreToolUse (Bash) で codex 未レビューの git push を deny (block-pre-push-codex.sh)、codex review wrapper の background 起動を deny (block-bg-codex-wrapper.sh)。SubagentStart で launch attestation を書き、SubagentStop で report / hash 検証を経て codex marker を更新する。PostToolUseFailure では Codex pending attestation を破棄する。マーカー仕様・保証差は plugin README を参照。",
+  "description": "pre-push-codex-review の配送経路: SessionStart で review cadence 規律を additionalContext として注入する (inject-review-cadence-rules.sh)。PreToolUse (Bash) は codex 未レビューの git push を deny し (block-pre-push-codex.sh)、codex review wrapper の background 起動を deny し (block-bg-codex-wrapper.sh)、review cadence の checkpoint 要求中は review 起動を deny する (manage-review-cadence.mjs)。SubagentStart は launch attestation を書き (auto-mark.sh)、`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の起動を review cadence へ記録する (manage-review-cadence.mjs)。SubagentStop は report / hash 検証を経て codex marker を更新し (auto-mark.sh)、計数対象 reviewer の成功と `codex-advisor:advisor-runner` の checkpoint 充足 attestation を review cadence へ反映する (manage-review-cadence.mjs)。PostToolUseFailure は Codex pending attestation を破棄し (auto-mark.sh)、`codex-advisor:advisor-runner` の起動失敗を review cadence の checkpoint 充足として fail-open に扱う (manage-review-cadence.mjs)。Stop は review cadence の checkpoint 要求中に main session の停止を block する (manage-review-cadence.mjs)。SessionEnd は review cadence state を削除する (manage-review-cadence.mjs)。マーカー仕様・保証差は plugin README を参照。",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-review-cadence-rules.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -12,6 +32,10 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-bg-codex-wrapper.sh"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
           }
         ]
       }
@@ -25,6 +49,15 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
           }
         ]
+      },
+      {
+        "matcher": "^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -34,6 +67,10 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
           }
         ]
       }
@@ -45,6 +82,25 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer|codex-advisor:(review|advisor)-runner)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
           }
         ]
       }

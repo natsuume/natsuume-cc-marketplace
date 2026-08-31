@@ -38,6 +38,9 @@ CODE_REVIEWER = PLUGINS / "pre-push-review" / "agents" / "code-reviewer.md"
 SECURITY_REVIEWER = PLUGINS / "pre-push-review" / "agents" / "security-reviewer.md"
 ADVISOR_RULES = PLUGINS / "codex-advisor" / "hooks" / "prompts" / "advisor-rules.md"
 CONSULT_SKILL = PLUGINS / "codex-advisor" / "skills" / "consult" / "SKILL.md"
+REVIEW_CADENCE_RULES = (
+    PLUGINS / "pre-push-codex-review" / "hooks" / "prompts" / "review-cadence-rules.md"
+)
 UI_PATTERNS_SKILL = PLUGINS / "ui-discipline" / "skills" / "ui-patterns" / "SKILL.md"
 DRAFT_SKILL = PLUGINS / "natsuume-writing" / "skills" / "draft" / "SKILL.md"
 
@@ -217,14 +220,30 @@ class CodexAdvisorDeduplicationTest(unittest.TestCase):
         self.assertNotIn("completion notification または TaskOutput を回収", text)
         self.assertIn("terminal report が返るまで", text)
 
-    def test_advisor_rules_points_to_consult_definition(self) -> None:
-        """advisor-rules.md は checkpoint 項目の定義を consult skill へ、正本の
-        識別子 (`/codex-advisor:consult`) 付きの参照で委ねる。
+    def test_review_cadence_rules_points_to_consult_definition(self) -> None:
+        """checkpoint 4 項目の詳細定義は `/codex-advisor:consult`
+        (skills/consult/SKILL.md の `<review_cycle_checkpoint>` template) を
+        正本とする。review cadence の enforcement 主体である
+        pre-push-codex-review plugin の review-cadence-rules.md は、checkpoint
+        起動時に正本の識別子 (`/codex-advisor:consult`) を名指しして委ね、
+        consult 側の詳細な項目説明文 (bullet 本文) を逐語複製しない。
         """
-        text = read(ADVISOR_RULES)
-        self.assertIn("が定義する 4 項目", text)
+        text = read(REVIEW_CADENCE_RULES)
+        self.assertIn("`/codex-advisor:consult`", text)
         self.assertIn("省略せず含める", text)
-        self.assertIn("`/codex-advisor:consult` が定義する", text)
+        leftovers = [
+            bullet
+            for bullet in (
+                "元の Goal、受入基準、変えてはならない制約",
+                "直近 5 サイクルの主要 findings、施した修正、反復している傾向",
+                "現在の問題設定・仮説・アプローチと、残っている不確実性",
+                "局所修正を続けるべきか、根本方針・設計境界・検証戦略を変えるべきか」という 1 つの質問",
+            )
+            if bullet in text
+        ]
+        self.assertEqual(
+            [], leftovers, f"review-cadence-rules.md に残る consult 側の逐語 bullet: {leftovers}"
+        )
 
     def test_consult_skill_remains_canonical_for_checkpoint(self) -> None:
         """正本側 (consult/SKILL.md) の checkpoint テンプレート全フィールドと

@@ -68,11 +68,9 @@ find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.
 
 ## review cadence
 
-lifecycle hook は正常終了したこの runner と `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の正常終了を、
-同じ session-scoped review cadence へ 1 回ずつ加算する。前回の根本方針 checkpoint から
-合計 5 回完了すると、Stop と次の一般 / pre-push Codex review 起動を block して
-`codex-advisor:advisor-runner` による checkpoint を親へ要求する。この runner 自身は advisor を
-起動せず、回数を推測せず、gate を迂回しない。起動時の PreToolUse が cadence を理由に deny
+`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の正常終了と
+同じく、この runner の正常終了は pre-push-codex-review plugin の review cadence enforcement が
+消費する。この runner 自身は advisor を起動せず、gate を迂回しない。起動時の PreToolUse が deny
 した場合は、その理由を terminal failure として親へ返す。
 
 ## failure と footer

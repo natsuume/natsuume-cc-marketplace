@@ -192,7 +192,7 @@ case "$HOOK_EVENT_NAME" in
 
     # tombstone (この agent_id は一度 SubagentStop まで到達した) が存在すれば exit 0。
     # 同一 agent_id はフル review 1 回のみ許す (resume で SubagentStart が再発火する
-    # 環境での attestation 再鋳造を遮断する。 issue #285 codex review P1 指摘)。
+    # 環境での attestation 再鋳造を遮断する。 issue #285 の指摘)。
     TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
     if [ -e "$TOMBSTONE_PATH" ]; then
       exit 0
