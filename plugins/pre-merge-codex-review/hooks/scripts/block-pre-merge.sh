@@ -24,20 +24,23 @@
 #    subagent の実行を案内する。 status は pass / findings のどちらでも「レビュー済み」
 #    として成立する (merge の approve や findings 0 件の証明ではない)。
 #
-# ## 対象 PR の解決
+# ## 対象 PR の解決 (repo スコープの一本化)
 #
-# 対象 PR の解決と head SHA の取得は gh に委ねる。 本 script はフラグ文法を解析せず、
-# 「連続列の直後に置かれた対象指定」 だけを受理して、 それ以外の曖昧な形はすべて deny する
-# (fail-closed):
+# 照合は **hook プロセスの cwd の repo** の文脈で行うため (`gh pr view` を cwd で実行する)、
+# 実際に merge される repo がそこから動きうる形はすべて deny する。 対象 PR の解決と head SHA
+# の取得自体は gh に委ね、 本 script はフラグ文法を解析しない:
+#   - `--repo` / `-R` の文字列を含む → 別 repo の PR を merge しうるため deny する
+#   - 正規化済みコマンドが `gh pr merge` で始まらない (前置コマンド連結・`cd` ・環境変数の
+#     前置き等) → 実際の merge 対象 repo が cwd と食い違いうるため deny する。 連続列より
+#     後ろの連結 (`gh pr merge 123 && ...`) は照合対象に影響しないので許容する
 #   - `gh pr merge` の連続列が 2 回以上ある → どの PR を照合すべきか一意に決まらないため
 #     deny する
-#   - 連続列の後ろのトークンを、 シェル演算子 (`&&` / `||` / `;` / `|` / `&`) の手前まで
-#     順に見る:
+#   - 連続列の後ろのトークンを、 リダイレクト (演算子と書き込み先) を除いたうえで、 シェル
+#     演算子 (`&&` / `||` / `;` / `|` / `&`) の手前まで順に見る:
 #       - 走査範囲のトークンがすべて `-` 始まり (フラグ) → 対象指定なしとして `gh pr view`
 #         の current branch 解決に委ねる
-#       - 最初の非フラグトークンが連続列の**直後**にある → 全数字 (PR 番号) / `http(s)://`
-#         (PR URL) ならその値を `gh pr view` に渡し、 解釈と解決は gh が行う。 それ以外
-#         (branch 名・変数展開等) は deny する
+#       - 最初の非フラグトークンが連続列の**直後**にある → 全数字 (PR 番号) のときだけ
+#         その値を `gh pr view` に渡す。 URL や branch 名は別 repo を指しうるため deny する
 #       - 最初の非フラグトークンが直後以外の位置にある (例: `gh pr merge --squash 123`)
 #         → フラグの値なのか対象指定なのかを本 script は判別できないため deny する
 #
@@ -104,6 +107,20 @@ codex review 済みであることを確認したうえで、 \`--auto\` / \`--a
     ;;
 esac
 
+# repo selector (`--repo` / `-R`) 付きの merge は、 本 gate が照合に使う repo (hook プロセスの
+# cwd) と実際に merge される repo が食い違いうる。 別 repo の同番号 PR のレビューコメントで
+# 未レビュー merge を通す経路になるため deny する (`--auto` / `--admin` と同じ粗い文字列検出)。
+case "$NORMALIZED" in
+  *--repo*|*-R*)
+    deny "マージをブロックしました。 repo 指定付きの merge (\`--repo\` / \`-R\`) はサポート外です。
+
+本 gate はコマンドを実行する repo の文脈でレビューコメントを照合するため、 repo を切り替える指定が入ると別 repo の PR を照合してしまう可能性があります。
+
+対象 repo のディレクトリに移動し、 repo 指定を外した \`gh pr merge\` を単独のコマンドとして実行してください。"
+    exit 0
+    ;;
+esac
+
 # 同一コマンド内に `gh pr merge` の連続列が複数あると、 どの PR を照合すれば merge 全体を
 # 検証したことになるかが決まらない。 1 つでも未レビューの merge を通さないため deny する。
 MERGE_SEQUENCE_COUNT=0
@@ -126,16 +143,40 @@ merge は 1 回の Bash 呼び出しにつき 1 つにして、 それぞれ個�
   exit 0
 fi
 
+# merge は単独コマンドとして先頭に置かれていることを要求する。 前置コマンドの連結
+# (`cd other-repo; gh pr merge 123` / `FOO=bar gh pr merge 123` 等) は、 実際に merge が
+# 行われる repo と本 gate が照合に使う repo (hook プロセスの cwd) が食い違いうるため deny する。
+# 連続列より **後ろ** の連結 (`gh pr merge 123 && ...`) は照合対象に影響しないので許容する。
+TRIMMED="${NORMALIZED# }"
+case "$TRIMMED" in
+  "gh pr merge") ;;
+  "gh pr merge "*) ;;
+  *)
+    deny "マージをブロックしました。 \`gh pr merge\` は単独のコマンドとして実行してください (前置コマンドとの連結・\`cd\` の後置き・環境変数の前置き等は、 実際に merge される repo と本 gate が照合する repo が食い違う経路になります)。
+
+対象 repo のディレクトリで作業している状態にしてから、 \`gh pr merge\` を先頭に置いた単独のコマンドとして実行してください (\`gh pr merge 123 --squash\` の後ろに別コマンドを連結する形は許容されます)。"
+    exit 0
+    ;;
+esac
+
 # 連続列の後ろのトークンを走査して対象指定を取り出す (フラグ文法は解析しない)。
 TARGET=""
-REST="${NORMALIZED#*gh pr merge}"
+REST="${TRIMMED#gh pr merge}"
 case "$REST" in
   " "*) REST="${REST# }" ;;
-  # `gh pr merge` で終わる形、 または直後が空白でない (別語の一部) 形。 走査対象なし。
   *) REST="" ;;
 esac
+# リダイレクト演算子とその書き込み先は引数ではないため走査対象から外す (除去しないと
+# `gh pr merge --squash > /tmp/log` の `/tmp/log` を対象指定と誤認する)。 除去は演算子から
+# 後ろに続く filename-safe な文字列までに限り、 想定外の shape はそのまま残して後段の分類で
+# deny 側に倒す。
+REST=$(printf '%s' "$REST" \
+  | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>|>|<)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')
 # シェル演算子 (`&&` / `||` / `;` / `|` / `&`) から後ろは別コマンドなので走査対象から外す。
 REST="${REST%%[&|;]*}"
+# リダイレクト除去で生じた空白を畳み直し、 先頭の空白を落とす。
+REST=$(printf '%s' "$REST" | tr -s ' ')
+REST="${REST# }"
 
 TOKEN_POSITION=0
 while [ -n "$REST" ]; do
@@ -160,15 +201,10 @@ while [ -n "$REST" ]; do
   fi
   case "$TOKEN" in
     *[!0-9]*)
-      case "$TOKEN" in
-        http://*|https://*) TARGET="$TOKEN" ;;
-        *)
-          deny "マージをブロックしました。 merge 対象の PR を一意に特定できません (\`gh pr merge\` の直後の語 \`${TOKEN}\` を PR 番号にも PR URL にも解釈できませんでした)。
+      deny "マージをブロックしました。 merge 対象の PR を一意に特定できません (\`gh pr merge\` の直後の語 \`${TOKEN}\` は PR 番号ではありません)。
 
-本 gate は対象 PR の解決を gh に委ねるため、 対象は PR 番号 (\`gh pr merge 123\`) か PR URL で指定してください。 対象 PR のブランチに切り替えたうえで対象指定を省略する形 (\`gh pr merge --squash\`) も使えます。"
-          exit 0
-          ;;
-      esac
+本 gate は対象 PR の解決を gh に委ねますが、 照合はコマンドを実行する repo の文脈で行うため、 別 repo を指しうる URL 指定や branch 名指定は受理しません。 対象 PR は同じ repo 内の番号 (\`gh pr merge 123\`) で指定するか、 対象 PR のブランチに切り替えて対象指定を省略する形 (\`gh pr merge --squash\`) を使ってください。"
+      exit 0
       ;;
     *) TARGET="$TOKEN" ;;
   esac
@@ -236,6 +272,8 @@ deny "マージをブロックしました。 merge 前に codex review を実�
 この head SHA に一致する codex review コメント (\`<!-- codex-review: head=<SHA> status=pass|findings -->\` 形式の header を持つ PR レビュー) が PR 上に見つかりませんでした。
 
 Agent / Task tool で subagent_type=\"pre-merge-codex-review:codex-reviewer\", model=\"sonnet\" を起動してください。 subagent が codex review を実行し、 完了時に header 付きの PR レビューを投稿します。 投稿後に \`gh pr merge\` を再試行してください。
+
+レビューは **current branch の PR** に対して実行・投稿されます。 別の PR を番号で指定して merge しようとしている場合は、 先にその PR のブランチへ \`git switch\` してから subagent を起動してください (別ブランチのまま起動すると、 レビューが current branch の PR に付いてしまい、 この merge は deny のままになります)。
 
 model 未指定の Agent 起動は Fable セッションでは agent-discipline の hook に deny されるため、 上記の model を常に明示してください。
 
