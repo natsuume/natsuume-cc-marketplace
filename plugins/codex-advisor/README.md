@@ -12,7 +12,7 @@ v3.0.0
 
 | 構成要素 | 役割 |
 |---|---|
-| SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 6 ルール (下記) を `additionalContext` として常時注入する |
+| SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 5 ルール (下記) を `additionalContext` として常時注入する |
 | SubagentStart hook (`inject-advisor-rules-subagent`) | 通常 subagent に advisor の許可境界を注入する。通常 subagent は wrapper を直接起動せず、self-contained な相談 request を親へ返す |
 | runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、SubagentStart / SubagentStop の active・bounded retry (advisor-runner の attestation footer 契約検証を含む)、Stop の reroute / completion 回収要求を管理する。runner state は UID + session ID で分離し、prompt / Codex 出力を保存しない |
 | role 固有 runner agents | rescue / review / advisor の model 起動・job tracking・terminal output を subagent context に閉じ込める。全 runner は foreground Agent として起動する |

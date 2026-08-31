@@ -135,7 +135,7 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 1. advisor runner が checkpoint request の成功を `Codex-Advisor-Review-Cadence: satisfied` で証明したとき
 2. advisor runner が checkpoint request を完了できないことを `unavailable` で証明したとき (terminal-failure)
-3. checkpoint 相談 (相談 request に `<review_cycle_checkpoint>` を含む) の `codex-advisor:advisor-runner` 起動自体が失敗したとき (PostToolUseFailure。fail-open — codex-advisor 未 install 環境で checkpoint が解除不能な block にならないようにする)。`<review_cycle_checkpoint>` を含まない通常の advisor 相談の起動失敗はこの経路に含まれない
+3. checkpoint 相談 (相談 request に `<review_cycle_checkpoint>` を含む) の `codex-advisor:advisor-runner` が実行を開始した後に失敗したとき (PostToolUseFailure。fail-open — codex-advisor 未 install 環境で checkpoint が解除不能な block にならないようにする)。`<review_cycle_checkpoint>` を含まない通常の advisor 相談の起動失敗、およびユーザ interrupt による abort (`is_interrupt: true`) はこの経路に含まれない。`codex-advisor:advisor-runner` という agent 自体が存在せず起動が実行開始前の validation で拒否された場合はこの hook が発火せず自動解除されないため、[state](#state) の手動 reset (state ファイル削除) で解除する
 
 ### state
 
@@ -145,7 +145,7 @@ review cadence の state は session ごとに 1 ファイル (ファイル名�
 
 ### codex-advisor 連携
 
-checkpoint の実行には `codex-advisor` plugin の install が必要です。未 install の環境ではチェックポイント相談の `codex-advisor:advisor-runner` 起動自体が失敗し、PostToolUseFailure hook がその失敗 (相談 request に `<review_cycle_checkpoint>` を含む場合のみ) を fail-open として扱ってカウンターを reset するため、block は解除されて続行できます。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
+checkpoint の実行には `codex-advisor` plugin の install が必要です。`codex-advisor:advisor-runner` が実行を開始した後に失敗した場合 (未認証・timeout 等) は、PostToolUseFailure hook がその失敗 (相談 request に `<review_cycle_checkpoint>` を含む場合のみ) を fail-open として扱ってカウンターを reset するため、block は解除されて続行できます。一方、codex-advisor 未 install で `codex-advisor:advisor-runner` という agent 自体が存在しない場合は、起動が実行開始前の validation で拒否され PostToolUseFailure 自体が発火しないため自動解除されません。この場合は codex-advisor plugin の install が必要であることをユーザに報告したうえで、[state](#state) の手動 reset (state ファイル削除) で解除してください。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
 
 ## pre-push-review core との併用設計
 

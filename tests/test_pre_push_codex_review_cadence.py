@@ -248,18 +248,20 @@ class HookHarness(unittest.TestCase):
         subagent_type: str = ADVISOR_CHECKPOINT_RUNNER,
         prompt: str | None = None,
         tool_name: str = "Agent",
+        is_interrupt: bool | None = None,
     ) -> dict[str, object] | None:
         tool_input: dict[str, object] = {"subagent_type": subagent_type}
         if prompt is not None:
             tool_input["prompt"] = prompt
-        return self.hook_response(
-            {
-                "hook_event_name": "PostToolUseFailure",
-                "session_id": session_id,
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-            }
-        )
+        payload: dict[str, object] = {
+            "hook_event_name": "PostToolUseFailure",
+            "session_id": session_id,
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+        }
+        if is_interrupt is not None:
+            payload["is_interrupt"] = is_interrupt
+        return self.hook_response(payload)
 
     def session_end(self, session_id: str = "session-a") -> dict[str, object] | None:
         return self.hook_response(
@@ -647,6 +649,18 @@ class PostToolUseFailureFailOpenTest(HookHarness):
         )
         self.assertIsNone(self.main_stop(session_id))
         self.assertIsNone(self.state_for(session_id))
+
+    def test_interrupt_failure_does_not_reset(self) -> None:
+        session_id = "session-interrupt-failure"
+        self.drive_to_checkpoint(session_id)
+        self.post_tool_use_failure(
+            session_id=session_id,
+            prompt=(
+                "<task>...</task>\n<review_cycle_checkpoint>...</review_cycle_checkpoint>"
+            ),
+            is_interrupt=True,
+        )
+        self.assert_stop_blocked(self.main_stop(session_id))
 
     def test_ordinary_consultation_launch_failure_does_not_reset(self) -> None:
         session_id = "session-ordinary-failure"
