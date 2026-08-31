@@ -15,13 +15,24 @@ red になる。
   `plugins/pre-push-review/hooks/scripts/lib/diff-hash.sh` の
   `compute_review_hash_in` と同一)。
 - marker が無い、または 5 key のいずれかが実 PR metadata・現在のローカル HEAD と
-  一致しなければ gate は deny する。
+  一致しなければ gate は deny する。marker の各 key は照合の前に形式を検証する
+  (`repo` は owner/name 形・`pr` は数値・`merge_base` / `head` は 40 hex の
+  commit OID・`diff_hash` は 64 hex)。形式不正の marker は deny する (marker は
+  ローカルの可変ファイルであり、内容を検証せずに deny 理由の案内コマンド等へ
+  流用しない)。
 - `--auto` を含む `gh pr merge` は marker の状態に関わらず常に deny する。
   `--auto=<値>` の連結形も値 (true / false) に依らず同様に deny する
   (フラグ形の解析分岐を増やさず fail-closed に倒す)。
+- `--admin` (ブランチ保護 bypass の即時 merge) を含む `gh pr merge` は、
+  構造強制の趣旨と両立しないため marker の状態に関わらず常に deny する。
 - gate は token-level の `gh pr merge` invocation を検出したコマンドのみを
   判定対象とする。invocation を含まないコマンドは、粗フィルタ (部分文字列)
-  に一致しても関与しない (無出力で終了し、既定の許可フローに委ねる)。
+  に一致しても原則関与しない (無出力で終了し、既定の許可フローに委ねる)。
+  ただし、粗フィルタに一致するコマンドが subshell / コマンド置換等の不透明
+  領域、または interpreter・評価コマンド (bash / sh / eval / source / xargs
+  等) を含む場合は、invocation がその内部に隠れている可能性があるため保守的
+  に deny する (不関与になるのは、不透明領域も interpreter も含まない quoted
+  データとしての言及のみのコマンド)。
 - invocation を検出した場合、コマンド全体がその単一 invocation で構成されて
   いなければ (他コマンドとの連結 (`&&` / `;` / `|` 等)・複数の merge
   invocation・`cd` 等の前置コマンドを含む合成形は) marker の状態に関わらず
@@ -30,10 +41,13 @@ red になる。
   invocation に到達する形 (env 代入 prefix・path 修飾された gh・`command`
   等の wrapper 経由) も保守的に deny する (gate の metadata 取得と実行される
   merge の解決入力を一致させるため)。
-- `--disable-auto` を単独で含む invocation は auto-merge 予約の解除であり
-  merge を実行しないため、gate は marker の有無に依らず関与しない (無出力)。
-  merge 方式フラグ (--merge / --squash / --rebase) や `--auto` / `--admin` と
-  併存する場合は矛盾形として保守的に deny する。
+- bare `--disable-auto` を単独で含む invocation は auto-merge 予約の解除で
+  あり merge を実行しないため、gate は marker の有無に依らず関与しない
+  (無出力)。`--disable-auto=<値>` の連結形は、falsy 値が実 merge を行う形の
+  ため値に依らず保守的に deny する。merge 方式フラグ (--merge / --squash /
+  --rebase) や `--auto` / `--admin` と併存する場合も矛盾形として deny する。
+- `--help` / `-h` を含む invocation は help 表示であり merge を実行しない
+  ため、gate は関与しない (無出力)。
 - gate は merge 対象 PR の実 metadata を `gh pr view [<対象指定>] --json <fields>`
   で取得する。`gh pr merge` の対象指定 (PR 番号 / URL / branch / 省略) は
   位置引数としてそのまま転送し、`-R` / `--repo` による repo 指定の値も転送する
@@ -46,12 +60,19 @@ red になる。
   `--json` で要求してよいフィールドは fake payload の key 集合 (gh 2.96.0 の
   `gh pr view --json` に実在するフィールドのみ。2026-08-31 実測) のサブセットに
   限る。
-- 5 key すべてが実 PR metadata・現在のローカル HEAD と一致する場合のみ gate は
-  allow し、`merge` サブコマンドトークンの末尾直後に
-  ` --match-head-commit <レビュー済み head OID>` を挿入した `updatedInput` を返す
-  (enforce-draft-pr と同型の offset 挿入方式。挿入以外の 1 バイトも変更しない)。
-  挿入結果の command は完全一致で検証する。merge 方式 (--merge / --squash /
-  --rebase) や `--delete-branch` の併用は判定に影響しない。
+- gate が出す permissionDecision は deny のみである。検証通過時・非対象
+  コマンドでは無出力で終了し、既定の許可フローに委ねる (allow / updatedInput
+  は一切出さない。gate が merge を自動承認して許可プロンプトを bypass する
+  経路を作らない)。
+- 5 key すべてが実 PR metadata・現在のローカル HEAD と一致し、コマンドに
+  `--match-head-commit` が無い場合、gate は deny し、元コマンドの `merge`
+  サブコマンドトークン末尾直後に ` --match-head-commit <レビュー済み head
+  OID>` を挿入した完全な再実行コマンドを deny 理由の中で案内する
+  (deny-and-reissue。案内文字列は完全一致の部分文字列として検証する)。
+  フラグ付き再発行が検証を通過すると無出力で通り、gate 検証後〜実 merge 間に
+  remote head が更新される TOCTOU は GitHub 側の `--match-head-commit` 検証が
+  遮断する。merge 方式 (--merge / --squash / --rebase) や `--delete-branch`
+  の併用は判定に影響しない。
 - コマンドが既に `--match-head-commit` を指定している場合 (分離形 / `=` 連結形
   とも): 値がレビュー済み head OID と一致し、かつ他のすべての検証 (marker
   5 key・merge queue・head 一致) を通過した場合は、書き換え不要のため
@@ -477,31 +498,31 @@ class PreMergeCodexGateTest(unittest.TestCase):
         response = json.loads(result.stdout)
         return response["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def updated_command(self, result: subprocess.CompletedProcess[bytes]) -> str:
-        response = json.loads(result.stdout)
-        return response["hookSpecificOutput"]["updatedInput"]["command"]
-
-    def maybe_updated_command(
-        self, result: subprocess.CompletedProcess[bytes]
-    ) -> str | None:
-        response = json.loads(result.stdout)
-        updated = response["hookSpecificOutput"].get("updatedInput")
-        if updated is None:
-            return None
-        return updated["command"]
-
-    def expected_injected(self, command: str, head_oid: str | None = None) -> str:
-        """`merge` サブコマンドトークン末尾直後に ` --match-head-commit <head>` を
-        offset 挿入した期待コマンドを組み立てる (完全一致検証用)。本テストの
-        merge コマンドはすべて `gh pr merge` で始まる形のみを使う。
+    def reissue_command(self, command: str, head_oid: str | None = None) -> str:
+        """元コマンドの `merge` サブコマンドトークン末尾直後に
+        ` --match-head-commit <head>` を挿入した、deny 理由で案内される再実行
+        コマンドの期待値を組み立てる (完全一致の部分文字列として検証する)。
         """
         if head_oid is None:
             head_oid = self.head_oid
-        prefix = "gh pr merge"
-        self.assertTrue(
-            command.startswith(prefix), f"unexpected command shape: {command}"
+        token = " merge"
+        index = command.index(token) + len(token)
+        return (
+            f"{command[:index]} --match-head-commit {head_oid}{command[index:]}"
         )
-        return f"{prefix} --match-head-commit {head_oid}{command[len(prefix):]}"
+
+    def assert_denied_with_reissue_guidance(
+        self,
+        result: subprocess.CompletedProcess[bytes],
+        command: str,
+        head_oid: str | None = None,
+    ) -> None:
+        """検証通過 + フラグ無しの deny は、完全な再実行コマンドを deny 理由の
+        中で案内する契約 (deny-and-reissue)。"""
+        self.assertEqual(self.decision(result), "deny")
+        self.assertIn(
+            self.reissue_command(command, head_oid), self.deny_reason(result)
+        )
 
     def assert_fake_gh_consulted(self) -> None:
         self.assertTrue(
@@ -599,6 +620,25 @@ class PreMergeCodexGateTest(unittest.TestCase):
                     f"--auto の = 連結形も値に依らず deny する契約 (case={label})",
                 )
 
+    def test_denies_admin_merge_regardless_of_marker(self) -> None:
+        """--admin (ブランチ保護 bypass の即時 merge) は構造強制の趣旨と
+        両立しないため常に deny する。"""
+        with self.subTest(marker="absent"):
+            result = self.run_gate(f"{MERGE_COMMAND} --admin")
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(self.decision(result), "deny")
+
+        with self.subTest(marker="present_and_valid"):
+            self.write_marker(self.build_marker())
+            result = self.run_gate(f"{MERGE_COMMAND} --admin")
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(
+                self.decision(result),
+                "deny",
+                "--admin はブランチ保護 bypass のため有効な marker があっても"
+                " deny する契約",
+            )
+
     # ------------------------------------------------------------------
     # (c2) 合成コマンド (連結・複数 invocation・前置コマンド) は marker の
     #      有無に依らず deny
@@ -666,12 +706,59 @@ class PreMergeCodexGateTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(self.decision(result), "deny")
 
+        for label, command in {
+            "equals_false": f"gh pr merge {PR_NUMBER} --disable-auto=false",
+            "equals_true": f"gh pr merge {PR_NUMBER} --disable-auto=true",
+        }.items():
+            with self.subTest(case=label):
+                self.write_marker(self.build_marker())
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(
+                    self.decision(result),
+                    "deny",
+                    "--disable-auto の = 連結形は値に依らず deny する契約"
+                    f" (case={label})",
+                )
+
+    def test_ignores_help_invocations(self) -> None:
+        """--help / -h は help 表示であり merge を実行しないため関与しない。"""
+        commands = {
+            "long": f"gh pr merge {PR_NUMBER} --help",
+            "short": f"gh pr merge -h {PR_NUMBER}",
+        }
+        for label, command in commands.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIsNone(self.decision(result), f"case={label}")
+
+    def test_denies_merge_invocation_hidden_in_opaque_or_interpreter_shapes(
+        self,
+    ) -> None:
+        """subshell / コマンド置換 / interpreter・評価コマンドの内部に隠れた
+        merge invocation は token-level 検出の射程外のため、粗フィルタ一致 +
+        不透明領域 / interpreter の存在で保守的に deny する。"""
+        commands = {
+            "bash_dash_c": f'bash -c "gh pr merge {PR_NUMBER} --merge"',
+            "eval": f'eval "gh pr merge {PR_NUMBER} --merge"',
+            "subshell": f"(gh pr merge {PR_NUMBER} --merge)",
+            "substitution": f"echo $(gh pr merge {PR_NUMBER} --merge)",
+            "piped_to_shell": f'echo "gh pr merge {PR_NUMBER} --merge" | bash',
+        }
+        for label, command in commands.items():
+            with self.subTest(case=label):
+                self.write_marker(self.build_marker())
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
     # ------------------------------------------------------------------
-    # (d) 正しい 5 key marker + PR metadata 一致 → allow + --match-head-commit
-    #     挿入 (updatedInput の command は完全一致)
+    # (d) 正しい 5 key marker + PR metadata 一致 + フラグ無し → deny +
+    #     再実行コマンド案内 (deny-and-reissue。案内文字列は完全一致で検証)
     # ------------------------------------------------------------------
 
-    def test_allows_merge_with_valid_marker_and_injects_match_head_commit(
+    def test_denies_valid_marker_without_flag_and_guides_reissue(
         self,
     ) -> None:
         self.write_marker(self.build_marker())
@@ -679,18 +766,16 @@ class PreMergeCodexGateTest(unittest.TestCase):
         result = self.run_gate(MERGE_COMMAND)
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "allow")
-        self.assertEqual(
-            self.updated_command(result), self.expected_injected(MERGE_COMMAND)
-        )
+        self.assert_denied_with_reissue_guidance(result, MERGE_COMMAND)
         self.assert_fake_gh_consulted()
 
     # ------------------------------------------------------------------
-    # (d2) 対象指定形 (URL / branch / 省略 / --repo) ごとに、gate は同じ対象
-    #      指定を gh pr view へ転送したうえで allow + 挿入する
+    # (d2) 対象指定形 (URL / branch / 省略 / repo flag 各形・各位置) ごとに、
+    #      gate は同じ対象指定を gh pr view へ転送したうえで検証し、再実行
+    #      コマンドを案内する
     # ------------------------------------------------------------------
 
-    def test_allows_merge_for_each_target_form(self) -> None:
+    def test_guides_reissue_for_each_target_form(self) -> None:
         cases: dict[str, tuple[str, str | None, str | None]] = {
             "url": (f"gh pr merge {PR_URL} --merge", PR_URL, None),
             "branch": ("gh pr merge feature/test --merge", "feature/test", None),
@@ -715,6 +800,16 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 str(PR_NUMBER),
                 REPO_NAME_WITH_OWNER,
             ),
+            "repo_flag_before_pr": (
+                f"gh -R {REPO_NAME_WITH_OWNER} pr merge {PR_NUMBER} --merge",
+                str(PR_NUMBER),
+                REPO_NAME_WITH_OWNER,
+            ),
+            "repo_flag_between": (
+                f"gh pr -R {REPO_NAME_WITH_OWNER} merge {PR_NUMBER} --merge",
+                str(PR_NUMBER),
+                REPO_NAME_WITH_OWNER,
+            ),
         }
         for label, (command, expect_target, expect_repo_flag) in cases.items():
             with self.subTest(case=label):
@@ -728,10 +823,7 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 result = self.run_gate(command)
 
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "allow", f"case={label}")
-                self.assertEqual(
-                    self.updated_command(result), self.expected_injected(command)
-                )
+                self.assert_denied_with_reissue_guidance(result, command)
                 self.assert_fake_gh_consulted()
 
     def test_denies_duplicated_repo_selector(self) -> None:
@@ -756,10 +848,12 @@ class PreMergeCodexGateTest(unittest.TestCase):
 
     # ------------------------------------------------------------------
     # (d3) merge 方式 (--squash / --rebase) と --delete-branch 併用は判定に
-    #      影響しない (marker 有効なら allow + 挿入)
+    #      影響しない (marker 有効なら再実行コマンド案内)
     # ------------------------------------------------------------------
 
-    def test_allows_each_merge_strategy_and_delete_branch(self) -> None:
+    def test_guides_reissue_for_each_merge_strategy_and_delete_branch(
+        self,
+    ) -> None:
         commands = {
             "squash": f"gh pr merge {PR_NUMBER} --squash",
             "rebase": f"gh pr merge {PR_NUMBER} --rebase",
@@ -773,19 +867,17 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 result = self.run_gate(command)
 
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "allow", f"case={label}")
-                self.assertEqual(
-                    self.updated_command(result), self.expected_injected(command)
-                )
+                self.assert_denied_with_reissue_guidance(result, command)
                 self.assert_fake_gh_consulted()
 
     # ------------------------------------------------------------------
     # (d4) 非 default base の PR: merge_base / diff_hash の検証は実 PR base
-    #      (baseRefName) を基準にする。default branch (origin/master) を
-    #      決め打ちする実装はこのケースで deny になり契約違反として検出される
+    #      の commit OID (baseRefOid) を基準にする。default branch
+    #      (origin/master) を決め打ちする実装はこのケースで deny になり
+    #      契約違反として検出される
     # ------------------------------------------------------------------
 
-    def test_allows_merge_with_non_default_base_branch(self) -> None:
+    def test_guides_reissue_with_non_default_base_branch(self) -> None:
         _git(self.work, "switch", "master")
         _git(self.work, "switch", "-c", "develop")
         (self.work / "develop.txt").write_text("develop base\n", encoding="utf-8")
@@ -832,10 +924,8 @@ class PreMergeCodexGateTest(unittest.TestCase):
         result = self.run_gate(MERGE_COMMAND)
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "allow")
-        self.assertEqual(
-            self.updated_command(result),
-            self.expected_injected(MERGE_COMMAND, head_oid=head_oid),
+        self.assert_denied_with_reissue_guidance(
+            result, MERGE_COMMAND, head_oid=head_oid
         )
         self.assert_fake_gh_consulted()
 
@@ -844,7 +934,7 @@ class PreMergeCodexGateTest(unittest.TestCase):
     #      と照合する (headRepository への束縛は fork PR で誤動作する)
     # ------------------------------------------------------------------
 
-    def test_allows_merge_for_cross_repository_pull_request(self) -> None:
+    def test_guides_reissue_for_cross_repository_pull_request(self) -> None:
         payload = dict(self.payload)
         payload["isCrossRepository"] = True
         payload["headRepository"] = {
@@ -863,10 +953,7 @@ class PreMergeCodexGateTest(unittest.TestCase):
         result = self.run_gate(MERGE_COMMAND)
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "allow")
-        self.assertEqual(
-            self.updated_command(result), self.expected_injected(MERGE_COMMAND)
-        )
+        self.assert_denied_with_reissue_guidance(result, MERGE_COMMAND)
         self.assert_fake_gh_consulted()
 
     # ------------------------------------------------------------------
@@ -875,7 +962,7 @@ class PreMergeCodexGateTest(unittest.TestCase):
     #      実装は誤った範囲を検証して deny になり、契約違反として検出される)
     # ------------------------------------------------------------------
 
-    def test_allows_merge_when_base_tracking_ref_is_stale(self) -> None:
+    def test_guides_reissue_when_base_tracking_ref_is_stale(self) -> None:
         # master を 1 commit 進めて push し、feature をそこから切る。
         _git(self.work, "switch", "master")
         (self.work / "base2.txt").write_text("base2\n", encoding="utf-8")
@@ -942,10 +1029,8 @@ class PreMergeCodexGateTest(unittest.TestCase):
         result = self.run_gate(MERGE_COMMAND)
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "allow")
-        self.assertEqual(
-            self.updated_command(result),
-            self.expected_injected(MERGE_COMMAND, head_oid=head_oid),
+        self.assert_denied_with_reissue_guidance(
+            result, MERGE_COMMAND, head_oid=head_oid
         )
 
     def test_denies_merge_when_base_oid_object_is_unavailable(self) -> None:
@@ -991,6 +1076,28 @@ class PreMergeCodexGateTest(unittest.TestCase):
             "head_mismatch": self.build_marker(head=self.base_oid),
             "diff_hash_mismatch": self.build_marker(
                 diff_hash=hashlib.sha256(b"tampered").hexdigest()
+            ),
+        }
+        for label, marker in cases.items():
+            with self.subTest(case=label):
+                self.write_marker(marker)
+                result = self.run_gate(MERGE_COMMAND)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
+    def test_denies_malformed_marker_values(self) -> None:
+        """marker の各 key は照合の前に形式検証する。malformed な値はローカル
+        可変ファイル由来の信頼できない内容として deny する。"""
+        cases = {
+            "head_not_oid": self.build_marker(head="not-a-commit-oid"),
+            "repo_without_owner": self.build_marker(repo="just-a-name"),
+            "diff_hash_not_sha256": self.build_marker(diff_hash="zzzz"),
+            "pr_not_number": (
+                f"repo={REPO_NAME_WITH_OWNER}\n"
+                "pr=abc\n"
+                f"merge_base={self.merge_base_oid}\n"
+                f"head={self.head_oid}\n"
+                f"diff_hash={self.diff_hash}\n"
             ),
         }
         for label, marker in cases.items():
@@ -1071,7 +1178,9 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertEqual(self.decision(result), "deny", f"case={label}")
 
-    def test_injects_when_flag_text_appears_inside_quoted_argument(self) -> None:
+    def test_guides_reissue_when_flag_text_appears_inside_quoted_argument(
+        self,
+    ) -> None:
         """quoted 引数値の中に現れるフラグ風文字列 (--auto /
         --match-head-commit) を実フラグと誤認しない (token-level 検出)。"""
         command = (
@@ -1083,10 +1192,7 @@ class PreMergeCodexGateTest(unittest.TestCase):
         result = self.run_gate(command)
 
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "allow")
-        self.assertEqual(
-            self.updated_command(result), self.expected_injected(command)
-        )
+        self.assert_denied_with_reissue_guidance(result, command)
 
     # ------------------------------------------------------------------
     # (g) merge queue 必須の base への merge は marker の有無に依らず deny
@@ -1112,16 +1218,6 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 "deny",
                 "merge queue 必須 branch への merge は遅延実行になるため"
                 "有効な marker があっても deny する契約",
-            )
-
-        with self.subTest(marker="present_and_valid", command="admin_bypass"):
-            self.write_marker(self.build_marker())
-            result = self.run_gate(f"{MERGE_COMMAND} --admin")
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
-            self.assertEqual(
-                self.decision(result),
-                "deny",
-                "merge queue を --admin でバイパスする merge も deny する契約",
             )
 
     def test_denies_merge_when_merge_queue_state_is_unavailable(self) -> None:
