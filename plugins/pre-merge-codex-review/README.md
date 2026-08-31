@@ -37,16 +37,17 @@ codex-advisor を併用する場合は v2.2.0 以上 (本 plugin の reviewer na
 
 `gh pr merge` を含む Bash コマンドを検出した際、次の手順で merge を許可するかを判定します:
 
-1. 粗フィルタ (`gh` / `pr` / `merge` の存在) を通過したコマンドを `lib/cmd-parser.sh` でトークン化し、`gh pr merge <PR 番号 | URL 等>` 相当の invocation を検出する。解析不能な形 (未対応の quote / heredoc / indirection 構文等) は保守的に deny する。また、Bash コマンド全体が単一の `gh pr merge` invocation である場合のみ判定対象とし、他コマンドとの連結 (`&&` / `;` / `|` 等)・複数の merge invocation・`cd` 等の前置コマンドを含む合成形も保守的に deny する (検証した repo / PR と実行される merge の乖離、および 2 つ目以降の invocation の検証漏れを塞ぐ)
-2. `--auto` (auto-merge 予約。`--auto=<値>` の連結形は値に依らず同扱い) を検出した場合は marker の有無に関わらず常に deny する。`--auto` は GitHub 側が条件成立を待って後から実 merge するため、予約時点のローカル gate 判定と実 merge 実行のタイミングが分離し、ローカル gate の射程外になる。この経路は fail-closed に deny する
-3. marker (`.claude-pre-merge-codex-reviewed`) を読み、`repo` / `pr` / `merge_base` / `head` / `diff_hash` の 5 key が揃っているかを確認する。marker が無い、または key が欠けていれば deny する
-4. `gh pr view [<対象指定>] --json <fields>` で merge 対象 PR の実 metadata (PR 番号 / head commit OID / リポジトリ identity) を取得する。`gh pr merge` の対象指定 (PR 番号 / URL / branch / 省略) は位置引数としてそのまま転送し、`-R` / `--repo` による repo 指定の値も転送する。取得に失敗したら deny する
-5. merge 対象 PR の `isMergeQueueEnabled` (base branch が merge queue を要求するか) を、merge 対象 (base) リポジトリに対する `gh api graphql` で取得し、true なら marker の状態に関わらず deny する (このフィールドは `gh pr view --json` では取得できないため GraphQL を直接使う)。gh は merge queue 必須 branch への `gh pr merge` を `--auto` の有無に依らず即時 merge せず遅延実行 (checks 未完了なら auto-merge 有効化、完了済みなら enqueue) に倒すため、`--auto` と同じ理由でローカル gate の射程外になる
-6. marker の `repo` / `pr` / `head` を実 metadata と照合し、1 つでも不一致なら deny する。`repo` の照合対象は merge 対象 (base) リポジトリの identity であり、fork 由来 PR (`isCrossRepository`) でも head 側リポジトリではない
-7. marker の `merge_base` が、実 metadata の base branch (`baseRefName`) との現在の merge-base OID と一致するかを検証する (ローカル default branch の決め打ちは非 default base への PR で誤る)
-8. marker の `diff_hash` を、`lib/diff-hash.sh` の `compute_review_hash_in` と同じ計算式で実 base 基準の merge-base..head 全差分から再計算した hash と照合する
-9. ローカル branch HEAD が remote PR head と一致することを検証する
-10. 1〜9 のいずれかで不一致・取得失敗・判定不能があれば deny する (fail-closed)。すべて一致した場合のみ allow し、merge コマンドの `merge` サブコマンドトークン末尾直後へ ` --match-head-commit <レビュー済み head OID>` を自動挿入する (enforce-draft-pr と同型の offset 挿入 + updatedInput 方式。挿入以外は 1 バイトも変更しない)。コマンドが既に `--match-head-commit` (分離形 / `=` 連結形) を指定している場合は、その値がレビュー済み head OID と一致するときのみ allow してコマンドを書き換えず、異なる OID を指定しているときは deny する。`--match-head-commit` が 1 コマンド中に複数回出現する場合は、値の一致に依らず deny する (cobra の後勝ち解決により検証済みの値が後続の未検証値で上書きされる経路を塞ぐ)。gate 検証後から実 merge までの間に remote head が更新される TOCTOU は、GitHub 側の `--match-head-commit` 検証が遮断する
+1. 粗フィルタ (`gh` / `pr` / `merge` の存在) を通過したコマンドを `lib/cmd-parser.sh` でトークン化し、token-level の `gh pr merge <PR 番号 | URL 等>` 相当の invocation を検出する。invocation を含まないコマンドは粗フィルタに一致しても関与しない (無出力で終了し、既定の許可フローに委ねる)。invocation を検出した場合、コマンド全体がその単一 invocation で構成されていなければ (他コマンドとの連結 (`&&` / `;` / `|` 等)・複数の merge invocation・`cd` 等の前置コマンドを含む合成形は) 保守的に deny する (検証した repo / PR と実行される merge の乖離、および 2 つ目以降の invocation の検証漏れを塞ぐ)。素の `gh` 以外で merge invocation に到達する形 (env 代入 prefix・path 修飾された gh・`command` 等の wrapper 経由) と、解析不能な形 (未対応の quote / heredoc / indirection 構文等) も保守的に deny する。フラグの検出・判定は token-level で行い、quoted 引数値の中に現れるフラグ風文字列を実フラグと誤認しない
+2. `--disable-auto` を単独で含む invocation は auto-merge 予約の解除であり merge を実行しないため、marker の有無に依らず関与しない (無出力)。merge 方式フラグ (--merge / --squash / --rebase) や `--auto` / `--admin` と併存する場合は矛盾形として保守的に deny する
+3. `--auto` (auto-merge 予約。`--auto=<値>` の連結形は値に依らず同扱い) を検出した場合は marker の有無に関わらず常に deny する。`--auto` は GitHub 側が条件成立を待って後から実 merge するため、予約時点のローカル gate 判定と実 merge 実行のタイミングが分離し、ローカル gate の射程外になる。この経路は fail-closed に deny する
+4. marker (`.claude-pre-merge-codex-reviewed`) を読み、`repo` / `pr` / `merge_base` / `head` / `diff_hash` の 5 key が揃っているかを確認する。marker が無い、または key が欠けていれば deny する
+5. `gh pr view [<対象指定>] --json <fields>` で merge 対象 PR の実 metadata (PR 番号 / head commit OID / base commit OID / リポジトリ identity) を取得する。`gh pr merge` の対象指定 (PR 番号 / URL / branch / 省略) は位置引数としてそのまま転送し、`-R` / `--repo` による repo 指定の値 (分離形 / `=` 連結形 / attached 短縮形) も転送する。repo 指定が 1 コマンド中に複数回出現する場合は値の一致に依らず deny する。取得に失敗したら deny する
+6. merge 対象 PR の `isMergeQueueEnabled` (base branch が merge queue を要求するか) を、merge 対象 (base) リポジトリに対する `gh api graphql` で取得し、true なら marker の状態に関わらず deny する (このフィールドは `gh pr view --json` では取得できないため GraphQL を直接使う)。gh は merge queue 必須 branch への `gh pr merge` を `--auto` の有無に依らず即時 merge せず遅延実行 (checks 未完了なら auto-merge 有効化、完了済みなら enqueue) に倒すため、`--auto` と同じ理由でローカル gate の射程外になる
+7. marker の `repo` / `pr` / `head` を実 metadata と照合し、1 つでも不一致なら deny する。`repo` の照合対象は merge 対象 (base) リポジトリの identity であり、fork 由来 PR (`isCrossRepository`) でも head 側リポジトリではない
+8. marker の `merge_base` が、実 metadata の base commit OID (`baseRefOid`) との現在の merge-base OID と一致するかを検証する (ローカル default branch や base 追跡 ref の決め打ちは、非 default base への PR や base の force-push 後に追跡 ref が stale な場合に誤った範囲を検証する)。`baseRefOid` の object がローカルに存在しない場合は deny する
+9. marker の `diff_hash` を、`lib/diff-hash.sh` の `compute_review_hash_in` と同じ計算式で `baseRefOid` 基準の merge-base..head 全差分から再計算した hash と照合する
+10. ローカル branch HEAD が remote PR head (`headRefOid`) と一致することを検証する (未 push commit / remote 前進の検出)
+11. 1〜10 のいずれかで不一致・取得失敗・判定不能があれば deny する (fail-closed)。すべて一致した場合のみ allow し、merge コマンドの `merge` サブコマンドトークン末尾直後へ ` --match-head-commit <レビュー済み head OID>` を自動挿入する (enforce-draft-pr と同型の offset 挿入 + updatedInput 方式。挿入以外は 1 バイトも変更しない)。コマンドが既に `--match-head-commit` (分離形 / `=` 連結形) を指定している場合は、その値がレビュー済み head OID と一致し検証をすべて通過したときに限り、書き換え不要のため decision を出さずに終了する (無出力。既定の許可フローに委ねる)。異なる OID を指定しているとき、またはフラグ値が一致しても marker key の検証に失敗したときは deny する。`--match-head-commit` が 1 コマンド中に複数回出現する場合は、値の一致に依らず deny する (cobra の後勝ち解決により検証済みの値が後続の未検証値で上書きされる経路を塞ぐ)。gate 検証後から実 merge までの間に remote head が更新される TOCTOU は、GitHub 側の `--match-head-commit` 検証が遮断する
 
 #### 2. block-bg-codex-wrapper (PreToolUse, matcher: `Bash`)
 
@@ -88,6 +89,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 - **`--auto` は常に deny**: `gh pr merge --auto` は GitHub 側が条件成立を待って後から実 merge を行うため、ローカル gate が判定できるのは予約操作の時点だけであり、実際の merge 実行を検証できません。この経路はサポート外として常に deny します
 - **merge queue 必須の base branch への merge も常に deny**: gh は merge queue が必須の branch への `gh pr merge` を `--auto` の有無に依らず即時 merge せず遅延実行 (checks 未完了なら auto-merge 有効化、完了済みなら enqueue) に倒すため、予約時点と実 merge 実行が分離し、`--auto` と同じ理由でサポート外として deny します。判定には gh 自身が enqueue 判定に使う PR の GraphQL field `isMergeQueueEnabled` を用います (marker の有無に依らず deny)。merge queue をバイパスする `--admin` を付けた場合も同様に deny します
 - **base tip の前進のみでは marker は失効しない**: base branch の tip だけが進み、PR の head commit と merge-base OID が変わらない場合 (= marker の 5 key がすべて維持される場合) は marker を失効させません。この状態で他の変更が base に同時に merge されたことによる semantic conflict (テキスト上は衝突しないが意味的に矛盾する変更) は本 plugin の検証範囲外です
+- **repo identity は owner/name で host を区別しない**: marker の `repo` は `<owner>/<name>` 形式であり、GitHub ホスト (github.com / GitHub Enterprise) を区別しません。複数ホストに同一 owner/name のミラーリポジトリを併用する運用は想定外です
 
 ## pre-push-review / pre-push-codex-review との併用設計
 

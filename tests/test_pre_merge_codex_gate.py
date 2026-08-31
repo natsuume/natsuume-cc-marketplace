@@ -19,15 +19,27 @@ red になる。
 - `--auto` を含む `gh pr merge` は marker の状態に関わらず常に deny する。
   `--auto=<値>` の連結形も値 (true / false) に依らず同様に deny する
   (フラグ形の解析分岐を増やさず fail-closed に倒す)。
-- gate は Bash コマンド全体が単一の `gh pr merge` invocation である場合のみ
-  判定し、他コマンドとの連結 (`&&` / `;` / `|` 等)・複数の merge invocation・
-  `cd` 等の前置コマンドを含む合成形は marker の状態に関わらず保守的に deny
-  する (検証した repo / PR と実行される merge の乖離、および 2 つ目以降の
-  invocation の検証漏れを塞ぐ)。
+- gate は token-level の `gh pr merge` invocation を検出したコマンドのみを
+  判定対象とする。invocation を含まないコマンドは、粗フィルタ (部分文字列)
+  に一致しても関与しない (無出力で終了し、既定の許可フローに委ねる)。
+- invocation を検出した場合、コマンド全体がその単一 invocation で構成されて
+  いなければ (他コマンドとの連結 (`&&` / `;` / `|` 等)・複数の merge
+  invocation・`cd` 等の前置コマンドを含む合成形は) marker の状態に関わらず
+  保守的に deny する (検証した repo / PR と実行される merge の乖離、および
+  2 つ目以降の invocation の検証漏れを塞ぐ)。素の `gh` 以外で merge
+  invocation に到達する形 (env 代入 prefix・path 修飾された gh・`command`
+  等の wrapper 経由) も保守的に deny する (gate の metadata 取得と実行される
+  merge の解決入力を一致させるため)。
+- `--disable-auto` を単独で含む invocation は auto-merge 予約の解除であり
+  merge を実行しないため、gate は marker の有無に依らず関与しない (無出力)。
+  merge 方式フラグ (--merge / --squash / --rebase) や `--auto` / `--admin` と
+  併存する場合は矛盾形として保守的に deny する。
 - gate は merge 対象 PR の実 metadata を `gh pr view [<対象指定>] --json <fields>`
   で取得する。`gh pr merge` の対象指定 (PR 番号 / URL / branch / 省略) は
   位置引数としてそのまま転送し、`-R` / `--repo` による repo 指定の値も転送する
-  (分離形 / `=` 連結形 / `-R<value>` attached 短縮形のいずれも)。marker の
+  (分離形 / `=` 連結形 / `-R<value>` attached 短縮形のいずれも)。repo 指定が
+  1 コマンド中に複数回出現する場合は、値の一致に依らず deny する (解析器と
+  gh の解決順の差で検証対象と実行対象が乖離する経路を塞ぐ)。marker の
   `pr` は取得した実 metadata の number と照合する (対象省略形ではコマンドに
   PR 番号が現れないため、コマンド文字列やローカル状態からの推定は照合に
   使えない)。
@@ -41,14 +53,23 @@ red になる。
   挿入結果の command は完全一致で検証する。merge 方式 (--merge / --squash /
   --rebase) や `--delete-branch` の併用は判定に影響しない。
 - コマンドが既に `--match-head-commit` を指定している場合 (分離形 / `=` 連結形
-  とも): 値がレビュー済み head OID と一致するなら allow し、コマンドは
-  書き換えない (updatedInput を返さない)。一致しない値なら deny する。
+  とも): 値がレビュー済み head OID と一致し、かつ他のすべての検証 (marker
+  5 key・merge queue・head 一致) を通過した場合は、書き換え不要のため
+  decision を出さずに終了する (無出力。既定の許可フローに委ねる。allow を
+  出すと既定の許可フローを自動スキップしてしまうため)。一致しない値なら
+  deny する。フラグ値が一致していても marker key の検証は省略しない
+  (フラグ一致だけで許可へ short-circuit しない)。
+- フラグの検出・判定は token-level で行い、quoted 引数値の中に現れるフラグ風
+  文字列 (`--auto` / `--match-head-commit` 等) を実フラグと誤認しない。
   `--match-head-commit` が 1 コマンド中に複数回出現する場合は、値の一致に
   依らず deny する (cobra の後勝ち解決により検証済みの値が後続の未検証値で
   上書きされる経路を塞ぐ)。
 - marker の `merge_base` / `diff_hash` の検証は、取得した実 PR metadata の
-  base branch (`baseRefName`) を基準にする (ローカル default branch の
-  決め打ちは、非 default base への PR で必ず不一致になる)。
+  base commit OID (`baseRefOid`) を基準に merge-base を計算する (ローカル
+  default branch や base 追跡 ref の決め打ちは、非 default base への PR や、
+  base の force-push 後に追跡 ref が stale なままの場合に誤った範囲を検証
+  する)。`baseRefOid` の object がローカルに存在しない場合は deny する
+  (fail-closed)。
 - marker の `repo` は merge 対象 (base) リポジトリの identity と照合する。
   fork 由来の PR (`isCrossRepository` が true で `headRepository` が別 repo を
   指す) でも、照合対象は base リポジトリであり head 側リポジトリではない。
@@ -62,6 +83,9 @@ red になる。
   enqueue 判定に使うフィールドであり、`gh pr view --json` では取得できない
   (gh 2.96.0。2026-08-31 実測) ため、gate は `gh api graphql` で取得する。
   取得失敗は deny (fail-closed)。
+- 必須依存 (jq / gh) が見つからない環境では、merge invocation を fail-closed
+  に deny し (deny 文言に不足コマンド名を含める)、無関係な Bash 呼び出しには
+  関与しない。
 
 gate は実の GitHub API を叩けないため、テストは一時ディレクトリに fake `gh`
 実行ファイルを作り PATH の先頭に置く。fake `gh` は上記の呼び出し形のみを
@@ -595,6 +619,53 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
                 self.assertEqual(self.decision(result), "deny", f"case={label}")
 
+    def test_ignores_commands_without_token_level_merge_invocation(self) -> None:
+        """粗フィルタ (部分文字列) に一致しても token-level の merge invocation
+        を含まないコマンドには関与しない (無出力)。"""
+        commands = {
+            "quoted_in_message": 'git commit -m "wip: gh pr merge gate"',
+            "compound_without_invocation": (
+                'git log --grep "gh pr merge" && echo ok'
+            ),
+        }
+        for label, command in commands.items():
+            with self.subTest(case=label):
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIsNone(self.decision(result), f"case={label}")
+
+    def test_denies_non_plain_gh_invocation_shapes(self) -> None:
+        """素の `gh` 以外で merge invocation に到達する形は、gate の metadata
+        取得と実行される merge の解決入力が乖離しうるため保守的に deny する。"""
+        commands = {
+            "env_prefix": (
+                f"GH_REPO=other-owner/other-repo gh pr merge {PR_NUMBER} --merge"
+            ),
+            "path_qualified": f"/usr/bin/gh pr merge {PR_NUMBER} --merge",
+            "builtin_wrapper": f"command gh pr merge {PR_NUMBER} --merge",
+        }
+        for label, command in commands.items():
+            with self.subTest(case=label):
+                self.write_marker(self.build_marker())
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
+    def test_ignores_standalone_disable_auto_and_denies_combined_form(
+        self,
+    ) -> None:
+        """--disable-auto 単独は auto-merge 予約の解除であり merge を実行しない
+        ため関与しない (無出力)。merge 方式フラグとの併存は矛盾形として deny
+        する。"""
+        result = self.run_gate(f"gh pr merge {PR_NUMBER} --disable-auto")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIsNone(self.decision(result))
+
+        self.write_marker(self.build_marker())
+        result = self.run_gate(f"gh pr merge {PR_NUMBER} --disable-auto --merge")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
     # ------------------------------------------------------------------
     # (d) 正しい 5 key marker + PR metadata 一致 → allow + --match-head-commit
     #     挿入 (updatedInput の command は完全一致)
@@ -662,6 +733,26 @@ class PreMergeCodexGateTest(unittest.TestCase):
                     self.updated_command(result), self.expected_injected(command)
                 )
                 self.assert_fake_gh_consulted()
+
+    def test_denies_duplicated_repo_selector(self) -> None:
+        """repo 指定 (-R / --repo) の複数出現は、値の一致に依らず deny する
+        (解析器と gh の解決順の差で検証対象と実行対象が乖離する経路を塞ぐ)。"""
+        commands = {
+            "conflicting": (
+                f"gh pr merge {PR_NUMBER} --repo {REPO_NAME_WITH_OWNER} "
+                f"-R other-owner/other-repo --merge"
+            ),
+            "same_value_twice": (
+                f"gh pr merge {PR_NUMBER} --repo {REPO_NAME_WITH_OWNER} "
+                f"--repo {REPO_NAME_WITH_OWNER} --merge"
+            ),
+        }
+        for label, command in commands.items():
+            with self.subTest(case=label):
+                self.write_marker(self.build_marker())
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
 
     # ------------------------------------------------------------------
     # (d3) merge 方式 (--squash / --rebase) と --delete-branch 併用は判定に
@@ -779,6 +870,112 @@ class PreMergeCodexGateTest(unittest.TestCase):
         self.assert_fake_gh_consulted()
 
     # ------------------------------------------------------------------
+    # (d6) base 追跡 ref が stale でも、gate は取得した baseRefOid を基準に
+    #      merge-base / diff_hash を検証する (stale な追跡 ref を基準にする
+    #      実装は誤った範囲を検証して deny になり、契約違反として検出される)
+    # ------------------------------------------------------------------
+
+    def test_allows_merge_when_base_tracking_ref_is_stale(self) -> None:
+        # master を 1 commit 進めて push し、feature をそこから切る。
+        _git(self.work, "switch", "master")
+        (self.work / "base2.txt").write_text("base2\n", encoding="utf-8")
+        _git(self.work, "add", "base2.txt")
+        _git(self.work, "commit", "-m", "advance base")
+        _git(self.work, "push", "origin", "master")
+        advanced_base_oid = _rev_parse(self.work, "master^{commit}")
+        _git(self.work, "switch", "-c", "feature/stale-base")
+        (self.work / "base2.txt").write_text(
+            "feature change\n", encoding="utf-8"
+        )
+        _git(self.work, "add", "base2.txt")
+        _git(self.work, "commit", "-m", "feature on advanced base")
+        _git(self.work, "push", "-u", "origin", "feature/stale-base")
+        head_oid = _rev_parse(self.work, "HEAD^{commit}")
+
+        # base が force-push で advance 分を捨てた状況を模す: master を旧 base
+        # へ戻して別 commit を積み、force push する。
+        _git(self.work, "switch", "master")
+        _git(self.work, "reset", "--hard", self.base_oid)
+        (self.work / "rewritten.txt").write_text("rewritten\n", encoding="utf-8")
+        _git(self.work, "add", "rewritten.txt")
+        _git(self.work, "commit", "-m", "rewritten base")
+        _git(self.work, "push", "--force", "origin", "master")
+        rewritten_base_oid = _rev_parse(self.work, "master^{commit}")
+        _git(self.work, "switch", "feature/stale-base")
+
+        # 追跡 ref を意図的に stale (advance 時点) へ付け替える。rewritten
+        # base の object はローカルに存在したままになる。
+        _git(
+            self.work,
+            "update-ref",
+            "refs/remotes/origin/master",
+            advanced_base_oid,
+        )
+
+        merge_base = (
+            subprocess.check_output(
+                ["git", "merge-base", rewritten_base_oid, "HEAD"], cwd=self.work
+            )
+            .decode()
+            .strip()
+        )
+        self.assertNotEqual(
+            merge_base,
+            advanced_base_oid,
+            "rewritten base 基準の merge-base が stale 追跡 ref と一致すると"
+            "このテストは追跡 ref 決め打ち実装を検出できない",
+        )
+        diff_hash = _expected_review_hash(self.work, base=rewritten_base_oid)
+
+        payload = dict(self.payload)
+        payload["headRefOid"] = head_oid
+        payload["headRefName"] = "feature/stale-base"
+        payload["baseRefOid"] = rewritten_base_oid
+        self.configure_fake_gh(expect_target=str(PR_NUMBER), payload=payload)
+
+        self.write_marker(
+            self.build_marker(
+                merge_base=merge_base, head=head_oid, diff_hash=diff_hash
+            )
+        )
+
+        result = self.run_gate(MERGE_COMMAND)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "allow")
+        self.assertEqual(
+            self.updated_command(result),
+            self.expected_injected(MERGE_COMMAND, head_oid=head_oid),
+        )
+
+    def test_denies_merge_when_base_oid_object_is_unavailable(self) -> None:
+        """取得した baseRefOid の object がローカルに存在しない場合は検証
+        不能として deny する (fail-closed)。"""
+        payload = dict(self.payload)
+        payload["baseRefOid"] = "0123456789abcdef0123456789abcdef01234567"
+        self.configure_fake_gh(expect_target=str(PR_NUMBER), payload=payload)
+        self.write_marker(self.build_marker())
+
+        result = self.run_gate(MERGE_COMMAND)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
+    def test_denies_merge_when_remote_head_diverges_from_local(self) -> None:
+        """marker がローカル HEAD と一致していても、remote PR head
+        (headRefOid) が別 commit を指す場合は deny する (未 push commit /
+        remote 前進の検出は実 remote head との比較でしか成立しない)。"""
+        payload = dict(self.payload)
+        payload["headRefOid"] = self.base_oid
+        self.configure_fake_gh(expect_target=str(PR_NUMBER), payload=payload)
+        self.write_marker(self.build_marker())
+
+        result = self.run_gate(MERGE_COMMAND)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+
+    # ------------------------------------------------------------------
     # (e) marker 5 key の各 1 key 不一致はそれぞれ単独で deny を導く
     # ------------------------------------------------------------------
 
@@ -822,9 +1019,11 @@ class PreMergeCodexGateTest(unittest.TestCase):
     #     allow + 無変更、不一致の OID なら deny
     # ------------------------------------------------------------------
 
-    def test_allows_existing_match_head_commit_bound_to_reviewed_head(
+    def test_passes_through_existing_match_head_commit_bound_to_reviewed_head(
         self,
     ) -> None:
+        """検証をすべて通過し書き換えも不要な場合は decision を出さない
+        (無出力)。allow を出すと既定の許可フローを自動スキップしてしまう。"""
         commands = {
             "separate": (
                 f"gh pr merge {PR_NUMBER} --merge "
@@ -843,11 +1042,51 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 result = self.run_gate(command)
 
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "allow", f"case={label}")
                 self.assertIsNone(
-                    self.maybe_updated_command(result),
-                    "既にレビュー済み head を指定するコマンドは書き換えない契約",
+                    self.decision(result),
+                    f"書き換え不要時は decision を出さない契約 (case={label})",
                 )
+
+    def test_denies_existing_match_head_commit_when_marker_key_mismatches(
+        self,
+    ) -> None:
+        """フラグ値がレビュー済み head と一致していても、marker key の検証は
+        省略されない (フラグ一致だけで許可へ short-circuit しない契約)。"""
+        command = (
+            f"gh pr merge {PR_NUMBER} --merge "
+            f"--match-head-commit {self.head_oid}"
+        )
+        cases = {
+            "repo_mismatch": self.build_marker(repo="other-owner/other-repo"),
+            "pr_mismatch": self.build_marker(pr=PR_NUMBER + 1),
+            "merge_base_mismatch": self.build_marker(merge_base=self.head_oid),
+            "diff_hash_mismatch": self.build_marker(
+                diff_hash=hashlib.sha256(b"tampered-2").hexdigest()
+            ),
+        }
+        for label, marker in cases.items():
+            with self.subTest(case=label):
+                self.write_marker(marker)
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+
+    def test_injects_when_flag_text_appears_inside_quoted_argument(self) -> None:
+        """quoted 引数値の中に現れるフラグ風文字列 (--auto /
+        --match-head-commit) を実フラグと誤認しない (token-level 検出)。"""
+        command = (
+            f"gh pr merge {PR_NUMBER} --merge --subject "
+            f'"mention --match-head-commit {self.base_oid} and --auto"'
+        )
+        self.write_marker(self.build_marker())
+
+        result = self.run_gate(command)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "allow")
+        self.assertEqual(
+            self.updated_command(result), self.expected_injected(command)
+        )
 
     # ------------------------------------------------------------------
     # (g) merge queue 必須の base への merge は marker の有無に依らず deny
@@ -941,6 +1180,101 @@ class PreMergeCodexGateTest(unittest.TestCase):
                     "deny",
                     f"複数出現は値の一致に依らず deny する契約 (case={label})",
                 )
+
+
+class PreMergeGateMissingDependencyTest(unittest.TestCase):
+    """必須依存 (jq / gh) が見つからない環境では、merge コマンドを fail-closed
+    に deny し、無関係な Bash 呼び出しには関与しない契約。"""
+
+    def _run_gate(
+        self, path_value: str, command: str
+    ) -> subprocess.CompletedProcess[bytes]:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        bash = shutil.which("bash")
+        assert bash is not None
+        env = os.environ.copy()
+        env["PATH"] = path_value
+        return subprocess.run(
+            [bash, str(GATE)],
+            input=json.dumps(payload).encode("utf-8"),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=ROOT,
+            env=env,
+        )
+
+    def _minimal_shims(self, work: Path) -> Path | None:
+        """jq 不在環境: cat / dirname だけを持つ shim PATH を作る。"""
+        cat = shutil.which("cat")
+        dirname = shutil.which("dirname")
+        if shutil.which("bash") is None or cat is None or dirname is None:
+            return None
+        shims = work / "bin"
+        shims.mkdir()
+        (shims / "cat").symlink_to(cat)
+        (shims / "dirname").symlink_to(dirname)
+        return shims
+
+    def test_merge_is_denied_without_jq(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            shims = self._minimal_shims(Path(name))
+            if shims is None:
+                self.skipTest("requires bash, cat, and dirname")
+            result = self._run_gate(
+                str(shims), f"gh pr merge {PR_NUMBER} --merge"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            response = json.loads(result.stdout)
+            output = response["hookSpecificOutput"]
+            self.assertEqual(output["permissionDecision"], "deny")
+            self.assertIn("jq", output["permissionDecisionReason"])
+
+    def test_unrelated_command_passes_without_jq(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            shims = self._minimal_shims(Path(name))
+            if shims is None:
+                self.skipTest("requires bash, cat, and dirname")
+            result = self._run_gate(str(shims), "printf hello")
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(result.stdout, b"")
+
+    def test_merge_is_denied_without_gh(self) -> None:
+        """gh 以外の全コマンドが見える PATH (symlink farm) でも、gh が無ければ
+        merge は deny される。"""
+        if not (
+            shutil.which("bash") and shutil.which("git") and shutil.which("jq")
+        ):
+            self.skipTest("requires bash, git, and jq")
+        with tempfile.TemporaryDirectory() as name:
+            shims = Path(name) / "bin"
+            shims.mkdir()
+            seen: set[str] = set()
+            for directory in os.environ.get("PATH", "").split(os.pathsep):
+                candidate = Path(directory)
+                if not candidate.is_dir():
+                    continue
+                for entry in candidate.iterdir():
+                    if entry.name in seen or entry.name == "gh":
+                        continue
+                    try:
+                        if entry.is_file() and os.access(entry, os.X_OK):
+                            (shims / entry.name).symlink_to(entry)
+                            seen.add(entry.name)
+                    except OSError:
+                        continue
+            result = self._run_gate(
+                str(shims), f"gh pr merge {PR_NUMBER} --merge"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            response = json.loads(result.stdout)
+            output = response["hookSpecificOutput"]
+            self.assertEqual(output["permissionDecision"], "deny")
+            self.assertIn("gh", output["permissionDecisionReason"])
 
 
 if __name__ == "__main__":
