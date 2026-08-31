@@ -25,14 +25,17 @@ red になる。
   (フラグ形の解析分岐を増やさず fail-closed に倒す)。
 - `--admin` (ブランチ保護 bypass の即時 merge) を含む `gh pr merge` は、
   構造強制の趣旨と両立しないため marker の状態に関わらず常に deny する。
+  `--admin=<値>` の連結形も値に依らず同様に deny する。
 - gate は token-level の `gh pr merge` invocation を検出したコマンドのみを
-  判定対象とする。invocation を含まないコマンドは、粗フィルタ (部分文字列)
-  に一致しても原則関与しない (無出力で終了し、既定の許可フローに委ねる)。
-  ただし、粗フィルタに一致するコマンドが subshell / コマンド置換等の不透明
-  領域、または interpreter・評価コマンド (bash / sh / eval / source / xargs
-  等) を含む場合は、invocation がその内部に隠れている可能性があるため保守的
-  に deny する (不関与になるのは、不透明領域も interpreter も含まない quoted
-  データとしての言及のみのコマンド)。
+  判定対象とする。invocation を含まないコマンドは、粗フィルタに一致しても
+  原則関与しない (無出力で終了し、既定の許可フローに委ねる)。ただし、
+  コマンド文字列に `gh pr merge` の連続列 (空白区切りの 3 語の並び) が現れ、
+  かつ subshell / コマンド置換等の不透明領域、または interpreter・評価
+  コマンド (bash / sh / eval / source / xargs 等) を含む場合は、invocation が
+  その内部に隠れている可能性があるため保守的に deny する。不関与になるのは、
+  連続列を含まないコマンド (merge を名に含む語が単独で現れるだけの read-only
+  ワークフロー等) と、連続列を含んでも不透明領域も interpreter も含まない
+  quoted データとしての言及のみのコマンドである。
 - invocation を検出した場合、コマンド全体がその単一 invocation で構成されて
   いなければ (他コマンドとの連結 (`&&` / `;` / `|` 等)・複数の merge
   invocation・`cd` 等の前置コマンドを含む合成形は) marker の状態に関わらず
@@ -46,8 +49,19 @@ red になる。
   (無出力)。`--disable-auto=<値>` の連結形は、falsy 値が実 merge を行う形の
   ため値に依らず保守的に deny する。merge 方式フラグ (--merge / --squash /
   --rebase) や `--auto` / `--admin` と併存する場合も矛盾形として deny する。
-- `--help` / `-h` を含む invocation は help 表示であり merge を実行しない
-  ため、gate は関与しない (無出力)。
+- `--help` を実フラグ位置に含む invocation は help 表示であり merge を実行
+  しないため、gate は関与しない (無出力)。gh 2.96.0 の `gh pr merge` に
+  `-h` shorthand は定義されていないため、`-h` は不関与の対象にしない。
+- 不関与・deny・既存フラグ検出に使うフラグトークンの分類は、CLI のフラグ
+  文法の下で実フラグ位置にある場合に限る: 値を取るオプション (-t/--subject・
+  -b/--body・-F/--body-file・-A/--author-email・--match-head-commit・
+  -R/--repo) の分離形は直後のトークンを値として消費するため、値位置に現れた
+  `--help` / `--disable-auto` / `--match-head-commit` 等の文字列をフラグと
+  して扱わない (実 merge を行うコマンドが不関与・検証省略へ落ちる誤分類を
+  塞ぐ)。
+- 合成形の deny は `--help` の有無に依らず維持する (help を含む invocation
+  が他コマンドと連結されている場合、後続 invocation の検証漏れを塞ぐため
+  deny する)。
 - gate は merge 対象 PR の実 metadata を `gh pr view [<対象指定>] --json <fields>`
   で取得する。`gh pr merge` の対象指定 (PR 番号 / URL / branch / 省略) は
   位置引数としてそのまま転送し、`-R` / `--repo` による repo 指定の値も転送する
@@ -112,7 +126,8 @@ gate は実の GitHub API を叩けないため、テストは一時ディレク
 実行ファイルを作り PATH の先頭に置く。fake `gh` は上記の呼び出し形のみを
 受理する厳格 fixture であり、想定外のサブコマンド・フラグ・対象指定・未知の
 `--json` フィールドを受けると非 0 で終了する (gate は fail-closed のため、
-allow を期待するテストの失敗として呼び出し形の契約違反が表面化する)。応答
+再実行コマンド案内を期待するテストの失敗として呼び出し形の契約違反が表面化
+する)。応答
 JSON は gh の実挙動と同じく、要求されたフィールドのみを含む。
 
 fake `gh` は `gh pr view` に加えて `gh api graphql` の呼び出しを受理する。
@@ -639,6 +654,20 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 " deny する契約",
             )
 
+        for label, command in {
+            "admin_equals_true": f"{MERGE_COMMAND} --admin=true",
+            "admin_equals_false": f"{MERGE_COMMAND} --admin=false",
+        }.items():
+            with self.subTest(case=label):
+                self.write_marker(self.build_marker())
+                result = self.run_gate(command)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(
+                    self.decision(result),
+                    "deny",
+                    f"--admin の = 連結形も値に依らず deny する契約 (case={label})",
+                )
+
     # ------------------------------------------------------------------
     # (c2) 合成コマンド (連結・複数 invocation・前置コマンド) は marker の
     #      有無に依らず deny
@@ -651,6 +680,9 @@ class PreMergeCodexGateTest(unittest.TestCase):
             "multiple_invocations": (
                 f"{MERGE_COMMAND}; gh pr merge {PR_NUMBER + 1} --merge"
             ),
+            # 合成形の deny は --help の有無に依らず維持する (後続 invocation
+            # の検証漏れを塞ぐ)。
+            "piped_help": f"gh pr merge {PR_NUMBER} --help | cat",
         }
         for label, command in commands.items():
             with self.subTest(case=label):
@@ -666,6 +698,11 @@ class PreMergeCodexGateTest(unittest.TestCase):
             "quoted_in_message": 'git commit -m "wip: gh pr merge gate"',
             "compound_without_invocation": (
                 'git log --grep "gh pr merge" && echo ok'
+            ),
+            # `gh pr merge` の連続列を含まないコマンドは、interpreter (xargs)
+            # を含んでいても保守的 deny の対象にしない。
+            "merge_named_fields_with_interpreter": (
+                "gh pr list --json mergeable,mergeStateStatus | xargs echo"
             ),
         }
         for label, command in commands.items():
@@ -722,16 +759,38 @@ class PreMergeCodexGateTest(unittest.TestCase):
                 )
 
     def test_ignores_help_invocations(self) -> None:
-        """--help / -h は help 表示であり merge を実行しないため関与しない。"""
+        """--help は help 表示であり merge を実行しないため関与しない
+        (gh 2.96.0 の gh pr merge に -h shorthand は無いため -h は対象外)。"""
+        result = self.run_gate(f"gh pr merge {PR_NUMBER} --help")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIsNone(self.decision(result))
+
+    def test_engages_when_ignore_or_flag_tokens_appear_in_value_position(
+        self,
+    ) -> None:
+        """値を取るオプションの値位置に現れたフラグ風トークンは分類に使わない。
+        いずれも CLI は実 merge を行うため、gate は通常の検証 (marker 有効なら
+        再実行コマンド案内) を行う。"""
         commands = {
-            "long": f"gh pr merge {PR_NUMBER} --help",
-            "short": f"gh pr merge -h {PR_NUMBER}",
+            "help_as_subject_value": (
+                f"gh pr merge {PR_NUMBER} --merge --subject --help"
+            ),
+            "disable_auto_as_subject_value": (
+                f"gh pr merge {PR_NUMBER} --subject --disable-auto --merge"
+            ),
+            "match_head_commit_as_subject_value": (
+                f"gh pr merge {PR_NUMBER} --merge --subject --match-head-commit"
+            ),
         }
         for label, command in commands.items():
             with self.subTest(case=label):
+                self.reset_gh_log()
+                self.write_marker(self.build_marker())
+
                 result = self.run_gate(command)
+
                 self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIsNone(self.decision(result), f"case={label}")
+                self.assert_denied_with_reissue_guidance(result, command)
 
     def test_denies_merge_invocation_hidden_in_opaque_or_interpreter_shapes(
         self,
@@ -1122,8 +1181,8 @@ class PreMergeCodexGateTest(unittest.TestCase):
         self.assertEqual(self.decision(result), "deny")
 
     # ------------------------------------------------------------------
-    # (f) 既存 --match-head-commit 指定: レビュー済み head と一致すれば
-    #     allow + 無変更、不一致の OID なら deny
+    # (f) 既存 --match-head-commit 指定: レビュー済み head と一致し検証を
+    #     すべて通過すれば無出力 (書き換えない)、不一致の OID なら deny
     # ------------------------------------------------------------------
 
     def test_passes_through_existing_match_head_commit_bound_to_reviewed_head(
