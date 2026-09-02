@@ -106,6 +106,7 @@ Fable 週次枠の使用率判定 (Step 1a):
 - `percent <= 閾値` なら allow
 - 閾値超過、および cache 不在・通常ファイルでない (symlink を含む)・読めない・JSON として parse できない・`fetched_at` 欠落/非数値・`fetched_at` が 1800 秒より古い・`weekly_scoped` 欠落/非配列/空・Fable entry 無し・`percent` が全て非数値 のときは deny する (fail-closed)
 - `fetched_at` が未来の時刻でも stale とはみなさない (時計ずれを許容する)
+- この判定は Agent / Task tool による**起動時の入場判定**です。起動後の継続 (SendMessage による同一 agent の再開)、Workflow tool 内部の `agent()` 呼び出し、fork subagent は PreToolUse `Agent|Task` で観測できないため再判定しません。起動時に閾値以下だった専用 agent が動作中に閾値を超えても停止しません
 
 ## agent-discipline との差分ファイル
 

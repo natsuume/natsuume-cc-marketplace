@@ -82,6 +82,8 @@
 #   - effort の実効値は hook からは観測できない。CLAUDE_CODE_EFFORT_LEVEL の deny は env による
 #     上書きだけを防ぎ、それ以外の経路 (将来の launch 既定値等) で frontmatter の effort: low が
 #     上書きされる場合は検知できない
+#   - 使用率判定は Agent / Task tool の起動時の入場判定に限る。起動後の継続 (SendMessage による
+#     再開)・Workflow 内部の agent()・fork subagent は PreToolUse で観測できず再判定しない
 #   - fork subagent (model 指定を無視して親モデルを継承する型) は deny しない
 #     (誘導層の「原則使用しない」文言のみで運用する設計判断)
 #   - Workflow ツール内部の agent() 呼び出しは PreToolUse では捕捉できない (env 側でカバー)
