@@ -38,7 +38,7 @@ The wrapper resolves the pull request for the current branch, reviews the full d
 
    Do not combine the two steps into one command, and do not substitute the path with `$(...)`. If step 1 lists nothing, report failure to the parent and do not retry — the parent will diagnose and re-invoke after fixing the install.
 
-2. Inspect the Bash tool's stdout (the codex review report) and stderr (wrapper status, including the posted head SHA and status) inside this subagent. Treat both as private working context: do not copy either stream into the final reply.
+2. Inspect the Bash tool's stdout (the codex review report) and stderr (wrapper status, including the posted head SHA and status) inside this subagent. Treat both as private working context: do not copy either stream into the final reply. The stderr note reports the header status the wrapper posted; it is not the source of your Status value (see "Deriving Status" below).
 
 3. Convert the wrapper result into the parent-safe report contract below. Preserve the review's urgency and decision-relevant substance, but abstract executable mechanics. Do not independently re-review the diff or silently drop a finding.
 
@@ -61,6 +61,16 @@ Recovery boundaries:
 ## Parent-safe report contract
 
 Allowed status values are `Status: pass | findings | execution-failed`.
+
+### Deriving `Status`
+
+Derive `Status` from the **Codex report body** (the wrapper's stdout), never from the `status=` value in the header the wrapper posted (reported in stderr):
+
+- If the body contains no finding record — no `## Finding` section, no `Severity:` line, and no numbered or bulleted individual finding item — and it concludes that nothing was found, return `Status: pass` / `Findings: 0` regardless of the posted header status.
+- If the body contains even one individual finding (including "minor nits only" style remarks), return `Status: findings` and normalize that finding; do not lean toward `pass`.
+- If the posted header status and the body's conclusion disagree, do not create a finding for the mismatch. Append exactly one line `Note: posted header status=<pass|findings>; report body concluded <pass|findings>; this does not affect the merge gate decision.` The `Note:` line goes after `Findings: 0` for a pass report, and directly after the `Status: findings` line (before the first finding section) for a findings report.
+- Only findings that exist in the Codex report body may be returned as findings. Never turn wrapper behavior, the posted header value, the outcome of the posting step, or the limits of this subagent's own observation into a finding; express those as `Status: execution-failed` with a failure class, or as the single `Note:` line.
+- The `Source severity: unknown` → `Severity: P1` / `must-fix-before-merge` default applies only to a finding that Codex reported without a severity label.
 
 Return exactly one markdown report. For a successful review with findings:
 
@@ -85,17 +95,18 @@ Status: findings
 
 Use a finding ID supplied by Codex when it is safe and stable. Otherwise derive a deterministic ID from `CODEX`, the normalized location, and a non-sensitive cause-class slug. Never derive the ID from a command, payload, secret, or environment value.
 
-`Severity` is the repository-normalized priority used for decisions and labels. `Source severity` preserves Codex's original label before normalization. If a source finding is P0, normalize it to `Severity: P1`, retain `Source severity: P0`, and set `Disposition: must-fix-before-merge`. Never map source P0 to P2/P3 or omit its source severity. For source P1/P2/P3, preserve the same value in both fields; use `unknown` only when Codex did not provide a severity. If source severity is `unknown` and impact cannot be mapped confidently, default to `Severity: P1` and `Disposition: must-fix-before-merge` rather than inventing a lower priority.
+`Severity` is the repository-normalized priority used for decisions and labels. `Source severity` preserves Codex's original label before normalization. If a source finding is P0, normalize it to `Severity: P1`, retain `Source severity: P0`, and set `Disposition: must-fix-before-merge`. Never map source P0 to P2/P3 or omit its source severity. For source P1/P2/P3, preserve the same value in both fields; use `unknown` only when Codex did not provide a severity. If source severity is `unknown` and impact cannot be mapped confidently, default to `Severity: P1` and `Disposition: must-fix-before-merge` rather than inventing a lower priority. This default applies only to findings Codex actually reported.
 
 Map each source finding to one section. Preserve criticality: never delete, downgrade, or mark a critical source finding as deferrable merely because its mechanics must be abstracted. If a required value cannot be determined without exposing executable detail, write `unknown` and state the non-sensitive reason.
 
-For zero findings, return only:
+For zero findings, return only the following (the `Note:` line is present only when the posted header disagrees with the body):
 
 ```markdown
 # Codex Review
 
 Status: pass
 Findings: 0
+Note: posted header status=findings; report body concluded pass; this does not affect the merge gate decision.
 ```
 
 For wrapper failure, return:

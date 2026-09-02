@@ -1,6 +1,6 @@
 {
   "name": "pre-merge-codex-review",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "`gh pr merge` の実行前に codex review (OpenAI クロスモデルレビュー) の完了を確認する軽量 merge gate プラグイン。レビュー結果は head SHA 記録付きの PR レビューコメントとして投稿され、gate は現在の head と一致するコメントの有無だけを検査する (cooperative 利用前提)。個人環境向けに push 毎ではなく merge 前 1 回の codex review 運用を成立させる。"
 }

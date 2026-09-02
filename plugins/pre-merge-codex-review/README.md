@@ -6,7 +6,7 @@
 
 ## バージョン
 
-v1.0.2
+v1.0.3
 
 ## インストール
 
@@ -90,7 +90,11 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 - **working tree が dirty なら中断**: codex のレビューは working tree を含む差分を見るため、未コミット変更があると head SHA を記録しながら別内容をレビューすることになります (commit / stash を案内します)
 - **base の妥当性**: PR が記録する base commit (`baseRefOid`) がローカルの `origin/<base>` から到達可能 (ancestor) であることを確認します。到達不能なら 1 度だけ明示 refspec (`git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>`) で fetch して再判定し、それでも到達不能ならレビューも投稿も行いません。base branch は PR 作成後も進むため完全一致は要求せず、レビュー範囲の anchor は `git merge-base HEAD origin/<base>` (GitHub の PR diff と同じ範囲) を使います
 - **空 diff の中断**: merge-base..HEAD の差分が空の場合も、何も見ていない「レビュー済み」コメントを残さないため中断します
-- **投稿直前の再検証**: codex review 完了後・投稿前に HEAD と working tree の状態を再確認し、レビュー実行中に変化していれば投稿せず中断します (レビューした内容と記録する head SHA の乖離を残さないため)tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
+- **投稿直前の再検証**: codex review 完了後・投稿前に HEAD と working tree の状態を再確認し、レビュー実行中に変化していれば投稿せず中断します (レビューした内容と記録する head SHA の乖離を残さないため)
+
+tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
+
+parent-safe report の `Status` は **Codex の report 本文** から決めます。本文に finding の記述 (`## Finding` 節・`Severity:` 行・番号付き / 箇条書きの個別指摘) が 1 つも無く「指摘なし」の趣旨で結ばれている場合は、wrapper が投稿した header の `status=` 値に関わらず `Status: pass` / `Findings: 0` を返します。header の status と本文の結論が食い違う場合は finding にせず、report に `Note:` 1 行 (header の値・本文の結論・merge gate の判定には影響しない旨) を添えます。finding として返せるのは Codex の report 本文に存在する指摘のみで、wrapper の挙動・header の値・投稿の成否・subagent 自身の観測範囲の限界は finding にしません (`Status: execution-failed` の Failure class か `Note:` で表現します)。
 
 ## 既知の制約
 
