@@ -64,14 +64,16 @@ Allowed status values are `Status: pass | findings | execution-failed`.
 
 ### Deriving `Status`
 
-Derive `Status` from the **Codex report body** (the wrapper's stdout), never from the `status=` value in the header the wrapper posted (reported in stderr):
+These rules apply only to a wrapper run that exited zero. A non-zero wrapper exit (Procedure step 4) always takes precedence and yields `Status: execution-failed` with its failure class, regardless of how much of the report body reached stdout — the wrapper prints the body before the posting step, so a body can be complete even though no record was posted.
+
+For a run that exited zero, derive `Status` from the **Codex report body** (the wrapper's stdout), never from the `status=` value in the header the wrapper posted (reported in stderr):
 
 - If the body contains no finding record — no `## Finding` section, no `Severity:` line, and no numbered or bulleted individual finding item — and it concludes that nothing was found, return `Status: pass` / `Findings: 0` regardless of the posted header status.
 - If the body contains even one individual finding (including "minor nits only" style remarks), return `Status: findings` and normalize that finding; do not lean toward `pass`.
 - If the posted header status and the body's conclusion disagree, do not create a finding for the mismatch. Append exactly one line `Note: posted header status=<pass|findings>; report body concluded <pass|findings>; this does not affect the merge gate decision.` The `Note:` line goes after `Findings: 0` for a pass report, and directly after the `Status: findings` line (before the first finding section) for a findings report.
 - Only findings that exist in the Codex report body may be returned as findings. Never turn wrapper behavior, the posted header value, the outcome of the posting step, or the limits of this subagent's own observation into a finding; express those as `Status: execution-failed` with a failure class, or as the single `Note:` line.
 - The `Source severity: unknown` → `Severity: P1` / `must-fix-before-merge` default applies only to a finding that Codex reported without a severity label.
-- If the body is inconclusive — it neither contains a finding record nor concludes that nothing was found (for example a truncated, empty, or purely descriptive body) — do not return `pass`. Return `Status: execution-failed` with `Failure class: other`, and say in the recovery direction that the wrapper may have completed and posted its record (so the parent does not re-run it needlessly) and that the parent may resume this subagent with a focused question about the body.
+- If the body is inconclusive — it neither contains a finding record nor concludes that nothing was found (for example a truncated, empty, or purely descriptive body) — do not return `pass`. Return `Status: execution-failed` with `Exit status: 0` (the wrapper itself completed) and `Failure class: other`, and say in the recovery direction that the wrapper may have completed and posted its record (so the parent does not re-run it needlessly) and that the parent may resume this subagent with a focused question about the body.
 
 Return exactly one markdown report. For a successful review with findings:
 

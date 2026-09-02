@@ -94,7 +94,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 
 tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
 
-parent-safe report の `Status` は **Codex の report 本文** から決めます。本文に finding の記述 (`## Finding` 節・`Severity:` 行・番号付き / 箇条書きの個別指摘) が 1 つも無く「指摘なし」の趣旨で結ばれている場合は、wrapper が投稿した header の `status=` 値に関わらず `Status: pass` / `Findings: 0` を返します。header の status と本文の結論が食い違う場合は finding にせず、report に `Note:` 1 行 (header の値・本文の結論・merge gate の判定には影響しない旨) を添えます。finding として返せるのは Codex の report 本文に存在する指摘のみで、wrapper の挙動・header の値・投稿の成否・subagent 自身の観測範囲の限界は finding にしません (`Status: execution-failed` の Failure class か `Note:` で表現します)。本文が finding も「指摘なし」の結論も含まず判定できない場合 (途中で切れている・空・記述のみ等) は pass に倒さず、`Status: execution-failed` (Failure class `other`) で返し、wrapper 自体は完了・投稿済みでありうる旨を recovery direction に書きます。
+wrapper が exit 0 で完了した場合、parent-safe report の `Status` は **Codex の report 本文** から決めます (wrapper が非 0 で終了した場合は本文の内容に関わらず従来どおり `Status: execution-failed` です)。本文に finding の記述 (`## Finding` 節・`Severity:` 行・番号付き / 箇条書きの個別指摘) が 1 つも無く「指摘なし」の趣旨で結ばれている場合は、wrapper が投稿した header の `status=` 値に関わらず `Status: pass` / `Findings: 0` を返します。header の status と本文の結論が食い違う場合は finding にせず、report に `Note:` 1 行 (header の値・本文の結論・merge gate の判定には影響しない旨) を添えます。finding として返せるのは Codex の report 本文に存在する指摘のみで、wrapper の挙動・header の値・投稿の成否・subagent 自身の観測範囲の限界は finding にしません (`Status: execution-failed` の Failure class か `Note:` で表現します)。本文が finding も「指摘なし」の結論も含まず判定できない場合 (途中で切れている・空・記述のみ等) は pass に倒さず、`Status: execution-failed` (Exit status 0・Failure class `other`) で返し、wrapper 自体は完了・投稿済みでありうる旨を recovery direction に書きます。
 
 ## 既知の制約
 
