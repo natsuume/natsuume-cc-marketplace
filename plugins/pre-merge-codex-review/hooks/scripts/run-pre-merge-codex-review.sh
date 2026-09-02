@@ -53,6 +53,8 @@ _RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &&
 
 # shellcheck source=lib/codex-companion-resolver.sh
 source "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
+# shellcheck source=lib/review-status.sh
+source "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/review-status.sh"
 
 # GitHub の PR コメント本文の上限 (65536 文字) に対する安全側の閾値。 これを超える report は
 # 行単位で切り詰めて投稿する (byte 単位で切ると multibyte 文字が壊れるため行単位で切る)。
@@ -194,16 +196,12 @@ fi
 # ための入力)。
 cat "$REVIEW_OUT"
 
-# findings の有無は codex review 出力の 「指摘なし」 表現の有無で判定する保守的な heuristic。
-# 判定できない場合は findings 側に倒す (「findings 0 件」 を誤って主張しないため)。 探索範囲を
-# report の末尾数行に限るのは、 レビュー対象の差分から引用された 「指摘なし」 表現 (report の
-# 中程に現れる) を結論と取り違えないため。 status は merge gate の判定には影響しない
-# (pass / findings のどちらでも「レビュー済み」として成立する) ため、 誤判定は記録の精度の
-# 問題に留まる。
-STATUS="findings"
-if tail -n 5 "$REVIEW_OUT" | grep -qiE '^[[:space:]]*(no material findings|no findings|no issues found)[[:space:].!]*$'; then
-  STATUS="pass"
-fi
+# findings の有無は codex review 出力の 「指摘なし」 表現の有無で判定する保守的な
+# heuristic。 判定ロジックの詳細 (対象行数・finding 記述の優先判定・表現の正規化) は
+# lib/review-status.sh の detect_review_status を参照。 status は merge gate の判定には
+# 影響しない (pass / findings のどちらでも「レビュー済み」として成立する) ため、 誤判定は
+# 記録の精度の問題に留まる。
+STATUS=$(detect_review_status "$REVIEW_OUT")
 
 # report 本文が header 形の文字列を含む場合 (レビュー対象の差分に header 形のコードが含まれ、
 # report がそれを引用した場合等) は無害化してから埋め込む。 merge gate は本文 **先頭行** の
