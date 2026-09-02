@@ -668,6 +668,15 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                     session_state="claude-sonnet-5",
                 )
             )
+        with self.subTest(model="unspecified-env-sonnet"):
+            self.assert_allow(
+                self.run_gate(
+                    subagent_type="general-purpose",
+                    agent_id="agent-123",
+                    env_subagent_model="sonnet",
+                    session_state="claude-sonnet-5",
+                )
+            )
 
     def test_step3b_non_empty_env_allows_inherited_delegation(self) -> None:
         """Step 3b: model 未指定でも env が非 fable の具体値なら allow になる。"""

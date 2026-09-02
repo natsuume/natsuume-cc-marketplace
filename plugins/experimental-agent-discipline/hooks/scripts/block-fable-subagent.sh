@@ -31,10 +31,11 @@
 #         model: fable であり、継承経路では使用率判定を通さずに Fable が起動しうる。
 #         `model: "fable"` を明示して再実行すれば使用率判定が働く
 #      b. それ以外:
-#         - subagent 内 (hook 入力に agent_id あり) からの起動 → deny。継承先は起動元 subagent の
-#           モデルで、session model state では判定できない (Fable 専用 agent からの起動で専用
-#           agent 以外の subagent が Fable を継承する経路を閉じる)
-#         - env が非空 → allow (env が継承を非 fable モデルへ上書きするため安全)
+#         - env が非空 → allow (env が継承を非 fable モデルへ上書きするため、subagent 内からの
+#           起動も含めて安全)
+#         - env 不在 + subagent 内 (hook 入力に agent_id あり) からの起動 → deny。継承先は起動元
+#           subagent のモデルで、session model state では判定できない (Fable 専用 agent からの
+#           起動で専用 agent 以外の subagent が Fable を継承する経路を閉じる)
 #         - env 不在: inject-always.sh が SessionStart で記録した session model state が
 #           fable の場合のみ deny
 #         - env 不在 + state 不明: pending マーカー
@@ -316,15 +317,17 @@ if resolves_to_dedicated_fable_agent "$SUBAGENT_TYPE"; then
 fi
 
 # 3b. それ以外の model 未指定 = 継承経路
+if [ -n "$ENV_SUB" ]; then
+  # 非空・非 inherit の env は authoritative な非 fable 値として信頼する (正規化ポリシー参照)。
+  # 継承先が env で上書きされるため、subagent 内からの起動も含めて allow する
+  exit 0
+fi
+
 # subagent 内 (agent_id あり) からの起動は、継承先がその subagent のモデルであり session model
 # state (メインセッションのモデル) では判定できない。Fable 専用 agent から model 未指定で起動
 # されると、専用 agent 以外の subagent が使用率判定を通らずに Fable を継承しうるため deny する。
 if [ -n "$AGENT_ID" ]; then
   deny "experimental-agent-discipline: subagent 内からの model 未指定 (継承) のサブエージェント起動を deny しました。継承先は起動元 subagent のモデルになり、Fable 専用 agent からの起動では専用 agent 以外の subagent が使用率判定を通らずに Fable で実行されえます。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
-fi
-if [ -n "$ENV_SUB" ]; then
-  # 非空・非 inherit の env は authoritative な非 fable 値として信頼する (正規化ポリシー参照)
-  exit 0
 fi
 
 SAFE_SESSION_ID=$(printf '%s' "$SESSION_ID" | tr -cd 'A-Za-z0-9._-')
