@@ -169,12 +169,15 @@ check_fable_weekly_usage() {
 
   # cache の検査と閾値比較を jq に閉じる: percent は小数を取りうるため、シェルの整数比較には
   # 頼らない。--slurp で入力全体を配列として受け取り、JSON document がちょうど 1 つの場合だけ
-  # 判定する (複数 document の連結や空入力は invalid)。出力は 3 行 (status / percent /
-  # resets_at) で、status が ok 以外は deny 理由。jq の exit status と出力行数も検証し、
-  # 契約どおりの出力が得られない場合は parse 失敗として deny する (fail-closed)。
+  # 判定する (複数 document の連結や空入力は invalid)。出力は 4 行 (status / percent /
+  # resets_at / 固定終端 END) で、status が ok 以外は deny 理由。終端行を置くのは、command
+  # substitution が末尾の改行を落としても、resets_at が空のときに行数契約が崩れないようにする
+  # ため。jq の exit status と出力行数・終端行も検証し、契約どおりの出力が得られない場合は
+  # parse 失敗として deny する (fail-closed)。resets_at は ISO 8601 形式に一致する場合だけ
+  # deny 文に載せる (cache 由来の文字列を無検証で判定文へ反映しない)。
   GATE_OUTPUT=$(printf '%s' "$CACHE_CONTENT" | jq -rs \
     --argjson now "$NOW" --argjson threshold "$MAX_PERCENT" '
-    def emit(status; percent; resets): "\(status)\n\(percent)\n\(resets)";
+    def emit(status; percent; resets): "\(status)\n\(percent)\n\(resets)\nEND";
     if length != 1 then emit("invalid"; ""; "")
     else .[0] |
     if type != "object" then emit("invalid"; ""; "")
@@ -191,7 +194,9 @@ check_fable_weekly_usage() {
       | if ($fable | length) == 0 then emit("entries"; ""; "")
         else
           ($fable | sort_by(.percent) | last) as $top
-          | (if ($top.resets_at | type) == "string" then $top.resets_at else "" end) as $resets
+          | (if ($top.resets_at | type) == "string"
+                and ($top.resets_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"))
+             then $top.resets_at else "" end) as $resets
           | if $top.percent > $threshold
             then emit("over"; $top.percent; $resets)
             else emit("ok"; $top.percent; $resets)
@@ -203,13 +208,12 @@ check_fable_weekly_usage() {
   GATE_RC=$?
 
   GATE_LINES=$(printf '%s\n' "$GATE_OUTPUT" | grep -c '')
-  if [ "$GATE_RC" -ne 0 ] || [ "$GATE_LINES" -ne 3 ]; then
-    deny_usage "使用率 cache を JSON として読み取れません。"
-  fi
-
-  { read -r GATE_STATUS; read -r GATE_PERCENT; read -r GATE_RESETS; } <<GATE_EOF
+  { read -r GATE_STATUS; read -r GATE_PERCENT; read -r GATE_RESETS; read -r GATE_END; } <<GATE_EOF
 $GATE_OUTPUT
 GATE_EOF
+  if [ "$GATE_RC" -ne 0 ] || [ "$GATE_LINES" -ne 4 ] || [ "$GATE_END" != "END" ]; then
+    deny_usage "使用率 cache を JSON として読み取れません。"
+  fi
 
   case "$GATE_STATUS" in
     ok)
