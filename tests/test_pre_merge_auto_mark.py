@@ -470,6 +470,24 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             self.assertFalse(pending.exists())
             self.assertFalse(body.exists())
 
+    def test_stop_without_attestation_keeps_promoted_pair(self) -> None:
+        # final と本文は gate が投稿に使う対 (pair) であり、昇格済みの対は terminal な
+        # 掃除経路でも壊さない。偽装 stop で消えるのは pending だけ。
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            head = self.head_sha(work)
+            final = self.final_marker_path(work)
+            final.write_text(self.pending_content(head), encoding="utf-8")
+            body = self.write_comment_body(work, self.comment_body_content(head))
+            pending = self.write_pending(work, self.pending_content(head))
+            self.assertFalse(self.launch_attestation_path(work).exists())
+
+            result = self.run_hook(work, self.stop_payload(PASS_REPORT))
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertTrue(final.exists(), "昇格済みの final は保持する")
+            self.assertTrue(body.exists(), "final と対になる本文も保持する")
+            self.assertFalse(pending.exists())
+
     def test_stop_with_existing_tombstone_discards_pending(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))

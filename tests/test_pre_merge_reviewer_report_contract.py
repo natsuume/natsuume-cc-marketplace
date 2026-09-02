@@ -23,7 +23,7 @@ REQUIRED_REPORT_FIELDS = (
     "### Deriving `Status`",
     "Status: pass | findings | execution-failed",
     "Findings: 0",
-    "Note: posted header status=",
+    "Note: recorded header status=",
     "regardless of the posted header status",
     "Never turn wrapper behavior",
     "applies only to a finding that Codex reported without a severity label",
