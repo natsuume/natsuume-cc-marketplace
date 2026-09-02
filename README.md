@@ -46,6 +46,7 @@ Claude Code 側で fable-risk-labeler を install していた場合は、plugin
 | [update-default-branch](#update-default-branch) | 0.4.1 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.10.1 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 0.25.2 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
+| [experimental-agent-discipline](#experimental-agent-discipline) | 0.1.0 | agent-discipline の実験的 fork。Fable 週次枠の使用率が閾値 (既定 50%) 以下のあいだ、effort low 固定の専用 agent への Fable subagent 委任を許可する (agent-discipline と切替運用) |
 | [ui-discipline](#ui-discipline) | 0.4.3 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.6.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
 | [codex-advisor](#codex-advisor) | 3.0.0 | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧する。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
@@ -317,6 +318,20 @@ v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定�
 - `fable-discipline` は v0.8.0 で `agent-discipline` に統合され、本リポジトリから削除されました。モデル別分業規律の配送 (`inject-always.sh` / `resolve-model-on-prompt.sh`) とサブエージェントの Fable 実行防止 (`block-fable-subagent.sh`、PreToolUse `Agent|Task`) は `agent-discipline` の hook として提供されます。
 - `fable-discipline` を install 済みの利用者は、当該 plugin を uninstall したうえで `agent-discipline` を update してください。
 - 旧 state dir (`${TMPDIR:-/tmp}/fable-discipline-state`) は本統合後は参照されなくなり、OS の tmpfs cleanup により自然消去されます (手動削除は不要)。
+
+---
+
+## experimental-agent-discipline
+
+[agent-discipline](#agent-discipline) の実験的 fork です。agent-discipline が全経路で deny している Fable サブエージェントを、effort low 固定の専用 agent (`experimental-agent-discipline:fable-low-worker` / `experimental-agent-discipline:fable-low-explorer`) への委任に限り条件付きで許可します。それ以外の規律配送・検知機能は agent-discipline と同一です。
+
+許可条件は、`model: "fable"` を明示した専用 agent への委任であり、かつ Fable 週次モデル別枠の使用率が閾値 (既定 50%、環境変数 `EXPERIMENTAL_FABLE_SUBAGENT_MAX_PERCENT`) 以下であることです。閾値超過時と使用率を取得できないときは deny します (fail-closed)。`CLAUDE_CODE_SUBAGENT_MODEL` が設定されている環境では、env が明示指定より優先されるため専用 agent への委任も deny します。
+
+使用率は natsuume-statusline が書く `weekly-scoped.json` cache から読むため、natsuume-statusline を statusline として構成しておく必要があります (未構成なら Fable 委任は常に deny)。
+
+agent-discipline との同時 enable は非サポートです (PreToolUse hook は 1 つでも deny すれば起動が止まるため agent-discipline 側の deny が優先され、規律も二重注入されます)。`~/.claude/settings.json` の `enabledPlugins` で一方だけを true にして切り替えます。
+
+切替手順・deny 理由ごとの対処・hook の判定順序・agent-discipline との差分ファイル一覧は [plugins/experimental-agent-discipline/README.md](plugins/experimental-agent-discipline/README.md) を参照してください。
 
 ---
 

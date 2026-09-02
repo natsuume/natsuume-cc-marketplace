@@ -71,6 +71,13 @@
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
+      "name": "experimental-agent-discipline",
+      "source": "./plugins/experimental-agent-discipline",
+      "description": "agent-discipline の実験的 fork。Fable 週次枠の使用率が閾値 (既定 50%) 以下のあいだ、effort low 固定の専用 agent (fable-low-worker / fable-low-explorer) への Fable subagent 委任を PreToolUse hook が許可する。agent-discipline と同時 enable はしない (切替運用)。",
+      "version": "0.1.0",
+      "keywords": ["experimental", "system-prompt", "discipline", "fable", "subagent", "effort", "rate-limit", "hook", "guardrail"]
+    },
+    {
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
       "description": "UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う。",
