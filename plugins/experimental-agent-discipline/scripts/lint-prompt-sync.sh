@@ -21,7 +21,7 @@
 # ============================================================================
 #
 # - 引数: なし (将来の flag 拡張余地は残すが、 現状は引数を取らない)
-# - 実行位置: リポジトリルートから実行することを前提とする (plugins/agent-discipline/... や
+# - 実行位置: リポジトリルートから実行することを前提とする (plugins/experimental-agent-discipline/... や
 #   .github/workflows/... への相対パス参照を用いるため)。 リポジトリルート以外から実行した
 #   場合や、 参照先ファイルが見つからない場合は fail-closed (exit 1) とし、 チェックを
 #   silent skip しない。
@@ -39,10 +39,10 @@
 # ============================================================================
 #
 # 対象ファイル:
-#   - plugins/agent-discipline/hooks/prompts/always-fable.md
-#   - plugins/agent-discipline/hooks/prompts/always-sonnet-1.md
-#   - plugins/agent-discipline/hooks/prompts/always-sonnet-2.md
-#   - plugins/agent-discipline/hooks/prompts/always-sonnet-3.md
+#   - plugins/experimental-agent-discipline/hooks/prompts/always-fable.md
+#   - plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-1.md
+#   - plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-2.md
+#   - plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-3.md
 #
 # 背景 (issue #236):
 #   注入ペイロード分割により always-sonnet.md を rule 境界で 3 part に分割したため、
@@ -79,7 +79,7 @@
 # ============================================================================
 #
 # 対象ファイル:
-#   - plugins/agent-discipline/hooks/hooks.json
+#   - plugins/experimental-agent-discipline/hooks/hooks.json
 #
 # 対象 entry (`.hooks.PreToolUse[0].hooks[]` 配下、 type == "agent" の 4 要素):
 #   - if: "Bash(gh issue create:*)"
@@ -196,9 +196,9 @@
 # ============================================================================
 #
 # 対象ファイル:
-#   - plugins/agent-discipline/hooks/prompts/discipline-fable.md
-#   - plugins/agent-discipline/hooks/prompts/discipline-sonnet.md
-#   - plugins/agent-discipline/hooks/prompts/discipline-opus.md
+#   - plugins/experimental-agent-discipline/hooks/prompts/discipline-fable.md
+#   - plugins/experimental-agent-discipline/hooks/prompts/discipline-sonnet.md
+#   - plugins/experimental-agent-discipline/hooks/prompts/discipline-opus.md
 #
 # 背景:
 #   #194 で分業規律がモデル別 2 ファイル化された (rule ID: role-split / delegation-rules /
@@ -236,7 +236,7 @@
 # ============================================================================
 #
 # 対象ファイル:
-#   - plugins/agent-discipline/hooks/prompts/subagent-rules.md
+#   - plugins/experimental-agent-discipline/hooks/prompts/subagent-rules.md
 #
 # 背景:
 #   #221 で subagent 向け常時適用ルール (SubagentStart 注入) が新設された。subagent-rules.md
@@ -274,19 +274,19 @@
 
 set -u
 
-FABLE_MD="plugins/agent-discipline/hooks/prompts/always-fable.md"
+FABLE_MD="plugins/experimental-agent-discipline/hooks/prompts/always-fable.md"
 # issue #236 (注入ペイロード分割) で always-sonnet.md を 3 part に分割したため、
 # チェック 1/5 の「sonnet 側」は 3 part ファイルの和集合として扱う (SONNET_MD_LIST)。
-SONNET_MD_1="plugins/agent-discipline/hooks/prompts/always-sonnet-1.md"
-SONNET_MD_2="plugins/agent-discipline/hooks/prompts/always-sonnet-2.md"
-SONNET_MD_3="plugins/agent-discipline/hooks/prompts/always-sonnet-3.md"
-HOOKS_JSON="plugins/agent-discipline/hooks/hooks.json"
-DISCIPLINE_FABLE_MD="plugins/agent-discipline/hooks/prompts/discipline-fable.md"
-DISCIPLINE_SONNET_MD="plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
+SONNET_MD_1="plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-1.md"
+SONNET_MD_2="plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-2.md"
+SONNET_MD_3="plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-3.md"
+HOOKS_JSON="plugins/experimental-agent-discipline/hooks/hooks.json"
+DISCIPLINE_FABLE_MD="plugins/experimental-agent-discipline/hooks/prompts/discipline-fable.md"
+DISCIPLINE_SONNET_MD="plugins/experimental-agent-discipline/hooks/prompts/discipline-sonnet.md"
 # PR2 (agent-discipline 0.21.0) で discipline-opus.md (Opus 系向け) を新設し、チェック 4 の
 # 対象を分業規律 3 ファイルに拡張した。
-DISCIPLINE_OPUS_MD="plugins/agent-discipline/hooks/prompts/discipline-opus.md"
-SUBAGENT_MD="plugins/agent-discipline/hooks/prompts/subagent-rules.md"
+DISCIPLINE_OPUS_MD="plugins/experimental-agent-discipline/hooks/prompts/discipline-opus.md"
+SUBAGENT_MD="plugins/experimental-agent-discipline/hooks/prompts/subagent-rules.md"
 
 # チェック 2 前提検証 (#186) で使う、 期待される type:agent entry 数。
 EXPECTED_AGENT_ENTRIES=4

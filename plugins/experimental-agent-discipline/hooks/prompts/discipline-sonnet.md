@@ -59,10 +59,10 @@
 
 **適用範囲**: Agent ツール / Workflow script の `agent()` / SendMessage による継続を含む、すべての委任に適用する。
 
-- **Fable をサブエージェントに使わない**: model に fable 系を明示指定しない (PreToolUse hook (block-fable-subagent.sh) が deny する)。非 Fable セッションでは model 未指定の継承先も非 Fable なので、未指定 (継承) を既定としてよい
+- **Fable は専用 agent への委任に限り使ってよい**: `experimental-agent-discipline:fable-low-worker` (仕様が確定した実装・一括修正・指摘反映) と `experimental-agent-discipline:fable-low-explorer` (読み取り専用の調査) に `model: "fable"` を明示して委任する場合だけ許可される (effort は agent 定義の frontmatter で low 固定のため、呼び出し側では扱わない)。PreToolUse hook (block-fable-subagent.sh) が Fable 週次枠の使用率を見て、閾値 (既定 50%) 以下のときだけ allow し、超過時と使用率を取得できないときは deny する。それ以外の経路では fable 系を明示指定しない。非 Fable セッションでは model 未指定の継承先も非 Fable なので、専用 agent 以外への委任は未指定 (継承) を既定としてよい
 - **Opus 5 を使う委任では effort を固定しない**: 難度・コストに応じて選択してよい。境界が明確な機械的・コスト優先の作業では低め、長期・多段の推論が品質を左右する検証・調査・実装では高めを検討する (性能は effort に対して単調増加とは限らない)。高 effort の副作用はセクション 3 の Opus 5 固有指示 (スコープ制限・汎用再確認指示の禁止) で抑え、明示しない経路ではセッション既定の継承でよい
 - **`CLAUDE_CODE_SUBAGENT_MODEL` が設定されている場合**、その値は model の明示指定や agent 定義の frontmatter より優先され、全サブエージェント (Workflow 内部の `agent()` 含む) がその値で実行される。品質・コストは env の実効モデルで走る前提で見積もる (メインセッションと同一モデルとは限らない)
-- **Sonnet 系には effort を指定しない**: セッション既定の effort の継承を前提とし、Workflow の `agent()` でも effort オプションは付けない。effort を明示する場合は Opus 5 への委任に限る
+- **Sonnet 系には effort を指定しない**: セッション既定の effort の継承を前提とし、Workflow の `agent()` でも effort オプションは付けない。effort を明示する場合は Opus 5 への委任に限る。Fable 専用 agent (fable-low-worker / fable-low-explorer) は agent 定義の frontmatter で effort low に固定されているため、呼び出し側で effort を扱わない
 - **独立した subtask は同一メッセージで並列に委任し、完了をブロックして待たずに他の作業を進める**。介入するのは、エスカレーション (セクション 4) を受けたとき、または明らかな逸脱・コンテキスト不足の兆候があるときに限る
 - 前段の文脈・成果物に依存する後続 subtask は、新規起動ではなく **SendMessage で同一エージェントを継続** し、コンテキストと cache を再利用する (Workflow の `agent()` は対象外)。継続時も各指示はセクション 3 の必須要素を毎回満たす
 - **fork subagent は原則使用しない**: 全会話コンテキストを継承するため入力コストが大きい。代わりに、必要な文脈を指示文に埋め込んだ新規起動 (セクション 2 の self-contained 要件) を使う。コンテキスト継承が不可欠な委任に限り fork を例外として許容する

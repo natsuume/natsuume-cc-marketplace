@@ -321,6 +321,20 @@ v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定�
 
 ---
 
+## experimental-agent-discipline
+
+[agent-discipline](#agent-discipline) の実験的 fork です。agent-discipline が全経路で deny している Fable サブエージェントを、effort low 固定の専用 agent (`experimental-agent-discipline:fable-low-worker` / `experimental-agent-discipline:fable-low-explorer`) への委任に限り条件付きで許可します。それ以外の規律配送・検知機能は agent-discipline と同一です。
+
+許可条件は、`model: "fable"` を明示した専用 agent への委任であり、かつ Fable 週次モデル別枠の使用率が閾値 (既定 50%、環境変数 `EXPERIMENTAL_FABLE_SUBAGENT_MAX_PERCENT`) 以下であることです。閾値超過時と使用率を取得できないときは deny します (fail-closed)。`CLAUDE_CODE_SUBAGENT_MODEL` が設定されている環境では、env が明示指定より優先されるため専用 agent への委任も deny します。
+
+使用率は natsuume-statusline が書く `weekly-scoped.json` cache から読むため、natsuume-statusline を statusline として構成しておく必要があります (未構成なら Fable 委任は常に deny)。
+
+agent-discipline との同時 enable は非サポートです (PreToolUse hook は 1 つでも deny すれば起動が止まるため agent-discipline 側の deny が優先され、規律も二重注入されます)。`~/.claude/settings.json` の `enabledPlugins` で一方だけを true にして切り替えます。
+
+切替手順・deny 理由ごとの対処・hook の判定順序・agent-discipline との差分ファイル一覧は [plugins/experimental-agent-discipline/README.md](plugins/experimental-agent-discipline/README.md) を参照してください。
+
+---
+
 ## ui-discipline
 
 UI (フロントエンド) 実装時の規律を配送するプラグインです。UI を持つプロジェクトでのみ enable して使います。共通化すべきか / 表示・非表示をどう決めるか / レイアウトが崩れないか、といった UI 実装で繰り返し発生する判断基準を 10 ルールとして常時配送し、判断のぶれによる重複 component や CLS (Cumulative Layout Shift)、a11y 欠落を防ぎます。
