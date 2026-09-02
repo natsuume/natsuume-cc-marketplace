@@ -11,7 +11,7 @@
 #
 # ## なぜ必要か
 #
-# wrapper は codex review を foreground で実行し、 完了時に結果を PR レビューとして投稿する。
+# wrapper は codex review を foreground で実行し、 完了時にレビュー記録をローカルに書く。
 # これを Bash tool の `run_in_background: true` や shell-level の `&` / `|` で起動すると、
 # codex-reviewer subagent が wrapper の stdout / stderr を観察できないまま完了しうるため、
 # parent-safe report を正規化できない (レビュー結果が親 session に正しく配送されない)。

@@ -6,30 +6,39 @@
 #
 # ## 何をするか
 #
-# 1. current branch の PR を gh で解決し、 head SHA・base branch・base commit SHA を取得する
+# 1. 起動時に git-dir 直下の stale なレビュー記録 (final attestation / pending attestation /
+#    投稿用本文) を削除する (前回の中断が残した記録で merge が通る経路を残さないため)
+# 2. current branch の PR を gh で解決し、 head SHA・base branch・base commit SHA を取得する
 #    (取得値は git コマンドへ渡す前に形式を検証する)
-# 2. ローカル HEAD が PR の head SHA と一致し、 working tree が clean であることを確認する
+# 3. ローカル HEAD が PR の head SHA と一致し、 working tree が clean であることを確認する
 #    (どちらかを欠くと、 head SHA を記録しながら別内容をレビューした記録を残すことになる)
-# 3. PR が記録する base commit がローカルの `origin/<base>` から到達可能 (ancestor) である
+# 4. PR が記録する base commit がローカルの `origin/<base>` から到達可能 (ancestor) である
 #    ことを確認する (到達不能なら 1 度だけ fetch して再判定し、 それでも到達不能なら実行
 #    しない)。 さらに merge-base..HEAD の差分が空でないことを確認する (空のままレビューすると、
-#    何も見ていない 「レビュー済み」 コメントを残すことになるため)
-# 4. PR の実 base との merge-base..HEAD 全差分に対して codex review を foreground 実行する
+#    何も見ていない 「レビュー済み」 記録を残すことになるため)
+# 5. PR の実 base との merge-base..HEAD 全差分に対して codex review を foreground 実行する
 #    (codex companion に `--base origin/<base>` を渡すと merge-base からの branch diff になる)
-# 5. 投稿の直前に HEAD と working tree の状態を再確認し、 レビュー中に変化していれば投稿
-#    しない (レビューした内容と記録する head SHA の乖離を残さないため)
-# 6. 機械可読 header + review report を `gh pr review --comment` で PR レビューとして投稿する
+# 6. 記録を書く直前に HEAD と working tree の状態を再確認し、 レビュー中に変化していれば記録を
+#    書かない (レビューした内容と記録する head SHA の乖離を残さないため)
+# 7. 機械可読 header + review report を投稿用の本文ファイルへ、 PR 番号と head SHA を pending
+#    attestation へ書く (いずれも git-dir 直下。 PR への投稿は行わない)
 #
-# 投稿する本文の形式:
+# 投稿用の本文ファイルの形式:
 #
 #   <!-- codex-review: head=<レビュー対象の full head SHA> status=pass|findings -->
 #   # Codex Review
 #   ...
 #
-# **投稿がレビュー完了の記録である**。 ローカル marker / pending attestation の機構は持たず、
-# merge gate (block-pre-merge.sh) は PR 上のこのコメントだけを照合する。 投稿は merge の
-# approve でも findings 0 件の証明でもない (status=findings でも「レビュー済み」として
-# 成立し、 findings への対応判断は通常のレビューフローで行う)。
+# pending attestation の形式 (2 行):
+#
+#   pr=<PR 番号>
+#   head=<レビュー対象の full head SHA>
+#
+# **本 wrapper は PR に投稿しない**。 レビュー完了の記録をローカルに書くところまでが責務で、
+# subagent lifecycle hook (auto-mark.sh) が parent-safe report を検証して pending を final
+# attestation へ昇格し、 merge gate (block-pre-merge.sh) が `gh pr merge` 時にその記録を検証して
+# PR に投稿する。 記録は merge の approve でも findings 0 件の証明でもない (status=findings でも
+# 「レビュー済み」 として成立し、 findings への対応判断は通常のレビューフローで行う)。
 #
 # ## なぜ wrapper を介すか
 #
@@ -49,12 +58,18 @@
 
 set -e
 
+# 本 script が作るファイル (作業用 temp とレビュー記録) は他ユーザに読ませる必要がないため、
+# 生成時の permission を所有者のみに絞る。
+umask 077
+
 _RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/codex-companion-resolver.sh
 source "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
 # shellcheck source=lib/review-status.sh
 source "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/review-status.sh"
+# shellcheck source=lib/markers.sh
+source "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/markers.sh"
 
 # GitHub の PR コメント本文の上限 (65536 文字) に対する安全側の閾値。 これを超える report は
 # 行単位で切り詰めて投稿する (byte 単位で切ると multibyte 文字が壊れるため行単位で切る)。
@@ -79,7 +94,18 @@ command -v gh >/dev/null 2>&1 || fail "gh が見つかりません。 gh CLI を
 command -v jq >/dev/null 2>&1 || fail "jq が見つかりません。 jq をインストールしてから再実行してください。"
 command -v node >/dev/null 2>&1 || fail "node が見つかりません。 codex companion の実行に node が必要です。"
 
-git rev-parse --git-dir >/dev/null 2>&1 || fail "現在の cwd は git repository ではありません。 codex review は PR の作業リポジトリ内で実行してください。"
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || fail "現在の cwd は git repository ではありません。 codex review は PR の作業リポジトリ内で実行してください。"
+
+# レビュー記録の置き場 (git-dir 直下)。 ファイル名の単一ソースは lib/markers.sh。
+FINAL_ATTESTATION_PATH=$(pre_merge_final_marker_path "$GIT_DIR") || fail "レビュー記録の path を解決できませんでした。"
+PENDING_ATTESTATION_PATH=$(pre_merge_pending_marker_path "$GIT_DIR") || fail "レビュー記録の path を解決できませんでした。"
+COMMENT_BODY_PATH=$(pre_merge_comment_body_path "$GIT_DIR") || fail "レビュー記録の path を解決できませんでした。"
+
+# 起動時に stale な記録を消す。 前回の実行が途中で落ちて残した記録 (別 head SHA のものを
+# 含む) を放置すると、 merge gate がそれを投稿して 「レビューしていない状態を通す」 経路に
+# なるため、 レビューを始める前に必ず片付ける。 消せない場合は記録の一貫性を保証できないので
+# 中断する。
+rm -f "$FINAL_ATTESTATION_PATH" "$PENDING_ATTESTATION_PATH" "$COMMENT_BODY_PATH" || fail "古いレビュー記録 (${GIT_DIR} 直下) を削除できませんでした。 権限を確認してから再実行してください。"
 
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null) || fail "detached HEAD では PR を解決できません。 PR のブランチに切り替えてから再実行してください。"
 
@@ -167,7 +193,7 @@ if ! base_oid_is_in_origin_base; then
 fi
 
 # レビュー対象範囲 (merge-base..HEAD) に差分が無い状態でレビューすると、 何も見ていない
-# 「レビュー済み」 コメントを PR に残すことになるため実行しない。
+# 「レビュー済み」 記録を残すことになるため実行しない。
 MERGE_BASE=$(git merge-base HEAD "$BASE_REF_FULL" 2>/dev/null) || fail "HEAD と ${BASE_REF_FULL} の merge-base を解決できませんでした (shallow clone / 履歴の不足が考えられます)。 \`git fetch --unshallow\` 等で履歴を補ってから再実行してください。"
 if git diff --quiet "$MERGE_BASE" HEAD 2>/dev/null; then
   fail "レビュー対象の差分が空です (merge-base ${MERGE_BASE} と HEAD が同一内容)。 PR に差分がある状態で再実行してください。"
@@ -185,11 +211,11 @@ note "running: node ${COMPANION} review --wait --base ${BASE_REF}"
 
 # codex review を foreground 実行する。 `--wait` を hardcode することで、 呼び出し側からの
 # argument injection で background 起動になる余地を排除する。 stdout (review report) は
-# ファイルに落として投稿本文に使い、 stderr (進捗) はそのまま流す。
+# ファイルに落として記録の本文に使い、 stderr (進捗) はそのまま流す。
 # `if !` で失敗を捕捉する (set -e 配下では node の非ゼロ exit で script が即終了し、
 # fail() のメッセージを出す機会を失うため)。
 if ! node "$COMPANION" review --wait --base "$BASE_REF" > "$REVIEW_OUT"; then
-  fail "codex review が失敗しました。 PR へのレビュー投稿は行いません。 上の output を確認して再実行してください。"
+  fail "codex review が失敗しました。 レビュー記録は書きません。 上の output を確認して再実行してください。"
 fi
 
 # review report を stdout に流す (codex-reviewer subagent が parent-safe report に正規化する
@@ -221,24 +247,41 @@ awk -v budget="$MAX_COMMENT_BODY_CHARS" '
 ' "$COMMENT_BODY" > "$COMMENT_BODY.capped" || fail "レビュー本文の整形に失敗しました。"
 mv "$COMMENT_BODY.capped" "$COMMENT_BODY" || fail "レビュー本文の差し替えに失敗しました。"
 
-# 投稿直前の再検証。 レビュー実行中に commit / checkout / 編集が入ると、 記録する head SHA と
-# 実際にレビューした内容が乖離する。 投稿は 「この head SHA の内容をレビューした」 という
-# 記録なので、 状態が変わっていたら投稿せず中断する (再実行すれば新しい状態でレビューし直す)。
-POST_REVIEW_HEAD=$(git rev-parse HEAD 2>/dev/null) || fail "投稿前の HEAD 再確認に失敗しました。 レビュー結果は投稿していません。"
+# 記録を書く直前の再検証。 レビュー実行中に commit / checkout / 編集が入ると、 記録する
+# head SHA と実際にレビューした内容が乖離する。 記録は 「この head SHA の内容をレビューした」
+# という主張なので、 状態が変わっていたら記録を書かずに中断する (再実行すれば新しい状態で
+# レビューし直す)。
+POST_REVIEW_HEAD=$(git rev-parse HEAD 2>/dev/null) || fail "HEAD の再確認に失敗しました。 レビュー記録は書いていません。"
 if [ "$POST_REVIEW_HEAD" != "$HEAD_SHA" ]; then
-  fail "codex review の実行中に HEAD が変わりました (${HEAD_SHA} → ${POST_REVIEW_HEAD})。 レビューした内容と記録する head SHA が食い違うため投稿しません。 HEAD が PR の head と一致する状態で再実行してください。"
+  fail "codex review の実行中に HEAD が変わりました (${HEAD_SHA} → ${POST_REVIEW_HEAD})。 レビューした内容と記録する head SHA が食い違うため記録を書きません。 HEAD が PR の head と一致する状態で再実行してください。"
 fi
-POST_REVIEW_STATUS=$(git status --porcelain 2>/dev/null) || fail "投稿前の working tree 再確認に失敗しました。 レビュー結果は投稿していません。"
+POST_REVIEW_STATUS=$(git status --porcelain 2>/dev/null) || fail "working tree の再確認に失敗しました。 レビュー記録は書いていません。"
 if [ -n "$POST_REVIEW_STATUS" ]; then
-  fail "codex review の実行中に working tree が変更されました。 レビューした内容と記録する head SHA が食い違うため投稿しません。 working tree が clean な状態で再実行してください。"
+  fail "codex review の実行中に working tree が変更されました。 レビューした内容と記録する head SHA が食い違うため記録を書きません。 working tree が clean な状態で再実行してください。"
 fi
 
-# レビュー完了の記録を PR に投稿する。 gh の確認出力は stderr へ回して stdout を review
-# report だけに保つ。
-if ! gh pr review "$PR_NUMBER" --comment --body-file "$COMMENT_BODY" >&2; then
-  fail "PR #${PR_NUMBER} へのレビュー投稿に失敗しました。 codex review 自体は完了していますが、 レビュー済みの記録が PR に残っていないため merge gate は deny を続けます。 gh の認証・権限を確認して再実行してください。"
+# 本文ファイルの書き込み以降で失敗した場合の後始末。 本文だけが残ると 「pending の無い
+# 本文」 という中途半端な記録になるため、 失敗時は本文も消してから中断する。
+fail_after_body() {
+  rm -f "$COMMENT_BODY_PATH" 2>/dev/null || true
+  fail "$1"
+}
+
+# レビュー記録を git-dir 直下に書く。 WORK_DIR (TMPDIR 配下) と git-dir は別 filesystem に
+# なりうるため、 本文は mv で移す (失敗したら記録を残さず中断する)。 pending は git-dir 内の
+# temp file から mv して atomic に置く (読み手が中途半端な内容を観測しないため)。
+mv "$COMMENT_BODY" "$COMMENT_BODY_PATH" || fail "投稿用の本文を ${COMMENT_BODY_PATH} へ書き込めませんでした。 レビュー記録は残っていません。"
+
+PENDING_TMP=$(mktemp "${PENDING_ATTESTATION_PATH}.XXXXXX" 2>/dev/null) || fail_after_body "pending attestation の一時ファイルを作成できませんでした。 レビュー記録は残っていません。"
+if ! printf 'pr=%s\nhead=%s\n' "$PR_NUMBER" "$HEAD_SHA" > "$PENDING_TMP" 2>/dev/null; then
+  rm -f "$PENDING_TMP" 2>/dev/null || true
+  fail_after_body "pending attestation を書き込めませんでした。 レビュー記録は残っていません。"
+fi
+if ! mv "$PENDING_TMP" "$PENDING_ATTESTATION_PATH" 2>/dev/null; then
+  rm -f "$PENDING_TMP" 2>/dev/null || true
+  fail_after_body "pending attestation を ${PENDING_ATTESTATION_PATH} へ配置できませんでした。 レビュー記録は残っていません。"
 fi
 
-note "PR #${PR_NUMBER} に codex review コメントを投稿しました (head=${HEAD_SHA} status=${STATUS})。"
+note "レビュー記録をローカルに保存しました (pr=${PR_NUMBER} head=${HEAD_SHA} status=${STATUS})。 \`gh pr merge\` を実行すると merge gate が記録を PR に投稿してから merge に進みます。"
 
 exit 0

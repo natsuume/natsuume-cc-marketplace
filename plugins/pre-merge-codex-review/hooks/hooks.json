@@ -1,5 +1,5 @@
 {
-  "description": "pre-merge-codex-review の配送経路: PreToolUse (Bash) で、codex review コメント (レビュー時 head SHA 記録付き) が PR に無い `gh pr merge` を deny (block-pre-merge.sh)、codex review wrapper の main session / background 起動を deny (block-bg-codex-wrapper.sh)。gate の判定内容・投稿 header 仕様は plugin README を参照。",
+  "description": "pre-merge-codex-review の配送経路: PreToolUse (Bash) で、codex review 済みでない `gh pr merge` を deny し、レビュー済みならローカル attestation を検証してレビューコメントを PR に投稿してから通す (block-pre-merge.sh)、codex review wrapper の main session / background 起動を deny する (block-bg-codex-wrapper.sh)。SubagentStart は launch attestation を書き (auto-mark.sh)、SubagentStop は report / head SHA 検証を経て pending attestation を final へ昇格し (auto-mark.sh)、PostToolUseFailure は pending attestation を破棄し、final attestation が無ければ投稿用本文も破棄する (auto-mark.sh)。gate の判定内容・投稿 header 仕様は plugin README を参照。",
   "hooks": {
     "PreToolUse": [
       {
@@ -12,6 +12,39 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-bg-codex-wrapper.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "^pre-merge-codex-review:codex-reviewer$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^pre-merge-codex-review:codex-reviewer$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
           }
         ]
       }
