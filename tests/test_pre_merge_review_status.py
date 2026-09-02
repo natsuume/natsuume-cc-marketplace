@@ -164,6 +164,23 @@ class DetectReviewStatusContractTest(unittest.TestCase):
                 report = f"# Codex Review\n\n{last_line}\n"
                 self.assert_status(report, "pass", name=f"{label}.md")
 
+    def test_negated_or_uncertain_trailing_clause_is_not_pass(self) -> None:
+        """否定・不確実な結論は末尾が「no ...」形でも pass にしない。"""
+        cases = {
+            "cannot_establish": (
+                "We cannot establish that there are no regressions."
+            ),
+            "could_not_verify": "I could not verify that there are no findings.",
+            "contraction": "Couldn't confirm there are no issues found.",
+            "unclear_whether": "It is unclear whether there are no issues.",
+            "conditional": "This is fine if there are no material findings.",
+            "not_confident": "I am not confident there are no regressions.",
+        }
+        for label, last_line in cases.items():
+            with self.subTest(case=label):
+                report = f"# Codex Review\n\n{last_line}\n"
+                self.assert_status(report, "findings", name=f"{label}.md")
+
     # ------------------------------------------------------------------
     # (f) 末尾から 6〜10 行目にある場合 (旧 5 行では取りこぼす位置) → pass
     # ------------------------------------------------------------------

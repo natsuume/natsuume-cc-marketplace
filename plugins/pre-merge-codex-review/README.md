@@ -72,7 +72,9 @@ wrapper はレビュー完了時に、結果を `gh pr review --comment` で対�
   material/actionable findings」「no issues found/identified」「no
   regression(s) found/identified」や `no (material|actionable|significant)
   issue(s)/regression(s)/findings` といった表現に行全体または行末が一致する行が 1 つでも
-  あれば `pass`、無ければ `findings` (判定できない場合も findings に倒す)
+  あれば `pass`、無ければ `findings` (判定できない場合も findings に倒す)。否定・不確実を
+  表す語 (`cannot` / `not` / `unable` / `unclear` / `whether` / `if` 等) を含む行は肯定の
+  結論ではないため一致とみなさない
 - **header は本文の先頭行に置かれ、gate も先頭行の header だけを attestation として受理する**。report 本文が header 形の文字列を含む場合 (レビュー対象の差分から引用した場合等) は、wrapper が投稿前に `<!-- codex-review (quoted):` へ書き換えて無害化する
 - 投稿はレビュー完了の記録であり、merge の approve や findings 0 件の証明ではない (status=findings でも「レビュー済み」として成立する。findings への対応判断は通常のレビューフローで行う)
 
