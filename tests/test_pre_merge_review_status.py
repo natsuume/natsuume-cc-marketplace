@@ -8,8 +8,8 @@
 - 関数: `detect_review_status <report-file>`。stdout に `pass` または `findings` を
   改行なしで出力し、常に return 0 する。ファイルが存在しない・読めない場合も
   `findings` を出力する (判定できない場合は findings に倒す)。
-- 判定対象は report の末尾 10 行。
-- 末尾 10 行に `## Finding` / `- Severity:` / 前後が英数字でない `P0`〜`P3` のいずれか
+- 「指摘なし」の結論を探す対象は report の末尾 10 行。finding 記述の有無は report 全体を見る。
+- report 全体に `## Finding` / `- Severity:` / 前後が英数字でない `P0`〜`P3` のいずれか
   が 1 行でも含まれれば、他の条件に関わらず findings。
 - finding 記述が無い場合、各行を (1) 行頭の markdown 装飾除去、(2) 強調記号
   `*`/`_` 除去、(3) 行末の `.`/`!`/空白除去、(4) 小文字化、の順で正規化し、
@@ -240,7 +240,7 @@ class DetectReviewStatusContractTest(unittest.TestCase):
         self.assert_status(report, "findings")
 
     # ------------------------------------------------------------------
-    # (h) finding 記述 (## Finding / - Severity:) が末尾 10 行にあれば
+    # (h) finding 記述 (## Finding / - Severity:) が report 内にあれば
     #     「指摘なし」 結論が続いても findings が優先する
     # ------------------------------------------------------------------
 
@@ -255,6 +255,31 @@ class DetectReviewStatusContractTest(unittest.TestCase):
             "\n"
             "No other issues found.\n"
         )
+        self.assert_status(report, "findings")
+
+    def test_finding_markers_above_tail_window_still_override(self) -> None:
+        """finding 記述が末尾 10 行より前にあり、末尾が「指摘なし」節で結ばれていても
+        findings (finding 記述の走査は report 全体)。"""
+        cases = {
+            "finding_section": "## Finding CODEX-1\n\n- Severity: P2\n",
+            "bracket_priority": "- [P2] Null dereference in the parser\n",
+        }
+        filler = "".join(f"Summary line {index}.\n" for index in range(12))
+        for label, finding_block in cases.items():
+            with self.subTest(case=label):
+                report = (
+                    "# Codex Review\n\n"
+                    + finding_block
+                    + "\n"
+                    + filler
+                    + "Beyond the item above, the rest looks fine with no"
+                    " further issues found.\n"
+                )
+                self.assert_status(report, "findings", name=f"{label}.md")
+
+    def test_typographic_apostrophe_contraction_is_not_pass(self) -> None:
+        """typographic apostrophe (U+2019) の短縮形も否定語として扱う。"""
+        report = "# Codex Review\n\nCouldn’t confirm there are no issues found.\n"
         self.assert_status(report, "findings")
 
     # ------------------------------------------------------------------

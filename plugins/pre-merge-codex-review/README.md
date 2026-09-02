@@ -65,9 +65,9 @@ wrapper はレビュー完了時に、結果を `gh pr review --comment` で対�
 ```
 
 - header の `head=` はレビュー対象となった PR head の full SHA (40 hex)
-- `status=pass|findings` は report の末尾 10 行から `lib/review-status.sh` の
-  `detect_review_status` が判定する。末尾 10 行に finding 記述 (`## Finding` /
-  `- Severity:` / 前後が英数字でない `P0`〜`P3`) が 1 行でもあれば `findings`。無ければ
+- `status=pass|findings` は `lib/review-status.sh` の `detect_review_status` が判定する。
+  report 全体に finding 記述 (`## Finding` / `- Severity:` / 前後が英数字でない
+  `P0`〜`P3`) が 1 行でもあれば `findings`。無ければ report の末尾 10 行について
   各行を markdown 装飾・強調記号の除去と小文字化で正規化し、「no findings」「no
   material/actionable findings」「no issues found/identified」「no
   regression(s) found/identified」や `no (material|actionable|significant)

@@ -23,8 +23,10 @@
 #
 # ## 判定仕様
 #
-# 1. 判定対象は report の末尾 10 行
-# 2. 末尾 10 行の中に次のいずれかの finding 記述が 1 行でも含まれる場合は、他の条件に
+# 1. 「指摘なし」 の結論を探す対象は report の末尾 10 行。 finding 記述の有無は report
+#    全体を見る (結論の直前に finding 一覧が長く並ぶ report で、 末尾の補足文だけを見て
+#    pass と誤判定しないため)
+# 2. report 全体に次のいずれかの finding 記述が 1 行でも含まれる場合は、他の条件に
 #    関わらず findings:
 #    - `## Finding` (行頭の `#` 1 個以上 + 空白 + `Finding`)
 #    - `- Severity:` (行頭の `-` または `*` + 空白 + `Severity:`)
@@ -34,6 +36,8 @@
 #    - 行頭の markdown 装飾を除去: 空白、 `-`/`*`/`>` の箇条書き・引用記号、 `1.`/`1)` の
 #      番号付きリスト記号 (複数重なっていてもすべて除去)
 #    - 強調記号 `*` と `_` をすべて除去
+#    - typographic apostrophe (U+2019) を ASCII の `'` に置換 (`couldn’t` のような短縮形を
+#      否定語として認識するため)
 #    - 行末の `.` `!` と空白を除去
 #    - 大文字小文字を区別しない (小文字化)
 # 4. 正規化後の行について、 次のいずれかを満たす行が 1 つでもあれば pass:
@@ -72,31 +76,40 @@
 detect_review_status() {
   local report_file="$1"
 
-  local tail_lines
-  if ! tail_lines=$(tail -n 10 -- "$report_file" 2>/dev/null); then
+  if [ ! -f "$report_file" ] || [ ! -r "$report_file" ]; then
     printf '%s' 'findings'
     return 0
   fi
 
   # 以下の grep / sed / tr は LC_ALL=C (byte 指向) で実行する。 report は非 ASCII を含みうる
   # ため、 UTF-8 locale のまま BSD sed / tr に通すと不正な multibyte 列で途中終了し、 結論行が
-  # 照合されないまま findings に倒れる。 照合するパターンはすべて ASCII なので C locale で
-  # 十分に判定できる。
-  # finding 記述 (## Finding / - Severity: / 前後が英数字でない P0〜P3) が末尾 10 行に
-  # 1 行でもあれば、他の条件に関わらず findings 確定。
-  if printf '%s\n' "$tail_lines" \
-    | LC_ALL=C grep -qE '^[[:space:]]*#+[[:space:]]+Finding|^[[:space:]]*[-*][[:space:]]+Severity:|(^|[^A-Za-z0-9])P[0-3]([^A-Za-z0-9]|$)'
-  then
+  # 照合されないまま findings に倒れる。 照合するパターンはすべて ASCII (typographic
+  # apostrophe は byte 列として扱う) なので C locale で十分に判定できる。
+  # finding 記述 (## Finding / - Severity: / 前後が英数字でない P0〜P3) が report 全体に
+  # 1 行でもあれば、他の条件に関わらず findings 確定。 走査を末尾に限らないのは、 finding
+  # 一覧の後ろに補足の結び (「no further issues」等) が続く report を pass と誤判定しない
+  # ため。 grep の失敗 (読み取りエラー等) は findings に倒す。
+  local marker_status=0
+  LC_ALL=C grep -qE '^[[:space:]]*#+[[:space:]]+Finding|^[[:space:]]*[-*][[:space:]]+Severity:|(^|[^A-Za-z0-9])P[0-3]([^A-Za-z0-9]|$)' "$report_file" 2>/dev/null || marker_status=$?
+  if [ "$marker_status" -ne 1 ]; then
     printf '%s' 'findings'
     return 0
   fi
 
-  # 各行を正規化する: 行頭の markdown 装飾除去 → 強調記号 (*/_) 除去 → 行末の句読点・
-  # 空白除去 → 小文字化。
-  local normalized
+  local tail_lines
+  if ! tail_lines=$(tail -n 10 "$report_file" 2>/dev/null); then
+    printf '%s' 'findings'
+    return 0
+  fi
+
+  # 各行を正規化する: 行頭の markdown 装飾除去 → 強調記号 (*/_) 除去 → typographic
+  # apostrophe (U+2019) を `'` に置換 → 行末の句読点・空白除去 → 小文字化。
+  local rsquo normalized
+  rsquo=$(printf '\342\200\231')
   normalized=$(printf '%s\n' "$tail_lines" \
     | LC_ALL=C sed -E 's/^[[:space:]]*(([-*>]|[0-9]+[.)])[[:space:]]*)*//' \
     | LC_ALL=C sed -E 's/[*_]//g' \
+    | LC_ALL=C sed "s/${rsquo}/'/g" \
     | LC_ALL=C sed -E 's/[[:space:].!]+$//' \
     | LC_ALL=C tr '[:upper:]' '[:lower:]')
 
