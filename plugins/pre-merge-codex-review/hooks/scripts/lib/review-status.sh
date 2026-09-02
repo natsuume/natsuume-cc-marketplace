@@ -69,10 +69,14 @@ detect_review_status() {
     return 0
   fi
 
+  # 以下の grep / sed / tr は LC_ALL=C (byte 指向) で実行する。 report は非 ASCII を含みうる
+  # ため、 UTF-8 locale のまま BSD sed / tr に通すと不正な multibyte 列で途中終了し、 結論行が
+  # 照合されないまま findings に倒れる。 照合するパターンはすべて ASCII なので C locale で
+  # 十分に判定できる。
   # finding 記述 (## Finding / - Severity: / 前後が英数字でない P0〜P3) が末尾 10 行に
   # 1 行でもあれば、他の条件に関わらず findings 確定。
   if printf '%s\n' "$tail_lines" \
-    | grep -qE '^[[:space:]]*#+[[:space:]]+Finding|^[[:space:]]*[-*][[:space:]]+Severity:|(^|[^A-Za-z0-9])P[0-3]([^A-Za-z0-9]|$)'
+    | LC_ALL=C grep -qE '^[[:space:]]*#+[[:space:]]+Finding|^[[:space:]]*[-*][[:space:]]+Severity:|(^|[^A-Za-z0-9])P[0-3]([^A-Za-z0-9]|$)'
   then
     printf '%s' 'findings'
     return 0
@@ -82,15 +86,15 @@ detect_review_status() {
   # 空白除去 → 小文字化。
   local normalized
   normalized=$(printf '%s\n' "$tail_lines" \
-    | sed -E 's/^[[:space:]]*(([-*>]|[0-9]+[.)])[[:space:]]*)*//' \
-    | sed -E 's/[*_]//g' \
-    | sed -E 's/[[:space:].!]+$//' \
-    | tr '[:upper:]' '[:lower:]')
+    | LC_ALL=C sed -E 's/^[[:space:]]*(([-*>]|[0-9]+[.)])[[:space:]]*)*//' \
+    | LC_ALL=C sed -E 's/[*_]//g' \
+    | LC_ALL=C sed -E 's/[[:space:].!]+$//' \
+    | LC_ALL=C tr '[:upper:]' '[:lower:]')
 
   # 正規化後の行のいずれかが 「no findings」 等の表現に行全体一致するか、行末が同表現に
   # 一致すれば (直前が行頭または非英字) pass。
   if printf '%s\n' "$normalized" \
-    | grep -qE '(^|[^a-z])no (material |actionable |significant )?(issue|issues|regression|regressions|findings)( found| identified)?$'
+    | LC_ALL=C grep -qE '(^|[^a-z])no (material |actionable |significant )?(issue|issues|regression|regressions|findings)( found| identified)?$'
   then
     printf '%s' 'pass'
     return 0
