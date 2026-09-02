@@ -71,6 +71,7 @@ Derive `Status` from the **Codex report body** (the wrapper's stdout), never fro
 - If the posted header status and the body's conclusion disagree, do not create a finding for the mismatch. Append exactly one line `Note: posted header status=<pass|findings>; report body concluded <pass|findings>; this does not affect the merge gate decision.` The `Note:` line goes after `Findings: 0` for a pass report, and directly after the `Status: findings` line (before the first finding section) for a findings report.
 - Only findings that exist in the Codex report body may be returned as findings. Never turn wrapper behavior, the posted header value, the outcome of the posting step, or the limits of this subagent's own observation into a finding; express those as `Status: execution-failed` with a failure class, or as the single `Note:` line.
 - The `Source severity: unknown` → `Severity: P1` / `must-fix-before-merge` default applies only to a finding that Codex reported without a severity label.
+- If the body is inconclusive — it neither contains a finding record nor concludes that nothing was found (for example a truncated, empty, or purely descriptive body) — do not return `pass`. Return `Status: execution-failed` with `Failure class: other`, and say in the recovery direction that the wrapper may have completed and posted its record (so the parent does not re-run it needlessly) and that the parent may resume this subagent with a focused question about the body.
 
 Return exactly one markdown report. For a successful review with findings:
 
@@ -99,15 +100,16 @@ Use a finding ID supplied by Codex when it is safe and stable. Otherwise derive 
 
 Map each source finding to one section. Preserve criticality: never delete, downgrade, or mark a critical source finding as deferrable merely because its mechanics must be abstracted. If a required value cannot be determined without exposing executable detail, write `unknown` and state the non-sensitive reason.
 
-For zero findings, return only the following (the `Note:` line is present only when the posted header disagrees with the body):
+For zero findings, return only:
 
 ```markdown
 # Codex Review
 
 Status: pass
 Findings: 0
-Note: posted header status=findings; report body concluded pass; this does not affect the merge gate decision.
 ```
+
+Only when the posted header disagrees with the body, append the single `Note:` line described in "Deriving `Status`" as a third line after `Findings: 0` (for example `Note: posted header status=findings; report body concluded pass; this does not affect the merge gate decision.`). When they agree, the report ends at `Findings: 0`.
 
 For wrapper failure, return:
 

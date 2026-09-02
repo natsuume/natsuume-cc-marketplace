@@ -28,6 +28,7 @@ REQUIRED_REPORT_FIELDS = (
     "Never turn wrapper behavior",
     "applies only to a finding that Codex reported without a severity label",
     "Disposition: must-fix-before-merge | may-defer",
+    "If the body is inconclusive",
 )
 
 REQUIRED_SAFETY_RULES = (
