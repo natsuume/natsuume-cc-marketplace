@@ -48,10 +48,15 @@
 #        `no (material |actionable |significant )?(issue|issues|regression|regressions|
 #        findings)( found| identified)?`
 #        に一致する (直前は行頭または英字以外。 例: 「..., with no actionable
-#        regression identified」)。 ただし同じ行に否定・不確実を表す語
+#        regression identified」)。 ただし同じ行に否定・不確実・保留を表す語
 #        (`cannot` / `could not` / `not` / `n't` / `unable` / `unclear` / `uncertain` /
-#        `unsure` / `whether` / `if` / `unverified` / `unconfirmed`) が単語として含まれる
-#        場合は、 結論が肯定形でない (例: 「we cannot establish that there are no
+#        `unsure` / `whether` / `if` / `unverified` / `unconfirmed`、 法助動詞 `may` /
+#        `might` / `could` / `should` / `would`、 推量 `possibly` / `likely` / `probably` /
+#        `presumably` / `seems` / `appears`、 検証保留 `pending` / `needs` / `needed` /
+#        `requires` / `required` / `confirm` / `verify` / `verification` / `expect` /
+#        `expected` / `assume` / `assumed` / `assuming`) が単語として含まれる場合は、
+#        結論が肯定形でない (例: 「we cannot establish that there are no regressions」
+#        「there may be no regressions」「further testing is needed to confirm no
 #        regressions」) ため一致とみなさない
 # 5. 空 report・末尾 10 行が空白のみ・上記に一致しない場合は findings
 #
@@ -97,12 +102,13 @@ detect_review_status() {
 
   # 正規化後の行のいずれかが 「no findings」 等の表現に行全体一致するか、行末が同表現に
   # 一致すれば (直前が行頭または非英字) pass。 ただし否定・不確実を表す語を含む行
-  # (「cannot establish that there are no regressions」等) は肯定の結論ではないため除外する
+  # (「cannot establish that there are no regressions」「there may be no regressions」等) は
+  # 肯定の結論ではないため除外する
   # (1 段目の grep で候補行を抽出し、 2 段目の grep -v で否定語を含む行を落とす。 残る行が
   # 1 つでもあれば pass)。
   if printf '%s\n' "$normalized" \
     | LC_ALL=C grep -E '(^|[^a-z])no (material |actionable |significant )?(issue|issues|regression|regressions|findings)( found| identified)?$' \
-    | LC_ALL=C grep -qvE "(^|[^a-z])(cannot|could not|not|unable|unclear|uncertain|unsure|whether|if|unverified|unconfirmed)([^a-z]|$)|n't([^a-z]|$)"
+    | LC_ALL=C grep -qvE "(^|[^a-z])(cannot|could not|not|unable|unclear|uncertain|unsure|whether|if|unverified|unconfirmed|may|might|could|should|would|possibly|likely|probably|presumably|seems?|appears?|pending|needs?|needed|requires?|required|confirm|verify|verification|expect|expected|assum(e|ed|ing))([^a-z]|$)|n't([^a-z]|$)"
   then
     printf '%s' 'pass'
     return 0

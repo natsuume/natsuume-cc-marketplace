@@ -175,6 +175,12 @@ class DetectReviewStatusContractTest(unittest.TestCase):
             "unclear_whether": "It is unclear whether there are no issues.",
             "conditional": "This is fine if there are no material findings.",
             "not_confident": "I am not confident there are no regressions.",
+            "modal_may": "There may be no regressions.",
+            "modal_should": "This should have no issues.",
+            "pending_verification": (
+                "Further testing is needed to confirm no regressions."
+            ),
+            "seems": "It seems there are no findings.",
         }
         for label, last_line in cases.items():
             with self.subTest(case=label):
