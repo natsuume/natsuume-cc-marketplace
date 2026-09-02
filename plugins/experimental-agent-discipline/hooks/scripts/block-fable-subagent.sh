@@ -6,18 +6,24 @@
 # への明示委任に限り、Fable 週次枠の使用率が閾値以下のあいだだけ許可し、それ以外の Fable 実行
 # 経路は deny する。
 #
-# 判定順序は Claude Code のモデル解決順序 (CLAUDE_CODE_SUBAGENT_MODEL env > tool_input.model
-# 明示指定 > agent frontmatter > メインセッション継承) と一致させる。すべて deterministic な
-# 文字列判定で LLM 評価は使わない。
+# 判定順序は agent-discipline と同じく、CLAUDE_CODE_SUBAGENT_MODEL env > tool_input.model
+# 明示指定 > agent frontmatter > メインセッション継承 のモデル解決順序を前提に組んである。
+# Claude Code の現行ドキュメントは「明示指定 > frontmatter > env > 継承 (env を最優先にするには
+# CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1)」としており前提と食い違うため、env が非空のときは
+# どちらの順序でも安全側に倒れるよう、専用 agent への Fable 委任を deny する (Step 1a)。
+# すべて deterministic な文字列判定で LLM 評価は使わない。
 #
 #   0. env が fable を指す → tool_input.model の値に依らず無条件 deny
 #      (env は明示指定より優先されるため、明示 sonnet/opus でも実行モデルは fable になる)
 #   1. tool_input.model に fable が明示指定されている:
 #      a. subagent_type が上記 2 種の専用 agent に完全一致 (namespace prefix 必須、前後空白は
 #         trim、大文字小文字は区別):
-#         - env が非空 (= Step 0 を通過した非 fable 値) → deny。env は明示指定より優先されるため、
-#           専用 agent が Fable 以外のモデルで effort low 実行されてしまう
-#         - env 未指定 → 「Fable 週次枠の使用率判定」へ
+#         - env が非空 (= Step 0 を通過した非 fable 値) → deny。env が明示指定より優先される
+#           環境では、専用 agent が Fable 以外のモデルで effort low 実行されてしまう
+#         - CLAUDE_CODE_EFFORT_LEVEL が設定されていて low 以外 → deny。この env は agent 定義
+#           frontmatter の effort より優先されるため、専用 agent が low 以外の effort で Fable 枠を
+#           消費してしまう
+#         - どちらも未設定 → 「Fable 週次枠の使用率判定」へ
 #      b. それ以外の subagent_type → deny (Fable は専用 agent 経由に限る)
 #   2. tool_input.model が非 fable の具体指定 → allow (Step 0 より env は非 fable 確定)
 #   3. tool_input.model 未指定 (= 継承経路):
@@ -70,8 +76,12 @@
 #   - agent 定義 frontmatter の model / effort は tool_input に現れないため hook からは検証
 #     できない。effort low の保証は専用 agent 定義の frontmatter と、上記の subagent_type
 #     完全一致判定に依存する
-#   - env 不在 + model 未指定 + frontmatter が fable を指す構成は、専用 agent 以外では捕捉
-#     不能 (env 側でカバー)
+#   - model 未指定 + frontmatter が fable を指す構成は、専用 agent 以外では捕捉不能。現行
+#     ドキュメントの解決順序では frontmatter が env より優先されるため、env を設定しても防げない
+#     (専用 agent は Step 3a の広い名前判定で捕捉する)
+#   - effort の実効値は hook からは観測できない。CLAUDE_CODE_EFFORT_LEVEL の deny は env による
+#     上書きだけを防ぎ、それ以外の経路 (将来の launch 既定値等) で frontmatter の effort: low が
+#     上書きされる場合は検知できない
 #   - fork subagent (model 指定を無視して親モデルを継承する型) は deny しない
 #     (誘導層の「原則使用しない」文言のみで運用する設計判断)
 #   - Workflow ツール内部の agent() 呼び出しは PreToolUse では捕捉できない (env 側でカバー)
@@ -273,6 +283,12 @@ if printf '%s' "$TOOL_MODEL" | grep -qi 'fable'; then
     # ため、この委任は Fable 以外のモデルが effort low で走る (専用 agent の前提が崩れる)。
     if [ -n "$ENV_SUB" ]; then
       deny "experimental-agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL が設定されているため、Fable 専用 agent への委任を deny しました。この env は model の明示指定より優先されるため、専用 agent が Fable 以外のモデルで effort low のまま実行されてしまいます。env を解除してから再実行するか、model に sonnet / opus を明示して通常のサブエージェントへ委任してください。この env はセッションを超える設定のため独断で書き換えず、解除が必要な場合はユーザに依頼してください。"
+    fi
+    # CLAUDE_CODE_EFFORT_LEVEL は agent 定義 frontmatter の effort より優先されるため、low 以外が
+    # 設定されていると専用 agent の effort low 固定が崩れる (Fable 枠を高 effort で消費する)。
+    EFFORT_ENV=$(trim "${CLAUDE_CODE_EFFORT_LEVEL:-}")
+    if [ -n "$EFFORT_ENV" ] && ! printf '%s' "$EFFORT_ENV" | grep -qix 'low'; then
+      deny "experimental-agent-discipline: CLAUDE_CODE_EFFORT_LEVEL が low 以外 (${EFFORT_ENV}) に設定されているため、Fable 専用 agent への委任を deny しました。この env は agent 定義 frontmatter の effort: low より優先されるため、専用 agent が低 effort の前提を崩して Fable 枠を消費してしまいます。env を解除 (または low に設定) してから再実行するか、model に sonnet / opus を明示して通常のサブエージェントへ委任してください。この env はセッションを超える設定のため独断で書き換えず、変更が必要な場合はユーザに依頼してください。"
     fi
     check_fable_weekly_usage
     exit 0

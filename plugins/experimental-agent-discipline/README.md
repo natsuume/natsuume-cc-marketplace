@@ -49,6 +49,7 @@ agent-discipline へ戻す:
 
 - **natsuume-statusline が statusline として構成済みであること**。Fable 週次枠の使用率は natsuume-statusline が `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json` に書く cache から読みます。本 plugin はこの cache を書かず、OAuth usage API も直接呼びません。未構成の場合、cache が存在しないため Fable 委任は常に deny されます。`/natsuume-statusline:setup` で構成してください。
 - **`CLAUDE_CODE_SUBAGENT_MODEL` が設定されていないこと**。この env は model の明示指定より優先されるため、設定されている環境では専用 agent が Fable 以外のモデルで effort low のまま実行されてしまいます。そのため、env が非空の環境では専用 agent への Fable 委任も deny されます (env が fable を指す場合も従来どおり deny)。Fable 委任を使うときは env を解除してください。
+- **`CLAUDE_CODE_EFFORT_LEVEL` が未設定か `low` であること**。この env は agent 定義 frontmatter の `effort: low` より優先されるため、low 以外に設定されている環境では専用 agent が高 effort で Fable 枠を消費してしまいます。そのため、env が low 以外の環境では専用 agent への Fable 委任は deny されます。Fable 委任を使うときは env を解除するか low にしてください。
 - `jq` が使えること (agent-discipline と同じ前提。jq 不在時は hook が何もせず通過します)。
 - **natsuume-statusline の cache 更新が続いていること**。natsuume-statusline は、Claude Code が statusline の stdin にモデル別枠 (`rate_limits.model_scoped[]`) を渡し始めると、その公式経路を優先して `weekly-scoped.json` の更新を止めます。その状態では cache が stale (fetched_at が 1800 秒より前) になり、本 plugin の Fable 委任は `/natsuume-statusline:setup` を実行しても deny のままになります。この条件は本 plugin の既知の制約であり、gate が公式経路の値を読む対応は未実装です。
 
@@ -76,6 +77,7 @@ Agent ツールで `subagent_type` に上記のいずれかを指定し、**あ�
 | deny 理由 | 対処 |
 |---|---|
 | `CLAUDE_CODE_SUBAGENT_MODEL` が設定されている | env を解除して再実行する。env はセッションを超える設定のため、解除はユーザに依頼する。急ぐ場合は sonnet / opus へ通常委任する |
+| `CLAUDE_CODE_EFFORT_LEVEL` が low 以外に設定されている | env を解除するか low にして再実行する。env はセッションを超える設定のため、変更はユーザに依頼する。急ぐ場合は sonnet / opus へ通常委任する |
 | subagent_type が専用 agent 2 種のいずれでもない | subagent_type を専用 agent に変えるか、model に sonnet / opus (機械的作業なら haiku) を明示して通常委任する |
 | model 未指定 (継承) で専用 agent を起動した | `model: "fable"` を明示して再実行する |
 | 使用率 cache が無い・読めない・壊れている・古い (1800 秒超) | `/natsuume-statusline:setup` で natsuume-statusline を構成する。構成済みなら statusline が動作しているか確認する。復旧までは sonnet / opus へ通常委任する |
@@ -90,7 +92,8 @@ Agent ツールで `subagent_type` に上記のいずれかを指定し、**あ�
 1. `tool_input.model` に fable が指定されている
    - a. `subagent_type` が専用 agent 2 種に完全一致 (namespace prefix 必須、前後空白は trim、大文字小文字は区別)
      - `CLAUDE_CODE_SUBAGENT_MODEL` が非空 → deny (env 解除の案内)
-     - env が未指定 → Fable 週次枠の使用率判定へ
+     - `CLAUDE_CODE_EFFORT_LEVEL` が low 以外 → deny (env の解除または low への変更の案内)
+     - どちらも未設定 → Fable 週次枠の使用率判定へ
    - b. それ以外の `subagent_type` → deny (専用 agent への切り替え、または sonnet / opus への通常委任の案内)
 2. `tool_input.model` が非 fable の具体指定 → allow
 3. `tool_input.model` 未指定 (継承経路)

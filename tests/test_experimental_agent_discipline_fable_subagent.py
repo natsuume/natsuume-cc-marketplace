@@ -317,6 +317,7 @@ class BlockFableSubagentHookTestBase(unittest.TestCase):
         hook_event_name: str = "PreToolUse",
         session_id: str = "experimental-fable-gate",
         env_subagent_model: object = UNSET,
+        env_effort_level: object = UNSET,
         threshold: object = UNSET,
         cache: object = UNSET,
         cache_kind: str = "file",
@@ -382,6 +383,8 @@ class BlockFableSubagentHookTestBase(unittest.TestCase):
             }
             if env_subagent_model is not UNSET:
                 env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(env_subagent_model)
+            if env_effort_level is not UNSET:
+                env["CLAUDE_CODE_EFFORT_LEVEL"] = str(env_effort_level)
             if threshold is not UNSET:
                 env["EXPERIMENTAL_FABLE_SUBAGENT_MAX_PERCENT"] = str(threshold)
 
@@ -481,6 +484,29 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                         cache=self.healthy_cache(),
                     )
                     self.assert_deny(result, "CLAUDE_CODE_SUBAGENT_MODEL", "解除")
+
+    def test_step1a_non_low_effort_env_denies_with_unpin_guidance(self) -> None:
+        """Step 1a: CLAUDE_CODE_EFFORT_LEVEL が low 以外なら、余裕のある枠でも deny し、
+        env の解除 (または low への変更) を案内する。low または未設定なら使用率判定へ進む。"""
+        for env_value in ("high", "medium", "xhigh", "MAX", " high "):
+            with self.subTest(effort=env_value):
+                result = self.run_gate(
+                    tool_model="fable",
+                    subagent_type=ALLOWED_SUBAGENT_TYPES[0],
+                    env_effort_level=env_value,
+                    cache=self.healthy_cache(),
+                )
+                self.assert_deny(result, "CLAUDE_CODE_EFFORT_LEVEL", "解除")
+        for env_value in ("low", "LOW", " low ", ""):
+            with self.subTest(effort=env_value):
+                self.assert_allow(
+                    self.run_gate(
+                        tool_model="fable",
+                        subagent_type=ALLOWED_SUBAGENT_TYPES[0],
+                        env_effort_level=env_value,
+                        cache=self.healthy_cache(),
+                    )
+                )
 
     def test_step1a_subagent_type_is_trimmed_before_matching(self) -> None:
         """Step 1a: subagent_type の前後空白は trim して完全一致判定される。"""
