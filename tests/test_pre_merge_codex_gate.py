@@ -971,5 +971,381 @@ class PreMergeGateMalformedPayloadTest(unittest.TestCase):
         self.assertEqual(result.stdout, b"")
 
 
+# gate がローカル attestation を読む場所 (merge 実行 repo の git-dir 直下)。
+FINAL_ATTESTATION = ".claude-pre-merge-codex-reviewed"
+PENDING_ATTESTATION = ".claude-pre-merge-codex-reviewed.pending"
+COMMENT_BODY = ".claude-pre-merge-codex-comment.md"
+
+# `pr view` は設定 JSON の payload を返し、`pr review` は argv を calls.log に追記して
+# review_fail フラグに従い成否を返す fake gh。
+POSTING_FAKE_GH_SCRIPT = """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+with open(os.path.join(HERE, "gh-config.json"), encoding="utf-8") as fp:
+    config = json.load(fp)
+
+args = sys.argv[1:]
+if args[:2] == ["pr", "view"]:
+    print(json.dumps(config["payload"]))
+    sys.exit(0)
+
+if args[:2] == ["pr", "review"]:
+    with open(os.path.join(HERE, "calls.log"), "a", encoding="utf-8") as fp:
+        fp.write(" ".join(args) + "\\n")
+    if config.get("review_fail"):
+        print("fake-gh: injected review failure", file=sys.stderr)
+        sys.exit(1)
+    sys.exit(0)
+
+sys.exit(0)
+"""
+
+
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq") and shutil.which("git"),
+    "gate integration requires bash, jq, and git",
+)
+class PreMergeGateLocalAttestationTest(unittest.TestCase):
+    """レビューコメントの投稿主体が gate である契約。
+
+    PR に現在の head SHA と一致する codex review コメントが無い場合、gate は merge 実行
+    repo の git-dir 直下にあるローカル attestation (`.claude-pre-merge-codex-reviewed`) と
+    投稿用本文 (`.claude-pre-merge-codex-comment.md`) を検証し、成立していれば
+    `gh pr review <PR> --comment --body-file <本文>` で投稿してから merge を通す。
+
+    - attestation は 2 行 (`pr=<PR 番号>` / `head=<full head SHA>`) で、gh から得た PR 番号
+      と head SHA の両方に一致することを要求する
+    - 本文ファイルの先頭行は attestation と同じ head の機械可読 header であることを要求する
+    - 投稿に成功したら attestation 一式 (final / pending / 本文) を掃除する
+    - attestation が無い・欠ける・食い違う・投稿に失敗した場合はいずれも deny する
+      (fail-closed)
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        temporary_path = Path(self.temporary.name)
+
+        self.work = temporary_path / "work"
+        self.work.mkdir()
+        self.initialize_repository(self.work)
+        self.git_dir = self.resolve_git_dir(self.work)
+
+        # git repo ではない照合先 (attestation を解決できない状況の再現に使う)。
+        self.plain_dir = temporary_path / "plain"
+        self.plain_dir.mkdir()
+
+        self.fake_bin_dir = temporary_path / "fake-bin"
+        self.fake_bin_dir.mkdir()
+        gh_path = self.fake_bin_dir / "gh"
+        gh_path.write_text(POSTING_FAKE_GH_SCRIPT, encoding="utf-8")
+        gh_path.chmod(
+            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
+        self.configure_fake_gh(review_bodies=[])
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    def git(self, cwd: Path, *args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def initialize_repository(self, work: Path) -> None:
+        self.git(work, "init")
+        self.git(work, "config", "user.name", "Marketplace Test")
+        self.git(work, "config", "user.email", "marketplace@example.invalid")
+        (work / "example.txt").write_text("base\n", encoding="utf-8")
+        self.git(work, "add", "example.txt")
+        self.git(work, "commit", "-m", "base")
+
+    def resolve_git_dir(self, work: Path) -> Path:
+        value = subprocess.check_output(
+            ["git", "rev-parse", "--absolute-git-dir"], cwd=work
+        )
+        return Path(value.decode().strip())
+
+    def configure_fake_gh(
+        self,
+        *,
+        review_bodies: list[str],
+        number: int = PR_NUMBER,
+        head_oid: str = HEAD_SHA,
+        review_fail: bool = False,
+    ) -> None:
+        config = {
+            "payload": {
+                "number": number,
+                "headRefOid": head_oid,
+                "reviews": [{"body": body} for body in review_bodies],
+            },
+            "review_fail": review_fail,
+        }
+        (self.fake_bin_dir / "gh-config.json").write_text(
+            json.dumps(config, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def final_attestation_path(self) -> Path:
+        return self.git_dir / FINAL_ATTESTATION
+
+    def pending_attestation_path(self) -> Path:
+        return self.git_dir / PENDING_ATTESTATION
+
+    def comment_body_path(self) -> Path:
+        return self.git_dir / COMMENT_BODY
+
+    def attestation_content(
+        self, *, pr: int = PR_NUMBER, head: str = HEAD_SHA
+    ) -> str:
+        return f"pr={pr}\nhead={head}\n"
+
+    def write_final_attestation(
+        self, *, pr: int = PR_NUMBER, head: str = HEAD_SHA
+    ) -> Path:
+        path = self.final_attestation_path()
+        path.write_text(self.attestation_content(pr=pr, head=head), encoding="utf-8")
+        return path
+
+    def write_pending_attestation(
+        self, *, pr: int = PR_NUMBER, head: str = HEAD_SHA
+    ) -> Path:
+        path = self.pending_attestation_path()
+        path.write_text(self.attestation_content(pr=pr, head=head), encoding="utf-8")
+        return path
+
+    def write_comment_body(
+        self,
+        *,
+        head: str = HEAD_SHA,
+        status: str = "pass",
+        first_line: str | None = None,
+    ) -> Path:
+        header = (
+            first_line
+            if first_line is not None
+            else f"<!-- codex-review: head={head} status={status} -->"
+        )
+        path = self.comment_body_path()
+        path.write_text(
+            f"{header}\n# Codex Review\n\nStatus: {status}\n", encoding="utf-8"
+        )
+        return path
+
+    def run_gate(
+        self, command: str = MERGE_COMMAND, *, payload_cwd: Path | None = None
+    ) -> subprocess.CompletedProcess[bytes]:
+        cwd = self.work if payload_cwd is None else payload_cwd
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "cwd": str(cwd),
+        }
+        env = os.environ.copy()
+        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        return subprocess.run(
+            ["bash", str(GATE)],
+            cwd=cwd,
+            input=json.dumps(payload).encode("utf-8"),
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
+        if not result.stdout.strip():
+            return None
+        response = json.loads(result.stdout)
+        return response["hookSpecificOutput"]["permissionDecision"]
+
+    def deny_reason(self, result: subprocess.CompletedProcess[bytes]) -> str:
+        response = json.loads(result.stdout)
+        return response["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def gh_review_calls(self) -> list[str]:
+        log = self.fake_bin_dir / "calls.log"
+        if not log.exists():
+            return []
+        return [
+            line for line in log.read_text(encoding="utf-8").splitlines() if line
+        ]
+
+    def assert_no_review_posted(self) -> None:
+        self.assertEqual(self.gh_review_calls(), [])
+
+    # ------------------------------------------------------------------
+    # 投稿経路
+    # ------------------------------------------------------------------
+
+    def test_posts_review_comment_and_cleans_attestation(self) -> None:
+        final = self.write_final_attestation()
+        body = self.write_comment_body()
+        pending = self.write_pending_attestation()
+
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIsNone(self.decision(result), result.stdout.decode())
+
+        calls = self.gh_review_calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertTrue(
+            calls[0].startswith(f"pr review {PR_NUMBER} --comment"), calls[0]
+        )
+        self.assertIn(f"--body-file {body}", calls[0])
+
+        self.assertFalse(final.exists())
+        self.assertFalse(body.exists())
+        self.assertFalse(pending.exists())
+
+    def test_posts_for_merge_without_pr_number(self) -> None:
+        """番号なし merge でも、gh が返す PR 番号と attestation を照合して投稿する。"""
+        self.write_final_attestation()
+        self.write_comment_body()
+
+        result = self.run_gate("gh pr merge --squash")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIsNone(self.decision(result), result.stdout.decode())
+        calls = self.gh_review_calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertTrue(
+            calls[0].startswith(f"pr review {PR_NUMBER} --comment"), calls[0]
+        )
+
+    def test_denies_when_review_post_fails(self) -> None:
+        self.configure_fake_gh(review_bodies=[], review_fail=True)
+        final = self.write_final_attestation()
+        body = self.write_comment_body()
+
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+        reason = self.deny_reason(result)
+        self.assertIn("投稿に失敗", reason)
+        self.assertIn("再実行", reason)
+        self.assertTrue(
+            final.exists(), "投稿に失敗した attestation は再実行のため保持する"
+        )
+        self.assertTrue(body.exists())
+
+    # ------------------------------------------------------------------
+    # attestation の検証 (fail-closed)
+    # ------------------------------------------------------------------
+
+    def test_denies_without_local_attestation(self) -> None:
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+        reason = self.deny_reason(result)
+        self.assertIn(CODEX_SUBAGENT_NAME, reason)
+        self.assertIn("ローカル", reason)
+        self.assertIn("gate", reason)
+        self.assertNotIn(
+            "投稿します",
+            reason,
+            "投稿するのは subagent ではなく gate である旨と食い違う案内を出さない",
+        )
+        self.assert_no_review_posted()
+
+    def test_denies_on_pr_number_mismatch(self) -> None:
+        self.write_final_attestation(pr=456)
+        self.write_comment_body()
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+        self.assert_no_review_posted()
+
+    def test_denies_on_head_mismatch(self) -> None:
+        self.write_final_attestation(head=OTHER_SHA)
+        self.write_comment_body(head=OTHER_SHA)
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+        reason = self.deny_reason(result)
+        self.assertIn(HEAD_SHA, reason)
+        self.assertIn(OTHER_SHA, reason)
+        self.assertIn("再レビュー", reason)
+        self.assert_no_review_posted()
+
+    def test_denies_when_comment_body_is_missing(self) -> None:
+        self.write_final_attestation()
+        self.assertFalse(self.comment_body_path().exists())
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+        self.assert_no_review_posted()
+
+    def test_denies_on_comment_body_header_mismatch(self) -> None:
+        cases = {
+            "other_head": {"head": OTHER_SHA},
+            "unknown_status": {"status": "unknown"},
+            "not_a_header": {"first_line": "# Codex Review"},
+        }
+        for label, kwargs in cases.items():
+            with self.subTest(case=label):
+                self.write_final_attestation()
+                self.write_comment_body(**kwargs)
+                result = self.run_gate()
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_no_review_posted()
+
+    def test_denies_with_pending_attestation_only(self) -> None:
+        self.write_pending_attestation()
+        self.write_comment_body()
+        self.assertFalse(self.final_attestation_path().exists())
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+        self.assert_no_review_posted()
+
+    def test_denies_when_final_attestation_is_symlink(self) -> None:
+        target = Path(self.temporary.name) / "attestation-target"
+        target.write_text(self.attestation_content(), encoding="utf-8")
+        self.final_attestation_path().symlink_to(target)
+        self.write_comment_body()
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+        self.assert_no_review_posted()
+
+    # ------------------------------------------------------------------
+    # 既存コメントとの関係 / 照合 repo
+    # ------------------------------------------------------------------
+
+    def test_existing_review_comment_skips_posting_and_cleans(self) -> None:
+        """PR に一致コメントが在れば投稿せず通し、不要になった attestation を掃除する。"""
+        self.configure_fake_gh(review_bodies=[codex_review_comment(HEAD_SHA)])
+        final = self.write_final_attestation()
+        body = self.write_comment_body()
+        pending = self.write_pending_attestation()
+
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIsNone(self.decision(result), result.stdout.decode())
+        self.assert_no_review_posted()
+        self.assertFalse(final.exists())
+        self.assertFalse(body.exists())
+        self.assertFalse(pending.exists())
+
+    def test_denies_when_workdir_is_not_a_repository(self) -> None:
+        """attestation の置き場を解決できない (git repo でない) 場合は deny する。"""
+        result = self.run_gate(payload_cwd=self.plain_dir)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(self.decision(result), "deny")
+        self.assert_no_review_posted()
+
+
 if __name__ == "__main__":
     unittest.main()
