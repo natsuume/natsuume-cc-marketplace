@@ -6,7 +6,7 @@
 
 ## バージョン
 
-v1.0.1
+v1.0.2
 
 ## インストール
 
@@ -65,7 +65,14 @@ wrapper はレビュー完了時に、結果を `gh pr review --comment` で対�
 ```
 
 - header の `head=` はレビュー対象となった PR head の full SHA (40 hex)
-- `status=pass` は findings 0 件、`status=findings` は findings ありを示す
+- `status=pass|findings` は report の末尾 10 行から `lib/review-status.sh` の
+  `detect_review_status` が判定する。末尾 10 行に finding 記述 (`## Finding` /
+  `- Severity:` / 前後が英数字でない `P0`〜`P3`) が 1 行でもあれば `findings`。無ければ
+  各行を markdown 装飾・強調記号の除去と小文字化で正規化し、「no findings」「no
+  material/actionable findings」「no issues found/identified」「no
+  regression(s) found/identified」や `no (material|actionable|significant)
+  issue(s)/regression(s)/findings` といった表現に行全体または行末が一致する行が 1 つでも
+  あれば `pass`、無ければ `findings` (判定できない場合も findings に倒す)
 - **header は本文の先頭行に置かれ、gate も先頭行の header だけを attestation として受理する**。report 本文が header 形の文字列を含む場合 (レビュー対象の差分から引用した場合等) は、wrapper が投稿前に `<!-- codex-review (quoted):` へ書き換えて無害化する
 - 投稿はレビュー完了の記録であり、merge の approve や findings 0 件の証明ではない (status=findings でも「レビュー済み」として成立する。findings への対応判断は通常のレビューフローで行う)
 
@@ -107,7 +114,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 
 `hooks/scripts/lib/codex-companion-resolver.sh` は `pre-push-codex-review` (`plugins/pre-push-codex-review/hooks/scripts/lib/`) が canonical で、本 plugin はその byte-identical なコピーを保持します (codex review の実行機構は両 plugin で同一のため)。この同一性は `tests/test_pre_merge_lib_copies.py` の契約テストが検査します。
 
-それ以外の lib コピーは持ちません。reviewer 一式 (wrapper / subagent 定義 / hook script 群) は pre-merge 専用の実装であり、pre-push 系との文字列同一性契約は設けません。
+それ以外の lib コピーは持ちません。reviewer 一式 (wrapper / subagent 定義 / hook script 群) は pre-merge 専用の実装であり、pre-push 系との文字列同一性契約は設けません。`lib/review-status.sh` (status 判定) も pre-merge 専用の lib であり、この同一性契約の対象外です。
 
 ## ファイル構成
 
@@ -118,6 +125,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 | `hooks/scripts/block-bg-codex-wrapper.sh` | codex review wrapper の起動検証 (PreToolUse) |
 | `hooks/scripts/run-pre-merge-codex-review.sh` | codex review wrapper 本体 (レビュー実行 + PR レビュー投稿。basename は `pre-push-codex-review` の wrapper と別名) |
 | `hooks/scripts/lib/codex-companion-resolver.sh` | codex companion 解決ロジック (`pre-push-codex-review` からの byte-identical コピー) |
+| `hooks/scripts/lib/review-status.sh` | status 判定 (`detect_review_status`)。report の末尾 10 行から pass/findings を判定する |
 | `agents/codex-reviewer.md` | `pre-merge-codex-review:codex-reviewer` subagent 定義 |
 
 ## 関連プラグイン

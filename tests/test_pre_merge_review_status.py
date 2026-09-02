@@ -1,10 +1,7 @@
-"""pre-merge-codex-review の findings 判定契約テスト (Phase A: spec-first, red)。
+"""pre-merge-codex-review の findings 判定契約テスト。
 
-判定ロジック (`plugins/pre-merge-codex-review/hooks/scripts/lib/review-status.sh` の
-`detect_review_status`) は Phase A 時点ではスタブであり、常に `findings` を返す。
-本テストは Phase B で実装する判定仕様を先に固定するものであり、`pass` を期待する
-ケースは Phase A では意図した失敗 (red) になる。`findings` を期待するケースは
-Phase A でも green になる。
+判定ロジックは `plugins/pre-merge-codex-review/hooks/scripts/lib/review-status.sh` の
+`detect_review_status` が担う。
 
 固定する契約:
 
