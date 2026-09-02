@@ -287,6 +287,24 @@ class FableLowAgentFrontmatterTest(unittest.TestCase):
                 self.assertIn(f"{PLUGIN_NAME}:{name}", description[0], path)
                 self.assertIn('model: "fable"', description[0], path)
 
+    def test_agent_descriptions_are_quoted_yaml_scalars(self) -> None:
+        """description は引用符付き scalar とする (本文に `: ` を含むため、plain scalar では
+        frontmatter 全体の YAML パースが失敗し model / effort / tools が適用されない)。"""
+        for name, path in self.AGENTS.items():
+            with self.subTest(agent=name):
+                description = [
+                    line
+                    for line in frontmatter_lines(read(path))
+                    if line.startswith("description:")
+                ]
+                self.assertEqual(1, len(description), path)
+                value = description[0][len("description:"):].strip()
+                self.assertTrue(
+                    (value.startswith("'") and value.endswith("'"))
+                    or (value.startswith('"') and value.endswith('"')),
+                    f"{path}: description は引用符で囲む",
+                )
+
 
 class BlockFableSubagentHookTestBase(unittest.TestCase):
     """hook を隔離した env / TMPDIR / XDG_CACHE_HOME / HOME で実行する共通基盤。"""

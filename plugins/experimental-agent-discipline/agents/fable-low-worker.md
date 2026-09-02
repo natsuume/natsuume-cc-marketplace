@@ -1,6 +1,6 @@
 ---
 name: fable-low-worker
-description: 仕様が確定済みの実装・一括修正・レビュー指摘の反映を委任する Fable low の実行役。親は subagent_type="experimental-agent-discipline:fable-low-worker" と model: "fable" を明示して起動し、PreToolUse hook が Fable 週次枠の使用率 (閾値既定 50%) で起動可否を判定する。effort は frontmatter で low に固定され、ツールは親セッションから全て継承する。
+description: '仕様が確定済みの実装・一括修正・レビュー指摘の反映を委任する Fable low の実行役。親は subagent_type="experimental-agent-discipline:fable-low-worker" と model: "fable" を明示して起動し、PreToolUse hook が Fable 週次枠の使用率 (閾値既定 50%) で起動可否を判定する。effort は frontmatter で low に固定され、ツールは親セッションから全て継承する。'
 model: fable
 effort: low
 color: green

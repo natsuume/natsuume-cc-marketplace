@@ -1,6 +1,6 @@
 ---
 name: fable-low-explorer
-description: リポジトリの調査・探索・事実確認を委任する Fable low の read-only 実行役。親は subagent_type="experimental-agent-discipline:fable-low-explorer" と model: "fable" を明示して起動し、PreToolUse hook が Fable 週次枠の使用率 (閾値既定 50%) で起動可否を判定する。effort は frontmatter で low に固定され、ツールは読み取り系のみに制限される。
+description: 'リポジトリの調査・探索・事実確認を委任する Fable low の read-only 実行役。親は subagent_type="experimental-agent-discipline:fable-low-explorer" と model: "fable" を明示して起動し、PreToolUse hook が Fable 週次枠の使用率 (閾値既定 50%) で起動可否を判定する。effort は frontmatter で low に固定され、ツールは読み取り系のみに制限される。'
 tools: Bash, Read, Glob, Grep, LS
 model: fable
 effort: low
