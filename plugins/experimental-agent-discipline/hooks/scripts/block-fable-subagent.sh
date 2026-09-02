@@ -168,10 +168,15 @@ check_fable_weekly_usage() {
   CACHE_CONTENT=$(cat "$CACHE_FILE" 2>/dev/null)
 
   # cache の検査と閾値比較を jq に閉じる: percent は小数を取りうるため、シェルの整数比較には
-  # 頼らない。出力は 3 行 (status / percent / resets_at) で、status が ok 以外は deny 理由。
-  GATE_OUTPUT=$(printf '%s' "$CACHE_CONTENT" | jq -r \
+  # 頼らない。--slurp で入力全体を配列として受け取り、JSON document がちょうど 1 つの場合だけ
+  # 判定する (複数 document の連結や空入力は invalid)。出力は 3 行 (status / percent /
+  # resets_at) で、status が ok 以外は deny 理由。jq の exit status と出力行数も検証し、
+  # 契約どおりの出力が得られない場合は parse 失敗として deny する (fail-closed)。
+  GATE_OUTPUT=$(printf '%s' "$CACHE_CONTENT" | jq -rs \
     --argjson now "$NOW" --argjson threshold "$MAX_PERCENT" '
     def emit(status; percent; resets): "\(status)\n\(percent)\n\(resets)";
+    if length != 1 then emit("invalid"; ""; "")
+    else .[0] |
     if type != "object" then emit("invalid"; ""; "")
     elif (.fetched_at | type) != "number" then emit("fetched_at"; ""; "")
     elif ($now - .fetched_at) > 1800 then emit("stale"; ""; "")
@@ -193,7 +198,14 @@ check_fable_weekly_usage() {
             end
         end
     end
+    end
   ' 2>/dev/null)
+  GATE_RC=$?
+
+  GATE_LINES=$(printf '%s\n' "$GATE_OUTPUT" | grep -c '')
+  if [ "$GATE_RC" -ne 0 ] || [ "$GATE_LINES" -ne 3 ]; then
+    deny_usage "使用率 cache を JSON として読み取れません。"
+  fi
 
   { read -r GATE_STATUS; read -r GATE_PERCENT; read -r GATE_RESETS; } <<GATE_EOF
 $GATE_OUTPUT

@@ -654,13 +654,34 @@ class FableWeeklyUsageGateTest(BlockFableSubagentHookTestBase):
         )
         self.assert_deny(result, STATUSLINE_SETUP_HINT)
 
-    def test_cache_at_1800_seconds_is_not_stale(self) -> None:
-        """`fetched_at` がちょうど 1800 秒前なら stale とみなさず allow になる。"""
+    def test_cache_within_stale_window_is_not_stale(self) -> None:
+        """`fetched_at` が stale 窓 (1800 秒) の内側なら allow になる。
+
+        テストが fetched_at を計算してから hook が現在時刻を読むまでに秒境界を跨ぐと
+        age が増えるため、ちょうど 1800 秒ではなく 5 秒の余裕を持たせて決定的にする
+        (stale 側の境界は 1801 秒のケースが固定する)。
+        """
         self.assert_allow(
             self.run_dedicated(
-                cache=weekly_scoped_cache([fable_entry(10)], age_seconds=1800)
+                cache=weekly_scoped_cache([fable_entry(10)], age_seconds=1795)
             )
         )
+
+    def test_concatenated_documents_deny(self) -> None:
+        """JSON document が複数連結された cache は、先頭が許可条件を満たしていても deny になる。"""
+        healthy = json.dumps(weekly_scoped_cache([fable_entry(10)]))
+        cases = {
+            "two-healthy": healthy + "\n" + healthy,
+            "healthy-then-garbage": healthy + "\n{not json",
+            "healthy-then-scalar": healthy + " 1",
+        }
+        for label, text in cases.items():
+            with self.subTest(cache=label):
+                self.assert_deny(self.run_dedicated(cache=text), STATUSLINE_SETUP_HINT)
+
+    def test_empty_cache_file_denies(self) -> None:
+        """空の cache ファイルは deny になる。"""
+        self.assert_deny(self.run_dedicated(cache=""), STATUSLINE_SETUP_HINT)
 
     def test_future_fetched_at_is_not_stale(self) -> None:
         """`fetched_at` が未来の時刻でも stale とみなさず allow になる (時計ずれ許容)。"""
