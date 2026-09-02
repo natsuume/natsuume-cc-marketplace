@@ -50,6 +50,7 @@ agent-discipline へ戻す:
 - **natsuume-statusline が statusline として構成済みであること**。Fable 週次枠の使用率は natsuume-statusline が `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json` に書く cache から読みます。本 plugin はこの cache を書かず、OAuth usage API も直接呼びません。未構成の場合、cache が存在しないため Fable 委任は常に deny されます。`/natsuume-statusline:setup` で構成してください。
 - **`CLAUDE_CODE_SUBAGENT_MODEL` が設定されていないこと**。この env は model の明示指定より優先されるため、設定されている環境では専用 agent が Fable 以外のモデルで effort low のまま実行されてしまいます。そのため、env が非空の環境では専用 agent への Fable 委任も deny されます (env が fable を指す場合も従来どおり deny)。Fable 委任を使うときは env を解除してください。
 - `jq` が使えること (agent-discipline と同じ前提。jq 不在時は hook が何もせず通過します)。
+- **natsuume-statusline の cache 更新が続いていること**。natsuume-statusline は、Claude Code が statusline の stdin にモデル別枠 (`rate_limits.model_scoped[]`) を渡し始めると、その公式経路を優先して `weekly-scoped.json` の更新を止めます。その状態では cache が stale (fetched_at が 1800 秒より前) になり、本 plugin の Fable 委任は `/natsuume-statusline:setup` を実行しても deny のままになります。この条件は本 plugin の既知の制約であり、gate が公式経路の値を読む対応は未実装です。
 
 ## 使い方
 
