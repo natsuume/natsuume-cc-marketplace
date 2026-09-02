@@ -98,7 +98,7 @@ Agent ツールで `subagent_type` に上記のいずれかを指定し、**あ�
 2. `tool_input.model` が非 fable の具体指定 → allow
 3. `tool_input.model` 未指定 (継承経路)
    - a. `subagent_type` が専用 agent 2 種に完全一致 → deny (`model: "fable"` の明示を案内)
-   - b. それ以外 → env が非空なら allow。env 不在ならセッションの model state が fable のとき deny、state 不明かつ pending マーカーがあるとき deny、それ以外は allow
+   - b. それ以外 → subagent 内 (hook 入力に `agent_id` あり) からの起動なら deny (継承先が起動元 subagent のモデルになり、専用 agent から Fable を継承しうるため)。env が非空なら allow。env 不在ならセッションの model state が fable のとき deny、state 不明かつ pending マーカーがあるとき deny、それ以外は allow
 
 Fable 週次枠の使用率判定 (Step 1a):
 

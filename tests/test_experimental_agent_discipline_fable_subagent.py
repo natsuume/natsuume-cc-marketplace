@@ -316,6 +316,7 @@ class BlockFableSubagentHookTestBase(unittest.TestCase):
         subagent_type: object = UNSET,
         hook_event_name: str = "PreToolUse",
         session_id: str = "experimental-fable-gate",
+        agent_id: object = UNSET,
         env_subagent_model: object = UNSET,
         env_effort_level: object = UNSET,
         threshold: object = UNSET,
@@ -393,11 +394,13 @@ class BlockFableSubagentHookTestBase(unittest.TestCase):
                 tool_input["model"] = tool_model
             if subagent_type is not UNSET:
                 tool_input["subagent_type"] = subagent_type
-            payload = {
+            payload: dict[str, object] = {
                 "hook_event_name": hook_event_name,
                 "session_id": session_id,
                 "tool_input": tool_input,
             }
+            if agent_id is not UNSET:
+                payload["agent_id"] = agent_id
 
             return subprocess.run(
                 ["/bin/bash", str(BLOCK_FABLE)],
@@ -645,6 +648,26 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                 cache=self.healthy_cache(),
             )
             self.assert_deny(result, "experimental-agent-discipline:fable-low-worker")
+
+    def test_step3b_nested_delegation_without_model_is_denied(self) -> None:
+        """Step 3b: subagent 内 (agent_id あり) からの model 未指定起動は、セッション state が
+        非 Fable でも deny する (継承先は起動元 subagent のモデルのため)。明示指定なら allow。"""
+        with self.subTest(model="unspecified"):
+            result = self.run_gate(
+                subagent_type="general-purpose",
+                agent_id="agent-123",
+                session_state="claude-sonnet-5",
+            )
+            self.assert_deny(result, "subagent 内")
+        with self.subTest(model="explicit-sonnet"):
+            self.assert_allow(
+                self.run_gate(
+                    tool_model="sonnet",
+                    subagent_type="general-purpose",
+                    agent_id="agent-123",
+                    session_state="claude-sonnet-5",
+                )
+            )
 
     def test_step3b_non_empty_env_allows_inherited_delegation(self) -> None:
         """Step 3b: model 未指定でも env が非 fable の具体値なら allow になる。"""

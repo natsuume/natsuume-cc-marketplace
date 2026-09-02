@@ -31,6 +31,9 @@
 #         model: fable であり、継承経路では使用率判定を通さずに Fable が起動しうる。
 #         `model: "fable"` を明示して再実行すれば使用率判定が働く
 #      b. それ以外:
+#         - subagent 内 (hook 入力に agent_id あり) からの起動 → deny。継承先は起動元 subagent の
+#           モデルで、session model state では判定できない (Fable 専用 agent からの起動で専用
+#           agent 以外の subagent が Fable を継承する経路を閉じる)
 #         - env が非空 → allow (env が継承を非 fable モデルへ上書きするため安全)
 #         - env 不在: inject-always.sh が SessionStart で記録した session model state が
 #           fable の場合のみ deny
@@ -102,12 +105,13 @@ INPUT=$(cat)
 
 # 各フィールドは 1 行 1 値で読むため、値に含まれる改行 (CR / LF) は空白に置き換えて欄ずれを防ぐ
 # (subagent_type に改行を含めても、後続の session_id 等が別の欄に読み込まれない)。
-{ read -r HOOK_EVENT; read -r TOOL_MODEL; read -r SUBAGENT_TYPE; read -r SESSION_ID; } < <(
+{ read -r HOOK_EVENT; read -r TOOL_MODEL; read -r SUBAGENT_TYPE; read -r SESSION_ID; read -r AGENT_ID; } < <(
   printf '%s' "$INPUT" | jq -r '
     [ (.hook_event_name // ""),
       (.tool_input.model // ""),
       (.tool_input.subagent_type // ""),
-      (.session_id // "") ]
+      (.session_id // ""),
+      (.agent_id // "") ]
     | map(tostring | gsub("[\r\n]"; " "))
     | .[]
   ' 2>/dev/null
@@ -311,7 +315,13 @@ if resolves_to_dedicated_fable_agent "$SUBAGENT_TYPE"; then
   deny "experimental-agent-discipline: Fable 専用 agent (experimental-agent-discipline:fable-low-worker / experimental-agent-discipline:fable-low-explorer) は model 未指定 (継承) では起動できません。専用 agent の frontmatter は model: fable のため、継承経路では Fable 週次枠の使用率判定を通さずに Fable が起動しえます。subagent_type を上記の正規の綴りにしたうえで \`model: \"fable\"\` を明示して再実行してください (明示することで使用率判定が働きます)。"
 fi
 
-# 3b. それ以外の model 未指定 = メインセッション継承経路
+# 3b. それ以外の model 未指定 = 継承経路
+# subagent 内 (agent_id あり) からの起動は、継承先がその subagent のモデルであり session model
+# state (メインセッションのモデル) では判定できない。Fable 専用 agent から model 未指定で起動
+# されると、専用 agent 以外の subagent が使用率判定を通らずに Fable を継承しうるため deny する。
+if [ -n "$AGENT_ID" ]; then
+  deny "experimental-agent-discipline: subagent 内からの model 未指定 (継承) のサブエージェント起動を deny しました。継承先は起動元 subagent のモデルになり、Fable 専用 agent からの起動では専用 agent 以外の subagent が使用率判定を通らずに Fable で実行されえます。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
+fi
 if [ -n "$ENV_SUB" ]; then
   # 非空・非 inherit の env は authoritative な非 fable 値として信頼する (正規化ポリシー参照)
   exit 0
