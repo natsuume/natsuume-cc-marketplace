@@ -559,6 +559,41 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                     )
                     self.assert_deny(result, 'model: "fable"')
 
+    def test_step3a_resolver_equivalent_spellings_are_also_denied(self) -> None:
+        """Step 3a: Claude Code の agent 解決が同一視する綴り (大文字小文字・空白・`-`・`_` の
+        差、namespace 無し) も専用 agent として扱い、model 未指定なら継承経路へ抜けずに deny する。"""
+        variants = (
+            "Experimental-Agent-Discipline:Fable-Low-Worker",
+            "experimental_agent_discipline:fable_low_worker",
+            "experimentalagentdiscipline:fablelowworker",
+            "experimental-agent-discipline:fable low worker",
+            "fable-low-worker",
+            "FABLE-LOW-EXPLORER",
+            "fable_low_explorer",
+        )
+        for subagent_type in variants:
+            with self.subTest(subagent_type=subagent_type):
+                result = self.run_gate(
+                    subagent_type=subagent_type,
+                    session_state="claude-sonnet-5",
+                    cache=self.healthy_cache(),
+                )
+                self.assert_deny(result, 'model: "fable"')
+
+    def test_step1a_resolver_equivalent_spellings_do_not_reach_the_allow_path(self) -> None:
+        """Step 1a の許可は正規の綴りの完全一致に限り、綴りの揺れは `model: fable` 明示でも deny する。"""
+        for subagent_type in (
+            "Experimental-Agent-Discipline:Fable-Low-Worker",
+            "fable-low-worker",
+        ):
+            with self.subTest(subagent_type=subagent_type):
+                result = self.run_gate(
+                    tool_model="fable",
+                    subagent_type=subagent_type,
+                    cache=self.healthy_cache(),
+                )
+                self.assert_deny(result, "experimental-agent-discipline:fable-low-worker")
+
     def test_step3b_non_empty_env_allows_inherited_delegation(self) -> None:
         """Step 3b: model 未指定でも env が非 fable の具体値なら allow になる。"""
         self.assert_allow(

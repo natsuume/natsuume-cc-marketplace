@@ -58,8 +58,13 @@
 #     「未指定」に正規化する (inherit は継承の別表記であり具体的なモデル選択ではないため)
 #   - 非空・非 inherit の env 値は、fable を含まない限り authoritative な非 fable 値として
 #     信頼する (env の妥当性検証は Claude Code 本体と利用者の責務で、hook の確信境界の外)
-#   - subagent_type は前後空白のみ trim し、許可リストとは大文字小文字を区別して完全一致で
-#     比較する (許可対象を固定リストで閉じるため、部分一致・別名を受け付けない)
+#   - subagent_type は前後空白のみ trim し、許可 (Step 1a) の判定は正規の綴りとの完全一致
+#     (大文字小文字を区別) に限る (許可対象を固定リストで閉じるため、別名を受け付けない)
+#   - deny 側 (Step 3a) の判定は広く取る: Claude Code の agent 解決は大文字小文字と空白・`-`・
+#     `_` を無視して一致させるため、小文字化して空白・`-`・`_` を除去した値が専用 agent
+#     (namespace 付き / 無しのどちらでも) に一致すれば専用 agent とみなして deny する。綴りの
+#     揺れた subagent_type が継承経路 (Step 3b) へ抜けて frontmatter の Fable が gate なしで
+#     起動するのを防ぐ。NFKC 正規化 (全角英数等) は行わない
 #
 # 既知の制約:
 #   - agent 定義 frontmatter の model / effort は tool_input に現れないため hook からは検証
@@ -118,6 +123,17 @@ is_dedicated_fable_agent() {
   case "$1" in
     experimental-agent-discipline:fable-low-worker) return 0 ;;
     experimental-agent-discipline:fable-low-explorer) return 0 ;;
+  esac
+  return 1
+}
+
+# deny 側の広い判定: Claude Code の agent 解決と同じく大文字小文字・空白・`-`・`_` を無視し、
+# namespace の有無も問わずに専用 agent を指しているかを判定する。
+resolves_to_dedicated_fable_agent() {
+  normalized=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]_-')
+  case "$normalized" in
+    experimentalagentdiscipline:fablelowworker|fablelowworker) return 0 ;;
+    experimentalagentdiscipline:fablelowexplorer|fablelowexplorer) return 0 ;;
   esac
   return 1
 }
@@ -267,9 +283,10 @@ if [ -n "$TOOL_MODEL" ]; then
 fi
 
 # 3a. 専用 agent を model 未指定で起動すると、frontmatter の model: fable が使用率判定を
-# 通らずに適用されるため deny する (明示指定に直せば Step 1a の使用率判定が働く)。
-if is_dedicated_fable_agent "$SUBAGENT_TYPE"; then
-  deny "experimental-agent-discipline: Fable 専用 agent (experimental-agent-discipline:fable-low-worker / experimental-agent-discipline:fable-low-explorer) は model 未指定 (継承) では起動できません。専用 agent の frontmatter は model: fable のため、継承経路では Fable 週次枠の使用率判定を通さずに Fable が起動しえます。\`model: \"fable\"\` を明示して再実行してください (明示することで使用率判定が働きます)。"
+# 通らずに適用されるため deny する (明示指定に直せば Step 1a の使用率判定が働く)。綴りの揺れた
+# subagent_type も Claude Code 側では同じ agent に解決されるため、広い判定で捕捉する。
+if resolves_to_dedicated_fable_agent "$SUBAGENT_TYPE"; then
+  deny "experimental-agent-discipline: Fable 専用 agent (experimental-agent-discipline:fable-low-worker / experimental-agent-discipline:fable-low-explorer) は model 未指定 (継承) では起動できません。専用 agent の frontmatter は model: fable のため、継承経路では Fable 週次枠の使用率判定を通さずに Fable が起動しえます。subagent_type を上記の正規の綴りにしたうえで \`model: \"fable\"\` を明示して再実行してください (明示することで使用率判定が働きます)。"
 fi
 
 # 3b. それ以外の model 未指定 = メインセッション継承経路
