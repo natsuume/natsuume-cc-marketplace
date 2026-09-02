@@ -468,6 +468,20 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                     )
                 )
 
+    def test_step1a_non_fable_env_denies_with_unpin_guidance(self) -> None:
+        """Step 1a: env が非 Fable を指す場合は専用 agent + 余裕のある枠でも deny し、
+        env の解除 (または sonnet / opus への通常委任) を案内する。"""
+        for subagent_type in ALLOWED_SUBAGENT_TYPES:
+            for env_value in ("sonnet", "claude-opus-5"):
+                with self.subTest(subagent_type=subagent_type, env=env_value):
+                    result = self.run_gate(
+                        tool_model="fable",
+                        subagent_type=subagent_type,
+                        env_subagent_model=env_value,
+                        cache=self.healthy_cache(),
+                    )
+                    self.assert_deny(result, "CLAUDE_CODE_SUBAGENT_MODEL", "解除")
+
     def test_step1a_subagent_type_is_trimmed_before_matching(self) -> None:
         """Step 1a: subagent_type の前後空白は trim して完全一致判定される。"""
         self.assert_allow(

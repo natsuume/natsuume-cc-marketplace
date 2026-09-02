@@ -22,6 +22,7 @@ color: cyan
 ## 起動契約
 
 - 親は `subagent_type="experimental-agent-discipline:fable-low-explorer"` を指定し、あわせて `model: "fable"` を明示して起動します。model を省略すると継承経路として PreToolUse hook が deny します。
+- `CLAUDE_CODE_SUBAGENT_MODEL` が設定されている環境では、明示した model より env が優先されて Fable 以外のモデルが effort low で実行される可能性があるため、PreToolUse hook が deny します。env を解除してから起動するか、sonnet / opus への通常委任に切り替えます。
 - effort はこの定義の frontmatter で low に固定されます。Agent 呼び出しごとの effort 指定はできないため、呼び出し側は effort を扱いません。
 - 起動可否は PreToolUse hook が Fable 週次枠の使用率で判定します。使用率が閾値 (既定 50%、環境変数 `EXPERIMENTAL_FABLE_SUBAGENT_MAX_PERCENT` で変更可) を超える場合、および使用率を取得できない場合は deny されます。deny された委任は sonnet / opus へ切り替えて実行します。
 
