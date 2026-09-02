@@ -88,12 +88,16 @@ fi
 
 INPUT=$(cat)
 
+# 各フィールドは 1 行 1 値で読むため、値に含まれる改行 (CR / LF) は空白に置き換えて欄ずれを防ぐ
+# (subagent_type に改行を含めても、後続の session_id 等が別の欄に読み込まれない)。
 { read -r HOOK_EVENT; read -r TOOL_MODEL; read -r SUBAGENT_TYPE; read -r SESSION_ID; } < <(
   printf '%s' "$INPUT" | jq -r '
-    (.hook_event_name // ""),
-    (.tool_input.model // ""),
-    (.tool_input.subagent_type // ""),
-    (.session_id // "")
+    [ (.hook_event_name // ""),
+      (.tool_input.model // ""),
+      (.tool_input.subagent_type // ""),
+      (.session_id // "") ]
+    | map(tostring | gsub("[\r\n]"; " "))
+    | .[]
   ' 2>/dev/null
 )
 
@@ -211,7 +215,7 @@ check_fable_weekly_usage() {
         else
           ($fable | sort_by(.percent) | last) as $top
           | (if ($top.resets_at | type) == "string"
-                and ($top.resets_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"))
+                and ($top.resets_at | test("\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})\\z"))
              then $top.resets_at else "" end) as $resets
           | if $top.percent > $threshold
             then emit("over"; $top.percent; $resets)

@@ -594,6 +594,32 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                 )
                 self.assert_deny(result, "experimental-agent-discipline:fable-low-worker")
 
+    def test_embedded_newline_in_subagent_type_does_not_shift_fields(self) -> None:
+        """subagent_type に改行が含まれても後続の欄 (session_id) がずれず、専用 agent の判定と
+        Fable セッションの継承 deny が働く。"""
+        newline_type = "experimental-agent-discipline:fable-low-\nworker"
+        with self.subTest(model="unspecified-fable-session"):
+            result = self.run_gate(
+                subagent_type=newline_type,
+                session_state="claude-fable-5",
+                cache=self.healthy_cache(),
+            )
+            self.assert_deny(result)
+        with self.subTest(model="unspecified-sonnet-session"):
+            result = self.run_gate(
+                subagent_type=newline_type,
+                session_state="claude-sonnet-5",
+                cache=self.healthy_cache(),
+            )
+            self.assert_deny(result, 'model: "fable"')
+        with self.subTest(model="explicit-fable"):
+            result = self.run_gate(
+                tool_model="fable",
+                subagent_type=newline_type,
+                cache=self.healthy_cache(),
+            )
+            self.assert_deny(result, "experimental-agent-discipline:fable-low-worker")
+
     def test_step3b_non_empty_env_allows_inherited_delegation(self) -> None:
         """Step 3b: model 未指定でも env が非 fable の具体値なら allow になる。"""
         self.assert_allow(
@@ -728,6 +754,24 @@ class FableWeeklyUsageGateTest(BlockFableSubagentHookTestBase):
         cache = weekly_scoped_cache([fable_entry(73, resets_at=injected)])
         reason = self.assert_deny(self.run_dedicated(cache=cache), "73")
         self.assertNotIn(injected, reason)
+        self.assertNotIn("リセット", reason)
+
+    def test_multiline_resets_at_is_dropped_without_breaking_the_contract(self) -> None:
+        """先頭行だけが ISO 8601 形式の複数行 `resets_at` は deny 文に載せず、閾値以下なら allow、
+        超過なら実測値付きの deny になる (行数契約を壊さない)。"""
+        multiline = "2026-09-08T00:00:00Z\nsecond line"
+        self.assert_allow(
+            self.run_dedicated(
+                cache=weekly_scoped_cache([fable_entry(10, resets_at=multiline)])
+            )
+        )
+        reason = self.assert_deny(
+            self.run_dedicated(
+                cache=weekly_scoped_cache([fable_entry(73, resets_at=multiline)])
+            ),
+            "73",
+        )
+        self.assertNotIn("second line", reason)
         self.assertNotIn("リセット", reason)
 
     def test_deny_reasons_name_the_specific_cache_defect(self) -> None:
