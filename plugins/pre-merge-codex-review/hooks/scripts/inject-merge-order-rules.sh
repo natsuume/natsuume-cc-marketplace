@@ -29,6 +29,12 @@ fi
 # (pre-push-codex-review/hooks/scripts/inject-review-cadence-rules.sh と同じパス解決方式)。
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
 
+# prompts ディレクトリを解決できなければ、空の base path で filesystem root 直下を読みに
+# 行かず、fail-open で無音終了する (plugin tree 内で解決できた path だけを読む)。
+if [ -z "$PROMPTS_DIR" ]; then
+  exit 0
+fi
+
 # 注入本文を読み込む。読めない場合は fail-open で無音終了する。
 CONTEXT=$(cat "$PROMPTS_DIR/merge-order-rules.md" 2>/dev/null)
 

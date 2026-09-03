@@ -143,7 +143,7 @@ auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 
 本 plugin はこれを次の 3 段で扱います:
 
 1. **起動順の規律 (SessionStart 注入)**: `hooks/prompts/merge-order-rules.md` を毎セッション注入し、マージ前提条件の確認後・`gh pr merge` の前に codex-reviewer を起動する手順、起動 prompt の定型文、`--delete-branch` を付けない merge の形、拒否時は `AskUserQuestion` でユーザの許可を得る手順を定めます
-2. **subagent の description と案内 prompt**: classifier が起動時に評価する task description に merge / 投稿 / gate の語を含めないよう、subagent の description と gate の deny 文が案内する prompt を read-only review の記述に統一しています
+2. **subagent の description と案内 prompt**: classifier が起動時に評価する task description が subagent の実際の操作を正確に表すよう、subagent の description と gate の deny 文が案内する prompt を「read-only の codex review を 1 回実行して report を返す」記述に統一しています (PR への投稿と merge を行うのは gate であり、subagent ではありません)
 3. **classifier の allow 設定 (任意)**: 恒久的に解消するには、`~/.claude/settings.json` の `autoMode.allow` に次のルールを追加します。`"$defaults"` を残さないと組み込みルールが失われるので必ず併記してください
 
 ```json
