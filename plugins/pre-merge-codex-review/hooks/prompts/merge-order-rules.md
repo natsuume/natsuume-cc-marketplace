@@ -5,11 +5,11 @@
 
 **なぜ**: auto mode の classifier は tool result (merge gate の deny 文) を読まず、ユーザ発言と tool call の並びだけを見る。`gh pr merge` の呼び出し直後に codex-reviewer subagent を起動すると、classifier には「ユーザが依頼していない merge 系操作の一部」に見えて起動が拒否される。merge 試行を挟まずに起動すれば拒否されない。
 
-**指示**: PR のマージ前提条件 (draft でない・CI・レビュー承認・mergeable) を確認したら、`gh pr merge` を実行する **前に** `pre-merge-codex-review:codex-reviewer` を Agent tool で `model: "sonnet"`、foreground (`run_in_background: false`) で起動し、report を受け取る。merge gate の deny を待ってから起動しない。起動 prompt は、subagent が実際に行う操作 (read-only の codex review 1 回と report の返却) を述べた次の定型文だけを使う:
+**指示**: PR のマージ前提条件 (draft でない・CI・レビュー承認・mergeable) を確認したら、`gh pr merge` を実行する **前に** `pre-merge-codex-review:codex-reviewer` を Agent tool で `model: "sonnet"`、foreground (`run_in_background: false`) で起動し、report を受け取る。merge gate の deny を待ってから起動しない。subagent は current branch の PR をレビューするため、merge 対象 PR のブランチを checkout した状態 (ローカル HEAD が PR の head と一致し、working tree が clean) で起動する。起動 prompt は、subagent が実際に行う操作 (read-only の codex review 1 回と report の返却) を述べた次の定型文だけを使う:
 
 > current branch の PR (#<番号>) の merge-base..head 差分に対して、agent body の契約に従い codex review を 1 回実行し、parent-safe な markdown report を返してください。
 
-起動は PR の head SHA ごとに 1 回でよい。現在の head SHA に対するレビュー記録 (PR 上の codex review コメント、または git-dir 直下のローカル記録) が既にある場合は再起動せず、そのまま `gh pr merge` に進む。report の findings を分類・対応し、head SHA が変わる commit を追加した場合は、次の merge 試行の前に同じ手順で再実行する。report を受け取った後の `gh pr merge` で、merge gate がローカルのレビュー記録を検証して PR に投稿してから merge に進む。
+起動は PR の head SHA ごとに 1 回でよい。現在の head SHA に対して、このセッションで subagent から `Status: pass` または `Status: findings` の report を既に受け取っている場合、または PR 上に現在の head SHA の codex review コメントが既にある場合は再起動せず、そのまま `gh pr merge` に進む (ローカル記録の有無は判断材料にしない。gate が受理する状態かどうかは gate 自身が判定する)。report の findings を分類・対応し、head SHA が変わる commit を追加した場合は、次の merge 試行の前に同じ手順で再実行する。report を受け取った後の `gh pr merge` で、merge gate がローカルのレビュー記録を検証して PR に投稿してから merge に進む。
 
 **境界**: 本規律は permission mode に依らず適用する (auto 以外でも手順は同じで無害)。merge gate に deny された後にその案内に従って起動することも引き続きできるが、それは復旧経路であり既定の順序ではない。
 

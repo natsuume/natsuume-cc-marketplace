@@ -151,11 +151,13 @@ auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 
   "autoMode": {
     "allow": [
       "$defaults",
-      "Launching the pre-merge-codex-review:codex-reviewer subagent is allowed at any point, including immediately after a gh pr merge attempt: it only runs a read-only cross-model code review of the current branch's pull request diff and writes a local record under the repository's .git directory. It does not post to GitHub, merge, push, or delete anything."
+      "Launching the pre-merge-codex-review:codex-reviewer subagent while preparing to merge the current branch's pull request is allowed, including immediately after a gh pr merge attempt: it only runs a read-only cross-model code review of the pull request diff and writes a local record under the repository's .git directory. It does not post to GitHub, merge, push, or delete anything."
     ]
   }
 }
 ```
+
+この allow ルールが緩めるのは subagent の**起動**の審査だけです。subagent が実行中に行う各 tool call は引き続き classifier が親 session と同じ規則で審査し、完了時にも行動履歴が審査されます。
 
 classifier は project settings (`.claude/settings.json` / `.claude/settings.local.json`) の `autoMode` を読まないため、ユーザ設定 (`~/.claude/settings.json`) に書く必要があります。classifier は CLAUDE.md も読むため、プロジェクトの CLAUDE.md に同趣旨の 1 文を書く方法でも代替できます。設定なしで拒否された場合は、ユーザが「マージ前レビューとマージを実行してよい」と発言すれば次の起動は通ります (classifier は明示的なユーザ意図で soft block を解除します)。
 
