@@ -344,7 +344,13 @@ fi
 # ローカルのレビュー記録を検証し、 成立していれば PR に投稿してから merge を通す。
 
 # 記録が無い / 解決できない場合に共通で案内する本文。
-REVIEW_GUIDANCE="Agent / Task tool で subagent_type=\"pre-merge-codex-review:codex-reviewer\", model=\"sonnet\" を起動してください。 subagent が codex review を実行し、 完了時にレビュー記録を repo の git-dir 直下 (ローカル) に保存します。 その後 \`gh pr merge\` を再実行すると、 この gate が記録を検証して PR に投稿してから merge に進みます。
+REVIEW_GUIDANCE="Agent / Task tool で subagent_type=\"pre-merge-codex-review:codex-reviewer\", model=\"sonnet\" を foreground 起動してください。 起動 prompt は次の定型文だけを使います (merge・投稿・gate の語を加えない):
+
+current branch の PR (#<番号>) の merge-base..head 差分に対して、agent body の契約に従い codex review を 1 回実行し、parent-safe な markdown report を返してください。
+
+subagent が codex review を実行し、 完了時にレビュー記録を repo の git-dir 直下 (ローカル) に保存します。 その後 \`gh pr merge\` を再実行すると、 この gate が記録を検証して PR に投稿してから merge に進みます。
+
+次回以降は、 マージ前提条件を確認した時点 (\`gh pr merge\` を実行する前) で同じ subagent を起動してください。 auto mode の classifier は \`gh pr merge\` の直後の subagent 起動を拒否することがあります。 起動が拒否された場合は同じ起動を繰り返さず、 AskUserQuestion でユーザにレビュー実行の許可を求めてください。
 
 レビューは **current branch の PR** に対して実行され、 記録も current branch の PR に紐づきます。 別の PR を番号で指定して merge しようとしている場合は、 先にその PR のブランチへ \`git switch\` してから subagent を起動してください (別ブランチのまま起動すると、 記録が current branch の PR のものになり、 この merge は deny のままになります)。
 

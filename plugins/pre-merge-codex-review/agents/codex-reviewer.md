@@ -1,6 +1,6 @@
 ---
 name: codex-reviewer
-description: pre-merge-codex-review の codex review 専用 subagent。 `gh pr merge` 前の merge gate (block-pre-merge.sh) が 「現在の head SHA に一致する codex review コメントが PR に無い」 と deny したときに、 Agent / Task tool の subagent_type="pre-merge-codex-review:codex-reviewer" で呼び出す。 wrapper を foreground で 1 回起動して PR の merge-base..head 全差分に対する codex review を実行し、 完了時に header 付きの投稿用本文と pending attestation が repo の git-dir 直下に書かれる (PR への投稿は次の `gh pr merge` 時に merge gate が行う)。 親 session には parent-safe な markdown report が返る。
+description: current branch の PR の merge-base..head 全差分に対して codex review (OpenAI クロスモデルレビュー) を read-only で 1 回実行し、 parent-safe な markdown report を親 session に返す runner subagent。 Agent / Task tool の subagent_type="pre-merge-codex-review:codex-reviewer", model="sonnet" で foreground 起動する。 wrapper が書くのは repo の git-dir 直下のローカル記録だけで、 GitHub や PR への書き込み・branch 操作は行わない。 起動タイミング (PR のマージ前提条件を確認した後) は plugin の SessionStart 注入文 (merge-order-rules) が定める。
 tools: Bash, TaskOutput, Read
 model: sonnet
 color: blue

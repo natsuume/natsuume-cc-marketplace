@@ -6,7 +6,7 @@
 
 ## バージョン
 
-v2.0.0
+v2.1.0
 
 ## インストール
 
@@ -65,6 +65,12 @@ codex review wrapper (`run-pre-merge-codex-review.sh`) の起動を検証する 
 - **SubagentStop**: `stop_hook_active` が boolean false である最初の stop でのみ消費します。launch attestation を tombstone へ不可逆に遷移させたうえで、(1) `last_assistant_message` に `Status: ` で始まる行がちょうど 1 つあり `^Status: (pass|findings)$` に一致する、(2) launch attestation の HEAD が現在の HEAD と一致する、(3) pending attestation が symlink でない通常ファイルで 2 行の形式を満たし head が現在の HEAD と一致する、(4) 投稿用本文が通常ファイルで先頭行が同じ head の header である、をすべて満たす場合のみ pending を `mv` で final へ昇格します。`Status: execution-failed`・Status 行の欠落 / 重複 / 未知値・HEAD 不一致・形式不正はいずれも昇格しません (fail-closed)
 - **掃除経路**: launch attestation の無い stop (偽装 stop・resume 後の再 stop)、既存 tombstone、上記検証の不成立、PostToolUseFailure (Agent / Task 呼び出し自体の失敗) では pending attestation を破棄します。**投稿用本文は final attestation が存在しない場合にのみ削除します** — final と本文は gate が投稿に使う対であり、昇格済みの対を後続の stop や失敗イベントが壊さないためです。昇格に成功した場合も本文は残します (gate が `--body-file` として使います)
 - 環境要因の失敗 (jq / git が無い、path を解決できない等) は silent skip (exit 0) で、レビュー完了の証明だけを fail-closed に扱います
+
+#### 4. inject-merge-order-rules (SessionStart)
+
+**ファイル**: `hooks/scripts/inject-merge-order-rules.sh`
+
+`hooks/prompts/merge-order-rules.md` の全文を毎セッションの SessionStart で additionalContext として注入します。注入文は、PR のマージ前提条件を確認した後・`gh pr merge` を実行する前に codex-reviewer subagent を起動する手順、起動 prompt の定型文、`--delete-branch` を付けない merge の形、起動が classifier に拒否された場合に `AskUserQuestion` でユーザの許可を得る手順を定めます (背景は「auto mode での利用」節)。permission mode やモデルによる分岐はなく常に同一内容を注入します。`jq` 不在・prompt ファイルの欠落・空・読み取り不能のいずれでも無出力で exit 0 とし (fail-open)、セッションを壊しません。
 
 ### レビューコメント形式とローカル記録
 
@@ -130,6 +136,31 @@ tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固�
 
 wrapper が exit 0 で完了した場合、parent-safe report の `Status` は **Codex の report 本文** から決めます (wrapper が非 0 で終了した場合は本文の内容に関わらず従来どおり `Status: execution-failed` です)。本文に finding の記述 (`## Finding` 節・`Severity:` 行・番号付き / 箇条書きの個別指摘) が 1 つも無く「指摘なし」の趣旨で結ばれている場合は、wrapper が記録した header の `status=` 値に関わらず `Status: pass` / `Findings: 0` を返します。header の status と本文の結論が食い違う場合は finding にせず、report に `Note:` 1 行 (header の値・本文の結論・merge gate の判定には影響しない旨) を添えます。finding として返せるのは Codex の report 本文に存在する指摘のみで、wrapper の挙動・header の値・記録の書き込みの成否・subagent 自身の観測範囲の限界は finding にしません (`Status: execution-failed` の Failure class か `Note:` で表現します)。本文が finding も「指摘なし」の結論も含まず判定できない場合 (途中で切れている・空・記述のみ等) は pass に倒さず、`Status: execution-failed` (Exit status 0・Failure class `other`) で返し、wrapper 自体は完了しレビュー記録を書き終えている可能性がある旨を recovery direction に書きます。
 
+## auto mode での利用
+
+auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 tool call を審査します。classifier が読むのは「ユーザ発言・tool call・CLAUDE.md」で、tool result (merge gate の deny 文を含む) は除去されます。そのため `gh pr merge` の呼び出し直後に `pre-merge-codex-review:codex-reviewer` を起動すると、classifier には「ユーザが依頼していない merge 系操作の一部」に見え、起動が `Blocked by classifier` で拒否されることがあります。作者環境での集計では、merge gate の deny 直後 (間に人間の発言なし) の起動 11 件中 8 件が拒否され、merge 試行を挟まない起動 13 件と、ユーザの許可発言を挟んだ起動 3 件はすべて通過しました。
+
+本 plugin はこれを次の 3 段で扱います:
+
+1. **起動順の規律 (SessionStart 注入)**: `hooks/prompts/merge-order-rules.md` を毎セッション注入し、マージ前提条件の確認後・`gh pr merge` の前に codex-reviewer を起動する手順、起動 prompt の定型文、`--delete-branch` を付けない merge の形、拒否時は `AskUserQuestion` でユーザの許可を得る手順を定めます
+2. **subagent の description と案内 prompt**: classifier が起動時に評価する task description に merge / 投稿 / gate の語を含めないよう、subagent の description と gate の deny 文が案内する prompt を read-only review の記述に統一しています
+3. **classifier の allow 設定 (任意)**: 恒久的に解消するには、`~/.claude/settings.json` の `autoMode.allow` に次のルールを追加します。`"$defaults"` を残さないと組み込みルールが失われるので必ず併記してください
+
+```json
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Launching the pre-merge-codex-review:codex-reviewer subagent is allowed at any point, including immediately after a gh pr merge attempt: it only runs a read-only cross-model code review of the current branch's pull request diff and writes a local record under the repository's .git directory. It does not post to GitHub, merge, push, or delete anything."
+    ]
+  }
+}
+```
+
+classifier は project settings (`.claude/settings.json` / `.claude/settings.local.json`) の `autoMode` を読まないため、ユーザ設定 (`~/.claude/settings.json`) に書く必要があります。classifier は CLAUDE.md も読むため、プロジェクトの CLAUDE.md に同趣旨の 1 文を書く方法でも代替できます。設定なしで拒否された場合は、ユーザが「マージ前レビューとマージを実行してよい」と発言すれば次の起動は通ります (classifier は明示的なユーザ意図で soft block を解除します)。
+
+`gh pr merge` 自体が classifier に拒否されることもあります。`--delete-branch` は remote branch の削除として組み込み soft_deny の対象になるため、merge は `gh pr merge <番号> --squash` 等の単独正規形で実行し、branch の掃除は merge 後に別コマンドで行ってください。
+
 ## 既知の制約
 
 - **レビュー済み確認の正本は PR 上のコメント**: コメントの偽装 (codex review を実行せずに同形式のコメントを投稿する等) は防ぎません (cooperative 利用前提)。gate が投稿の材料にするローカル記録の偽装 (final attestation と投稿用本文を手で置く等) も同様に防ぎません。lifecycle hook の検証 (Status 行・HEAD 一致・one-shot 消費) が守るのは「subagent が実際に完走したレビューだけを昇格する」ことであり、ファイルを直接書ける利用者に対する防御ではありません
@@ -165,6 +196,8 @@ wrapper が exit 0 で完了した場合、parent-safe report の `Status` は *
 | `hooks/scripts/block-pre-merge.sh` | 軽量 merge gate 本体 (PreToolUse)。レビュー記録の検証と PR への投稿も行う |
 | `hooks/scripts/block-bg-codex-wrapper.sh` | codex review wrapper の起動検証 (PreToolUse) |
 | `hooks/scripts/auto-mark.sh` | subagent lifecycle hook (SubagentStart / SubagentStop / PostToolUseFailure)。pending attestation を final へ昇格する |
+| `hooks/scripts/inject-merge-order-rules.sh` | SessionStart hook。merge 前 codex review の起動順規律を additionalContext として注入する |
+| `hooks/prompts/merge-order-rules.md` | 注入する起動順規律の本文 |
 | `hooks/scripts/run-pre-merge-codex-review.sh` | codex review wrapper 本体 (レビュー実行 + ローカル記録の書き込み。basename は `pre-push-codex-review` の wrapper と別名) |
 | `hooks/scripts/lib/codex-companion-resolver.sh` | codex companion 解決ロジック (`pre-push-codex-review` からの byte-identical コピー) |
 | `hooks/scripts/lib/markers.sh` | レビュー記録のファイル名と内容契約の単一ソース |
