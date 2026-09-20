@@ -14,7 +14,9 @@
  *     の SubagentStop で、report に `Status: pass|findings` 行がちょうど 1 行ある場合
  *   - `codex-advisor:review-runner` の SubagentStop で、report の実質末尾 3 行の footer
  *     (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` /
- *     `Codex-Runner-Job-ID: <id>`) が揃っている場合
+ *     `Codex-Runner-Job-ID: <id>`) が揃っている場合。同一 agent_id は 1 回だけ計数する
+ *     (計数済み agent_id を `countedRunnerAgentIds` に記録し、resume 再 stop で footer 付きの
+ *     plain text が再び来ても加算しない)
  *
  * report の所在 (SubagentStop での判定材料):
  *   Claude Code v2.1.271 以降の auto mode では、subagent の最終 report は
@@ -197,6 +199,7 @@ function readState(sessionId) {
       ...parsed,
       activeReviewerAgentIds,
       handbackReports: sanitizeHandbackReports(parsed.handbackReports),
+      countedRunnerAgentIds: sanitizeAgentIds(parsed.countedRunnerAgentIds),
       checkpointRequired:
         parsed.checkpointRequired === true ||
         parsed.completedReviews >= REVIEW_CADENCE_LIMIT,
@@ -211,6 +214,7 @@ function writeState(
   completedReviews,
   activeReviewerAgentIds = [],
   handbackReports = {},
+  countedRunnerAgentIds = [],
 ) {
   ensureRoot();
   const destination = statePath(sessionId);
@@ -226,6 +230,7 @@ function writeState(
     completedReviews: normalizedCount,
     activeReviewerAgentIds: sanitizeAgentIds(activeReviewerAgentIds),
     handbackReports: sanitizeHandbackReports(handbackReports),
+    countedRunnerAgentIds: sanitizeAgentIds(countedRunnerAgentIds),
     checkpointRequired: normalizedCount >= REVIEW_CADENCE_LIMIT,
     updatedAt: new Date().toISOString(),
   };
@@ -257,22 +262,30 @@ function removeState(sessionId) {
 
 /**
  * state を書くか、保持する情報が何も無ければ (完了 review 0 回・起動中 reviewer 無し・
- * 未消費の handback 記録無し) state file ごと削除する。
+ * 未消費の handback 記録無し・計数済み runner 無し) state file ごと削除する。
  */
 function persistState(
   sessionId,
   completedReviews,
   activeReviewerAgentIds,
   handbackReports,
+  countedRunnerAgentIds = [],
 ) {
   if (
     completedReviews === 0 &&
     activeReviewerAgentIds.length === 0 &&
-    Object.keys(handbackReports).length === 0
+    Object.keys(handbackReports).length === 0 &&
+    countedRunnerAgentIds.length === 0
   ) {
     removeState(sessionId);
   } else {
-    writeState(sessionId, completedReviews, activeReviewerAgentIds, handbackReports);
+    writeState(
+      sessionId,
+      completedReviews,
+      activeReviewerAgentIds,
+      handbackReports,
+      countedRunnerAgentIds,
+    );
   }
 }
 
@@ -576,6 +589,7 @@ function handleSubagentStart(input) {
     state?.completedReviews ?? 0,
     activeReviewerAgentIds,
     state?.handbackReports ?? {},
+    state?.countedRunnerAgentIds ?? [],
   );
   return null;
 }
@@ -609,6 +623,7 @@ function handlePostToolUse(input) {
     state?.completedReviews ?? 0,
     state?.activeReviewerAgentIds ?? [],
     handbackReports,
+    state?.countedRunnerAgentIds ?? [],
   );
   return null;
 }
@@ -626,6 +641,7 @@ function handleStatusLineReviewerStop(input) {
         state.completedReviews,
         state.activeReviewerAgentIds,
         handbackReports,
+        state.countedRunnerAgentIds,
       );
     }
     return null;
@@ -643,6 +659,7 @@ function handleStatusLineReviewerStop(input) {
     completedReviews,
     activeReviewerAgentIds,
     handbackReports,
+    state.countedRunnerAgentIds,
   );
   return null;
 }
@@ -653,13 +670,27 @@ function handleFooterReviewerStop(input) {
   const footer = report
     ? report.footer
     : parseRunnerFooter(input.last_assistant_message);
-  const counted =
-    footer?.operation === "review" && footer.status === "success" ? 1 : 0;
+  const success = footer?.operation === "review" && footer.status === "success";
+  // 同一 runner (agent_id) は 1 回だけ計数する。hand-back で計数した後に resume 再 stop の
+  // plain text に footer が含まれても加算しない。agent_id が無効な stop は束縛できないため
+  // 計数しない。
+  const countedRunnerAgentIds = [...(state?.countedRunnerAgentIds ?? [])];
+  let counted = 0;
+  if (
+    success &&
+    typeof input.agent_id === "string" &&
+    AGENT_ID_RE.test(input.agent_id) &&
+    !countedRunnerAgentIds.includes(input.agent_id)
+  ) {
+    countedRunnerAgentIds.push(input.agent_id);
+    counted = 1;
+  }
   persistState(
     input.session_id,
     (state?.completedReviews ?? 0) + counted,
     state?.activeReviewerAgentIds ?? [],
     handbackReports,
+    countedRunnerAgentIds,
   );
   return null;
 }
@@ -688,6 +719,7 @@ function handleAdvisorCheckpointStop(input) {
       state.completedReviews,
       state.activeReviewerAgentIds,
       handbackReports,
+      state.countedRunnerAgentIds,
     );
   }
   return null;

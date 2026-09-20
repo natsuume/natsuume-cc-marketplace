@@ -129,7 +129,7 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 ### 計数対象
 
 - `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の SubagentStop で、report (auto mode では PostToolUse で記録した `SubagentHandback` の hand-back report、それ以外は `last_assistant_message`) に `Status: pass|findings` 行がちょうど 1 行ある場合
-- `codex-advisor:review-runner` の SubagentStop で、report (所在は上と同じ) の実質末尾 3 行の footer (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` / `Codex-Runner-Job-ID: <id>`) が揃っている場合
+- `codex-advisor:review-runner` の SubagentStop で、report (所在は上と同じ) の実質末尾 3 行の footer (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` / `Codex-Runner-Job-ID: <id>`) が揃っている場合。同一 agent_id は 1 回だけ計数する (resume 再 stop で footer 付きの報告が再び来ても加算しない)
 
 ### checkpoint
 

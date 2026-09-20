@@ -1011,6 +1011,34 @@ class SubagentHandbackReportTest(HookHarness):
         self.assertEqual(1, state["completedReviews"])
         self.assertEqual({}, state["handbackReports"])
 
+    def test_review_runner_is_counted_once_per_agent_id(self) -> None:
+        session_id = "session-runner-once"
+        message = "\n".join(
+            ["Codex review report", *self.footer_lines("review", "success")]
+        )
+        self.handback(
+            FOOTER_COUNTED_REVIEWER,
+            message,
+            session_id=session_id,
+            agent_id="review-runner-a",
+        )
+        self.closing_stop(
+            FOOTER_COUNTED_REVIEWER,
+            session_id=session_id,
+            agent_id="review-runner-a",
+        )
+        # resume 再 stop で footer 付き plain text が来ても同じ agent_id は加算しない。
+        self.review_runner_stop(session_id=session_id, agent_id="review-runner-a")
+        state = self.state_for(session_id)
+        assert state is not None
+        self.assertEqual(1, state["completedReviews"])
+        self.assertEqual(["review-runner-a"], state["countedRunnerAgentIds"])
+        # 別 agent_id の runner は計数される。
+        self.review_runner_stop(session_id=session_id, agent_id="review-runner-b")
+        state = self.state_for(session_id)
+        assert state is not None
+        self.assertEqual(2, state["completedReviews"])
+
     def test_handback_advisor_attestation_resets_at_closing_stop(self) -> None:
         session_id = "session-advisor-handback"
         for cycle in range(1, REVIEW_CADENCE_LIMIT + 1):
