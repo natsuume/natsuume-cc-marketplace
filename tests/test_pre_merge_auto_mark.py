@@ -474,6 +474,67 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                 self.handback_report_path(work, "handbackfail0").exists()
             )
 
+    def test_duplicate_handback_is_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            self.run_start(work, agent_id="duplicate0")
+            head = self.head_sha(work)
+            pending = self.write_pending(work, self.pending_content(head))
+            body = self.write_comment_body(work, self.comment_body_content(head))
+            for _ in range(2):
+                result = self.run_hook(
+                    work, self.handback_payload(PASS_REPORT, agent_id="duplicate0")
+                )
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+            record = self.handback_report_path(work, "duplicate0")
+            self.assertEqual(record.read_text(encoding="utf-8"), "invalid")
+            self.assert_no_final(
+                work,
+                self.stop_payload(HANDBACK_CLOSING_MESSAGE, agent_id="duplicate0"),
+            )
+            self.assertFalse(pending.exists())
+            self.assertFalse(body.exists())
+            self.assertFalse(record.exists())
+
+    def test_handback_without_launch_attestation_is_not_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            # attestation 無し (SubagentStart を経ていない偽装 / 移行前起動)。
+            result = self.run_hook(
+                work, self.handback_payload(PASS_REPORT, agent_id="noattest0")
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(
+                self.handback_report_path(work, "noattest0").exists()
+            )
+            # tombstone 既存 (stop 済み agent_id の resume 中 hand-back)。
+            self.run_start(work, agent_id="resumed0")
+            self.run_hook(
+                work,
+                self.stop_payload(
+                    "# Codex Review\n\nStatus: execution-failed\n",
+                    agent_id="resumed0",
+                ),
+            )
+            self.assertTrue(self.launch_tombstone_path(work, "resumed0").exists())
+            self.launch_attestation_path(work, "resumed0").write_text(
+                self.head_sha(work), encoding="utf-8"
+            )
+            result = self.run_hook(
+                work, self.handback_payload(PASS_REPORT, agent_id="resumed0")
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(
+                self.handback_report_path(work, "resumed0").exists()
+            )
+            head = self.head_sha(work)
+            self.write_pending(work, self.pending_content(head))
+            self.write_comment_body(work, self.comment_body_content(head))
+            self.assert_no_final(
+                work,
+                self.stop_payload(HANDBACK_CLOSING_MESSAGE, agent_id="resumed0"),
+            )
+
     def test_handback_from_other_agent_type_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
