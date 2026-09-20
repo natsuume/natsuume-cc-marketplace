@@ -67,7 +67,7 @@ codex review wrapper (`run-pre-push-codex-review.sh`) の起動を検証する P
 
 `pre-push-codex-review:codex-reviewer` subagent の実行完了を subagent lifecycle hook (SubagentStart / SubagentStop) で検知し、codex マーカーに「commit 列 + branch 全差分 + 未コミット差分のハッシュ」を書き込みます。matcher は SubagentStart / SubagentStop が `^pre-push-codex-review:codex-reviewer$`、PostToolUse が `^SubagentHandback$` (tool 名) で、script 側でも agent_type を完全一致で再検証します。`SubagentStart` はレビュー開始時の hash を launch attestation として one-shot 記録し、`PostToolUse` (`SubagentHandback`) は auto mode で hand-back された report (`tool_input.message`) の Status を handback record (`.claude-pre-push-handback-<agent_id>`) に記録し、`SubagentStop` は (a) attestation の一回限りの消費 (b) 開始時 hash と現在 hash の一致 (c) report (handback record があればその判定結果、無ければ `last_assistant_message`) 内の単一 `Status: pass|findings` 行 (d) wrapper が書いた pending attestation と現在 hash の一致、をすべて検証した場合のみマーカーを書きます。`PostToolUseFailure` では残った Codex pending attestation を破棄します。
 
-Claude Code v2.1.271 以降の auto mode では subagent の最終 report が `SubagentHandback` tool 経由で親に届き、SubagentStop の `last_assistant_message` には締めの文しか入らないため、report の判定は PostToolUse で記録した handback record を優先します。同一 agent_id で `SubagentHandback` が 2 回以上呼ばれた場合は重複 report として無効 (fail-closed) です。
+Claude Code v2.1.271 以降の auto mode では subagent の最終 report が `SubagentHandback` tool 経由で親に届き、SubagentStop の `last_assistant_message` には締めの文しか入らないため、report の判定は PostToolUse で記録した handback record を優先します。同一 agent_id で `SubagentHandback` が 2 回以上呼ばれた場合は重複 report として無効 (fail-closed) です。`tool_response.success` が false (未配信) の hand-back は記録せず、`last_assistant_message` 経路の判定に委ねます。
 
 マーカーが証明するのは、codex review が marker に記録された最新差分に対して完了したことだけです。変更の approve や findings が 0 件であることは証明しません。
 

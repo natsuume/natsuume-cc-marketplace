@@ -140,7 +140,7 @@ hooks.json の matcher は SubagentStart / SubagentStop とも `^pre-push-review
 
 - `stop_hook_active` が boolean `false` でない (stop hook による継続中の中間 stop)
 - launch attestation が無い、regular file でない (symlink 含む)、または開始時 hash と現在 hash が不一致
-- report (handback record があればその判定結果、無ければ `last_assistant_message`) に単一の `Status: pass` / `Status: findings` 行が無い (`execution-failed`、欠落、重複、未知値、非 string)。同一 agent_id で `SubagentHandback` が 2 回以上呼ばれた場合も重複 report として無効
+- report (handback record があればその判定結果、無ければ `last_assistant_message`) に単一の `Status: pass` / `Status: findings` 行が無い (`execution-failed`、欠落、重複、未知値、非 string)。同一 agent_id で `SubagentHandback` が 2 回以上呼ばれた場合も重複 report として無効。`tool_response.success` が false (未配信) の hand-back は記録されず、`last_assistant_message` 経路の判定に委ねる
 - `agent_type` が namespace 付き 2 reviewer 以外、または `agent_id` が `^[A-Za-z0-9._-]{1,128}$` に不一致
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)

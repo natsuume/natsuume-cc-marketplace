@@ -176,7 +176,13 @@ class PrePushAutoMarkTest(unittest.TestCase):
         *,
         agent_id: str = DEFAULT_AGENT_ID,
         tool_name: str = "SubagentHandback",
+        tool_response: object = None,
     ) -> dict[str, object]:
+        if tool_response is None:
+            tool_response = {
+                "success": True,
+                "message": "Report delivered to your caller.",
+            }
         return {
             "hook_event_name": "PostToolUse",
             "session_id": "test-session",
@@ -184,10 +190,7 @@ class PrePushAutoMarkTest(unittest.TestCase):
             "agent_type": agent_type,
             "tool_name": tool_name,
             "tool_input": {"message": message},
-            "tool_response": {
-                "success": True,
-                "message": "Report delivered to your caller.",
-            },
+            "tool_response": tool_response,
             "tool_use_id": "toolu_test",
         }
 
@@ -623,6 +626,45 @@ class PrePushAutoMarkTest(unittest.TestCase):
                     agent_type, HANDBACK_CLOSING_MESSAGE, agent_id="resumed0"
                 ),
             )
+
+    def test_undelivered_handback_is_not_recorded(self) -> None:
+        agent_type = "pre-push-review:code-reviewer"
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        undelivered_responses = {
+            "object": {
+                "success": False,
+                "message": "Nothing was sent: SubagentHandback is not active for this agent.",
+            },
+            "json-string": '{"success":false,"message":"Nothing was sent."}',
+        }
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            for index, (case, response) in enumerate(undelivered_responses.items()):
+                with self.subTest(case=case):
+                    agent_id = f"undelivered{index}"
+                    self.run_start(work, agent_type, agent_id=agent_id)
+                    result = self.run_hook(
+                        work,
+                        self.handback_payload(
+                            agent_type,
+                            report,
+                            agent_id=agent_id,
+                            tool_response=response,
+                        ),
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
+                    self.assertFalse(
+                        self.handback_report_path(work, agent_id).exists()
+                    )
+                    # harness は未配信時に plain text での報告へ切り替えるため、
+                    # last_assistant_message の report で marker が書かれる。
+                    marker = self.marker_path(work, agent_type)
+                    marker.unlink(missing_ok=True)
+                    result = self.run_hook(
+                        work, self.stop_payload(agent_type, report, agent_id=agent_id)
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
+                    self.assertTrue(marker.exists(), result.stderr.decode())
 
     def test_handback_from_other_tools_or_agents_is_ignored(self) -> None:
         report = "# Code Review\n\nStatus: pass\nFindings: 0"

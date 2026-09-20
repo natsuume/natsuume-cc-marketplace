@@ -111,6 +111,7 @@ class HookHarness(unittest.TestCase):
         session_id: str = "session-a",
         agent_id: str = "agent-a",
         tool_name: str = "SubagentHandback",
+        delivered: bool = True,
     ) -> dict[str, object] | None:
         """PostToolUse (SubagentHandback): auto mode で report が hand-back された。"""
         return self.hook_response(
@@ -122,8 +123,12 @@ class HookHarness(unittest.TestCase):
                 "tool_name": tool_name,
                 "tool_input": {"message": message},
                 "tool_response": {
-                    "success": True,
-                    "message": "Report delivered to your caller.",
+                    "success": delivered,
+                    "message": (
+                        "Report delivered to your caller."
+                        if delivered
+                        else "Nothing was sent: SubagentHandback is not active for this agent."
+                    ),
                 },
                 "tool_use_id": "toolu_test",
             }
@@ -953,6 +958,36 @@ class SubagentHandbackReportTest(HookHarness):
             session_id=session_id,
             tool_name="Write",
         )
+        self.assertIsNone(self.state_for(session_id))
+
+    def test_undelivered_handback_is_not_recorded(self) -> None:
+        session_id = "session-undelivered"
+        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
+        self.status_line_start(PRE_PUSH_CODEX_REVIEWER, session_id=session_id)
+        self.handback(
+            PRE_PUSH_CODEX_REVIEWER, report, session_id=session_id, delivered=False
+        )
+        state = self.state_for(session_id)
+        assert state is not None
+        self.assertEqual({}, state["handbackReports"])
+        # 未配信時は plain text での報告 (last_assistant_message) が計数される。
+        self.status_line_stop(PRE_PUSH_CODEX_REVIEWER, "pass", session_id=session_id)
+        state = self.state_for(session_id)
+        assert state is not None
+        self.assertEqual(1, state["completedReviews"])
+
+    def test_orphan_handback_record_is_consumed_when_agent_is_not_active(
+        self,
+    ) -> None:
+        session_id = "session-orphan"
+        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
+        # 起動記録の無い reviewer (checkpoint reset 後の stop 等) の hand-back。
+        self.handback(PRE_PUSH_CODEX_REVIEWER, report, session_id=session_id)
+        state = self.state_for(session_id)
+        assert state is not None
+        self.assertIn("agent-a", state["handbackReports"])
+        self.closing_stop(PRE_PUSH_CODEX_REVIEWER, session_id=session_id)
+        # 計数はされず (起動記録が無い)、記録は消費されて state も残らない。
         self.assertIsNone(self.state_for(session_id))
 
     def test_handback_review_runner_footer_counts_at_closing_stop(self) -> None:

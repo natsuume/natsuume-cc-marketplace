@@ -216,6 +216,7 @@ class HookHarness(unittest.TestCase):
         job_id: str = "task-example",
         review_cadence: str | None = None,
         tool_name: str = "SubagentHandback",
+        delivered: bool = True,
     ) -> dict[str, object] | None:
         """PostToolUse (SubagentHandback): auto mode で report が hand-back された。"""
         report_lines = ["Codex runner report"]
@@ -241,8 +242,12 @@ class HookHarness(unittest.TestCase):
                 "tool_name": tool_name,
                 "tool_input": {"message": "\n".join(report_lines)},
                 "tool_response": {
-                    "success": True,
-                    "message": "Report delivered to your caller.",
+                    "success": delivered,
+                    "message": (
+                        "Report delivered to your caller."
+                        if delivered
+                        else "Nothing was sent: SubagentHandback is not active for this agent."
+                    ),
                 },
                 "tool_use_id": "toolu_test",
             }
@@ -534,6 +539,16 @@ class CodexRunnerLifecycleTest(HookHarness):
         records = self.state_records()
         self.assertEqual(1, len(records))
         self.assertEqual("retry-required", records[0]["phase"])
+
+    def test_undelivered_handback_is_not_recorded(self) -> None:
+        self.subagent_start("rescue")
+        self.handback("rescue", "success", delivered=False)
+        records = self.state_records()
+        self.assertEqual(1, len(records))
+        self.assertIsNone(records[0]["handback"])
+        # 未配信時は plain text での報告 (last_assistant_message) が採用される。
+        self.subagent_stop("rescue", "success")
+        self.assertEqual([], self.state_records())
 
     def test_handback_from_other_agent_id_or_tool_is_ignored(self) -> None:
         self.subagent_start("rescue", agent_id="agent-a")

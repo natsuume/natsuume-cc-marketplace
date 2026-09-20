@@ -53,7 +53,11 @@
 # launch attestation) で行う。
 #
 # - PostToolUse (hooks.json matcher: ^SubagentHandback$):
-#   1. tool_name が SubagentHandback でなければ exit 0
+#   1. tool_name が SubagentHandback でなければ exit 0。 tool_response.success が
+#      boolean false (未配信: この agent では tool が active でない / 既に配信済み /
+#      親が受理しない / 親が終了済み) の場合も record を書かず exit 0 (未配信の report は
+#      last_assistant_message 経路に委ねる。 harness は未配信時に plain text での報告へ
+#      切り替える)
 #   2. agent_type / agent_id を SubagentStart と同じ基準で検証。不一致は exit 0
 #      (filesystem 操作は一切行わない)
 #   3. launch attestation が regular file として存在しない、または launch tombstone が
@@ -324,6 +328,22 @@ case "$HOOK_EVENT_NAME" in
     # ------------------------------------------------------------------
     TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
     if [ "$TOOL_NAME" != "SubagentHandback" ]; then
+      exit 0
+    fi
+
+    # SubagentHandback は tool 自体は正常終了しつつ「配信されなかった」ことを
+    # tool_response.success=false で返す (この agent では tool が active でない /
+    # 既に配信済み / 親が受理しない / 親が終了済み 等)。 未配信の hand-back は report では
+    # ないため記録せず、 SubagentStop の last_assistant_message 判定に委ねる (harness は
+    # 未配信時に plain text での報告へ切り替えるため、 その経路で report を判定できる)。
+    HANDBACK_UNDELIVERED=$(printf '%s' "$INPUT" | jq -r '
+      (.tool_response | if type == "string" then (try fromjson catch {}) else . end) as $response
+      | if (($response | type) == "object")
+           and (($response.success | type) == "boolean")
+           and ($response.success == false)
+        then "true" else "false" end
+    ')
+    if [ "$HANDBACK_UNDELIVERED" = "true" ]; then
       exit 0
     fi
 

@@ -27,6 +27,9 @@
  *   記録が無い場合 (SubagentHandback が提供されない非 auto mode 等) に限り
  *   `last_assistant_message` を report として解析する。同一 agent_id の 2 回目以降の
  *   hand-back は重複 report として解析値をすべて null にする (fail-closed)。
+ *   `tool_response.success` が false の hand-back (未配信: tool が active でない / 配信済み /
+ *   親が受理しない等) は report ではないため記録しない (harness は未配信時に plain text
+ *   での報告へ切り替えるため、`last_assistant_message` 経路で解析できる)。
  *   旧 `pre-push-review:codex-reviewer` (codex gate 分離前の namespace) は計数対象に
  *   含めない。本 plugin の support floor は codex gate 分離後の pre-push-review
  *   v6.0.0 以降であり、旧 namespace の review 経路はサポート対象外のため。
@@ -504,6 +507,23 @@ function parseReviewStatus(message) {
  * hand-back された report (SubagentHandback の tool_input.message) を、SubagentStop が
  * 使う 3 種の解析値へまとめて変換する。本文そのものは state に保存しない。
  */
+/**
+ * SubagentHandback の tool_response が「配信されなかった」(success === false) ことを示すか。
+ * tool_response が JSON 文字列で届く場合も解釈する。success が無い / boolean でない場合は
+ * 配信済みとみなす (schema 変更で record が書けなくなる fail-closed 化を避ける)。
+ */
+function handbackUndelivered(toolResponse) {
+  let response = toolResponse;
+  if (typeof response === "string") {
+    try {
+      response = JSON.parse(response);
+    } catch {
+      return false;
+    }
+  }
+  return Boolean(response) && typeof response === "object" && response.success === false;
+}
+
 function parseHandbackReport(message) {
   if (typeof message !== "string") return INVALID_HANDBACK_REPORT;
   return {
@@ -566,6 +586,7 @@ function handleSubagentStart(input) {
  */
 function handlePostToolUse(input) {
   if (input.tool_name !== "SubagentHandback") return null;
+  if (handbackUndelivered(input.tool_response)) return null;
   if (
     typeof input.session_id !== "string" ||
     typeof input.agent_id !== "string" ||
@@ -595,12 +616,24 @@ function handlePostToolUse(input) {
 function handleStatusLineReviewerStop(input) {
   if (typeof input.agent_id !== "string") return null;
   const state = readState(input.session_id);
-  if (!state?.activeReviewerAgentIds.includes(input.agent_id)) return null;
+  // handback 記録は起動記録の有無に関わらず one-shot で消費する (checkpoint reset で
+  // 起動記録が消えた後に stop した reviewer の記録が orphan として残らないようにする)。
+  const { report, handbackReports } = takeHandbackReport(state, input.agent_id);
+  if (!state?.activeReviewerAgentIds.includes(input.agent_id)) {
+    if (state) {
+      persistState(
+        input.session_id,
+        state.completedReviews,
+        state.activeReviewerAgentIds,
+        handbackReports,
+      );
+    }
+    return null;
+  }
 
   const activeReviewerAgentIds = state.activeReviewerAgentIds.filter(
     (agentId) => agentId !== input.agent_id,
   );
-  const { report, handbackReports } = takeHandbackReport(state, input.agent_id);
   const reviewStatus = report
     ? report.reviewStatus
     : parseReviewStatus(input.last_assistant_message);
