@@ -75,6 +75,8 @@ For a run that exited zero, derive `Status` from the **Codex report body** (the 
 - The `Source severity: unknown` → `Severity: P1` / `must-fix-before-merge` default applies only to a finding that Codex reported without a severity label.
 - If the body is inconclusive — it neither contains a finding record nor concludes that nothing was found (for example a truncated, empty, or purely descriptive body) — do not return `pass`. Return `Status: execution-failed` with `Exit status: 0` (the wrapper itself completed) and `Failure class: other`, and say in the recovery direction that the wrapper may have completed and written its record (so the parent does not re-run it needlessly) and that the parent may resume this subagent with a focused question about the body.
 
+When the `SubagentHandback` tool is available (Claude Code auto mode), deliver this report as the `message` of exactly one `SubagentHandback` call; the same contract applies to that message, and any closing text you write after the call is not the report. Otherwise return the report as your final message.
+
 Return exactly one markdown report. For a successful review with findings:
 
 ```markdown

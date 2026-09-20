@@ -79,7 +79,7 @@ find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.
 
 必ず次の 3 行で終了する (`JOB_ID` 不明時は `unknown`)。footer をコードフェンス・引用ブロックで
 囲まず、プレーンテキストの最終行群として出力する。下のコードブロックは記法の説明であり、フェンス
-自体を出力に含めない。
+自体を出力に含めない。`SubagentHandback` tool が提供される場合 (Claude Code の auto mode) は、この report 全体 (末尾の footer 行群を含む) を `SubagentHandback` の `message` として 1 回だけ渡す。footer は message の実質末尾に置き、呼び出し後に書く締めの文は report ではない。
 
 ```text
 Codex-Runner-Operation: rescue

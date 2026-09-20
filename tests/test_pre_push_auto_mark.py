@@ -24,8 +24,16 @@ pre-push-codex-review plugin が所有する (tests/test_pre_push_codex_auto_mar
   - launch attestation が無ければ skip (resume 後の再 stop・移行前起動)
   - attestation は最初の SubagentStop で必ず消費する (one-shot。検証失敗でも
     再 stop で marker が書ける経路を残さない)
-  - last_assistant_message 全体で `^Status: (pass|findings|execution-failed)$`
+  - report の Status は、PostToolUse (SubagentHandback) が書いた handback record
+    (git-dir/.claude-pre-push-handback-<agent_id>) があればそれを one-shot で
+    消費して採用し (last_assistant_message は見ない)、無ければ
+    last_assistant_message 全体で `^Status: (pass|findings|execution-failed)$`
     に一致する行がちょうど 1 つ、かつ値が pass|findings のときのみ有効
+- PostToolUse (tool_name が SubagentHandback、agent_type が 2 reviewer の完全一致):
+  - launch attestation が regular file として存在し tombstone が無い場合のみ、
+    tool_input.message を SubagentStop と同じ規則で判定した結果
+    (pass / findings / invalid) を handback record に書く
+  - 同一 agent_id の 2 回目以降の hand-back は record を invalid に上書きする
   - 開始時 hash と stop 時点の現在 hash が一致するときのみ marker を書く
     (レビュー開始後の差分変更を fail-closed に遮断)
   - final marker は同一ディレクトリの一時 file へ完全に書いてから atomic rename
@@ -58,6 +66,13 @@ MARKERS = {
 }
 LAUNCH_ATTESTATION_PREFIX = ".claude-pre-push-launch-"
 LAUNCH_TOMBSTONE_PREFIX = ".claude-pre-push-done-"
+HANDBACK_REPORT_PREFIX = ".claude-pre-push-handback-"
+HANDBACK_MATCHER = "^SubagentHandback$"
+# auto mode で SubagentHandback を呼んだ後の last_assistant_message (締めの文。
+# Status 行を含まない)。
+HANDBACK_CLOSING_MESSAGE = (
+    "Code review complete. Report delivered to the parent session."
+)
 DEFAULT_AGENT_ID = "a1b2c3d4e5f6a7b8c"
 CLAUDE_REVIEWER_MATCHER = (
     "^pre-push-review:(code|security)-reviewer$"
@@ -153,6 +168,47 @@ class PrePushAutoMarkTest(unittest.TestCase):
         if message is not None:
             payload["last_assistant_message"] = message
         return payload
+
+    def handback_payload(
+        self,
+        agent_type: str,
+        message: object,
+        *,
+        agent_id: str = DEFAULT_AGENT_ID,
+        tool_name: str = "SubagentHandback",
+    ) -> dict[str, object]:
+        return {
+            "hook_event_name": "PostToolUse",
+            "session_id": "test-session",
+            "agent_id": agent_id,
+            "agent_type": agent_type,
+            "tool_name": tool_name,
+            "tool_input": {"message": message},
+            "tool_response": {
+                "success": True,
+                "message": "Report delivered to your caller.",
+            },
+            "tool_use_id": "toolu_test",
+        }
+
+    def run_handback(
+        self,
+        work: Path,
+        agent_type: str,
+        message: object,
+        *,
+        agent_id: str = DEFAULT_AGENT_ID,
+    ) -> subprocess.CompletedProcess[bytes]:
+        result = self.run_hook(
+            work, self.handback_payload(agent_type, message, agent_id=agent_id)
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        return result
+
+    def handback_report_path(
+        self, work: Path, agent_id: str = DEFAULT_AGENT_ID
+    ) -> Path:
+        return self.git_dir(work) / f"{HANDBACK_REPORT_PREFIX}{agent_id}"
 
     def run_hook(
         self,
@@ -255,8 +311,12 @@ class PrePushAutoMarkTest(unittest.TestCase):
             stale.write_text("0" * 64, encoding="utf-8")
             two_days_ago = time.time() - 2 * 24 * 3600
             os.utime(stale, (two_days_ago, two_days_ago))
+            stale_handback = self.handback_report_path(work, "stalehandback")
+            stale_handback.write_text("pass", encoding="utf-8")
+            os.utime(stale_handback, (two_days_ago, two_days_ago))
             self.run_start(work, "pre-push-review:code-reviewer")
             self.assertFalse(stale.exists())
+            self.assertFalse(stale_handback.exists())
             self.assertTrue(self.launch_attestation_path(work).exists())
 
     def test_start_does_not_overwrite_existing_attestation(self) -> None:
@@ -391,6 +451,209 @@ class PrePushAutoMarkTest(unittest.TestCase):
                                 work, agent_id
                             ).exists()
                         )
+
+    # ------------------------------------------------------------------
+    # PostToolUse (SubagentHandback): auto mode の hand-back された report
+    # ------------------------------------------------------------------
+
+    def test_handback_report_writes_marker_at_stop_and_consumes_record(
+        self,
+    ) -> None:
+        reports = {
+            "pass": "# Code Review\n\nStatus: pass\nFindings: 0",
+            "findings": (
+                "# Security Review\n\nStatus: findings\n\n"
+                "## Finding SEC-example-input-validation"
+            ),
+        }
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            for cycle, agent_type in enumerate(MARKERS):
+                for status_index, (status, report) in enumerate(
+                    reports.items()
+                ):
+                    with self.subTest(agent_type=agent_type, status=status):
+                        agent_id = f"{DEFAULT_AGENT_ID}h{cycle}{status_index}"
+                        marker = self.marker_path(work, agent_type)
+                        marker.unlink(missing_ok=True)
+                        self.run_start(work, agent_type, agent_id=agent_id)
+                        self.run_handback(
+                            work, agent_type, report, agent_id=agent_id
+                        )
+                        record = self.handback_report_path(work, agent_id)
+                        self.assertEqual(
+                            record.read_text(encoding="utf-8"), status
+                        )
+                        # auto mode の SubagentStop: last_assistant_message は
+                        # 締めの文だけで Status 行を含まない。
+                        result = self.run_hook(
+                            work,
+                            self.stop_payload(
+                                agent_type,
+                                HANDBACK_CLOSING_MESSAGE,
+                                agent_id=agent_id,
+                            ),
+                        )
+                        self.assertEqual(
+                            result.returncode, 0, result.stderr.decode()
+                        )
+                        self.assertTrue(marker.exists(), result.stderr.decode())
+                        self.assertEqual(
+                            marker.read_text(encoding="utf-8"),
+                            self.expected_review_hash(work),
+                        )
+                        self.assertFalse(record.exists())
+                        self.assertFalse(
+                            self.launch_attestation_path(
+                                work, agent_id
+                            ).exists()
+                        )
+
+    def test_handback_record_takes_precedence_over_last_assistant_message(
+        self,
+    ) -> None:
+        agent_type = "pre-push-review:code-reviewer"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            # hand-back が execution-failed なら、締めの文に Status: pass が
+            # 混じっていても marker は書かれない (record が優先)。
+            self.run_start(work, agent_type, agent_id="precedence0")
+            self.run_handback(
+                work,
+                agent_type,
+                "# Code Review\n\nStatus: execution-failed\n",
+                agent_id="precedence0",
+            )
+            self.assert_no_marker(
+                work,
+                agent_type,
+                self.stop_payload(
+                    agent_type,
+                    "# Code Review\n\nStatus: pass\nFindings: 0",
+                    agent_id="precedence0",
+                ),
+            )
+            self.assertFalse(self.handback_report_path(work, "precedence0").exists())
+
+    def test_invalid_handback_reports_do_not_write_marker(self) -> None:
+        agent_type = "pre-push-review:security-reviewer"
+        rejected_reports = {
+            "execution-failed": (
+                "# Security Review\n\nStatus: execution-failed\n"
+                "Failure class: command-unavailable"
+            ),
+            "missing-status": "# Security Review\n\nFindings: 0",
+            "unknown-status": "# Security Review\n\nStatus: unknown",
+            "ambiguous-status": (
+                "# Security Review\n\nStatus: pass\n\nStatus: execution-failed"
+            ),
+            "empty-message": "",
+            "non-string-message": {"nested": "Status: pass"},
+        }
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            for index, (case, report) in enumerate(rejected_reports.items()):
+                with self.subTest(case=case):
+                    agent_id = f"{DEFAULT_AGENT_ID}i{index}"
+                    self.run_start(work, agent_type, agent_id=agent_id)
+                    self.run_handback(
+                        work, agent_type, report, agent_id=agent_id
+                    )
+                    record = self.handback_report_path(work, agent_id)
+                    self.assertEqual(
+                        record.read_text(encoding="utf-8"), "invalid"
+                    )
+                    self.assert_no_marker(
+                        work,
+                        agent_type,
+                        self.stop_payload(
+                            agent_type,
+                            HANDBACK_CLOSING_MESSAGE,
+                            agent_id=agent_id,
+                        ),
+                    )
+                    self.assertFalse(record.exists())
+
+    def test_duplicate_handback_is_fail_closed(self) -> None:
+        agent_type = "pre-push-review:code-reviewer"
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            self.run_start(work, agent_type, agent_id="duplicate0")
+            self.run_handback(work, agent_type, report, agent_id="duplicate0")
+            self.run_handback(work, agent_type, report, agent_id="duplicate0")
+            record = self.handback_report_path(work, "duplicate0")
+            self.assertEqual(record.read_text(encoding="utf-8"), "invalid")
+            self.assert_no_marker(
+                work,
+                agent_type,
+                self.stop_payload(
+                    agent_type, HANDBACK_CLOSING_MESSAGE, agent_id="duplicate0"
+                ),
+            )
+
+    def test_handback_without_launch_attestation_is_not_recorded(self) -> None:
+        agent_type = "pre-push-review:code-reviewer"
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            # attestation 無し (SubagentStart を経ていない偽装 / 移行前起動)。
+            self.run_handback(work, agent_type, report, agent_id="noattest0")
+            self.assertFalse(self.handback_report_path(work, "noattest0").exists())
+            # tombstone 既存 (stop 済み agent_id の resume 中 hand-back)。
+            self.run_start(work, agent_type, agent_id="resumed0")
+            self.run_hook(
+                work,
+                self.stop_payload(
+                    agent_type,
+                    "# Code Review\n\nStatus: execution-failed\n",
+                    agent_id="resumed0",
+                ),
+            )
+            self.assertTrue(self.launch_tombstone_path(work, "resumed0").exists())
+            self.launch_attestation_path(work, "resumed0").write_text(
+                self.expected_review_hash(work), encoding="utf-8"
+            )
+            self.run_handback(work, agent_type, report, agent_id="resumed0")
+            self.assertFalse(self.handback_report_path(work, "resumed0").exists())
+            self.assert_no_marker(
+                work,
+                agent_type,
+                self.stop_payload(
+                    agent_type, HANDBACK_CLOSING_MESSAGE, agent_id="resumed0"
+                ),
+            )
+
+    def test_handback_from_other_tools_or_agents_is_ignored(self) -> None:
+        report = "# Code Review\n\nStatus: pass\nFindings: 0"
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            agent_type = "pre-push-review:code-reviewer"
+            self.run_start(work, agent_type, agent_id="ignored0")
+            result = self.run_hook(
+                work,
+                self.handback_payload(
+                    agent_type, report, agent_id="ignored0", tool_name="Write"
+                ),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(self.handback_report_path(work, "ignored0").exists())
+            result = self.run_hook(
+                work,
+                self.handback_payload(
+                    "code-reviewer", report, agent_id="ignored0"
+                ),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(self.handback_report_path(work, "ignored0").exists())
+            result = self.run_hook(
+                work,
+                self.handback_payload(
+                    agent_type, report, agent_id="../evil"
+                ),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse((self.git_dir(work).parent / "evil").exists())
 
     def test_stop_marker_publish_is_atomic_when_rename_fails(self) -> None:
         report = "# Code Review\n\nStatus: pass\nFindings: 0"
@@ -681,13 +944,20 @@ class PrePushAutoMarkTest(unittest.TestCase):
             "auto-mark.sh", stop_groups[0]["hooks"][0]["command"]
         )
 
-        for group in hooks.get("PostToolUse", []):
-            for hook in group.get("hooks", []):
-                self.assertNotIn(
-                    "auto-mark.sh",
-                    hook.get("command", ""),
-                    "PostToolUse から auto-mark.sh への配線は #285 で撤去済みのはず",
-                )
+        # PostToolUse は SubagentHandback (auto mode の hand-back された report) の
+        # matcher だけに配線する。Agent tool の completion payload には配線しない。
+        post_groups = [
+            group
+            for group in hooks.get("PostToolUse", [])
+            if any(
+                "auto-mark.sh" in hook.get("command", "")
+                for hook in group.get("hooks", [])
+            )
+        ]
+        self.assertEqual(len(post_groups), 1)
+        self.assertEqual(post_groups[0]["matcher"], HANDBACK_MATCHER)
+        self.assertIsNotNone(re.fullmatch(HANDBACK_MATCHER, "SubagentHandback"))
+        self.assertIsNone(re.fullmatch(HANDBACK_MATCHER, "Agent"))
 
         # codex pending attestation の掃除経路 (PostToolUseFailure) は
         # pre-push-codex-review plugin が所有するため、core は登録しない。

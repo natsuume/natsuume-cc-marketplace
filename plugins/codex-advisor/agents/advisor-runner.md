@@ -105,7 +105,7 @@ tracking / status transport の一時失敗または差分 0 件は `retryable-f
 必ず次の 3 行で終了する (`JOB_ID` 不明時は `unknown`)。footer (直前の
 `Codex-Advisor-Review-Cadence` 予約行を含む) をコードフェンス・引用ブロックで囲まず、プレーン
 テキストの最終行群として出力する。下のコードブロックは記法の説明であり、フェンス自体を出力に
-含めない。
+含めない。`SubagentHandback` tool が提供される場合 (Claude Code の auto mode) は、この report 全体 (末尾の footer 行群を含む) を `SubagentHandback` の `message` として 1 回だけ渡す。footer は message の実質末尾に置き、呼び出し後に書く締めの文は report ではない。
 
 ```text
 Codex-Runner-Operation: advisor

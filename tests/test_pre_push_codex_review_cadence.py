@@ -103,6 +103,53 @@ class HookHarness(unittest.TestCase):
 
     # -- payload builders ------------------------------------------------------
 
+    def handback(
+        self,
+        agent_type: str,
+        message: object,
+        *,
+        session_id: str = "session-a",
+        agent_id: str = "agent-a",
+        tool_name: str = "SubagentHandback",
+    ) -> dict[str, object] | None:
+        """PostToolUse (SubagentHandback): auto mode で report が hand-back された。"""
+        return self.hook_response(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "agent_type": agent_type,
+                "tool_name": tool_name,
+                "tool_input": {"message": message},
+                "tool_response": {
+                    "success": True,
+                    "message": "Report delivered to your caller.",
+                },
+                "tool_use_id": "toolu_test",
+            }
+        )
+
+    def closing_stop(
+        self,
+        agent_type: str,
+        *,
+        session_id: str = "session-a",
+        agent_id: str = "agent-a",
+    ) -> dict[str, object] | None:
+        """auto mode の SubagentStop: last_assistant_message は締めの文だけ。"""
+        return self.hook_response(
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "agent_type": agent_type,
+                "last_assistant_message": (
+                    "Review complete. Report delivered to the parent session."
+                ),
+                "stop_hook_active": False,
+            }
+        )
+
     def status_line_start(
         self,
         agent_type: str,
@@ -839,6 +886,163 @@ class HooksManifestContractTest(unittest.TestCase):
             ),
             session_start_commands,
         )
+
+
+class SubagentHandbackReportTest(HookHarness):
+    """auto mode の hand-back された report (PostToolUse) を SubagentStop が消費する。"""
+
+    def test_handback_status_line_counts_at_closing_stop(self) -> None:
+        session_id = "session-handback"
+        for cycle in range(1, REVIEW_CADENCE_LIMIT + 1):
+            agent_id = f"reviewer-{cycle}"
+            self.status_line_start(
+                PRE_PUSH_CODEX_REVIEWER, session_id=session_id, agent_id=agent_id
+            )
+            self.handback(
+                PRE_PUSH_CODEX_REVIEWER,
+                "# Codex Review\n\nStatus: pass\nFindings: 0",
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+            state = self.state_for(session_id)
+            assert state is not None
+            self.assertIn(agent_id, state["handbackReports"])
+            self.closing_stop(
+                PRE_PUSH_CODEX_REVIEWER, session_id=session_id, agent_id=agent_id
+            )
+            state = self.state_for(session_id)
+            assert state is not None
+            self.assertEqual(cycle, state["completedReviews"])
+            self.assertNotIn(agent_id, state["handbackReports"])
+        self.assert_stop_blocked(self.main_stop(session_id))
+
+    def test_handback_report_takes_precedence_over_closing_text(self) -> None:
+        session_id = "session-precedence"
+        self.status_line_start(PRE_MERGE_CODEX_REVIEWER, session_id=session_id)
+        self.handback(
+            PRE_MERGE_CODEX_REVIEWER,
+            "# Codex Review\n\nStatus: execution-failed\n",
+            session_id=session_id,
+        )
+        # 締めの文に Status: pass が混じっていても hand-back の解析値が優先される。
+        self.status_line_stop(
+            PRE_MERGE_CODEX_REVIEWER, "pass", session_id=session_id
+        )
+        state = self.state_for(session_id)
+        self.assertTrue(state is None or state["completedReviews"] == 0)
+
+    def test_duplicate_handback_is_not_counted(self) -> None:
+        session_id = "session-duplicate"
+        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
+        self.status_line_start(PRE_PUSH_CODEX_REVIEWER, session_id=session_id)
+        self.handback(PRE_PUSH_CODEX_REVIEWER, report, session_id=session_id)
+        self.handback(PRE_PUSH_CODEX_REVIEWER, report, session_id=session_id)
+        self.closing_stop(PRE_PUSH_CODEX_REVIEWER, session_id=session_id)
+        state = self.state_for(session_id)
+        self.assertTrue(state is None or state["completedReviews"] == 0)
+
+    def test_handback_of_untracked_agent_or_tool_is_ignored(self) -> None:
+        session_id = "session-untracked"
+        report = "# Codex Review\n\nStatus: pass\nFindings: 0"
+        self.handback(
+            PRE_PUSH_CODEX_REVIEWER_LEGACY, report, session_id=session_id
+        )
+        self.handback(
+            PRE_PUSH_CODEX_REVIEWER,
+            report,
+            session_id=session_id,
+            tool_name="Write",
+        )
+        self.assertIsNone(self.state_for(session_id))
+
+    def test_handback_review_runner_footer_counts_at_closing_stop(self) -> None:
+        session_id = "session-runner-handback"
+        message = "\n".join(
+            ["Codex review report", *self.footer_lines("review", "success")]
+        )
+        self.handback(
+            FOOTER_COUNTED_REVIEWER,
+            message,
+            session_id=session_id,
+            agent_id="review-runner-a",
+        )
+        self.closing_stop(
+            FOOTER_COUNTED_REVIEWER,
+            session_id=session_id,
+            agent_id="review-runner-a",
+        )
+        state = self.state_for(session_id)
+        assert state is not None
+        self.assertEqual(1, state["completedReviews"])
+        self.assertEqual({}, state["handbackReports"])
+
+    def test_handback_advisor_attestation_resets_at_closing_stop(self) -> None:
+        session_id = "session-advisor-handback"
+        for cycle in range(1, REVIEW_CADENCE_LIMIT + 1):
+            self.complete_status_line_review(
+                PRE_PUSH_CODEX_REVIEWER,
+                session_id=session_id,
+                agent_id=f"reviewer-{cycle}",
+            )
+        self.assert_stop_blocked(self.main_stop(session_id))
+        message = "\n".join(
+            [
+                "Codex advisor report",
+                "Codex-Advisor-Review-Cadence: satisfied",
+                *self.footer_lines("advisor", "success"),
+            ]
+        )
+        self.handback(
+            ADVISOR_CHECKPOINT_RUNNER,
+            message,
+            session_id=session_id,
+            agent_id="advisor-runner-a",
+        )
+        self.closing_stop(
+            ADVISOR_CHECKPOINT_RUNNER,
+            session_id=session_id,
+            agent_id="advisor-runner-a",
+        )
+        self.assertIsNone(self.state_for(session_id))
+        self.assertIsNone(self.main_stop(session_id))
+
+    def test_handback_advisor_without_attestation_does_not_reset(self) -> None:
+        session_id = "session-advisor-noattest"
+        for cycle in range(1, REVIEW_CADENCE_LIMIT + 1):
+            self.complete_status_line_review(
+                PRE_PUSH_CODEX_REVIEWER,
+                session_id=session_id,
+                agent_id=f"reviewer-{cycle}",
+            )
+        message = "\n".join(
+            ["Codex advisor report", *self.footer_lines("advisor", "success")]
+        )
+        self.handback(
+            ADVISOR_CHECKPOINT_RUNNER,
+            message,
+            session_id=session_id,
+            agent_id="advisor-runner-a",
+        )
+        self.closing_stop(
+            ADVISOR_CHECKPOINT_RUNNER,
+            session_id=session_id,
+            agent_id="advisor-runner-a",
+        )
+        state = self.state_for(session_id)
+        assert state is not None
+        self.assertEqual(REVIEW_CADENCE_LIMIT, state["completedReviews"])
+        self.assertEqual({}, state["handbackReports"])
+        self.assert_stop_blocked(self.main_stop(session_id))
+
+
+
+class HooksManifestHandbackTest(HooksManifestContractTest):
+    def test_post_tool_use_handback_is_registered(self) -> None:
+        hooks = self._manifest()
+        entry = self._matcher_entry_for(
+            hooks, "PostToolUse", "manage-review-cadence.mjs"
+        )
+        self.assertEqual("^SubagentHandback$", entry["matcher"])
 
 
 if __name__ == "__main__":

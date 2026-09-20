@@ -16,8 +16,15 @@ subagent の lifecycle hook (SubagentStart / SubagentStop) が正規 report と 
 - SubagentStop (同 agent_type の完全一致):
   - launch attestation は最初の SubagentStop で必ず消費する (one-shot。検証失敗でも
     再 stop で final を書ける経路を残さない)
-  - last_assistant_message 全体で `Status: ` で始まる行がちょうど 1 つ、かつ
+  - report の Status は、PostToolUse (SubagentHandback) が書いた handback record
+    (git-dir/.claude-pre-merge-handback-<agent_id>) があればそれを one-shot で
+    消費して採用し (last_assistant_message は見ない)、無ければ
+    last_assistant_message 全体で `Status: ` で始まる行がちょうど 1 つ、かつ
     `^Status: (pass|findings)$` に一致するときのみ有効
+- PostToolUse (tool_name が SubagentHandback、同 agent_type の完全一致):
+  - launch attestation が regular file として存在し tombstone が無い場合のみ、
+    tool_input.message を SubagentStop と同じ規則で判定した結果
+    (pass / findings / invalid) を handback record に書く
   - launch attestation の HEAD が現在の HEAD と一致し、pending attestation が
     `pr=<全数字>` / `head=<40 hex>` の 2 行で head が現在の HEAD と一致し、投稿用の
     本文ファイルの先頭行が同じ head の header であるときのみ final へ昇格する。
@@ -65,6 +72,12 @@ PENDING_MARKER = ".claude-pre-merge-codex-reviewed.pending"
 COMMENT_BODY = ".claude-pre-merge-codex-comment.md"
 LAUNCH_ATTESTATION_PREFIX = ".claude-pre-merge-launch-"
 LAUNCH_TOMBSTONE_PREFIX = ".claude-pre-merge-done-"
+HANDBACK_REPORT_PREFIX = ".claude-pre-merge-handback-"
+HANDBACK_MATCHER = "^SubagentHandback$"
+# auto mode で SubagentHandback を呼んだ後の last_assistant_message (締めの文)。
+HANDBACK_CLOSING_MESSAGE = (
+    "Codex review complete. Report delivered to the parent session."
+)
 
 DEFAULT_AGENT_ID = "a1b2c3d4e5f6a7b8c"
 PR_NUMBER = 123
@@ -188,6 +201,11 @@ class RepositoryFixture:
     ) -> Path:
         return self.git_dir(work) / f"{LAUNCH_TOMBSTONE_PREFIX}{agent_id}"
 
+    def handback_report_path(
+        self, work: Path, agent_id: str = DEFAULT_AGENT_ID
+    ) -> Path:
+        return self.git_dir(work) / f"{HANDBACK_REPORT_PREFIX}{agent_id}"
+
     def pending_content(self, head: str, *, pr: int = PR_NUMBER) -> str:
         return f"pr={pr}\nhead={head}\n"
 
@@ -245,6 +263,27 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
         if message is not None:
             payload["last_assistant_message"] = message
         return payload
+
+    def handback_payload(
+        self,
+        message: object,
+        *,
+        agent_type: str = CODEX_REVIEWER,
+        agent_id: str = DEFAULT_AGENT_ID,
+    ) -> dict[str, object]:
+        return {
+            "hook_event_name": "PostToolUse",
+            "session_id": "test-session",
+            "agent_id": agent_id,
+            "agent_type": agent_type,
+            "tool_name": "SubagentHandback",
+            "tool_input": {"message": message},
+            "tool_response": {
+                "success": True,
+                "message": "Report delivered to your caller.",
+            },
+            "tool_use_id": "toolu_test",
+        }
 
     def run_hook(
         self,
@@ -365,6 +404,92 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                     self.assertTrue(
                         self.launch_tombstone_path(work, agent_id).exists()
                     )
+
+    def test_handback_report_promotes_pending_at_stop(self) -> None:
+        reports = {"pass": PASS_REPORT, "findings": FINDINGS_REPORT}
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            for index, (status, report) in enumerate(reports.items()):
+                with self.subTest(status=status):
+                    agent_id = f"{DEFAULT_AGENT_ID}h{index}"
+                    final = self.final_marker_path(work)
+                    final.unlink(missing_ok=True)
+                    self.run_start(work, agent_id=agent_id)
+                    head = self.head_sha(work)
+                    pending_text = self.pending_content(head)
+                    pending = self.write_pending(work, pending_text)
+                    body = self.write_comment_body(
+                        work, self.comment_body_content(head, status=status)
+                    )
+                    result = self.run_hook(
+                        work, self.handback_payload(report, agent_id=agent_id)
+                    )
+                    self.assertEqual(
+                        result.returncode, 0, result.stderr.decode()
+                    )
+                    record = self.handback_report_path(work, agent_id)
+                    self.assertEqual(record.read_text(encoding="utf-8"), status)
+                    result = self.run_hook(
+                        work,
+                        self.stop_payload(
+                            HANDBACK_CLOSING_MESSAGE, agent_id=agent_id
+                        ),
+                    )
+                    self.assertEqual(
+                        result.returncode, 0, result.stderr.decode()
+                    )
+                    self.assertTrue(final.exists(), result.stderr.decode())
+                    self.assertEqual(
+                        final.read_text(encoding="utf-8"), pending_text
+                    )
+                    self.assertFalse(pending.exists())
+                    self.assertTrue(body.exists())
+                    self.assertFalse(record.exists())
+                    self.assertTrue(
+                        self.launch_tombstone_path(work, agent_id).exists()
+                    )
+
+    def test_handback_execution_failed_discards_pending_and_body(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            self.run_start(work, agent_id="handbackfail0")
+            head = self.head_sha(work)
+            pending = self.write_pending(work, self.pending_content(head))
+            body = self.write_comment_body(work, self.comment_body_content(head))
+            result = self.run_hook(
+                work,
+                self.handback_payload(
+                    "# Codex Review\n\nStatus: execution-failed\n",
+                    agent_id="handbackfail0",
+                ),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            # record が優先されるため、締めの文に Status: pass があっても昇格しない。
+            self.assert_no_final(
+                work, self.stop_payload(PASS_REPORT, agent_id="handbackfail0")
+            )
+            self.assertFalse(pending.exists())
+            self.assertFalse(body.exists())
+            self.assertFalse(
+                self.handback_report_path(work, "handbackfail0").exists()
+            )
+
+    def test_handback_from_other_agent_type_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_name:
+            work = self.create_feature_repository(Path(temporary_name))
+            self.run_start(work, agent_id="otheragent0")
+            result = self.run_hook(
+                work,
+                self.handback_payload(
+                    PASS_REPORT,
+                    agent_type=PUSH_CODEX_REVIEWER,
+                    agent_id="otheragent0",
+                ),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertFalse(
+                self.handback_report_path(work, "otheragent0").exists()
+            )
 
     def test_stop_with_invalid_report_discards_pending_and_body(self) -> None:
         cases = {
@@ -624,6 +749,21 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
         ]
         self.assertEqual(len(stop_groups), 1)
         self.assertIn("auto-mark.sh", stop_groups[0]["hooks"][0]["command"])
+
+        # PostToolUse は SubagentHandback (auto mode の hand-back された report) の
+        # matcher だけに配線する。
+        post_groups = [
+            group
+            for group in hooks.get("PostToolUse", [])
+            if any(
+                "auto-mark.sh" in hook.get("command", "")
+                for hook in group.get("hooks", [])
+            )
+        ]
+        self.assertEqual(len(post_groups), 1)
+        self.assertEqual(post_groups[0]["matcher"], HANDBACK_MATCHER)
+        self.assertIsNotNone(re.fullmatch(HANDBACK_MATCHER, "SubagentHandback"))
+        self.assertIsNone(re.fullmatch(HANDBACK_MATCHER, "Agent"))
 
         failure_groups = hooks["PostToolUseFailure"]
         self.assertEqual(len(failure_groups), 1)

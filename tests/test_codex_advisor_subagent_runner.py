@@ -206,6 +206,69 @@ class HookHarness(unittest.TestCase):
             }
         )
 
+    def handback(
+        self,
+        operation: str,
+        status: str,
+        *,
+        session_id: str = "session-a",
+        agent_id: str = "agent-a",
+        job_id: str = "task-example",
+        review_cadence: str | None = None,
+        tool_name: str = "SubagentHandback",
+    ) -> dict[str, object] | None:
+        """PostToolUse (SubagentHandback): auto mode で report が hand-back された。"""
+        report_lines = ["Codex runner report"]
+        if review_cadence is None and operation == "advisor":
+            review_cadence = "not-applicable"
+        if review_cadence is not None:
+            report_lines.append(
+                f"Codex-Advisor-Review-Cadence: {review_cadence}"
+            )
+        report_lines.extend(
+            [
+                f"Codex-Runner-Operation: {operation}",
+                f"Codex-Runner-Status: {status}",
+                f"Codex-Runner-Job-ID: {job_id}",
+            ]
+        )
+        return self.hook_response(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "agent_type": RUNNERS[operation],
+                "tool_name": tool_name,
+                "tool_input": {"message": "\n".join(report_lines)},
+                "tool_response": {
+                    "success": True,
+                    "message": "Report delivered to your caller.",
+                },
+                "tool_use_id": "toolu_test",
+            }
+        )
+
+    def closing_stop(
+        self,
+        operation: str,
+        *,
+        session_id: str = "session-a",
+        agent_id: str = "agent-a",
+    ) -> dict[str, object] | None:
+        """auto mode の SubagentStop: last_assistant_message は締めの文だけ。"""
+        return self.hook_response(
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "agent_type": RUNNERS[operation],
+                "last_assistant_message": (
+                    "Runner finished. Report delivered to the parent session."
+                ),
+                "stop_hook_active": False,
+            }
+        )
+
     def main_stop(self, session_id: str = "session-a") -> dict[str, object] | None:
         return self.hook_response(
             {
@@ -388,6 +451,97 @@ class CodexRunnerLifecycleTest(HookHarness):
                 ]
                 self.assertEqual([], records)
                 self.assertIsNone(self.main_stop(session_id))
+
+    def test_handback_success_report_terminates_state_at_closing_stop(self) -> None:
+        for operation in ("rescue", "review", "advisor"):
+            session_id = f"handback-{operation}"
+            with self.subTest(operation=operation):
+                self.subagent_start(operation, session_id=session_id)
+                self.handback(operation, "success", session_id=session_id)
+                records = [
+                    record
+                    for record in self.state_records()
+                    if record["sessionId"] == session_id
+                ]
+                self.assertEqual(1, len(records))
+                self.assertEqual("active", records[0]["phase"])
+                self.assertEqual(
+                    "success", records[0]["handback"]["footer"]["status"]
+                )
+                self.closing_stop(operation, session_id=session_id)
+                records = [
+                    record
+                    for record in self.state_records()
+                    if record["sessionId"] == session_id
+                ]
+                self.assertEqual([], records)
+                self.assertIsNone(self.main_stop(session_id))
+
+    def test_handback_retryable_failure_schedules_one_retry(self) -> None:
+        self.subagent_start("review", agent_id="agent-first")
+        self.handback("review", "retryable-failure", agent_id="agent-first")
+        self.closing_stop("review", agent_id="agent-first")
+        records = self.state_records()
+        self.assertEqual(1, len(records))
+        self.assertEqual("retry-required", records[0]["phase"])
+        self.assertIsNone(records[0]["handback"])
+        self.assert_stop_blocked(self.main_stop(), RUNNERS["review"])
+
+    def test_handback_takes_precedence_over_closing_text(self) -> None:
+        self.subagent_start("rescue")
+        self.handback("rescue", "terminal-failure")
+        # 締めの文が success footer を装っても hand-back の解析値が優先される
+        # (terminal-failure なので retry せず state を消す)。
+        self.subagent_stop("rescue", "success")
+        self.assertEqual([], self.state_records())
+
+    def test_handback_advisor_without_attestation_line_is_retry_required(
+        self,
+    ) -> None:
+        self.subagent_start("advisor")
+        # helper は advisor の review_cadence を not-applicable に補完するため、
+        # attestation 行を欠く report は直接組み立てる。
+        self.hook_response(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "session-a",
+                "agent_id": "agent-a",
+                "agent_type": RUNNERS["advisor"],
+                "tool_name": "SubagentHandback",
+                "tool_input": {
+                    "message": "\n".join(
+                        [
+                            "advisor report without reserved metadata",
+                            "Codex-Runner-Operation: advisor",
+                            "Codex-Runner-Status: success",
+                            "Codex-Runner-Job-ID: task-advisor",
+                        ]
+                    )
+                },
+                "tool_response": {"success": True},
+            }
+        )
+        self.closing_stop("advisor")
+        records = self.state_records()
+        self.assertEqual(1, len(records))
+        self.assertEqual("retry-required", records[0]["phase"])
+
+    def test_duplicate_handback_is_retry_required(self) -> None:
+        self.subagent_start("rescue")
+        self.handback("rescue", "success")
+        self.handback("rescue", "success")
+        self.closing_stop("rescue")
+        records = self.state_records()
+        self.assertEqual(1, len(records))
+        self.assertEqual("retry-required", records[0]["phase"])
+
+    def test_handback_from_other_agent_id_or_tool_is_ignored(self) -> None:
+        self.subagent_start("rescue", agent_id="agent-a")
+        self.handback("rescue", "success", agent_id="agent-other")
+        self.handback("rescue", "success", tool_name="Write")
+        records = self.state_records()
+        self.assertEqual(1, len(records))
+        self.assertIsNone(records[0]["handback"])
 
     def test_malformed_runner_report_is_retryable_but_bounded(self) -> None:
         self.subagent_start("rescue")
@@ -803,6 +957,7 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
             "SessionEnd",
             "PreToolUse",
             "SubagentStart",
+            "PostToolUse",
             "SubagentStop",
             "Stop",
         ):
@@ -817,6 +972,15 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
                     any("manage-codex-runners.mjs" in command for command in commands),
                     commands,
                 )
+        post_tool_use_matchers = [
+            entry["matcher"]
+            for entry in hooks["PostToolUse"]
+            if any(
+                "manage-codex-runners.mjs" in hook["command"]
+                for hook in entry["hooks"]
+            )
+        ]
+        self.assertEqual(["^SubagentHandback$"], post_tool_use_matchers)
         # review の起動・計数は pre-push-codex-review / pre-merge-codex-review
         # plugin の責務であり、codex-advisor の hooks.json は reviewer
         # namespace に関知しない。

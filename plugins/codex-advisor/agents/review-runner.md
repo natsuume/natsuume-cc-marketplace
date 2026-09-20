@@ -82,7 +82,7 @@ tracking / status transport の一時失敗と job 差分 0 件は `retryable-fa
 
 必ず次の 3 行で終了する (正常 foreground 完了で job ID を必要としなかった場合は `none`)。footer を
 コードフェンス・引用ブロックで囲まず、プレーンテキストの最終行群として出力する。下のコードブロックは
-記法の説明であり、フェンス自体を出力に含めない。
+記法の説明であり、フェンス自体を出力に含めない。`SubagentHandback` tool が提供される場合 (Claude Code の auto mode) は、この report 全体 (末尾の footer 行群を含む) を `SubagentHandback` の `message` として 1 回だけ渡す。footer は message の実質末尾に置き、呼び出し後に書く締めの文は report ではない。
 
 ```text
 Codex-Runner-Operation: review

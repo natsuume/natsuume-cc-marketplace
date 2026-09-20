@@ -11,17 +11,28 @@
  *
  * 計数対象 (1 サイクル = 成功 review 1 回。session ごとに合算する):
  *   - `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer`
- *     の SubagentStop で、`last_assistant_message` に `Status: pass|findings` 行が
- *     ちょうど 1 行ある場合
- *   - `codex-advisor:review-runner` の SubagentStop で、実質末尾 3 行の footer
+ *     の SubagentStop で、report に `Status: pass|findings` 行がちょうど 1 行ある場合
+ *   - `codex-advisor:review-runner` の SubagentStop で、report の実質末尾 3 行の footer
  *     (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` /
  *     `Codex-Runner-Job-ID: <id>`) が揃っている場合
+ *
+ * report の所在 (SubagentStop での判定材料):
+ *   Claude Code v2.1.271 以降の auto mode では、subagent の最終 report は
+ *   `SubagentHandback` tool の `message` 引数として親へ届き、SubagentStop の
+ *   `last_assistant_message` には hand-back 後の締めの文しか入らない。そのため
+ *   PostToolUse (`tool_name` が `SubagentHandback`) で `tool_input.message` を解析した
+ *   結果 (Status 行 / footer / attestation の解析値のみ。本文は保存しない) を
+ *   state の `handbackReports[agent_id]` に記録し、SubagentStop は同じ agent_id の
+ *   記録があればそれを one-shot で消費して採用する (`last_assistant_message` は見ない)。
+ *   記録が無い場合 (SubagentHandback が提供されない非 auto mode 等) に限り
+ *   `last_assistant_message` を report として解析する。同一 agent_id の 2 回目以降の
+ *   hand-back は重複 report として解析値をすべて null にする (fail-closed)。
  *   旧 `pre-push-review:codex-reviewer` (codex gate 分離前の namespace) は計数対象に
  *   含めない。本 plugin の support floor は codex gate 分離後の pre-push-review
  *   v6.0.0 以降であり、旧 namespace の review 経路はサポート対象外のため。
  *
  * カウンター reset (checkpoint 充足) の契約:
- *   - `codex-advisor:advisor-runner` の SubagentStop で、footer が
+ *   - `codex-advisor:advisor-runner` の SubagentStop で、report (所在は上記と同じ) の footer が
  *     `Codex-Runner-Status: success` かつ footer 直前の実質行が
  *     `Codex-Advisor-Review-Cadence: satisfied` である場合、または footer が
  *     `Codex-Runner-Status: terminal-failure` かつ同行が `unavailable` である場合
@@ -61,8 +72,8 @@
  * SessionStart では削除しない (resume でカウンターを保持するため。そのため本 script は
  * SessionStart イベントを扱わない)。
  *
- * 扱う hook イベント: PreToolUse, SubagentStart, SubagentStop, PostToolUseFailure,
- * Stop, SessionEnd。
+ * 扱う hook イベント: PreToolUse, SubagentStart, PostToolUse (SubagentHandback),
+ * SubagentStop, PostToolUseFailure, Stop, SessionEnd。
  */
 
 import crypto from "node:crypto";
@@ -82,6 +93,21 @@ const REVIEW_CADENCE_ATTESTATIONS = new Set([
   "unavailable",
   "not-applicable",
 ]);
+const AGENT_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+// PostToolUse (SubagentHandback) で report を記録する agent_type (計数対象 2 reviewer +
+// footer 計数の review-runner + reset 判定の advisor-runner)。
+const HANDBACK_TRACKED_AGENT_TYPES = new Set([
+  ...STATUS_LINE_COUNTED_REVIEWERS,
+  FOOTER_COUNTED_REVIEWER,
+  ADVISOR_CHECKPOINT_RUNNER,
+]);
+// 重複 hand-back (同一 agent_id の 2 回目以降) を表す解析値。すべて null なので、
+// SubagentStop ではどの判定も成立しない (fail-closed)。
+const INVALID_HANDBACK_REPORT = Object.freeze({
+  reviewStatus: null,
+  footer: null,
+  attestation: null,
+});
 
 function stateRoot() {
   const overridden = process.env.PRE_PUSH_CODEX_REVIEW_CADENCE_STATE_ROOT;
@@ -109,12 +135,48 @@ function sanitizeAgentIds(values) {
     ? [
         ...new Set(
           values.filter(
-            (value) =>
-              typeof value === "string" && /^[A-Za-z0-9._-]{1,128}$/.test(value),
+            (value) => typeof value === "string" && AGENT_ID_RE.test(value),
           ),
         ),
       ]
     : [];
+}
+
+function sanitizeFooter(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    typeof value.operation !== "string" ||
+    typeof value.status !== "string" ||
+    typeof value.jobId !== "string"
+  ) {
+    return null;
+  }
+  return { operation: value.operation, status: value.status, jobId: value.jobId };
+}
+
+function sanitizeHandbackReport(value) {
+  if (!value || typeof value !== "object") return INVALID_HANDBACK_REPORT;
+  return {
+    reviewStatus:
+      value.reviewStatus === "pass" || value.reviewStatus === "findings"
+        ? value.reviewStatus
+        : null,
+    footer: sanitizeFooter(value.footer),
+    attestation: REVIEW_CADENCE_ATTESTATIONS.has(value.attestation)
+      ? value.attestation
+      : null,
+  };
+}
+
+function sanitizeHandbackReports(value) {
+  const reports = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return reports;
+  for (const [agentId, report] of Object.entries(value)) {
+    if (!AGENT_ID_RE.test(agentId)) continue;
+    reports[agentId] = sanitizeHandbackReport(report);
+  }
+  return reports;
 }
 
 function readState(sessionId) {
@@ -131,6 +193,7 @@ function readState(sessionId) {
     return {
       ...parsed,
       activeReviewerAgentIds,
+      handbackReports: sanitizeHandbackReports(parsed.handbackReports),
       checkpointRequired:
         parsed.checkpointRequired === true ||
         parsed.completedReviews >= REVIEW_CADENCE_LIMIT,
@@ -140,7 +203,12 @@ function readState(sessionId) {
   }
 }
 
-function writeState(sessionId, completedReviews, activeReviewerAgentIds = []) {
+function writeState(
+  sessionId,
+  completedReviews,
+  activeReviewerAgentIds = [],
+  handbackReports = {},
+) {
   ensureRoot();
   const destination = statePath(sessionId);
   const temporary = `${destination}.${process.pid}.${crypto
@@ -154,6 +222,7 @@ function writeState(sessionId, completedReviews, activeReviewerAgentIds = []) {
     sessionId,
     completedReviews: normalizedCount,
     activeReviewerAgentIds: sanitizeAgentIds(activeReviewerAgentIds),
+    handbackReports: sanitizeHandbackReports(handbackReports),
     checkpointRequired: normalizedCount >= REVIEW_CADENCE_LIMIT,
     updatedAt: new Date().toISOString(),
   };
@@ -181,6 +250,44 @@ function removeState(sessionId) {
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
+}
+
+/**
+ * state を書くか、保持する情報が何も無ければ (完了 review 0 回・起動中 reviewer 無し・
+ * 未消費の handback 記録無し) state file ごと削除する。
+ */
+function persistState(
+  sessionId,
+  completedReviews,
+  activeReviewerAgentIds,
+  handbackReports,
+) {
+  if (
+    completedReviews === 0 &&
+    activeReviewerAgentIds.length === 0 &&
+    Object.keys(handbackReports).length === 0
+  ) {
+    removeState(sessionId);
+  } else {
+    writeState(sessionId, completedReviews, activeReviewerAgentIds, handbackReports);
+  }
+}
+
+/**
+ * SubagentStop 側で、同じ agent_id の handback 記録を one-shot で取り出す。戻り値の
+ * `report` は記録が無ければ null、`handbackReports` は取り出した後の残り。
+ */
+function takeHandbackReport(state, agentId) {
+  const handbackReports = { ...(state?.handbackReports ?? {}) };
+  if (
+    typeof agentId !== "string" ||
+    !Object.prototype.hasOwnProperty.call(handbackReports, agentId)
+  ) {
+    return { report: null, handbackReports };
+  }
+  const report = handbackReports[agentId];
+  delete handbackReports[agentId];
+  return { report, handbackReports };
 }
 
 function shellSegments(command) {
@@ -393,6 +500,19 @@ function parseReviewStatus(message) {
   return match?.[1] ?? null;
 }
 
+/**
+ * hand-back された report (SubagentHandback の tool_input.message) を、SubagentStop が
+ * 使う 3 種の解析値へまとめて変換する。本文そのものは state に保存しない。
+ */
+function parseHandbackReport(message) {
+  if (typeof message !== "string") return INVALID_HANDBACK_REPORT;
+  return {
+    reviewStatus: parseReviewStatus(message),
+    footer: parseRunnerFooter(message),
+    attestation: parseReviewCadenceAttestation(message),
+  };
+}
+
 function denyResponse(reason) {
   return {
     hookSpecificOutput: {
@@ -421,7 +541,7 @@ function handleSubagentStart(input) {
   if (
     typeof input.session_id !== "string" ||
     typeof input.agent_id !== "string" ||
-    !/^[A-Za-z0-9._-]{1,128}$/.test(input.agent_id) ||
+    !AGENT_ID_RE.test(input.agent_id) ||
     !STATUS_LINE_COUNTED_REVIEWERS.has(input.agent_type)
   ) {
     return null;
@@ -431,7 +551,44 @@ function handleSubagentStart(input) {
   if (!activeReviewerAgentIds.includes(input.agent_id)) {
     activeReviewerAgentIds.push(input.agent_id);
   }
-  writeState(input.session_id, state?.completedReviews ?? 0, activeReviewerAgentIds);
+  writeState(
+    input.session_id,
+    state?.completedReviews ?? 0,
+    activeReviewerAgentIds,
+    state?.handbackReports ?? {},
+  );
+  return null;
+}
+
+/**
+ * PostToolUse (SubagentHandback): hand-back された report の解析値を agent_id ごとに
+ * state へ記録する。SubagentStop が同じ agent_id の記録を one-shot で消費する。
+ */
+function handlePostToolUse(input) {
+  if (input.tool_name !== "SubagentHandback") return null;
+  if (
+    typeof input.session_id !== "string" ||
+    typeof input.agent_id !== "string" ||
+    !AGENT_ID_RE.test(input.agent_id) ||
+    !HANDBACK_TRACKED_AGENT_TYPES.has(input.agent_type)
+  ) {
+    return null;
+  }
+  const state = readState(input.session_id);
+  const handbackReports = { ...(state?.handbackReports ?? {}) };
+  // 同一 agent_id の 2 回目以降の hand-back は重複 report として無効化する。
+  handbackReports[input.agent_id] = Object.prototype.hasOwnProperty.call(
+    handbackReports,
+    input.agent_id,
+  )
+    ? INVALID_HANDBACK_REPORT
+    : parseHandbackReport(input.tool_input?.message);
+  writeState(
+    input.session_id,
+    state?.completedReviews ?? 0,
+    state?.activeReviewerAgentIds ?? [],
+    handbackReports,
+  );
   return null;
 }
 
@@ -443,37 +600,63 @@ function handleStatusLineReviewerStop(input) {
   const activeReviewerAgentIds = state.activeReviewerAgentIds.filter(
     (agentId) => agentId !== input.agent_id,
   );
-  const completedReviews =
-    state.completedReviews +
-    (parseReviewStatus(input.last_assistant_message) === null ? 0 : 1);
-  if (completedReviews === 0 && activeReviewerAgentIds.length === 0) {
-    removeState(input.session_id);
-  } else {
-    writeState(input.session_id, completedReviews, activeReviewerAgentIds);
-  }
+  const { report, handbackReports } = takeHandbackReport(state, input.agent_id);
+  const reviewStatus = report
+    ? report.reviewStatus
+    : parseReviewStatus(input.last_assistant_message);
+  const completedReviews = state.completedReviews + (reviewStatus === null ? 0 : 1);
+  persistState(
+    input.session_id,
+    completedReviews,
+    activeReviewerAgentIds,
+    handbackReports,
+  );
   return null;
 }
 
 function handleFooterReviewerStop(input) {
-  const footer = parseRunnerFooter(input.last_assistant_message);
-  if (footer?.operation !== "review" || footer.status !== "success") return null;
   const state = readState(input.session_id);
-  writeState(
+  const { report, handbackReports } = takeHandbackReport(state, input.agent_id);
+  const footer = report
+    ? report.footer
+    : parseRunnerFooter(input.last_assistant_message);
+  const counted =
+    footer?.operation === "review" && footer.status === "success" ? 1 : 0;
+  persistState(
     input.session_id,
-    (state?.completedReviews ?? 0) + 1,
+    (state?.completedReviews ?? 0) + counted,
     state?.activeReviewerAgentIds ?? [],
+    handbackReports,
   );
   return null;
 }
 
 function handleAdvisorCheckpointStop(input) {
-  const footer = parseRunnerFooter(input.last_assistant_message);
-  if (footer?.operation !== "advisor") return null;
-  const attestation = parseReviewCadenceAttestation(input.last_assistant_message);
-  const satisfied = footer.status === "success" && attestation === "satisfied";
-  const unavailable =
-    footer.status === "terminal-failure" && attestation === "unavailable";
-  if (satisfied || unavailable) removeState(input.session_id);
+  const state = readState(input.session_id);
+  const { report, handbackReports } = takeHandbackReport(state, input.agent_id);
+  const footer = report
+    ? report.footer
+    : parseRunnerFooter(input.last_assistant_message);
+  const attestation = report
+    ? report.attestation
+    : parseReviewCadenceAttestation(input.last_assistant_message);
+  if (footer?.operation === "advisor") {
+    const satisfied = footer.status === "success" && attestation === "satisfied";
+    const unavailable =
+      footer.status === "terminal-failure" && attestation === "unavailable";
+    if (satisfied || unavailable) {
+      removeState(input.session_id);
+      return null;
+    }
+  }
+  if (state) {
+    persistState(
+      input.session_id,
+      state.completedReviews,
+      state.activeReviewerAgentIds,
+      handbackReports,
+    );
+  }
   return null;
 }
 
@@ -544,6 +727,8 @@ function dispatch(input) {
       return handlePreToolUse(input);
     case "SubagentStart":
       return handleSubagentStart(input);
+    case "PostToolUse":
+      return handlePostToolUse(input);
     case "SubagentStop":
       return handleSubagentStop(input);
     case "PostToolUseFailure":
