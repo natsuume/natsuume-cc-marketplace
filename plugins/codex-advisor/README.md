@@ -6,7 +6,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v3.0.0
+v3.0.1
 
 ## 機構
 
@@ -14,7 +14,7 @@ v3.0.0
 |---|---|
 | SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 5 ルール (下記) を `additionalContext` として常時注入する |
 | SubagentStart hook (`inject-advisor-rules-subagent`) | 通常 subagent に advisor の許可境界を注入する。通常 subagent は wrapper を直接起動せず、self-contained な相談 request を親へ返す |
-| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、SubagentStart / SubagentStop の active・bounded retry (advisor-runner の attestation footer 契約検証を含む)、Stop の reroute / completion 回収要求を管理する。runner state は UID + session ID で分離し、prompt / Codex 出力を保存しない |
+| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、SubagentStart / SubagentStop の active・bounded retry (advisor-runner の attestation footer 契約検証を含む)、Stop の reroute / completion 回収要求を管理する。auto mode (Claude Code v2.1.271 以降) では runner の最終 report が `SubagentHandback` tool 経由で届き SubagentStop の `last_assistant_message` には締めの文しか入らないため、PostToolUse (`SubagentHandback`) で report の footer / attestation を解析して state に記録し、SubagentStop がそれを採用する。runner state は UID + session ID で分離し、prompt / Codex 出力 (hand-back report の本文を含む) を保存しない |
 | role 固有 runner agents | rescue / review / advisor の model 起動・job tracking・terminal output を subagent context に閉じ込める。全 runner は foreground Agent として起動する |
 | `/codex-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では `codex-advisor:advisor-runner` を起動する。Codex host の source 契約は PTY stdin wrapper を維持する |
 | `scripts/run-codex-job.sh` | official companion v1.0.6 の task / review / status / result / cancel を runner 向けの path-only command に限定して公開する。status wait は単発 status の短い poll で構成する |

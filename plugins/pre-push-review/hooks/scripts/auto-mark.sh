@@ -13,6 +13,14 @@
 # 発火しない。このため completion 検知は SubagentStop で行い、SubagentStart の launch
 # attestation で「レビューがこの差分に対して開始された」ことを束縛する。
 #
+# Claude Code v2.1.271 以降の auto mode では、 subagent の最終 report は SubagentHandback
+# tool の `message` 引数として親へ届き、 SubagentStop の last_assistant_message には
+# hand-back 後の締めの文 (report ではない) しか入らない。 そのため report の Status 判定は
+# PostToolUse (tool_name=SubagentHandback) で行って handback record
+# (git-dir/.claude-pre-push-handback-<agent_id>) に記録し、 SubagentStop はその record を
+# one-shot で消費する。 record が無い場合 (SubagentHandback が提供されない非 auto mode 等)
+# に限り last_assistant_message を report として判定する。
+#
 # イベント別契約:
 #
 # - SubagentStart (hooks.json matcher: ^pre-push-review:(code|security)-reviewer$):
@@ -28,8 +36,9 @@
 #   5. base 検出不能 / branch 取得不能 / master・main / hash 計算失敗 →
 #      attestation を書かず exit 0 (block-pre-push.sh の pass-through / deny 条件と
 #      整合)
-#   6. 1 日より古い launch attestation (.claude-pre-push-launch-*) を opportunistic
-#      に削除する (stale 掃除、best-effort)。 launch tombstone
+#   6. 1 日より古い launch attestation (.claude-pre-push-launch-*) と handback record
+#      (.claude-pre-push-handback-*) を opportunistic に削除する (stale 掃除、
+#      best-effort)。 launch tombstone
 #      (.claude-pre-push-done-*) は prune せず無期限に保持する — resume の成立期間は
 #      transcript の保持期間に従い、 それは cleanupPeriodDays 設定で任意に延長
 #      できるため、 期限付き prune では設定次第で再鋳造の穴が復活する。 1 件
@@ -44,6 +53,24 @@
 # 実行を証明しない (resume は既存の subagent context を継続するだけ)。 再レビューが
 # 必要な場合は新規 subagent の spawn (= 新しい agent_id での launch attestation) で
 # 行う。
+#
+# - PostToolUse (hooks.json matcher: ^SubagentHandback$):
+#   1. tool_name が SubagentHandback でなければ exit 0。 tool_response.success が
+#      boolean false (未配信: この agent では tool が active でない / 既に配信済み /
+#      親が受理しない / 親が終了済み) の場合も record を書かず exit 0 (未配信の report は
+#      last_assistant_message 経路に委ねる。 harness は未配信時に plain text での報告へ
+#      切り替える)
+#   2. agent_type / agent_id を SubagentStart と同じ基準で検証。不一致は exit 0
+#      (filesystem 操作は一切行わない)
+#   3. launch attestation が regular file として存在しない、または launch tombstone が
+#      既に存在する場合は record を書かず exit 0 (attestation の無い hand-back は開始
+#      hash に束縛された review の報告ではない。 SubagentStop 到達後の resume 中の
+#      hand-back もここで遮断される)
+#   4. tool_input.message (string) を SubagentStop 5 と同じ規則で判定し、 結果
+#      (pass / findings / invalid) を handback record (.claude-pre-push-handback-
+#      <agent_id>) へ同一ディレクトリ内 temp file + `mv` で atomic に書く。 同一
+#      agent_id の 2 回目以降の hand-back (record が既存) は重複 report として record を
+#      invalid に上書きする (fail-closed。 「Status 行はちょうど 1 つ」と同じ規律)
 #
 # - SubagentStop (同 matcher):
 #   1. agent_type / agent_id を SubagentStart と同じ基準で検証。不一致は exit 0
@@ -70,16 +97,21 @@
 #      消えると、 同一 agent_id の SubagentStart 再発火を拒否する記録が残らない)。
 #      遷移が完了した stop 以降は、 検証が失敗しても再 stop で marker を書ける
 #      経路も、 同一 agent_id での SubagentStart 再発火も残らない
-#   5. last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行が
-#      ちょうど 1 つ、かつその行が ^Status: (pass|findings)$ に一致するときのみ
-#      有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 / 非 string は
-#      fail-closed に skip (収集を許可値に限定すると未知値との併存を受理してしまう)
+#   5. report の Status を判定する。 handback record (PostToolUse が書いた
+#      .claude-pre-push-handback-<agent_id>) が regular file として存在すればその内容
+#      (pass / findings 以外は invalid。 symlink も invalid) を採用して record を rm し
+#      (one-shot)、 last_assistant_message は見ない (auto mode では締めの文しか入らない
+#      ため。 record が優先する)。 record が無い場合は last_assistant_message (string)
+#      全体を行分割し、`Status: ` で始まる行がちょうど 1 つ、かつその行が
+#      ^Status: (pass|findings)$ に一致するときのみ有効な report とみなす。
+#      execution-failed / 未知値 / 欠落 / 重複 / 非 string は fail-closed に skip
+#      (収集を許可値に限定すると未知値との併存を受理してしまう)
 #   6. base / branch / master・main / 現在 hash の計算は従来どおり (失敗は skip)
 #   7. launch attestation の開始時 hash と現在 hash が一致するときのみ marker を
 #      書く (レビュー開始後の差分変更を fail-closed に遮断)
 #
-# - 上記 2 event 以外 (PostToolUse の completion payload を含む) では marker を
-#   書かない
+# - 上記 3 event 以外では marker を書かない。 PostToolUse も tool_name が
+#   SubagentHandback 以外 (Agent tool の completion payload を含む) では何もしない
 #
 # policy: environment errors are fail-open, review completion is fail-closed
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を
@@ -114,9 +146,10 @@
 #     Claude Code の Agent は background 起動時にも `async_launched` で正常 return し、
 #     subagent が内部失敗を parent-safe report の `Status: execution-failed` として返した場合も
 #     外側の tool call 自体は成功する。そこで SubagentStop (subagent 自身の応答完了に
-#     紐づく lifecycle event) の last_assistant_message にある Status と launch
-#     attestation の hash 束縛を併せて検証し、 launch 時点・内部失敗・resume 再 stop では
-#     marker を書かない (= push gate がそのまま deny) ことを担保する。
+#     紐づく lifecycle event) で、 report の Status (SubagentHandback で届いた report は
+#     handback record 経由、 それ以外は last_assistant_message) と launch attestation の
+#     hash 束縛を併せて検証し、 launch 時点・内部失敗・resume 再 stop では marker を
+#     書かない (= push gate がそのまま deny) ことを担保する。
 #
 # レビュー対象 repo の前提 (block-pre-push.sh との非対称について):
 #   本 hook は dirty 判定 / base 検出 / branch / ハッシュ計算 / marker パスを **すべて
@@ -172,6 +205,54 @@ source "$SCRIPT_DIR/lib/markers.sh"
 # ため、 マッチしない agent_id は filesystem 操作を一切行わずに exit 0 する。
 AGENT_ID_RE='^[A-Za-z0-9._-]{1,128}$'
 
+# parent-safe report の Status 判定 (jq 関数定義)。 report (string) 全体を行分割し、
+# `Status: ` で始まる行を全件収集する。ちょうど 1 行で、かつその行が
+# ^Status: (pass|findings)$ に一致するときのみその値を返し、それ以外 (execution-failed /
+# 未知値 / 欠落 / 重複 / 非 string) は "invalid" を返す (許可値の行だけを数えると
+# 「Status: pass + Status: unknown」の併存を pass として受理してしまうため、収集は
+# 許可値に限定しない)。 PostToolUse (SubagentHandback の tool_input.message) と
+# SubagentStop (last_assistant_message) の両方で同じ規則を使う。
+REPORT_STATUS_JQ='
+  def report_status(report):
+    if ((report | type) != "string") then
+      "invalid"
+    else
+      ([
+        report
+        | gsub("\r\n"; "\n")
+        | split("\n")[]
+        | select(test("^Status: "))
+      ]) as $status_lines
+      | if ($status_lines | length) != 1 then
+          "invalid"
+        elif ($status_lines[0] | test("^Status: (pass|findings)$")) then
+          ($status_lines[0] | capture("^Status: (?<status>pass|findings)$").status)
+        else
+          "invalid"
+        end
+    end;
+'
+
+# handback record を同一ディレクトリ内 temp file + `mv` で atomic に書く。 record は
+# 1 語 (pass / findings / invalid) で、 既存 record は置き換える (重複 hand-back を
+# invalid へ上書きする経路で使う)。 失敗は silent (戻り値 1)。
+write_handback_record() {
+  local record_path="$1"
+  local record_value="$2"
+  local record_tmp
+
+  record_tmp=$(mktemp "${record_path}.tmp.XXXXXX" 2>/dev/null) || return 1
+  if ! printf '%s' "$record_value" > "$record_tmp" 2>/dev/null; then
+    rm -f "$record_tmp" 2>/dev/null || true
+    return 1
+  fi
+  if ! mv -f "$record_tmp" "$record_path" 2>/dev/null; then
+    rm -f "$record_tmp" 2>/dev/null || true
+    return 1
+  fi
+  return 0
+}
+
 HOOK_EVENT_NAME=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty')
 
 case "$HOOK_EVENT_NAME" in
@@ -215,9 +296,10 @@ case "$HOOK_EVENT_NAME" in
     HASH=$(compute_review_hash "$BASE") || exit 0
 
     STORAGE_DIR=$(marker_storage_dir "$GIT_DIR") || exit 0
-    # 1 日 (1440 分) より古い launch attestation を opportunistic に削除する
-    # (stale 掃除、best-effort)。 find の失敗 (権限不足等) は無視する。
+    # 1 日 (1440 分) より古い launch attestation と handback record を opportunistic に
+    # 削除する (stale 掃除、best-effort)。 find の失敗 (権限不足等) は無視する。
     find "$STORAGE_DIR" -maxdepth 1 -name "${LAUNCH_ATTESTATION_PREFIX}*" -type f -mmin +1440 -delete 2>/dev/null || true
+    find "$STORAGE_DIR" -maxdepth 1 -name "${HANDBACK_REPORT_PREFIX}*" -type f -mmin +1440 -delete 2>/dev/null || true
     # tombstone は prune せず無期限に保持する。 resume の成立期間は transcript の
     # 保持期間に従い、 それは cleanupPeriodDays 設定で任意に延長できるため、 期限付き
     # prune では設定次第で attestation 再鋳造の穴が復活する。 1 件 64 byte の
@@ -238,6 +320,71 @@ case "$HOOK_EVENT_NAME" in
       exit 0
     fi
     rm -f "$ATTESTATION_TMP" 2>/dev/null
+    exit 0
+    ;;
+
+  PostToolUse)
+    # ------------------------------------------------------------------
+    # PostToolUse (SubagentHandback): hand-back された report の Status を判定し、
+    # handback record として記録する (SubagentStop が one-shot で消費する)。
+    # ------------------------------------------------------------------
+    TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
+    if [ "$TOOL_NAME" != "SubagentHandback" ]; then
+      exit 0
+    fi
+
+    # SubagentHandback は tool 自体は正常終了しつつ「配信されなかった」ことを
+    # tool_response.success=false で返す (この agent では tool が active でない /
+    # 既に配信済み / 親が受理しない / 親が終了済み 等)。 未配信の hand-back は report では
+    # ないため記録せず、 SubagentStop の last_assistant_message 判定に委ねる (harness は
+    # 未配信時に plain text での報告へ切り替えるため、 その経路で report を判定できる)。
+    HANDBACK_UNDELIVERED=$(printf '%s' "$INPUT" | jq -r '
+      (.tool_response | if type == "string" then (try fromjson catch {}) else . end) as $response
+      | if (($response | type) == "object")
+           and (($response.success | type) == "boolean")
+           and ($response.success == false)
+        then "true" else "false" end
+    ')
+    if [ "$HANDBACK_UNDELIVERED" = "true" ]; then
+      exit 0
+    fi
+
+    AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
+    case "$AGENT_TYPE" in
+      pre-push-review:code-reviewer|pre-push-review:security-reviewer) ;;
+      *) exit 0 ;;
+    esac
+
+    AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty')
+    [[ "$AGENT_ID" =~ $AGENT_ID_RE ]] || exit 0
+
+    GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+
+    # launch attestation に束縛されていない hand-back (attestation 無し / tombstone 既存
+    # = 過去に stop 済みの agent_id からの resume 中 hand-back) は記録しない。
+    ATTESTATION_PATH=$(launch_attestation_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    if [ -L "$ATTESTATION_PATH" ] || [ ! -f "$ATTESTATION_PATH" ]; then
+      exit 0
+    fi
+    TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    if [ -e "$TOMBSTONE_PATH" ]; then
+      exit 0
+    fi
+
+    HANDBACK_REPORT_PATH=$(handback_report_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    HANDBACK_STATUS=$(printf '%s' "$INPUT" | jq -r "$REPORT_STATUS_JQ"'
+      report_status(.tool_input.message)
+    ')
+    case "$HANDBACK_STATUS" in
+      pass|findings) ;;
+      *) HANDBACK_STATUS="invalid" ;;
+    esac
+    # 同一 agent_id の 2 回目以降の hand-back は重複 report として invalid に落とす
+    # (symlink や不正な既存 record も同様に invalid で置き換える)。
+    if [ -e "$HANDBACK_REPORT_PATH" ] || [ -L "$HANDBACK_REPORT_PATH" ]; then
+      HANDBACK_STATUS="invalid"
+    fi
+    write_handback_record "$HANDBACK_REPORT_PATH" "$HANDBACK_STATUS" || exit 0
     exit 0
     ;;
 
@@ -271,11 +418,14 @@ case "$HOOK_EVENT_NAME" in
 
     GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
     ATTESTATION_PATH=$(launch_attestation_path "$GIT_DIR" "$AGENT_ID") || exit 0
+    HANDBACK_REPORT_PATH=$(handback_report_path "$GIT_DIR" "$AGENT_ID") || exit 0
 
     # launch attestation が無ければ exit 0 (SendMessage resume 後の再 stop・移行前起動・
     # main session からの偽装 stop はここで遮断される)。 symlink は regular file
-    # 扱いしない (= 「無い」と同じ経路で exit 0)。
+    # 扱いしない (= 「無い」と同じ経路で exit 0)。 attestation に束縛されない handback
+    # record が残っていれば掃除だけ行う。
     if [ -L "$ATTESTATION_PATH" ] || [ ! -f "$ATTESTATION_PATH" ]; then
+      rm -f "$HANDBACK_REPORT_PATH" 2>/dev/null || true
       exit 0
     fi
 
@@ -290,6 +440,7 @@ case "$HOOK_EVENT_NAME" in
     TOMBSTONE_PATH=$(launch_tombstone_path "$GIT_DIR" "$AGENT_ID") || exit 0
     if [ -e "$TOMBSTONE_PATH" ]; then
       rm -f "$ATTESTATION_PATH" 2>/dev/null || true
+      rm -f "$HANDBACK_REPORT_PATH" 2>/dev/null || true
       exit 0
     fi
     # attestation → tombstone の不可逆遷移: 最初の (stop_hook_active=false の)
@@ -341,31 +492,22 @@ case "$HOOK_EVENT_NAME" in
       return 0
     }
 
-    # last_assistant_message (string) 全体を行分割し、`Status: ` で始まる行を
-    # 全件収集する。ちょうど 1 行で、かつその行が ^Status: (pass|findings)$ に一致する
-    # ときのみ有効な report とみなす。execution-failed / 未知値 / 欠落 / 重複 /
-    # 非 string は fail-closed に skip する (許可値の行だけを数えると
-    # 「Status: pass + Status: unknown」の併存を pass として受理してしまうため、
-    # 収集は許可値に限定しない)。
-    REPORT_STATUS=$(printf '%s' "$INPUT" | jq -r '
-      if ((.last_assistant_message | type) != "string") then
-        "invalid"
-      else
-        ([
-          .last_assistant_message
-          | gsub("\r\n"; "\n")
-          | split("\n")[]
-          | select(test("^Status: "))
-        ]) as $status_lines
-        | if ($status_lines | length) != 1 then
-            "invalid"
-          elif ($status_lines[0] | test("^Status: (pass|findings)$")) then
-            ($status_lines[0] | capture("^Status: (?<status>pass|findings)$").status)
-          else
-            "invalid"
-          end
-      end
-    ')
+    # report の Status を決める。 handback record (PostToolUse が SubagentHandback の
+    # tool_input.message から判定して書いたもの) があればそれを one-shot で消費して
+    # 採用し、 last_assistant_message は見ない (auto mode の last_assistant_message は
+    # hand-back 後の締めの文であり report ではない)。 record が無ければ
+    # last_assistant_message を同じ規則 (REPORT_STATUS_JQ) で判定する。
+    if [ -L "$HANDBACK_REPORT_PATH" ]; then
+      rm -f "$HANDBACK_REPORT_PATH" 2>/dev/null || true
+      REPORT_STATUS="invalid"
+    elif [ -f "$HANDBACK_REPORT_PATH" ]; then
+      REPORT_STATUS=$(cat "$HANDBACK_REPORT_PATH" 2>/dev/null)
+      rm -f "$HANDBACK_REPORT_PATH" 2>/dev/null || true
+    else
+      REPORT_STATUS=$(printf '%s' "$INPUT" | jq -r "$REPORT_STATUS_JQ"'
+        report_status(.last_assistant_message)
+      ')
+    fi
     case "$REPORT_STATUS" in
       pass|findings) ;;
       *) skip_marker ;;
@@ -399,8 +541,7 @@ case "$HOOK_EVENT_NAME" in
     ;;
 
   *)
-    # PostToolUse completion payload を含む未知 / 対象外 event はすべて exit 0
-    # (marker を書かない)。
+    # 未知 / 対象外 event はすべて exit 0 (marker を書かない)。
     exit 0
     ;;
 esac

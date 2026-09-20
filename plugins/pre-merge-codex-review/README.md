@@ -6,7 +6,7 @@
 
 ## バージョン
 
-v2.1.0
+v2.1.1
 
 ## インストール
 
@@ -55,14 +55,15 @@ review cadence (Codex review 一定回数ごとの checkpoint 強制) の計数�
 
 codex review wrapper (`run-pre-merge-codex-review.sh`) の起動を検証する PreToolUse hook です。hook payload トップレベルの `agent_type` が `pre-merge-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ fail-closed に deny します。background 起動・pipeline 経由の起動も同様に deny します。wrapper の basename を `pre-push-codex-review` の wrapper (`run-pre-push-codex-review.sh`) と別名にしているのは、両 plugin が併存する環境で互いの wrapper 検出 gate (basename ベース) が相手の wrapper 起動を deny し合う干渉を塞ぐためです。
 
-#### 3. auto-mark (SubagentStart / SubagentStop / PostToolUseFailure)
+#### 3. auto-mark (SubagentStart / PostToolUse / SubagentStop / PostToolUseFailure)
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`pre-merge-codex-review:codex-reviewer` subagent の lifecycle を追跡し、wrapper が書いた pending attestation を final attestation へ昇格する hook です。matcher は SubagentStart / SubagentStop が `^pre-merge-codex-review:codex-reviewer$`、PostToolUseFailure が `Agent|Task` で、script 側でも agent_type / subagent_type を完全一致で再検証します。束縛キーはローカル HEAD の full SHA (`git rev-parse HEAD`) です。
+`pre-merge-codex-review:codex-reviewer` subagent の lifecycle を追跡し、wrapper が書いた pending attestation を final attestation へ昇格する hook です。matcher は SubagentStart / SubagentStop が `^pre-merge-codex-review:codex-reviewer$`、PostToolUse が `^SubagentHandback$` (tool 名)、PostToolUseFailure が `Agent|Task` で、script 側でも agent_type / subagent_type を完全一致で再検証します。束縛キーはローカル HEAD の full SHA (`git rev-parse HEAD`) です。
 
 - **SubagentStart**: レビュー開始時のローカル HEAD を launch attestation (`.claude-pre-merge-launch-<agent_id>`) へ、同一ディレクトリ内 temp file + 排他 `ln` で atomic に書きます。tombstone (`.claude-pre-merge-done-<agent_id>`) が既に在る場合と launch attestation が既に在る場合は書きません (resume による attestation の再鋳造を構造的に拒否します)。agent_id が `^[A-Za-z0-9._-]{1,128}$` に一致しない場合はファイル操作を一切行いません。1 日より古い launch attestation は best-effort で掃除し、tombstone は無期限に保持します
-- **SubagentStop**: `stop_hook_active` が boolean false である最初の stop でのみ消費します。launch attestation を tombstone へ不可逆に遷移させたうえで、(1) `last_assistant_message` に `Status: ` で始まる行がちょうど 1 つあり `^Status: (pass|findings)$` に一致する、(2) launch attestation の HEAD が現在の HEAD と一致する、(3) pending attestation が symlink でない通常ファイルで 2 行の形式を満たし head が現在の HEAD と一致する、(4) 投稿用本文が通常ファイルで先頭行が同じ head の header である、をすべて満たす場合のみ pending を `mv` で final へ昇格します。`Status: execution-failed`・Status 行の欠落 / 重複 / 未知値・HEAD 不一致・形式不正はいずれも昇格しません (fail-closed)
+- **PostToolUse** (`SubagentHandback`): Claude Code v2.1.271 以降の auto mode では subagent の最終 report が `SubagentHandback` tool の `message` として親に届き、SubagentStop の `last_assistant_message` には締めの文しか入りません。そのため hand-back された report の Status をここで判定し、launch attestation が存在し tombstone が無い場合のみ handback record (`.claude-pre-merge-handback-<agent_id>`) に `pass` / `findings` / `invalid` を書きます。同一 agent_id の 2 回目以降の hand-back は重複 report として `invalid` に上書きします。`tool_response.success` が false (未配信) の hand-back は記録せず、`last_assistant_message` 経路の判定に委ねます
+- **SubagentStop**: `stop_hook_active` が boolean false である最初の stop でのみ消費します。launch attestation を tombstone へ不可逆に遷移させたうえで、(1) report (handback record があればその判定結果を one-shot で消費して採用し `last_assistant_message` は見ない。無ければ `last_assistant_message`) に `Status: ` で始まる行がちょうど 1 つあり `^Status: (pass|findings)$` に一致する、(2) launch attestation の HEAD が現在の HEAD と一致する、(3) pending attestation が symlink でない通常ファイルで 2 行の形式を満たし head が現在の HEAD と一致する、(4) 投稿用本文が通常ファイルで先頭行が同じ head の header である、をすべて満たす場合のみ pending を `mv` で final へ昇格します。`Status: execution-failed`・Status 行の欠落 / 重複 / 未知値・HEAD 不一致・形式不正はいずれも昇格しません (fail-closed)
 - **掃除経路**: launch attestation の無い stop (偽装 stop・resume 後の再 stop)、既存 tombstone、上記検証の不成立、PostToolUseFailure (Agent / Task 呼び出し自体の失敗) では pending attestation を破棄します。**投稿用本文は final attestation が存在しない場合にのみ削除します** — final と本文は gate が投稿に使う対であり、昇格済みの対を後続の stop や失敗イベントが壊さないためです。昇格に成功した場合も本文は残します (gate が `--body-file` として使います)
 - 環境要因の失敗 (jq / git が無い、path を解決できない等) は silent skip (exit 0) で、レビュー完了の証明だけを fail-closed に扱います
 
@@ -99,7 +100,7 @@ wrapper はレビュー完了時に投稿用の本文をローカル (git-dir �
 - 本文が長い場合は wrapper が行単位で切り詰める (GitHub の PR コメント本文上限に対する安全側の閾値。header 行は先頭にあるため常に残る)
 - 記録と投稿はレビュー完了の記録であり、merge の approve や findings 0 件の証明ではない (status=findings でも「レビュー済み」として成立する。findings への対応判断は通常のレビューフローで行う)
 
-ローカルの記録は merge 実行 repo の git-dir 直下に置かれ、次の 5 種類です (名前の単一ソースは `hooks/scripts/lib/markers.sh`):
+ローカルの記録は merge 実行 repo の git-dir 直下に置かれ、次の 6 種類です (名前の単一ソースは `hooks/scripts/lib/markers.sh`):
 
 | ファイル | 書き手 | 役割 |
 |---|---|---|
@@ -108,6 +109,7 @@ wrapper はレビュー完了時に投稿用の本文をローカル (git-dir �
 | `.claude-pre-merge-codex-comment.md` | wrapper | 投稿用の本文 (先頭行が機械可読 header) |
 | `.claude-pre-merge-launch-<agent_id>` | auto-mark (SubagentStart) | レビュー開始時のローカル HEAD |
 | `.claude-pre-merge-done-<agent_id>` | auto-mark (SubagentStop) | attestation を消費した記録 (one-shot 保証。無期限に保持する) |
+| `.claude-pre-merge-handback-<agent_id>` | auto-mark (PostToolUse) | `SubagentHandback` で hand-back された report の Status 判定結果 (`pass` / `findings` / `invalid`)。SubagentStop が消費する |
 
 pending / final attestation の内容は次の 2 行で、昇格は rename のみで内容を書き換えません:
 
@@ -197,7 +199,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 | `hooks/hooks.json` | フック配送経路の定義 |
 | `hooks/scripts/block-pre-merge.sh` | 軽量 merge gate 本体 (PreToolUse)。レビュー記録の検証と PR への投稿も行う |
 | `hooks/scripts/block-bg-codex-wrapper.sh` | codex review wrapper の起動検証 (PreToolUse) |
-| `hooks/scripts/auto-mark.sh` | subagent lifecycle hook (SubagentStart / SubagentStop / PostToolUseFailure)。pending attestation を final へ昇格する |
+| `hooks/scripts/auto-mark.sh` | subagent lifecycle hook (SubagentStart / PostToolUse / SubagentStop / PostToolUseFailure)。pending attestation を final へ昇格する |
 | `hooks/scripts/inject-merge-order-rules.sh` | SessionStart hook。merge 前 codex review の起動順規律を additionalContext として注入する |
 | `hooks/prompts/merge-order-rules.md` | 注入する起動順規律の本文 |
 | `hooks/scripts/run-pre-merge-codex-review.sh` | codex review wrapper 本体 (レビュー実行 + ローカル記録の書き込み。basename は `pre-push-codex-review` の wrapper と別名) |

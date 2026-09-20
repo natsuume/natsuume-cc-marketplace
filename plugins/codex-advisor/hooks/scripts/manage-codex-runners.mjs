@@ -8,15 +8,30 @@
  *
  * - PreToolUse: Codex model の起動を role 固有 runner だけに限定する
  * - SubagentStart / SubagentStop: runner の active / retry / terminal 遷移を記録する
+ * - PostToolUse (SubagentHandback): hand-back された report の footer / attestation
+ *   解析値を runner state に記録する (SubagentStop が one-shot で消費する)
  * - SubagentStop: advisor-runner の report が review cadence attestation footer 行
  *   (`Codex-Advisor-Review-Cadence`) を欠く場合、report 契約違反として retry させる
+ *
+ * report の所在: Claude Code v2.1.271 以降の auto mode では、runner の最終 report は
+ * `SubagentHandback` tool の `message` 引数として親へ届き、SubagentStop の
+ * `last_assistant_message` には hand-back 後の締めの文しか入らない。そのため PostToolUse
+ * (`tool_name` が `SubagentHandback`) で `tool_input.message` の footer / attestation を
+ * 解析して state の `handback` に記録し、SubagentStop は記録があればそれを採用する
+ * (`last_assistant_message` は見ない)。記録が無い場合 (SubagentHandback が提供されない
+ * 非 auto mode 等) に限り `last_assistant_message` を report として解析する。同一 runner
+ * の 2 回目以降の hand-back は重複 report として解析値を null にする (fail-closed)。
+ * `tool_response.success` が false の hand-back (未配信: tool が active でない / 配信済み /
+ * 親が受理しない等) は report ではないため記録しない (harness は未配信時に plain text での
+ * 報告へ切り替えるため、`last_assistant_message` 経路で解析できる)。
  * - Stop: 未回収の runner がある間は main session の終了を block する
  * - SessionStart / SessionEnd: stale runner state を掃除する
  *
  * advisor-runner の attestation footer は外部 plugin (pre-push-codex-review) の review
  * cadence enforcement が消費する。
  *
- * state に prompt や Codex 出力は保存しない。既定では UID ごとの /tmp 配下、テストでは
+ * state に prompt や Codex 出力は保存しない (hand-back された report も解析値だけを
+ * 保存し本文は保存しない)。既定では UID ごとの /tmp 配下、テストでは
  * CODEX_ADVISOR_STATE_ROOT で差し替えた directory に、session + operation ごとの JSON を
  * temp file + rename で atomic に保存する。
  */
@@ -44,6 +59,9 @@ const VALID_STATUSES = new Set([
   "terminal-failure",
   "cancelled",
 ]);
+// 重複 hand-back (同一 runner の 2 回目以降) を表す解析値。footer が無いので
+// SubagentStop では contract 違反として扱われる (fail-closed)。
+const INVALID_HANDBACK = Object.freeze({ footer: null, attestation: null });
 
 function stateRoot() {
   const overridden = process.env.CODEX_ADVISOR_STATE_ROOT;
@@ -126,6 +144,7 @@ function writeRecord(record) {
     phase: record.phase,
     retryCount: Number.isInteger(record.retryCount) ? record.retryCount : 0,
     jobId: record.jobId ?? null,
+    handback: sanitizeHandback(record.handback),
     updatedAt: new Date().toISOString(),
   };
   try {
@@ -144,6 +163,33 @@ function writeRecord(record) {
     throw error;
   }
   return normalized;
+}
+
+function sanitizeFooter(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    typeof value.operation !== "string" ||
+    typeof value.status !== "string" ||
+    typeof value.jobId !== "string"
+  ) {
+    return null;
+  }
+  return { operation: value.operation, status: value.status, jobId: value.jobId };
+}
+
+/**
+ * runner state の `handback` (PostToolUse で記録した hand-back report の解析値)。
+ * 未記録なら null、記録済みなら { footer, attestation } (それぞれ null になりうる)。
+ */
+function sanitizeHandback(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    footer: sanitizeFooter(value.footer),
+    attestation: REVIEW_CADENCE_ATTESTATIONS.has(value.attestation)
+      ? value.attestation
+      : null,
+  };
 }
 
 function removeRecord(sessionId, operation) {
@@ -377,9 +423,11 @@ function handlePreToolUse(input) {
     writeRecord({
       sessionId: input.session_id,
       operation: launch.operation,
+      agentId: previous?.agentId ?? null,
       phase: "reroute-required",
       retryCount: previous?.retryCount ?? 0,
       jobId: previous?.jobId ?? null,
+      handback: previous?.handback ?? null,
     });
   } catch (error) {
     stateFailure = ` state の永続化に失敗しました (${error?.code ?? "unknown"})。deny は有効ですが、自動復旧要求を保存できていません。`;
@@ -469,6 +517,61 @@ function parseReviewCadenceAttestation(message) {
   return REVIEW_CADENCE_ATTESTATIONS.has(value) ? value : null;
 }
 
+/**
+ * PostToolUse (SubagentHandback): hand-back された report の footer / attestation 解析値を
+ * runner state に記録する。record が無い (SubagentStart を経ていない) 場合も、hand-back は
+ * runner が動作中である事実なので active record として作る (直後の SubagentStop が
+ * 消費する)。
+ */
+function handbackUndelivered(toolResponse) {
+  let response = toolResponse;
+  if (typeof response === "string") {
+    try {
+      response = JSON.parse(response);
+    } catch {
+      return false;
+    }
+  }
+  return Boolean(response) && typeof response === "object" && response.success === false;
+}
+
+function handlePostToolUse(input) {
+  if (input.tool_name !== "SubagentHandback") return null;
+  // 未配信 (success === false) の hand-back は report ではないため記録しない。success が
+  // 無い / boolean でない場合は配信済みとみなす (schema 変更での fail-closed 化を避ける)。
+  if (handbackUndelivered(input.tool_response)) return null;
+  const operation = operationForAgentType(input.agent_type);
+  if (!operation || typeof input.session_id !== "string") return null;
+  const current = readRecord(input.session_id, operation);
+  if (
+    current?.agentId &&
+    typeof input.agent_id === "string" &&
+    current.agentId !== input.agent_id
+  ) {
+    return null;
+  }
+  const message = input.tool_input?.message;
+  // 同一 runner の 2 回目以降の hand-back は重複 report として無効化する。
+  const handback = current?.handback
+    ? INVALID_HANDBACK
+    : {
+        footer: parseRunnerFooter(message),
+        attestation: parseReviewCadenceAttestation(message),
+      };
+  writeRecord({
+    sessionId: input.session_id,
+    operation,
+    agentId:
+      current?.agentId ??
+      (typeof input.agent_id === "string" ? input.agent_id : null),
+    phase: current?.phase ?? "active",
+    retryCount: current?.retryCount ?? 0,
+    jobId: current?.jobId ?? null,
+    handback,
+  });
+  return null;
+}
+
 function scheduleRetryOrFinish(input, operation, jobId) {
   const previous = readRecord(input.session_id, operation);
   const retryCount = previous?.retryCount ?? 0;
@@ -513,10 +616,13 @@ function handleSubagentStop(input) {
     return null;
   }
 
-  const footer = parseRunnerFooter(input.last_assistant_message);
-  const reviewCadenceAttestation = parseReviewCadenceAttestation(
-    input.last_assistant_message,
-  );
+  // hand-back の記録があればそれを採用し、無ければ last_assistant_message を解析する。
+  const footer = current?.handback
+    ? current.handback.footer
+    : parseRunnerFooter(input.last_assistant_message);
+  const reviewCadenceAttestation = current?.handback
+    ? current.handback.attestation
+    : parseReviewCadenceAttestation(input.last_assistant_message);
   const reportedOperation = footer?.operation ?? null;
   const status = footer?.status ?? null;
   const jobId = footer?.jobId ?? null;
@@ -570,6 +676,8 @@ function dispatch(input) {
       return handlePreToolUse(input);
     case "SubagentStart":
       return handleSubagentStart(input);
+    case "PostToolUse":
+      return handlePostToolUse(input);
     case "SubagentStop":
       return handleSubagentStop(input);
     case "Stop":

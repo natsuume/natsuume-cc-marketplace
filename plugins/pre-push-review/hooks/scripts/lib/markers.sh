@@ -28,6 +28,14 @@ LAUNCH_ATTESTATION_PREFIX=".claude-pre-push-launch-"
 # `<attestation-path>.done` のような suffix 方式だと agent_id の内容次第で name 衝突しうる
 # ため (例: agent_id="foo.done" だと衝突する)。 prefix 方式なら agent_id の中身に依存しない。
 LAUNCH_TOMBSTONE_PREFIX=".claude-pre-push-done-"
+# SubagentHandback で届いた parent-safe report の Status 判定結果 (pass / findings /
+# invalid) を SubagentStop まで運ぶ handback record (agent_id ごとに 1 ファイル) の prefix。
+# auto mode (Claude Code v2.1.271 以降) では subagent の最終 report が SubagentHandback tool
+# の `message` として親へ届き、 SubagentStop の last_assistant_message には hand-back 後の
+# 締めの文しか入らない。 そのため PostToolUse (tool_name=SubagentHandback) で Status を判定
+# してここに記録し、 SubagentStop がそれを one-shot で消費する。 attestation / tombstone と
+# 同じく prefix 方式にするのは、 agent_id の中身に依存せず name 衝突を避けるため。
+HANDBACK_REPORT_PREFIX=".claude-pre-push-handback-"
 
 # 引数: <git-dir>
 # 出力: marker storage directory (= git-dir 直下)
@@ -83,4 +91,17 @@ launch_tombstone_path() {
   local git_dir="$1"
   local agent_id="$2"
   marker_path "$git_dir" "${LAUNCH_TOMBSTONE_PREFIX}${agent_id}"
+}
+
+# 引数: <git-dir> <agent_id>
+# 出力: PostToolUse (SubagentHandback) が書く handback record
+#       (git-dir/.claude-pre-push-handback-<agent_id>) の path
+#
+# agent_id の validation は launch_attestation_path と同様に呼び出し側 (auto-mark.sh) の
+# 責務。 record の内容は `pass` / `findings` / `invalid` のいずれか 1 語で、 SubagentStop が
+# 読み取り後に削除する (one-shot)。
+handback_report_path() {
+  local git_dir="$1"
+  local agent_id="$2"
+  marker_path "$git_dir" "${HANDBACK_REPORT_PREFIX}${agent_id}"
 }

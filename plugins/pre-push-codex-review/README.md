@@ -8,7 +8,7 @@
 
 ## バージョン
 
-v2.0.0
+v2.0.1
 
 ## インストール
 
@@ -61,11 +61,13 @@ push 前レビューを **同じアシスタントメッセージで並列に** 
 
 codex review wrapper (`run-pre-push-codex-review.sh`) の起動を検証する PreToolUse hook です。hook payload トップレベルの `agent_type` が `pre-push-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ fail-closed に deny します。wrapper の basename を `pre-push-review` core の wrapper (`run-codex-review.sh`) と別名にしているのは、codex gate を持つ版の core と本 plugin が併存する環境で、互いの wrapper 検出 gate (basename ベース) が相手の wrapper 起動を deny し合う干渉を塞ぐためです。foreground 起動を強制する理由は、background 起動では `pre-push-codex-review:codex-reviewer` subagent が wrapper の stdout / stderr (= codex review の verdict / findings) を完全に観察できず、正しい parent-safe report を組み立てられないためです。
 
-#### 3. auto-mark (SubagentStart / SubagentStop, matcher: `^pre-push-codex-review:codex-reviewer$`)
+#### 3. auto-mark (SubagentStart / PostToolUse / SubagentStop)
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-`pre-push-codex-review:codex-reviewer` subagent の実行完了を subagent lifecycle hook (SubagentStart / SubagentStop) で検知し、codex マーカーに「commit 列 + branch 全差分 + 未コミット差分のハッシュ」を書き込みます。`SubagentStart` はレビュー開始時の hash を launch attestation として one-shot 記録し、`SubagentStop` は (a) attestation の一回限りの消費 (b) 開始時 hash と現在 hash の一致 (c) `last_assistant_message` 内の単一 `Status: pass|findings` 行 (d) wrapper が書いた pending attestation と現在 hash の一致、をすべて検証した場合のみマーカーを書きます。`PostToolUseFailure` では残った Codex pending attestation を破棄します。
+`pre-push-codex-review:codex-reviewer` subagent の実行完了を subagent lifecycle hook (SubagentStart / SubagentStop) で検知し、codex マーカーに「commit 列 + branch 全差分 + 未コミット差分のハッシュ」を書き込みます。matcher は SubagentStart / SubagentStop が `^pre-push-codex-review:codex-reviewer$`、PostToolUse が `^SubagentHandback$` (tool 名) で、script 側でも agent_type を完全一致で再検証します。`SubagentStart` はレビュー開始時の hash を launch attestation として one-shot 記録し、`PostToolUse` (`SubagentHandback`) は auto mode で hand-back された report (`tool_input.message`) の Status を handback record (`.claude-pre-push-handback-<agent_id>`) に記録し、`SubagentStop` は (a) attestation の一回限りの消費 (b) 開始時 hash と現在 hash の一致 (c) report (handback record があればその判定結果、無ければ `last_assistant_message`) 内の単一 `Status: pass|findings` 行 (d) wrapper が書いた pending attestation と現在 hash の一致、をすべて検証した場合のみマーカーを書きます。`PostToolUseFailure` では残った Codex pending attestation を破棄します。
+
+Claude Code v2.1.271 以降の auto mode では subagent の最終 report が `SubagentHandback` tool 経由で親に届き、SubagentStop の `last_assistant_message` には締めの文しか入らないため、report の判定は PostToolUse で記録した handback record を優先します。同一 agent_id で `SubagentHandback` が 2 回以上呼ばれた場合は重複 report として無効 (fail-closed) です。`tool_response.success` が false (未配信) の hand-back は記録せず、`last_assistant_message` 経路の判定に委ねます。
 
 マーカーが証明するのは、codex review が marker に記録された最新差分に対して完了したことだけです。変更の approve や findings が 0 件であることは証明しません。
 
@@ -83,6 +85,7 @@ review cadence の state 管理と enforcement を担う node script です。�
 
 - **PreToolUse** (matcher: `Bash`): checkpoint 要求中 (完了 review が 5 回に達している間) に review 起動形 (`codex-companion.mjs review|adversarial-review`、`run-pre-push-codex-review.sh`、`run-codex-job.sh review`) を検出すると deny する
 - **SubagentStart** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer)$`): 起動した agent_id を review cadence state へ記録する
+- **PostToolUse** (matcher: `^SubagentHandback$`): 計数対象 2 reviewer・`codex-advisor:review-runner`・`codex-advisor:advisor-runner` が auto mode で hand-back した report (`tool_input.message`) を解析し、Status 行 / footer / attestation の解析値 (本文は保存しない) を agent_id ごとに state へ記録する。SubagentStop がそれを one-shot で消費する
 - **SubagentStop** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer|codex-advisor:(review|advisor)-runner)$`): 計数対象 reviewer の成功 review を加算し、`codex-advisor:advisor-runner` の checkpoint 充足 attestation でカウンターを reset する
 - **PostToolUseFailure** (matcher: `Agent|Task`): checkpoint 相談 (起動 request の `tool_input.prompt` に `<review_cycle_checkpoint>` を含む) の `codex-advisor:advisor-runner` 起動失敗を fail-open で checkpoint 充足とみなし、checkpoint 要求中ならカウンターを reset する。同じ `codex-advisor:advisor-runner` でも通常の advisor 相談の起動失敗は reset しない
 - **Stop**: checkpoint 要求中は main session の停止を block し、`codex-advisor:advisor-runner` の foreground 起動を案内する
@@ -98,6 +101,7 @@ review cadence の state 管理と enforcement を担う node script です。�
 | `.claude-pre-push-codex-reviewed.pending` | wrapper が束縛した review 対象 hash (pending attestation) | report 失敗・hash mismatch・次回 wrapper 起動で削除。codex-reviewer の terminal な拒否 stop でも破棄 |
 | `.claude-pre-push-launch-<agent_id>` | SubagentStart が one-shot 記録するレビュー開始時の hash (launch attestation)。SubagentStop が開始時 hash と現在 hash の一致検証に使う | 最初の SubagentStop で消費 (削除) |
 | `.claude-pre-push-done-<agent_id>` | attestation 消費時に排他作成される launch tombstone。同一 agent_id での SubagentStart 再発火による attestation 再鋳造を遮断する | 無期限保持 (prune しない) |
+| `.claude-pre-push-handback-<agent_id>` | PostToolUse (`SubagentHandback`) が記録する hand-back された report の Status 判定結果 (`pass` / `findings` / `invalid`) | 最初の SubagentStop で消費 (削除)。1 日より古い残存分は次回 SubagentStart が掃除 |
 
 `pre-push-review` core が発行する `.claude-pre-push-code-reviewed` / `.claude-pre-push-security-reviewed` は本 plugin の関知対象外です。逆に core は本 plugin の codex マーカーを検証しません。
 
@@ -124,8 +128,8 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 ### 計数対象
 
-- `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の SubagentStop で、`last_assistant_message` に `Status: pass|findings` 行がちょうど 1 行ある場合
-- `codex-advisor:review-runner` の SubagentStop で、実質末尾 3 行の footer (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` / `Codex-Runner-Job-ID: <id>`) が揃っている場合
+- `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の SubagentStop で、report (auto mode では PostToolUse で記録した `SubagentHandback` の hand-back report、それ以外は `last_assistant_message`) に `Status: pass|findings` 行がちょうど 1 行ある場合
+- `codex-advisor:review-runner` の SubagentStop で、report (所在は上と同じ) の実質末尾 3 行の footer (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` / `Codex-Runner-Job-ID: <id>`) が揃っている場合。同一 agent_id は 1 回だけ計数する (resume 再 stop で footer 付きの報告が再び来ても加算しない)
 
 ### checkpoint
 
@@ -170,8 +174,8 @@ checkpoint の実行には `codex-advisor` plugin の install が必要です。
 | `hooks/hooks.json` | フック配送経路の定義 |
 | `hooks/scripts/block-pre-push-codex.sh` | push gate 本体 (PreToolUse) |
 | `hooks/scripts/block-bg-codex-wrapper.sh` | codex review wrapper の background 起動検知 (PreToolUse) |
-| `hooks/scripts/auto-mark.sh` | codex マーカーの自動発行 (SubagentStart / SubagentStop / PostToolUseFailure) |
-| `hooks/scripts/manage-review-cadence.mjs` | review cadence の state 管理と enforcement (PreToolUse / SubagentStart / SubagentStop / PostToolUseFailure / Stop / SessionEnd) |
+| `hooks/scripts/auto-mark.sh` | codex マーカーの自動発行 (SubagentStart / PostToolUse / SubagentStop / PostToolUseFailure) |
+| `hooks/scripts/manage-review-cadence.mjs` | review cadence の state 管理と enforcement (PreToolUse / SubagentStart / PostToolUse / SubagentStop / PostToolUseFailure / Stop / SessionEnd) |
 | `hooks/scripts/inject-review-cadence-rules.sh` | review cadence 規律の SessionStart 注入 |
 | `hooks/prompts/review-cadence-rules.md` | review cadence 規律の本文 (SessionStart additionalContext) |
 | `hooks/scripts/run-pre-push-codex-review.sh` | codex review wrapper 本体 (basename は core の wrapper と別名) |

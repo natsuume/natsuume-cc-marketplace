@@ -79,6 +79,8 @@ Recovery boundaries:
 
 Allowed status values are `Status: pass | findings | execution-failed`.
 
+When the `SubagentHandback` tool is available (Claude Code auto mode), deliver this report as the `message` of exactly one `SubagentHandback` call; the same contract applies to that message, and any closing text you write after the call is not the report. Otherwise return the report as your final message.
+
 Return exactly one markdown report. For a successful review with findings:
 
 ```markdown

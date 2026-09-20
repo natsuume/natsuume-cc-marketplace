@@ -1,5 +1,5 @@
 {
-  "description": "codex-advisor の配送・runner 強制経路: SessionStart / SubagentStart で利用規律を additionalContext として注入する。PreToolUse は rescue / review / advisor の Codex model 起動を role 固有 foreground runner だけに限定し、SubagentStart / SubagentStop が runner の active / retry / terminal 遷移を記録する (advisor-runner の SubagentStop は review cadence attestation footer 行の欠落も retry 対象にする)。Stop は未回収の runner がある間 main session の終了を block する。SessionStart / SessionEnd は同一 session の runner state を lifecycle に沿って掃除する。",
+  "description": "codex-advisor の配送・runner 強制経路: SessionStart / SubagentStart で利用規律を additionalContext として注入する。PreToolUse は rescue / review / advisor の Codex model 起動を role 固有 foreground runner だけに限定し、SubagentStart / SubagentStop が runner の active / retry / terminal 遷移を記録し、PostToolUse (SubagentHandback) が hand-back された report の footer / attestation 解析値を runner state に記録する (advisor-runner の SubagentStop は review cadence attestation footer 行の欠落も retry 対象にする)。Stop は未回収の runner がある間 main session の終了を block する。SessionStart / SessionEnd は同一 session の runner state を lifecycle に沿って掃除する。",
   "hooks": {
     "SessionStart": [
       {
@@ -47,6 +47,17 @@
       },
       {
         "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^SubagentHandback$",
         "hooks": [
           {
             "type": "command",

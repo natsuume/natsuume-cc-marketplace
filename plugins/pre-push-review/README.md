@@ -27,14 +27,14 @@ correctness バグ検出に security review を重ねた defense-in-depth です
 2 レビューをどちらも subagent 経由に統一していることの意味:
 
 - **context isolation**: reviewer は raw stdout / stderr、実行可能な command、具体的な再現手順を subagent context に留め、親 session には severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけを返します。これは agent prompt と contract test で固定する **instruction contract** であり、auto-mark が report 本文を機械検査して情報流出を遮断する **hard security boundary** ではありません。
-- **起動・marker 発行経路の単一化**: 親 session は 2 軸とも同じ `Agent` / `Task` tool で起動し、2 marker とも auto-mark.sh が SubagentStart の launch attestation と SubagentStop での parent-safe report 検証を経て発行します。
+- **起動・marker 発行経路の単一化**: 親 session は 2 軸とも同じ `Agent` / `Task` tool で起動し、2 marker とも auto-mark.sh が SubagentStart の launch attestation、PostToolUse (`SubagentHandback`) での hand-back された report の記録、SubagentStop での parent-safe report 検証を経て発行します。
 - **`/pre-push-review:review` slash command が 2 subagent を並列発出**: deny メッセージとともに案内されます。 wall-clock は最遅レビュー 1 本の時間で完了します。
 
 Linked worktree では marker、launch attestation、tombstone を main `.git` 直下ではなく、`git rev-parse --absolute-git-dir` が返す worktree 専用 git-dir (`.git/worktrees/<name>/`) に保存します。`block-pre-push.sh` の deny メッセージは実際の marker storage を表示するため、main `.git` の同名ファイルを見てレビュー状態を判断しないでください。
 
 ## バージョン
 
-v6.0.1
+v6.0.2
 
 ## インストール
 
@@ -113,32 +113,34 @@ push 前 2 レビューを **同じアシスタントメッセージで並列に
 
 > **target-mismatch の構造的解決**: 本プラグインは独自の bash command parser (`lib/cmd-parser.sh`) と target resolver (`lib/target-resolver.sh`) で `cd dir && git push` / `git -C dir push` / `GIT_DIR=path/.git git push` の **実 push target を決定的に解決** し、解決した target cwd の `.git` (`git rev-parse --git-dir`) に対して markers / hash 比較を行います。解析不能な形式 (subshell `(...)`, brace group `{...}`, `bash -c "..."`, `pushd`/`popd`, `export GIT_DIR=...`, `--work-tree=...`, `time` / `env` 等の未対応 wrapper) は **保守的に deny** します。
 
-#### 2. auto-mark (SubagentStart / SubagentStop, matcher: `^pre-push-review:(code|security)-reviewer$`)
+#### 2. auto-mark (SubagentStart / PostToolUse / SubagentStop)
 
 **ファイル**: `hooks/scripts/auto-mark.sh`
 
-2 reviewer subagent の **実行完了** を subagent lifecycle hook (SubagentStart / SubagentStop) で自動検知し、対応するマーカーファイルに「commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュ」 を書き込みます。Skill (`/code-review` / `/security-review`) の検知は行いません。completion 検知に PostToolUse を使わないのは、 Claude Code の Agent tool が既定で background 起動になり、 PostToolUse が起動受理時にしか発火しないためです。
+2 reviewer subagent の **実行完了** を subagent lifecycle hook (SubagentStart / SubagentStop) で自動検知し、対応するマーカーファイルに「commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュ」 を書き込みます。Skill (`/code-review` / `/security-review`) の検知は行いません。completion 検知に Agent tool の PostToolUse を使わないのは、 Claude Code の Agent tool が既定で background 起動になり、 PostToolUse が起動受理時にしか発火しないためです。
+
+Claude Code v2.1.271 以降の auto mode では、subagent の最終 report は `SubagentHandback` tool の `message` として親に届き、SubagentStop の `last_assistant_message` には hand-back 後の締めの文しか入りません。そのため PostToolUse (matcher: `^SubagentHandback$`) で `tool_input.message` の Status を判定して handback record (`.claude-pre-push-handback-<agent_id>`) に記録し、SubagentStop がその record を one-shot で消費します。record がある場合は `last_assistant_message` を見ません (record が優先)。record が無い場合 (非 auto mode 等) に限り `last_assistant_message` を report として判定します。
 
 マーカーが証明するのは、各 reviewer がマーカーに記録された最新差分に対してレビューを完了したことだけです。変更の approve や findings が 0 件であることは証明しません。`Status: findings` でも正規完了条件を満たせばマーカーは書かれ、finding の妥当性分類と修正判断は `/pre-push-review:review` の親 session が行います。
 
-hooks.json の matcher は SubagentStart / SubagentStop とも `^pre-push-review:(code|security)-reviewer$` で、 2 reviewer subagent 以外では本フックは発火しません。 スクリプト側でも agent_type の完全一致を再検証します (matcher の regex 解釈には依存しない)。
+hooks.json の matcher は SubagentStart / SubagentStop とも `^pre-push-review:(code|security)-reviewer$` で、 2 reviewer subagent 以外では本フックは発火しません。 PostToolUse の matcher は tool 名 (`^SubagentHandback$`) のため、 スクリプト側で agent_type の完全一致を検証してから record を書きます。 いずれの event でもスクリプト側で agent_type の完全一致を再検証します (matcher の regex 解釈には依存しない)。
 
 **検知ルール**:
 
 | 検知対象                                                | event | 判定                                                                                                                                                                            | 書き込むマーカー                              |
 | ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `pre-push-review:code-reviewer` subagent の完了 | `SubagentStart` + `SubagentStop` | launch attestation の存在・一回限りの消費 + 開始時 hash と現在 hash の一致 + `last_assistant_message` 内の単一 `Status: pass\|findings` 行 | `<git-dir>/.claude-pre-push-code-reviewed`    |
-| `pre-push-review:security-reviewer` subagent の完了 | `SubagentStart` + `SubagentStop` | launch attestation の存在・一回限りの消費 + 開始時 hash と現在 hash の一致 + `last_assistant_message` 内の単一 `Status: pass\|findings` 行 | `<git-dir>/.claude-pre-push-security-reviewed` |
+| `pre-push-review:code-reviewer` subagent の完了 | `SubagentStart` + `PostToolUse` (`SubagentHandback`) + `SubagentStop` | launch attestation の存在・一回限りの消費 + 開始時 hash と現在 hash の一致 + report (handback record、無ければ `last_assistant_message`) 内の単一 `Status: pass\|findings` 行 | `<git-dir>/.claude-pre-push-code-reviewed`    |
+| `pre-push-review:security-reviewer` subagent の完了 | `SubagentStart` + `PostToolUse` (`SubagentHandback`) + `SubagentStop` | launch attestation の存在・一回限りの消費 + 開始時 hash と現在 hash の一致 + report (handback record、無ければ `last_assistant_message`) 内の単一 `Status: pass\|findings` 行 | `<git-dir>/.claude-pre-push-security-reviewed` |
 
 **subagent lifecycle hook (2 段階) で検知する理由**:
 
-各 subagent は内部で標準 skill を呼ばずに self-contained でレビューを実行します。 Claude Code の Agent tool は既定で background 起動になり、 `async_launched` で正常 return した後は subagent 完了時に PostToolUse が発火しないため、 開始 (`SubagentStart`) と完了 (`SubagentStop`) の 2 イベントに分けて検知します。 `SubagentStart` は「レビューがこの差分に対して開始された」ことを launch attestation として one-shot 記録し、 `SubagentStop` は (a) attestation の一回限りの消費 (b) 開始時 hash と現在 hash の一致 (c) `last_assistant_message` 内の単一 `Status: pass\|findings` 行 (d) `stop_hook_active == false` をすべて検証した場合のみ marker を書きます。SendMessage resume 後の再 stop・レビュー開始後の差分変更・重複 stop・`execution-failed` は fail-closed に遮断され、push gate が deny のまま残るため silent-pass しない設計です。
+各 subagent は内部で標準 skill を呼ばずに self-contained でレビューを実行します。 Claude Code の Agent tool は既定で background 起動になり、 `async_launched` で正常 return した後は subagent 完了時に PostToolUse が発火しないため、 開始 (`SubagentStart`) と完了 (`SubagentStop`) の 2 イベントに分けて検知します。 `SubagentStart` は「レビューがこの差分に対して開始された」ことを launch attestation として one-shot 記録し、 `SubagentStop` は (a) attestation の一回限りの消費 (b) 開始時 hash と現在 hash の一致 (c) report (auto mode では `PostToolUse` が `SubagentHandback` の `tool_input.message` から記録した handback record、それ以外は `last_assistant_message`) 内の単一 `Status: pass\|findings` 行 (d) `stop_hook_active == false` をすべて検証した場合のみ marker を書きます。SendMessage resume 後の再 stop・レビュー開始後の差分変更・重複 stop・`execution-failed` は fail-closed に遮断され、push gate が deny のまま残るため silent-pass しない設計です。
 
 **書き込みをスキップする条件**:
 
 - `stop_hook_active` が boolean `false` でない (stop hook による継続中の中間 stop)
 - launch attestation が無い、regular file でない (symlink 含む)、または開始時 hash と現在 hash が不一致
-- `last_assistant_message` に単一の `Status: pass` / `Status: findings` 行が無い (`execution-failed`、欠落、重複、未知値、非 string)
+- report (handback record があればその判定結果、無ければ `last_assistant_message`) に単一の `Status: pass` / `Status: findings` 行が無い (`execution-failed`、欠落、重複、未知値、非 string)。同一 agent_id で `SubagentHandback` が 2 回以上呼ばれた場合も重複 report として無効。`tool_response.success` が false (未配信) の hand-back は記録されず、`last_assistant_message` 経路の判定に委ねる
 - `agent_type` が namespace 付き 2 reviewer 以外、または `agent_id` が `^[A-Za-z0-9._-]{1,128}$` に不一致
 - カレントブランチが default branch (master/main)
 - default branch (origin/HEAD) が検出できない (origin が無い等)
@@ -153,6 +155,7 @@ hooks.json の matcher は SubagentStart / SubagentStop とも `^pre-push-review
 | `.claude-pre-push-security-reviewed` | `pre-push-review:security-reviewer` subagent 完了時の commit 列 + branch 全差分のハッシュ | 次の編集で hash が変わると失効 (明示削除しない) |
 | `.claude-pre-push-launch-<agent_id>` | SubagentStart が one-shot 記録するレビュー開始時の hash (launch attestation)。SubagentStop が開始時 hash と現在 hash の一致検証に使う | 最初の SubagentStop で消費 (削除)。1 日より古い残存分は次回 SubagentStart が掃除 |
 | `.claude-pre-push-done-<agent_id>` | attestation 消費時に排他作成される launch tombstone。同一 agent_id での SubagentStart 再発火 (resume 等) による attestation 再鋳造を遮断する。再レビューは新規 spawn (新しい agent_id) で行う | 無期限保持 (prune しない)。resume の成立期間は transcript 保持期間 (cleanupPeriodDays で延長可能) に従うため、期限付き掃除では遮断に穴が開く。1 件 64 byte で実害なし |
+| `.claude-pre-push-handback-<agent_id>` | PostToolUse (`SubagentHandback`) が記録する hand-back された report の Status 判定結果 (`pass` / `findings` / `invalid` の 1 語)。launch attestation が存在し tombstone が無い場合のみ書かれる | 最初の SubagentStop で消費 (削除)。1 日より古い残存分は次回 SubagentStart が掃除 |
 
 マーカーは reviewer subagent の agent_type に対して発行され、実効モデルは検証しません。`CLAUDE_CODE_SUBAGENT_MODEL` は起動時の model 指定や agent frontmatter より優先されるため、この環境変数を設定した環境では既定 model での実行保証が失われます。本プラグインはこの環境変数を設定しない運用を前提とします。
 
@@ -169,7 +172,7 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 - tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/code-review` skill を invoke できないようにしている (理由は security-reviewer と同じ; 下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため
 - subagent body には logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリと exclusion ルール (style / docs / perf / refactor / security / pre-existing bug 等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
-- SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report の単一 `Status: pass|findings` 行を確認して code-reviewed マーカーを更新する
+- SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して code-reviewed マーカーを更新する
 - model は `opus` に固定、effort は指定せずセッション既定を継承
 
 #### `pre-push-review:security-reviewer` (subagent)
@@ -183,7 +186,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 - tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/security-review` skill を invoke できないようにしている (理由は下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため
 - subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
-- SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report の単一 `Status: pass|findings` 行を確認して security マーカーを更新する (`execution-failed` / 欠落 / 重複 / 未知値では書かず、silent-pass を防ぐ)
+- SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して security マーカーを更新する (`execution-failed` / 欠落 / 重複 / 未知値では書かず、silent-pass を防ぐ)
 - model は `opus` に固定、effort は指定せずセッション既定を継承
 
 #### code-reviewer / security-reviewer subagent が標準 skill を invoke しない理由 (共通)
