@@ -932,11 +932,21 @@ class PermissionDeniedTest(BackgroundRunnerHarness):
         self.assert_denied_record("advisor")
 
     def test_denial_of_another_subagent_or_tool_keeps_the_record(self) -> None:
+        """runner 以外の拒否・別 operation の runner の拒否は、record に印も付けない。
+
+        印は拒否された起動に対応する operation の record だけに付く。稼働中の別 runner の
+        record に印が漏れると、Stop の「印付き + in-flight task 無し → block しない」規則と
+        組み合わさって、その runner の追跡喪失が黙って見逃される。
+        """
         cases = {
             "other-subagent": {"subagent_type": "Explore", "tool_name": "Agent"},
             "other-tool": {
                 "subagent_type": RUNNERS["rescue"],
                 "tool_name": "Bash",
+            },
+            "other-operation-runner": {
+                "subagent_type": RUNNERS["advisor"],
+                "tool_name": "Agent",
             },
         }
         for name, arguments in cases.items():
@@ -949,6 +959,11 @@ class PermissionDeniedTest(BackgroundRunnerHarness):
                 records = self.records_for(session_id)
                 self.assertEqual(1, len(records))
                 self.assertEqual("active", records[0]["phase"])
+                self.assertNotIn("launchDenied", records[0])
+                self.assert_stop_blocked(
+                    self.stop(session_id=session_id, background_tasks=[]),
+                    RUNNERS["rescue"],
+                )
 
 
 class PreToolUseGateHardeningTest(BackgroundRunnerHarness):
