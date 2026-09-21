@@ -78,17 +78,25 @@ PRECHECK_SENTENCE = (
     "Before the first wait, confirm with the Bash tool that the recorded "
     "output file exists."
 )
-# run の同一性 (待機前に 1 回だけ、output file 先頭の案内行から run id を取る).
+# run の同一性 (待機前に 1 回だけ、output file の先頭行の案内行から run id を取る).
 RUN_ID_SENTENCE = (
     "Before the first wait, Read the head of the recorded output file once "
     "and take the run id from the wrapper's `terminal sentinel: <path> "
-    "run=<id>` announcement line; reuse that one run id for the rest of this "
-    "recovery."
+    "run=<id>` announcement line, which is the first line of that file; "
+    "reuse that one run id for the rest of this recovery."
 )
-# sentinel path の正本 (案内行の絶対パス).
+# shell へ補間する前の形状検証.
+ANNOUNCEMENT_VALIDATION_SENTENCE = (
+    "Before interpolating them into a shell command, check that the run id "
+    "matches `^[0-9]+-[0-9]+-[0-9a-f]{8}$` and that the sentinel path is "
+    "absolute — it starts with `/` and carries no whitespace, quote, `$`, "
+    "backtick, `;`, `&` or `|`."
+)
+# sentinel path の正本 (案内行の絶対パス。run id 入りの run ごとのファイル).
 SENTINEL_PATH_SOURCE_SENTENCE = (
     "Take the sentinel path from the absolute path in that same announcement "
-    "line."
+    "line; the wrapper writes one sentinel per run, so that path already "
+    "carries this run id."
 )
 # 案内行がまだ出ていないときの猶予待ち (回収予算には数えない).
 GRACE_WAIT_SENTENCE = (
@@ -98,10 +106,12 @@ GRACE_WAIT_SENTENCE = (
     "then Read the head again; this grace wait is not one of the recovery "
     "budget's loop runs."
 )
-# 案内行は wrapper 自身の起動通知であり、report 本文の finding ではない.
-ANNOUNCEMENT_NOT_A_FINDING_SENTENCE = (
-    "The announcement line is the wrapper's own startup notice at the top of "
-    "the body, so never normalize it into a finding."
+# 案内行・終了行は wrapper 自身の通知であり report 本文ではない。background 移行の
+# 有無に依らず適用されるため、recovery 節ではなく report 正規化の共通部分に置く.
+NOTICE_LINES_NOT_FINDINGS_SENTENCE = (
+    "The `terminal sentinel:` announcement line and the `terminal sentinel "
+    "end` line are the wrapper's own startup and completion notices, so never "
+    "treat them as findings and never include them in the parent-safe report."
 )
 # 待機手段 (Bash tool 1 回の until ポーリングループ。述語は run id 一致まで含む).
 WAIT_SENTENCE = (
@@ -161,6 +171,19 @@ READ_TO_END_SENTENCE = (
     "Read that output file to its end, continuing with `offset` and `limit` "
     "until the end of the file is reached."
 )
+# 本文の完結条件 (wrapper の終了行).
+END_LINE_SENTENCE = (
+    "The body is complete only when its last line is the wrapper's "
+    "`terminal sentinel end run=<id>` line carrying this same run id."
+)
+# 終了行がまだ出ていないときの猶予待ち (回収予算には数えない).
+END_LINE_GRACE_SENTENCE = (
+    "If the last line is not that end line, wait once with a short Bash "
+    'until-loop `until tail -n 1 "$OUT" | grep -qE " run=${RUN_ID}$" || '
+    "[ $SECONDS -ge $end ]; do sleep 5; done` whose deadline is 30 seconds, "
+    "then Read the tail again; this grace wait is not one of the recovery "
+    "budget's loop runs."
+)
 # path の出所要件 (同一 run 由来であれば、どの step が surface した path でもよい).
 PATH_PROVENANCE_SENTENCE = (
     "Any step of this recovery may surface the output file path; use it as "
@@ -202,7 +225,7 @@ MISSING_FILE_SENTENCE = (
     "disappears while the loop is waiting, return `Status: execution-failed` "
     "(failure class `other`) without rerunning the loop."
 )
-# 境界: 回収予算 (3 回のループ) の超過.
+# 境界: 回収予算 (5 回のループ) の超過.
 BUDGET_SENTENCE = (
     "If the fifth run of the loop ends at its deadline without a matching "
     "sentinel, return `Status: execution-failed` (failure class `other`), "
@@ -210,27 +233,28 @@ BUDGET_SENTENCE = (
     "running in the background, and note that the parent may resume this "
     "same subagent for a diagnostic status check only."
 )
-# 境界: 本文を最後まで読めない / 案内行しか無いまま status=ok.
+# 境界: 本文を最後まで読めない / 終了行が来ない / 通知行しか無い.
 INCOMPLETE_BODY_SENTENCE = (
-    "If the recorded output file cannot be read to its end, or carries "
-    "nothing beyond the announcement line when the sentinel reports "
-    "`status=ok`, return `Status: execution-failed` (failure class `other`) "
-    "instead of normalizing a partial body."
+    "If the recorded output file cannot be read to its end, still lacks that "
+    "end line after the grace wait, or carries nothing between the "
+    "announcement line and the end line, return `Status: execution-failed` "
+    "(failure class `other`) instead of normalizing a partial body."
 )
-# 境界: 猶予待ちの後も run を同定できない (空ファイルもここに含む).
+# 境界: 猶予待ちの後も run を同定できない (空ファイル・形状検証の失敗も含む).
 UNIDENTIFIABLE_RUN_SENTENCE = (
-    "If the head Read after that grace wait still finds no announcement line "
-    "— including a recorded output file that is still empty — this run "
-    "cannot be identified: return `Status: execution-failed` (failure class "
-    "`other`) without entering the wait loop."
+    "If the first line after that grace wait is still not an announcement "
+    "line — including a recorded output file that is still empty — or its "
+    "run id or sentinel path fails those checks, this run cannot be "
+    "identified: return `Status: execution-failed` (failure class `other`) "
+    "without entering the wait loop."
 )
 
-# sentinel path の fallback (案内行から path が取れない場合。固定名は plugin ごと).
-SENTINEL_NAME = "pre-push-codex-review-terminal"
+# sentinel path の fallback (案内行から path が取れない場合。prefix は plugin ごと).
+SENTINEL_NAME_PREFIX = "pre-push-codex-review-terminal"
 SENTINEL_PATH_SENTENCE = (
     "Only when the announcement line yields no path, compose the sentinel "
-    "path from the git directory that `git rev-parse --git-dir` prints and "
-    f"the fixed name `{SENTINEL_NAME}`."
+    "path from the git directory that `git rev-parse --git-dir` prints, the "
+    f"fixed prefix `{SENTINEL_NAME_PREFIX}-` and this run id."
 )
 # resume 後の status check の位置づけ (plugin ごとに gate 名が異なる).
 RESUME_CHECK_SENTENCE = (
@@ -248,9 +272,9 @@ SHARED_RECOVERY_CLAUSES = {
     "no-second-run": SECOND_RUN_SENTENCE,
     "output-file-precheck": PRECHECK_SENTENCE,
     "run-id-from-announcement": RUN_ID_SENTENCE,
+    "announcement-validation": ANNOUNCEMENT_VALIDATION_SENTENCE,
     "sentinel-path-from-announcement": SENTINEL_PATH_SOURCE_SENTENCE,
     "announcement-grace-wait": GRACE_WAIT_SENTENCE,
-    "announcement-not-a-finding": ANNOUNCEMENT_NOT_A_FINDING_SENTENCE,
     "polling-loop-wait": WAIT_SENTENCE,
     "loop-deadline": LOOP_DEADLINE_SENTENCE,
     "no-standalone-sleep": NO_STANDALONE_SLEEP_SENTENCE,
@@ -260,6 +284,8 @@ SHARED_RECOVERY_CLAUSES = {
     "sentinel-failed": SENTINEL_FAILED_SENTENCE,
     "recover-by-read": RECOVER_BY_READ_SENTENCE,
     "read-body-to-end": READ_TO_END_SENTENCE,
+    "end-line-completes-the-body": END_LINE_SENTENCE,
+    "end-line-grace-wait": END_LINE_GRACE_SENTENCE,
     "path-provenance": PATH_PROVENANCE_SENTENCE,
     "source-of-truth": SOURCE_OF_TRUTH_SENTENCE,
     "report-contract-handoff": HANDOFF_SENTENCE,
@@ -270,6 +296,11 @@ SHARED_RECOVERY_CLAUSES = {
     "boundary-incomplete-body": INCOMPLETE_BODY_SENTENCE,
     "boundary-budget-exhausted": BUDGET_SENTENCE,
     "boundary-unidentifiable-run": UNIDENTIFIABLE_RUN_SENTENCE,
+}
+
+# background 移行の有無に依らず適用されるため、回収節の中だけに置いてはならない一文。
+SHARED_BODY_CLAUSES = {
+    "notice-lines-not-findings": NOTICE_LINES_NOT_FINDINGS_SENTENCE,
 }
 
 RECOVERY_HEADING = "## Background-move recovery"
@@ -462,6 +493,22 @@ class ContractTestCase(unittest.TestCase):
         if expected not in normalized_recovery_section(path):
             self.fail(f"{path}: 回収契約の一文が欠けている: {expected}")
 
+    def assert_body_clause_outside_recovery(
+        self, path: Path, sentence: str
+    ) -> None:
+        """経路非依存の契約が、回収節の外にも書かれていることを確認する。"""
+        body = read(path)
+        expected = normalize(sentence)
+        if expected not in normalize(body):
+            self.fail(f"{path}: 契約の一文が本文に無い: {expected}")
+        section = recovery_section(body)
+        outside = body.replace(section, " ", 1) if section else body
+        if expected not in normalize(outside):
+            self.fail(
+                f"{path}: 契約の一文が '{RECOVERY_HEADING}' 節の中だけにある: "
+                f"{expected}"
+            )
+
     def assert_tools_line(self, path: Path) -> None:
         match = FRONTMATTER_PATTERN.match(read(path))
         if match is None:
@@ -537,6 +584,11 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovery_takes_the_run_id_from_the_announcement_line(self) -> None:
         self.assert_clause(RUN_ID_SENTENCE)
 
+    def test_announcement_values_are_validated_before_interpolation(
+        self,
+    ) -> None:
+        self.assert_clause(ANNOUNCEMENT_VALIDATION_SENTENCE)
+
     def test_recovery_takes_the_sentinel_path_from_the_announcement_line(
         self,
     ) -> None:
@@ -544,9 +596,6 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
 
     def test_missing_announcement_line_gets_one_grace_wait(self) -> None:
         self.assert_clause(GRACE_WAIT_SENTENCE)
-
-    def test_announcement_line_is_not_normalized_into_a_finding(self) -> None:
-        self.assert_clause(ANNOUNCEMENT_NOT_A_FINDING_SENTENCE)
 
     def test_recovery_waits_with_a_bash_until_loop(self) -> None:
         self.assert_clause(WAIT_SENTENCE)
@@ -576,6 +625,12 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
 
     def test_recovered_body_is_read_to_the_end(self) -> None:
         self.assert_clause(READ_TO_END_SENTENCE)
+
+    def test_end_line_completes_the_recovered_body(self) -> None:
+        self.assert_clause(END_LINE_SENTENCE)
+
+    def test_missing_end_line_gets_one_grace_wait(self) -> None:
+        self.assert_clause(END_LINE_GRACE_SENTENCE)
 
     def test_output_file_path_from_any_step_of_same_run_is_usable(self) -> None:
         self.assert_clause(PATH_PROVENANCE_SENTENCE)
@@ -609,6 +664,15 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
 
     def test_resumed_status_check_is_bounded_and_diagnostic_only(self) -> None:
         self.assert_clause(RESUME_CHECK_SENTENCE)
+
+
+class CodexReviewerReportNormalizationTest(ContractTestCase):
+    """background 移行の有無に依らず適用される report 正規化の契約。"""
+
+    def test_wrapper_notice_lines_are_never_findings(self) -> None:
+        self.assert_body_clause_outside_recovery(
+            CODEX_REVIEWER, NOTICE_LINES_NOT_FINDINGS_SENTENCE
+        )
 
 
 class CodexReviewerDocumentationTest(ContractTestCase):

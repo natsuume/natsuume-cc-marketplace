@@ -43,17 +43,18 @@ _shared_contract = _load_shared_recovery_contract()
 
 ContractTestCase = _shared_contract.ContractTestCase
 SHARED_RECOVERY_CLAUSES = _shared_contract.SHARED_RECOVERY_CLAUSES
+SHARED_BODY_CLAUSES = _shared_contract.SHARED_BODY_CLAUSES
 TOOL_GRANT_LITERAL = _shared_contract.TOOL_GRANT_LITERAL
 FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 FORBIDDEN_TERMINAL_CONCEPT = _shared_contract.FORBIDDEN_TERMINAL_CONCEPT
 
-# wrapper が書く terminal sentinel の固定名 (plugin ごとに異なる)。案内行から path を
-# 取れない場合の fallback としてだけ使う。
-SENTINEL_NAME = "pre-merge-codex-review-terminal"
+# wrapper が書く terminal sentinel の固定 prefix (plugin ごとに異なる)。案内行から
+# path を取れない場合の fallback としてだけ使う。
+SENTINEL_NAME_PREFIX = "pre-merge-codex-review-terminal"
 SENTINEL_PATH_SENTENCE = (
     "Only when the announcement line yields no path, compose the sentinel "
-    "path from the git directory that `git rev-parse --git-dir` prints and "
-    f"the fixed name `{SENTINEL_NAME}`."
+    "path from the git directory that `git rev-parse --git-dir` prints, the "
+    f"fixed prefix `{SENTINEL_NAME_PREFIX}-` and this run id."
 )
 # resume 後の status check の位置づけ。merge gate はローカル記録を検証するため、
 # 診断目的の再読では gate を満たせないことを pre-merge 側の文言で固定する。
@@ -149,6 +150,15 @@ class PreMergeReviewerBackgroundMoveRecoveryTest(ContractTestCase):
 
     def test_resumed_status_check_is_bounded_and_diagnostic_only(self) -> None:
         self.assert_recovery_clause(AGENT, RESUME_CHECK_SENTENCE)
+
+
+class PreMergeReviewerReportNormalizationTest(ContractTestCase):
+    """background 移行の有無に依らず適用される report 正規化の契約。"""
+
+    def test_body_states_every_shared_body_clause_outside_recovery(self) -> None:
+        for clause, sentence in SHARED_BODY_CLAUSES.items():
+            with self.subTest(clause=clause):
+                self.assert_body_clause_outside_recovery(AGENT, sentence)
 
 
 class PreMergeReviewerDocumentationTest(ContractTestCase):
