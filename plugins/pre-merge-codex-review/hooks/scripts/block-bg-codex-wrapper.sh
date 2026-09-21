@@ -71,7 +71,7 @@ AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null) ||
 if [ "$AGENT_TYPE" != "$REVIEWER_AGENT_TYPE" ]; then
   deny "codex review wrapper の起動をブロックしました。 wrapper (\`${WRAPPER_BASENAME}\`) は \`${REVIEWER_AGENT_TYPE}\` subagent からのみ起動できます。
 
-Agent / Task tool で subagent_type=\"${REVIEWER_AGENT_TYPE}\", model=\"sonnet\" を foreground 起動してください。 subagent が wrapper を実行し、 結果を parent-safe な markdown report として返します。
+Agent / Task tool で subagent_type=\"${REVIEWER_AGENT_TYPE}\", model=\"sonnet\" を起動してください。 起動 mode は Claude Code が決める (対話セッションでは background が既定) ため指定せず、 結果は completion notification (SubagentHandback / SubagentStop) 経由で届きます。 subagent が wrapper を実行し、 結果を parent-safe な markdown report として返します。
 
 wrapper の出力 (codex review の生の findings) を親 session の context に直接流し込まないための境界です。"
   exit 0

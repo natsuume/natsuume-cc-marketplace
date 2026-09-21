@@ -58,8 +58,8 @@
  *     review 起動形 (`node .../codex-companion.mjs review|adversarial-review`、
  *     `run-pre-push-codex-review.sh`、`run-codex-job.sh review`) を deny する
  *   - Stop: checkpoint 要求中は main session の停止を block し、
- *     `codex-advisor:advisor-runner` を `model: "sonnet"`, `run_in_background: false`
- *     で foreground 起動することと、相談 request に含める `<review_cycle_checkpoint>`
+ *     `codex-advisor:advisor-runner` を `model: "sonnet"` で起動することと、相談
+ *     request に含める `<review_cycle_checkpoint>`
  *     4 項目 (Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と
  *     不確実性 / course-correction の問い) を案内する
  *
@@ -566,7 +566,7 @@ function handlePreToolUse(input) {
   if (!state?.checkpointRequired) return null;
   if (!isReviewLaunch(command)) return null;
   return denyResponse(
-    `前回の根本方針 checkpoint から Codex review が ${REVIEW_CADENCE_LIMIT} 回完了しています。次の review より先に ${ADVISOR_CHECKPOINT_RUNNER} を foreground 起動 (model: "sonnet", run_in_background: false) して、元の Goal・制約・直近の review 履歴・現在の方針を材料に根本方針を壁打ちしてください。通常の advisor 相談では解除されません。`,
+    `前回の根本方針 checkpoint から Codex review が ${REVIEW_CADENCE_LIMIT} 回完了しています。次の review より先に ${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet" で起動して、元の Goal・制約・直近の review 履歴・現在の方針を材料に根本方針を壁打ちしてください。起動 mode は Claude Code が決めるため指定せず、助言は completion notification 経由で届きます。通常の advisor 相談では解除されません。`,
   );
 }
 
@@ -777,7 +777,7 @@ function handleStop(input) {
   if (!state?.checkpointRequired) return null;
   return {
     decision: "block",
-    reason: `Codex review が前回の根本方針 checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。まず必ず ${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet", run_in_background: false で foreground 起動してください。相談 request の <review_cycle_checkpoint> には次の 4 項目を省略せず含めます: Goal と受入基準・制約 / 直近 ${REVIEW_CADENCE_LIMIT} サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。通常の advisor 相談では解除されません。起動に失敗した場合、その起動失敗が fail-open reset を発火させることがあります。起動を試みた後も block が解除されない場合に限り、codex-advisor plugin の install が必要であることをユーザに報告してください (state の手動 reset 手順は plugin README に記載)。`,
+    reason: `Codex review が前回の根本方針 checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。まず必ず ${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet" で起動してください。起動 mode は Claude Code が決めるため指定せず、助言は completion notification 経由で届きます。相談 request の <review_cycle_checkpoint> には次の 4 項目を省略せず含めます: Goal と受入基準・制約 / 直近 ${REVIEW_CADENCE_LIMIT} サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。通常の advisor 相談では解除されません。起動に失敗した場合、その起動失敗が fail-open reset を発火させることがあります。起動を試みた後も block が解除されない場合に限り、codex-advisor plugin の install が必要であることをユーザに報告してください (state の手動 reset 手順は plugin README に記載)。`,
   };
 }
 

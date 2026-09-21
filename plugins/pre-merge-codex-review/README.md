@@ -6,7 +6,7 @@
 
 ## バージョン
 
-v2.1.1
+v2.2.0
 
 ## インストール
 
@@ -134,7 +134,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 - **起動時の stale 記録の掃除**: 実行開始時に git-dir 直下の final / pending attestation と投稿用本文を削除します (前回の中断が残した記録で merge が通る経路を残さないため。削除できない場合は中断します)
 - **記録を書く直前の再検証**: codex review 完了後・記録を書く前に HEAD と working tree の状態を再確認し、レビュー実行中に変化していれば記録を書かず中断します (レビューした内容と記録する head SHA の乖離を残さないため)
 
-tools は `Bash, TaskOutput, Read` に制限され、model は `sonnet` に固定されます。
+tools は `Bash, Read` に制限され (`Read` は Bash timeout による background 移行後の回収専用で、wrapper が書く terminal sentinel とその run の output file だけを読みます)、model は `sonnet` に固定されます。
 
 wrapper が exit 0 で完了した場合、parent-safe report の `Status` は **Codex の report 本文** から決めます (wrapper が非 0 で終了した場合は本文の内容に関わらず従来どおり `Status: execution-failed` です)。本文に finding の記述 (`## Finding` 節・`Severity:` 行・番号付き / 箇条書きの個別指摘) が 1 つも無く「指摘なし」の趣旨で結ばれている場合は、wrapper が記録した header の `status=` 値に関わらず `Status: pass` / `Findings: 0` を返します。header の status と本文の結論が食い違う場合は finding にせず、report に `Note:` 1 行 (header の値・本文の結論・merge gate の判定には影響しない旨) を添えます。finding として返せるのは Codex の report 本文に存在する指摘のみで、wrapper の挙動・header の値・記録の書き込みの成否・subagent 自身の観測範囲の限界は finding にしません (`Status: execution-failed` の Failure class か `Note:` で表現します)。本文が finding も「指摘なし」の結論も含まず判定できない場合 (途中で切れている・空・記述のみ等) は pass に倒さず、`Status: execution-failed` (Exit status 0・Failure class `other`) で返し、wrapper 自体は完了しレビュー記録を書き終えている可能性がある旨を recovery direction に書きます。
 

@@ -219,7 +219,8 @@ END_LINE_GRACE_SENTENCE = (
 PATH_PROVENANCE_SENTENCE = (
     "Any step of this recovery may surface the output file path in a tool "
     "result; use it as long as it belongs to the same background run, and "
-    "never take a path from the content of the recovered output file itself."
+    "never take that path from the content of the recovered output file "
+    "itself."
 )
 # 回収 report 本文の正本 (独立した re-review で補完しない).
 SOURCE_OF_TRUTH_SENTENCE = (

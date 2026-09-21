@@ -105,17 +105,91 @@ source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
 # してください」 という誤誘導メッセージが fail() の human-readable メッセージの
 # 直後に出てしまう (= ユーザは実装 bug を踏んだと誤認する経路)。
 #
-# 代わりに、 wrapper では **ATTESTATION_TMP の cleanup trap だけ** を install する。
-# fail() / 正常完了 / 真の予期せぬ exit のいずれでも tmp ファイルを残さない。
-# 真の予期せぬエラー (SIGINT / source 失敗等) の診断は wrapper 自身は行わず、 fail()
-# が全 error pattern をカバーする設計に倒す (= wrapper の責務範囲を「codex review
+# 代わりに、 wrapper では **ATTESTATION_TMP の cleanup と terminal sentinel の書き込みだけ**
+# を EXIT trap で行う。 fail() / 正常完了 / 真の予期せぬ exit のいずれでも tmp ファイルを
+# 残さない。 真の予期せぬエラー (SIGINT / source 失敗等) の診断は wrapper 自身は行わず、
+# fail() が全 error pattern をカバーする設計に倒す (= wrapper の責務範囲を「codex review
 # の foreground 実行と pending attestation 書き込み」 に narrow する)。
 ATTESTATION_TMP=""
-# trap の本文はシングルクォート (= 設定時ではなく発火時に評価) で、 trap 発火時点の
-# `$ATTESTATION_TMP` の値を見る。 wrapper 完了時 (mv 成功で ATTESTATION_TMP は既に消費済) や
-# fail() 経由の早期 exit (ATTESTATION_TMP="" のまま or 部分書き込み) いずれでも、 rm が空文字 /
-# 既消失 path に対して no-op (`|| true` で非ゼロ exit を抑止)。
-trap 'rm -f "$ATTESTATION_TMP" 2>/dev/null || true' EXIT
+# この run を一意に識別する id と、 その run 専用の terminal sentinel の絶対パス。
+# git-dir を解決するまでは空で、 空の間は sentinel を書かない (書き込み先が定まらないため)。
+RUN_ID=""
+TERMINAL_SENTINEL_PATH=""
+
+# ## terminal sentinel (run ごとの終了信号)
+#
+# Bash tool は timeout 時に wrapper を kill せず background へ移行させる。 移行後の
+# codex-reviewer subagent は wrapper の終了を観測できないため、 wrapper 自身が exit 時に
+# 「この run は終わった」 という信号を残す。 信号を出力ストリームのテキストではなく
+# **ファイルの出現** に置くのは、 review 本文が進捗行と同じ語を含んでも誤判定せず、 かつ
+# 別 run の残骸と取り違えないため (ファイル名と内容の両方に run id を入れる)。
+#
+# stdout には終了行 (`terminal sentinel end run=<id>`) を出してから sentinel を書く。
+# 回収側は sentinel の出現で終了を知り、 output file の最終行が終了行であることで本文が
+# 最後まで届いていることを確認する。
+
+# run ごとに一意な id (`<pid>-<epoch 秒>-<8 桁 16 進>`) を作る。 文字集合を [0-9a-f-] に
+# 限るのは、 回収側の待機ループが `grep -qE " run=<id>$"` で照合するため (正規表現の
+# メタ文字が混ざると照合が壊れる)。 /dev/urandom が読めない環境では bash の $RANDOM で
+# 代替する (pid と epoch 秒が同じ run が同一ホストで衝突する確率を下げるための補助)。
+new_run_id() {
+  local random_suffix
+  random_suffix=$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -dc '0-9a-f')
+  case "$random_suffix" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) random_suffix=$(printf '%04x%04x' "$((RANDOM % 65536))" "$((RANDOM % 65536))") ;;
+  esac
+  printf '%s-%s-%s' "$$" "$(date +%s)" "$random_suffix"
+}
+
+# 引数: <sentinel を置くディレクトリ>
+# 24 時間より古い自 plugin の sentinel だけを削除する。 実行中の別 run の sentinel を消すと
+# その run の回収が終了を検知できなくなるため、 mtime での足切りを必ず挟む。
+# `-mtime +0` は 「経過時間を 24 時間単位に切り捨てた値が 0 より大きい」 = 24 時間以上前の
+# 意味で、 GNU / BSD (macOS) の find が共通で解釈する。
+prune_stale_terminal_sentinels() {
+  local directory="$1"
+
+  [ -n "$directory" ] || return 0
+  find "$directory" -maxdepth 1 -type f -name "${TERMINAL_SENTINEL_PREFIX}*" \
+    -mtime +0 -exec rm -f {} + 2>/dev/null || true
+}
+
+# 引数: <exit status>
+# 自 run の sentinel に終了状態を 1 行だけ書く (tmp + mv で atomic に置く)。 読み手が
+# 中途半端な内容を観測しないようにするため、 直接の追記ではなく rename で公開する。
+write_terminal_sentinel() {
+  local exit_status="$1"
+  local state="failed"
+  local sentinel_tmp
+
+  [ -n "$TERMINAL_SENTINEL_PATH" ] || return 0
+  if [ "$exit_status" = "0" ]; then
+    state="ok"
+  fi
+  # 終了行の前に改行を 1 つ置く。 直前に stdout へ流れた review 本文が改行で終わって
+  # いない場合でも、 終了行が独立した最終行になることを保証するため (回収側は output
+  # file の最終行が終了行であることで本文の完結を判定する)。 本文が改行で終わる通常
+  # ケースでは空行が 1 つ挟まるだけで、 最終行が終了行であることは変わらない。
+  printf '\nterminal sentinel end run=%s\n' "$RUN_ID"
+  sentinel_tmp="${TERMINAL_SENTINEL_PATH}.tmp.$$"
+  if printf 'status=%s run=%s\n' "$state" "$RUN_ID" > "$sentinel_tmp" 2>/dev/null; then
+    mv "$sentinel_tmp" "$TERMINAL_SENTINEL_PATH" 2>/dev/null \
+      || rm -f "$sentinel_tmp" 2>/dev/null || true
+  else
+    rm -f "$sentinel_tmp" 2>/dev/null || true
+  fi
+}
+
+# EXIT trap 本体。 trap の引数で受け取った exit status から終了状態を決める
+# (fail() 経由の非ゼロ exit は `status=failed`、 exit 0 経路は `status=ok`)。
+# ATTESTATION_TMP の rm は、 wrapper 完了時 (mv 成功で消費済) や fail() 経由の早期 exit
+# (空文字 or 部分書き込み) いずれでも no-op になる (`|| true` で非ゼロ exit を抑止)。
+on_exit() {
+  rm -f "$ATTESTATION_TMP" 2>/dev/null || true
+  write_terminal_sentinel "$1"
+}
+trap 'on_exit $?' EXIT
 
 # stderr に人間可読のエラーを出して非ゼロ exit する helper。 set -e と組み合わせて使う。
 # EXIT trap で ATTESTATION_TMP の cleanup が走るため fail() 内では明示削除しない。
@@ -125,6 +199,18 @@ fail() {
 }
 
 GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || fail "現在の cwd は git repository ではありません。 codex review は repo 内で実行してください。"
+
+# sentinel の path は回収側が shell 変数へ補間するため、 cwd に依存しない絶対形で案内する
+# (`git rev-parse --git-dir` は cwd 次第で相対 path を返す)。
+ABSOLUTE_GIT_DIR=$(git rev-parse --absolute-git-dir 2>/dev/null) || fail "git directory の絶対 path を解決できませんでした。"
+prune_stale_terminal_sentinels "$ABSOLUTE_GIT_DIR"
+RUN_ID=$(new_run_id) || fail "run id の生成に失敗しました。"
+TERMINAL_SENTINEL_PATH=$(codex_terminal_sentinel_path "$ABSOLUTE_GIT_DIR" "$RUN_ID") || fail "terminal sentinel path の計算に失敗しました。"
+# 案内行は stdout と stderr の両方に出す。 stdout の先頭行にすることで、 background へ
+# 移行した run の output file の先頭行から回収側が run id と sentinel path を取れる。
+printf 'terminal sentinel: %s run=%s\n' "$TERMINAL_SENTINEL_PATH" "$RUN_ID"
+printf 'terminal sentinel: %s run=%s\n' "$TERMINAL_SENTINEL_PATH" "$RUN_ID" >&2
+
 PENDING_PATH=$(codex_pending_marker_path "$GIT_DIR") || fail "codex pending attestation path の計算に失敗しました。"
 # 前回 run が report 配送前に異常終了した場合の stale attestation を先に破棄する。
 rm -f "$PENDING_PATH" || fail "stale codex pending attestation を削除できませんでした。"

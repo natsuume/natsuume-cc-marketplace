@@ -14,6 +14,7 @@
 # - CODEX_PENDING_MARKER ← wrapper が書く hash-bound pending attestation
 # - LAUNCH_ATTESTATION   ← SubagentStart が記録するレビュー開始時 hash (agent_id ごと)
 # - LAUNCH_TOMBSTONE     ← attestation 消費時に排他作成される one-shot 記録 (agent_id ごと)
+# - TERMINAL_SENTINEL    ← wrapper が exit 時に書く run ごとの終了状態 (run id ごと)
 #
 # pre-push-review core が扱う code-reviewed / security-reviewed マーカーは本 plugin の
 # 関知対象外のため、 ここには定義しない。
@@ -40,6 +41,13 @@ LAUNCH_TOMBSTONE_PREFIX=".claude-pre-push-done-"
 # してここに記録し、 SubagentStop がそれを one-shot で消費する。 attestation / tombstone と
 # 同じく prefix 方式にするのは、 agent_id の中身に依存せず name 衝突を避けるため。
 HANDBACK_REPORT_PREFIX=".claude-pre-push-handback-"
+# wrapper が EXIT trap で書く terminal sentinel (run ごとに 1 ファイル) の prefix。
+# Bash tool の timeout で wrapper が background へ移行した場合、 codex-reviewer subagent は
+# この sentinel の出現で終了を検知する。 出力ストリームのテキストではなくファイルの出現を
+# 終端信号にすることで、 review 本文の文面や別 run の残骸に判定が影響されない。
+# 先頭にドットを付けないのは、 このファイルが gate の検証対象ではなく実行中の run を外から
+# 観測するための一時的な信号であり、 マーカー類と区別して掃除対象を見分けやすくするため。
+TERMINAL_SENTINEL_PREFIX="pre-push-codex-review-terminal-"
 
 # 引数: <git-dir>
 # 出力: marker storage directory (= git-dir 直下)
@@ -70,6 +78,17 @@ codex_marker_path() {
 # auto-mark.sh が parent-safe report の正常完了後にのみ final marker へ昇格する。
 codex_pending_marker_path() {
   marker_path "$1" "$CODEX_PENDING_MARKER_NAME"
+}
+
+# 引数: <git-dir> <run id>
+# 出力: その run の terminal sentinel (git-dir/pre-push-codex-review-terminal-<run id>) の path
+#
+# run id の形状 (`<pid>-<epoch 秒>-<8 桁 16 進>`) の生成と検証は呼び出し側 (wrapper) の
+# 責務。 本関数は prefix に run id を連結するだけで、 run id の中身を検証しない。
+codex_terminal_sentinel_path() {
+  local git_dir="$1"
+  local run_id="$2"
+  marker_path "$git_dir" "${TERMINAL_SENTINEL_PREFIX}${run_id}"
 }
 
 # 引数: <git-dir> <agent_id>

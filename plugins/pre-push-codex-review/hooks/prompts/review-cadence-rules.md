@@ -15,7 +15,7 @@
 
 **なぜ**: 同じ方針のまま局所修正と Codex review を反復すると、個別 finding は減っても問題設定・設計境界・検証戦略の誤りを温存し、多数サイクル規模まで収束しないことがある。5 サイクルごとに review とは独立した advisor へ根本方針を問い直せば、局所最適化を続ける前に course-correction を判断できる。
 
-**指示**: `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` が `Status: pass|findings` で完了した Codex review、または `codex-advisor:review-runner` が成功した native review / adversarial review を 1 サイクルと数える。前回の根本方針 checkpoint から合計 5 サイクル完了したら、次の review または完了宣言より先に `/codex-advisor:consult` の review cadence mode で `codex-advisor:advisor-runner` を foreground 起動する (`model: "sonnet"`, `run_in_background: false`)。相談の `<review_cycle_checkpoint>` には次の 4 項目を省略せず含める: Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。
+**指示**: `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` が `Status: pass|findings` で完了した Codex review、または `codex-advisor:review-runner` が成功した native review / adversarial review を 1 サイクルと数える。前回の根本方針 checkpoint から合計 5 サイクル完了したら、次の review または完了宣言より先に `/codex-advisor:consult` の review cadence mode で `codex-advisor:advisor-runner` を起動する (`model: "sonnet"` のみを明示する)。起動 mode は Claude Code が決める (対話セッションでは background が既定) ため指定せず、助言は completion notification (SubagentHandback / SubagentStop) 経由で届く。相談の `<review_cycle_checkpoint>` には次の 4 項目を省略せず含める: Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。
 
 助言は独立した第二視点としてフラットに扱い、自分の証拠・推論と同じ土俵で採否を判断する。採用する course-correction、または現方針を維持する根拠を作業報告に記録してから review cycle を再開する。
 

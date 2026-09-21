@@ -5,7 +5,7 @@
 
 **なぜ**: auto mode の classifier は tool result (merge gate の deny 文) を読まず、ユーザ発言と tool call の並びだけを見る。`gh pr merge` の呼び出し直後に codex-reviewer subagent を起動すると、classifier には「ユーザが依頼していない merge 系操作の一部」に見えて起動が拒否される。merge 試行を挟まずに起動すれば拒否されない。
 
-**指示**: PR のマージ前提条件 (draft でない・CI・レビュー承認・mergeable) を確認したら、`gh pr merge` を実行する **前に** `pre-merge-codex-review:codex-reviewer` を Agent tool で `model: "sonnet"`、foreground (`run_in_background: false`) で起動し、report を受け取る。merge gate の deny を待ってから起動しない。subagent は current branch の PR をレビューするため、merge 対象 PR のブランチを checkout した状態 (ローカル HEAD が PR の head と一致し、working tree が clean) で起動する。起動 prompt は、subagent が実際に行う操作 (read-only の codex review 1 回と report の返却) を述べた次の定型文だけを使う:
+**指示**: PR のマージ前提条件 (draft でない・CI・レビュー承認・mergeable) を確認したら、`gh pr merge` を実行する **前に** `pre-merge-codex-review:codex-reviewer` を Agent tool で `model: "sonnet"` を指定して起動し、report を受け取る。起動 mode は Claude Code が決める (対話セッションでは background が既定) ため指定せず、report は completion notification (SubagentHandback / SubagentStop) 経由で届く。merge gate の deny を待ってから起動しない。subagent は current branch の PR をレビューするため、merge 対象 PR のブランチを checkout した状態 (ローカル HEAD が PR の head と一致し、working tree が clean) で起動する。起動 prompt は、subagent が実際に行う操作 (read-only の codex review 1 回と report の返却) を述べた次の定型文だけを使う:
 
 > current branch の PR (#<番号>) の merge-base..head 差分に対して、agent body の契約に従い codex review を 1 回実行し、parent-safe な markdown report を返してください。
 
