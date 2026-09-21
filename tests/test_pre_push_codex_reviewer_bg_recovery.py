@@ -92,6 +92,15 @@ ANNOUNCEMENT_VALIDATION_SENTENCE = (
     "absolute — it starts with `/` and carries no whitespace, quote, `$`, "
     "backtick, `;`, `&` or `|`."
 )
+# shell への補間形 (double-quoted な変数代入と double quote 内の展開に限る)。形状
+# 検証は deny-list なので、検証をすり抜けた文字が unquoted な位置に届く経路を塞ぐ.
+QUOTED_ASSIGNMENT_SENTENCE = (
+    'Interpolate the run id, the sentinel path and the recorded output file '
+    'path only through double-quoted shell variable assignments '
+    '(`RUN_ID="<id>"`, `SENTINEL="<path>"`, `OUT="<path>"`) and expand them '
+    'only inside double quotes, so a character those checks do not reject '
+    'still reaches no unquoted position of the command.'
+)
 # sentinel path の正本 (案内行の絶対パス。run id 入りの run ごとのファイル).
 SENTINEL_PATH_SOURCE_SENTENCE = (
     "Take the sentinel path from the absolute path in that same announcement "
@@ -184,9 +193,9 @@ END_LINE_GRACE_SENTENCE = (
     "If the last line is not that end line, wait once with a short Bash "
     'until-loop `until tail -n 1 "$OUT" | grep -qE "^terminal sentinel end '
     'run=${RUN_ID}$" || [ $SECONDS -ge $end ]; do sleep 5; done` whose '
-    "deadline is 30 seconds, "
-    "then Read the tail again; this grace wait is not one of the recovery "
-    "budget's loop runs."
+    "deadline is 30 seconds, then resume the offset-based Read from the "
+    "position the previous read reached and continue to the end of the file; "
+    "this grace wait is not one of the recovery budget's loop runs."
 )
 # path の出所要件 (同一 run 由来であれば、どの step が surface した path でもよい).
 PATH_PROVENANCE_SENTENCE = (
@@ -253,12 +262,17 @@ UNIDENTIFIABLE_RUN_SENTENCE = (
     "without entering the wait loop."
 )
 
-# sentinel path の fallback (案内行から path が取れない場合。prefix は plugin ごと).
+# sentinel path の fallback (案内行に path が全く無い場合に限る。prefix は plugin
+# ごと)。path があって形状検証に落ちる状態は run 同定不能境界であり、fallback の
+# 対象ではない。合成に使う git directory は cwd に依存しない絶対形にする.
 SENTINEL_NAME_PREFIX = "pre-push-codex-review-terminal"
 SENTINEL_PATH_SENTENCE = (
-    "Only when the announcement line yields no path, compose the sentinel "
-    "path from the git directory that `git rev-parse --git-dir` prints, the "
-    f"fixed prefix `{SENTINEL_NAME_PREFIX}-` and this run id."
+    "Only when the announcement line carries a run id but no path at all, "
+    "compose the sentinel path from the absolute git directory that "
+    "`git rev-parse --absolute-git-dir` prints, the fixed prefix "
+    f"`{SENTINEL_NAME_PREFIX}-` and this run id; a path that is present but "
+    "fails those checks is the unidentifiable-run boundary, not a case for "
+    "this fallback."
 )
 # resume 後の status check の位置づけ (plugin ごとに gate 名が異なる).
 RESUME_CHECK_SENTENCE = (
@@ -277,6 +291,7 @@ SHARED_RECOVERY_CLAUSES = {
     "output-file-precheck": PRECHECK_SENTENCE,
     "run-id-from-announcement": RUN_ID_SENTENCE,
     "announcement-validation": ANNOUNCEMENT_VALIDATION_SENTENCE,
+    "quoted-shell-assignment": QUOTED_ASSIGNMENT_SENTENCE,
     "sentinel-path-from-announcement": SENTINEL_PATH_SOURCE_SENTENCE,
     "announcement-grace-wait": GRACE_WAIT_SENTENCE,
     "polling-loop-wait": WAIT_SENTENCE,
@@ -477,14 +492,20 @@ class ContractTestCase(unittest.TestCase):
             self.fail(f"{path}: 期待する文字列が無い: {needle}")
 
     def assert_text_absent(self, path: Path, needle: str) -> None:
+        """空白正規化した全文で禁止語の不在を確認する (改行をまたぐ出現も検出する)。
+
+        行番号付きの hit 一覧は診断用で、行内に収まらない出現はその旨だけを示す。
+        """
+        body = read(path)
+        if normalize(needle) not in normalize(body):
+            return
         hits = [
             f"L{number}: {line.strip()[:120]}"
-            for number, line in enumerate(read(path).splitlines(), start=1)
+            for number, line in enumerate(body.splitlines(), start=1)
             if needle in line
         ]
-        if hits:
-            joined = " / ".join(hits)
-            self.fail(f"{path}: {needle} の言及が残っている: {joined}")
+        joined = " / ".join(hits) if hits else "改行をまたいで出現"
+        self.fail(f"{path}: {needle} の言及が残っている: {joined}")
 
     def assert_no_agent_launch_mode_parameter(self, path: Path) -> None:
         hits = agent_launch_mode_hits(read(path))
@@ -592,6 +613,9 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
         self,
     ) -> None:
         self.assert_clause(ANNOUNCEMENT_VALIDATION_SENTENCE)
+
+    def test_values_are_interpolated_only_as_quoted_assignments(self) -> None:
+        self.assert_clause(QUOTED_ASSIGNMENT_SENTENCE)
 
     def test_recovery_takes_the_sentinel_path_from_the_announcement_line(
         self,
