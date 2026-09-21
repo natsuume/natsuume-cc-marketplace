@@ -61,13 +61,20 @@ pre-push-codex-review plugin の lifecycle hook が checkpoint を要求した�
 
 ### Claude Code host
 
-`Agent` tool で `codex-advisor:advisor-runner` を foreground 起動する。request には組み立てた相談プロンプト全文を self-contained に渡し、次の指定を明示する。
+`Agent` tool で `codex-advisor:advisor-runner` を起動する。request には組み立てた相談プロンプト全文を self-contained に渡し、次の指定を明示する。
 
 - `subagent_type: "codex-advisor:advisor-runner"`
 - model: "sonnet"
-- `run_in_background: false`
 
-main session で wrapper / companion を Bash 実行しない。advisor runner が Write tool で session scratchpad の一意な prompt file を作成し、companion の detached job ID を `status` / `result` で追跡する。Claude Code が Agent call を `async_launched` として受理した場合も、completion notification または `TaskOutput` を回収し、runner の terminal report を受け取るまで turn を終了しない。
+起動規律は次のとおり。
+
+- Agent call は `model: "sonnet"` を明示する
+- 起動 mode は Claude Code が決めるため、Agent call で起動 mode を指定しない
+- runner の terminal report は completion notification (auto mode では SubagentHandback、それ以外では SubagentStop) で後続 turn に届く
+- main session は completion notification を受け取ってから runner の report を処理する
+- runner の terminal report が返るまでタスクを完了扱いにしない
+
+main session で wrapper / companion を Bash 実行しない。advisor runner が Write tool で session scratchpad の一意な prompt file を作成し、companion の detached job ID を `status` / `result` で追跡する。
 
 runner report の助言本文をそのまま受け取り、末尾の `Codex-Runner-Operation` / `Codex-Runner-Status` / `Codex-Runner-Job-ID` は lifecycle metadata として扱う。review cadence request では、その直前の `Codex-Advisor-Review-Cadence: satisfied|unavailable` も hook 用 metadata として扱う。`retryable-failure` では Stop hook の指示に従って 1 回だけ同じ request を新しい advisor runner へ渡す。`terminal-failure` / `cancelled` は無限 retry しない。
 

@@ -94,8 +94,8 @@
     {
       "name": "codex-advisor",
       "source": "./plugins/codex-advisor",
-      "description": "Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧するプラグイン。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI)。",
-      "version": "3.0.1",
+      "description": "Codex rescue / review / advisor を role 固有 runner subagent に閉じ込め、追跡喪失から復旧するプラグイン。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI)。",
+      "version": "4.0.0",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {

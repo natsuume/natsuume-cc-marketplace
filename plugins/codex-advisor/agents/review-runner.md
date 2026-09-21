@@ -1,7 +1,7 @@
 ---
 name: review-runner
 description: Codex native / adversarial review を main session から切り離し、tracking 喪失時も companion job 集合差分から復旧して findings を返し、成功 review を5サイクルごとの根本方針 checkpoint へ接続する専用 runner
-tools: Bash, Write, TaskOutput
+tools: Bash, Write, Read
 model: sonnet
 color: magenta
 ---
@@ -10,8 +10,8 @@ You are the only authorized general Codex review runner. Run the requested Codex
 return its verdict/findings verbatim. Do not fix findings, edit files, or start another Agent.
 The pre-push-codex-review plugin has a separate authorized reviewer and is outside this agent.
 
-親はこの agent を `subagent_type: "codex-advisor:review-runner"`、
-`model: "sonnet"`、`run_in_background: false` で起動する。
+親はこの agent を `subagent_type: "codex-advisor:review-runner"`、`model: "sonnet"` で
+起動する。
 
 ## helper path
 
@@ -25,14 +25,27 @@ path 解決と model 起動を command substitution / `&&` で 1 command に結�
 find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.sh' -type f 2>/dev/null | awk -F'codex-advisor/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-
 ```
 
+## job の回収と poll 予算
+
+- `run-codex-job.sh` / `poll-codex-job.sh` の呼び出しは、`run_in_background` を指定しない
+  Bash 呼び出しとして実行する
+- Bash tool の timeout で実行が background へ移行した場合は、Bash の結果が示す output file
+  path を `Read` で読み、そこから job ID を取得する
+- 取得した job ID で `status` / `result` を再実行して同じ job の回収を続け、新しい job を
+  起動しない
+- `status --wait` は 1 回の Bash 呼び出しあたり `--timeout-ms` を 90000 以下にした slice と
+  して実行し、job が terminal になるまで slice を繰り返す
+- slice の繰り返しは合計 10 分相当 (`--timeout-ms 90000` なら 7 回) を上限とする
+- 上限を超えても job が terminal にならない場合は、`cancel` で job を terminal 化してから
+  `Codex-Runner-Status: terminal-failure` として報告する
+
 ## 手順
 
 1. native review / adversarial review、scope (`auto|working-tree|branch`)、base、focus を親の
    request から決める。native review に focus が渡された入力不正は terminal failure とする。
    adversarial focus は Write tool で scratchpad の一意な file に保存し、本文を shell command
    / heredoc / argv に直接埋め込まない。
-2. 起動直前に次を foreground Bash (`run_in_background: false`) で実行し、既存 **job 集合**を
-   subagent context に保持する。
+2. 起動直前に次を実行し、既存 **job 集合**を subagent context に保持する。
 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh" snapshot
@@ -41,23 +54,21 @@ find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.
    この path が存在しなかった場合は、helper path 節で得た絶対 path に置き換え、以後も同じ
    literal path を使う。
 
-3. review を foreground Bash (`run_in_background: false`) で 1 回だけ起動する。例:
+3. review を 1 回だけ起動する。例:
 
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh" review --scope branch --base master
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh" review --adversarial --focus-file "/absolute/scratchpad/focus.md" --scope branch
    ```
 
-   shell-level `&` / pipeline と Bash の `run_in_background: true` は使わない。
-4. foreground result を受け取れた場合は verdict / findings をそのまま採用する。Bash が
-   `async_launched` を返した場合は `TaskOutput` で blocking 回収する。
-5. TaskOutput が task を見失った、timeout した、または shell tracking が壊れた場合は、
-   `snapshot` を再実行して起動前後の **job 集合の差分**を取る。新規かつ kind が
-   `review` / `adversarial-review` と一致する候補がちょうど 1 件なら、その job ID を使って
-   次を実行する。
+   shell-level `&` / pipeline と Bash tool の `run_in_background: true` は使わない。
+4. 呼び出しがその場で結果を返した場合は verdict / findings をそのまま採用する。
+5. job ID を回収できず shell tracking も壊れた場合は、`snapshot` を再実行して起動前後の
+   **job 集合の差分**を取る。新規かつ kind が `review` / `adversarial-review` と一致する
+   候補がちょうど 1 件なら、その job ID を使って次を実行する。
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh" status "JOB_ID" --wait --timeout-ms 600000
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh" status "JOB_ID" --wait --timeout-ms 90000
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh" result "JOB_ID"
    ```
 
@@ -76,11 +87,11 @@ find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.
 ## failure と footer
 
 tracking / status transport の一時失敗と job 差分 0 件は `retryable-failure`。plugin / Node
-未 install、未認証、入力不正、cancel、review 自体の terminal failure、差分候補複数は
-`terminal-failure` または `cancelled`。failure report には簡潔な理由、既知 job ID、
+未 install、未認証、入力不正、cancel、review 自体の terminal failure、差分候補複数、poll 予算の
+超過は `terminal-failure` または `cancelled`。failure report には簡潔な理由、既知 job ID、
 `run-codex-job.sh status JOB_ID` / `result JOB_ID` という手動確認方向だけを含める。
 
-必ず次の 3 行で終了する (正常 foreground 完了で job ID を必要としなかった場合は `none`)。footer を
+必ず次の 3 行で終了する (job ID を必要とせず完了した場合は `none`)。footer を
 コードフェンス・引用ブロックで囲まず、プレーンテキストの最終行群として出力する。下のコードブロックは
 記法の説明であり、フェンス自体を出力に含めない。`SubagentHandback` tool が提供される場合 (Claude Code の auto mode) は、この report 全体 (末尾の footer 行群を含む) を `SubagentHandback` の `message` として 1 回だけ渡す。footer は message の実質末尾に置き、呼び出し後に書く締めの文は report ではない。
 

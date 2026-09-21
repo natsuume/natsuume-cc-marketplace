@@ -44,6 +44,57 @@ resolve_companion_or_fail() {
     || fail "codex companion が見つかりません。/codex:setup で install と認証を確認してください。"
 }
 
+# cancel は job が既に消えている / companion が応答しない場合に無期限ブロックしうるため、
+# wrapper 自身が deadline を監視する。`timeout` コマンドは macOS の標準環境に無いので、
+# bash の monitor mode で子を独立 process group に置き、期限超過時は group ごと
+# TERM -> grace -> KILL する (bash 3.2 と Linux / macOS の双方で動く形)。
+run_cancel_with_deadline() {
+  CANCEL_DEADLINE_SECONDS=$1
+  CANCEL_JOB_ID=$2
+  CANCEL_GRACE_SECONDS=${CODEX_JOB_CANCEL_KILL_GRACE_SECONDS:-1}
+  case "$CANCEL_GRACE_SECONDS" in
+    ''|*[!0-9]*) fail "CODEX_JOB_CANCEL_KILL_GRACE_SECONDS は 0 以上の整数で指定してください。" ;;
+  esac
+
+  CANCEL_MONITOR_WAS_ENABLED=0
+  case $- in
+    *m*) CANCEL_MONITOR_WAS_ENABLED=1 ;;
+    *) set -m ;;
+  esac
+  node "$COMPANION" cancel "$CANCEL_JOB_ID" &
+  CANCEL_PID=$!
+  [ "$CANCEL_MONITOR_WAS_ENABLED" -eq 1 ] || set +m
+
+  CANCEL_ELAPSED=0
+  CANCEL_TIMED_OUT=0
+  while kill -0 "$CANCEL_PID" 2>/dev/null; do
+    if [ "$CANCEL_ELAPSED" -ge "$CANCEL_DEADLINE_SECONDS" ]; then
+      CANCEL_TIMED_OUT=1
+      kill -TERM -- "-$CANCEL_PID" 2>/dev/null \
+        || kill -TERM "$CANCEL_PID" 2>/dev/null \
+        || true
+      [ "$CANCEL_GRACE_SECONDS" -eq 0 ] || sleep "$CANCEL_GRACE_SECONDS"
+      kill -KILL -- "-$CANCEL_PID" 2>/dev/null \
+        || kill -KILL "$CANCEL_PID" 2>/dev/null \
+        || true
+      break
+    fi
+    sleep 1
+    CANCEL_ELAPSED=$((CANCEL_ELAPSED + 1))
+  done
+
+  if wait "$CANCEL_PID"; then
+    CANCEL_STATUS=0
+  else
+    CANCEL_STATUS=$?
+  fi
+  if [ "$CANCEL_TIMED_OUT" -eq 1 ]; then
+    printf '%s\n' "[run-codex-job] cancel timeout: job $CANCEL_JOB_ID の cancel が ${CANCEL_DEADLINE_SECONDS} 秒以内に終わりませんでした。" >&2
+    return 124
+  fi
+  return "$CANCEL_STATUS"
+}
+
 [ "$#" -ge 1 ] || {
   usage
   exit 1
@@ -192,7 +243,7 @@ case "$MODE" in
     exec node "$COMPANION" status "$JOB_ID" --json
     ;;
 
-  result|cancel)
+  result)
     [ "$#" -eq 1 ] || {
       usage
       exit 1
@@ -200,7 +251,24 @@ case "$MODE" in
     case "$1" in
       ''|*[!A-Za-z0-9._:-]*) fail "job ID に不正な文字が含まれています。" ;;
     esac
-    exec node "$COMPANION" "$MODE" "$1"
+    exec node "$COMPANION" result "$1"
+    ;;
+
+  cancel)
+    [ "$#" -eq 1 ] || {
+      usage
+      exit 1
+    }
+    case "$1" in
+      ''|*[!A-Za-z0-9._:-]*) fail "job ID に不正な文字が含まれています。" ;;
+    esac
+    CANCEL_TIMEOUT=${CODEX_JOB_CANCEL_TIMEOUT_SECONDS:-30}
+    case "$CANCEL_TIMEOUT" in
+      ''|*[!0-9]*) fail "CODEX_JOB_CANCEL_TIMEOUT_SECONDS は正の整数で指定してください。" ;;
+    esac
+    [ "$CANCEL_TIMEOUT" -gt 0 ] \
+      || fail "CODEX_JOB_CANCEL_TIMEOUT_SECONDS は正の整数で指定してください。"
+    run_cancel_with_deadline "$CANCEL_TIMEOUT" "$1"
     ;;
 
   *)

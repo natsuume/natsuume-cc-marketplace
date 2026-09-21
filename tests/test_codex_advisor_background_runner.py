@@ -898,6 +898,22 @@ class PermissionDeniedTest(BackgroundRunnerHarness):
         self.subagent_start("rescue")
         self.assert_stop_blocked(self.stop(background_tasks=[]), RUNNERS["rescue"])
 
+    def test_next_runner_of_the_same_operation_starts_without_the_mark(self) -> None:
+        """印は record インスタンスに属し、同じ operation の次の runner には引き継がれない。
+
+        印が次の `active` record に残ると、その runner の追跡喪失が Stop で block されずに
+        黙って見逃される。SubagentStart は印の無い新しい `active` record を書く。
+        """
+        self.subagent_start("rescue", agent_id="agent-first")
+        self.permission_denied(subagent_type=RUNNERS["rescue"])
+        self.assertIs(True, self.records_for()[0].get("launchDenied"))
+        self.subagent_start("rescue", agent_id="agent-second")
+        records = self.records_for()
+        self.assertEqual(1, len(records))
+        self.assertEqual("active", records[0]["phase"])
+        self.assertNotIn("launchDenied", records[0])
+        self.assert_stop_blocked(self.stop(background_tasks=[]), RUNNERS["rescue"])
+
     def test_denied_launch_moves_a_retry_required_record_to_denied(self) -> None:
         self.subagent_start("review", agent_id="agent-first")
         self.subagent_stop("review", "retryable-failure", agent_id="agent-first")
