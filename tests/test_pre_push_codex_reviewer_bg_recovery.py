@@ -128,11 +128,12 @@ LOOP_DEADLINE_SENTENCE = (
     "Bash call's `timeout` to 600000 ms, so the loop always ends on its own "
     "before the tool timeout could move it to the background."
 )
-# 単独 foreground sleep の禁止 (Bash tool が拒否する).
+# 単独 foreground sleep の禁止 (Bash tool が拒否する)。許される待機は、メインの
+# ポーリングループと 2 つの猶予ループの内側にある sleep に限る.
 NO_STANDALONE_SLEEP_SENTENCE = (
     "Never call a standalone foreground `sleep`; the Bash tool rejects it, "
-    "and the only wait in this recovery is the `sleep 10` inside that until "
-    "loop."
+    "and every wait in this recovery is a `sleep` inside one of these bounded "
+    "until loops — the polling loop and the two grace loops."
 )
 # 回収予算 (ループの総実行回数と合計時間).
 BUDGET_DEFINITION_SENTENCE = (
@@ -176,11 +177,14 @@ END_LINE_SENTENCE = (
     "The body is complete only when its last line is the wrapper's "
     "`terminal sentinel end run=<id>` line carrying this same run id."
 )
-# 終了行がまだ出ていないときの猶予待ち (回収予算には数えない).
+# 終了行がまだ出ていないときの猶予待ち (回収予算には数えない)。述語は終了行の
+# 接頭辞まで含めて照合する (案内行も同じ ` run=<id>` で終わるため、run id だけでは
+# 案内行しか無い output file で即座に抜けてしまう).
 END_LINE_GRACE_SENTENCE = (
     "If the last line is not that end line, wait once with a short Bash "
-    'until-loop `until tail -n 1 "$OUT" | grep -qE " run=${RUN_ID}$" || '
-    "[ $SECONDS -ge $end ]; do sleep 5; done` whose deadline is 30 seconds, "
+    'until-loop `until tail -n 1 "$OUT" | grep -qE "^terminal sentinel end '
+    'run=${RUN_ID}$" || [ $SECONDS -ge $end ]; do sleep 5; done` whose '
+    "deadline is 30 seconds, "
     "then Read the tail again; this grace wait is not one of the recovery "
     "budget's loop runs."
 )
