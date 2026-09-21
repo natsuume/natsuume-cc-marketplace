@@ -145,14 +145,16 @@ new_run_id() {
 # 引数: <sentinel を置くディレクトリ>
 # 24 時間より古い自 plugin の sentinel だけを削除する。 実行中の別 run の sentinel を消すと
 # その run の回収が終了を検知できなくなるため、 mtime での足切りを必ず挟む。
-# `-mtime +0` は 「経過時間を 24 時間単位に切り捨てた値が 0 より大きい」 = 24 時間以上前の
-# 意味で、 GNU / BSD (macOS) の find が共通で解釈する。
+# 閾値は `-mmin +1440` (経過時間が 1440 分 = 24 時間を超える) で表す。 日単位の `-mtime` は
+# GNU find が経過時間を切り捨て、 BSD (macOS) find が切り上げて日数化するため、 同じ式でも
+# 意味が変わる (BSD では `-mtime +0` が 1 秒前のファイルにも一致する)。 分単位なら両実装の
+# 丸め差は最大 1 分に収まり、 直前に終わった別 run の sentinel を誤って消さない。
 prune_stale_terminal_sentinels() {
   local directory="$1"
 
   [ -n "$directory" ] || return 0
   find "$directory" -maxdepth 1 -type f -name "${TERMINAL_SENTINEL_PREFIX}*" \
-    -mtime +0 -exec rm -f {} + 2>/dev/null || true
+    -mmin +1440 -exec rm -f {} + 2>/dev/null || true
 }
 
 # 引数: <exit status>
