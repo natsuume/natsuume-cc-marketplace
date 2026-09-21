@@ -64,6 +64,13 @@ BASE_PLUGIN_JSON = BASE_PLUGIN / ".claude-plugin" / "plugin.json"
 
 BLOCK_FABLE = BASE_PLUGIN / "hooks" / "scripts" / "block-fable-subagent.sh"
 UPDATE_MODEL_ON_SWITCH = BASE_PLUGIN / "hooks" / "scripts" / "update-model-on-switch.sh"
+# hooks.json が登録する command の実体。登録する plugin ごとに実行可能ファイルとして存在する。
+UPDATE_MODEL_ON_SWITCH_SCRIPTS = {
+    "agent-discipline": UPDATE_MODEL_ON_SWITCH,
+    "experimental-agent-discipline": (
+        FORK_PLUGIN / "hooks" / "scripts" / "update-model-on-switch.sh"
+    ),
+}
 
 # plugin ごとの対応ファイル (同じ契約を両 plugin に課す検査で使う)。
 HOOKS_JSON = {
@@ -179,12 +186,15 @@ def read(path: Path) -> str:
 
 
 def squeeze(text: str) -> str:
-    """空白 (改行・インデント・全角以外の空白) をすべて除去した文字列を返す。
+    """行頭の comment 記号 (`#` の並び) と空白をすべて除去した文字列を返す。
 
     soft line-wrap や行頭の comment インデントで文が分断されていても、同じ文言なら
-    一致すると判定するための正規化。照合する両辺に同じ正規化を掛けて使う。
+    一致すると判定するための正規化。shell comment の途中で折り返された文言は各行の
+    `#` を挟んで連結されるため、行頭の `#` も除いてから空白を落とす。照合する両辺に
+    同じ正規化を掛けて使う。
     """
-    return re.sub(r"\s+", "", text)
+    without_comment_markers = re.sub(r"(?m)^[ \t]*#+", "", text)
+    return re.sub(r"\s+", "", without_comment_markers)
 
 
 def delegation_rules_section(body: str) -> str:
@@ -196,21 +206,32 @@ def delegation_rules_section(body: str) -> str:
 
 
 def markdown_section(body: str, heading: str) -> str:
-    """`heading` 行から同レベル以上の次の見出し直前までを返す (見つからなければ空文字)。"""
+    """`heading` 行から同レベル以上の次の見出し直前までを返す (見つからなければ空文字)。
+
+    コードフェンス (``` / ~~~) の内側は見出しとして扱わない (フェンス内の shell comment
+    `# ...` で節が途切れないようにする)。見出しは `#` の並びの直後に空白がある行だけ。
+    """
     lines = body.splitlines()
     level = len(heading) - len(heading.lstrip("#"))
     collected: list[str] = []
     inside = False
+    fence: str | None = None
     for line in lines:
-        if line.rstrip() == heading:
-            inside = True
+        fence_match = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if fence_match:
+            marker = fence_match.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+        if not inside:
+            if fence is None and line.rstrip() == heading:
+                inside = True
             continue
-        if inside:
-            stripped = line.lstrip("#")
-            current = len(line) - len(stripped)
-            if line.startswith("#") and 0 < current <= level:
-                break
-            collected.append(line)
+        heading_match = re.match(r"^(#{1,6})\s", line)
+        if fence is None and heading_match and len(heading_match.group(1)) <= level:
+            break
+        collected.append(line)
     return "\n".join(collected)
 
 
@@ -244,7 +265,7 @@ def row(
     ``CLAUDE_CODE_SUBAGENT_MODEL``、``model`` / ``subagent_type`` は hook 入力の
     ``tool_input`` の各フィールド (UNSET はいずれも未設定)。``session_state`` は
     ``${TMPDIR}/agent-discipline-state/model-<session_id>`` の内容、``pending`` は同
-    ``pending-model-<session_id>`` の有無。``keywords`` は deny 理由に含むべき文字列。
+    ``pending-model-<session_id>`` の有無。``keywords`` は deny 理由に一致すべき正規表現。
     """
     return {
         "label": label,
@@ -260,12 +281,14 @@ def row(
     }
 
 
-# deny 理由に求めるキーワード。SELF_REPAIR は「model に sonnet を明示して起動し直す」
-# 自己修復誘導 (FORCE 無効時と fork の代替手段として有効な誘導)、NAMES_ENV / NAMES_FORCE は
-# 実効モデルを決めている env を名指しすること (FORCE 有効時は model の明示では直らないため)。
-SELF_REPAIR = ("sonnet",)
-NAMES_ENV = ("CLAUDE_CODE_SUBAGENT_MODEL",)
-NAMES_FORCE = ("CLAUDE_CODE_SUBAGENT_MODEL_FORCE",)
+# deny 理由に求めるキーワード (正規表現)。SELF_REPAIR は「model に sonnet を明示して起動し
+# 直す」自己修復誘導 (FORCE 無効時と fork の代替手段として有効な誘導)、NAMES_ENV / NAMES_FORCE
+# は実効モデルを決めている env を名指しすること (FORCE 有効時は model の明示では直らないため)。
+# NAMES_ENV は `_FORCE` が続かない出現を要求する (FORCE 変数名の接頭辞として現れただけでは
+# env を名指ししたことにならない)。
+SELF_REPAIR = (r"sonnet",)
+NAMES_ENV = (r"CLAUDE_CODE_SUBAGENT_MODEL(?!_FORCE)",)
+NAMES_FORCE = (r"CLAUDE_CODE_SUBAGENT_MODEL_FORCE",)
 
 # 判定表。FORCE 有効 (`1` / `true`、大文字小文字を区別しない) では実効モデルを
 # env (非空ならその値、空なら session model state) とみなし、FORCE 無効 (`0` / `false` /
@@ -598,7 +621,7 @@ class BlockFableSubagentDecisionTableTest(HookSubprocessTestBase):
                     continue
                 reason = self.deny_reason(result, label)
                 for keyword in case["keywords"]:  # type: ignore[union-attr]
-                    self.assertIn(keyword, reason, label)
+                    self.assertRegex(reason, keyword, label)
 
     def test_deny_reasons_drop_the_superseded_priority_claim(self) -> None:
         """FORCE 無効時の deny 理由に「env は明示指定より優先」の説明が残っていない。"""
@@ -656,11 +679,11 @@ class PostModelSwitchHookRegistrationTest(unittest.TestCase):
                 )
 
     def test_update_script_exists_and_is_executable(self) -> None:
-        """agent-discipline 側の update-model-on-switch.sh が実行可能ファイルとして存在する。"""
-        self.assertTrue(UPDATE_MODEL_ON_SWITCH.is_file(), UPDATE_MODEL_ON_SWITCH)
-        self.assertTrue(
-            os.access(UPDATE_MODEL_ON_SWITCH, os.X_OK), UPDATE_MODEL_ON_SWITCH
-        )
+        """hook を登録する両 plugin で update-model-on-switch.sh が実行可能ファイルとして存在する。"""
+        for plugin, path in UPDATE_MODEL_ON_SWITCH_SCRIPTS.items():
+            with self.subTest(plugin=plugin):
+                self.assertTrue(path.is_file(), path)
+                self.assertTrue(os.access(path, os.X_OK), path)
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
