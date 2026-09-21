@@ -817,8 +817,19 @@ class StopGateBackgroundTaskTest(BackgroundRunnerHarness):
                 )
 
     def test_absent_background_tasks_field_falls_back_to_records(self) -> None:
+        """`background_tasks` を提供しない host では record だけを根拠に block する。
+
+        稼働状況の証拠が無いため「対応する task が無い」とは断定せず、重複起動を促さない
+        従来の案内 (既存 runner の report を待つ) に留める。
+        """
         self.subagent_start("review")
-        self.assert_stop_blocked(self.stop(), RUNNERS["review"])
+        response = self.stop()
+        self.assert_stop_blocked(response, RUNNERS["review"])
+        assert response is not None
+        reason = response["reason"]
+        assert isinstance(reason, str)
+        self.assertNotIn("background task がありません", reason)
+        self.assertIn("重複起動", reason)
 
     def test_two_parallel_runners_report_only_the_untracked_one(self) -> None:
         self.subagent_start("rescue", agent_id="agent-rescue")
@@ -1037,6 +1048,24 @@ class PreToolUseGateHardeningTest(BackgroundRunnerHarness):
                 f'printf "%s\\n" /tmp/prompt.md | xargs bash "{JOB_HELPER_PATH}" advisor',
                 "advisor",
             ),
+            # wrapper の option が値を別 token に取る形。値が先頭語に残ると実行形として
+            # 分類されず素通りする。
+            "xargs-option-value": (
+                f'printf "%s\\n" /tmp/prompt.md | xargs -n 1 bash "{JOB_HELPER_PATH}" advisor',
+                "advisor",
+            ),
+            "sudo-user-value": (
+                f'sudo -u nobody node "{COMPANION_PATH}" task --background',
+                "rescue",
+            ),
+            "ionice-class-value": (
+                f'ionice -c 2 -n 7 node "{COMPANION_PATH}" review --wait',
+                "review",
+            ),
+            "watch-interval-value": (
+                f'watch -n 5 bash "{JOB_HELPER_PATH}" review --scope branch',
+                "review",
+            ),
         }
         for name, (command, operation) in cases.items():
             with self.subTest(case=name):
@@ -1045,6 +1074,27 @@ class PreToolUseGateHardeningTest(BackgroundRunnerHarness):
                     RUNNERS[operation],
                 )
 
+    def test_variable_directory_with_a_literal_helper_name_is_classified(self) -> None:
+        """directory だけが変数の先頭語は解決できるため fail-closed に落とさない。
+
+        runner は `${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh` の形で helper を呼ぶ。
+        起動 subcommand は分類器が判定し、`status` / `result` / `cancel` の管理 subcommand は
+        起動でないので allow する (fail-closed に落ちると runner が自分の job を回収できない)。
+        """
+        helper = '"${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh"'
+        for command in (
+            f"bash {helper} status task-123 --wait --timeout-ms 90000",
+            f"bash {helper} result task-123",
+            f"bash {helper} cancel task-123",
+            f"{helper} status task-123",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(self.hook_response(self.bash_payload(command)))
+        self.assert_denied(
+            self.hook_response(self.bash_payload(f"bash {helper} advisor /tmp/prompt.md")),
+            RUNNERS["advisor"],
+        )
+
     def test_unresolvable_command_name_with_a_codex_path_is_denied(self) -> None:
         commands = {
             "dollar-var-companion": f'$CMD "{COMPANION_PATH}" task --background --json',
@@ -1052,6 +1102,15 @@ class PreToolUseGateHardeningTest(BackgroundRunnerHarness):
                 f'${{CMD}} bash "{JOB_HELPER_PATH}" advisor /tmp/prompt.md'
             ),
             "braced-var-advisor-wrapper": f'${{RUNNER}} "{ADVISOR_WRAPPER_PATH}"',
+            # 置換で作った command 名も hook からは解決できない。置換の中身を外側の
+            # segment から取り除くだけだと、companion の path が先頭語になって起動として
+            # 分類されず、fail-closed にも掛からずに素通りする。
+            "substitution-command-companion": (
+                f'$(echo node) "{COMPANION_PATH}" task --background --json'
+            ),
+            "backtick-command-job-helper": (
+                f'`echo bash` "{JOB_HELPER_PATH}" advisor /tmp/prompt.md'
+            ),
         }
         for name, command in commands.items():
             with self.subTest(case=name):

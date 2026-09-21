@@ -287,10 +287,16 @@ function matchingParenIndex(text, openIndex) {
 // 病的に深い入力でも解析が停止する。
 const SUBSTITUTION_DEPTH_LIMIT = 8;
 
+// 外側の segment で substitution が占めていた位置に残す placeholder。置換結果は hook から
+// 解決できないため、command 名の位置にあれば「変数のまま解決できない command 名」と
+// 同じ扱い (fail-closed の判定対象) になる。
+const SUBSTITUTION_PLACEHOLDER = "$SUBSTITUTION";
+
 /**
  * shell の list separator で segment に分割し、`$(...)` とバッククォートの中身も
  * 独立した segment として再帰的に取り出す。substitution の中身は外側の segment から
- * 取り除くため、置換結果を実行形として誤読しない。
+ * 取り除いて placeholder に置き換えるため、置換結果を実行形として誤読せず、置換で
+ * 作られた command 名を解決済みとも扱わない。
  */
 function collectShellSegments(command, segments, depth) {
   let current = "";
@@ -322,6 +328,7 @@ function collectShellSegments(command, segments, depth) {
         const end = matchingParenIndex(command, index + 1);
         if (end !== -1) {
           collectShellSegments(command.slice(index + 2, end), segments, depth + 1);
+          current += SUBSTITUTION_PLACEHOLDER;
           index = end;
           continue;
         }
@@ -330,6 +337,7 @@ function collectShellSegments(command, segments, depth) {
         const end = command.indexOf("`", index + 1);
         if (end !== -1) {
           collectShellSegments(command.slice(index + 1, end), segments, depth + 1);
+          current += SUBSTITUTION_PLACEHOLDER;
           index = end;
           continue;
         }
@@ -407,6 +415,14 @@ function basename(word) {
   return word.split("/").pop() ?? word;
 }
 
+// Codex を起動しうる実行形の path 断片。解析不能な command 名と同居する場合だけ
+// fail-closed の判定材料になる。
+const CODEX_ENTRYPOINT_FRAGMENTS = [
+  "codex-companion.mjs",
+  "run-codex-job.sh",
+  "run-codex-advisor.sh",
+];
+
 // 後続の argv をそのまま実行する launcher。実行形の判定は剥がした後の先頭語で行う。
 const COMMAND_WRAPPERS = [
   "command",
@@ -423,6 +439,28 @@ const COMMAND_WRAPPERS = [
 // 解けない入力でも停止する)。
 const WRAPPER_STRIP_LIMIT = 8;
 
+// wrapper の後に来る「実行形の先頭語」として認識する basename。wrapper の option は値を
+// 別 token に取ることがある (`xargs -n 1` / `sudo -u user` 等) ため、option の arity を
+// 個別に持たず、これらのいずれか (または変数のまま解決できない語) が現れるまで読み飛ばす。
+const EXECUTABLE_HEADS = new Set([
+  "node",
+  "bash",
+  "sh",
+  "env",
+  "timeout",
+  "eval",
+  ...COMMAND_WRAPPERS,
+]);
+
+function looksLikeExecutableHead(word) {
+  const name = basename(word);
+  return (
+    name.includes("$") ||
+    EXECUTABLE_HEADS.has(name) ||
+    CODEX_ENTRYPOINT_FRAGMENTS.includes(name)
+  );
+}
+
 function commandWords(segment) {
   let words = shellWords(segment);
   for (let round = 0; round < WRAPPER_STRIP_LIMIT; round += 1) {
@@ -432,7 +470,7 @@ function commandWords(segment) {
     const head = basename(words[0] ?? "");
     if (COMMAND_WRAPPERS.includes(head)) {
       words.shift();
-      while ((words[0] ?? "").startsWith("-")) words.shift();
+      while (words.length > 0 && !looksLikeExecutableHead(words[0])) words.shift();
       continue;
     }
     if (head === "env") {
@@ -506,14 +544,6 @@ function classifyModelLaunch(command) {
   return null;
 }
 
-// Codex を起動しうる実行形の path 断片。解析不能な command 名と同居する場合だけ
-// fail-closed の判定材料になる。
-const CODEX_ENTRYPOINT_FRAGMENTS = [
-  "codex-companion.mjs",
-  "run-codex-job.sh",
-  "run-codex-advisor.sh",
-];
-
 /**
  * command 名が変数のまま解決できない segment に Codex entrypoint の path があるかを調べる。
  *
@@ -521,11 +551,15 @@ const CODEX_ENTRYPOINT_FRAGMENTS = [
  * 判定できない。分類できないまま allow すると gate を素通りできてしまうため、この組み合わせ
  * だけを fail-closed で deny する。command 名が解決できる通常のコマンド (`cat` / `rg` 等) に
  * よる path 言及は従来どおり allow する。
+ *
+ * 「解決できない」は basename で判定する。`${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh`
+ * のように directory だけが変数で file 名が literal な先頭語は分類器が解決できるため、
+ * `status` / `result` / `cancel` のような管理 subcommand をここで拒否しない。
  */
 function unresolvableCodexEntrypoint(command) {
   for (const segment of shellSegments(command)) {
     const words = commandWords(segment);
-    const head = words[0] ?? "";
+    const head = basename(words[0] ?? "");
     if (!head.includes("$")) continue;
     const fragment = CODEX_ENTRYPOINT_FRAGMENTS.find((candidate) =>
       words.some((word) => basename(word) === candidate),
@@ -887,6 +921,11 @@ function handleStop(input) {
   if (blocking.length > 0) {
     const instructions = blocking.map((record) => {
       const runner = RUNNERS[record.operation];
+      if (record.phase === "active" && inFlight === null) {
+        // 稼働状況の証拠 (`background_tasks`) が無い host では、追跡喪失とは断定できない。
+        // 重複起動を促さず、既存 runner の report を待つ従来の案内に留める。
+        return `${runner} は active です (この host は background_tasks を提供しないため稼働状況を確認できません)。新しい runner を重複起動せず、既存 runner の completion notification を待って report を処理してください。`;
+      }
       if (record.phase === "active") {
         return `${runner} の active record に対応する background task がありません。同じ request で ${runner} を Agent tool の subagent_type に指定し、model: "sonnet" で起動し直してください。`;
       }
