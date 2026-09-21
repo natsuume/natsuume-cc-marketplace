@@ -850,13 +850,21 @@ class PermissionDeniedTest(BackgroundRunnerHarness):
         self.assertEqual(operation, records[0]["operation"])
         self.assertEqual("denied", records[0]["phase"])
 
-    def test_denied_launch_moves_an_active_record_to_denied(self) -> None:
+    def test_denied_launch_keeps_an_active_record(self) -> None:
+        """SubagentStart を観測済みの runner は、別の起動の拒否で追跡を失わない。
+
+        classifier の拒否は spawn 前に起きるため、拒否された起動が `active` record を
+        作ることはない。`active` record は別の稼働中 runner のものなので据え置き、
+        その terminal report を Stop gate が引き続き要求する。
+        """
         self.subagent_start("rescue")
         result = self.permission_denied(subagent_type=RUNNERS["rescue"])
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("", result.stdout.strip())
-        self.assert_denied_record("rescue")
-        self.assert_not_blocked(self.stop(background_tasks=[]))
+        records = self.records_for()
+        self.assertEqual(1, len(records))
+        self.assertEqual("active", records[0]["phase"])
+        self.assert_stop_blocked(self.stop(background_tasks=[]), RUNNERS["rescue"])
 
     def test_denied_launch_moves_a_retry_required_record_to_denied(self) -> None:
         self.subagent_start("review", agent_id="agent-first")
@@ -885,7 +893,9 @@ class PermissionDeniedTest(BackgroundRunnerHarness):
         self.assert_not_blocked(self.stop(background_tasks=[]))
 
     def test_task_tool_denial_is_handled_like_the_agent_tool(self) -> None:
-        self.subagent_start("advisor")
+        self.hook_response(
+            self.bash_payload(f'bash "{JOB_HELPER_PATH}" advisor /tmp/prompt.md')
+        )
         self.permission_denied(subagent_type=RUNNERS["advisor"], tool_name="Task")
         self.assert_denied_record("advisor")
 
@@ -1055,8 +1065,14 @@ class CancelTimeoutTest(unittest.TestCase):
                 self.fail("cancel が timeout 設定を超えても終了しなかった")
             elapsed = time.monotonic() - started
             self.assertNotEqual(0, result.returncode, result.stdout)
-            self.assertLess(elapsed, 10)
-            self.assertTrue(result.stderr.strip(), "timeout の理由が報告されていない")
+            # stub の companion は 5 秒で自然終了するため、それより短い時間で終わって
+            # いることが「wrapper の timeout が子を止めた」ことの弁別条件になる。
+            self.assertLess(elapsed, 4)
+            self.assertIn(
+                "timeout",
+                result.stderr.lower(),
+                "timeout による中断であることが stderr に報告されていない",
+            )
 
 
 # ---------------------------------------------------------------------------
