@@ -865,6 +865,25 @@ class PermissionDeniedTest(BackgroundRunnerHarness):
         self.assert_denied_record("review")
         self.assert_not_blocked(self.stop(background_tasks=[]))
 
+    def test_denied_launch_moves_a_reroute_required_record_to_denied(self) -> None:
+        """PreToolUse gate が reroute を要求した直後の拒否でも block ループを残さない。
+
+        main session が companion を直接起動しようとすると gate が deny し、その
+        operation の record を `reroute-required` にして runner の起動を案内する。
+        案内どおりの Agent 起動が classifier に拒否されたとき、この phase の record が
+        Stop を block し続けないよう、`denied` へ遷移させる。
+        """
+        response = self.hook_response(
+            self.bash_payload(f'node "{COMPANION_PATH}" task --background --json')
+        )
+        self.assertIsNotNone(response)
+        records = self.records_for()
+        self.assertEqual(1, len(records))
+        self.assertEqual("reroute-required", records[0]["phase"])
+        self.permission_denied(subagent_type=RUNNERS["rescue"])
+        self.assert_denied_record("rescue")
+        self.assert_not_blocked(self.stop(background_tasks=[]))
+
     def test_task_tool_denial_is_handled_like_the_agent_tool(self) -> None:
         self.subagent_start("advisor")
         self.permission_denied(subagent_type=RUNNERS["advisor"], tool_name="Task")
