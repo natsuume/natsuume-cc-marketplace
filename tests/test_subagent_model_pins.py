@@ -279,20 +279,18 @@ class ManageCodexRunnersModelAnnotationTest(unittest.TestCase):
         body = read(MANAGE_CODEX_RUNNERS)
         self.assertNotIn("subagent_type に指定し、run_in_background: false で", body)
 
-    def test_user_facing_run_in_background_instruction_lines_declare_model(
-        self,
-    ) -> None:
-        """`run_in_background: false` のユーザ向け指示文行は全て model を含む。
+    def test_user_facing_launch_instruction_lines_declare_model(self) -> None:
+        """runner 起動を案内するユーザ向け指示文行は全て model を含む。
 
-        行の判別は元指定の 2 部分文字列 (`run_in_background: false を指定` /
-        `run_in_background: false で`) の有無で行う。コード内の Boolean 比較行
-        (`input.tool_input?.run_in_background === true`) はこの部分文字列を含まない
-        (`false` を含まない) ため自動的に除外され、追加の判別ロジックは不要だった。
+        行の判別は案内文に現れる指定形 (`subagent_type=\\"` の escaped literal と
+        `subagent_type に指定` の自然文) で行い、hook が request payload を読む実装行
+        (`tool_input?.subagent_type` 等) は対象にしない。Agent tool は起動 mode を選ぶ
+        parameter を持たないため、案内文で指定するのは model だけになる。
         """
         body = read(MANAGE_CODEX_RUNNERS)
         instruction_markers = (
-            "run_in_background: false を指定",
-            "run_in_background: false で",
+            r'subagent_type=\"',
+            "subagent_type に指定",
         )
         matching_lines = [
             line
@@ -301,7 +299,7 @@ class ManageCodexRunnersModelAnnotationTest(unittest.TestCase):
         ]
         self.assertTrue(
             matching_lines,
-            "no user-facing run_in_background instruction line was found",
+            "no user-facing runner launch instruction line was found",
         )
         for line in matching_lines:
             with self.subTest(line=line):

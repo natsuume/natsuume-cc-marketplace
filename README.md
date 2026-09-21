@@ -49,7 +49,7 @@ Claude Code 側で fable-risk-labeler を install していた場合は、plugin
 | [experimental-agent-discipline](#experimental-agent-discipline) | 0.1.0 | agent-discipline の実験的 fork。Fable 週次枠の使用率が閾値 (既定 50%) 以下のあいだ、effort low 固定の専用 agent への Fable subagent 委任を許可する (agent-discipline と切替運用) |
 | [ui-discipline](#ui-discipline) | 0.4.3 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.6.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
-| [codex-advisor](#codex-advisor) | 3.0.1 | Codex rescue / review / advisor を role 固有 foreground subagent に閉じ込め、追跡喪失から復旧する。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
+| [codex-advisor](#codex-advisor) | 4.0.0 | Codex rescue / review / advisor を role 固有 runner subagent に閉じ込め、追跡喪失から復旧する。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.1 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.3.1 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.2 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
@@ -398,9 +398,9 @@ Codex は read-only sandbox でリポジトリを自分で読んで裏取りし�
 
 Codex review の review cadence (`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の成功 review と `codex-advisor:review-runner` の成功 review を session ごとに合算し、5 サイクル完了後に main session の Stop と次の review 起動を block する enforcement) は [pre-push-codex-review](#pre-push-codex-review) plugin が担います。codex-advisor は checkpoint の実行主体として `codex-advisor:advisor-runner` を提供し、元の Goal / 制約、直近 5 サイクルの review 履歴、現在の方針を材料に根本方針・問題設定・設計境界・検証戦略を問い直す助言を返して `Codex-Advisor-Review-Cadence` attestation を発行します。通常の advisor 相談ではカウンターを解除しません。
 
-v1.0.0 では rescue / review / advisor を `codex-advisor:rescue-runner` / `review-runner` / `advisor-runner` の role 固有 foreground subagent に統一しました。main session や通常 subagent から companion / wrapper を直接実行すると PreToolUse hook が deny し、Stop hook が対応 runner への reroute、active Agent の completion 回収、1 回だけの retry を要求します。
+rescue / review / advisor は `codex-advisor:rescue-runner` / `review-runner` / `advisor-runner` の role 固有 runner subagent に閉じ込めます。main session や通常 subagent から companion / wrapper を直接実行すると PreToolUse hook が deny し、Stop hook が対応 runner への reroute、稼働中 runner の completion notification 待ち、1 回だけの retry を要求します。起動 mode は Claude Code が決めるため Agent call では指定せず、runner の report は completion notification (SubagentHandback / SubagentStop) 経由で後続ターンに届きます。
 
-runner は Codex 起動前の companion job 集合を保持します。rescue / advisor は detached task の job ID を追跡し、review は長時間 Bash の tracking を失った場合に起動前後の job 集合差分から review job を一意に特定します。いずれも `status` / `result` で terminal output を回収するため、Claude の Bash / TaskOutput tracking が失われても companion の永続 state から復旧できます。候補が 0 件または複数件なら別 job を推測しません。
+runner は Codex 起動前の companion job 集合を保持します。rescue / advisor は detached task の job ID を追跡し、review は Bash の tracking を失った場合に起動前後の job 集合差分から review job を一意に特定します。いずれも `status` / `result` で terminal output を回収するため、Claude 側の実行追跡が失われても companion の永続 state から復旧できます。候補が 0 件または複数件なら別 job を推測しません。
 
 通常 subagent が相談を必要とする場合、wrapper を直接実行せず self-contained な request を親へ返します。親が advisor runner を起動できるのは、委任指示が codex-advisor の使用を明示的に許可した場合だけです (相談は課金を伴う外部呼び出しのため)。
 
@@ -416,13 +416,13 @@ Claude Code からの利用には [公式 codex plugin](https://github.com/opena
 |---------|---------|------|
 | `inject-advisor-rules` | SessionStart | メインセッション向けの相談・rescue thread・role 固有 runner 規律を `additionalContext` として常時注入する |
 | `inject-advisor-rules-subagent` | SubagentStart | 通常 subagent 向けの許可境界と、直接 wrapper ではなく相談 request を親へ返す規律を注入する |
-| `manage-codex-runners` | SessionStart / SessionEnd / PreToolUse / SubagentStart / PostToolUse (`SubagentHandback`) / SubagentStop / Stop | 直接実行 gate、UID + session-scoped state、active 回収、bounded retry、stale cleanup を管理する。auto mode で `SubagentHandback` 経由で届く runner report は PostToolUse で footer / attestation を解析して state に記録し、SubagentStop がそれを採用する。advisor-runner の SubagentStop は review cadence attestation footer 行の欠落も retry 対象にする (cadence の計数・enforcement 自体は [pre-push-codex-review](#pre-push-codex-review) が担う) |
+| `manage-codex-runners` | SessionStart (`startup` / `clear`) / SessionEnd / PreToolUse (`Bash`) / PermissionDenied (`Agent` / `Task`) / SubagentStart / PostToolUse (`SubagentHandback`) / SubagentStop / Stop | 直接実行 gate、UID + session-scoped state、bounded retry、stale cleanup を管理する。auto mode で `SubagentHandback` 経由で届く runner report は PostToolUse で footer / attestation を解析して state に記録し、SubagentStop がそれを採用する。PermissionDenied は classifier に拒否された runner 起動を state へ反映し、Stop が同じ起動を要求し続ける loop を残さない。Stop は `background_tasks` と state を突き合わせ、稼働中の runner には completion notification を待つよう通知し、追跡を失った runner だけを block 対象にする。advisor-runner の SubagentStop は review cadence attestation footer 行の欠落も retry 対象にする (cadence の計数・enforcement 自体は [pre-push-codex-review](#pre-push-codex-review) が担う) |
 
 #### Skills
 
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
-| consult | Claude: `/codex-advisor:consult` | self-contained な相談プロンプトを組み立て、`codex-advisor:advisor-runner` を foreground 起動して助言を回収する |
+| consult | Claude: `/codex-advisor:consult` | self-contained な相談プロンプトを組み立て、`codex-advisor:advisor-runner` を起動して助言を回収する |
 
 ### キーワード
 

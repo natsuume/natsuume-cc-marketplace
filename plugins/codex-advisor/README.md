@@ -6,7 +6,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v3.0.1
+v4.0.0
 
 ## 機構
 
@@ -14,8 +14,8 @@ v3.0.1
 |---|---|
 | SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 5 ルール (下記) を `additionalContext` として常時注入する |
 | SubagentStart hook (`inject-advisor-rules-subagent`) | 通常 subagent に advisor の許可境界を注入する。通常 subagent は wrapper を直接起動せず、self-contained な相談 request を親へ返す |
-| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、SubagentStart / SubagentStop の active・bounded retry (advisor-runner の attestation footer 契約検証を含む)、Stop の reroute / completion 回収要求を管理する。auto mode (Claude Code v2.1.271 以降) では runner の最終 report が `SubagentHandback` tool 経由で届き SubagentStop の `last_assistant_message` には締めの文しか入らないため、PostToolUse (`SubagentHandback`) で report の footer / attestation を解析して state に記録し、SubagentStop がそれを採用する。runner state は UID + session ID で分離し、prompt / Codex 出力 (hand-back report の本文を含む) を保存しない |
-| role 固有 runner agents | rescue / review / advisor の model 起動・job tracking・terminal output を subagent context に閉じ込める。全 runner は foreground Agent として起動する |
+| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、PermissionDenied による拒否済み起動要求の解消、SubagentStart / SubagentStop の active・bounded retry (advisor-runner の attestation footer 契約検証を含む)、Stop の reroute / 待機通知を管理する。auto mode では runner の最終 report が `SubagentHandback` tool 経由で届き SubagentStop の `last_assistant_message` には締めの文しか入らないため、PostToolUse (`SubagentHandback`) で report の footer / attestation を解析して state に記録し、SubagentStop がそれを採用する。runner state は UID + session ID で分離し、prompt / Codex 出力 (hand-back report の本文を含む) を保存しない |
+| role 固有 runner agents | rescue / review / advisor の model 起動・job tracking・terminal output を subagent context に閉じ込める。起動 mode は Claude Code が決め、report は completion notification 経由で親へ届く |
 | `/codex-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では `codex-advisor:advisor-runner` を起動する。Codex host の source 契約は PTY stdin wrapper を維持する |
 | `scripts/run-codex-job.sh` | official companion v1.0.6 の task / review / status / result / cancel を runner 向けの path-only command に限定して公開する。status wait は単発 status の短い poll で構成する |
 | `scripts/run-codex-advisor.sh` | v0.3.0 の adapter 契約と Codex host source を維持する wrapper。Claude Code の通常 Skill は直接呼ばず advisor runner を使う。Codex host では PTY stdin から direct read-only / ephemeral `codex exec` を foreground 起動し、既定 10 分の watchdog で process group を回収する |
@@ -28,13 +28,13 @@ v3.0.1
 | `rule:advisor-weight` | 助言はフラットに扱う (独立した第二視点として自分の証拠・推論と同じ土俵で採否を判断し、採否と理由を明示する。黙って無視しない)。証拠と助言が衝突し自分で判断できないときは reconcile call (衝突を明示した再相談) で解消する |
 | `rule:advisor-boundary` | 設計/仕様の決定はユーザ専権 (助言は AskUserQuestion の代替でない)。差分 finding は pre-push-review が担当し、review cadence の checkpoint (enforcement は pre-push-codex-review が担う) は根本方針の course-correction だけを相談する。advisor 不通時は相談なしで続行しユーザ報告 |
 | `rule:rescue-thread` | `/codex:rescue` 起動時は `--resume` / `--fresh` を常に Claude が自律決定して付与し、thread 選択の AskUserQuestion を発行しない。`--resume` は「直前の rescue と同一論点の続き + 対象 rescue がセッション内で最新の再開可能 task (terminal 状態かつ threadId あり) と確実に分かる場合」のみで、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先 |
-| `rule:codex-runner` | rescue / review / advisor は完全修飾 runner を `model: "sonnet"`、`run_in_background: false` で起動する。Agent が async 受理されても completion notification / TaskOutput と terminal report を回収するまで turn を終了しない |
+| `rule:codex-runner` | rescue / review / advisor は完全修飾 runner を `model: "sonnet"` で起動し、起動 mode は指定しない (Claude Code が決める)。runner の terminal report は completion notification 経由で後続ターンに届き、それを処理するまでタスクを完了扱いにしない。起動が classifier に拒否されたら同じ起動を繰り返さず `AskUserQuestion` で許可を得る |
 
 公式ドキュメントの推奨プロンプト (timing block / advice block) の移植ですが、次の 2 点は意図的に変えています: (1)「最初のファイル変更前に必ず advisor を呼ぶ」型の hard rule は採用していません (公式実測で、強い executor への hard rule 追加は過剰呼び出しを招き純効果がゼロ〜マイナスと報告されているため)。(2) advice block の「助言を重く扱う」も採用せず、フラットな扱いに変更しています (下記の差分参照)。
 
 ### subagent からの利用
 
-通常 subagent が相談を必要とする場合も、wrapper / companion を直接実行しません。相談は課金を伴う外部サービス呼び出しなので、委任指示が codex-advisor の使用を明示的に許可している場合だけ self-contained な相談 request を親へ返します。親は `codex-advisor:advisor-runner` を foreground Agent として起動します。subagent には AskUserQuestion が無いため、助言と証拠の衝突が自力で解消できない場合は両論併記で親へエスカレーションします。
+通常 subagent が相談を必要とする場合も、wrapper / companion を直接実行しません。相談は課金を伴う外部サービス呼び出しなので、委任指示が codex-advisor の使用を明示的に許可している場合だけ self-contained な相談 request を親へ返します。親は `codex-advisor:advisor-runner` を Agent tool で起動します。subagent には AskUserQuestion が無いため、助言と証拠の衝突が自力で解消できない場合は両論併記で親へエスカレーションします。
 
 委任指示に含める許可の定型文の例:
 
@@ -48,6 +48,31 @@ v3.0.1
 - API 版の advice block は「executor より高知能な advisor」を前提に助言を重く扱わせますが、本プラグインの呼び出し元は advisor と同等以上のモデル (Fable 等) でもありうるため、助言はフラットに扱う規律に変更しています。advisor の価値は知能差ではなく、別モデル系統からの独立した第二視点です
 
 本プラグイン自体は Claude Code 専用で、Codex marketplace では配布していません (OpenAI Codex は advisor として呼び出す外部 CLI であり、配布物ではありません)。
+
+## auto mode での利用
+
+auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 tool call を審査します。classifier が読むのは「ユーザ発言・tool call・CLAUDE.md」で、tool result (PreToolUse gate の deny 文や Stop hook の指示を含む) は除去されます。そのため gate の deny 直後に runner を起動すると、classifier には「ユーザが依頼していない操作の一部」に見え、起動が `Blocked by classifier` で拒否されることがあります。
+
+本 plugin はこれを次の 3 段で扱います:
+
+1. **起動規律の注入 (SessionStart)**: `hooks/prompts/advisor-rules.md` の `rule:codex-runner` が、runner を `model: "sonnet"` で起動すること、起動 mode を指定しないこと、report を completion notification 経由で受け取ること、拒否されたら同じ起動を繰り返さず `AskUserQuestion` でユーザの許可を得てから再起動することを定めます
+2. **拒否の記録 (PermissionDenied hook)**: 拒否された起動要求を runner state に反映し、Stop hook が同じ起動を要求し続ける loop を残しません
+3. **classifier の allow 設定 (任意)**: 恒久的に解消するには、`~/.claude/settings.json` の `autoMode.allow` に次のルールを追加します。`"$defaults"` を残さないと組み込みルールが失われるので必ず併記してください
+
+```json
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Launching the codex-advisor:rescue-runner, codex-advisor:review-runner or codex-advisor:advisor-runner subagent is allowed, including immediately after the codex-advisor PreToolUse gate denied a direct companion call: the runner only starts an OpenAI Codex job through the plugin's own helper and returns its output. It does not push, merge, post to GitHub, or delete anything."
+    ]
+  }
+}
+```
+
+この allow ルールが緩めるのは subagent の**起動**の審査だけです。runner が実行中に行う各 tool call は引き続き classifier が親 session と同じ規則で審査します。
+
+classifier は project settings (`.claude/settings.json` / `.claude/settings.local.json`) の `autoMode` を読まないため、ユーザ設定 (`~/.claude/settings.json`) に書く必要があります。classifier は CLAUDE.md も読むため、プロジェクトの CLAUDE.md に同趣旨の 1 文を書く方法でも代替できます。設定なしで拒否された場合は、ユーザが `AskUserQuestion` の確認で許可すれば次の起動は通ります (classifier は明示的なユーザ意図で soft block を解除します)。
 
 ## 依存
 

@@ -260,7 +260,7 @@ class CodexAdvisorDeduplicationTest(unittest.TestCase):
                 "<review_history>",
                 "<current_strategy>",
                 "<question>",
-                "TaskOutput",
+                "completion notification",
                 "terminal report",
             )
             if element not in text
@@ -268,10 +268,9 @@ class CodexAdvisorDeduplicationTest(unittest.TestCase):
         self.assertEqual([], missing, f"consult/SKILL.md から欠落した正本要素: {missing}")
 
     def test_advisor_rules_keeps_launch_safety_essentials(self) -> None:
-        """参照化後も安全上必須の起動指定 (model / run_in_background) は本文に残す。"""
+        """参照化後も安全上必須の起動指定 (model) は本文に残す。"""
         text = read(ADVISOR_RULES)
         self.assertIn('`model: "sonnet"`', text)
-        self.assertIn('`run_in_background: false`', text)
 
 
 class UiPatternsChecklistReframingTest(unittest.TestCase):

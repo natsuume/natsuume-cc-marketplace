@@ -7,6 +7,8 @@
  * 接続する。
  *
  * - PreToolUse: Codex model の起動を role 固有 runner だけに限定する
+ * - PermissionDenied: classifier が拒否した runner 起動を record に反映する (起動を要求して
+ *   いる phase は `denied` へ、`active` は `launchDenied` の印だけを付けて Stop に委ねる)
  * - SubagentStart / SubagentStop: runner の active / retry / terminal 遷移を記録する
  * - PostToolUse (SubagentHandback): hand-back された report の footer / attestation
  *   解析値を runner state に記録する (SubagentStop が one-shot で消費する)
@@ -24,7 +26,8 @@
  * `tool_response.success` が false の hand-back (未配信: tool が active でない / 配信済み /
  * 親が受理しない等) は report ではないため記録しない (harness は未配信時に plain text での
  * 報告へ切り替えるため、`last_assistant_message` 経路で解析できる)。
- * - Stop: 未回収の runner がある間は main session の終了を block する
+ * - Stop: `background_tasks` と record を突き合わせ、稼働中の runner には待機を通知し、
+ *   追跡を失った runner がある間だけ main session の終了を block する
  * - SessionStart / SessionEnd: stale runner state を掃除する
  *
  * advisor-runner の attestation footer は外部 plugin (pre-push-codex-review) の review
@@ -147,6 +150,9 @@ function writeRecord(record) {
     handback: sanitizeHandback(record.handback),
     updatedAt: new Date().toISOString(),
   };
+  // 印は record インスタンスに属する。呼び出し側が明示的に true を渡したときだけ書き、
+  // lifecycle の遷移 (SubagentStart / SubagentStop / PostToolUse) では引き継がない。
+  if (record.launchDenied === true) normalized.launchDenied = true;
   try {
     fs.writeFileSync(temporary, `${JSON.stringify(normalized)}\n`, {
       encoding: "utf8",
@@ -240,12 +246,68 @@ function hasTopLevelBackgroundOrPipeline(command) {
   return false;
 }
 
-function shellSegments(command) {
-  const segments = [];
+/**
+ * `$(...)` の閉じ括弧位置を返す (見つからなければ -1)。入れ子の括弧と quote を数える。
+ */
+function matchingParenIndex(text, openIndex) {
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  for (let index = openIndex; index < text.length; index += 1) {
+    const character = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+      continue;
+    }
+    if (character === ")") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+// command substitution の再帰解析の深さ上限。実用上の入れ子はこの範囲に収まり、
+// 病的に深い入力でも解析が停止する。
+const SUBSTITUTION_DEPTH_LIMIT = 8;
+
+// 外側の segment で substitution が占めていた位置に残す placeholder。置換結果は hook から
+// 解決できないため、command 名の位置にあれば「変数のまま解決できない command 名」と
+// 同じ扱い (fail-closed の判定対象) になる。
+const SUBSTITUTION_PLACEHOLDER = "$SUBSTITUTION";
+
+/**
+ * shell の list separator で segment に分割し、`$(...)` とバッククォートの中身も
+ * 独立した segment として再帰的に取り出す。substitution の中身は外側の segment から
+ * 取り除いて placeholder に置き換えるため、置換結果を実行形として誤読せず、置換で
+ * 作られた command 名を解決済みとも扱わない。
+ */
+function collectShellSegments(command, segments, depth) {
   let current = "";
   let quote = null;
   let escaped = false;
-  for (const character of command) {
+  const flush = () => {
+    if (current.trim()) segments.push(current.trim());
+    current = "";
+  };
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
     if (escaped) {
       current += character;
       escaped = false;
@@ -255,6 +317,31 @@ function shellSegments(command) {
       current += character;
       escaped = true;
       continue;
+    }
+    if (quote === "'") {
+      current += character;
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (depth < SUBSTITUTION_DEPTH_LIMIT) {
+      if (character === "$" && command[index + 1] === "(") {
+        const end = matchingParenIndex(command, index + 1);
+        if (end !== -1) {
+          collectShellSegments(command.slice(index + 2, end), segments, depth + 1);
+          current += SUBSTITUTION_PLACEHOLDER;
+          index = end;
+          continue;
+        }
+      }
+      if (character === "`") {
+        const end = command.indexOf("`", index + 1);
+        if (end !== -1) {
+          collectShellSegments(command.slice(index + 1, end), segments, depth + 1);
+          current += SUBSTITUTION_PLACEHOLDER;
+          index = end;
+          continue;
+        }
+      }
     }
     if (quote) {
       current += character;
@@ -267,13 +354,17 @@ function shellSegments(command) {
       continue;
     }
     if (character === ";" || character === "\n" || character === "|" || character === "&") {
-      if (current.trim()) segments.push(current.trim());
-      current = "";
+      flush();
       continue;
     }
     current += character;
   }
-  if (current.trim()) segments.push(current.trim());
+  flush();
+}
+
+function shellSegments(command) {
+  const segments = [];
+  collectShellSegments(command, segments, 0);
   return segments;
 }
 
@@ -324,27 +415,103 @@ function basename(word) {
   return word.split("/").pop() ?? word;
 }
 
-function commandWords(segment) {
-  const words = shellWords(segment);
-  while (["then", "do", "else"].includes(words[0])) words.shift();
-  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) words.shift();
+// Codex を起動しうる実行形の path 断片。解析不能な command 名と同居する場合だけ
+// fail-closed の判定材料になる。
+const CODEX_ENTRYPOINT_FRAGMENTS = [
+  "codex-companion.mjs",
+  "run-codex-job.sh",
+  "run-codex-advisor.sh",
+];
 
-  if (words[0] === "command" || words[0] === "builtin" || words[0] === "nohup") {
-    words.shift();
-  }
-  if (basename(words[0] ?? "") === "env") {
-    words.shift();
-    while (
-      (words[0] ?? "").startsWith("-") ||
-      /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")
-    ) {
+// 後続の argv をそのまま実行する launcher。実行形の判定は剥がした後の先頭語で行う。
+const COMMAND_WRAPPERS = [
+  "command",
+  "builtin",
+  "nohup",
+  "sudo",
+  "setsid",
+  "ionice",
+  "stdbuf",
+  "watch",
+  "xargs",
+];
+// wrapper の剥がしを繰り返す回数の上限 (`sudo setsid node ...` のような多重包装を解き、
+// 解けない入力でも停止する)。
+const WRAPPER_STRIP_LIMIT = 8;
+
+// wrapper の後に来る「実行形の先頭語」として認識する basename。wrapper の option は値を
+// 別 token に取ることがある (`xargs -n 1` / `sudo -u user` 等) ため、option の arity を
+// 個別に持たず、「option の直後にあり、かつ実行形の先頭語に見えない token」を option の値と
+// して読み飛ばす。option に続かない token は実行形として扱う (`sudo -u user cat <file>` の
+// `cat` を飛ばして後続の path を実行形と誤認しない)。
+const EXECUTABLE_HEADS = new Set([
+  "node",
+  "bash",
+  "sh",
+  "env",
+  "timeout",
+  "eval",
+  ...COMMAND_WRAPPERS,
+]);
+
+function looksLikeExecutableHead(word) {
+  const name = basename(word);
+  return (
+    name.includes("$") ||
+    EXECUTABLE_HEADS.has(name) ||
+    CODEX_ENTRYPOINT_FRAGMENTS.includes(name)
+  );
+}
+
+function commandWords(segment) {
+  let words = shellWords(segment);
+  for (let round = 0; round < WRAPPER_STRIP_LIMIT; round += 1) {
+    while (["then", "do", "else"].includes(words[0])) words.shift();
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) words.shift();
+
+    const head = basename(words[0] ?? "");
+    if (COMMAND_WRAPPERS.includes(head)) {
       words.shift();
+      let previousWasOption = false;
+      while (words.length > 0) {
+        if (words[0].startsWith("-")) {
+          previousWasOption = true;
+          words.shift();
+          continue;
+        }
+        if (previousWasOption && !looksLikeExecutableHead(words[0])) {
+          previousWasOption = false;
+          words.shift();
+          continue;
+        }
+        break;
+      }
+      continue;
     }
-  }
-  if (basename(words[0] ?? "") === "timeout") {
-    words.shift();
-    while ((words[0] ?? "").startsWith("-")) words.shift();
-    if (/^[0-9]+(?:\.[0-9]+)?[smhd]?$/.test(words[0] ?? "")) words.shift();
+    if (head === "env") {
+      words.shift();
+      while (
+        (words[0] ?? "").startsWith("-") ||
+        /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")
+      ) {
+        words.shift();
+      }
+      continue;
+    }
+    if (head === "timeout") {
+      words.shift();
+      while ((words[0] ?? "").startsWith("-")) words.shift();
+      if (/^[0-9]+(?:\.[0-9]+)?[smhd]?$/.test(words[0] ?? "")) words.shift();
+      continue;
+    }
+    if (head === "eval") {
+      // eval は引数を連結して再度 shell として解釈するため、quote を外した残りを
+      // 1 つの command 文字列として再解析する。
+      words.shift();
+      words = shellWords(words.join(" "));
+      continue;
+    }
+    break;
   }
   return words;
 }
@@ -392,6 +559,31 @@ function classifyModelLaunch(command) {
   return null;
 }
 
+/**
+ * command 名が変数のまま解決できない segment に Codex entrypoint の path があるかを調べる。
+ *
+ * `$CMD /path/to/codex-companion.mjs task` のような形は、展開結果が何であるかを hook から
+ * 判定できない。分類できないまま allow すると gate を素通りできてしまうため、この組み合わせ
+ * だけを fail-closed で deny する。command 名が解決できる通常のコマンド (`cat` / `rg` 等) に
+ * よる path 言及は従来どおり allow する。
+ *
+ * 「解決できない」は basename で判定する。`${CLAUDE_PLUGIN_ROOT}/scripts/run-codex-job.sh`
+ * のように directory だけが変数で file 名が literal な先頭語は分類器が解決できるため、
+ * `status` / `result` / `cancel` のような管理 subcommand をここで拒否しない。
+ */
+function unresolvableCodexEntrypoint(command) {
+  for (const segment of shellSegments(command)) {
+    const words = commandWords(segment);
+    const head = basename(words[0] ?? "");
+    if (!head.includes("$")) continue;
+    const fragment = CODEX_ENTRYPOINT_FRAGMENTS.find((candidate) =>
+      words.some((word) => basename(word) === candidate),
+    );
+    if (fragment) return fragment;
+  }
+  return null;
+}
+
 function denyResponse(reason) {
   return {
     hookSpecificOutput: {
@@ -407,7 +599,13 @@ function handlePreToolUse(input) {
   const command = input.tool_input?.command;
   if (typeof command !== "string") return null;
   const launch = classifyModelLaunch(command);
-  if (!launch) return null;
+  if (!launch) {
+    const fragment = unresolvableCodexEntrypoint(command);
+    if (!fragment) return null;
+    return denyResponse(
+      `codex-advisor: command 名が変数のままで解決できない segment に ${fragment} の path があります。Codex 起動かどうかを判定できないため拒否しました。Codex を起動する場合は Agent tool で subagent_type=\"${RUNNERS.rescue}\" / \"${RUNNERS.review}\" / \"${RUNNERS.advisor}\" のいずれかを model=\"sonnet\" で起動してください。読み取り・管理操作の場合は command 名を literal で書き直してください。`,
+    );
+  }
 
   const expectedRunner = RUNNERS[launch.operation];
   const agentType = typeof input.agent_type === "string" ? input.agent_type : "";
@@ -439,8 +637,51 @@ function handlePreToolUse(input) {
     mismatch = "background / pipeline を含む起動";
   }
   return denyResponse(
-    `codex-advisor: ${launch.entrypoint} は ${expectedRunner} の foreground Agent だけが実行できます。${mismatch} からの直接実行を拒否しました。main session は Agent tool で subagent_type=\"${expectedRunner}\", model=\"sonnet\", run_in_background: false を指定し、terminal report まで待ってください。${stateFailure}`,
+    `codex-advisor: ${launch.entrypoint} は ${expectedRunner} だけが実行できます。${mismatch} からの直接実行を拒否しました。main session は Agent tool で subagent_type=\"${expectedRunner}\", model=\"sonnet\" を指定して起動してください。起動 mode は Claude Code が決めるため指定せず、runner の report は completion notification で後続 turn に届きます。${stateFailure}`,
   );
+}
+
+/**
+ * PermissionDenied (Agent / Task): classifier が runner の起動を拒否した。
+ *
+ * 拒否は spawn の前に起きるため、起動を要求している phase (`retry-required` /
+ * `reroute-required`) の record はその要求が満たされないまま残る。これを `denied` へ
+ * 移し、Stop が同じ起動を要求し続ける loop を断つ。`active` の record が稼働中 runner の
+ * ものか、runner が SubagentStop 無しに消えた残骸かはこの入力では判別できないので、
+ * phase は変えずに `launchDenied` の印だけを付け、判別を Stop hook へ委ねる。
+ */
+function handlePermissionDenied(input) {
+  if (input.tool_name !== "Agent" && input.tool_name !== "Task") return null;
+  const operation = operationForAgentType(input.tool_input?.subagent_type);
+  if (!operation || typeof input.session_id !== "string") return null;
+  const current = readRecord(input.session_id, operation);
+  if (!current) return null;
+
+  if (current.phase === "retry-required" || current.phase === "reroute-required") {
+    writeRecord({
+      sessionId: input.session_id,
+      operation,
+      agentId: current.agentId ?? null,
+      phase: "denied",
+      retryCount: current.retryCount ?? 0,
+      jobId: current.jobId ?? null,
+      handback: current.handback ?? null,
+    });
+    return null;
+  }
+  if (current.phase === "active") {
+    writeRecord({
+      sessionId: input.session_id,
+      operation,
+      agentId: current.agentId ?? null,
+      phase: "active",
+      retryCount: current.retryCount ?? 0,
+      jobId: current.jobId ?? null,
+      handback: current.handback ?? null,
+      launchDenied: true,
+    });
+  }
+  return null;
 }
 
 function handleSubagentStart(input) {
@@ -644,24 +885,88 @@ function handleSubagentStop(input) {
   return null;
 }
 
+/**
+ * Stop 入力の `background_tasks` から、稼働中 runner の operation 集合を作る。
+ *
+ * 配列が無い入力 (この field を提供しない host) では null を返し、呼び出し側は record
+ * だけを根拠にする従来の判定へ退避する。
+ */
+function inFlightRunnerOperations(input) {
+  const tasks = input.background_tasks;
+  if (!Array.isArray(tasks)) return null;
+  const operations = new Set();
+  for (const task of tasks) {
+    if (!task || typeof task !== "object") continue;
+    if (task.type !== "subagent") continue;
+    const operation = operationForAgentType(task.agent_type);
+    if (operation) operations.add(operation);
+  }
+  return operations;
+}
+
 function handleStop(input) {
   if (input.stop_hook_active === true || typeof input.session_id !== "string") {
     return null;
   }
   const records = listRecords(input.session_id);
   if (records.length === 0) return null;
-  const instructions = records.map((record) => {
-    const runner = RUNNERS[record.operation];
-    if (record.phase === "active") {
-      return `${runner} は active です。既存 Agent の completion notification / TaskOutput を回収し、terminal report を受け取るまで終了しないでください。新しい runner は重複起動しません。`;
+  const inFlight = inFlightRunnerOperations(input);
+
+  const blocking = [];
+  const waiting = [];
+  for (const record of records) {
+    // classifier に拒否された起動要求は満たされない。同じ起動を要求し続けない。
+    if (record.phase === "denied") continue;
+    if (inFlight === null) {
+      blocking.push(record);
+      continue;
     }
-    const retry = record.phase === "retry-required" ? "自動 retry (残り 1 回)" : "reroute";
-    return `${runner} を Agent tool の subagent_type に指定し、model: "sonnet"、run_in_background: false で ${retry} してください。起動受理だけをユーザーへ返さず、terminal report まで待ってください。`;
-  });
-  return {
-    decision: "block",
-    reason: `codex-advisor の未完了 runner があるため main session の停止を拒否します。${instructions.join(" ")}`,
-  };
+    if (record.phase === "active") {
+      if (inFlight.has(record.operation)) {
+        waiting.push(record);
+        continue;
+      }
+      // 起動が拒否された印のある active record に対応する task が無いなら、runner は
+      // 稼働していない。追跡喪失ではなく拒否の残骸なので block しない。
+      if (record.launchDenied === true) continue;
+    }
+    blocking.push(record);
+  }
+
+  if (blocking.length > 0) {
+    const instructions = blocking.map((record) => {
+      const runner = RUNNERS[record.operation];
+      if (record.phase === "active" && inFlight === null) {
+        // 稼働状況の証拠 (`background_tasks`) が無い host では、追跡喪失とは断定できない。
+        // 重複起動を促さず、既存 runner の report を待つ従来の案内に留める。
+        return `${runner} は active です (この host は background_tasks を提供しないため稼働状況を確認できません)。新しい runner を重複起動せず、既存 runner の completion notification を待って report を処理してください。`;
+      }
+      if (record.phase === "active") {
+        return `${runner} の active record に対応する background task がありません。同じ request で ${runner} を Agent tool の subagent_type に指定し、model: "sonnet" で起動し直してください。`;
+      }
+      const retry = record.phase === "retry-required" ? "自動 retry (残り 1 回)" : "reroute";
+      return `${runner} を Agent tool の subagent_type に指定し、model: "sonnet" で ${retry} してください。起動受理だけをユーザーへ返さず、runner の report を処理してからタスクを完了扱いにしてください。`;
+    });
+    return {
+      decision: "block",
+      reason: `codex-advisor の未完了 runner があるため main session の停止を拒否します。${instructions.join(" ")}`,
+    };
+  }
+
+  if (waiting.length > 0) {
+    const notices = waiting.map(
+      (record) =>
+        `${RUNNERS[record.operation]} は稼働中です。report は completion notification で後続 turn に届くため、重複起動せずに notification を待ち、受け取ってから report を処理してください。`,
+    );
+    return {
+      hookSpecificOutput: {
+        hookEventName: "Stop",
+        additionalContext: `codex-advisor: ${notices.join(" ")}`,
+      },
+    };
+  }
+
+  return null;
 }
 
 function dispatch(input) {
@@ -674,6 +979,8 @@ function dispatch(input) {
       return null;
     case "PreToolUse":
       return handlePreToolUse(input);
+    case "PermissionDenied":
+      return handlePermissionDenied(input);
     case "SubagentStart":
       return handleSubagentStart(input);
     case "PostToolUse":
