@@ -85,12 +85,15 @@ RUN_ID_SENTENCE = (
     "run=<id>` announcement line, which is the first line of that file; "
     "reuse that one run id for the rest of this recovery."
 )
-# shell へ補間する前の形状検証.
+# shell へ補間する前の形状検証。path の deny-list は double quote 内でも特別な意味を
+# 持つ文字だけに絞る (空白や記号を含む repo パスを回収不能にしない)。空白等の
+# shell 安全性は quoted 代入の clause が担う.
 ANNOUNCEMENT_VALIDATION_SENTENCE = (
     "Before interpolating them into a shell command, check that the run id "
     "matches `^[0-9]+-[0-9]+-[0-9a-f]{8}$` and that the sentinel path is "
-    "absolute — it starts with `/` and carries no whitespace, quote, `$`, "
-    "backtick, `;`, `&` or `|`."
+    "absolute — it starts with `/` and carries no double quote, `$`, backtick "
+    "or backslash, the only characters that stay special inside double "
+    "quotes; whitespace and other punctuation are ordinary path characters."
 )
 # shell への補間形 (double-quoted な変数代入と double quote 内の展開に限る)。形状
 # 検証は deny-list なので、検証をすり抜けた文字が unquoted な位置に届く経路を塞ぐ.
@@ -100,6 +103,15 @@ QUOTED_ASSIGNMENT_SENTENCE = (
     '(`RUN_ID="<id>"`, `SENTINEL="<path>"`, `OUT="<path>"`) and expand them '
     'only inside double quotes, so a character those checks do not reject '
     'still reaches no unquoted position of the command.'
+)
+# Bash tool 呼び出し間で shell 状態は残らない。毎回同じコマンド内で 3 値を代入し
+# 直さないと、未代入の `$OUT` が output file 不存在の分岐に見えてしまう.
+REASSIGN_PER_CALL_SENTENCE = (
+    "Shell state does not survive between Bash calls, so every Bash call in "
+    "this recovery — each loop run, each grace wait and each exit check — "
+    "starts by re-establishing those three assignments in the same command; "
+    "a loop must never run with an unset `$OUT`, which would look like a "
+    "missing output file."
 )
 # sentinel path の正本 (案内行の絶対パス。run id 入りの run ごとのファイル).
 SENTINEL_PATH_SOURCE_SENTENCE = (
@@ -257,9 +269,9 @@ INCOMPLETE_BODY_SENTENCE = (
 UNIDENTIFIABLE_RUN_SENTENCE = (
     "If the first line after that grace wait is still not an announcement "
     "line — including a recorded output file that is still empty — or its "
-    "run id or sentinel path fails those checks, this run cannot be "
-    "identified: return `Status: execution-failed` (failure class `other`) "
-    "without entering the wait loop."
+    "run id, or a sentinel path it does carry, fails those checks, this run "
+    "cannot be identified: return `Status: execution-failed` (failure class "
+    "`other`) without entering the wait loop."
 )
 
 # sentinel path の fallback (案内行に path が全く無い場合に限る。prefix は plugin
@@ -292,6 +304,7 @@ SHARED_RECOVERY_CLAUSES = {
     "run-id-from-announcement": RUN_ID_SENTENCE,
     "announcement-validation": ANNOUNCEMENT_VALIDATION_SENTENCE,
     "quoted-shell-assignment": QUOTED_ASSIGNMENT_SENTENCE,
+    "assignments-per-bash-call": REASSIGN_PER_CALL_SENTENCE,
     "sentinel-path-from-announcement": SENTINEL_PATH_SOURCE_SENTENCE,
     "announcement-grace-wait": GRACE_WAIT_SENTENCE,
     "polling-loop-wait": WAIT_SENTENCE,
@@ -616,6 +629,9 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
 
     def test_values_are_interpolated_only_as_quoted_assignments(self) -> None:
         self.assert_clause(QUOTED_ASSIGNMENT_SENTENCE)
+
+    def test_every_bash_call_reestablishes_the_assignments(self) -> None:
+        self.assert_clause(REASSIGN_PER_CALL_SENTENCE)
 
     def test_recovery_takes_the_sentinel_path_from_the_announcement_line(
         self,
