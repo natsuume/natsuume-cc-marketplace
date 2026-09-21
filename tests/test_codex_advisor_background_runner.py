@@ -855,12 +855,15 @@ class PermissionDeniedTest(BackgroundRunnerHarness):
         self.assertEqual(operation, records[0]["operation"])
         self.assertEqual("denied", records[0]["phase"])
 
-    def test_denied_launch_keeps_an_active_record(self) -> None:
-        """SubagentStart を観測済みの runner は、別の起動の拒否で追跡を失わない。
+    def test_denied_launch_marks_an_active_record_instead_of_clearing_it(
+        self,
+    ) -> None:
+        """`active` record は拒否で phase を変えず、`launchDenied` の印だけを持つ。
 
         classifier の拒否は spawn 前に起きるため、拒否された起動が `active` record を
-        作ることはない。`active` record は別の稼働中 runner のものなので据え置き、
-        その terminal report を Stop gate が引き続き要求する。
+        作ることはない。`active` record が稼働中 runner のものか、runner が SubagentStop
+        無しに消えた残骸かは PermissionDenied の入力では判別できないので、印だけを付けて
+        判別を Stop hook (`background_tasks` を参照できる) に委ねる。
         """
         self.subagent_start("rescue")
         result = self.permission_denied(subagent_type=RUNNERS["rescue"])
@@ -869,6 +872,30 @@ class PermissionDeniedTest(BackgroundRunnerHarness):
         records = self.records_for()
         self.assertEqual(1, len(records))
         self.assertEqual("active", records[0]["phase"])
+        self.assertIs(True, records[0].get("launchDenied"))
+
+    def test_marked_active_record_without_an_in_flight_task_does_not_block(
+        self,
+    ) -> None:
+        """印付きの `active` record は、対応する in-flight task が無ければ denied と同等。
+
+        runner が消えて record だけが残った状態で再起動が拒否されたとき、Stop が
+        tracking 喪失として block し続ける経路を断つ。
+        """
+        self.subagent_start("rescue")
+        self.permission_denied(subagent_type=RUNNERS["rescue"])
+        self.assert_not_blocked(self.stop(background_tasks=[]))
+
+    def test_marked_active_record_with_an_in_flight_task_still_waits(self) -> None:
+        """印付きでも in-flight の task があれば稼働中 runner として待機通知を返す。"""
+        self.subagent_start("rescue")
+        self.permission_denied(subagent_type=RUNNERS["rescue"])
+        response = self.stop(background_tasks=[self.subagent_task("rescue")])
+        self.assert_stop_waits(response, RUNNERS["rescue"])
+
+    def test_unmarked_active_record_without_an_in_flight_task_blocks(self) -> None:
+        """印の無い `active` record は従来どおり tracking 喪失として block する。"""
+        self.subagent_start("rescue")
         self.assert_stop_blocked(self.stop(background_tasks=[]), RUNNERS["rescue"])
 
     def test_denied_launch_moves_a_retry_required_record_to_denied(self) -> None:
