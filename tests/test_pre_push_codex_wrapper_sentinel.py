@@ -42,7 +42,12 @@ STALE_SENTINEL_AGE_SECONDS = 24 * 60 * 60
 
 # 起動時に stdout / stderr へ出る案内行、EXIT trap が stdout へ出す終了行、
 # sentinel の 1 行の形式。
-ANNOUNCEMENT_PATTERN = re.compile(r"terminal sentinel: (?P<path>\S+) run=(?P<run>\S+)")
+# 案内行の path は `terminal sentinel: ` と末尾の ` run=<id>` の間の全体 (空白を含む
+# パスも丸ごと取る)。run id の文字集合は `[0-9a-f-]` に固定されているため、末尾の
+# ` run=` から後ろは一意に切り出せる。
+ANNOUNCEMENT_PATTERN = re.compile(
+    r"^terminal sentinel: (?P<path>/.*) run=(?P<run>[0-9a-f-]+)$", re.MULTILINE
+)
 SENTINEL_LINE_PATTERN = re.compile(r"\Astatus=(?P<status>ok|failed) run=(?P<run>\S+)\Z")
 END_LINE_TEMPLATE = "terminal sentinel end run={run_id}"
 # run id は `<pid>-<epoch 秒>-<8 桁の 16 進>`。待機ループが `grep -qE " run=<id>$"` で

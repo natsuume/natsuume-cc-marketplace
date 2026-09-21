@@ -90,10 +90,11 @@ RUN_ID_SENTENCE = (
 # shell 安全性は quoted 代入の clause が担う.
 ANNOUNCEMENT_VALIDATION_SENTENCE = (
     "Before interpolating them into a shell command, check that the run id "
-    "matches `^[0-9]+-[0-9]+-[0-9a-f]{8}$` and that the sentinel path is "
-    "absolute — it starts with `/` and carries no double quote, `$`, backtick "
-    "or backslash, the only characters that stay special inside double "
-    "quotes; whitespace and other punctuation are ordinary path characters."
+    "matches `^[0-9]+-[0-9]+-[0-9a-f]{8}$` and that the sentinel path and the "
+    "recorded output file path are absolute — each starts with `/` and "
+    "carries no double quote, `$`, backtick or backslash, the only characters "
+    "that stay special inside double quotes; whitespace and other punctuation "
+    "are ordinary path characters."
 )
 # shell への補間形 (double-quoted な変数代入と double quote 内の展開に限る)。形状
 # 検証は deny-list なので、検証をすり抜けた文字が unquoted な位置に届く経路を塞ぐ.
@@ -109,15 +110,18 @@ QUOTED_ASSIGNMENT_SENTENCE = (
 REASSIGN_PER_CALL_SENTENCE = (
     "Shell state does not survive between Bash calls, so every Bash call in "
     "this recovery — each loop run, each grace wait and each exit check — "
-    "starts by re-establishing those three assignments in the same command; "
-    "a loop must never run with an unset `$OUT`, which would look like a "
-    "missing output file."
+    "starts by re-establishing those three assignments and setting that "
+    "call's own deadline `$end` from `$SECONDS` in the same command; a loop "
+    "must never run with an unset `$OUT`, which would look like a missing "
+    "output file, or an unset `$end`, which would never end the loop."
 )
-# sentinel path の正本 (案内行の絶対パス。run id 入りの run ごとのファイル).
+# sentinel path の正本 (案内行の絶対パス。run id 入りの run ごとのファイル)。切り出しは
+# 先頭の固定接頭辞と末尾の ` run=<id>` を境界にし、空白を含むパスも丸ごと取る.
 SENTINEL_PATH_SOURCE_SENTENCE = (
-    "Take the sentinel path from the absolute path in that same announcement "
-    "line; the wrapper writes one sentinel per run, so that path already "
-    "carries this run id."
+    "Take the sentinel path from that same announcement line as everything "
+    "between `terminal sentinel: ` and the trailing ` run=<id>` field, so a "
+    "path containing spaces is recovered whole; the wrapper writes one "
+    "sentinel per run, so that path already carries this run id."
 )
 # 案内行がまだ出ていないときの猶予待ち (回収予算には数えない).
 GRACE_WAIT_SENTENCE = (
