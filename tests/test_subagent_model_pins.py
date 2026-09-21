@@ -282,12 +282,20 @@ class ManageCodexRunnersModelAnnotationTest(unittest.TestCase):
     def test_user_facing_launch_instruction_lines_declare_model(self) -> None:
         """runner 起動を案内するユーザ向け指示文行は全て model を含む。
 
-        行の判別は `subagent_type` の言及で行う (Agent tool は起動 mode を選ぶ
-        parameter を持たないため、案内文で指定するのは model だけになる)。
+        行の判別は案内文に現れる指定形 (`subagent_type=\\"` の escaped literal と
+        `subagent_type に指定` の自然文) で行い、hook が request payload を読む実装行
+        (`tool_input?.subagent_type` 等) は対象にしない。Agent tool は起動 mode を選ぶ
+        parameter を持たないため、案内文で指定するのは model だけになる。
         """
         body = read(MANAGE_CODEX_RUNNERS)
+        instruction_markers = (
+            r'subagent_type=\"',
+            "subagent_type に指定",
+        )
         matching_lines = [
-            line for line in body.splitlines() if "subagent_type" in line
+            line
+            for line in body.splitlines()
+            if any(marker in line for marker in instruction_markers)
         ]
         self.assertTrue(
             matching_lines,
