@@ -157,6 +157,13 @@ on_exit() {
   write_terminal_sentinel "$1"
 }
 trap 'on_exit $?' EXIT
+# 信号による終了を EXIT trap に非ゼロの exit status として伝える。 信号の既定動作のまま
+# 終了すると EXIT trap の `$?` が直前のコマンドの 0 を引き継ぐことがあり、 review を
+# 完了していない run の sentinel が `status=ok` になる経路が生じるため、 128 + 信号番号で
+# 明示的に exit する。
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # stderr に人間可読のエラーを出して非ゼロ exit する helper。 set -e と組み合わせて使う。
 fail() {
