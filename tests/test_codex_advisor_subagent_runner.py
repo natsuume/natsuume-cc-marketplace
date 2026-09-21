@@ -4,8 +4,8 @@ Phase A では次の public seam を固定する。
 
 1. hook JSON I/O: Codex model 起動を role 固有 runner に限定し、direct deny から
    SubagentStart / SubagentStop / Stop までの session-scoped state を遷移させる。
-2. plugin artifact: rescue / review / advisor runner と consult Skill が、foreground
-   subagent・companion job ID・status/result recovery の契約を明示する。
+2. plugin artifact: rescue / review / advisor runner と consult Skill が、subagent 内での
+   model 起動・companion job ID・status/result recovery の契約を明示する。
 
 private helper の構成、poll 回数、state file 名には結合しない。
 """
@@ -905,8 +905,6 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
                 self.assertTrue(path.is_file(), path)
                 contents = path.read_text(encoding="utf-8")
                 self.assertIn(f"name: {operation}-runner", contents)
-                self.assertIn("run_in_background: false", contents)
-                self.assertIn("TaskOutput", contents)
                 self.assertIn("status", contents)
                 self.assertIn("result", contents)
                 self.assertIn("plugin cache", contents)
@@ -959,7 +957,6 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
         contents = CONSULT.read_text(encoding="utf-8")
         self.assertIn(RUNNERS["advisor"], contents)
         self.assertIn("Agent", contents)
-        self.assertIn("run_in_background: false", contents)
         self.assertNotIn(
             'bash "<plugin-root>/scripts/run-codex-advisor.sh" <', contents
         )
