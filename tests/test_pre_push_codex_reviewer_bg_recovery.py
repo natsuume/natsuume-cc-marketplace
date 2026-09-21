@@ -1,16 +1,18 @@
 """pre-push-codex-review:codex-reviewer の background-move 回収契約テスト。
 
 Bash tool は timeout 時に wrapper 実行を kill せず background へ移行させ、その実行の
-出力先 file path を結果に載せる。codex-reviewer subagent は wrapper の completion
-marker が現れるまで Monitor tool の watch で待ち、marker のイベントが届いたら
-recorded output file を `Read` して回収し、既存の parent-safe report 契約へ
-normalize する。
+出力先 file path を結果に載せる。codex-reviewer subagent は wrapper が git-dir 直下に
+書く terminal sentinel の出現を Bash tool の polling loop で待ち、sentinel の
+`status=ok` / `status=failed` で終了状態を判定してから recorded output file を `Read`
+して回収し、既存の parent-safe report 契約へ normalize する。終端信号を sentinel
+ファイルに置くことで、判定は出力ストリームのテキストに依存しなくなり、待機を含む
+コマンド実行は `Bash` matcher の PreToolUse gate が観測できる 1 本に閉じる。
 
 本ファイルは、その回収契約を成す一文 (canonical 文) を module 定数として固定し、
 `## Background-move recovery` セクション内に空白正規化した上で存在することを検証する。
 pre-merge-codex-review 側の codex-reviewer も同じ回収契約に従うため、両 agent で共通の
 一文は `SHARED_RECOVERY_CLAUSES` として公開し、pre-merge 側の契約テストが再利用する
-(gate 名を含む resume 時の一文だけが plugin ごとに異なる)。
+(sentinel 名を含む一文と gate 名を含む resume 時の一文だけが plugin ごとに異なる)。
 """
 
 from __future__ import annotations
@@ -29,8 +31,14 @@ ROOT_README = ROOT / "README.md"
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
-TOOLS_LINE = "tools: Bash, Read, Monitor"
-TOOL_GRANT_LITERAL = "`Bash, Read, Monitor`"
+TOOLS_LINE = "tools: Bash, Read"
+TOOL_GRANT_LITERAL = "`Bash, Read`"
+# 待機を含むコマンド実行は Bash tool に閉じる。別のコマンド実行経路を持つ tool を
+# 案内すると、`Bash` matcher の PreToolUse gate が観測しない実行経路が増える。
+FORBIDDEN_EXECUTION_TOOL = "Monitor"
+# 終端判定は sentinel ファイルで行う。出力ストリーム中のテキストを終端信号にすると、
+# wrapper の進捗行と接頭辞を共有して一意に判定できない。
+FORBIDDEN_TERMINAL_CONCEPT = "completion marker"
 
 # Agent tool は起動 mode を選ぶパラメータを受け付けない。一方 Bash tool の同名 option は
 # 現行仕様でも有効なので、禁止対象は「Agent / subagent の起動を指示する文」に限る。
@@ -56,23 +64,48 @@ RECORD_SENTENCE = (
     "background-move result surfaces."
 )
 SECOND_RUN_SENTENCE = "Do not start a second wrapper run"
-# 待機手段 (Monitor の until-loop watch と 1 watch あたりの deadline).
+# 待機前の前提確認 (recorded output file の存在).
+PRECHECK_SENTENCE = (
+    "Before the first wait, confirm with the Bash tool that the recorded "
+    "output file exists."
+)
+# 待機手段 (Bash tool 1 回の until ポーリングループ).
 WAIT_SENTENCE = (
-    "Wait for that same background run with the Monitor tool: its `command` "
-    "is an until-loop that polls the recorded output file for the wrapper's "
-    "completion marker and exits as soon as the marker appears, and its "
-    "`timeout_ms` is 600000 (a 10-minute deadline for each watch)."
+    "Wait for that same background run with a single Bash call that runs the "
+    'until-loop `until [ -e "$SENTINEL" ] || [ ! -e "$OUT" ] || '
+    '[ $SECONDS -ge $end ]; do sleep 10; done`, where `$SENTINEL` is the '
+    "wrapper's terminal sentinel, `$OUT` is the recorded output file, and "
+    "`$end` is the loop's own deadline."
 )
-# 回収予算 (watch の総回数と合計時間).
+# ループ内 deadline と Bash tool timeout の関係 (auto-background を避ける).
+LOOP_DEADLINE_SENTENCE = (
+    "Give that loop a 9-minute deadline measured with `$SECONDS` and set the "
+    "Bash call's `timeout` to 600000 ms, so the loop always ends on its own "
+    "before the tool timeout could move it to the background."
+)
+# 単独 foreground sleep の禁止 (Bash tool が拒否する).
+NO_STANDALONE_SLEEP_SENTENCE = (
+    "Never call a standalone foreground `sleep`; the Bash tool rejects it, "
+    "and the only wait in this recovery is the `sleep 10` inside that until "
+    "loop."
+)
+# 回収予算 (ループの総実行回数と合計時間).
 BUDGET_DEFINITION_SENTENCE = (
-    "For the initial automatic recovery, arm at most three such watches in "
-    "total — a 30-minute recovery budget — re-arming the watch only when one "
-    "expires at its deadline without the marker."
+    "For the initial automatic recovery, run that loop at most three times in "
+    "total — the initial run plus two reruns, roughly a 30-minute recovery "
+    "budget — rerunning it only when it ended at its deadline without the "
+    "sentinel."
 )
-# marker イベント到着後の回収 (Read).
+# sentinel が示す終了状態の読み取り (failure 側).
+SENTINEL_FAILED_SENTENCE = (
+    "Once the sentinel exists, Read it first: a sentinel line of "
+    "`status=failed` means the wrapper stopped before finishing, so return "
+    "`Status: execution-failed` (failure class `other`)."
+)
+# sentinel が示す終了状態の読み取り (success 側) と回収.
 RECOVER_BY_READ_SENTENCE = (
-    "When the watch reports that the completion marker appeared, recover the "
-    "report body by Reading that recorded output file."
+    "When the sentinel line is `status=ok`, recover the report body by "
+    "Reading that recorded output file."
 )
 # path の出所要件 (同一 run 由来であれば、どの step が surface した path でもよい).
 PATH_PROVENANCE_SENTENCE = (
@@ -85,13 +118,6 @@ SOURCE_OF_TRUTH_SENTENCE = (
     "body: normalize what you Read and never complete it by re-reviewing "
     "the diff yourself."
 )
-# terminal 判定の基準 (wrapper の completion marker).
-TERMINAL_MARKER_SENTENCE = (
-    "The wrapper's completion marker is its final status line, which reports "
-    "either the review record it wrote or the failure that stopped it; an "
-    "output file whose tail does not carry that line has not reached a "
-    "terminal state."
-)
 # 回収成功後の report 契約への handoff.
 HANDOFF_SENTENCE = (
     "Once the recovered output reaches a terminal state, normalize it "
@@ -99,38 +125,39 @@ HANDOFF_SENTENCE = (
     "`Status: pass` or `Status: findings`, and a failed wrapper run yields "
     "`Status: execution-failed`."
 )
-# background 移行が起きなかった場合 (Monitor / Read 経路に入らない).
+# background 移行が起きなかった場合 (polling loop / Read 経路に入らない).
 NO_MOVE_SENTENCE = (
     "If the Bash result did not report a background move, its stdout is the "
-    "report body and this recovery section does not apply; do not arm a "
-    "watch and do not Read the output file in that case."
+    "report body and this recovery section does not apply; do not run the "
+    "polling loop and do not Read the output file in that case."
 )
-# Monitor と Read の適用範囲.
+# polling と Read の適用範囲.
 TOOL_SCOPE_SENTENCE = (
-    "Watch and Read only the recorded output file of this same background "
-    "run; do not watch or read other files and do not independently "
-    "re-review the diff."
+    "Poll and Read only this same background run's recorded output file and "
+    "its terminal sentinel; do not poll or read other files and do not "
+    "independently re-review the diff."
 )
 # 境界: output file path が得られなかった.
 NO_PATH_SENTENCE = (
     "If the background-move result surfaced no output file path, return "
     "`Status: execution-failed` (failure class `other`)."
 )
-# 境界: recorded output file が存在しない.
+# 境界: recorded output file が存在しない / 待機中に消えた.
 MISSING_FILE_SENTENCE = (
-    "If the recorded output file does not exist when the watch or the Read "
-    "reaches it, return `Status: execution-failed` (failure class `other`) "
-    "without re-arming the watch."
+    "If the recorded output file is missing before the first loop or "
+    "disappears while the loop is waiting, return `Status: execution-failed` "
+    "(failure class `other`) without rerunning the loop."
 )
-# 境界: recorded output file が空 (completion marker 未到達として待機継続).
+# 境界: recorded output file が空 (sentinel 未出現なら実行中として待機継続).
 EMPTY_FILE_SENTENCE = (
-    "If the recorded output file is empty (zero bytes), it has not reached "
-    "the completion marker: keep waiting within the recovery budget."
+    "If the recorded output file is empty (zero bytes) and the sentinel has "
+    "not appeared, the run is still in progress: keep waiting within the "
+    "recovery budget."
 )
-# 境界: 回収予算 (3 watch) の超過.
+# 境界: 回収予算 (3 回のループ) の超過.
 BUDGET_SENTENCE = (
-    "If the third watch expires without the completion marker, return "
-    "`Status: execution-failed` (failure class `other`), state in the "
+    "If the third run of the loop ends at its deadline without the sentinel, "
+    "return `Status: execution-failed` (failure class `other`), state in the "
     "recovery direction that the codex review is likely still running in the "
     "background, and note that the parent may resume this same subagent for "
     "a diagnostic status check only."
@@ -139,6 +166,14 @@ BUDGET_SENTENCE = (
 LOST_RUN_SENTENCE = (
     "If you can no longer tell which wrapper run the recorded output file "
     "belongs to, return `Status: execution-failed` (failure class `other`)."
+)
+
+# sentinel path の組み立て方 (固定名が plugin ごとに異なる).
+SENTINEL_NAME = "pre-push-codex-review-terminal"
+SENTINEL_PATH_SENTENCE = (
+    "Compose the sentinel path yourself from the git directory that "
+    "`git rev-parse --git-dir` prints and the fixed name "
+    f"`{SENTINEL_NAME}`."
 )
 # resume 後の status check の位置づけ (plugin ごとに gate 名が異なる).
 RESUME_CHECK_SENTENCE = (
@@ -154,15 +189,18 @@ SHARED_RECOVERY_CLAUSES = {
     "precedence": PRECEDENCE_SENTENCE,
     "record-output-file-path": RECORD_SENTENCE,
     "no-second-run": SECOND_RUN_SENTENCE,
-    "monitor-wait": WAIT_SENTENCE,
+    "output-file-precheck": PRECHECK_SENTENCE,
+    "polling-loop-wait": WAIT_SENTENCE,
+    "loop-deadline": LOOP_DEADLINE_SENTENCE,
+    "no-standalone-sleep": NO_STANDALONE_SLEEP_SENTENCE,
     "budget-definition": BUDGET_DEFINITION_SENTENCE,
+    "sentinel-failed": SENTINEL_FAILED_SENTENCE,
     "recover-by-read": RECOVER_BY_READ_SENTENCE,
     "path-provenance": PATH_PROVENANCE_SENTENCE,
     "source-of-truth": SOURCE_OF_TRUTH_SENTENCE,
-    "completion-marker": TERMINAL_MARKER_SENTENCE,
     "report-contract-handoff": HANDOFF_SENTENCE,
     "no-background-move": NO_MOVE_SENTENCE,
-    "watch-and-read-scope": TOOL_SCOPE_SENTENCE,
+    "poll-and-read-scope": TOOL_SCOPE_SENTENCE,
     "boundary-no-output-path": NO_PATH_SENTENCE,
     "boundary-missing-output-file": MISSING_FILE_SENTENCE,
     "boundary-empty-output-file": EMPTY_FILE_SENTENCE,
@@ -175,6 +213,8 @@ RECOVERY_HEADING = "## Background-move recovery"
 FENCE_OPEN_PATTERN = re.compile(r"^(`{3,}|~{3,})")
 # 回収セクションを終端する見出し: 同レベル (`## `) と上位 (`# `)。
 SECTION_END_PATTERN = re.compile(r"^#{1,2} ")
+# 指示の単位を区切る list item の開始 (markdown の箇条書きと番号付きリスト)。
+LIST_ITEM_PATTERN = re.compile(r"^(?:[-*+]\s|\d+[.)]\s)")
 
 
 class UnclosedFenceError(ValueError):
@@ -253,18 +293,46 @@ def normalized_recovery_section(path: Path) -> str:
     return normalize(section)
 
 
-def agent_launch_mode_hits(text: str) -> list[str]:
-    """Agent 起動を指示する行のうち、起動 mode のパラメータを添えている行を返す。
+def instruction_units(text: str) -> list[tuple[int, str]]:
+    """本文を指示の単位に分割し、(開始行番号, 空白正規化した本文) の列を返す。
 
-    Agent / subagent を名指しする行だけを対象にするため、subagent 内部で wrapper を
+    単位は空行で区切り、list item の開始でも区切る。1 つの指示が改行で分断されていても
+    同じ単位にまとまるため、行単位では見えない組み合わせを検査できる。隣接する別々の
+    箇条書きが 1 単位に混ざることはない。
+    """
+    units: list[tuple[int, str]] = []
+    current: list[str] = []
+    start = 0
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            if current:
+                units.append((start, " ".join(current)))
+                current = []
+            continue
+        if LIST_ITEM_PATTERN.match(stripped) and current:
+            units.append((start, " ".join(current)))
+            current = []
+        if not current:
+            start = number
+        current.append(stripped)
+    if current:
+        units.append((start, " ".join(current)))
+    return units
+
+
+def agent_launch_mode_hits(text: str) -> list[str]:
+    """Agent 起動を指示する単位のうち、起動 mode のパラメータを添えたものを返す。
+
+    Agent / subagent を名指しする指示だけを対象にするため、subagent 内部で wrapper を
     plain な foreground Bash コマンドとして起動するという Bash レベルの説明は
     検出しない。
     """
     return [
-        f"L{number}: {line.strip()[:120]}"
-        for number, line in enumerate(text.splitlines(), start=1)
-        if AGENT_LAUNCH_MODE_PARAMETER in line
-        and any(marker in line for marker in AGENT_LAUNCH_MARKERS)
+        f"L{number}: {unit[:120]}"
+        for number, unit in instruction_units(text)
+        if AGENT_LAUNCH_MODE_PARAMETER in unit
+        and any(marker in unit for marker in AGENT_LAUNCH_MARKERS)
     ]
 
 
@@ -316,11 +384,19 @@ class ContractTestCase(unittest.TestCase):
 class CodexReviewerToolGrantTest(ContractTestCase):
     """回収に使うツールの公開契約 (frontmatter の tools 行)。"""
 
-    def test_tools_frontmatter_grants_bash_read_and_monitor(self) -> None:
+    def test_tools_frontmatter_grants_bash_and_read(self) -> None:
         self.assert_tools_line(CODEX_REVIEWER)
 
     def test_agent_body_never_mentions_task_output(self) -> None:
         self.assert_text_absent(CODEX_REVIEWER, "TaskOutput")
+
+    def test_agent_body_never_mentions_a_second_execution_tool(self) -> None:
+        """待機を含むコマンド実行は Bash tool に閉じる (実行経路を 1 本に保つ)。"""
+        self.assert_text_absent(CODEX_REVIEWER, FORBIDDEN_EXECUTION_TOOL)
+
+    def test_agent_body_never_uses_output_text_as_terminal_signal(self) -> None:
+        """終端判定は sentinel ファイルで行い、出力テキストに依存しない。"""
+        self.assert_text_absent(CODEX_REVIEWER, FORBIDDEN_TERMINAL_CONCEPT)
 
     def test_agent_body_does_not_deny_read(self) -> None:
         """Read を許可しない旨に読める文言が本文に無い (tools 行との矛盾を防ぐ)。"""
@@ -358,13 +434,28 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovery_forbids_second_wrapper_run(self) -> None:
         self.assert_clause(SECOND_RUN_SENTENCE)
 
-    def test_recovery_waits_with_a_monitor_until_loop(self) -> None:
+    def test_recovery_composes_the_sentinel_path_from_the_git_dir(self) -> None:
+        self.assert_clause(SENTINEL_PATH_SENTENCE)
+
+    def test_recovery_checks_the_output_file_before_waiting(self) -> None:
+        self.assert_clause(PRECHECK_SENTENCE)
+
+    def test_recovery_waits_with_a_bash_until_loop(self) -> None:
         self.assert_clause(WAIT_SENTENCE)
 
-    def test_recovery_budget_bounds_monitor_watches(self) -> None:
+    def test_loop_deadline_precedes_the_bash_tool_timeout(self) -> None:
+        self.assert_clause(LOOP_DEADLINE_SENTENCE)
+
+    def test_recovery_forbids_a_standalone_foreground_sleep(self) -> None:
+        self.assert_clause(NO_STANDALONE_SLEEP_SENTENCE)
+
+    def test_recovery_budget_bounds_polling_loop_runs(self) -> None:
         self.assert_clause(BUDGET_DEFINITION_SENTENCE)
 
-    def test_recovery_reads_output_file_after_marker_event(self) -> None:
+    def test_failed_sentinel_ends_execution_failed(self) -> None:
+        self.assert_clause(SENTINEL_FAILED_SENTENCE)
+
+    def test_ok_sentinel_recovers_the_body_by_reading_the_output_file(self) -> None:
         self.assert_clause(RECOVER_BY_READ_SENTENCE)
 
     def test_output_file_path_from_any_step_of_same_run_is_usable(self) -> None:
@@ -373,16 +464,13 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovered_report_body_comes_from_the_output_file(self) -> None:
         self.assert_clause(SOURCE_OF_TRUTH_SENTENCE)
 
-    def test_completion_marker_defines_terminal_state(self) -> None:
-        self.assert_clause(TERMINAL_MARKER_SENTENCE)
-
     def test_recovered_terminal_state_routes_through_report_contract(self) -> None:
         self.assert_clause(HANDOFF_SENTENCE)
 
     def test_absent_background_move_keeps_bash_stdout_as_report(self) -> None:
         self.assert_clause(NO_MOVE_SENTENCE)
 
-    def test_watch_and_read_scope_limited_to_recorded_output_file(self) -> None:
+    def test_poll_and_read_scope_limited_to_the_same_run(self) -> None:
         self.assert_clause(TOOL_SCOPE_SENTENCE)
 
     def test_boundary_no_output_file_path_ends_execution_failed(self) -> None:
@@ -409,6 +497,7 @@ class CodexReviewerDocumentationTest(ContractTestCase):
 
     def test_plugin_readme_documents_current_tool_grant(self) -> None:
         self.assert_text_absent(PLUGIN_README, "TaskOutput")
+        self.assert_text_absent(PLUGIN_README, FORBIDDEN_EXECUTION_TOOL)
         self.assert_text_contains(PLUGIN_README, TOOL_GRANT_LITERAL)
 
     def test_plugin_readme_omits_agent_launch_mode_parameter(self) -> None:
@@ -429,10 +518,18 @@ class AgentLaunchModeHelperTest(unittest.TestCase):
         )
         self.assertEqual(len(agent_launch_mode_hits(text)), 1)
 
+    def test_agent_launch_split_across_lines_is_detected(self) -> None:
+        text = (
+            "**指示**: `pre-merge-codex-review:codex-reviewer` を Agent tool で\n"
+            '`model: "sonnet"`、foreground (`run_in_background: false`) で\n'
+            "起動し、report を受け取る\n"
+        )
+        self.assertEqual(len(agent_launch_mode_hits(text)), 1)
+
     def test_bash_level_description_is_not_detected(self) -> None:
         text = (
-            "subagent body は wrapper を `run_in_background: false` で 1 回起動し、"
-            "raw output を final reply へコピーしない\n"
+            "- subagent body は wrapper を `run_in_background: false` で 1 回起動する\n"
+            "- exact detail の確認が必要なら同一 codex-reviewer を resume する\n"
         )
         self.assertEqual(agent_launch_mode_hits(text), [])
 

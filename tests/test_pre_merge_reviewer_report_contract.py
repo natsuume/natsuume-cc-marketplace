@@ -44,7 +44,16 @@ _shared_contract = _load_shared_recovery_contract()
 ContractTestCase = _shared_contract.ContractTestCase
 SHARED_RECOVERY_CLAUSES = _shared_contract.SHARED_RECOVERY_CLAUSES
 TOOL_GRANT_LITERAL = _shared_contract.TOOL_GRANT_LITERAL
+FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
+FORBIDDEN_TERMINAL_CONCEPT = _shared_contract.FORBIDDEN_TERMINAL_CONCEPT
 
+# wrapper が書く terminal sentinel の固定名 (plugin ごとに異なる)。
+SENTINEL_NAME = "pre-merge-codex-review-terminal"
+SENTINEL_PATH_SENTENCE = (
+    "Compose the sentinel path yourself from the git directory that "
+    "`git rev-parse --git-dir` prints and the fixed name "
+    f"`{SENTINEL_NAME}`."
+)
 # resume 後の status check の位置づけ。merge gate はローカル記録を検証するため、
 # 診断目的の再読では gate を満たせないことを pre-merge 側の文言で固定する。
 RESUME_CHECK_SENTENCE = (
@@ -108,11 +117,19 @@ class PreMergeReviewerParentSafeReportContractTest(unittest.TestCase):
 class PreMergeReviewerToolGrantTest(ContractTestCase):
     """回収に使うツールの公開契約 (frontmatter の tools 行)。"""
 
-    def test_tools_frontmatter_grants_bash_read_and_monitor(self) -> None:
+    def test_tools_frontmatter_grants_bash_and_read(self) -> None:
         self.assert_tools_line(AGENT)
 
     def test_agent_body_never_mentions_task_output(self) -> None:
         self.assert_text_absent(AGENT, "TaskOutput")
+
+    def test_agent_body_never_mentions_a_second_execution_tool(self) -> None:
+        """待機を含むコマンド実行は Bash tool に閉じる (実行経路を 1 本に保つ)。"""
+        self.assert_text_absent(AGENT, FORBIDDEN_EXECUTION_TOOL)
+
+    def test_agent_body_never_uses_output_text_as_terminal_signal(self) -> None:
+        """終端判定は sentinel ファイルで行い、出力テキストに依存しない。"""
+        self.assert_text_absent(AGENT, FORBIDDEN_TERMINAL_CONCEPT)
 
     def test_agent_body_omits_agent_launch_mode_parameter(self) -> None:
         self.assert_no_agent_launch_mode_parameter(AGENT)
@@ -126,6 +143,9 @@ class PreMergeReviewerBackgroundMoveRecoveryTest(ContractTestCase):
             with self.subTest(clause=clause):
                 self.assert_recovery_clause(AGENT, sentence)
 
+    def test_recovery_composes_the_sentinel_path_from_the_git_dir(self) -> None:
+        self.assert_recovery_clause(AGENT, SENTINEL_PATH_SENTENCE)
+
     def test_resumed_status_check_is_bounded_and_diagnostic_only(self) -> None:
         self.assert_recovery_clause(AGENT, RESUME_CHECK_SENTENCE)
 
@@ -135,6 +155,7 @@ class PreMergeReviewerDocumentationTest(ContractTestCase):
 
     def test_plugin_readme_documents_current_tool_grant(self) -> None:
         self.assert_text_absent(PLUGIN_README, "TaskOutput")
+        self.assert_text_absent(PLUGIN_README, FORBIDDEN_EXECUTION_TOOL)
         self.assert_text_contains(PLUGIN_README, TOOL_GRANT_LITERAL)
 
     def test_plugin_readme_omits_agent_launch_mode_parameter(self) -> None:

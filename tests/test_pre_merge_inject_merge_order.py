@@ -67,22 +67,32 @@ REQUIRED_PROMPT_SUBSTRINGS = [
     FIXED_PROMPT_SENTENCE,
 ]
 
+# report 受領 → findings の分類・対応 → `gh pr merge` という順序を示す定型文。
+FINDINGS_TRIAGE_SENTENCE = "report の findings を分類・対応し"
+REPORT_BEFORE_MERGE_SENTENCE = "report を受け取った後の `gh pr merge`"
+ORDERING_PROMPT_SUBSTRINGS = [
+    FINDINGS_TRIAGE_SENTENCE,
+    REPORT_BEFORE_MERGE_SENTENCE,
+]
+
 _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
 
-def _load_agent_launch_mode_hits():
-    """Agent 起動指示の起動 mode 指定を検出する共有 helper を読み込む。
+def _load_shared_contract():
+    """codex-reviewer の文言契約 helper を持つ共有 module を読み込む。
 
     `import` 文で書くと「sys.path 操作より前に import 文が来る」という lint 制約
     (E402) に抵触するため、既存テストと同じ importlib 経由の明示 import にする。
     """
-    module = importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
-    return module.agent_launch_mode_hits
+    return importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
 
 
-agent_launch_mode_hits = _load_agent_launch_mode_hits()
+_shared_contract = _load_shared_contract()
+
+agent_launch_mode_hits = _shared_contract.agent_launch_mode_hits
+FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 
 FORBIDDEN_DESCRIPTION_SUBSTRINGS = ["gh pr merge", "merge gate", "deny", "投稿"]
 REQUIRED_DESCRIPTION_SUBSTRINGS = ["read-only", "parent-safe"]
@@ -280,10 +290,43 @@ class PromptContractTest(unittest.TestCase):
             with self.subTest(substring=substring):
                 self.assertIn(substring, text)
 
+    def test_prompt_requires_report_before_merge_ordering(self) -> None:
+        """report 受領 → findings の分類・対応 → `gh pr merge` の順序を固定する。
+
+        この順序は subagent の起動 mode の表現とは独立した規律なので、起動指示の
+        書き方が変わっても失われないよう別の assertion で固定する。
+        """
+        text = self._read_prompt()
+        for substring in ORDERING_PROMPT_SUBSTRINGS:
+            with self.subTest(substring=substring):
+                self.assertIn(substring, text)
+        findings_index = text.find(FINDINGS_TRIAGE_SENTENCE)
+        merge_index = text.find(REPORT_BEFORE_MERGE_SENTENCE)
+        self.assertNotEqual(findings_index, -1)
+        self.assertNotEqual(merge_index, -1)
+        self.assertLess(
+            findings_index,
+            merge_index,
+            "findings の分類・対応より後に merge へ進む順序になっていない",
+        )
+
     def test_prompt_omits_agent_launch_mode_parameter(self) -> None:
         """Agent tool は起動 mode を選ぶパラメータを受け付けないため指示しない。"""
         hits = agent_launch_mode_hits(self._read_prompt())
         self.assertEqual(hits, [], "Agent 起動指示の起動 mode 指定が残っている")
+
+    def test_prompt_never_mentions_a_second_execution_tool(self) -> None:
+        """subagent のコマンド実行経路は Bash tool 1 本に閉じる。"""
+        hits = [
+            f"L{number}: {line.strip()[:120]}"
+            for number, line in enumerate(
+                self._read_prompt().splitlines(), start=1
+            )
+            if FORBIDDEN_EXECUTION_TOOL in line
+        ]
+        self.assertEqual(
+            hits, [], f"{FORBIDDEN_EXECUTION_TOOL} の言及が残っている"
+        )
 
     def test_prompt_has_no_issue_pr_number_or_date_references(self) -> None:
         text = self._read_prompt()

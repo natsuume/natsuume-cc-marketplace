@@ -33,17 +33,19 @@ if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
 
-def _load_agent_launch_mode_hits():
-    """Agent 起動指示の起動 mode 指定を検出する共有 helper を読み込む。
+def _load_shared_contract():
+    """codex-reviewer の文言契約 helper を持つ共有 module を読み込む。
 
     `import` 文で書くと「sys.path 操作より前に import 文が来る」という lint 制約
     (E402) に抵触するため、既存テストと同じ importlib 経由の明示 import にする。
     """
-    module = importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
-    return module.agent_launch_mode_hits
+    return importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
 
 
-agent_launch_mode_hits = _load_agent_launch_mode_hits()
+_shared_contract = _load_shared_contract()
+
+agent_launch_mode_hits = _shared_contract.agent_launch_mode_hits
+FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 
 PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
 PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
@@ -1152,6 +1154,20 @@ class CheckpointLaunchInstructionTest(unittest.TestCase):
     def test_injected_rules_declare_checkpoint_runner_model(self) -> None:
         text = CADENCE_RULES_PROMPT.read_text(encoding="utf-8")
         self.assertIn('`model: "sonnet"`', text)
+
+    def test_injected_rules_never_mention_a_second_execution_tool(self) -> None:
+        """subagent のコマンド実行経路は Bash tool 1 本に閉じる。"""
+        hits = [
+            f"L{number}: {line.strip()[:120]}"
+            for number, line in enumerate(
+                CADENCE_RULES_PROMPT.read_text(encoding="utf-8").splitlines(),
+                start=1,
+            )
+            if FORBIDDEN_EXECUTION_TOOL in line
+        ]
+        self.assertEqual(
+            hits, [], f"{FORBIDDEN_EXECUTION_TOOL} の言及が残っている"
+        )
 
 
 if __name__ == "__main__":
