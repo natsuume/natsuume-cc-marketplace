@@ -106,8 +106,13 @@ FORBIDDEN_AGENT_MODE_PHRASES = (
 # runner 内部の Bash 呼び出しも起動 mode を指定しない (timeout で background へ移行
 # しうるため、foreground であることを前提にした手順を書かない)。
 FORBIDDEN_RUNNER_BASH_PHRASE = "foreground Bash"
-# 同一 turn 内で terminal report を待つことはできない。
-FORBIDDEN_WAIT_IN_TURN_PHRASES = ("turn を終了しない", "ターンを終了しない")
+# 同一 turn 内で terminal report を待つことはできない (hook の deny / Stop 文言が使う
+# 「terminal report まで待って」の形も同じ指示なので対象にする)。
+FORBIDDEN_WAIT_IN_TURN_PHRASES = (
+    "turn を終了しない",
+    "ターンを終了しない",
+    "terminal report まで待って",
+)
 # 経緯記述 (過去の仕様の説明) を配送 prompt・README・コードコメントに残さない。
 FORBIDDEN_HISTORY_PHRASES = (
     "以前は",
@@ -1041,7 +1046,9 @@ class CancelTimeoutTest(unittest.TestCase):
             fake_bin.mkdir()
             fake_node = fake_bin / "node"
             # cancel が返らない companion。wrapper 側の timeout だけが実行を終わらせる。
-            fake_node.write_text("#!/bin/bash\nsleep 5\n", encoding="utf-8")
+            # `exec` で stub 自身が sleep になり、孫プロセスが stdio の pipe を握って
+            # 経過時間を伸ばさないようにする (測るのは直接の子に対する timeout)。
+            fake_node.write_text("#!/bin/bash\nexec sleep 5\n", encoding="utf-8")
             fake_node.chmod(0o755)
             env = {
                 "HOME": str(temp / "home"),
