@@ -1,8 +1,10 @@
 """pre-push-codex-review:codex-reviewer の background-move 回収契約テスト。
 
 Bash tool は timeout 時に wrapper 実行を kill せず background へ移行させ、その実行の
-出力先 file path を結果に載せる。codex-reviewer subagent は移行後の出力をこの output
-file の `Read` だけで回収し、既存の parent-safe report 契約へ normalize する。
+出力先 file path を結果に載せる。codex-reviewer subagent は wrapper の completion
+marker が現れるまで Monitor tool の watch で待ち、marker のイベントが届いたら
+recorded output file を `Read` して回収し、既存の parent-safe report 契約へ
+normalize する。
 
 本ファイルは、その回収契約を成す一文 (canonical 文) を module 定数として固定し、
 `## Background-move recovery` セクション内に空白正規化した上で存在することを検証する。
@@ -27,8 +29,19 @@ ROOT_README = ROOT / "README.md"
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
-TOOLS_LINE = "tools: Bash, Read"
-TOOL_GRANT_LITERAL = "`Bash, Read`"
+TOOLS_LINE = "tools: Bash, Read, Monitor"
+TOOL_GRANT_LITERAL = "`Bash, Read, Monitor`"
+
+# Agent tool は起動 mode を選ぶパラメータを受け付けない。一方 Bash tool の同名 option は
+# 現行仕様でも有効なので、禁止対象は「Agent / subagent の起動を指示する文」に限る。
+AGENT_LAUNCH_MODE_PARAMETER = "run_in_background: false"
+AGENT_LAUNCH_MARKERS = (
+    "codex-reviewer",
+    "advisor-runner",
+    "ADVISOR_CHECKPOINT_RUNNER",
+    "subagent_type",
+    "Agent tool",
+)
 
 # background 移行の分類 (回収経路と非ゼロ exit 経路の排他).
 PRECEDENCE_SENTENCE = (
@@ -43,11 +56,23 @@ RECORD_SENTENCE = (
     "background-move result surfaces."
 )
 SECOND_RUN_SENTENCE = "Do not start a second wrapper run"
-# 回収手段 (Read による recorded output file の再読).
-READ_RECOVERY_SENTENCE = (
-    "Recover by Reading the recorded output file of that same background "
-    "run, repeating until the file reaches a terminal state or the recovery "
-    "budget is exhausted."
+# 待機手段 (Monitor の until-loop watch と 1 watch あたりの deadline).
+WAIT_SENTENCE = (
+    "Wait for that same background run with the Monitor tool: its `command` "
+    "is an until-loop that polls the recorded output file for the wrapper's "
+    "completion marker and exits as soon as the marker appears, and its "
+    "`timeout_ms` is 600000 (a 10-minute deadline for each watch)."
+)
+# 回収予算 (watch の総回数と合計時間).
+BUDGET_DEFINITION_SENTENCE = (
+    "For the initial automatic recovery, arm at most three such watches in "
+    "total — a 30-minute recovery budget — re-arming the watch only when one "
+    "expires at its deadline without the marker."
+)
+# marker イベント到着後の回収 (Read).
+RECOVER_BY_READ_SENTENCE = (
+    "When the watch reports that the completion marker appeared, recover the "
+    "report body by Reading that recorded output file."
 )
 # path の出所要件 (同一 run 由来であれば、どの step が surface した path でもよい).
 PATH_PROVENANCE_SENTENCE = (
@@ -60,18 +85,12 @@ SOURCE_OF_TRUTH_SENTENCE = (
     "body: normalize what you Read and never complete it by re-reviewing "
     "the diff yourself."
 )
-# terminal 判定の基準 (wrapper の終了マーカー).
+# terminal 判定の基準 (wrapper の completion marker).
 TERMINAL_MARKER_SENTENCE = (
-    "The output file has reached a terminal state only when its tail "
-    "carries the wrapper's completion marker — the wrapper's final status "
-    "line, which reports either the review record it wrote or the failure "
-    "that stopped it."
-)
-# 回収予算 (Read 回数の上限と再読の間隔).
-BUDGET_DEFINITION_SENTENCE = (
-    "For the initial automatic recovery, make at most five Read calls on "
-    "that output file, and wait between two consecutive Reads with a single "
-    "Bash `sleep 60` command."
+    "The wrapper's completion marker is its final status line, which reports "
+    "either the review record it wrote or the failure that stopped it; an "
+    "output file whose tail does not carry that line has not reached a "
+    "terminal state."
 )
 # 回収成功後の report 契約への handoff.
 HANDOFF_SENTENCE = (
@@ -80,16 +99,17 @@ HANDOFF_SENTENCE = (
     "`Status: pass` or `Status: findings`, and a failed wrapper run yields "
     "`Status: execution-failed`."
 )
-# background 移行が起きなかった場合 (Read 経路に入らない).
+# background 移行が起きなかった場合 (Monitor / Read 経路に入らない).
 NO_MOVE_SENTENCE = (
     "If the Bash result did not report a background move, its stdout is the "
-    "report body and this recovery section does not apply; do not Read the "
-    "output file in that case."
+    "report body and this recovery section does not apply; do not arm a "
+    "watch and do not Read the output file in that case."
 )
-# Read の適用範囲.
+# Monitor と Read の適用範囲.
 TOOL_SCOPE_SENTENCE = (
-    "Read only the recorded output file of this same background run; do not "
-    "read other files or independently re-review the diff."
+    "Watch and Read only the recorded output file of this same background "
+    "run; do not watch or read other files and do not independently "
+    "re-review the diff."
 )
 # 境界: output file path が得られなかった.
 NO_PATH_SENTENCE = (
@@ -98,22 +118,22 @@ NO_PATH_SENTENCE = (
 )
 # 境界: recorded output file が存在しない.
 MISSING_FILE_SENTENCE = (
-    "If the recorded output file does not exist when you Read it, return "
-    "`Status: execution-failed` (failure class `other`) without further "
-    "Reads."
+    "If the recorded output file does not exist when the watch or the Read "
+    "reaches it, return `Status: execution-failed` (failure class `other`) "
+    "without re-arming the watch."
 )
-# 境界: recorded output file が空 (終了マーカー未到達として再読継続).
+# 境界: recorded output file が空 (completion marker 未到達として待機継続).
 EMPTY_FILE_SENTENCE = (
     "If the recorded output file is empty (zero bytes), it has not reached "
-    "the completion marker: keep Reading it within the recovery budget."
+    "the completion marker: keep waiting within the recovery budget."
 )
-# 境界: 回収予算の超過.
+# 境界: 回収予算 (3 watch) の超過.
 BUDGET_SENTENCE = (
-    "If the recovery budget is exhausted before the output file reaches a "
-    "terminal state, return `Status: execution-failed` (failure class "
-    "`other`), state in the recovery direction that the codex review is "
-    "likely still running in the background, and note that the parent may "
-    "resume this same subagent for a diagnostic status check only."
+    "If the third watch expires without the completion marker, return "
+    "`Status: execution-failed` (failure class `other`), state in the "
+    "recovery direction that the codex review is likely still running in the "
+    "background, and note that the parent may resume this same subagent for "
+    "a diagnostic status check only."
 )
 # 境界: 回収対象の run を見失った.
 LOST_RUN_SENTENCE = (
@@ -134,14 +154,15 @@ SHARED_RECOVERY_CLAUSES = {
     "precedence": PRECEDENCE_SENTENCE,
     "record-output-file-path": RECORD_SENTENCE,
     "no-second-run": SECOND_RUN_SENTENCE,
-    "read-recovery": READ_RECOVERY_SENTENCE,
+    "monitor-wait": WAIT_SENTENCE,
+    "budget-definition": BUDGET_DEFINITION_SENTENCE,
+    "recover-by-read": RECOVER_BY_READ_SENTENCE,
     "path-provenance": PATH_PROVENANCE_SENTENCE,
     "source-of-truth": SOURCE_OF_TRUTH_SENTENCE,
-    "terminal-marker": TERMINAL_MARKER_SENTENCE,
-    "budget-definition": BUDGET_DEFINITION_SENTENCE,
+    "completion-marker": TERMINAL_MARKER_SENTENCE,
     "report-contract-handoff": HANDOFF_SENTENCE,
     "no-background-move": NO_MOVE_SENTENCE,
-    "read-scope": TOOL_SCOPE_SENTENCE,
+    "watch-and-read-scope": TOOL_SCOPE_SENTENCE,
     "boundary-no-output-path": NO_PATH_SENTENCE,
     "boundary-missing-output-file": MISSING_FILE_SENTENCE,
     "boundary-empty-output-file": EMPTY_FILE_SENTENCE,
@@ -232,6 +253,21 @@ def normalized_recovery_section(path: Path) -> str:
     return normalize(section)
 
 
+def agent_launch_mode_hits(text: str) -> list[str]:
+    """Agent 起動を指示する行のうち、起動 mode のパラメータを添えている行を返す。
+
+    Agent / subagent を名指しする行だけを対象にするため、subagent 内部で wrapper を
+    plain な foreground Bash コマンドとして起動するという Bash レベルの説明は
+    検出しない。
+    """
+    return [
+        f"L{number}: {line.strip()[:120]}"
+        for number, line in enumerate(text.splitlines(), start=1)
+        if AGENT_LAUNCH_MODE_PARAMETER in line
+        and any(marker in line for marker in AGENT_LAUNCH_MARKERS)
+    ]
+
+
 class ContractTestCase(unittest.TestCase):
     """md / mjs の文言契約を、失敗時に全文を出力せずに検証する assertion helper。
 
@@ -252,6 +288,12 @@ class ContractTestCase(unittest.TestCase):
         if hits:
             joined = " / ".join(hits)
             self.fail(f"{path}: {needle} の言及が残っている: {joined}")
+
+    def assert_no_agent_launch_mode_parameter(self, path: Path) -> None:
+        hits = agent_launch_mode_hits(read(path))
+        if hits:
+            joined = " / ".join(hits)
+            self.fail(f"{path}: Agent 起動指示の起動 mode 指定が残っている: {joined}")
 
     def assert_recovery_clause(self, path: Path, sentence: str) -> None:
         expected = normalize(sentence)
@@ -274,7 +316,7 @@ class ContractTestCase(unittest.TestCase):
 class CodexReviewerToolGrantTest(ContractTestCase):
     """回収に使うツールの公開契約 (frontmatter の tools 行)。"""
 
-    def test_tools_frontmatter_grants_bash_and_read(self) -> None:
+    def test_tools_frontmatter_grants_bash_read_and_monitor(self) -> None:
         self.assert_tools_line(CODEX_REVIEWER)
 
     def test_agent_body_never_mentions_task_output(self) -> None:
@@ -297,6 +339,9 @@ class CodexReviewerToolGrantTest(ContractTestCase):
                         f"{wording}"
                     )
 
+    def test_agent_body_omits_agent_launch_mode_parameter(self) -> None:
+        self.assert_no_agent_launch_mode_parameter(CODEX_REVIEWER)
+
 
 class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     """`## Background-move recovery` セクションが固定すべき回収契約の一文。"""
@@ -313,8 +358,14 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovery_forbids_second_wrapper_run(self) -> None:
         self.assert_clause(SECOND_RUN_SENTENCE)
 
-    def test_recovery_reads_recorded_output_file(self) -> None:
-        self.assert_clause(READ_RECOVERY_SENTENCE)
+    def test_recovery_waits_with_a_monitor_until_loop(self) -> None:
+        self.assert_clause(WAIT_SENTENCE)
+
+    def test_recovery_budget_bounds_monitor_watches(self) -> None:
+        self.assert_clause(BUDGET_DEFINITION_SENTENCE)
+
+    def test_recovery_reads_output_file_after_marker_event(self) -> None:
+        self.assert_clause(RECOVER_BY_READ_SENTENCE)
 
     def test_output_file_path_from_any_step_of_same_run_is_usable(self) -> None:
         self.assert_clause(PATH_PROVENANCE_SENTENCE)
@@ -322,11 +373,8 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovered_report_body_comes_from_the_output_file(self) -> None:
         self.assert_clause(SOURCE_OF_TRUTH_SENTENCE)
 
-    def test_terminal_state_is_defined_by_completion_marker(self) -> None:
+    def test_completion_marker_defines_terminal_state(self) -> None:
         self.assert_clause(TERMINAL_MARKER_SENTENCE)
-
-    def test_recovery_budget_bounds_reads_and_sleep_interval(self) -> None:
-        self.assert_clause(BUDGET_DEFINITION_SENTENCE)
 
     def test_recovered_terminal_state_routes_through_report_contract(self) -> None:
         self.assert_clause(HANDOFF_SENTENCE)
@@ -334,7 +382,7 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_absent_background_move_keeps_bash_stdout_as_report(self) -> None:
         self.assert_clause(NO_MOVE_SENTENCE)
 
-    def test_read_scope_limited_to_recorded_output_file(self) -> None:
+    def test_watch_and_read_scope_limited_to_recorded_output_file(self) -> None:
         self.assert_clause(TOOL_SCOPE_SENTENCE)
 
     def test_boundary_no_output_file_path_ends_execution_failed(self) -> None:
@@ -343,7 +391,7 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_boundary_missing_output_file_ends_execution_failed(self) -> None:
         self.assert_clause(MISSING_FILE_SENTENCE)
 
-    def test_boundary_empty_output_file_keeps_reading(self) -> None:
+    def test_boundary_empty_output_file_keeps_waiting(self) -> None:
         self.assert_clause(EMPTY_FILE_SENTENCE)
 
     def test_boundary_budget_exhausted_reports_still_running(self) -> None:
@@ -363,12 +411,37 @@ class CodexReviewerDocumentationTest(ContractTestCase):
         self.assert_text_absent(PLUGIN_README, "TaskOutput")
         self.assert_text_contains(PLUGIN_README, TOOL_GRANT_LITERAL)
 
-    def test_plugin_readme_omits_agent_launch_parameter(self) -> None:
-        self.assert_text_absent(PLUGIN_README, "run_in_background")
+    def test_plugin_readme_omits_agent_launch_mode_parameter(self) -> None:
+        self.assert_no_agent_launch_mode_parameter(PLUGIN_README)
 
     def test_root_readme_documents_current_tool_grant(self) -> None:
         self.assert_text_absent(ROOT_README, "Bash, TaskOutput, Read")
         self.assert_text_contains(ROOT_README, TOOL_GRANT_LITERAL)
+
+
+class AgentLaunchModeHelperTest(unittest.TestCase):
+    """`agent_launch_mode_hits` が Agent 起動指示だけを検出すること。"""
+
+    def test_agent_launch_line_is_detected(self) -> None:
+        text = (
+            '`pre-merge-codex-review:codex-reviewer` を Agent tool で '
+            '`model: "sonnet"`、foreground (`run_in_background: false`) で起動する\n'
+        )
+        self.assertEqual(len(agent_launch_mode_hits(text)), 1)
+
+    def test_bash_level_description_is_not_detected(self) -> None:
+        text = (
+            "subagent body は wrapper を `run_in_background: false` で 1 回起動し、"
+            "raw output を final reply へコピーしない\n"
+        )
+        self.assertEqual(agent_launch_mode_hits(text), [])
+
+    def test_agent_launch_line_without_the_parameter_is_not_detected(self) -> None:
+        text = (
+            '`pre-merge-codex-review:codex-reviewer` を Agent tool で '
+            '`model: "sonnet"` を指定して起動する\n'
+        )
+        self.assertEqual(agent_launch_mode_hits(text), [])
 
 
 class RecoverySectionHelperTest(unittest.TestCase):

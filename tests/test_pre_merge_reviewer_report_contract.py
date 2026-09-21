@@ -108,11 +108,14 @@ class PreMergeReviewerParentSafeReportContractTest(unittest.TestCase):
 class PreMergeReviewerToolGrantTest(ContractTestCase):
     """回収に使うツールの公開契約 (frontmatter の tools 行)。"""
 
-    def test_tools_frontmatter_grants_bash_and_read(self) -> None:
+    def test_tools_frontmatter_grants_bash_read_and_monitor(self) -> None:
         self.assert_tools_line(AGENT)
 
     def test_agent_body_never_mentions_task_output(self) -> None:
         self.assert_text_absent(AGENT, "TaskOutput")
+
+    def test_agent_body_omits_agent_launch_mode_parameter(self) -> None:
+        self.assert_no_agent_launch_mode_parameter(AGENT)
 
 
 class PreMergeReviewerBackgroundMoveRecoveryTest(ContractTestCase):
@@ -134,8 +137,8 @@ class PreMergeReviewerDocumentationTest(ContractTestCase):
         self.assert_text_absent(PLUGIN_README, "TaskOutput")
         self.assert_text_contains(PLUGIN_README, TOOL_GRANT_LITERAL)
 
-    def test_plugin_readme_omits_agent_launch_parameter(self) -> None:
-        self.assert_text_absent(PLUGIN_README, "run_in_background")
+    def test_plugin_readme_omits_agent_launch_mode_parameter(self) -> None:
+        self.assert_no_agent_launch_mode_parameter(PLUGIN_README)
 
 
 if __name__ == "__main__":

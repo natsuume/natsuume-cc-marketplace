@@ -11,10 +11,12 @@ private helper の構成や state ファイル名の形式には結合しない�
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,6 +27,23 @@ PLUGIN = ROOT / "plugins" / "pre-push-codex-review"
 HOOK = PLUGIN / "hooks" / "scripts" / "manage-review-cadence.mjs"
 HOOKS_JSON = PLUGIN / "hooks" / "hooks.json"
 CADENCE_RULES_PROMPT = PLUGIN / "hooks" / "prompts" / "review-cadence-rules.md"
+
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
+
+def _load_agent_launch_mode_hits():
+    """Agent 起動指示の起動 mode 指定を検出する共有 helper を読み込む。
+
+    `import` 文で書くと「sys.path 操作より前に import 文が来る」という lint 制約
+    (E402) に抵触するため、既存テストと同じ importlib 経由の明示 import にする。
+    """
+    module = importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
+    return module.agent_launch_mode_hits
+
+
+agent_launch_mode_hits = _load_agent_launch_mode_hits()
 
 PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
 PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
@@ -1114,17 +1133,15 @@ class CheckpointLaunchInstructionTest(unittest.TestCase):
 
     Agent tool は起動 mode を選ぶパラメータを受け付けないため、SessionStart 注入文と
     cadence script の deny / Stop 文言はその指定を指示せず、`model` だけを明示する。
+    Bash tool の同名 option は現行仕様でも有効なので、検査対象は Agent / subagent を
+    名指しする行に限る。
     """
 
     def assert_no_launch_mode_parameter(self, path: Path) -> None:
-        hits = [
-            f"L{number}: {line.strip()[:120]}"
-            for number, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            )
-            if "run_in_background" in line
-        ]
-        self.assertEqual(hits, [], f"{path}: 起動 mode の指定指示が残っている")
+        hits = agent_launch_mode_hits(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            hits, [], f"{path}: Agent 起動指示の起動 mode 指定が残っている"
+        )
 
     def test_injected_rules_omit_launch_mode_parameter(self) -> None:
         self.assert_no_launch_mode_parameter(CADENCE_RULES_PROMPT)

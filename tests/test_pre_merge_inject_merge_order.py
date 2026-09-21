@@ -21,11 +21,13 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,9 +67,22 @@ REQUIRED_PROMPT_SUBSTRINGS = [
     FIXED_PROMPT_SENTENCE,
 ]
 
-# Agent tool は起動 mode を選ぶパラメータを受け付けないため、注入文はその指定を
-# 指示しない。
-FORBIDDEN_PROMPT_SUBSTRINGS = ["run_in_background"]
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
+
+def _load_agent_launch_mode_hits():
+    """Agent 起動指示の起動 mode 指定を検出する共有 helper を読み込む。
+
+    `import` 文で書くと「sys.path 操作より前に import 文が来る」という lint 制約
+    (E402) に抵触するため、既存テストと同じ importlib 経由の明示 import にする。
+    """
+    module = importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
+    return module.agent_launch_mode_hits
+
+
+agent_launch_mode_hits = _load_agent_launch_mode_hits()
 
 FORBIDDEN_DESCRIPTION_SUBSTRINGS = ["gh pr merge", "merge gate", "deny", "投稿"]
 REQUIRED_DESCRIPTION_SUBSTRINGS = ["read-only", "parent-safe"]
@@ -265,16 +280,10 @@ class PromptContractTest(unittest.TestCase):
             with self.subTest(substring=substring):
                 self.assertIn(substring, text)
 
-    def test_prompt_contains_no_forbidden_substrings(self) -> None:
-        text = self._read_prompt()
-        for substring in FORBIDDEN_PROMPT_SUBSTRINGS:
-            with self.subTest(substring=substring):
-                hits = [
-                    f"L{number}: {line.strip()[:120]}"
-                    for number, line in enumerate(text.splitlines(), start=1)
-                    if substring in line
-                ]
-                self.assertEqual(hits, [], f"{substring} の指定指示が残っている")
+    def test_prompt_omits_agent_launch_mode_parameter(self) -> None:
+        """Agent tool は起動 mode を選ぶパラメータを受け付けないため指示しない。"""
+        hits = agent_launch_mode_hits(self._read_prompt())
+        self.assertEqual(hits, [], "Agent 起動指示の起動 mode 指定が残っている")
 
     def test_prompt_has_no_issue_pr_number_or_date_references(self) -> None:
         text = self._read_prompt()
