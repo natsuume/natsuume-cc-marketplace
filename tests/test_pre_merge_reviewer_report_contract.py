@@ -47,12 +47,13 @@ TOOL_GRANT_LITERAL = _shared_contract.TOOL_GRANT_LITERAL
 FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 FORBIDDEN_TERMINAL_CONCEPT = _shared_contract.FORBIDDEN_TERMINAL_CONCEPT
 
-# wrapper が書く terminal sentinel の固定名 (plugin ごとに異なる)。
+# wrapper が書く terminal sentinel の固定名 (plugin ごとに異なる)。案内行から path を
+# 取れない場合の fallback としてだけ使う。
 SENTINEL_NAME = "pre-merge-codex-review-terminal"
 SENTINEL_PATH_SENTENCE = (
-    "Compose the sentinel path yourself from the git directory that "
-    "`git rev-parse --git-dir` prints and the fixed name "
-    f"`{SENTINEL_NAME}`."
+    "Only when the announcement line yields no path, compose the sentinel "
+    "path from the git directory that `git rev-parse --git-dir` prints and "
+    f"the fixed name `{SENTINEL_NAME}`."
 )
 # resume 後の status check の位置づけ。merge gate はローカル記録を検証するため、
 # 診断目的の再読では gate を満たせないことを pre-merge 側の文言で固定する。
@@ -143,7 +144,7 @@ class PreMergeReviewerBackgroundMoveRecoveryTest(ContractTestCase):
             with self.subTest(clause=clause):
                 self.assert_recovery_clause(AGENT, sentence)
 
-    def test_recovery_composes_the_sentinel_path_from_the_git_dir(self) -> None:
+    def test_sentinel_path_falls_back_to_the_fixed_name(self) -> None:
         self.assert_recovery_clause(AGENT, SENTINEL_PATH_SENTENCE)
 
     def test_resumed_status_check_is_bounded_and_diagnostic_only(self) -> None:

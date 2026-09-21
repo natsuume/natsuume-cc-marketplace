@@ -32,9 +32,12 @@ MARKERS_LIB = PLUGIN / "hooks" / "scripts" / "lib" / "markers.sh"
 SENTINEL_NAME = "pre-merge-codex-review-terminal"
 SENTINEL_PATH_HELPER = "pre_merge_terminal_sentinel_path"
 
-# 起動時に stderr へ出る案内行と、sentinel の 1 行の形式。
+# 起動時に stdout / stderr へ出る案内行と、sentinel の 1 行の形式。
 ANNOUNCEMENT_PATTERN = re.compile(r"terminal sentinel: (?P<path>\S+) run=(?P<run>\S+)")
 SENTINEL_LINE_PATTERN = re.compile(r"\Astatus=(?P<status>ok|failed) run=(?P<run>\S+)\Z")
+# run id は `<pid>-<epoch 秒>-<8 桁の 16 進>`。待機ループが `grep -qE " run=<id>$"` で
+# 照合するため、正規表現のメタ文字を含まない文字集合 ([0-9a-f-]) に限る。
+RUN_ID_PATTERN = re.compile(r"\A[0-9]+-[0-9]+-[0-9a-f]{8}\Z")
 
 GIT = shutil.which("git")
 BASH = shutil.which("bash")
@@ -123,6 +126,15 @@ class WrapperTerminalSentinelTest(unittest.TestCase):
             )
         self.assertEqual(match.group("path"), str(self.sentinel_path(repository)))
         return match.group("run")
+
+    @unittest.skipUnless(PREREQUISITES, "requires gh, jq and node")
+    def test_run_id_has_the_fixed_shape(self) -> None:
+        """run id は `<pid>-<epoch 秒>-<8 桁の 16 進>` で、正規表現メタ文字を含まない。"""
+        repository = self.make_repository()
+        self.git("switch", "--detach", "HEAD", cwd=repository)
+        run_id = self.announced_run_id(repository, self.run_wrapper(repository))
+        if RUN_ID_PATTERN.match(run_id) is None:
+            self.fail(f"run id が想定の形式ではない: {run_id}")
 
     def assert_sentinel(
         self, repository: Path, *, status: str, run_id: str

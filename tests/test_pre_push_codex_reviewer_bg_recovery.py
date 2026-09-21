@@ -85,6 +85,19 @@ RUN_ID_SENTENCE = (
     "run=<id>` announcement line; reuse that one run id for the rest of this "
     "recovery."
 )
+# sentinel path の正本 (案内行の絶対パス).
+SENTINEL_PATH_SOURCE_SENTENCE = (
+    "Take the sentinel path from the absolute path in that same announcement "
+    "line."
+)
+# 案内行がまだ出ていないときの猶予待ち (回収予算には数えない).
+GRACE_WAIT_SENTENCE = (
+    "If that head Read finds no announcement line, wait once with a short "
+    "Bash until-loop `until grep -q 'terminal sentinel:' \"$OUT\" || "
+    "[ $SECONDS -ge $end ]; do sleep 5; done` whose deadline is 30 seconds, "
+    "then Read the head again; this grace wait is not one of the recovery "
+    "budget's loop runs."
+)
 # 案内行は wrapper 自身の起動通知であり、report 本文の finding ではない.
 ANNOUNCEMENT_NOT_A_FINDING_SENTENCE = (
     "The announcement line is the wrapper's own startup notice at the top of "
@@ -93,7 +106,7 @@ ANNOUNCEMENT_NOT_A_FINDING_SENTENCE = (
 # 待機手段 (Bash tool 1 回の until ポーリングループ。述語は run id 一致まで含む).
 WAIT_SENTENCE = (
     "Wait for that same background run with a single Bash call that runs the "
-    'until-loop `until { [ -e "$SENTINEL" ] && grep -q "run=$RUN_ID" '
+    'until-loop `until { [ -e "$SENTINEL" ] && grep -qE " run=${RUN_ID}$" '
     '"$SENTINEL"; } || [ ! -e "$OUT" ] || [ $SECONDS -ge $end ]; do sleep 10; '
     "done`, where `$SENTINEL` is the wrapper's terminal sentinel, `$RUN_ID` "
     "is the run id you took before waiting, `$OUT` is the recorded output "
@@ -113,8 +126,8 @@ NO_STANDALONE_SLEEP_SENTENCE = (
 )
 # 回収予算 (ループの総実行回数と合計時間).
 BUDGET_DEFINITION_SENTENCE = (
-    "For the initial automatic recovery, run that loop at most three times in "
-    "total — the initial run plus two reruns, roughly a 30-minute recovery "
+    "For the initial automatic recovery, run that loop at most five times in "
+    "total — the initial run plus four reruns, roughly a 45-minute recovery "
     "budget — rerunning it only when it ended at its deadline without a "
     "matching sentinel."
 )
@@ -128,9 +141,9 @@ LOOP_EXIT_SENTENCE = (
 )
 # 述語が run id 一致を含むことの帰結 (別 run の sentinel は待機も予算も動かさない).
 SENTINEL_MATCH_SENTENCE = (
-    "Because the loop only accepts a sentinel carrying this run id, a "
-    "sentinel left by a different run neither ends the wait nor consumes the "
-    "recovery budget."
+    "The run id is matched in full against the end of the sentinel line, "
+    "never as a prefix, so a sentinel left by a different run neither ends "
+    "the wait nor consumes the recovery budget."
 )
 # sentinel が示す終了状態の読み取り (failure 側).
 SENTINEL_FAILED_SENTENCE = (
@@ -191,7 +204,7 @@ MISSING_FILE_SENTENCE = (
 )
 # 境界: 回収予算 (3 回のループ) の超過.
 BUDGET_SENTENCE = (
-    "If the third run of the loop ends at its deadline without a matching "
+    "If the fifth run of the loop ends at its deadline without a matching "
     "sentinel, return `Status: execution-failed` (failure class `other`), "
     "state in the recovery direction that the codex review is likely still "
     "running in the background, and note that the parent may resume this "
@@ -204,20 +217,20 @@ INCOMPLETE_BODY_SENTENCE = (
     "`status=ok`, return `Status: execution-failed` (failure class `other`) "
     "instead of normalizing a partial body."
 )
-# 境界: run を同定できない (案内行がまだ無い。空ファイルもここに含む).
+# 境界: 猶予待ちの後も run を同定できない (空ファイルもここに含む).
 UNIDENTIFIABLE_RUN_SENTENCE = (
-    "If that head Read finds no announcement line — including a recorded "
-    "output file that is still empty — this run cannot be identified: return "
-    "`Status: execution-failed` (failure class `other`) without entering the "
-    "wait loop."
+    "If the head Read after that grace wait still finds no announcement line "
+    "— including a recorded output file that is still empty — this run "
+    "cannot be identified: return `Status: execution-failed` (failure class "
+    "`other`) without entering the wait loop."
 )
 
-# sentinel path の組み立て方 (固定名が plugin ごとに異なる).
+# sentinel path の fallback (案内行から path が取れない場合。固定名は plugin ごと).
 SENTINEL_NAME = "pre-push-codex-review-terminal"
 SENTINEL_PATH_SENTENCE = (
-    "Compose the sentinel path yourself from the git directory that "
-    "`git rev-parse --git-dir` prints and the fixed name "
-    f"`{SENTINEL_NAME}`."
+    "Only when the announcement line yields no path, compose the sentinel "
+    "path from the git directory that `git rev-parse --git-dir` prints and "
+    f"the fixed name `{SENTINEL_NAME}`."
 )
 # resume 後の status check の位置づけ (plugin ごとに gate 名が異なる).
 RESUME_CHECK_SENTENCE = (
@@ -235,6 +248,8 @@ SHARED_RECOVERY_CLAUSES = {
     "no-second-run": SECOND_RUN_SENTENCE,
     "output-file-precheck": PRECHECK_SENTENCE,
     "run-id-from-announcement": RUN_ID_SENTENCE,
+    "sentinel-path-from-announcement": SENTINEL_PATH_SOURCE_SENTENCE,
+    "announcement-grace-wait": GRACE_WAIT_SENTENCE,
     "announcement-not-a-finding": ANNOUNCEMENT_NOT_A_FINDING_SENTENCE,
     "polling-loop-wait": WAIT_SENTENCE,
     "loop-deadline": LOOP_DEADLINE_SENTENCE,
@@ -513,7 +528,7 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovery_forbids_second_wrapper_run(self) -> None:
         self.assert_clause(SECOND_RUN_SENTENCE)
 
-    def test_recovery_composes_the_sentinel_path_from_the_git_dir(self) -> None:
+    def test_sentinel_path_falls_back_to_the_fixed_name(self) -> None:
         self.assert_clause(SENTINEL_PATH_SENTENCE)
 
     def test_recovery_checks_the_output_file_before_waiting(self) -> None:
@@ -521,6 +536,14 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
 
     def test_recovery_takes_the_run_id_from_the_announcement_line(self) -> None:
         self.assert_clause(RUN_ID_SENTENCE)
+
+    def test_recovery_takes_the_sentinel_path_from_the_announcement_line(
+        self,
+    ) -> None:
+        self.assert_clause(SENTINEL_PATH_SOURCE_SENTENCE)
+
+    def test_missing_announcement_line_gets_one_grace_wait(self) -> None:
+        self.assert_clause(GRACE_WAIT_SENTENCE)
 
     def test_announcement_line_is_not_normalized_into_a_finding(self) -> None:
         self.assert_clause(ANNOUNCEMENT_NOT_A_FINDING_SENTENCE)
