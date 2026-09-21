@@ -56,9 +56,10 @@ SENTINEL_PATH_SENTENCE = (
     "Only when the announcement line carries a run id but no path at all, "
     "compose the sentinel path from the absolute git directory that "
     "`git rev-parse --absolute-git-dir` prints, the fixed prefix "
-    f"`{SENTINEL_NAME_PREFIX}-` and this run id; a path that is present but "
-    "fails those checks is the unidentifiable-run boundary, not a case for "
-    "this fallback."
+    f"`{SENTINEL_NAME_PREFIX}-` and this run id, and put the composed path "
+    "through the same shape check before interpolating it; a path that is "
+    "present but fails those checks is the unidentifiable-run boundary, not a "
+    "case for this fallback."
 )
 # resume 後の status check の位置づけ。merge gate はローカル記録を検証するため、
 # 診断目的の再読では gate を満たせないことを pre-merge 側の文言で固定する。

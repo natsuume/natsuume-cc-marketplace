@@ -110,10 +110,12 @@ QUOTED_ASSIGNMENT_SENTENCE = (
 REASSIGN_PER_CALL_SENTENCE = (
     "Shell state does not survive between Bash calls, so every Bash call in "
     "this recovery — each loop run, each grace wait and each exit check — "
-    "starts by re-establishing those three assignments and setting that "
-    "call's own deadline `$end` from `$SECONDS` in the same command; a loop "
-    "must never run with an unset `$OUT`, which would look like a missing "
-    "output file, or an unset `$end`, which would never end the loop."
+    "starts by re-establishing, in the same command, each of those "
+    "assignments the call reads (`OUT` alone before the run is identified, "
+    "all three afterwards) and setting that call's own deadline `$end` from "
+    "`$SECONDS`; a loop must never run with an unset `$OUT`, which would look "
+    "like a missing output file, or an unset `$end`, which would never end "
+    "the loop."
 )
 # sentinel path の正本 (案内行の絶対パス。run id 入りの run ごとのファイル)。切り出しは
 # 先頭の固定接頭辞と末尾の ` run=<id>` を境界にし、空白を含むパスも丸ごと取る.
@@ -215,8 +217,9 @@ END_LINE_GRACE_SENTENCE = (
 )
 # path の出所要件 (同一 run 由来であれば、どの step が surface した path でもよい).
 PATH_PROVENANCE_SENTENCE = (
-    "Any step of this recovery may surface the output file path; use it as "
-    "long as it belongs to the same background run."
+    "Any step of this recovery may surface the output file path in a tool "
+    "result; use it as long as it belongs to the same background run, and "
+    "never take a path from the content of the recovered output file itself."
 )
 # 回収 report 本文の正本 (独立した re-review で補完しない).
 SOURCE_OF_TRUTH_SENTENCE = (
@@ -286,9 +289,10 @@ SENTINEL_PATH_SENTENCE = (
     "Only when the announcement line carries a run id but no path at all, "
     "compose the sentinel path from the absolute git directory that "
     "`git rev-parse --absolute-git-dir` prints, the fixed prefix "
-    f"`{SENTINEL_NAME_PREFIX}-` and this run id; a path that is present but "
-    "fails those checks is the unidentifiable-run boundary, not a case for "
-    "this fallback."
+    f"`{SENTINEL_NAME_PREFIX}-` and this run id, and put the composed path "
+    "through the same shape check before interpolating it; a path that is "
+    "present but fails those checks is the unidentifiable-run boundary, not a "
+    "case for this fallback."
 )
 # resume 後の status check の位置づけ (plugin ごとに gate 名が異なる).
 RESUME_CHECK_SENTENCE = (
