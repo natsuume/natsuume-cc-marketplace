@@ -441,7 +441,9 @@ const WRAPPER_STRIP_LIMIT = 8;
 
 // wrapper の後に来る「実行形の先頭語」として認識する basename。wrapper の option は値を
 // 別 token に取ることがある (`xargs -n 1` / `sudo -u user` 等) ため、option の arity を
-// 個別に持たず、これらのいずれか (または変数のまま解決できない語) が現れるまで読み飛ばす。
+// 個別に持たず、「option の直後にあり、かつ実行形の先頭語に見えない token」を option の値と
+// して読み飛ばす。option に続かない token は実行形として扱う (`sudo -u user cat <file>` の
+// `cat` を飛ばして後続の path を実行形と誤認しない)。
 const EXECUTABLE_HEADS = new Set([
   "node",
   "bash",
@@ -470,7 +472,20 @@ function commandWords(segment) {
     const head = basename(words[0] ?? "");
     if (COMMAND_WRAPPERS.includes(head)) {
       words.shift();
-      while (words.length > 0 && !looksLikeExecutableHead(words[0])) words.shift();
+      let previousWasOption = false;
+      while (words.length > 0) {
+        if (words[0].startsWith("-")) {
+          previousWasOption = true;
+          words.shift();
+          continue;
+        }
+        if (previousWasOption && !looksLikeExecutableHead(words[0])) {
+          previousWasOption = false;
+          words.shift();
+          continue;
+        }
+        break;
+      }
       continue;
     }
     if (head === "env") {

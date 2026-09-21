@@ -1066,6 +1066,12 @@ class PreToolUseGateHardeningTest(BackgroundRunnerHarness):
                 f'watch -n 5 bash "{JOB_HELPER_PATH}" review --scope branch',
                 "review",
             ),
+            # 値を取らない option の直後に実行形が来る形。option の値と誤認して実行形を
+            # 読み飛ばさない。
+            "sudo-flag-then-executable": (
+                f'sudo -E node "{COMPANION_PATH}" task --background',
+                "rescue",
+            ),
         }
         for name, (command, operation) in cases.items():
             with self.subTest(case=name):
@@ -1073,6 +1079,15 @@ class PreToolUseGateHardeningTest(BackgroundRunnerHarness):
                     self.hook_response(self.bash_payload(command)),
                     RUNNERS[operation],
                 )
+
+    def test_wrapped_reading_command_is_not_mistaken_for_a_launch(self) -> None:
+        """wrapper の後の実行形が読み取り command なら、後続の path を起動と誤認しない。"""
+        for command in (
+            f'sudo -u nobody cat "{JOB_HELPER_PATH}" advisor',
+            f'xargs -n 1 grep -n review "{COMPANION_PATH}"',
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(self.hook_response(self.bash_payload(command)))
 
     def test_variable_directory_with_a_literal_helper_name_is_classified(self) -> None:
         """directory だけが変数の先頭語は解決できるため fail-closed に落とさない。

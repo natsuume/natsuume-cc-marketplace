@@ -31,6 +31,9 @@ find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.
   Bash 呼び出しとして実行する
 - Bash tool の timeout で実行が background へ移行した場合は、Bash の結果が示す output file
   path を `Read` で読み、そこから job ID を取得する
+- review は companion を `--wait` で実行するため、output file には job ID ではなく review の
+  結果 (完了後の verdict / findings) が書かれる。output file に結果が揃っていればそれを採用し、
+  揃っていなければ手順 5 の snapshot 差分で job ID を特定して `status` / `result` に接続する
 - 取得した job ID で `status` / `result` を再実行して同じ job の回収を続け、新しい job を
   起動しない
 - `status --wait` は 1 回の Bash 呼び出しあたり `--timeout-ms` を 90000 以下にした slice と
