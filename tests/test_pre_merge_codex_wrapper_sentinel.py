@@ -1,10 +1,12 @@
 """pre-merge-codex-review の codex review wrapper が書く terminal sentinel の契約テスト。
 
-wrapper は git-dir を解決した直後に sentinel を捨て、EXIT trap で終了状態を 1 行
-(`status=ok` = exit 0 の全経路 / `status=failed` = fail 経路) だけ書く。background へ
-移行した wrapper の終了を codex-reviewer subagent はこの sentinel の出現で検知するため、
-sentinel は出力ストリームのテキストに依存しない唯一の終端信号になる。git-dir を解決
-できない (git repository でない) 場合は書き込み先が定まらないので sentinel を書かない。
+wrapper は起動ごとに一意な run id を作り、sentinel の絶対パスと run id を stderr の
+案内行 (`terminal sentinel: <絶対パス> run=<id>`) で知らせる。git-dir を解決した直後に
+sentinel を捨て、EXIT trap で終了状態を 1 行 (`status=<ok|failed> run=<id>`) だけ書く。
+background へ移行した wrapper の終了を codex-reviewer subagent はこの sentinel の出現で
+検知し、run id の一致で自分が待っている run のものだと確認するため、sentinel は出力
+ストリームのテキストに依存しない唯一の終端信号になる。git-dir を解決できない
+(git repository でない) 場合は書き込み先が定まらないので sentinel を書かない。
 
 テストは隔離した一時 git repository で wrapper を実行する。PR を解決できない状態で
 失敗する経路だけを使い、codex companion には到達させない。
@@ -13,6 +15,7 @@ sentinel は出力ストリームのテキストに依存しない唯一の終�
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -28,6 +31,10 @@ MARKERS_LIB = PLUGIN / "hooks" / "scripts" / "lib" / "markers.sh"
 # sentinel の固定名と、その path を組み立てる lib/markers.sh の helper。
 SENTINEL_NAME = "pre-merge-codex-review-terminal"
 SENTINEL_PATH_HELPER = "pre_merge_terminal_sentinel_path"
+
+# 起動時に stderr へ出る案内行と、sentinel の 1 行の形式。
+ANNOUNCEMENT_PATTERN = re.compile(r"terminal sentinel: (?P<path>\S+) run=(?P<run>\S+)")
+SENTINEL_LINE_PATTERN = re.compile(r"\Astatus=(?P<status>ok|failed) run=(?P<run>\S+)\Z")
 
 GIT = shutil.which("git")
 BASH = shutil.which("bash")
@@ -101,10 +108,27 @@ class WrapperTerminalSentinelTest(unittest.TestCase):
             timeout=120,
         )
 
-    def sentinel_lines(self, repository: Path) -> list[str]:
+    def announced_run_id(self, repository: Path, stderr: str) -> str:
+        """起動時の案内行から run id を取り出す (path の一致も確認する)。"""
+        match = ANNOUNCEMENT_PATTERN.search(stderr)
+        if match is None:
+            self.fail(f"起動時の sentinel 案内行が stderr に無い: {stderr[:300]}")
+        self.assertEqual(match.group("path"), str(self.sentinel_path(repository)))
+        return match.group("run")
+
+    def assert_sentinel(
+        self, repository: Path, *, status: str, run_id: str
+    ) -> None:
+        """sentinel が 1 行だけで、終了状態と run id を持つことを確認する。"""
         sentinel = self.sentinel_path(repository)
         self.assertTrue(sentinel.is_file(), f"missing sentinel: {sentinel}")
-        return sentinel.read_text(encoding="utf-8").splitlines()
+        lines = sentinel.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        match = SENTINEL_LINE_PATTERN.match(lines[0])
+        if match is None:
+            self.fail(f"{sentinel}: 想定の形式ではない: {lines[0]}")
+        self.assertEqual(match.group("status"), status)
+        self.assertEqual(match.group("run"), run_id)
 
     @unittest.skipUnless(PREREQUISITES, "requires gh, jq and node")
     def test_failing_run_records_failed_status(self) -> None:
@@ -112,17 +136,32 @@ class WrapperTerminalSentinelTest(unittest.TestCase):
         self.git("switch", "--detach", "HEAD", cwd=repository)
         result = self.run_wrapper(repository)
         self.assertNotEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.sentinel_lines(repository), ["status=failed"])
+        run_id = self.announced_run_id(repository, result.stderr)
+        self.assert_sentinel(repository, status="failed", run_id=run_id)
 
     @unittest.skipUnless(PREREQUISITES, "requires gh, jq and node")
     def test_startup_discards_a_stale_sentinel(self) -> None:
         repository = self.make_repository()
         self.sentinel_path(repository).write_text(
-            "status=ok\nstale second line\n", encoding="utf-8"
+            "status=ok run=stale-run-id\nstale second line\n", encoding="utf-8"
         )
         self.git("switch", "--detach", "HEAD", cwd=repository)
-        self.run_wrapper(repository)
-        self.assertEqual(self.sentinel_lines(repository), ["status=failed"])
+        result = self.run_wrapper(repository)
+        run_id = self.announced_run_id(repository, result.stderr)
+        self.assertNotEqual(run_id, "stale-run-id")
+        self.assert_sentinel(repository, status="failed", run_id=run_id)
+
+    @unittest.skipUnless(PREREQUISITES, "requires gh, jq and node")
+    def test_each_run_uses_a_distinct_run_id(self) -> None:
+        repository = self.make_repository()
+        self.git("switch", "--detach", "HEAD", cwd=repository)
+        first = self.announced_run_id(
+            repository, self.run_wrapper(repository).stderr
+        )
+        second = self.announced_run_id(
+            repository, self.run_wrapper(repository).stderr
+        )
+        self.assertNotEqual(first, second)
 
     def test_outside_a_git_repository_writes_no_sentinel(self) -> None:
         plain = self.root / "plain"
@@ -132,11 +171,11 @@ class WrapperTerminalSentinelTest(unittest.TestCase):
         self.assertEqual(list(self.root.rglob(SENTINEL_NAME)), [])
 
     @unittest.skipUnless(PREREQUISITES, "requires gh, jq and node")
-    def test_startup_announces_the_sentinel_path_on_stderr(self) -> None:
+    def test_startup_announces_the_sentinel_path_and_run_id(self) -> None:
         repository = self.make_repository()
         self.git("switch", "--detach", "HEAD", cwd=repository)
         result = self.run_wrapper(repository)
-        self.assertIn(str(self.sentinel_path(repository)), result.stderr)
+        self.assertTrue(self.announced_run_id(repository, result.stderr))
 
     def test_markers_lib_defines_the_sentinel_path_helper(self) -> None:
         body = MARKERS_LIB.read_text(encoding="utf-8")

@@ -40,6 +40,7 @@ HOOKS_JSON = HOOKS_DIR / "hooks.json"
 SCRIPT = HOOKS_DIR / "scripts" / "inject-merge-order-rules.sh"
 PROMPT = HOOKS_DIR / "prompts" / "merge-order-rules.md"
 BLOCK_PRE_MERGE = HOOKS_DIR / "scripts" / "block-pre-merge.sh"
+BLOCK_BG_CODEX_WRAPPER = HOOKS_DIR / "scripts" / "block-bg-codex-wrapper.sh"
 CODEX_REVIEWER_AGENT = PLUGIN_DIR / "agents" / "codex-reviewer.md"
 
 DEFAULT_PAYLOAD = {"hook_event_name": "SessionStart"}
@@ -345,6 +346,23 @@ class BlockPreMergeFixedSentenceTest(unittest.TestCase):
     def test_block_pre_merge_source_contains_fixed_prompt_sentence(self) -> None:
         source = BLOCK_PRE_MERGE.read_text(encoding="utf-8")
         self.assertIn(FIXED_PROMPT_SENTENCE, source)
+
+
+class DenyMessageLaunchInstructionTest(unittest.TestCase):
+    """deny メッセージの subagent 起動案内が起動 mode を指示しないこと。
+
+    Agent tool は起動 mode を選ぶパラメータを受け付けず、foreground 起動を求めることも
+    できない。wrapper を foreground Bash コマンドとして起動するという Bash レベルの
+    案内は対象外。
+    """
+
+    def test_deny_messages_omit_agent_launch_mode(self) -> None:
+        for path in (BLOCK_PRE_MERGE, BLOCK_BG_CODEX_WRAPPER):
+            with self.subTest(path=path.name):
+                hits = agent_launch_mode_hits(path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    hits, [], f"{path}: Agent 起動 mode の指示が残っている"
+                )
 
 
 class CodexReviewerAgentDescriptionTest(unittest.TestCase):

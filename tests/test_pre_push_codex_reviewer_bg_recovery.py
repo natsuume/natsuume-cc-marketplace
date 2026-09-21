@@ -28,6 +28,9 @@ PLUGIN = ROOT / "plugins" / "pre-push-codex-review"
 CODEX_REVIEWER = PLUGIN / "agents" / "codex-reviewer.md"
 PLUGIN_README = PLUGIN / "README.md"
 ROOT_README = ROOT / "README.md"
+BLOCK_BG_CODEX_WRAPPER = (
+    PLUGIN / "hooks" / "scripts" / "block-bg-codex-wrapper.sh"
+)
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
@@ -40,9 +43,13 @@ FORBIDDEN_EXECUTION_TOOL = "Monitor"
 # wrapper の進捗行と接頭辞を共有して一意に判定できない。
 FORBIDDEN_TERMINAL_CONCEPT = "completion marker"
 
-# Agent tool は起動 mode を選ぶパラメータを受け付けない。一方 Bash tool の同名 option は
-# 現行仕様でも有効なので、禁止対象は「Agent / subagent の起動を指示する文」に限る。
+# Agent tool は起動 mode を選ぶパラメータを受け付けず、foreground 起動を求めることも
+# できない。一方 Bash tool の同名 option と foreground 実行は現行仕様でも有効なので、
+# 禁止対象は「Agent / subagent の起動を指示する文」に限る。
 AGENT_LAUNCH_MODE_PARAMETER = "run_in_background: false"
+AGENT_LAUNCH_FOREGROUND_PHRASES = ("foreground 起動", "foreground で起動")
+# agent の名指しと起動 mode の語がこの文字数以内に並ぶときだけ起動指示とみなす。
+AGENT_LAUNCH_MODE_DISTANCE = 80
 AGENT_LAUNCH_MARKERS = (
     "codex-reviewer",
     "advisor-runner",
@@ -68,6 +75,11 @@ SECOND_RUN_SENTENCE = "Do not start a second wrapper run"
 PRECHECK_SENTENCE = (
     "Before the first wait, confirm with the Bash tool that the recorded "
     "output file exists."
+)
+# run の同一性 (wrapper が output file の先頭に出す案内行から run id を取る).
+RUN_ID_SENTENCE = (
+    "Read the head of the recorded output file and take the run id from the "
+    "wrapper's `terminal sentinel: <path> run=<id>` announcement line."
 )
 # 待機手段 (Bash tool 1 回の until ポーリングループ).
 WAIT_SENTENCE = (
@@ -96,16 +108,35 @@ BUDGET_DEFINITION_SENTENCE = (
     "budget — rerunning it only when it ended at its deadline without the "
     "sentinel."
 )
+# ループ終了理由の判別 (rerun か境界かを決める前の明示確認).
+LOOP_EXIT_SENTENCE = (
+    'When the loop returns, check `[ -e "$SENTINEL" ]` and `[ -e "$OUT" ]` '
+    "with Bash before deciding what happened: an existing sentinel goes to "
+    "the run id check, a missing output file is the missing-output boundary, "
+    "and neither means the loop reached its deadline, so decide there whether "
+    "to rerun it."
+)
+# sentinel の run 照合 (別 run の sentinel は終端とみなさない).
+SENTINEL_MATCH_SENTENCE = (
+    "A sentinel is this run's terminal signal only when its `run=` value "
+    "equals that run id; a sentinel carrying any other run id belongs to a "
+    "different run, so ignore it and keep waiting within the recovery budget."
+)
 # sentinel が示す終了状態の読み取り (failure 側).
 SENTINEL_FAILED_SENTENCE = (
-    "Once the sentinel exists, Read it first: a sentinel line of "
-    "`status=failed` means the wrapper stopped before finishing, so return "
-    "`Status: execution-failed` (failure class `other`)."
+    "Once a sentinel with the matching run id exists, Read it: a sentinel "
+    "line of `status=failed` means the wrapper stopped before finishing, so "
+    "return `Status: execution-failed` (failure class `other`)."
 )
 # sentinel が示す終了状態の読み取り (success 側) と回収.
 RECOVER_BY_READ_SENTENCE = (
-    "When the sentinel line is `status=ok`, recover the report body by "
-    "Reading that recorded output file."
+    "When that sentinel line is `status=ok`, recover the report body by "
+    "Reading the recorded output file."
+)
+# 本文の完全読了 (Read の窓に収まらない場合の継続).
+READ_TO_END_SENTENCE = (
+    "Read that output file to its end, continuing with `offset` and `limit` "
+    "until the end of the file is reached."
 )
 # path の出所要件 (同一 run 由来であれば、どの step が surface した path でもよい).
 PATH_PROVENANCE_SENTENCE = (
@@ -137,9 +168,9 @@ TOOL_SCOPE_SENTENCE = (
     "its terminal sentinel; do not poll or read other files and do not "
     "independently re-review the diff."
 )
-# 境界: output file path が得られなかった.
+# 境界: usable な output file path が得られなかった.
 NO_PATH_SENTENCE = (
-    "If the background-move result surfaced no output file path, return "
+    "If no step of this recovery surfaced a usable output file path, return "
     "`Status: execution-failed` (failure class `other`)."
 )
 # 境界: recorded output file が存在しない / 待機中に消えた.
@@ -162,10 +193,18 @@ BUDGET_SENTENCE = (
     "background, and note that the parent may resume this same subagent for "
     "a diagnostic status check only."
 )
-# 境界: 回収対象の run を見失った.
-LOST_RUN_SENTENCE = (
-    "If you can no longer tell which wrapper run the recorded output file "
-    "belongs to, return `Status: execution-failed` (failure class `other`)."
+# 境界: 本文を最後まで読めない / 空のまま status=ok.
+INCOMPLETE_BODY_SENTENCE = (
+    "If the recorded output file cannot be read to its end, or is empty "
+    "(zero bytes) when the sentinel reports `status=ok`, return "
+    "`Status: execution-failed` (failure class `other`) instead of "
+    "normalizing a partial body."
+)
+# 境界: run を同定できない (案内行が output file に無い).
+UNIDENTIFIABLE_RUN_SENTENCE = (
+    "If the recorded output file carries no announcement line, this run "
+    "cannot be identified: return `Status: execution-failed` (failure class "
+    "`other`)."
 )
 
 # sentinel path の組み立て方 (固定名が plugin ごとに異なる).
@@ -190,12 +229,16 @@ SHARED_RECOVERY_CLAUSES = {
     "record-output-file-path": RECORD_SENTENCE,
     "no-second-run": SECOND_RUN_SENTENCE,
     "output-file-precheck": PRECHECK_SENTENCE,
+    "run-id-from-announcement": RUN_ID_SENTENCE,
     "polling-loop-wait": WAIT_SENTENCE,
     "loop-deadline": LOOP_DEADLINE_SENTENCE,
     "no-standalone-sleep": NO_STANDALONE_SLEEP_SENTENCE,
     "budget-definition": BUDGET_DEFINITION_SENTENCE,
+    "loop-exit-check": LOOP_EXIT_SENTENCE,
+    "sentinel-run-id-match": SENTINEL_MATCH_SENTENCE,
     "sentinel-failed": SENTINEL_FAILED_SENTENCE,
     "recover-by-read": RECOVER_BY_READ_SENTENCE,
+    "read-body-to-end": READ_TO_END_SENTENCE,
     "path-provenance": PATH_PROVENANCE_SENTENCE,
     "source-of-truth": SOURCE_OF_TRUTH_SENTENCE,
     "report-contract-handoff": HANDOFF_SENTENCE,
@@ -204,8 +247,9 @@ SHARED_RECOVERY_CLAUSES = {
     "boundary-no-output-path": NO_PATH_SENTENCE,
     "boundary-missing-output-file": MISSING_FILE_SENTENCE,
     "boundary-empty-output-file": EMPTY_FILE_SENTENCE,
+    "boundary-incomplete-body": INCOMPLETE_BODY_SENTENCE,
     "boundary-budget-exhausted": BUDGET_SENTENCE,
-    "boundary-lost-run": LOST_RUN_SENTENCE,
+    "boundary-unidentifiable-run": UNIDENTIFIABLE_RUN_SENTENCE,
 }
 
 RECOVERY_HEADING = "## Background-move recovery"
@@ -321,18 +365,48 @@ def instruction_units(text: str) -> list[tuple[int, str]]:
     return units
 
 
-def agent_launch_mode_hits(text: str) -> list[str]:
-    """Agent 起動を指示する単位のうち、起動 mode のパラメータを添えたものを返す。
+def sentences(unit: str) -> list[str]:
+    """指示の単位を文に分割する (句点区切り。句点が無ければ単位全体を 1 文とする)。"""
+    parts = [part.strip() for part in unit.split("。") if part.strip()]
+    return parts or ([unit] if unit.strip() else [])
 
-    Agent / subagent を名指しする指示だけを対象にするため、subagent 内部で wrapper を
-    plain な foreground Bash コマンドとして起動するという Bash レベルの説明は
-    検出しない。
+
+def demands_agent_launch_mode(sentence: str) -> bool:
+    """1 文が Agent の起動 mode を指示しているかを判定する。
+
+    起動 mode の指示は、パラメータ (`run_in_background: false`) と自然言語の
+    foreground 要求の両方を対象にする。ただし Bash tool の同名 option と wrapper の
+    foreground 実行は現行仕様でも有効なので、「Agent / subagent を名指しした直後に
+    その起動 mode を述べている」形だけを指示とみなす: 起動 mode の語が agent の
+    名指しより後ろの近い位置にあり、その間に別の起動対象 (wrapper) が挟まらないこと
+    を要求する。
     """
+    mode_tokens = (
+        AGENT_LAUNCH_MODE_PARAMETER,
+        *AGENT_LAUNCH_FOREGROUND_PHRASES,
+    )
+    for marker in AGENT_LAUNCH_MARKERS:
+        start = sentence.find(marker)
+        while start != -1:
+            end = start + len(marker)
+            for token in mode_tokens:
+                index = sentence.find(token, end)
+                if index == -1 or index - end > AGENT_LAUNCH_MODE_DISTANCE:
+                    continue
+                if "wrapper" in sentence[end:index]:
+                    continue
+                return True
+            start = sentence.find(marker, end)
+    return False
+
+
+def agent_launch_mode_hits(text: str) -> list[str]:
+    """Agent の起動 mode を指示している文を、開始行番号付きで返す。"""
     return [
-        f"L{number}: {unit[:120]}"
+        f"L{number}: {sentence[:120]}"
         for number, unit in instruction_units(text)
-        if AGENT_LAUNCH_MODE_PARAMETER in unit
-        and any(marker in unit for marker in AGENT_LAUNCH_MARKERS)
+        for sentence in sentences(unit)
+        if demands_agent_launch_mode(sentence)
     ]
 
 
@@ -440,6 +514,9 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovery_checks_the_output_file_before_waiting(self) -> None:
         self.assert_clause(PRECHECK_SENTENCE)
 
+    def test_recovery_takes_the_run_id_from_the_announcement_line(self) -> None:
+        self.assert_clause(RUN_ID_SENTENCE)
+
     def test_recovery_waits_with_a_bash_until_loop(self) -> None:
         self.assert_clause(WAIT_SENTENCE)
 
@@ -452,11 +529,20 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovery_budget_bounds_polling_loop_runs(self) -> None:
         self.assert_clause(BUDGET_DEFINITION_SENTENCE)
 
+    def test_loop_exit_reason_is_checked_before_deciding(self) -> None:
+        self.assert_clause(LOOP_EXIT_SENTENCE)
+
+    def test_sentinel_counts_only_when_the_run_id_matches(self) -> None:
+        self.assert_clause(SENTINEL_MATCH_SENTENCE)
+
     def test_failed_sentinel_ends_execution_failed(self) -> None:
         self.assert_clause(SENTINEL_FAILED_SENTENCE)
 
     def test_ok_sentinel_recovers_the_body_by_reading_the_output_file(self) -> None:
         self.assert_clause(RECOVER_BY_READ_SENTENCE)
+
+    def test_recovered_body_is_read_to_the_end(self) -> None:
+        self.assert_clause(READ_TO_END_SENTENCE)
 
     def test_output_file_path_from_any_step_of_same_run_is_usable(self) -> None:
         self.assert_clause(PATH_PROVENANCE_SENTENCE)
@@ -482,11 +568,14 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_boundary_empty_output_file_keeps_waiting(self) -> None:
         self.assert_clause(EMPTY_FILE_SENTENCE)
 
+    def test_boundary_incomplete_body_ends_execution_failed(self) -> None:
+        self.assert_clause(INCOMPLETE_BODY_SENTENCE)
+
     def test_boundary_budget_exhausted_reports_still_running(self) -> None:
         self.assert_clause(BUDGET_SENTENCE)
 
-    def test_boundary_lost_run_ends_execution_failed(self) -> None:
-        self.assert_clause(LOST_RUN_SENTENCE)
+    def test_boundary_unidentifiable_run_ends_execution_failed(self) -> None:
+        self.assert_clause(UNIDENTIFIABLE_RUN_SENTENCE)
 
     def test_resumed_status_check_is_bounded_and_diagnostic_only(self) -> None:
         self.assert_clause(RESUME_CHECK_SENTENCE)
@@ -508,6 +597,13 @@ class CodexReviewerDocumentationTest(ContractTestCase):
         self.assert_text_contains(ROOT_README, TOOL_GRANT_LITERAL)
 
 
+class CodexReviewerLaunchInstructionTest(ContractTestCase):
+    """deny メッセージの subagent 起動案内が起動 mode を指示しないこと。"""
+
+    def test_block_bg_wrapper_deny_omits_agent_launch_mode(self) -> None:
+        self.assert_no_agent_launch_mode_parameter(BLOCK_BG_CODEX_WRAPPER)
+
+
 class AgentLaunchModeHelperTest(unittest.TestCase):
     """`agent_launch_mode_hits` が Agent 起動指示だけを検出すること。"""
 
@@ -526,10 +622,27 @@ class AgentLaunchModeHelperTest(unittest.TestCase):
         )
         self.assertEqual(len(agent_launch_mode_hits(text)), 1)
 
+    def test_natural_language_foreground_demand_is_detected(self) -> None:
+        text = (
+            'Agent / Task tool で subagent_type="pre-merge-codex-review:'
+            'codex-reviewer", model="sonnet" を foreground 起動してください。\n'
+        )
+        self.assertEqual(len(agent_launch_mode_hits(text)), 1)
+
     def test_bash_level_description_is_not_detected(self) -> None:
         text = (
             "- subagent body は wrapper を `run_in_background: false` で 1 回起動する\n"
             "- exact detail の確認が必要なら同一 codex-reviewer を resume する\n"
+        )
+        self.assertEqual(agent_launch_mode_hits(text), [])
+
+    def test_bash_level_foreground_sentence_is_not_detected(self) -> None:
+        """同じ段落に Agent への言及があっても、別の文の Bash レベル説明は対象外。"""
+        text = (
+            "対応: wrapper は内部で codex companion を `--wait` で foreground 起動"
+            "するため、 Bash 呼び出し自体が review 完了まで block します。"
+            " この deny を見た場合は `pre-push-codex-review:codex-reviewer` "
+            "subagent を再起動してください。\n"
         )
         self.assertEqual(agent_launch_mode_hits(text), [])
 
