@@ -344,7 +344,7 @@ fi
 # ローカルのレビュー記録を検証し、 成立していれば PR に投稿してから merge を通す。
 
 # 記録が無い / 解決できない場合に共通で案内する本文。
-REVIEW_GUIDANCE="Agent / Task tool で subagent_type=\"pre-merge-codex-review:codex-reviewer\", model=\"sonnet\" を foreground 起動してください。 起動 prompt は、 subagent が実際に行う操作 (read-only の codex review 1 回と report の返却) を述べた次の定型文だけを使います:
+REVIEW_GUIDANCE="Agent / Task tool で subagent_type=\"pre-merge-codex-review:codex-reviewer\", model=\"sonnet\" を起動してください。 起動 mode は Claude Code が決める (対話セッションでは background が既定) ため指定せず、 report は completion notification (SubagentHandback / SubagentStop) 経由で届きます。 起動 prompt は、 subagent が実際に行う操作 (read-only の codex review 1 回と report の返却) を述べた次の定型文だけを使います:
 
 current branch の PR (#<番号>) の merge-base..head 差分に対して、agent body の契約に従い codex review を 1 回実行し、parent-safe な markdown report を返してください。
 

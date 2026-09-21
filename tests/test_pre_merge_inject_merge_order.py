@@ -21,11 +21,13 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +40,7 @@ HOOKS_JSON = HOOKS_DIR / "hooks.json"
 SCRIPT = HOOKS_DIR / "scripts" / "inject-merge-order-rules.sh"
 PROMPT = HOOKS_DIR / "prompts" / "merge-order-rules.md"
 BLOCK_PRE_MERGE = HOOKS_DIR / "scripts" / "block-pre-merge.sh"
+BLOCK_BG_CODEX_WRAPPER = HOOKS_DIR / "scripts" / "block-bg-codex-wrapper.sh"
 CODEX_REVIEWER_AGENT = PLUGIN_DIR / "agents" / "codex-reviewer.md"
 
 DEFAULT_PAYLOAD = {"hook_event_name": "SessionStart"}
@@ -56,12 +59,41 @@ FIXED_PROMPT_SENTENCE = (
 REQUIRED_PROMPT_SUBSTRINGS = [
     "pre-merge-codex-review:codex-reviewer",
     'model: "sonnet"',
-    "run_in_background: false",
+    # subagent の結果は completion notification 経由で届く (起動 mode は Claude Code
+    # が決め、呼び出し側は指定しない)。この前提を注入文が明記する。
+    "completion notification",
     "gh pr merge",
     "--delete-branch",
     "AskUserQuestion",
     FIXED_PROMPT_SENTENCE,
 ]
+
+# report 受領 → findings の分類・対応 → `gh pr merge` という順序を示す定型文。
+FINDINGS_TRIAGE_SENTENCE = "report の findings を分類・対応し"
+REPORT_BEFORE_MERGE_SENTENCE = "report を受け取った後の `gh pr merge`"
+ORDERING_PROMPT_SUBSTRINGS = [
+    FINDINGS_TRIAGE_SENTENCE,
+    REPORT_BEFORE_MERGE_SENTENCE,
+]
+
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
+
+def _load_shared_contract():
+    """codex-reviewer の文言契約 helper を持つ共有 module を読み込む。
+
+    `import` 文で書くと「sys.path 操作より前に import 文が来る」という lint 制約
+    (E402) に抵触するため、既存テストと同じ importlib 経由の明示 import にする。
+    """
+    return importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
+
+
+_shared_contract = _load_shared_contract()
+
+agent_launch_mode_hits = _shared_contract.agent_launch_mode_hits
+FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 
 FORBIDDEN_DESCRIPTION_SUBSTRINGS = ["gh pr merge", "merge gate", "deny", "投稿"]
 REQUIRED_DESCRIPTION_SUBSTRINGS = ["read-only", "parent-safe"]
@@ -259,6 +291,44 @@ class PromptContractTest(unittest.TestCase):
             with self.subTest(substring=substring):
                 self.assertIn(substring, text)
 
+    def test_prompt_requires_report_before_merge_ordering(self) -> None:
+        """report 受領 → findings の分類・対応 → `gh pr merge` の順序を固定する。
+
+        この順序は subagent の起動 mode の表現とは独立した規律なので、起動指示の
+        書き方が変わっても失われないよう別の assertion で固定する。
+        """
+        text = self._read_prompt()
+        for substring in ORDERING_PROMPT_SUBSTRINGS:
+            with self.subTest(substring=substring):
+                self.assertIn(substring, text)
+        findings_index = text.find(FINDINGS_TRIAGE_SENTENCE)
+        merge_index = text.find(REPORT_BEFORE_MERGE_SENTENCE)
+        self.assertNotEqual(findings_index, -1)
+        self.assertNotEqual(merge_index, -1)
+        self.assertLess(
+            findings_index,
+            merge_index,
+            "findings の分類・対応より後に merge へ進む順序になっていない",
+        )
+
+    def test_prompt_omits_agent_launch_mode_parameter(self) -> None:
+        """Agent tool は起動 mode を選ぶパラメータを受け付けないため指示しない。"""
+        hits = agent_launch_mode_hits(self._read_prompt())
+        self.assertEqual(hits, [], "Agent 起動指示の起動 mode 指定が残っている")
+
+    def test_prompt_never_mentions_a_second_execution_tool(self) -> None:
+        """subagent のコマンド実行経路は Bash tool 1 本に閉じる。"""
+        hits = [
+            f"L{number}: {line.strip()[:120]}"
+            for number, line in enumerate(
+                self._read_prompt().splitlines(), start=1
+            )
+            if FORBIDDEN_EXECUTION_TOOL in line
+        ]
+        self.assertEqual(
+            hits, [], f"{FORBIDDEN_EXECUTION_TOOL} の言及が残っている"
+        )
+
     def test_prompt_has_no_issue_pr_number_or_date_references(self) -> None:
         text = self._read_prompt()
         self.assertIsNone(
@@ -276,6 +346,23 @@ class BlockPreMergeFixedSentenceTest(unittest.TestCase):
     def test_block_pre_merge_source_contains_fixed_prompt_sentence(self) -> None:
         source = BLOCK_PRE_MERGE.read_text(encoding="utf-8")
         self.assertIn(FIXED_PROMPT_SENTENCE, source)
+
+
+class DenyMessageLaunchInstructionTest(unittest.TestCase):
+    """deny メッセージの subagent 起動案内が起動 mode を指示しないこと。
+
+    Agent tool は起動 mode を選ぶパラメータを受け付けず、foreground 起動を求めることも
+    できない。wrapper を foreground Bash コマンドとして起動するという Bash レベルの
+    案内は対象外。
+    """
+
+    def test_deny_messages_omit_agent_launch_mode(self) -> None:
+        for path in (BLOCK_PRE_MERGE, BLOCK_BG_CODEX_WRAPPER):
+            with self.subTest(path=path.name):
+                hits = agent_launch_mode_hits(path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    hits, [], f"{path}: Agent 起動 mode の指示が残っている"
+                )
 
 
 class CodexReviewerAgentDescriptionTest(unittest.TestCase):

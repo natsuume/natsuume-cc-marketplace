@@ -8,7 +8,7 @@
 
 ## バージョン
 
-v2.0.1
+v2.1.0
 
 ## インストール
 
@@ -88,7 +88,7 @@ review cadence の state 管理と enforcement を担う node script です。�
 - **PostToolUse** (matcher: `^SubagentHandback$`): 計数対象 2 reviewer・`codex-advisor:review-runner`・`codex-advisor:advisor-runner` が auto mode で hand-back した report (`tool_input.message`) を解析し、Status 行 / footer / attestation の解析値 (本文は保存しない) を agent_id ごとに state へ記録する。SubagentStop がそれを one-shot で消費する
 - **SubagentStop** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer|codex-advisor:(review|advisor)-runner)$`): 計数対象 reviewer の成功 review を加算し、`codex-advisor:advisor-runner` の checkpoint 充足 attestation でカウンターを reset する
 - **PostToolUseFailure** (matcher: `Agent|Task`): checkpoint 相談 (起動 request の `tool_input.prompt` に `<review_cycle_checkpoint>` を含む) の `codex-advisor:advisor-runner` 起動失敗を fail-open で checkpoint 充足とみなし、checkpoint 要求中ならカウンターを reset する。同じ `codex-advisor:advisor-runner` でも通常の advisor 相談の起動失敗は reset しない
-- **Stop**: checkpoint 要求中は main session の停止を block し、`codex-advisor:advisor-runner` の foreground 起動を案内する
+- **Stop**: checkpoint 要求中は main session の停止を block し、`codex-advisor:advisor-runner` の起動を案内する
 - **SessionEnd**: この session の review cadence state を削除する
 
 ### マーカーファイル
@@ -115,8 +115,8 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 **動作**:
 
-- tools は `Bash, TaskOutput, Read` に制限 (Edit / Write / Skill / Task はすべて非許可)。TaskOutput / Read は Bash timeout による background 移行後の回収専用で、wrapper-only な実行サーフェスを構造的に維持する
-- subagent body は wrapper を `run_in_background: false` で 1 回起動し、raw output を final reply へコピーせず parent-safe report に変換する
+- tools は `Bash, Read` に制限 (Edit / Write / Skill / Task はすべて非許可)。`Read` は Bash timeout による background 移行後の回収専用 (wrapper が書く terminal sentinel と、その run の output file だけを読む) で、wrapper-only な実行サーフェスを構造的に維持する
+- subagent body は wrapper を plain な foreground Bash 1 回で起動し、raw output を final reply へコピーせず parent-safe report に変換する
 - 親 session は finding の priority / location / impact / verification / fix direction / disposition を受け取る。実行可能な command、payload、環境値、段階的な再現・回避手順、raw stdout / stderr は subagent context に閉じ込められる
 - exact detail を使った追加確認が必要な場合は同一 codex-reviewer を resume し、検証結果だけを再度 parent-safe report で受け取る
 - wrapper は exit 0 完了時に hash-bound pending attestation を atomic write し、auto-mark が subagent の正規 `pass/findings` report と current hash 一致を確認して codex-reviewed マーカーへ昇格する
@@ -133,7 +133,7 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 ### checkpoint
 
-5 サイクル完了後、次の review 起動は PreToolUse hook が deny し、main session の停止は Stop hook が block します。checkpoint の実行主体は本 plugin ではなく `codex-advisor` plugin です。`codex-advisor:consult` skill の review cadence mode が `codex-advisor:advisor-runner` を `model: "sonnet"`, `run_in_background: false` で foreground 起動し、`<review_cycle_checkpoint>` (Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い) を材料に根本方針の壁打ちを行います。
+5 サイクル完了後、次の review 起動は PreToolUse hook が deny し、main session の停止は Stop hook が block します。checkpoint の実行主体は本 plugin ではなく `codex-advisor` plugin です。`codex-advisor:consult` skill の review cadence mode が `codex-advisor:advisor-runner` を `model: "sonnet"` で起動し、`<review_cycle_checkpoint>` (Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い) を材料に根本方針の壁打ちを行います。起動 mode は Claude Code が決める (対話セッションでは background が既定) ため指定せず、助言は completion notification (SubagentHandback / SubagentStop) 経由で届きます。
 
 カウンターの reset は次の 3 経路に限られます:
 
@@ -149,7 +149,7 @@ review cadence の state は session ごとに 1 ファイル (ファイル名�
 
 ### codex-advisor 連携
 
-checkpoint の実行には `codex-advisor` plugin の install が必要です。まず必ず `codex-advisor:advisor-runner` の foreground 起動を試みてください。起動失敗 (未認証・timeout・plugin 未 install 等) が PostToolUseFailure として本 script に到達すれば (相談 request に `<review_cycle_checkpoint>` を含む場合のみ)、fail-open としてカウンターを reset するため block は解除されて続行できます。起動を試みた後も block が解除されない場合は、codex-advisor plugin の install が必要であることをユーザに報告したうえで、[state](#state) の手動 reset (state ファイル削除) で解除してください。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
+checkpoint の実行には `codex-advisor` plugin の install が必要です。まず必ず `codex-advisor:advisor-runner` の起動を試みてください。起動失敗 (未認証・timeout・plugin 未 install 等) が PostToolUseFailure として本 script に到達すれば (相談 request に `<review_cycle_checkpoint>` を含む場合のみ)、fail-open としてカウンターを reset するため block は解除されて続行できます。起動を試みた後も block が解除されない場合は、codex-advisor plugin の install が必要であることをユーザに報告したうえで、[state](#state) の手動 reset (state ファイル削除) で解除してください。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
 
 ## pre-push-review core との併用設計
 

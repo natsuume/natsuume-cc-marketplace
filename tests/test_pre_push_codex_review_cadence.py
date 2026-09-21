@@ -11,10 +11,12 @@ private helper の構成や state ファイル名の形式には結合しない�
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +26,26 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "pre-push-codex-review"
 HOOK = PLUGIN / "hooks" / "scripts" / "manage-review-cadence.mjs"
 HOOKS_JSON = PLUGIN / "hooks" / "hooks.json"
+CADENCE_RULES_PROMPT = PLUGIN / "hooks" / "prompts" / "review-cadence-rules.md"
+
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
+
+def _load_shared_contract():
+    """codex-reviewer の文言契約 helper を持つ共有 module を読み込む。
+
+    `import` 文で書くと「sys.path 操作より前に import 文が来る」という lint 制約
+    (E402) に抵触するため、既存テストと同じ importlib 経由の明示 import にする。
+    """
+    return importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
+
+
+_shared_contract = _load_shared_contract()
+
+agent_launch_mode_hits = _shared_contract.agent_launch_mode_hits
+FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 
 PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
 PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
@@ -1106,6 +1128,46 @@ class HooksManifestHandbackTest(HooksManifestContractTest):
             hooks, "PostToolUse", "manage-review-cadence.mjs"
         )
         self.assertEqual("^SubagentHandback$", entry["matcher"])
+
+
+class CheckpointLaunchInstructionTest(unittest.TestCase):
+    """checkpoint runner の起動案内が現行の Agent tool の起動仕様に沿うこと。
+
+    Agent tool は起動 mode を選ぶパラメータを受け付けないため、SessionStart 注入文と
+    cadence script の deny / Stop 文言はその指定を指示せず、`model` だけを明示する。
+    Bash tool の同名 option は現行仕様でも有効なので、検査対象は Agent / subagent を
+    名指しする行に限る。
+    """
+
+    def assert_no_launch_mode_parameter(self, path: Path) -> None:
+        hits = agent_launch_mode_hits(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            hits, [], f"{path}: Agent 起動指示の起動 mode 指定が残っている"
+        )
+
+    def test_injected_rules_omit_launch_mode_parameter(self) -> None:
+        self.assert_no_launch_mode_parameter(CADENCE_RULES_PROMPT)
+
+    def test_cadence_script_messages_omit_launch_mode_parameter(self) -> None:
+        self.assert_no_launch_mode_parameter(HOOK)
+
+    def test_injected_rules_declare_checkpoint_runner_model(self) -> None:
+        text = CADENCE_RULES_PROMPT.read_text(encoding="utf-8")
+        self.assertIn('`model: "sonnet"`', text)
+
+    def test_injected_rules_never_mention_a_second_execution_tool(self) -> None:
+        """subagent のコマンド実行経路は Bash tool 1 本に閉じる。"""
+        hits = [
+            f"L{number}: {line.strip()[:120]}"
+            for number, line in enumerate(
+                CADENCE_RULES_PROMPT.read_text(encoding="utf-8").splitlines(),
+                start=1,
+            )
+            if FORBIDDEN_EXECUTION_TOOL in line
+        ]
+        self.assertEqual(
+            hits, [], f"{FORBIDDEN_EXECUTION_TOOL} の言及が残っている"
+        )
 
 
 if __name__ == "__main__":
