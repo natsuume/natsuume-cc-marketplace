@@ -103,11 +103,19 @@ class WrapperTerminalSentinelTest(unittest.TestCase):
             timeout=120,
         )
 
-    def announced_run_id(self, repository: Path, stderr: str) -> str:
-        """起動時の案内行から run id を取り出す (path の一致も確認する)。"""
-        match = ANNOUNCEMENT_PATTERN.search(stderr)
+    def announced_run_id(
+        self, repository: Path, result: subprocess.CompletedProcess[str]
+    ) -> str:
+        """起動時の案内行から run id を取り出す (path の一致も確認する)。
+
+        案内行は stdout にも出る (回収時に output file の先頭から run id を読むため)
+        が、run id 自体はどちらの stream から取っても同じなので stderr から取る。
+        """
+        match = ANNOUNCEMENT_PATTERN.search(result.stderr)
         if match is None:
-            self.fail(f"起動時の sentinel 案内行が stderr に無い: {stderr[:300]}")
+            self.fail(
+                f"起動時の sentinel 案内行が stderr に無い: {result.stderr[:300]}"
+            )
         self.assertEqual(match.group("path"), str(self.sentinel_path(repository)))
         return match.group("run")
 
@@ -130,14 +138,14 @@ class WrapperTerminalSentinelTest(unittest.TestCase):
         self.git("switch", "--detach", "HEAD", cwd=repository)
         result = self.run_wrapper(repository)
         self.assertNotEqual(result.returncode, 0, result.stderr)
-        run_id = self.announced_run_id(repository, result.stderr)
+        run_id = self.announced_run_id(repository, result)
         self.assert_sentinel(repository, status="failed", run_id=run_id)
 
     def test_default_branch_run_records_ok_status(self) -> None:
         repository = self.make_repository()
         result = self.run_wrapper(repository)
         self.assertEqual(result.returncode, 0, result.stderr)
-        run_id = self.announced_run_id(repository, result.stderr)
+        run_id = self.announced_run_id(repository, result)
         self.assert_sentinel(repository, status="ok", run_id=run_id)
 
     def test_startup_discards_a_stale_sentinel(self) -> None:
@@ -147,18 +155,14 @@ class WrapperTerminalSentinelTest(unittest.TestCase):
         )
         self.git("switch", "--detach", "HEAD", cwd=repository)
         result = self.run_wrapper(repository)
-        run_id = self.announced_run_id(repository, result.stderr)
+        run_id = self.announced_run_id(repository, result)
         self.assertNotEqual(run_id, "stale-run-id")
         self.assert_sentinel(repository, status="failed", run_id=run_id)
 
     def test_each_run_uses_a_distinct_run_id(self) -> None:
         repository = self.make_repository()
-        first = self.announced_run_id(
-            repository, self.run_wrapper(repository).stderr
-        )
-        second = self.announced_run_id(
-            repository, self.run_wrapper(repository).stderr
-        )
+        first = self.announced_run_id(repository, self.run_wrapper(repository))
+        second = self.announced_run_id(repository, self.run_wrapper(repository))
         self.assertNotEqual(first, second)
 
     def test_outside_a_git_repository_writes_no_sentinel(self) -> None:
@@ -168,10 +172,15 @@ class WrapperTerminalSentinelTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertEqual(list(self.root.rglob(SENTINEL_NAME)), [])
 
-    def test_startup_announces_the_sentinel_path_and_run_id(self) -> None:
+    def test_startup_announces_the_sentinel_on_both_streams(self) -> None:
+        """案内行は stdout にも出る (background 時に output file の先頭へ入る)。"""
         repository = self.make_repository()
         result = self.run_wrapper(repository)
-        self.assertTrue(self.announced_run_id(repository, result.stderr))
+        run_id = self.announced_run_id(repository, result)
+        expected = (
+            f"terminal sentinel: {self.sentinel_path(repository)} run={run_id}"
+        )
+        self.assertIn(expected, result.stdout)
 
     def test_markers_lib_defines_the_sentinel_path_helper(self) -> None:
         body = MARKERS_LIB.read_text(encoding="utf-8")

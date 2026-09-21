@@ -1,12 +1,14 @@
 """pre-push-codex-review:codex-reviewer の background-move 回収契約テスト。
 
 Bash tool は timeout 時に wrapper 実行を kill せず background へ移行させ、その実行の
-出力先 file path を結果に載せる。codex-reviewer subagent は wrapper が git-dir 直下に
-書く terminal sentinel の出現を Bash tool の polling loop で待ち、sentinel の
+出力先 file path を結果に載せる。codex-reviewer subagent は待機前に recorded output
+file の先頭にある wrapper の案内行から run id を取り、その run id を持つ terminal
+sentinel が git-dir 直下に現れるまで Bash tool の polling loop で待つ。sentinel の
 `status=ok` / `status=failed` で終了状態を判定してから recorded output file を `Read`
-して回収し、既存の parent-safe report 契約へ normalize する。終端信号を sentinel
-ファイルに置くことで、判定は出力ストリームのテキストに依存しなくなり、待機を含む
-コマンド実行は `Bash` matcher の PreToolUse gate が観測できる 1 本に閉じる。
+して回収し、既存の parent-safe report 契約へ normalize する。終端信号を run id 付きの
+sentinel ファイルに置くことで、判定は出力ストリームのテキストにも別 run の残骸にも
+依存せず、待機を含むコマンド実行は `Bash` matcher の PreToolUse gate が観測できる
+1 本に閉じる。
 
 本ファイルは、その回収契約を成す一文 (canonical 文) を module 定数として固定し、
 `## Background-move recovery` セクション内に空白正規化した上で存在することを検証する。
@@ -76,18 +78,26 @@ PRECHECK_SENTENCE = (
     "Before the first wait, confirm with the Bash tool that the recorded "
     "output file exists."
 )
-# run の同一性 (wrapper が output file の先頭に出す案内行から run id を取る).
+# run の同一性 (待機前に 1 回だけ、output file 先頭の案内行から run id を取る).
 RUN_ID_SENTENCE = (
-    "Read the head of the recorded output file and take the run id from the "
-    "wrapper's `terminal sentinel: <path> run=<id>` announcement line."
+    "Before the first wait, Read the head of the recorded output file once "
+    "and take the run id from the wrapper's `terminal sentinel: <path> "
+    "run=<id>` announcement line; reuse that one run id for the rest of this "
+    "recovery."
 )
-# 待機手段 (Bash tool 1 回の until ポーリングループ).
+# 案内行は wrapper 自身の起動通知であり、report 本文の finding ではない.
+ANNOUNCEMENT_NOT_A_FINDING_SENTENCE = (
+    "The announcement line is the wrapper's own startup notice at the top of "
+    "the body, so never normalize it into a finding."
+)
+# 待機手段 (Bash tool 1 回の until ポーリングループ。述語は run id 一致まで含む).
 WAIT_SENTENCE = (
     "Wait for that same background run with a single Bash call that runs the "
-    'until-loop `until [ -e "$SENTINEL" ] || [ ! -e "$OUT" ] || '
-    '[ $SECONDS -ge $end ]; do sleep 10; done`, where `$SENTINEL` is the '
-    "wrapper's terminal sentinel, `$OUT` is the recorded output file, and "
-    "`$end` is the loop's own deadline."
+    'until-loop `until { [ -e "$SENTINEL" ] && grep -q "run=$RUN_ID" '
+    '"$SENTINEL"; } || [ ! -e "$OUT" ] || [ $SECONDS -ge $end ]; do sleep 10; '
+    "done`, where `$SENTINEL` is the wrapper's terminal sentinel, `$RUN_ID` "
+    "is the run id you took before waiting, `$OUT` is the recorded output "
+    "file, and `$end` is the loop's own deadline."
 )
 # ループ内 deadline と Bash tool timeout の関係 (auto-background を避ける).
 LOOP_DEADLINE_SENTENCE = (
@@ -105,22 +115,22 @@ NO_STANDALONE_SLEEP_SENTENCE = (
 BUDGET_DEFINITION_SENTENCE = (
     "For the initial automatic recovery, run that loop at most three times in "
     "total — the initial run plus two reruns, roughly a 30-minute recovery "
-    "budget — rerunning it only when it ended at its deadline without the "
-    "sentinel."
+    "budget — rerunning it only when it ended at its deadline without a "
+    "matching sentinel."
 )
 # ループ終了理由の判別 (rerun か境界かを決める前の明示確認).
 LOOP_EXIT_SENTENCE = (
-    'When the loop returns, check `[ -e "$SENTINEL" ]` and `[ -e "$OUT" ]` '
-    "with Bash before deciding what happened: an existing sentinel goes to "
-    "the run id check, a missing output file is the missing-output boundary, "
-    "and neither means the loop reached its deadline, so decide there whether "
-    "to rerun it."
+    "When the loop returns, check with Bash which of the three exits "
+    "happened: a sentinel carrying this run id means the run ended, so go on "
+    "to recovery; a missing output file is the missing-output boundary; and "
+    "neither means the loop reached its deadline, so decide there whether to "
+    "rerun it."
 )
-# sentinel の run 照合 (別 run の sentinel は終端とみなさない).
+# 述語が run id 一致を含むことの帰結 (別 run の sentinel は待機も予算も動かさない).
 SENTINEL_MATCH_SENTENCE = (
-    "A sentinel is this run's terminal signal only when its `run=` value "
-    "equals that run id; a sentinel carrying any other run id belongs to a "
-    "different run, so ignore it and keep waiting within the recovery budget."
+    "Because the loop only accepts a sentinel carrying this run id, a "
+    "sentinel left by a different run neither ends the wait nor consumes the "
+    "recovery budget."
 )
 # sentinel が示す終了状態の読み取り (failure 側).
 SENTINEL_FAILED_SENTENCE = (
@@ -179,32 +189,27 @@ MISSING_FILE_SENTENCE = (
     "disappears while the loop is waiting, return `Status: execution-failed` "
     "(failure class `other`) without rerunning the loop."
 )
-# 境界: recorded output file が空 (sentinel 未出現なら実行中として待機継続).
-EMPTY_FILE_SENTENCE = (
-    "If the recorded output file is empty (zero bytes) and the sentinel has "
-    "not appeared, the run is still in progress: keep waiting within the "
-    "recovery budget."
-)
 # 境界: 回収予算 (3 回のループ) の超過.
 BUDGET_SENTENCE = (
-    "If the third run of the loop ends at its deadline without the sentinel, "
-    "return `Status: execution-failed` (failure class `other`), state in the "
-    "recovery direction that the codex review is likely still running in the "
-    "background, and note that the parent may resume this same subagent for "
-    "a diagnostic status check only."
+    "If the third run of the loop ends at its deadline without a matching "
+    "sentinel, return `Status: execution-failed` (failure class `other`), "
+    "state in the recovery direction that the codex review is likely still "
+    "running in the background, and note that the parent may resume this "
+    "same subagent for a diagnostic status check only."
 )
-# 境界: 本文を最後まで読めない / 空のまま status=ok.
+# 境界: 本文を最後まで読めない / 案内行しか無いまま status=ok.
 INCOMPLETE_BODY_SENTENCE = (
-    "If the recorded output file cannot be read to its end, or is empty "
-    "(zero bytes) when the sentinel reports `status=ok`, return "
-    "`Status: execution-failed` (failure class `other`) instead of "
-    "normalizing a partial body."
+    "If the recorded output file cannot be read to its end, or carries "
+    "nothing beyond the announcement line when the sentinel reports "
+    "`status=ok`, return `Status: execution-failed` (failure class `other`) "
+    "instead of normalizing a partial body."
 )
-# 境界: run を同定できない (案内行が output file に無い).
+# 境界: run を同定できない (案内行がまだ無い。空ファイルもここに含む).
 UNIDENTIFIABLE_RUN_SENTENCE = (
-    "If the recorded output file carries no announcement line, this run "
-    "cannot be identified: return `Status: execution-failed` (failure class "
-    "`other`)."
+    "If that head Read finds no announcement line — including a recorded "
+    "output file that is still empty — this run cannot be identified: return "
+    "`Status: execution-failed` (failure class `other`) without entering the "
+    "wait loop."
 )
 
 # sentinel path の組み立て方 (固定名が plugin ごとに異なる).
@@ -230,6 +235,7 @@ SHARED_RECOVERY_CLAUSES = {
     "no-second-run": SECOND_RUN_SENTENCE,
     "output-file-precheck": PRECHECK_SENTENCE,
     "run-id-from-announcement": RUN_ID_SENTENCE,
+    "announcement-not-a-finding": ANNOUNCEMENT_NOT_A_FINDING_SENTENCE,
     "polling-loop-wait": WAIT_SENTENCE,
     "loop-deadline": LOOP_DEADLINE_SENTENCE,
     "no-standalone-sleep": NO_STANDALONE_SLEEP_SENTENCE,
@@ -246,7 +252,6 @@ SHARED_RECOVERY_CLAUSES = {
     "poll-and-read-scope": TOOL_SCOPE_SENTENCE,
     "boundary-no-output-path": NO_PATH_SENTENCE,
     "boundary-missing-output-file": MISSING_FILE_SENTENCE,
-    "boundary-empty-output-file": EMPTY_FILE_SENTENCE,
     "boundary-incomplete-body": INCOMPLETE_BODY_SENTENCE,
     "boundary-budget-exhausted": BUDGET_SENTENCE,
     "boundary-unidentifiable-run": UNIDENTIFIABLE_RUN_SENTENCE,
@@ -517,6 +522,9 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_recovery_takes_the_run_id_from_the_announcement_line(self) -> None:
         self.assert_clause(RUN_ID_SENTENCE)
 
+    def test_announcement_line_is_not_normalized_into_a_finding(self) -> None:
+        self.assert_clause(ANNOUNCEMENT_NOT_A_FINDING_SENTENCE)
+
     def test_recovery_waits_with_a_bash_until_loop(self) -> None:
         self.assert_clause(WAIT_SENTENCE)
 
@@ -532,7 +540,9 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
     def test_loop_exit_reason_is_checked_before_deciding(self) -> None:
         self.assert_clause(LOOP_EXIT_SENTENCE)
 
-    def test_sentinel_counts_only_when_the_run_id_matches(self) -> None:
+    def test_other_runs_sentinel_neither_ends_the_wait_nor_costs_budget(
+        self,
+    ) -> None:
         self.assert_clause(SENTINEL_MATCH_SENTENCE)
 
     def test_failed_sentinel_ends_execution_failed(self) -> None:
@@ -564,9 +574,6 @@ class CodexReviewerBackgroundMoveRecoveryTest(ContractTestCase):
 
     def test_boundary_missing_output_file_ends_execution_failed(self) -> None:
         self.assert_clause(MISSING_FILE_SENTENCE)
-
-    def test_boundary_empty_output_file_keeps_waiting(self) -> None:
-        self.assert_clause(EMPTY_FILE_SENTENCE)
 
     def test_boundary_incomplete_body_ends_execution_failed(self) -> None:
         self.assert_clause(INCOMPLETE_BODY_SENTENCE)
