@@ -171,7 +171,9 @@ write_terminal_sentinel() {
   # いない場合でも、 終了行が独立した最終行になることを保証するため (回収側は output
   # file の最終行が終了行であることで本文の完結を判定する)。 本文が改行で終わる通常
   # ケースでは空行が 1 つ挟まるだけで、 最終行が終了行であることは変わらない。
-  printf '\nterminal sentinel end run=%s\n' "$RUN_ID"
+  # stdout への書き込み失敗 (閉じられた pipe 等) で trap が `set -e` により途中終了し、
+  # sentinel が書かれないまま exit status も置き換わる経路を塞ぐため、 失敗を無視する。
+  printf '\nterminal sentinel end run=%s\n' "$RUN_ID" || true
   sentinel_tmp="${TERMINAL_SENTINEL_PATH}.tmp.$$"
   if printf 'status=%s run=%s\n' "$state" "$RUN_ID" > "$sentinel_tmp" 2>/dev/null; then
     mv "$sentinel_tmp" "$TERMINAL_SENTINEL_PATH" 2>/dev/null \

@@ -136,7 +136,9 @@ write_terminal_sentinel() {
   # いない場合でも、 終了行が独立した最終行になることを保証するため (回収側は output
   # file の最終行が終了行であることで本文の完結を判定する)。 本文が改行で終わる通常
   # ケースでは空行が 1 つ挟まるだけで、 最終行が終了行であることは変わらない。
-  printf '\nterminal sentinel end run=%s\n' "$RUN_ID"
+  # stdout への書き込み失敗 (閉じられた pipe 等) で trap が `set -e` により途中終了し、
+  # sentinel が書かれないまま exit status も置き換わる経路を塞ぐため、 失敗を無視する。
+  printf '\nterminal sentinel end run=%s\n' "$RUN_ID" || true
   sentinel_tmp="${TERMINAL_SENTINEL_PATH}.tmp.$$"
   if printf 'status=%s run=%s\n' "$state" "$RUN_ID" > "$sentinel_tmp" 2>/dev/null; then
     mv "$sentinel_tmp" "$TERMINAL_SENTINEL_PATH" 2>/dev/null \
@@ -148,9 +150,10 @@ write_terminal_sentinel() {
 
 # EXIT trap 本体。 trap の引数で受け取った exit status から終了状態を決める
 # (fail() 経由の非ゼロ exit は `status=failed`、 exit 0 経路は `status=ok`)。
-# WORK_DIR が未設定のときの rm は行わない。
+# WORK_DIR が未設定のときの rm は行わない。 rm の失敗で trap が `set -e` により途中終了
+# すると sentinel が書かれないため、 失敗は無視して sentinel の書き込みへ進む。
 on_exit() {
-  if [ -n "$WORK_DIR" ]; then rm -rf "$WORK_DIR"; fi
+  if [ -n "$WORK_DIR" ]; then rm -rf "$WORK_DIR" 2>/dev/null || true; fi
   write_terminal_sentinel "$1"
 }
 trap 'on_exit $?' EXIT
