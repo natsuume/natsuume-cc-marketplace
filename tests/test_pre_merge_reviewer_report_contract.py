@@ -5,10 +5,17 @@ wrapper が PR レビューコメントの header に付ける `status=pass|find
 食い違うことがある。codex-reviewer subagent は `Status` を必ず report 本文
 から導出し、header との食い違いを finding として捏造しない (`Note:` 1 行で
 表現する) ことをこのテストで固定する。
+
+あわせて、この subagent の tool grant と background-move 回収契約が
+pre-push-codex-review 側の codex-reviewer と同一であることを固定する。共通の
+canonical 文と抽出 helper は `test_pre_push_codex_reviewer_bg_recovery` を正本と
+して読み込み、gate 名を含む resume 時の一文だけを本ファイルで定義する。
 """
 
 from __future__ import annotations
 
+import importlib
+import sys
 import unittest
 from pathlib import Path
 
@@ -17,6 +24,35 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "pre-merge-codex-review"
 AGENT = PLUGIN / "agents" / "codex-reviewer.md"
 PLUGIN_README = PLUGIN / "README.md"
+
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
+
+def _load_shared_recovery_contract():
+    """両 plugin 共通の回収契約 module (canonical 文と抽出 helper) を読み込む。
+
+    `import` 文で書くと「sys.path 操作より前に import 文が来る」という lint 制約
+    (E402) に抵触するため、既存テストと同じ importlib 経由の明示 import にする。
+    """
+    return importlib.import_module("test_pre_push_codex_reviewer_bg_recovery")
+
+
+_shared_contract = _load_shared_recovery_contract()
+
+ContractTestCase = _shared_contract.ContractTestCase
+SHARED_RECOVERY_CLAUSES = _shared_contract.SHARED_RECOVERY_CLAUSES
+TOOL_GRANT_LITERAL = _shared_contract.TOOL_GRANT_LITERAL
+
+# resume 後の status check の位置づけ。merge gate はローカル記録を検証するため、
+# 診断目的の再読では gate を満たせないことを pre-merge 側の文言で固定する。
+RESUME_CHECK_SENTENCE = (
+    "A resumed status check is a single bounded Read of the recorded output "
+    "file outside the initial recovery budget; it is diagnostic only and "
+    "cannot write the local record — satisfying the merge gate requires a "
+    "completed wrapper run that writes it."
+)
 
 REQUIRED_REPORT_FIELDS = (
     "## Parent-safe report contract",
@@ -67,6 +103,39 @@ class PreMergeReviewerParentSafeReportContractTest(unittest.TestCase):
         body = self.read(PLUGIN_README)
         self.assertIn("Note:", body)
         self.assertIn("Codex の report 本文", body)
+
+
+class PreMergeReviewerToolGrantTest(ContractTestCase):
+    """回収に使うツールの公開契約 (frontmatter の tools 行)。"""
+
+    def test_tools_frontmatter_grants_bash_and_read(self) -> None:
+        self.assert_tools_line(AGENT)
+
+    def test_agent_body_never_mentions_task_output(self) -> None:
+        self.assert_text_absent(AGENT, "TaskOutput")
+
+
+class PreMergeReviewerBackgroundMoveRecoveryTest(ContractTestCase):
+    """`## Background-move recovery` セクションが固定すべき回収契約の一文。"""
+
+    def test_recovery_section_states_every_shared_clause(self) -> None:
+        for clause, sentence in SHARED_RECOVERY_CLAUSES.items():
+            with self.subTest(clause=clause):
+                self.assert_recovery_clause(AGENT, sentence)
+
+    def test_resumed_status_check_is_bounded_and_diagnostic_only(self) -> None:
+        self.assert_recovery_clause(AGENT, RESUME_CHECK_SENTENCE)
+
+
+class PreMergeReviewerDocumentationTest(ContractTestCase):
+    """README が現在の tool grant と起動仕様を説明する。"""
+
+    def test_plugin_readme_documents_current_tool_grant(self) -> None:
+        self.assert_text_absent(PLUGIN_README, "TaskOutput")
+        self.assert_text_contains(PLUGIN_README, TOOL_GRANT_LITERAL)
+
+    def test_plugin_readme_omits_agent_launch_parameter(self) -> None:
+        self.assert_text_absent(PLUGIN_README, "run_in_background")
 
 
 if __name__ == "__main__":

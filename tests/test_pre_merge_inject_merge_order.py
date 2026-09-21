@@ -56,12 +56,18 @@ FIXED_PROMPT_SENTENCE = (
 REQUIRED_PROMPT_SUBSTRINGS = [
     "pre-merge-codex-review:codex-reviewer",
     'model: "sonnet"',
-    "run_in_background: false",
+    # subagent の結果は completion notification 経由で届く (起動 mode は Claude Code
+    # が決め、呼び出し側は指定しない)。この前提を注入文が明記する。
+    "completion notification",
     "gh pr merge",
     "--delete-branch",
     "AskUserQuestion",
     FIXED_PROMPT_SENTENCE,
 ]
+
+# Agent tool は起動 mode を選ぶパラメータを受け付けないため、注入文はその指定を
+# 指示しない。
+FORBIDDEN_PROMPT_SUBSTRINGS = ["run_in_background"]
 
 FORBIDDEN_DESCRIPTION_SUBSTRINGS = ["gh pr merge", "merge gate", "deny", "投稿"]
 REQUIRED_DESCRIPTION_SUBSTRINGS = ["read-only", "parent-safe"]
@@ -258,6 +264,17 @@ class PromptContractTest(unittest.TestCase):
         for substring in REQUIRED_PROMPT_SUBSTRINGS:
             with self.subTest(substring=substring):
                 self.assertIn(substring, text)
+
+    def test_prompt_contains_no_forbidden_substrings(self) -> None:
+        text = self._read_prompt()
+        for substring in FORBIDDEN_PROMPT_SUBSTRINGS:
+            with self.subTest(substring=substring):
+                hits = [
+                    f"L{number}: {line.strip()[:120]}"
+                    for number, line in enumerate(text.splitlines(), start=1)
+                    if substring in line
+                ]
+                self.assertEqual(hits, [], f"{substring} の指定指示が残っている")
 
     def test_prompt_has_no_issue_pr_number_or_date_references(self) -> None:
         text = self._read_prompt()

@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "pre-push-codex-review"
 HOOK = PLUGIN / "hooks" / "scripts" / "manage-review-cadence.mjs"
 HOOKS_JSON = PLUGIN / "hooks" / "hooks.json"
+CADENCE_RULES_PROMPT = PLUGIN / "hooks" / "prompts" / "review-cadence-rules.md"
 
 PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
 PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
@@ -1106,6 +1107,34 @@ class HooksManifestHandbackTest(HooksManifestContractTest):
             hooks, "PostToolUse", "manage-review-cadence.mjs"
         )
         self.assertEqual("^SubagentHandback$", entry["matcher"])
+
+
+class CheckpointLaunchInstructionTest(unittest.TestCase):
+    """checkpoint runner の起動案内が現行の Agent tool の起動仕様に沿うこと。
+
+    Agent tool は起動 mode を選ぶパラメータを受け付けないため、SessionStart 注入文と
+    cadence script の deny / Stop 文言はその指定を指示せず、`model` だけを明示する。
+    """
+
+    def assert_no_launch_mode_parameter(self, path: Path) -> None:
+        hits = [
+            f"L{number}: {line.strip()[:120]}"
+            for number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            )
+            if "run_in_background" in line
+        ]
+        self.assertEqual(hits, [], f"{path}: 起動 mode の指定指示が残っている")
+
+    def test_injected_rules_omit_launch_mode_parameter(self) -> None:
+        self.assert_no_launch_mode_parameter(CADENCE_RULES_PROMPT)
+
+    def test_cadence_script_messages_omit_launch_mode_parameter(self) -> None:
+        self.assert_no_launch_mode_parameter(HOOK)
+
+    def test_injected_rules_declare_checkpoint_runner_model(self) -> None:
+        text = CADENCE_RULES_PROMPT.read_text(encoding="utf-8")
+        self.assertIn('`model: "sonnet"`', text)
 
 
 if __name__ == "__main__":
