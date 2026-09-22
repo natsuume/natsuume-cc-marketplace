@@ -6,7 +6,7 @@
 
 ## バージョン
 
-v2.2.0
+v2.2.1
 
 ## インストール
 
@@ -179,6 +179,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - **照合 repo は hook payload の `cwd` に従う**: gate は payload の `cwd` が指す repo でレビューコメントを照合します。payload の `cwd` が実際にコマンドを実行する shell の cwd と乖離する環境では、gate は payload 側の repo を照合し、その乖離自体は検出できません
 - **remote `origin` = PR の repository が前提 (fork 構成は非対応)**: wrapper はレビュー範囲の base をローカルの `origin/<base>` で解決するため、remote `origin` が PR の属する repository を指す個人環境を前提とします。fork からの PR (origin と PR の repository が異なる構成) には対応しません
 - **merge queue による暗黙の遅延 merge は検出しない**: merge queue が有効な base branch では `--auto` を付けなくても merge が queue 経由の遅延実行になりえますが、gate はこれを検出しません (遅延 merge はサポート外です)
+- **PowerShell tool / Monitor tool 経由の `gh pr merge` は観測しない**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `gh pr merge` を gate は観測しません。これらの tool を有効にした環境はサポート外です
 
 ## pre-push-review / pre-push-codex-review との併用設計
 

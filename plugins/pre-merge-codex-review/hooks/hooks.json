@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-merge-order-rules.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-merge-order-rules.sh",
+            "args": []
           }
         ]
       }
@@ -17,11 +18,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-pre-merge.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-pre-merge.sh",
+            "args": []
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-bg-codex-wrapper.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-bg-codex-wrapper.sh",
+            "args": []
           }
         ]
       }
@@ -32,7 +35,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       }
@@ -43,7 +47,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       }
@@ -54,7 +59,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       }
@@ -65,7 +71,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       }

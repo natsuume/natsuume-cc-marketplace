@@ -7,7 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-pre-push.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-pre-push.sh",
+            "args": []
           }
         ]
       }
@@ -18,7 +19,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       }
@@ -29,7 +31,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       }
@@ -40,7 +43,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       }

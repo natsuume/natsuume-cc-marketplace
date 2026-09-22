@@ -8,7 +8,7 @@
 
 ## バージョン
 
-v2.1.0
+v2.1.1
 
 ## インストール
 
@@ -187,6 +187,10 @@ checkpoint の実行には `codex-advisor` plugin の install が必要です。
 | `hooks/scripts/lib/codex-companion-resolver.sh` | codex companion 解決ロジック (本 plugin が canonical) |
 | `agents/codex-reviewer.md` | `pre-push-codex-review:codex-reviewer` subagent 定義 |
 | `commands/review.md` | `/pre-push-codex-review:review` コマンド定義 |
+
+## 既知の制約
+
+- **gate の観測範囲は Bash tool のみ**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `git push` を gate は観測しない。これらの tool を有効にした環境はサポート外
 
 ## 関連プラグイン
 

@@ -40,7 +40,10 @@ TOOLS_LINE = "tools: Bash, Read"
 TOOL_GRANT_LITERAL = "`Bash, Read`"
 # 待機を含むコマンド実行は Bash tool に閉じる。別のコマンド実行経路を持つ tool を
 # 案内すると、`Bash` matcher の PreToolUse gate が観測しない実行経路が増える。
+# README の `## 既知の制約` 節だけは、この tool 経由のコマンドを gate が観測しない
+# (サポート外) ことを利用者へ明記するために例外とする。
 FORBIDDEN_EXECUTION_TOOL = "Monitor"
+KNOWN_CONSTRAINTS_HEADING = "## 既知の制約"
 # 終端判定は sentinel ファイルで行う。出力ストリーム中のテキストを終端信号にすると、
 # wrapper の進捗行と接頭辞を共有して一意に判定できない。
 FORBIDDEN_TERMINAL_CONCEPT = "completion marker"
@@ -419,6 +422,22 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def without_known_constraints_section(text: str) -> str:
+    """README 本文から `## 既知の制約` 節 (次の `## ` 見出しの直前まで) を除いて返す。"""
+    lines = text.splitlines(keepends=True)
+    kept: list[str] = []
+    skipping = False
+    for line in lines:
+        if line.rstrip("\n") == KNOWN_CONSTRAINTS_HEADING:
+            skipping = True
+            continue
+        if skipping and line.startswith("## "):
+            skipping = False
+        if not skipping:
+            kept.append(line)
+    return "".join(kept)
+
+
 def normalized_recovery_section(path: Path) -> str:
     """agent file の回収セクションを空白正規化して返す。セクション不在なら失敗する。"""
     section = recovery_section(read(path))
@@ -528,6 +547,24 @@ class ContractTestCase(unittest.TestCase):
         ]
         joined = " / ".join(hits) if hits else "改行をまたいで出現"
         self.fail(f"{path}: {needle} の言及が残っている: {joined}")
+
+    def assert_text_absent_outside_known_constraints(
+        self, path: Path, needle: str
+    ) -> None:
+        """`## 既知の制約` 節を除いた本文で禁止語の不在を確認する。"""
+        body = without_known_constraints_section(read(path))
+        if normalize(needle) not in normalize(body):
+            return
+        hits = [
+            f"L{number}: {line.strip()[:120]}"
+            for number, line in enumerate(body.splitlines(), start=1)
+            if needle in line
+        ]
+        joined = " / ".join(hits) if hits else "改行をまたいで出現"
+        self.fail(
+            f"{path}: {needle} の言及が {KNOWN_CONSTRAINTS_HEADING} 節の外に残っている: "
+            f"{joined}"
+        )
 
     def assert_no_agent_launch_mode_parameter(self, path: Path) -> None:
         hits = agent_launch_mode_hits(read(path))
@@ -733,7 +770,9 @@ class CodexReviewerDocumentationTest(ContractTestCase):
 
     def test_plugin_readme_documents_current_tool_grant(self) -> None:
         self.assert_text_absent(PLUGIN_README, "TaskOutput")
-        self.assert_text_absent(PLUGIN_README, FORBIDDEN_EXECUTION_TOOL)
+        self.assert_text_absent_outside_known_constraints(
+            PLUGIN_README, FORBIDDEN_EXECUTION_TOOL
+        )
         self.assert_text_contains(PLUGIN_README, TOOL_GRANT_LITERAL)
 
     def test_plugin_readme_omits_agent_launch_mode_parameter(self) -> None:

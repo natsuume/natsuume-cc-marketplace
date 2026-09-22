@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-review-cadence-rules.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-review-cadence-rules.sh",
+            "args": []
           }
         ]
       }
@@ -16,7 +17,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs"
+            ]
           }
         ]
       }
@@ -27,15 +31,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-pre-push-codex.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-pre-push-codex.sh",
+            "args": []
           },
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-bg-codex-wrapper.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-bg-codex-wrapper.sh",
+            "args": []
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs"
+            ]
           }
         ]
       }
@@ -46,7 +55,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       },
@@ -55,7 +65,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs"
+            ]
           }
         ]
       }
@@ -66,11 +79,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs"
+            ]
           }
         ]
       }
@@ -81,11 +98,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           },
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs"
+            ]
           }
         ]
       }
@@ -96,7 +117,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/auto-mark.sh",
+            "args": []
           }
         ]
       },
@@ -105,7 +127,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs"
+            ]
           }
         ]
       }
@@ -115,7 +140,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-review-cadence.mjs"
+            ]
           }
         ]
       }

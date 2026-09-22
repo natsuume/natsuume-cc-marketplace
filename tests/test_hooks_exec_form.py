@@ -537,7 +537,10 @@ class HooksManifestDescriptionTest(unittest.TestCase):
                 description = load_json(hooks_manifest_path(plugin))["description"]
                 self.assertIsInstance(description, str)
                 self.assertEqual(
-                    (length, hashlib.sha256(description.encode("utf-8")).hexdigest()),
+                    (
+                        len(description),
+                        hashlib.sha256(description.encode("utf-8")).hexdigest(),
+                    ),
                     (length, digest),
                     f"{plugin}: hooks.json の description は起動形の変更で改変しない",
                 )
