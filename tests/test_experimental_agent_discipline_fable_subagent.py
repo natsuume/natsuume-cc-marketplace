@@ -1,4 +1,4 @@
-"""issue #389 の受入基準を固定する。
+"""experimental-agent-discipline の受入契約を固定する。
 
 experimental-agent-discipline は agent-discipline の fork であり、Fable 週次枠の使用率が
 閾値 (既定 50%) 以下のあいだに限り、effort low 固定の専用 agent
@@ -10,12 +10,14 @@ PreToolUse hook が許可する。本ファイルは次の 6 契約を固定す�
   意図的な差分ファイル以外は byte-identical であること。意図的な差分ファイルは実際に
   内容が異なり、fork 側にのみ存在してよいのは 2 つの agent 定義だけであること。
 - version 整合 (``PluginVersionConsistencyTest``): plugin.json / marketplace.json /
-  リポジトリ直下 README / plugin README の 4 箇所が name と v0.1.0 で一致すること。
+  リポジトリ直下 README / plugin README の 4 箇所が name と v0.2.0 で一致すること。
 - agent 定義 (``FableLowAgentFrontmatterTest``): 両 agent の frontmatter が
   `model: fable` と `effort: low` を持ち、explorer だけが読み取り系 tools に制限されること。
 - hook 判定表 (``FableSubagentGateDecisionTableTest`` /
   ``FableWeeklyUsageGateTest``): block-fable-subagent.sh を隔離環境の subprocess で
-  実行し、判定順序 (Step 0 / 1a / 1b / 2 / 3a / 3b) と使用率判定の各境界を固定すること。
+  実行し、判定順序 (Step 1a / 1b / 2 / 3a / 3b と `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` /
+  fork の扱い) と使用率判定の各境界を固定すること。モデル解決順序そのものの契約は
+  ``test_agent_discipline_model_resolution`` が両 plugin 共通で固定する。
 - 規律本文 (``DisciplinePromptDelegationRulesTest``): fork 側 3 ファイルから Fable 禁止
   文言が消え、rule:delegation-rules 節に専用 agent への許可条件が書かれること。
 - hooks.json (``HooksJsonStructureTest``): `description` 以外の構造が agent-discipline と
@@ -24,8 +26,9 @@ PreToolUse hook が許可する。本ファイルは次の 6 契約を固定す�
 観測点は public boundary (hook script の stdin / stdout / exit code、リポジトリ内の
 ファイル内容) に限る。hook を実行するテストは ``TMPDIR`` / ``XDG_CACHE_HOME`` / ``HOME`` を
 一時ディレクトリへ向け、``CLAUDE_CODE_SUBAGENT_MODEL`` /
-``EXPERIMENTAL_FABLE_SUBAGENT_MAX_PERCENT`` は明示的に設定または未設定にした最小の env で
-実行するため、実リポジトリと利用者の cache には触れない。
+``CLAUDE_CODE_SUBAGENT_MODEL_FORCE`` / ``EXPERIMENTAL_FABLE_SUBAGENT_MAX_PERCENT`` は
+明示的に設定または未設定にした最小の env で実行するため、実リポジトリと利用者の cache には
+触れない。
 """
 
 from __future__ import annotations
@@ -55,7 +58,7 @@ WORKER_AGENT = FORK_PLUGIN / "agents" / "fable-low-worker.md"
 EXPLORER_AGENT = FORK_PLUGIN / "agents" / "fable-low-explorer.md"
 
 PLUGIN_NAME = "experimental-agent-discipline"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
 
 WORKER_SUBAGENT_TYPE = f"{PLUGIN_NAME}:fable-low-worker"
 EXPLORER_SUBAGENT_TYPE = f"{PLUGIN_NAME}:fable-low-explorer"
@@ -211,7 +214,7 @@ class PluginVersionConsistencyTest(unittest.TestCase):
     """(b) version 整合: plugin.json / marketplace.json / 2 つの README が一致する。"""
 
     def test_plugin_json_declares_experimental_name_and_version(self) -> None:
-        """plugin.json の name と version が experimental-agent-discipline / 0.1.0 である。"""
+        """plugin.json の name と version が experimental-agent-discipline / 0.2.0 である。"""
         manifest = json.loads(read(FORK_PLUGIN_JSON))
         self.assertEqual(PLUGIN_NAME, manifest["name"])
         self.assertEqual(PLUGIN_VERSION, manifest["version"])
@@ -233,8 +236,8 @@ class PluginVersionConsistencyTest(unittest.TestCase):
             f"[{PLUGIN_NAME}](#{PLUGIN_NAME}) | {PLUGIN_VERSION}", read(REPO_README)
         )
 
-    def test_plugin_readme_version_heading_declares_v0_1_0(self) -> None:
-        """plugin README の `## バージョン` 直下の行が v0.1.0 である。"""
+    def test_plugin_readme_version_heading_declares_the_version(self) -> None:
+        """plugin README の `## バージョン` 直下の行が v0.2.0 である。"""
         lines = read(FORK_README).splitlines()
         self.assertIn("## バージョン", lines)
         index = lines.index("## バージョン")
@@ -318,6 +321,7 @@ class BlockFableSubagentHookTestBase(unittest.TestCase):
         session_id: str = "experimental-fable-gate",
         agent_id: object = UNSET,
         env_subagent_model: object = UNSET,
+        env_subagent_model_force: object = UNSET,
         env_effort_level: object = UNSET,
         threshold: object = UNSET,
         cache: object = UNSET,
@@ -384,6 +388,8 @@ class BlockFableSubagentHookTestBase(unittest.TestCase):
             }
             if env_subagent_model is not UNSET:
                 env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(env_subagent_model)
+            if env_subagent_model_force is not UNSET:
+                env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] = str(env_subagent_model_force)
             if env_effort_level is not UNSET:
                 env["CLAUDE_CODE_EFFORT_LEVEL"] = str(env_effort_level)
             if threshold is not UNSET:
@@ -427,6 +433,11 @@ class BlockFableSubagentHookTestBase(unittest.TestCase):
         self.assertEqual("deny", output["permissionDecision"])
         reason = output["permissionDecisionReason"]
         for keyword in keywords:
+            # `CLAUDE_CODE_SUBAGENT_MODEL` は FORCE 変数名の接頭辞でもあるため、env の名指しは
+            # `_FORCE` が続かない出現を要求する (FORCE だけを名指しした理由文を通さない)。
+            if keyword == "CLAUDE_CODE_SUBAGENT_MODEL":
+                self.assertRegex(reason, r"CLAUDE_CODE_SUBAGENT_MODEL(?!_FORCE)")
+                continue
             self.assertIn(keyword, reason)
         return reason
 
@@ -450,17 +461,43 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                     )
                 )
 
-    def test_step0_env_pointing_at_fable_denies_even_the_dedicated_agents(self) -> None:
-        """Step 0: env が fable を指す場合は専用 agent + 余裕のある枠でも deny する。"""
+    def test_force_with_fable_env_denies_even_the_dedicated_agents(self) -> None:
+        """FORCE + env が fable: 実効モデルが fable に固定され、使用率判定を通さずに全ての
+        サブエージェントが Fable で走るため、専用 agent + 余裕のある枠でも deny する。"""
         for subagent_type in ALLOWED_SUBAGENT_TYPES:
-            with self.subTest(subagent_type=subagent_type):
-                result = self.run_gate(
-                    tool_model="fable",
-                    subagent_type=subagent_type,
-                    env_subagent_model="claude-fable-5",
-                    cache=self.healthy_cache(),
+            for force in ("1", "true", "yes", "ON"):
+                with self.subTest(subagent_type=subagent_type, force=force):
+                    result = self.run_gate(
+                        tool_model="fable",
+                        subagent_type=subagent_type,
+                        env_subagent_model="claude-fable-5",
+                        env_subagent_model_force=force,
+                        cache=self.healthy_cache(),
+                    )
+                    self.assert_deny(result, "CLAUDE_CODE_SUBAGENT_MODEL")
+
+    def test_env_pointing_at_fable_does_not_block_explicit_non_fable_delegation(
+        self,
+    ) -> None:
+        """FORCE が無効なら明示 model が env より優先されるため、env が fable を指していても
+        非 Fable の明示委任は allow になる。"""
+        for model in ("sonnet", "opus", "haiku"):
+            with self.subTest(model=model):
+                self.assert_allow(
+                    self.run_gate(
+                        tool_model=model,
+                        subagent_type="general-purpose",
+                        env_subagent_model="claude-fable-5",
+                    )
                 )
-                self.assert_deny(result, "CLAUDE_CODE_SUBAGENT_MODEL")
+
+    def test_env_pointing_at_fable_denies_inherited_delegation(self) -> None:
+        """FORCE が無効でも、model 未指定 (継承) は env の fable が実効モデルになるため
+        deny する。"""
+        result = self.run_gate(
+            subagent_type="general-purpose", env_subagent_model="claude-fable-5"
+        )
+        self.assert_deny(result, "sonnet")
 
     def test_step1a_dedicated_agents_are_allowed_below_the_threshold(self) -> None:
         """Step 1a: `model: fable` + 専用 agent は使用率が閾値以下なら allow になる。"""
@@ -474,19 +511,42 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                     )
                 )
 
-    def test_step1a_non_fable_env_denies_with_unpin_guidance(self) -> None:
-        """Step 1a: env が非 Fable を指す場合は専用 agent + 余裕のある枠でも deny し、
-        env の解除 (または sonnet / opus への通常委任) を案内する。"""
+    def test_step1a_force_denies_with_unpin_guidance(self) -> None:
+        """Step 1a: FORCE が有効だと agent 定義の `model: fable` が無視され、専用 agent が
+        Fable 以外のモデルで effort low のまま走るため、余裕のある枠でも deny し、env
+        (FORCE) の解除 (または sonnet / opus への通常委任) を案内する。"""
+        env_values = {"sonnet": "sonnet", "claude-opus-5": "claude-opus-5", "absent": UNSET}
         for subagent_type in ALLOWED_SUBAGENT_TYPES:
-            for env_value in ("sonnet", "claude-opus-5"):
-                with self.subTest(subagent_type=subagent_type, env=env_value):
+            for label, env_value in env_values.items():
+                with self.subTest(subagent_type=subagent_type, env=label):
                     result = self.run_gate(
                         tool_model="fable",
                         subagent_type=subagent_type,
                         env_subagent_model=env_value,
+                        env_subagent_model_force="1",
+                        session_state="claude-sonnet-5",
                         cache=self.healthy_cache(),
                     )
-                    self.assert_deny(result, "CLAUDE_CODE_SUBAGENT_MODEL", "解除")
+                    self.assert_deny(
+                        result, "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "解除"
+                    )
+
+    def test_step1a_non_fable_env_without_force_reaches_the_usage_gate(self) -> None:
+        """Step 1a: FORCE が無効なら env が非 Fable を指していても明示した `model: fable`
+        が優先されるため、専用 agent への委任は使用率判定を通って allow になる。"""
+        force_values = {"absent": UNSET, "zero": "0", "false": "false", "empty": ""}
+        for subagent_type in ALLOWED_SUBAGENT_TYPES:
+            for label, force in force_values.items():
+                with self.subTest(subagent_type=subagent_type, force=label):
+                    self.assert_allow(
+                        self.run_gate(
+                            tool_model="fable",
+                            subagent_type=subagent_type,
+                            env_subagent_model="sonnet",
+                            env_subagent_model_force=force,
+                            cache=self.healthy_cache(),
+                        )
+                    )
 
     def test_step1a_non_low_effort_env_denies_with_unpin_guidance(self) -> None:
         """Step 1a: CLAUDE_CODE_EFFORT_LEVEL が low 以外なら、余裕のある枠でも deny し、
@@ -713,6 +773,53 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
         self.assert_allow(
             self.run_gate(subagent_type="general-purpose", session_state="claude-sonnet-4-5")
         )
+
+    def test_fork_inherits_the_session_model_regardless_of_model_and_env(self) -> None:
+        """fork は model 指定にも env にも依らずメインセッションのモデルを継承するため、
+        session の model state が fable なら deny する。"""
+        cases = {
+            "model-unspecified": {},
+            "model-sonnet-explicit": {"tool_model": "sonnet"},
+            "env-sonnet": {"env_subagent_model": "sonnet"},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(fork=label):
+                result = self.run_gate(
+                    subagent_type="fork",
+                    session_state="claude-fable-5-1",
+                    **overrides,  # type: ignore[arg-type]
+                )
+                self.assert_deny(result, "sonnet")
+
+    def test_fork_from_inside_a_subagent_is_denied(self) -> None:
+        """subagent 内 (agent_id あり) からの fork は、session state が非 Fable でも deny する。
+
+        fork は起動元 subagent のモデルを継承するため、Fable 専用 agent からの fork では
+        使用率判定を通らずに Fable が起動しうる。継承経路の nested guard と同じ扱いにする。
+        """
+        cases = {
+            "model-unspecified": {},
+            "model-sonnet-explicit": {"tool_model": "sonnet"},
+            "env-sonnet": {"env_subagent_model": "sonnet"},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(fork=label):
+                result = self.run_gate(
+                    subagent_type="fork",
+                    agent_id="agent-123",
+                    session_state="claude-sonnet-5",
+                    **overrides,  # type: ignore[arg-type]
+                )
+                self.assert_deny(result, "subagent 内", "sonnet")
+
+    def test_fork_from_a_non_fable_session_is_allowed(self) -> None:
+        """fork は継承元が非 Fable なら allow になる (Sonnet / Opus セッションの fork を
+        妨げない)。"""
+        for session_state in ("claude-sonnet-5", "claude-opus-5"):
+            with self.subTest(session_state=session_state):
+                self.assert_allow(
+                    self.run_gate(subagent_type="fork", session_state=session_state)
+                )
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")

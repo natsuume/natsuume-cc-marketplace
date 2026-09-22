@@ -9,10 +9,11 @@
 #            fail-open でセッションを壊さない。inject-always.sh / codex-advisor の
 #            inject-advisor-rules-subagent.sh と同方針)
 #
-# 設計 (issue #221 の確定設計):
-#   - モデル判定 (Fable/Sonnet 分岐) を持たない: subagent は Fable になり得ず
-#     (block-fable-subagent.sh が deny)、SubagentStart hook input のモデル情報にも保証が
-#     ないため、Sonnet 向け書式の単一テンプレートを常に注入する
+# 設計:
+#   - モデル判定 (Fable/Sonnet 分岐) を持たない: subagent は原則 Sonnet / Opus だが、
+#     fork / frontmatter 経路では Fable になりうる (block-fable-subagent.sh が捕捉できる
+#     のは明示 model・env・継承の各経路に限る)。加えて SubagentStart hook input のモデル
+#     情報にも保証がないため、どのモデルで実行されても成り立つ単一テンプレートを常に注入する
 #   - agent_type による条件分岐も持たない (codex-advisor / ui-discipline の SubagentStart
 #     注入と同方針)
 #   - プレースホルダ置換なし (静的全文注入)。パス解決は script 自身の位置基準

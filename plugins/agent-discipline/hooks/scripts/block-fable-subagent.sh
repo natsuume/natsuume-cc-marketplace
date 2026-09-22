@@ -1,28 +1,35 @@
 #!/bin/bash
 # block-fable-subagent.sh
-# PreToolUse (matcher: Agent|Task) で、サブエージェントが Fable で実行される経路を deny する防波堤。
-#
-# 判定順序は Claude Code のモデル解決順序 (CLAUDE_CODE_SUBAGENT_MODEL env > tool_input.model
-# 明示指定 > agent frontmatter > メインセッション継承) と一致させる。すべて deterministic な
+# PreToolUse (matcher: Agent|Task) で、サブエージェントが Fable で実行される経路を deny する
+# 二重防御の hook。主防御は利用者の settings に置く permission rule
+# (`permissions.deny` の `Agent(model:fable)` / `Agent(fork)`) であり、本 hook は permission
+# rule が捕捉しない経路 (full model ID の明示、agent 定義 frontmatter、メインセッション継承、
+# env による上書き) の検知と、deny メッセージによる自己修正誘導を担う。すべて deterministic な
 # 文字列判定で LLM 評価は使わない。判定不能時は fail-open = allow。
 #
-#   0. env が fable を指す → tool_input.model の値に依らず無条件 deny
-#      (env は明示指定より優先されるため、明示 sonnet/opus でも実行モデルは fable になる)
-#   1. tool_input.model に fable が明示指定されている → deny
-#   2. tool_input.model が非 fable の具体指定 → allow (Step 0 より env は非 fable 確定)
-#   3. tool_input.model 未指定 (= 継承経路):
-#      a. env が非空 → allow (env が継承を非 fable モデルへ上書きするため安全)
-#      b. env 不在: inject-always.sh が SessionStart で記録した session model state が
-#         fable の場合のみ deny
-#      c. env 不在 + state 不明 (#200 で実装済み): pending マーカー
-#         `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` が存在する場合は
-#         deny する。判定不能セッションの実体が Fable のとき、未指定継承は継承先が Fable に
-#         なり、この時点では state も未確定のため他の防御が効かない (PR #199 codex P2)。
-#         deny メッセージには「モデル確定 (one-shot 補正) までは model に非 Fable (sonnet 等)
-#         を明示して再実行する」自己修復誘導を含める。明示非 Fable 指定は Step 2 で
-#         allow 済みのため、pending 中でも明示指定の委任は妨げない
-#      d. env 不在 + state 不明 + pending マーカーも無し → allow (真の情報ゼロは従来どおり
-#         fail-open を維持)
+# Claude Code のモデル解決順序:
+#   明示 model > agent 定義の frontmatter > CLAUDE_CODE_SUBAGENT_MODEL > メインセッション継承。
+#   CLAUDE_CODE_SUBAGENT_MODEL_FORCE (1 / true / yes / on、大文字小文字は区別しない) が設定されている
+#   場合のみ、env (未設定ならメインセッションのモデル) がこの順序の全てを上書きする。
+#   subagent_type が fork のサブエージェントは、model 指定にも env にも依らずメインセッションの
+#   モデルを継承する。
+#
+# 判定順序 (上から評価し、最初に該当した結果を返す):
+#   1. fork (subagent_type が fork) → メインセッションのモデルで判定する (継承経路と同じ扱い)
+#   2. CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効 → 実効モデルは env (非空ならその値、空なら
+#      メインセッションのモデル)。fable なら model の明示に依らず deny し、model の明示では
+#      直せないことを deny 理由に書く。非 fable なら model が fable でも allow
+#   3. tool_input.model に fable が明示指定されている → deny
+#   4. tool_input.model が非 fable の具体指定 → allow (明示は env より優先されるため)
+#   5. tool_input.model 未指定 (= メインセッション継承経路):
+#      - env が非空: fable なら deny、それ以外は allow
+#      - env 不在: session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`、
+#        inject-always.sh が SessionStart で記録し update-model-on-switch.sh が /model 切替で
+#        更新する) が fable の場合のみ deny
+#      - env 不在 + state 不明: pending マーカー
+#        (`${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`) が存在すれば deny
+#        する。モデル判定不能期間は継承先が Fable でも state から検知できないため。マーカーも
+#        無い真の情報ゼロの場合は fail-open (allow)
 #
 # 正規化ポリシー:
 #   - env / tool_input.model とも前後空白を trim し、"inherit" (case-insensitive) は
@@ -31,19 +38,11 @@
 #     信頼する (env の妥当性検証は Claude Code 本体と利用者の責務で、hook の確信境界の外)
 #
 # 既知の制約:
-#   - agent 定義 frontmatter の model は tool_input に現れないため判定できない。env 不在 +
-#     model 未指定 + frontmatter が fable を指す構成は本 hook では捕捉不能 (env 側でカバー)
-#   - fork subagent (model 指定を無視して親モデルを継承する型) は deny しない
-#     (誘導層の「原則使用しない」文言のみで運用する設計判断)
-#   - Workflow ツール内部の agent() 呼び出しは PreToolUse では捕捉できない (env 側でカバー)
-#   - セッション途中の /model 切替は検知できない (model を含む hook 入力は SessionStart のみで、
-#     $CLAUDE_MODEL 環境変数も存在しない)。env 不在時は state file が次の SessionStart まで
-#     stale になり、fable への切替は素通り (Step 3b が旧 state で allow)、fable からの切替は
-#     誤 deny になる (deny メッセージの model 明示誘導で自己修復可能)。README の既知の制約参照
-#
-# 主防御はあくまで CLAUDE_CODE_SUBAGENT_MODEL env 設定 (Agent の明示指定・agent frontmatter・
-# Workflow 内部の agent() すべてより優先されることを実測検証済み)。本 hook は env 設定が
-# 誤っている / 外れた場合の defense-in-depth + deny メッセージによる自己修正誘導が役割。
+#   - agent 定義 frontmatter の model は tool_input に現れないため判定できない。model 未指定 +
+#     frontmatter が fable を指す構成は、FORCE 併用時を除いて本 hook では捕捉不能
+#   - Workflow ツール内部の agent() 呼び出しは PreToolUse では捕捉できない
+#   - jq 不在時は何もせず exit 0 (jq は plugin 全体の前提であり、本 hook 単独では fail-closed に
+#     しない)。hook_event_name が PreToolUse 以外の入力にも応答しない
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -51,11 +50,16 @@ fi
 
 INPUT=$(cat)
 
-{ read -r HOOK_EVENT; read -r TOOL_MODEL; read -r SESSION_ID; } < <(
+# 各フィールドは 1 行 1 値で読むため、値に含まれる改行 (CR / LF) は空白に置き換えて欄ずれを防ぐ
+# (subagent_type に改行を含めても、後続の session_id 等が別の欄に読み込まれない)。
+{ read -r HOOK_EVENT; read -r TOOL_MODEL; read -r SUBAGENT_TYPE; read -r SESSION_ID; } < <(
   printf '%s' "$INPUT" | jq -r '
-    (.hook_event_name // ""),
-    (.tool_input.model // ""),
-    (.session_id // "")
+    [ (.hook_event_name // ""),
+      (.tool_input.model // ""),
+      (.tool_input.subagent_type // ""),
+      (.session_id // "") ]
+    | map(tostring | gsub("[\r\n]"; " "))
+    | .[]
   ' 2>/dev/null
 )
 
@@ -80,8 +84,15 @@ trim() {
   printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
+# モデル名が Fable を指すか (alias `fable` / full ID `claude-fable-5-1` の双方を含む部分一致)。
+is_fable() {
+  [ -n "$1" ] && printf '%s' "$1" | grep -qi 'fable'
+}
+
 TOOL_MODEL=$(trim "$TOOL_MODEL")
+SUBAGENT_TYPE=$(trim "$SUBAGENT_TYPE")
 ENV_SUB=$(trim "${CLAUDE_CODE_SUBAGENT_MODEL:-}")
+FORCE_RAW=$(trim "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}")
 
 # "inherit" (case-insensitive) は「未指定 = 継承」の別表記として正規化する
 if printf '%s' "$TOOL_MODEL" | grep -qix 'inherit'; then
@@ -91,47 +102,83 @@ if printf '%s' "$ENV_SUB" | grep -qix 'inherit'; then
   ENV_SUB=""
 fi
 
-# 0. env が fable を強制していれば、モデル解決の最上位で fable が確定するため無条件 deny
-if [ -n "$ENV_SUB" ] && printf '%s' "$ENV_SUB" | grep -qi 'fable'; then
-  deny "agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL が fable を指しており、model の明示指定より優先されて全サブエージェントが Fable で実行されます。この env はセッションを超える設定のため独断で書き換えず、この状態をユーザに報告して、settings.json 等の env 設定を sonnet / opus へ修正するよう依頼してください。"
+# FORCE の真値は Claude Code の boolean env の解釈に合わせて 1 / true / yes / on (大文字小文字は
+# 区別しない)。それ以外の値・空・未設定は無効。
+FORCE_ENABLED=0
+case "$(printf '%s' "$FORCE_RAW" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) FORCE_ENABLED=1 ;;
+esac
+
+# session model state と pending マーカーを読む (メインセッションのモデル判定に使う)。
+SAFE_SESSION_ID=$(printf '%s' "$SESSION_ID" | tr -cd 'A-Za-z0-9._-')
+STATE_DIR="${TMPDIR:-/tmp}/agent-discipline-state"
+SESSION_MODEL=""
+SESSION_MODEL_KNOWN=0
+PENDING_MODEL=0
+if [ -n "$SAFE_SESSION_ID" ]; then
+  STATE_FILE="$STATE_DIR/model-$SAFE_SESSION_ID"
+  if [ -r "$STATE_FILE" ]; then
+    SESSION_MODEL=$(cat "$STATE_FILE" 2>/dev/null)
+    SESSION_MODEL_KNOWN=1
+  elif [ -e "$STATE_DIR/pending-model-$SAFE_SESSION_ID" ]; then
+    PENDING_MODEL=1
+  fi
 fi
 
-# 1. fable の明示指定は deny
-if printf '%s' "$TOOL_MODEL" | grep -qi 'fable'; then
-  deny "agent-discipline: サブエージェントに Fable を指定しないでください。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。CLAUDE_CODE_SUBAGENT_MODEL が設定された環境では、ここで指定した値もどのみち env 値に上書きされ、意図したモデルでは実行されません。"
+PENDING_DENY_REASON="agent-discipline: このセッションはモデル判定不能期間 (pending) のため、メインセッションのモデルを継承する起動 (model 未指定 / fork) を一時的に deny しています。継承先が Fable になる可能性があり、この期間は state が未確定で検知できません。model に非 Fable モデル (例: sonnet) を明示した新規起動に切り替えるか、会話を 1 turn 進めて one-shot 補正でモデルが確定するのを待ってから再実行してください。"
+
+# FORCE 有効 + env 未設定で pending 中の deny 理由。継承経路の pending 文言 (model の明示を
+# 誘導する) は FORCE 下では従っても結果が変わらないため、実際に有効な対処だけを書く。
+FORCE_PENDING_DENY_REASON="agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効で CLAUDE_CODE_SUBAGENT_MODEL が未設定のため、全サブエージェントがメインセッションのモデルで実行されますが、このセッションはモデル判定不能期間 (pending) のため継承先が Fable かどうかを検知できません。model を明示しても実効モデルは変わらないため、会話を 1 turn 進めて one-shot 補正でモデルが確定するのを待ってから再実行するか、FORCE の解除または CLAUDE_CODE_SUBAGENT_MODEL への sonnet / opus の設定をユーザに依頼してください (どちらもセッションを超える設定のため独断で書き換えない)。"
+
+# メインセッションのモデルで allow / deny を決める (継承経路・fork・FORCE で共有する)。
+# $1 = メインセッションが Fable と判明した場合の deny 理由。
+# $2 = pending 中 (モデル判定不能期間) の deny 理由。省略時は継承経路の文言。
+decide_by_session_model() {
+  if [ "$SESSION_MODEL_KNOWN" -eq 1 ]; then
+    if is_fable "$SESSION_MODEL"; then
+      deny "$1"
+    fi
+    exit 0
+  fi
+  if [ "$PENDING_MODEL" -eq 1 ]; then
+    deny "${2:-$PENDING_DENY_REASON}"
+  fi
+  exit 0
+}
+
+# 1. fork は model 指定も env も無視してメインセッションのモデルを継承する
+if [ "$SUBAGENT_TYPE" = "fork" ]; then
+  decide_by_session_model "agent-discipline: fork のサブエージェントは model 指定にも env にも依らずメインセッション (Fable) のモデルを継承します。fork をやめ、必要な文脈を指示文に埋め込んだ新規起動で model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
 fi
 
-# 2. 非 fable の具体指定は allow (Step 0 より env は非 fable 確定なので上書きされても安全)
+# 2. FORCE が有効なら実効モデルは env (非空ならその値、空ならメインセッションのモデル)
+if [ "$FORCE_ENABLED" -eq 1 ]; then
+  if [ -n "$ENV_SUB" ]; then
+    if is_fable "$ENV_SUB"; then
+      deny "agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効で CLAUDE_CODE_SUBAGENT_MODEL が fable を指すため、全サブエージェントが Fable で実行されます。model を明示しても実効モデルは変わらないため、FORCE の解除または env の sonnet / opus への修正が必要です。どちらもセッションを超える設定のため独断で書き換えず、この状態をユーザに報告して修正を依頼してください。"
+    fi
+    exit 0
+  fi
+  decide_by_session_model "agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効で CLAUDE_CODE_SUBAGENT_MODEL が未設定のため、全サブエージェントがメインセッション (Fable) のモデルで実行されます。model を明示しても実効モデルは変わらないため、FORCE の解除または CLAUDE_CODE_SUBAGENT_MODEL への sonnet / opus の設定が必要です。どちらもセッションを超える設定のため独断で書き換えず、この状態をユーザに報告して修正を依頼してください。" "$FORCE_PENDING_DENY_REASON"
+fi
+
+# 3. fable の明示指定は deny
+if is_fable "$TOOL_MODEL"; then
+  deny "agent-discipline: サブエージェントに Fable を指定しないでください。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
+fi
+
+# 4. 非 fable の具体指定は allow (明示が env より優先されるため env の値に依らない)
 if [ -n "$TOOL_MODEL" ]; then
   exit 0
 fi
 
-# 3. model 未指定 = メインセッション継承経路
+# 5. model 未指定 = メインセッション継承経路。env が非空ならその値が実効モデルになる。
 if [ -n "$ENV_SUB" ]; then
-  # 非空・非 inherit の env は authoritative な非 fable 値として信頼する (正規化ポリシー参照)
-  exit 0
-fi
-
-SAFE_SESSION_ID=$(printf '%s' "$SESSION_ID" | tr -cd 'A-Za-z0-9._-')
-if [ -z "$SAFE_SESSION_ID" ]; then
-  exit 0
-fi
-
-STATE_FILE="${TMPDIR:-/tmp}/agent-discipline-state/model-$SAFE_SESSION_ID"
-if [ ! -r "$STATE_FILE" ]; then
-  # 3c/3d (#200 で実装済み): state 不明。pending マーカーが存在する場合、このセッションは
-  # モデル判定不能期間中であり、実体が Fable なら未指定継承の継承先が Fable になる
-  # (PR #199 codex P2)。pending マーカーも無い真の情報ゼロの場合のみ従来どおり fail-open。
-  PENDING_MARKER="${TMPDIR:-/tmp}/agent-discipline-state/pending-model-$SAFE_SESSION_ID"
-  if [ -e "$PENDING_MARKER" ]; then
-    deny "agent-discipline: このセッションはモデル判定不能期間 (pending) のため、model 未指定 (継承) のサブエージェント起動を一時的に deny しています。継承先が Fable になる可能性があり、この期間は state が未確定で検知できません。model に非 Fable モデル (例: sonnet) を明示して再実行するか、会話を 1 turn 進めて one-shot 補正でモデルが確定するのを待ってから再実行してください。"
+  if is_fable "$ENV_SUB"; then
+    deny "agent-discipline: model 未指定のサブエージェントは CLAUDE_CODE_SUBAGENT_MODEL の値 (fable) で実行されます。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。env 自体を sonnet / opus へ直す場合は、セッションを超える設定のため独断で書き換えず、ユーザに依頼してください。"
   fi
   exit 0
 fi
 
-SESSION_MODEL=$(cat "$STATE_FILE" 2>/dev/null)
-if printf '%s' "$SESSION_MODEL" | grep -qi 'fable'; then
-  deny "agent-discipline: model 未指定のサブエージェントはメインセッション (Fable) のモデルを継承します。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。この deny が出た時点で CLAUDE_CODE_SUBAGENT_MODEL は未設定 (または inherit) のため、主防御である env の設定 (sonnet 等) をユーザに提案するのも有効です。"
-fi
-
-exit 0
+decide_by_session_model "agent-discipline: model 未指定のサブエージェントはメインセッション (Fable) のモデルを継承します。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
