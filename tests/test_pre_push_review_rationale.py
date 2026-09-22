@@ -17,9 +17,11 @@ pre-push-review は push 前の 2 レビューを標準 skill ではなく専用
 - 上記 3 点と両立しない説明語 (harness が nested subagent 起動を禁止している /
   標準 skill を呼ぶと turn が終了する / 標準 skill が degraded mode になる /
   存在しない `LS` tool の名指し / `CLAUDE_CODE_SUBAGENT_MODEL` が明示 model や
-  agent frontmatter より優先される) を対象 5 ファイルが含まないこと
+  agent frontmatter より優先される) を、plugin の 5 ファイルとリポジトリ直下
+  README が含まないこと
 - 上記 3 点の説明が、agent description / agent body / command の理由節 /
-  README の `### Agents` 節 / auto-mark.sh の Skill 検知コメントにあること
+  plugin README の `### Agents` 節 (3 点それぞれが同一の箇条書き項目・段落に
+  共起する) / auto-mark.sh の Skill 検知コメントにあること
 - README の `### マーカーファイル` 節末尾が subagent の model 解決順序
   (明示 model・agent frontmatter が env より優先され、
   `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` 設定時のみ env が全てを上書きする) を
@@ -40,10 +42,12 @@ SECURITY_REVIEWER = PLUGIN / "agents" / "security-reviewer.md"
 REVIEW_COMMAND = PLUGIN / "commands" / "review.md"
 PLUGIN_README = PLUGIN / "README.md"
 AUTO_MARK = PLUGIN / "hooks" / "scripts" / "auto-mark.sh"
+ROOT_README = ROOT / "README.md"
 
 REVIEWER_AGENTS = (CODE_REVIEWER, SECURITY_REVIEWER)
 
-# 自前 reviewer を使う理由を述べる 5 ファイル。説明はこの 5 ファイルで揃える。
+# 自前 reviewer を使う理由を述べる plugin 側の 5 ファイル。説明はこの 5 ファイルで
+# 揃える (理由 3 点の必須語もこの 5 ファイルに課す)。
 RATIONALE_FILES = (
     CODE_REVIEWER,
     SECURITY_REVIEWER,
@@ -51,6 +55,10 @@ RATIONALE_FILES = (
     PLUGIN_README,
     AUTO_MARK,
 )
+
+# 禁止語の不在検査の対象。リポジトリ直下 README も pre-push-review の節で同じ理由を
+# 述べるため、失効した説明が残らないよう検査対象に含める。
+EXPIRED_RATIONALE_SCANNED_FILES = RATIONALE_FILES + (ROOT_README,)
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 SECTION_BOUNDARY_PATTERN = re.compile(r"^#{1,3} ")
@@ -70,6 +78,8 @@ PHRASES_CLAIMING_NESTED_SUBAGENT_IS_IMPOSSIBLE = (
     "No nested sub-tasks",
     "nested subagent 起動を禁止",
     "nested 制約",
+    "nested subagent 制約",
+    "Claude Code の制約で動かない",
     "subagents cannot spawn other subagents",
     "impossible from this subagent context",
 )
@@ -137,6 +147,11 @@ README_MODEL_RESOLUTION_KEYWORDS = (
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def repo_relative(path: Path) -> str:
+    """リポジトリ直下からの相対パスを返す (同名ファイルを subTest で区別する)。"""
+    return str(path.relative_to(ROOT))
 
 
 def normalize(text: str) -> str:
@@ -215,6 +230,29 @@ def paragraphs(text: str) -> list[str]:
     return blocks
 
 
+def cooccurrence_units(text: str) -> list[str]:
+    """キーワードの共起を判定する単位 (箇条書き 1 項目 / 段落) の列を返す。
+
+    空行と箇条書き項目の開始で区切る。箇条書きの記号で始まらない継続行
+    (インデントされた行など) は直前の単位に含める。
+    """
+    units: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        if not line.strip():
+            if current:
+                units.append("\n".join(current))
+                current = []
+            continue
+        if LIST_ITEM_PATTERN.match(line) and current:
+            units.append("\n".join(current))
+            current = []
+        current.append(line)
+    if current:
+        units.append("\n".join(current))
+    return units
+
+
 def list_item_containing(text: str, marker: str) -> str:
     """`marker` を含む箇条書き 1 項目分 (次の項目・空行の手前まで) を返す。"""
     lines = text.splitlines()
@@ -290,6 +328,31 @@ class ContractTestCase(unittest.TestCase):
         if missing:
             self.fail(f"{label}: 「{group}」の語が無い: {', '.join(missing)}")
 
+    def assert_keywords_cooccur(
+        self,
+        label: str,
+        units: list[str],
+        group: str,
+        keywords: tuple[str, ...],
+    ) -> None:
+        """1 つの箇条書き項目・段落の中に group の語がすべて現れることを確認する。
+
+        節全体での散在を許すと、別々の文が偶然すべての語を埋めて green になる。
+        """
+        matched = [
+            (sum(keyword in unit for keyword in keywords), unit) for unit in units
+        ]
+        if any(count == len(keywords) for count, _ in matched):
+            return
+        best_count, best_unit = max(matched, default=(0, ""))
+        missing = [keyword for keyword in keywords if keyword not in best_unit]
+        closest = normalize(best_unit)[:120] if best_count else "該当なし"
+        self.fail(
+            f"{label}: 「{group}」の語 ({', '.join(keywords)}) が同一の"
+            f"箇条書き項目・段落にそろっていない。最も近い箇所に欠けている語: "
+            f"{', '.join(missing) or 'なし'} / その箇所: {closest}"
+        )
+
 
 class ReviewerToolGrantTest(ContractTestCase):
     """reviewer subagent の tool grant (frontmatter の tools 行)。"""
@@ -308,34 +371,34 @@ class ReviewerToolGrantTest(ContractTestCase):
 
 
 class ExpiredRationaleAbsenceTest(ContractTestCase):
-    """自前 reviewer の理由として成立しない説明語が 5 ファイルに無いこと。"""
+    """自前 reviewer の理由として成立しない説明語が対象ファイルに無いこと。"""
 
     def test_no_file_claims_nested_subagent_is_impossible(self) -> None:
         """nested subagent 起動が harness に禁じられている、という説明が無い。"""
-        for path in RATIONALE_FILES:
+        for path in EXPIRED_RATIONALE_SCANNED_FILES:
             for phrase in PHRASES_CLAIMING_NESTED_SUBAGENT_IS_IMPOSSIBLE:
-                with self.subTest(file=path.name, phrase=phrase):
+                with self.subTest(file=repo_relative(path), phrase=phrase):
                     self.assert_phrase_absent(path, phrase)
 
     def test_no_file_claims_standard_skill_ends_the_turn(self) -> None:
         """標準 skill を呼ぶと turn が終了する、という説明が無い。"""
-        for path in RATIONALE_FILES:
+        for path in EXPIRED_RATIONALE_SCANNED_FILES:
             for phrase in PHRASES_CLAIMING_STANDARD_SKILL_ENDS_THE_TURN:
-                with self.subTest(file=path.name, phrase=phrase):
+                with self.subTest(file=repo_relative(path), phrase=phrase):
                     self.assert_phrase_absent(path, phrase)
 
     def test_no_file_claims_standard_skill_runs_degraded(self) -> None:
         """標準 skill が degraded mode に倒れる、という説明が無い。"""
-        for path in RATIONALE_FILES:
+        for path in EXPIRED_RATIONALE_SCANNED_FILES:
             for phrase in PHRASES_CLAIMING_STANDARD_SKILL_RUNS_DEGRADED:
-                with self.subTest(file=path.name, phrase=phrase):
+                with self.subTest(file=repo_relative(path), phrase=phrase):
                     self.assert_phrase_absent(path, phrase)
 
     def test_no_file_names_the_nonexistent_ls_tool(self) -> None:
         """存在しない `LS` tool を tool 名として名指しする箇所が無い。"""
-        for path in RATIONALE_FILES:
+        for path in EXPIRED_RATIONALE_SCANNED_FILES:
             for phrase in PHRASES_NAMING_THE_NONEXISTENT_LS_TOOL:
-                with self.subTest(file=path.name, phrase=phrase):
+                with self.subTest(file=repo_relative(path), phrase=phrase):
                     self.assert_phrase_absent(path, phrase)
 
     def test_readme_does_not_claim_env_precedence_over_explicit_model(self) -> None:
@@ -388,20 +451,22 @@ class CurrentRationalePresenceTest(ContractTestCase):
                 )
 
     def test_readme_agents_section_states_the_three_reasons(self) -> None:
-        """README の `### Agents` 節に理由 3 点の語がそろう。
+        """README の `### Agents` 節で理由 3 点が項目・段落単位にそろう。
 
-        `Task` / `Agent` を tools から外す理由もこの 3 点目 (`Agent` 除外による
-        read-only 維持) として書く。
+        3 点はそれぞれ 1 つの箇条書き項目 (または段落) の中で完結して書く。
+        3 点が別々の項目に分かれているのは構わない。`Task` / `Agent` を tools から
+        外す理由もこの 3 点目 (`Agent` 除外による read-only 維持) として書く。
         """
         section = markdown_section(read(PLUGIN_README), README_AGENTS_HEADING)
         self.assert_scope_found(
             f"{PLUGIN_README}", section, f"`{README_AGENTS_HEADING}` 節の本文が無い"
         )
+        units = cooccurrence_units(section)
         for group, keywords in RATIONALE_KEYWORD_GROUPS:
             with self.subTest(group=group):
-                self.assert_keywords_present(
+                self.assert_keywords_cooccur(
                     f"{PLUGIN_README} の {README_AGENTS_HEADING} 節",
-                    section,
+                    units,
                     group,
                     keywords,
                 )
