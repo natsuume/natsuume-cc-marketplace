@@ -89,6 +89,65 @@ if [ -e "$PENDING_FILE" ]; then
   PENDING_EXISTED=1
 fi
 
+FROM_IS_FABLE=0
+if is_fable "$FROM_MODEL"; then
+  FROM_IS_FABLE=1
+fi
+TO_IS_FABLE=0
+if is_fable "$TO_MODEL"; then
+  TO_IS_FABLE=1
+fi
+
+# 通知が必要なのは、Fable 境界をまたぐ切替か、pending マーカーを消す (= one-shot 補正の
+# 発火条件を消す) 場合。それ以外は配送済みの版が切替後もそのまま有効なので通知しない。
+NEED_NOTICE=0
+if [ "$FROM_IS_FABLE" -ne "$TO_IS_FABLE" ] || [ "$PENDING_EXISTED" -eq 1 ]; then
+  NEED_NOTICE=1
+fi
+
+# 通知本文は state を書く前に組み立てる。pending の削除は通知と対で行う必要があり、
+# 通知を作れない (prompts ディレクトリを解決できない / JSON を組めない) 場合は state も
+# pending も触らずに終了する (pending が残れば one-shot 補正が確定版を配送する)。
+NOTICE=""
+if [ "$NEED_NOTICE" -eq 1 ]; then
+  if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+    PROMPTS_DIR="$CLAUDE_PLUGIN_ROOT/hooks/prompts"
+  else
+    PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
+  fi
+  if [ -z "$PROMPTS_DIR" ]; then
+    exit 0
+  fi
+
+  SONNET_ALWAYS_FILES="always-sonnet-1.md / always-sonnet-2.md / always-sonnet-3.md"
+  if [ "$TO_IS_FABLE" -eq 1 ]; then
+    ALWAYS_FILES="always-fable.md"
+    DISCIPLINE_FILE="discipline-fable.md"
+  elif printf '%s' "$TO_MODEL" | grep -qi 'opus'; then
+    ALWAYS_FILES="$SONNET_ALWAYS_FILES"
+    DISCIPLINE_FILE="discipline-opus.md"
+  else
+    ALWAYS_FILES="$SONNET_ALWAYS_FILES"
+    DISCIPLINE_FILE="discipline-sonnet.md"
+  fi
+
+  # 通知にはモデル ID をそのままではなく sanitize した形で載せる (hook 入力の文字列を
+  # 無検証で本文へ反映しない)。
+  SAFE_TO_MODEL=$(printf '%s' "$TO_MODEL" | tr -cd 'A-Za-z0-9._-')
+
+  CONTEXT="(モデル切替) このセッションのモデルが ${SAFE_TO_MODEL} に切り替わりました。常時適用ルールと分業規律の確定版は ${ALWAYS_FILES} と ${DISCIPLINE_FILE} です。prompts ディレクトリ ${PROMPTS_DIR} からこれらを Read して自己修復し、以後は確定版を優先して、切替前のモデル向けに配送済みの版は破棄してください。"
+
+  NOTICE=$(jq -n --arg ctx "$CONTEXT" '{
+    hookSpecificOutput: {
+      hookEventName: "PostModelSwitch",
+      additionalContext: $ctx
+    }
+  }' 2>/dev/null) || exit 0
+  if [ -z "$NOTICE" ]; then
+    exit 0
+  fi
+fi
+
 if ! mkdir -p "$STATE_DIR" 2>/dev/null; then
   exit 0
 fi
@@ -107,55 +166,11 @@ if ! mv "$TMP_FILE" "$STATE_FILE" 2>/dev/null; then
 fi
 
 # state 書込が確認できた後にのみ pending マーカーを削除する (書込失敗時は本行に到達しない)。
+# 通知は既に組み立ててあるため、pending の削除と通知の出力は対で行われる。
 if [ "$PENDING_EXISTED" -eq 1 ]; then
   rm -f "$PENDING_FILE" 2>/dev/null
 fi
 
-FROM_IS_FABLE=0
-if is_fable "$FROM_MODEL"; then
-  FROM_IS_FABLE=1
+if [ "$NEED_NOTICE" -eq 1 ]; then
+  printf '%s\n' "$NOTICE"
 fi
-TO_IS_FABLE=0
-if is_fable "$TO_MODEL"; then
-  TO_IS_FABLE=1
-fi
-
-# Fable 境界をまたがず pending も無かった切替は、配送済みの版が切替後もそのまま有効なので
-# 通知しない。
-if [ "$FROM_IS_FABLE" -eq "$TO_IS_FABLE" ] && [ "$PENDING_EXISTED" -eq 0 ]; then
-  exit 0
-fi
-
-if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
-  PROMPTS_DIR="$CLAUDE_PLUGIN_ROOT/hooks/prompts"
-else
-  PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
-fi
-if [ -z "$PROMPTS_DIR" ]; then
-  exit 0
-fi
-
-SONNET_ALWAYS_FILES="always-sonnet-1.md / always-sonnet-2.md / always-sonnet-3.md"
-if [ "$TO_IS_FABLE" -eq 1 ]; then
-  ALWAYS_FILES="always-fable.md"
-  DISCIPLINE_FILE="discipline-fable.md"
-elif printf '%s' "$TO_MODEL" | grep -qi 'opus'; then
-  ALWAYS_FILES="$SONNET_ALWAYS_FILES"
-  DISCIPLINE_FILE="discipline-opus.md"
-else
-  ALWAYS_FILES="$SONNET_ALWAYS_FILES"
-  DISCIPLINE_FILE="discipline-sonnet.md"
-fi
-
-# 通知にはモデル ID をそのままではなく sanitize した形で載せる (hook 入力の文字列を
-# 無検証で本文へ反映しない)。
-SAFE_TO_MODEL=$(printf '%s' "$TO_MODEL" | tr -cd 'A-Za-z0-9._-')
-
-CONTEXT="(モデル切替) このセッションのモデルが ${SAFE_TO_MODEL} に切り替わりました。常時適用ルールと分業規律の確定版は ${ALWAYS_FILES} と ${DISCIPLINE_FILE} です。prompts ディレクトリ ${PROMPTS_DIR} からこれらを Read して自己修復し、以後は確定版を優先して、切替前のモデル向けに配送済みの版は破棄してください。"
-
-jq -n --arg ctx "$CONTEXT" '{
-  hookSpecificOutput: {
-    hookEventName: "PostModelSwitch",
-    additionalContext: $ctx
-  }
-}' || exit 0

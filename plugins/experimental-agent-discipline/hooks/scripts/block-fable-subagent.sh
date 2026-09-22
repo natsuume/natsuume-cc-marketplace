@@ -195,8 +195,13 @@ PENDING_DENY_REASON="agent-discipline: このセッションはモデル判定�
 
 FORCE_DEDICATED_DENY_REASON="experimental-agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効なため、Fable 専用 agent への委任を deny しました。FORCE が有効な間は agent 定義 frontmatter の model: fable が無視され、専用 agent が Fable 以外のモデルで effort low のまま実行されます。FORCE を解除してから再実行するか、model に sonnet / opus を明示して通常のサブエージェントへ委任してください。この env はセッションを超える設定のため独断で書き換えず、解除が必要な場合はユーザに依頼してください。"
 
-# メインセッションのモデルで allow / deny を決める (継承経路と fork で共有する)。
+# FORCE 有効 + env 未設定で pending 中の deny 理由。継承経路の pending 文言 (model の明示を
+# 誘導する) は FORCE 下では従っても結果が変わらないため、実際に有効な対処だけを書く。
+FORCE_PENDING_DENY_REASON="agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効で CLAUDE_CODE_SUBAGENT_MODEL が未設定のため、全サブエージェントがメインセッションのモデルで実行されますが、このセッションはモデル判定不能期間 (pending) のため継承先が Fable かどうかを検知できません。model を明示しても実効モデルは変わらないため、会話を 1 turn 進めて one-shot 補正でモデルが確定するのを待ってから再実行するか、FORCE の解除または CLAUDE_CODE_SUBAGENT_MODEL への sonnet / opus の設定をユーザに依頼してください (どちらもセッションを超える設定のため独断で書き換えない)。"
+
+# メインセッションのモデルで allow / deny を決める (継承経路・fork・FORCE で共有する)。
 # $1 = メインセッションが Fable と判明した場合の deny 理由。
+# $2 = pending 中 (モデル判定不能期間) の deny 理由。省略時は継承経路の文言。
 decide_by_session_model() {
   if [ "$SESSION_MODEL_KNOWN" -eq 1 ]; then
     if is_fable "$SESSION_MODEL"; then
@@ -205,7 +210,7 @@ decide_by_session_model() {
     exit 0
   fi
   if [ "$PENDING_MODEL" -eq 1 ]; then
-    deny "$PENDING_DENY_REASON"
+    deny "${2:-$PENDING_DENY_REASON}"
   fi
   exit 0
 }
@@ -339,7 +344,7 @@ if [ "$FORCE_ENABLED" -eq 1 ]; then
   if resolves_to_dedicated_fable_agent "$SUBAGENT_TYPE"; then
     deny "$FORCE_DEDICATED_DENY_REASON"
   fi
-  decide_by_session_model "agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効で CLAUDE_CODE_SUBAGENT_MODEL が未設定のため、全サブエージェントがメインセッション (Fable) のモデルで実行されます。model を明示しても実効モデルは変わらないため、FORCE の解除または CLAUDE_CODE_SUBAGENT_MODEL への sonnet / opus の設定が必要です。どちらもセッションを超える設定のため独断で書き換えず、この状態をユーザに報告して修正を依頼してください。"
+  decide_by_session_model "agent-discipline: CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効で CLAUDE_CODE_SUBAGENT_MODEL が未設定のため、全サブエージェントがメインセッション (Fable) のモデルで実行されます。model を明示しても実効モデルは変わらないため、FORCE の解除または CLAUDE_CODE_SUBAGENT_MODEL への sonnet / opus の設定が必要です。どちらもセッションを超える設定のため独断で書き換えず、この状態をユーザに報告して修正を依頼してください。" "$FORCE_PENDING_DENY_REASON"
 fi
 
 # 3. fable の明示指定は専用 agent 経由 + 週次枠に余裕がある場合に限り許可する

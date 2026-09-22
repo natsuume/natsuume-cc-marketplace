@@ -474,6 +474,17 @@ DECISION_TABLE = (
         "force-absent/env-absent/state-unknown/no-pending-marker",
         expect="allow",
     ),
+    # FORCE 有効 + env 空 + state 不明 (pending): 継承先が Fable かどうかを検知できないため
+    # deny する。model の明示では直らないため、理由は継承経路の文言ではなく FORCE を名指しして
+    # 有効な対処 (one-shot 補正を待つ / env の設定をユーザに依頼) を案内する。
+    row(
+        "force-on/env-absent/state-unknown/pending-marker/model-sonnet-explicit",
+        force="1",
+        model="sonnet",
+        pending=True,
+        expect="deny",
+        keywords=NAMES_FORCE,
+    ),
     # session_id が空に正規化される経路は state / pending を参照できないため allow
     # (fail-open)。sanitization の有無で結果が反転する入力は隔離 TMPDIR 内では構成できず、
     # この行は結果の契約だけを固定する。
