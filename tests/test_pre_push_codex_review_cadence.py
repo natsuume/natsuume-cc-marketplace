@@ -2,9 +2,16 @@
 
 対象は `plugins/pre-push-codex-review/hooks/scripts/manage-review-cadence.mjs`
 (以下 cadence script)。cadence script の header docs が定義する契約 (計数対象・
-reset 経路・enforcement) を hook JSON I/O を通じて固定する。state 隔離は環境変数
+reset 経路・enforcement) を hook JSON I/O を通じて固定し、あわせて hooks.json の
+event 登録と plugin README の該当節の記述を固定する。state 隔離は環境変数
 `PRE_PUSH_CODEX_REVIEW_CADENCE_STATE_ROOT` を各テストの一時ディレクトリへ向ける
 ことで行う。
+
+checkpoint 相談 (`codex-advisor:advisor-runner` を `<review_cycle_checkpoint>` を
+含む request で起動する) が成立しない経路は 2 つある。起動後の失敗は
+`PostToolUseFailure` に配信され、1 回で fail-open reset の契機になる。auto mode
+classifier による起動拒否は `PermissionDenied` に配信され、1 回目は retry を要求して
+state を残し、同じ checkpoint 要求中の 2 回目で fail-open reset の契機になる。
 
 private helper の構成や state ファイル名の形式には結合しない。
 """
@@ -27,6 +34,7 @@ PLUGIN = ROOT / "plugins" / "pre-push-codex-review"
 HOOK = PLUGIN / "hooks" / "scripts" / "manage-review-cadence.mjs"
 HOOKS_JSON = PLUGIN / "hooks" / "hooks.json"
 CADENCE_RULES_PROMPT = PLUGIN / "hooks" / "prompts" / "review-cadence-rules.md"
+README = PLUGIN / "README.md"
 
 _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:
@@ -57,6 +65,21 @@ ADVISOR_CHECKPOINT_RUNNER = "codex-advisor:advisor-runner"
 
 REVIEW_CADENCE_LIMIT = 5
 
+# checkpoint 相談の起動拒否が配信される event と、その matcher が受理すべき tool 名。
+PERMISSION_DENIED_EVENT = "PermissionDenied"
+AGENT_TOOL_NAMES = ("Agent", "Task")
+# checkpoint 相談 request を表す marker (これを含む起動の失敗・拒否だけが reset の契機)。
+CHECKPOINT_REQUEST_PROMPT = (
+    "<task>...</task>\n<review_cycle_checkpoint>...</review_cycle_checkpoint>"
+)
+ORDINARY_REQUEST_PROMPT = "<task>ordinary advisor consult, no checkpoint marker</task>"
+# auto mode classifier が起動を拒否したときの `reason` (判定には使わない)。
+PERMISSION_DENIED_REASON = "auto mode classifier rejected this subagent launch"
+
+# Stop の block 文言が checkpoint からの脱出手順として含む語。state file の絶対パスと
+# あわせて、codex-advisor 未 install 時に state を削除して脱出できることを示す。
+STOP_ESCAPE_KEYWORDS = ("codex-advisor", "install", "削除")
+
 # 計数対象の 4 つの review 起動形。
 REVIEW_LAUNCH_COMMANDS = {
     "wrapper": "bash /x/run-pre-push-codex-review.sh",
@@ -76,6 +99,26 @@ def hook_invocation(hook: dict) -> str:
     exec form では実行ファイルが `command`、script パスを含む引数が `args` に分かれる。
     """
     return " ".join([hook["command"], *hook.get("args", [])])
+
+
+def markdown_section(text: str, level: int, keyword: str) -> str | None:
+    """`keyword` を含む見出し (`#` が `level` 個) の行から節末尾までを返す。
+
+    節末尾は同じか上位の階層の次の見出し。見つからなければ None。
+    """
+    prefix = "#" * level + " "
+    child_prefix = "#" * (level + 1)
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix) or keyword not in line:
+            continue
+        body = [line]
+        for following in lines[index + 1 :]:
+            if following.startswith("#") and not following.startswith(child_prefix):
+                break
+            body.append(following)
+        return "\n".join(body)
+    return None
 
 
 class HookHarness(unittest.TestCase):
@@ -344,6 +387,32 @@ class HookHarness(unittest.TestCase):
         if is_interrupt is not None:
             payload["is_interrupt"] = is_interrupt
         return self.hook_response(payload)
+
+    def permission_denied(
+        self,
+        *,
+        session_id: str = "session-a",
+        subagent_type: str | None = ADVISOR_CHECKPOINT_RUNNER,
+        prompt: str | None = None,
+        tool_name: str = "Agent",
+        reason: str = PERMISSION_DENIED_REASON,
+    ) -> dict[str, object] | None:
+        """PermissionDenied: 起動そのものが拒否された (`is_interrupt` は無い)。"""
+        tool_input: dict[str, object] = {}
+        if subagent_type is not None:
+            tool_input["subagent_type"] = subagent_type
+        if prompt is not None:
+            tool_input["prompt"] = prompt
+        return self.hook_response(
+            {
+                "hook_event_name": PERMISSION_DENIED_EVENT,
+                "session_id": session_id,
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "tool_use_id": "toolu_test",
+                "reason": reason,
+            }
+        )
 
     def session_end(self, session_id: str = "session-a") -> dict[str, object] | None:
         return self.hook_response(
@@ -795,6 +864,191 @@ class PostToolUseFailureFailOpenTest(HookHarness):
         self.assert_stop_blocked(self.main_stop(session_id))
 
 
+class PermissionDeniedFailOpenTest(HookHarness):
+    """checkpoint 相談の起動が拒否された (PermissionDenied) ときの retry と reset。
+
+    auto mode classifier は subagent の起動そのものを拒否するため、この経路では
+    PostToolUseFailure は発火しない。「checkpoint 相談の拒否」とみなす条件は
+    PostToolUseFailure の fail-open reset と同じ (`tool_name` が `Agent` / `Task`、
+    `tool_input.subagent_type` が `codex-advisor:advisor-runner`、`tool_input.prompt`
+    が文字列で `<review_cycle_checkpoint>` を含む、checkpoint 要求中)。
+
+    1 回目の拒否では state を残したまま retry 応答を返し、ユーザ確認後の再起動を促す。
+    同じ checkpoint 要求中の 2 回目の拒否で fail-open reset する (拒否が続く環境で
+    checkpoint が解除不能な block にならないようにする)。条件に合わない拒否は state を
+    変えず無応答で、この回数にも数えない。拒否回数は state とともに消えるため、reset
+    後の新しい checkpoint 要求では再び 1 回目から数える。
+
+    回数をどの state フィールドで持つかには結合せず、観測は state の有無 /
+    `checkpointRequired` と stdout の応答だけで行う。
+    """
+
+    def drive_to_checkpoint(self, session_id: str, *, first_cycle: int = 1) -> None:
+        for cycle in range(first_cycle, first_cycle + REVIEW_CADENCE_LIMIT):
+            self.complete_status_line_review(
+                PRE_PUSH_CODEX_REVIEWER,
+                session_id=session_id,
+                agent_id=f"reviewer-{cycle}",
+                status="pass",
+            )
+        self.assert_stop_blocked(self.main_stop(session_id))
+
+    # -- payload / assertions ----------------------------------------------
+
+    def deny_checkpoint_consultation(
+        self, session_id: str
+    ) -> dict[str, object] | None:
+        return self.permission_denied(
+            session_id=session_id, prompt=CHECKPOINT_REQUEST_PROMPT
+        )
+
+    def assert_retry_requested(self, response: dict[str, object] | None) -> None:
+        self.assertIsNotNone(response, "1 回目の拒否は retry 応答を返す")
+        assert response is not None
+        hook_output = response["hookSpecificOutput"]
+        assert isinstance(hook_output, dict)
+        self.assertEqual(PERMISSION_DENIED_EVENT, hook_output["hookEventName"])
+        self.assertIs(True, hook_output["retry"])
+
+    def assert_checkpoint_still_required(self, session_id: str) -> None:
+        state = self.state_for(session_id)
+        self.assertIsNotNone(state, "checkpoint 要求中の state が消えている")
+        assert state is not None
+        self.assertIs(True, state["checkpointRequired"])
+        self.assert_stop_blocked(self.main_stop(session_id))
+
+    def assert_checkpoint_released(self, session_id: str) -> None:
+        self.assertIsNone(self.state_for(session_id))
+        self.assertIsNone(self.main_stop(session_id))
+
+    def assert_denial_is_a_noop(self, session_id: str, **denial: object) -> None:
+        """条件に合わない拒否は state を変えず、応答も返さない。"""
+        before = self.state_for(session_id)
+        self.assertIsNone(
+            self.permission_denied(session_id=session_id, **denial),
+            "条件に合わない拒否には応答しない",
+        )
+        self.assertEqual(before, self.state_for(session_id))
+
+    # -- 拒否の回数に応じた扱い --------------------------------------------
+
+    def test_first_checkpoint_denial_requests_a_retry_without_resetting(self) -> None:
+        session_id = "session-denied-first"
+        self.drive_to_checkpoint(session_id)
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+        self.assert_checkpoint_still_required(session_id)
+
+    def test_second_checkpoint_denial_resets_the_checkpoint(self) -> None:
+        session_id = "session-denied-second"
+        self.drive_to_checkpoint(session_id)
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+        self.assertIsNone(
+            self.deny_checkpoint_consultation(session_id),
+            "reset する拒否には応答しない",
+        )
+        self.assert_checkpoint_released(session_id)
+
+    def test_denial_count_restarts_after_an_attestation_reset(self) -> None:
+        """拒否回数は state とともに消え、次の checkpoint 要求では 1 回目から数える。"""
+        session_id = "session-denied-after-attestation"
+        self.drive_to_checkpoint(session_id)
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+
+        self.advisor_runner_stop(
+            session_id=session_id, status="success", attestation="satisfied"
+        )
+        self.assert_checkpoint_released(session_id)
+
+        self.drive_to_checkpoint(session_id, first_cycle=REVIEW_CADENCE_LIMIT + 1)
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+        self.assert_checkpoint_still_required(session_id)
+
+    def test_ordinary_consultation_denial_is_not_counted(self) -> None:
+        session_id = "session-denied-ordinary"
+        self.drive_to_checkpoint(session_id)
+        self.assert_denial_is_a_noop(session_id, prompt=ORDINARY_REQUEST_PROMPT)
+
+        # 直後の checkpoint 相談の拒否は 1 回目として扱われる (まだ reset しない)。
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+        self.assert_checkpoint_still_required(session_id)
+        self.assertIsNone(self.deny_checkpoint_consultation(session_id))
+        self.assert_checkpoint_released(session_id)
+
+    # -- 条件に合わない拒否 --------------------------------------------------
+
+    def test_missing_subagent_type_is_a_noop(self) -> None:
+        session_id = "session-denied-no-subagent-type"
+        self.drive_to_checkpoint(session_id)
+        self.assert_denial_is_a_noop(
+            session_id, subagent_type=None, prompt=CHECKPOINT_REQUEST_PROMPT
+        )
+
+    def test_other_subagent_type_is_a_noop(self) -> None:
+        session_id = "session-denied-other-runner"
+        self.drive_to_checkpoint(session_id)
+        self.assert_denial_is_a_noop(
+            session_id,
+            subagent_type=FOOTER_COUNTED_REVIEWER,
+            prompt=CHECKPOINT_REQUEST_PROMPT,
+        )
+
+    def test_bash_tool_denial_is_a_noop(self) -> None:
+        session_id = "session-denied-bash"
+        self.drive_to_checkpoint(session_id)
+        self.assert_denial_is_a_noop(
+            session_id, tool_name="Bash", prompt=CHECKPOINT_REQUEST_PROMPT
+        )
+
+    def test_denial_before_checkpoint_required_is_a_noop(self) -> None:
+        session_id = "session-denied-early"
+        for cycle in range(1, REVIEW_CADENCE_LIMIT - 1):
+            self.complete_status_line_review(
+                PRE_PUSH_CODEX_REVIEWER,
+                session_id=session_id,
+                agent_id=f"reviewer-{cycle}",
+                status="pass",
+            )
+        self.assertIsNotNone(self.state_for(session_id))
+        self.assert_denial_is_a_noop(session_id, prompt=CHECKPOINT_REQUEST_PROMPT)
+
+
+class StopBlockEscapeInstructionTest(HookHarness):
+    """Stop の block 文言が、自動 reset が届かない場合の脱出手順を自己完結で示す。
+
+    checkpoint 相談の起動が hook に到達しない形で失敗する環境 (codex-advisor 未 install
+    による subagent_type の解決失敗等) では自動 reset が発火しないため、block 文言は
+    その session の state file の絶対パスと、それを削除して脱出できることを含める。
+    """
+
+    def state_file(self) -> Path:
+        paths = sorted(self.state_root.rglob("*.json"))
+        self.assertEqual(1, len(paths), f"state file を一意に特定できない: {paths}")
+        return paths[0]
+
+    def test_stop_block_reason_names_the_state_file_and_the_manual_escape(self) -> None:
+        session_id = "session-escape-instruction"
+        for cycle in range(1, REVIEW_CADENCE_LIMIT + 1):
+            self.complete_status_line_review(
+                PRE_PUSH_CODEX_REVIEWER,
+                session_id=session_id,
+                agent_id=f"reviewer-{cycle}",
+                status="pass",
+            )
+        response = self.main_stop(session_id)
+        self.assert_stop_blocked(response)
+        assert response is not None
+        reason = response["reason"]
+        assert isinstance(reason, str)
+        self.assertIn(
+            str(self.state_file()),
+            reason,
+            "block 文言に この session の state file の絶対パスを含める",
+        )
+        for keyword in STOP_ESCAPE_KEYWORDS:
+            with self.subTest(keyword=keyword):
+                self.assertIn(keyword, reason)
+
+
 class SubagentStartGuardTest(HookHarness):
     def test_uncounted_agent_type_is_not_recorded(self) -> None:
         session_id = "session-uncounted-start"
@@ -891,13 +1145,37 @@ class HooksManifestContractTest(unittest.TestCase):
             with self.subTest(agent_type=agent_type):
                 self.assertIsNone(pattern.fullmatch(agent_type))
 
+    def test_permission_denied_matcher_covers_the_agent_launch_tools(self) -> None:
+        hooks = self._manifest()
+        self.assertIn(
+            PERMISSION_DENIED_EVENT,
+            hooks,
+            f"hooks.json に {PERMISSION_DENIED_EVENT} event が無い",
+        )
+        entry = self._matcher_entry_for(
+            hooks, PERMISSION_DENIED_EVENT, "manage-review-cadence.mjs"
+        )
+        pattern = re.compile(entry["matcher"])
+        for tool_name in AGENT_TOOL_NAMES:
+            with self.subTest(tool_name=tool_name):
+                self.assertIsNotNone(
+                    pattern.fullmatch(tool_name),
+                    f"matcher {entry['matcher']!r} が {tool_name} に一致しない",
+                )
+
     def test_remaining_lifecycle_events_are_registered(self) -> None:
         hooks = self._manifest()
-        for event in ("PreToolUse", "PostToolUseFailure", "Stop", "SessionEnd"):
+        for event in (
+            "PreToolUse",
+            "PostToolUseFailure",
+            PERMISSION_DENIED_EVENT,
+            "Stop",
+            "SessionEnd",
+        ):
             with self.subTest(event=event):
                 commands = [
                     hook_invocation(hook)
-                    for entry in hooks[event]
+                    for entry in hooks.get(event, [])
                     for hook in entry["hooks"]
                     if hook["type"] == "command"
                 ]
@@ -1163,6 +1441,16 @@ class CheckpointLaunchInstructionTest(unittest.TestCase):
         text = CADENCE_RULES_PROMPT.read_text(encoding="utf-8")
         self.assertIn('`model: "sonnet"`', text)
 
+    def test_injected_rules_require_user_confirmation_before_denied_retry(
+        self,
+    ) -> None:
+        """classifier 拒否 (PermissionDenied) 後の再起動前にユーザ確認を求める指示が、
+        hook の stderr ではなく注入 prompt 自体に書かれている。"""
+        text = CADENCE_RULES_PROMPT.read_text(encoding="utf-8")
+        for needle in ("PermissionDenied", "`AskUserQuestion`", "2 回目"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+
     def test_injected_rules_never_mention_a_second_execution_tool(self) -> None:
         """subagent のコマンド実行経路は Bash tool 1 本に閉じる。"""
         hits = [
@@ -1176,6 +1464,51 @@ class CheckpointLaunchInstructionTest(unittest.TestCase):
         self.assertEqual(
             hits, [], f"{FORBIDDEN_EXECUTION_TOOL} の言及が残っている"
         )
+
+
+class ReviewCadenceDocumentationTest(unittest.TestCase):
+    """README が 2 つの fail-open 契機と、手動での脱出手順を書く。"""
+
+    HOOK_LIST_SECTION = ("manage-review-cadence", 4)
+    CHECKPOINT_SECTION = ("checkpoint", 3)
+    CODEX_ADVISOR_SECTION = ("codex-advisor 連携", 3)
+
+    def section(self, keyword: str, level: int) -> str:
+        body = markdown_section(
+            README.read_text(encoding="utf-8"), level, keyword
+        )
+        if body is None:
+            self.fail(f"{README}: {keyword!r} を含む level {level} の見出しが無い")
+        return body
+
+    def test_hook_list_documents_the_permission_denied_entry(self) -> None:
+        section = self.section(*self.HOOK_LIST_SECTION)
+        bullets = [
+            line
+            for line in section.splitlines()
+            if line.startswith(f"- **{PERMISSION_DENIED_EVENT}**")
+        ]
+        self.assertTrue(
+            bullets,
+            f"{README}: hook 一覧に '- **{PERMISSION_DENIED_EVENT}**' の行が無い",
+        )
+
+    def test_fail_open_conditions_mention_both_delivery_events(self) -> None:
+        for keyword, level in (self.CHECKPOINT_SECTION, self.CODEX_ADVISOR_SECTION):
+            section = self.section(keyword, level)
+            for event in ("PostToolUseFailure", PERMISSION_DENIED_EVENT):
+                with self.subTest(section=keyword, event=event):
+                    self.assertIn(
+                        event,
+                        section,
+                        f"{README}: {keyword!r} 節の fail-open 条件に {event} が無い",
+                    )
+
+    def test_checkpoint_section_documents_the_manual_escape(self) -> None:
+        section = self.section(*self.CHECKPOINT_SECTION)
+        for keyword in ("install", "削除"):
+            with self.subTest(keyword=keyword):
+                self.assertIn(keyword, section)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,18 @@
         ]
       }
     ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-context-threshold.sh",
+            "args": []
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "clear|startup",

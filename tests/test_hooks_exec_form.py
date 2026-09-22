@@ -91,6 +91,7 @@ EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] 
         ("PreToolUse", script_path("block-commit-lint.sh"), ()),
         ("PostToolUse", script_path("code-format.sh"), ()),
         ("PostToolUse", script_path("post-commit-lint.sh"), ()),
+        ("PostToolUseFailure", script_path("post-commit-lint.sh"), ()),
     ),
     "codex-advisor": (
         ("SessionStart", script_path("inject-advisor-rules.sh"), ()),
@@ -136,6 +137,7 @@ EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] 
         ("PostToolUse", NODE_COMMAND, (REVIEW_CADENCE_SCRIPT,)),
         ("PostToolUseFailure", script_path("auto-mark.sh"), ()),
         ("PostToolUseFailure", NODE_COMMAND, (REVIEW_CADENCE_SCRIPT,)),
+        ("PermissionDenied", NODE_COMMAND, (REVIEW_CADENCE_SCRIPT,)),
         ("SubagentStop", script_path("auto-mark.sh"), ()),
         ("SubagentStop", NODE_COMMAND, (REVIEW_CADENCE_SCRIPT,)),
         ("Stop", NODE_COMMAND, (REVIEW_CADENCE_SCRIPT,)),
@@ -148,6 +150,7 @@ EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] 
     ),
     "session-handoff": (
         ("PostToolUse", script_path("detect-context-threshold.sh"), ()),
+        ("PostToolUseFailure", script_path("detect-context-threshold.sh"), ()),
         ("SessionStart", script_path("inject-pending-handoff.sh"), ()),
     ),
     "ui-discipline": (
@@ -258,9 +261,9 @@ AUTO_REMOVAL_NOTICE_WORDS = ("2.1.193", "自動")
 EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "git-guardrails": "0.6.6",
     "enforce-draft-pr": "0.5.4",
-    "auto-lint-check": "0.6.2",
+    "auto-lint-check": "0.7.0",
     "pre-push-review": "6.0.3",
-    "pre-push-codex-review": "2.1.1",
+    "pre-push-codex-review": "2.2.0",
     "pre-merge-codex-review": "2.2.1",
     "update-default-branch": "0.4.2",
     "natsuume-statusline": "0.10.2",
@@ -270,7 +273,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "natsuume-writing": "0.6.3",
     "codex-advisor": "4.0.1",
     "rate-limit": "0.5.2",
-    "session-handoff": "0.3.2",
+    "session-handoff": "0.4.0",
     "repo-analytics": "0.2.3",
 }
 

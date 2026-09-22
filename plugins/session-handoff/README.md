@@ -6,23 +6,28 @@ context 使用率が閾値を超えたときに handoff ドキュメントの作
 
 ## バージョン
 
-v0.3.2
+v0.4.0
 
 ## 機能概要
 
 producer と consumer で構成されます。
 
-1. **producer (`detect-context-threshold.sh`, PostToolUse)**: context 使用率が閾値
-   (既定 60%) を超えたことをツール実行のたびに検知し、超えていれば handoff ドキュメントの
-   作成を Claude に促す指示を注入する
+1. **producer (`detect-context-threshold.sh`, PostToolUse / PostToolUseFailure)**: context
+   使用率が閾値 (既定 60%) を超えたことをツール実行のたびに検知し、超えていれば handoff
+   ドキュメントの作成を Claude に促す指示を注入する
 2. **consumer (`inject-pending-handoff.sh`, SessionStart)**: 新しい context になる `clear` /
    `startup` で、直近 24 時間以内に作成された未消費の handoff があれば、その内容を前置き文とともに
    自動注入する
 
 ## hook の動作と境界
 
-### 検知 hook (PostToolUse, matcher `*`)
+### 検知 hook (PostToolUse / PostToolUseFailure, matcher `*`)
 
+- **成功したツール実行も失敗したツール実行も検知対象**: ツールが 0 で終了した実行は
+  PostToolUse、非 0 で終了した実行は PostToolUseFailure に配信される。どちらでも context
+  使用率は増えているため両方の event を配送し、判定は event に依らず同じにする
+  (`tool_response` は参照しない)。出力の `hookSpecificOutput.hookEventName` は入力の
+  `hook_event_name` をそのまま返す
 - 対象は cwd が git リポジトリのセッションのみ (非 git プロジェクトでは検知しない)
 - context 使用率は natsuume-statusline (後述) が書き出すキャッシュファイルから読む
 - **古いキャッシュでは検知しない**: キャッシュの `updated_at` (欠落時はファイル mtime) が
@@ -149,7 +154,7 @@ context 使用率キャッシュの producer が未構成の場合は、続け�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `detect-context-threshold` | PostToolUse (`*`) | context 使用率が閾値を超えたことを検知し、handoff 作成指示を注入する (1 セッション 1 回) |
+| `detect-context-threshold` | PostToolUse / PostToolUseFailure (`*`) | context 使用率が閾値を超えたことを検知し、handoff 作成指示を注入する (1 セッション 1 回) |
 | `inject-pending-handoff` | SessionStart (`clear\|startup`) | 直近 24 時間以内の未消費 handoff を自動注入する (at-most-once) |
 
 ### Skills

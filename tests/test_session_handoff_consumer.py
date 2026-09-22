@@ -141,16 +141,24 @@ class SessionHandoffPendingConsumerTest(unittest.TestCase):
 
 
 class SessionHandoffHooksContractTest(unittest.TestCase):
-    """hooks/hooks.json の Phase B 最終状態契約。
+    """hooks/hooks.json の配送契約。
 
-    別エージェントが並行して plugins/ 配下を編集中のため、実行タイミングによっては
-    このテストが red になりうる (それが正しい状態であり、最終検証は親セッションが行う)。
-    save-codex-handoff.sh の PreCompact entry が削除され、SessionStart の matcher が
-    'clear|startup' に縮小され、inject-pending-handoff.sh の登録は残ることを検証する。
+    consumer (inject-pending-handoff.sh) は SessionStart の `clear|startup` にだけ
+    登録し、PreCompact には登録しない。producer (detect-context-threshold.sh) は
+    ツールの成否を問わず閾値検知を行うため、matcher `*` で PostToolUse と
+    PostToolUseFailure の両方に同じ引数で登録する。
     """
 
+    DETECT_CONTEXT_THRESHOLD_COMMAND = (
+        "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-context-threshold.sh"
+    )
+
+    @staticmethod
+    def load_hooks() -> dict:
+        return json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
+
     def test_precompact_entry_removed_and_session_start_matcher_narrowed(self) -> None:
-        hooks = json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
+        hooks = self.load_hooks()
 
         self.assertNotIn("PreCompact", hooks)
 
@@ -166,6 +174,24 @@ class SessionHandoffHooksContractTest(unittest.TestCase):
             ),
             commands,
         )
+
+    def test_detection_hook_is_registered_for_tool_success_and_failure(self) -> None:
+        hooks = self.load_hooks()
+        for event in ("PostToolUse", "PostToolUseFailure"):
+            with self.subTest(event=event):
+                entries = [
+                    (group.get("matcher"), handler["command"], handler.get("args"))
+                    for group in hooks.get(event, [])
+                    for handler in group["hooks"]
+                    if handler.get("type") == "command"
+                ]
+                self.assertIn(
+                    ("*", self.DETECT_CONTEXT_THRESHOLD_COMMAND, []),
+                    entries,
+                    f"{event} に matcher '*' の "
+                    f"{self.DETECT_CONTEXT_THRESHOLD_COMMAND} (args: []) を登録する: "
+                    f"{entries!r}",
+                )
 
 
 if __name__ == "__main__":

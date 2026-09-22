@@ -4,7 +4,7 @@
 
 ## バージョン
 
-v0.6.2
+v0.7.0
 
 ## 概要
 
@@ -15,7 +15,7 @@ v0.6.2
 | 編集直前 | `block-ignore-lint-comment` (PreToolUse / Write\|Edit\|MultiEdit) | ESLint/Prettier/Ruff の ignore コメント挿入を deny |
 | 編集直後 | `code-format` (PostToolUse / Write\|Edit\|MultiEdit) | ESLint `--fix` / Prettier / Ruff で自動整形 |
 | `git commit` 直前 | `block-commit-lint` (PreToolUse / Bash) | staged ファイルに lint エラーがあれば commit を deny |
-| `git commit` 直後 | `post-commit-lint` (PostToolUse / Bash) | HEAD コミットを再 lint し、エラーがあれば non-blocking フィードバックを Claude に返す |
+| `git commit` 直後 | `post-commit-lint` (PostToolUse / PostToolUseFailure / Bash) | HEAD コミットを再 lint し、エラーがあれば non-blocking フィードバックを Claude に返す |
 
 モノレポ構成 (例: `front/`, `server/` 配下にそれぞれ linter 設定がある) でも、対象ファイルから上向きに最寄りの設定ファイルを探索し、その所在ディレクトリを実行 CWD として linter を起動します。
 
@@ -132,15 +132,19 @@ pathspec の検出には Python の `shlex` でクォート対応トークン化
 #### 4. post-commit-lint
 
 **ファイル**: `hooks/scripts/post-commit-lint.sh`
-**イベント**: PostToolUse (matcher: `Bash`)
+**イベント**: PostToolUse / PostToolUseFailure (matcher: `Bash`)
 
 Bash 経由で `git commit` が実行された **直後** に発火する非ブロッキングなセーフティネットです。`block-commit-lint` (PreToolUse) を何らかの理由で bypass した経路 (例: プラグインを一時的に無効化したまま commit、subagent からの commit、ローカルにない linter rule が remote で適用される ケース など) に対して、commit 後にもう 1 度 lint を回してフィードバックを返します。
+
+Bash が 0 で終了した実行は PostToolUse、非 0 で終了した実行は PostToolUseFailure に配信されます。`git commit -m msg && git push` のように commit 自体は成功しつつ後続コマンドが失敗した実行は後者にしか届かないため、両方の event を同じ lint 判定に流します。1 回の Bash 実行はどちらか一方の event にしか配信されないため、二重 lint は起きません。
 
 **発火条件**:
 
 - `tool_name == "Bash"`
 - コマンド文字列に `git commit` が含まれ、`parse-commit-command.py` が cwd repo に対する実 commit invocation を検出 (`--dry-run` / `--help` / repo override は skip)
 - Bash 全体の `tool_response.exit_code` は **見ない**: `git commit -m msg && git push` のように commit は成功するが後続コマンド (push) が失敗するケースでも、現 HEAD は新 commit になっているため lint 対象とする
+- PostToolUseFailure では追加で、`error` の先頭行が `Exit code <10 進整数>` の完全一致行であることを要求する。プロセス起動自体が失敗した入力 (この行が無い) では commit が走っていないため skip する
+- PostToolUseFailure の `is_interrupt` が `true` (ユーザの Esc/Ctrl+C による中断) の場合は何もせず終了する
 
 **lint 対象**:
 
@@ -151,7 +155,7 @@ Bash 経由で `git commit` が実行された **直後** に発火する非ブ�
 
 **現 HEAD ベースのセマンティクス**:
 
-PostToolUse hook では「Bash 実行前後の HEAD SHA 差分」を知る術がないため、「この Bash 実行で作られた commit」を厳密判定する手段はありません。本 hook は **「現在の HEAD コミットを再 lint する」セマンティクス**で動作します:
+どちらの event でも「Bash 実行前後の HEAD SHA 差分」を知る術がないため、「この Bash 実行で作られた commit」を厳密判定する手段はありません。本 hook は **「現在の HEAD コミットを再 lint する」セマンティクス**で動作します:
 
 - `git commit` 実行で HEAD が動いた場合 → 直前に作られた commit を lint
 - `git commit` が pre-commit reject 等で失敗し HEAD が動かなかった場合 → 前回 commit を再 lint (空振り clean なら無害、dirty なら "前から残っていた lint エラー" を notify する副次効果)
@@ -162,13 +166,15 @@ reason 文面は「現在の HEAD コミット」に対する lint であるこ�
 **出力**:
 
 - lint エラーが 1 件もなければ何も出力せず `exit 0`
-- lint エラーがあれば `{"decision": "block", "reason": "<HEAD SHA + lint 出力>"}` を返す
-  - PostToolUse の `decision: "block"` は tool 自体は既に実行済みのため **rollback はしない**。reason が Claude のターン context に注入され、`git commit --amend` などの修正アクションを促す **non-blocking なフィードバック** として機能する
+- lint エラーがあれば、同じ文面 (HEAD SHA + lint 出力) を event ごとの形で返す
+  - PostToolUse: `{"decision": "block", "reason": "<文面>"}`
+  - PostToolUseFailure: `{"hookSpecificOutput": {"hookEventName": "PostToolUseFailure", "additionalContext": "<文面>"}}` (`decision` は持たない)
+  - tool 自体は既に実行済みのため、どちらも **rollback はしない**。文面が Claude のターン context に注入され、`git commit --amend` などの修正アクションを促す **non-blocking なフィードバック** として機能する
 
 **fail policy**:
 
 - 必須ツール (jq / python3 / git) が欠ける場合は silent skip (stderr に warning は出す)
-- `block-commit-lint` のような fail-closed deny は PostToolUse では使えないため、本 hook は best-effort feedback として位置付け、検出漏れは `block-commit-lint` 側で fail-closed する設計に依存する
+- `block-commit-lint` のような fail-closed deny は commit 実行後の event では使えないため、本 hook は best-effort feedback として位置付け、検出漏れは `block-commit-lint` 側で fail-closed する設計に依存する
 
 **検出のスコープ外**:
 
