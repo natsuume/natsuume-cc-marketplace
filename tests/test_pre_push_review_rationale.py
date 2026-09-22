@@ -92,8 +92,8 @@ PHRASES_NAMING_THE_NONEXISTENT_LS_TOOL = (
 )
 
 # README の model 解決順序は「明示 model / agent frontmatter が env より優先される」
-# 形で書く。env が優先されるという説明に使われる語は README に置かない。
-PHRASE_CLAIMING_ENV_MODEL_PRECEDENCE = "より優先されるため"
+# 形で書く。env が agent frontmatter より優先されるという向きの説明は README に置かない。
+PHRASE_CLAIMING_ENV_PRECEDES_AGENT_FRONTMATTER = "agent frontmatter より優先されるため"
 
 # reviewer が nested subagent を起動しない旨を agent body に書く一文 (完全一致)。
 NO_SPAWN_CLAUSE = (
@@ -144,6 +144,15 @@ def normalize(text: str) -> str:
     return " ".join(text.split())
 
 
+def strip_whitespace(text: str) -> str:
+    """空白文字をすべて除去する。
+
+    禁止語の照合に使う。日本語の禁止語は語中に空白を持たないため、行の折り返しで
+    分断された出現は単一スペースへの正規化では一致しない。
+    """
+    return "".join(text.split())
+
+
 def frontmatter_lines(text: str) -> list[str] | None:
     """frontmatter の行の列を返す。frontmatter が無ければ None を返す。"""
     match = FRONTMATTER_PATTERN.match(text)
@@ -166,7 +175,11 @@ def description_line(text: str) -> str:
 
 
 def markdown_section(text: str, heading: str) -> str:
-    """`heading` 行から次の `#`〜`###` 見出しの手前までを返す (fence 内は見出し扱いしない)。"""
+    """`heading` の次の行から次の `#`〜`###` 見出しの手前までを返す。
+
+    見出し行そのものは含めない (見出しの語が本文のキーワード検査を満たさないように
+    する)。fence 内の `#` 始まりの行は見出しとして扱わない。
+    """
     lines = text.splitlines(keepends=True)
     start: int | None = None
     in_fence = False
@@ -180,10 +193,10 @@ def markdown_section(text: str, heading: str) -> str:
             start = index
             continue
         if start is not None and SECTION_BOUNDARY_PATTERN.match(line):
-            return "".join(lines[start:index])
+            return "".join(lines[start + 1 : index])
     if start is None:
         return ""
-    return "".join(lines[start:])
+    return "".join(lines[start + 1 :])
 
 
 def paragraphs(text: str) -> list[str]:
@@ -251,9 +264,12 @@ class ContractTestCase(unittest.TestCase):
     """対象ファイルが数百行あるため、失敗時に全文ではなく該当箇所だけを示す helper。"""
 
     def assert_phrase_absent(self, path: Path, phrase: str) -> None:
-        """空白正規化した全文で禁止語の不在を確認する (改行をまたぐ出現も検出する)。"""
+        """空白を除去した全文で禁止語の不在を確認する (折り返しでの分断も検出する)。
+
+        hit 一覧は行単位の診断のため、行内に収まらない出現はその旨だけを示す。
+        """
         body = read(path)
-        if normalize(phrase) not in normalize(body):
+        if strip_whitespace(phrase) not in strip_whitespace(body):
             return
         hits = [
             f"L{number}: {line.strip()[:120]}"
@@ -324,7 +340,9 @@ class ExpiredRationaleAbsenceTest(ContractTestCase):
 
     def test_readme_does_not_claim_env_precedence_over_explicit_model(self) -> None:
         """`CLAUDE_CODE_SUBAGENT_MODEL` が明示指定より優先される、という説明が無い。"""
-        self.assert_phrase_absent(PLUGIN_README, PHRASE_CLAIMING_ENV_MODEL_PRECEDENCE)
+        self.assert_phrase_absent(
+            PLUGIN_README, PHRASE_CLAIMING_ENV_PRECEDES_AGENT_FRONTMATTER
+        )
 
 
 class CurrentRationalePresenceTest(ContractTestCase):
@@ -377,7 +395,7 @@ class CurrentRationalePresenceTest(ContractTestCase):
         """
         section = markdown_section(read(PLUGIN_README), README_AGENTS_HEADING)
         self.assert_scope_found(
-            f"{PLUGIN_README}", section, f"`{README_AGENTS_HEADING}` 節が無い"
+            f"{PLUGIN_README}", section, f"`{README_AGENTS_HEADING}` 節の本文が無い"
         )
         for group, keywords in RATIONALE_KEYWORD_GROUPS:
             with self.subTest(group=group):
@@ -417,7 +435,9 @@ class ReadmeModelResolutionTest(ContractTestCase):
         """`### マーカーファイル` 節末尾の段落が env の位置づけを述べる。"""
         section = markdown_section(read(PLUGIN_README), README_MARKER_FILE_HEADING)
         self.assert_scope_found(
-            f"{PLUGIN_README}", section, f"`{README_MARKER_FILE_HEADING}` 節が無い"
+            f"{PLUGIN_README}",
+            section,
+            f"`{README_MARKER_FILE_HEADING}` 節の本文が無い",
         )
         blocks = paragraphs(section)
         last = blocks[-1] if blocks else ""
