@@ -1441,6 +1441,16 @@ class CheckpointLaunchInstructionTest(unittest.TestCase):
         text = CADENCE_RULES_PROMPT.read_text(encoding="utf-8")
         self.assertIn('`model: "sonnet"`', text)
 
+    def test_injected_rules_require_user_confirmation_before_denied_retry(
+        self,
+    ) -> None:
+        """classifier 拒否 (PermissionDenied) 後の再起動前にユーザ確認を求める指示が、
+        hook の stderr ではなく注入 prompt 自体に書かれている。"""
+        text = CADENCE_RULES_PROMPT.read_text(encoding="utf-8")
+        for needle in ("PermissionDenied", "`AskUserQuestion`", "2 回目"):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+
     def test_injected_rules_never_mention_a_second_execution_tool(self) -> None:
         """subagent のコマンド実行経路は Bash tool 1 本に閉じる。"""
         hits = [
