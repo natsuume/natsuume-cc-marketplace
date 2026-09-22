@@ -117,9 +117,11 @@ class ContextThresholdDetectionTest(unittest.TestCase):
             "tool_use_id": "toolu_test",
         }
 
-    def failure_payload(self, *, agent_id: str = "") -> dict[str, object]:
+    def failure_payload(
+        self, *, agent_id: str = "", is_interrupt: bool | None = None
+    ) -> dict[str, object]:
         """`tool_response` を持たない PostToolUseFailure 入力。"""
-        return {
+        payload: dict[str, object] = {
             "hook_event_name": FAILURE_EVENT,
             "session_id": SESSION_ID,
             "agent_id": agent_id,
@@ -130,6 +132,9 @@ class ContextThresholdDetectionTest(unittest.TestCase):
             "tool_use_id": "toolu_test",
             "duration_ms": 12,
         }
+        if is_interrupt is not None:
+            payload["is_interrupt"] = is_interrupt
+        return payload
 
     # -- assertions ---------------------------------------------------------
 
@@ -169,6 +174,13 @@ class ContextThresholdDetectionTest(unittest.TestCase):
     def test_subagent_execution_is_silent(self) -> None:
         self.assert_silent(self.failure_payload(agent_id="agent-a"))
         self.assertFalse(self.marker_path().exists())
+
+    def test_interrupted_failure_is_silent_and_keeps_the_marker(self) -> None:
+        """ユーザ中断の PostToolUseFailure では hook 出力が model に届かないため、
+        1 セッション 1 回の marker を消費せず、次の検知機会を残す。"""
+        self.assert_silent(self.failure_payload(is_interrupt=True))
+        self.assertFalse(self.marker_path().exists())
+        self.assert_emits_handoff_instruction(self.failure_payload(), FAILURE_EVENT)
 
     def test_usage_below_the_threshold_is_silent(self) -> None:
         self.write_context_cache(USED_PERCENTAGE_BELOW_THRESHOLD)

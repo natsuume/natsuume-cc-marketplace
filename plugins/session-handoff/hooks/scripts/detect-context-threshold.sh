@@ -5,6 +5,8 @@
 # additionalContext を 1 セッション 1 回だけ注入する。判定は event に依らず同じで
 # (`tool_response` は参照しない)、出力の hookEventName は入力の hook_event_name を
 # そのまま使う。ツールが失敗した実行でも使用率は増えているため、両方の event を配送する。
+# ただしユーザ中断 (`is_interrupt: true`) の PostToolUseFailure では host が hook の
+# 出力を model に届けないため、marker を消費しないよう何もしない。
 #
 # 参照する cache は natsuume-statusline plugin (#227) の producer が書き出す
 # ${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<sanitized_session_id>.json であり、
@@ -14,7 +16,7 @@
 #
 # 判定順序 (途中の失敗はすべて無音 exit 0。fail-open でセッションを壊さない):
 #   1. jq 不在
-#   2. agent_id が非空 (subagent 内での実行)
+#   2. agent_id が非空 (subagent 内での実行)、または is_interrupt が true (ユーザ中断)
 #   3. session_id 欠落 / サニタイズ後空
 #   4. uid 取得不能
 #   5. marker (1 セッション 1 回の通知済みガード) 存在
@@ -35,17 +37,20 @@ fi
 
 INPUT=$(cat)
 
-{ read -r HOOK_EVENT; read -r RAW_SESSION_ID; read -r AGENT_ID; read -r CWD; } < <(
+{ read -r HOOK_EVENT; read -r RAW_SESSION_ID; read -r AGENT_ID; read -r CWD; read -r IS_INTERRUPT; } < <(
   printf '%s' "$INPUT" | jq -r '
     (.hook_event_name // ""),
     (.session_id // ""),
     (.agent_id // ""),
-    (.cwd // "")
+    (.cwd // ""),
+    (.is_interrupt // false)
   ' 2>/dev/null
 )
 
-# 2. subagent 内の PostToolUse では検知しない (agent_id が付与されるのは subagent 実行時)
-if [ -n "$AGENT_ID" ]; then
+# 2. subagent 内の PostToolUse では検知しない (agent_id が付与されるのは subagent 実行時)。
+#    ユーザ中断の PostToolUseFailure では hook 出力が model に届かないため、marker を
+#    消費しないよう検知しない。
+if [ -n "$AGENT_ID" ] || [ "$IS_INTERRUPT" = "true" ]; then
   exit 0
 fi
 
