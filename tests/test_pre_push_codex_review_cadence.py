@@ -8,9 +8,10 @@ event 登録と plugin README の該当節の記述を固定する。state 隔�
 ことで行う。
 
 checkpoint 相談 (`codex-advisor:advisor-runner` を `<review_cycle_checkpoint>` を
-含む request で起動する) が成立しない経路は 2 つあり、どちらも fail-open reset の
-契機になる: 起動後の失敗は `PostToolUseFailure` に、auto mode classifier による
-起動拒否は `PermissionDenied` に配信される。
+含む request で起動する) が成立しない経路は 2 つある。起動後の失敗は
+`PostToolUseFailure` に配信され、1 回で fail-open reset の契機になる。auto mode
+classifier による起動拒否は `PermissionDenied` に配信され、1 回目は retry を要求して
+state を残し、同じ checkpoint 要求中の 2 回目で fail-open reset の契機になる。
 
 private helper の構成や state ファイル名の形式には結合しない。
 """
@@ -864,17 +865,26 @@ class PostToolUseFailureFailOpenTest(HookHarness):
 
 
 class PermissionDeniedFailOpenTest(HookHarness):
-    """checkpoint 相談の起動が拒否された (PermissionDenied) ときの fail-open reset。
+    """checkpoint 相談の起動が拒否された (PermissionDenied) ときの retry と reset。
 
     auto mode classifier は subagent の起動そのものを拒否するため、この経路では
-    PostToolUseFailure は発火しない。reset の条件は PostToolUseFailure と同じ
-    (`tool_name` が `Agent` / `Task`、`tool_input.subagent_type` が
-    `codex-advisor:advisor-runner`、`tool_input.prompt` に `<review_cycle_checkpoint>`
-    を含む、checkpoint 要求中)。
+    PostToolUseFailure は発火しない。「checkpoint 相談の拒否」とみなす条件は
+    PostToolUseFailure の fail-open reset と同じ (`tool_name` が `Agent` / `Task`、
+    `tool_input.subagent_type` が `codex-advisor:advisor-runner`、`tool_input.prompt`
+    が文字列で `<review_cycle_checkpoint>` を含む、checkpoint 要求中)。
+
+    1 回目の拒否では state を残したまま retry 応答を返し、ユーザ確認後の再起動を促す。
+    同じ checkpoint 要求中の 2 回目の拒否で fail-open reset する (拒否が続く環境で
+    checkpoint が解除不能な block にならないようにする)。条件に合わない拒否は state を
+    変えず無応答で、この回数にも数えない。拒否回数は state とともに消えるため、reset
+    後の新しい checkpoint 要求では再び 1 回目から数える。
+
+    回数をどの state フィールドで持つかには結合せず、観測は state の有無 /
+    `checkpointRequired` と stdout の応答だけで行う。
     """
 
-    def drive_to_checkpoint(self, session_id: str) -> None:
-        for cycle in range(1, REVIEW_CADENCE_LIMIT + 1):
+    def drive_to_checkpoint(self, session_id: str, *, first_cycle: int = 1) -> None:
+        for cycle in range(first_cycle, first_cycle + REVIEW_CADENCE_LIMIT):
             self.complete_status_line_review(
                 PRE_PUSH_CODEX_REVIEWER,
                 session_id=session_id,
@@ -883,53 +893,111 @@ class PermissionDeniedFailOpenTest(HookHarness):
             )
         self.assert_stop_blocked(self.main_stop(session_id))
 
-    def test_checkpoint_consultation_denial_resets_during_checkpoint(self) -> None:
-        session_id = "session-denied-checkpoint"
-        self.drive_to_checkpoint(session_id)
-        self.permission_denied(
+    # -- payload / assertions ----------------------------------------------
+
+    def deny_checkpoint_consultation(
+        self, session_id: str
+    ) -> dict[str, object] | None:
+        return self.permission_denied(
             session_id=session_id, prompt=CHECKPOINT_REQUEST_PROMPT
         )
-        self.assertIsNone(self.main_stop(session_id))
-        self.assertIsNone(self.state_for(session_id))
 
-    def test_ordinary_consultation_denial_does_not_reset(self) -> None:
+    def assert_retry_requested(self, response: dict[str, object] | None) -> None:
+        self.assertIsNotNone(response, "1 回目の拒否は retry 応答を返す")
+        assert response is not None
+        hook_output = response["hookSpecificOutput"]
+        assert isinstance(hook_output, dict)
+        self.assertEqual(PERMISSION_DENIED_EVENT, hook_output["hookEventName"])
+        self.assertIs(True, hook_output["retry"])
+
+    def assert_checkpoint_still_required(self, session_id: str) -> None:
+        state = self.state_for(session_id)
+        self.assertIsNotNone(state, "checkpoint 要求中の state が消えている")
+        assert state is not None
+        self.assertIs(True, state["checkpointRequired"])
+        self.assert_stop_blocked(self.main_stop(session_id))
+
+    def assert_checkpoint_released(self, session_id: str) -> None:
+        self.assertIsNone(self.state_for(session_id))
+        self.assertIsNone(self.main_stop(session_id))
+
+    def assert_denial_is_a_noop(self, session_id: str, **denial: object) -> None:
+        """条件に合わない拒否は state を変えず、応答も返さない。"""
+        before = self.state_for(session_id)
+        self.assertIsNone(
+            self.permission_denied(session_id=session_id, **denial),
+            "条件に合わない拒否には応答しない",
+        )
+        self.assertEqual(before, self.state_for(session_id))
+
+    # -- 拒否の回数に応じた扱い --------------------------------------------
+
+    def test_first_checkpoint_denial_requests_a_retry_without_resetting(self) -> None:
+        session_id = "session-denied-first"
+        self.drive_to_checkpoint(session_id)
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+        self.assert_checkpoint_still_required(session_id)
+
+    def test_second_checkpoint_denial_resets_the_checkpoint(self) -> None:
+        session_id = "session-denied-second"
+        self.drive_to_checkpoint(session_id)
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+        self.assertIsNone(
+            self.deny_checkpoint_consultation(session_id),
+            "reset する拒否には応答しない",
+        )
+        self.assert_checkpoint_released(session_id)
+
+    def test_denial_count_restarts_after_an_attestation_reset(self) -> None:
+        """拒否回数は state とともに消え、次の checkpoint 要求では 1 回目から数える。"""
+        session_id = "session-denied-after-attestation"
+        self.drive_to_checkpoint(session_id)
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+
+        self.advisor_runner_stop(
+            session_id=session_id, status="success", attestation="satisfied"
+        )
+        self.assert_checkpoint_released(session_id)
+
+        self.drive_to_checkpoint(session_id, first_cycle=REVIEW_CADENCE_LIMIT + 1)
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+        self.assert_checkpoint_still_required(session_id)
+
+    def test_ordinary_consultation_denial_is_not_counted(self) -> None:
         session_id = "session-denied-ordinary"
         self.drive_to_checkpoint(session_id)
-        self.permission_denied(session_id=session_id, prompt=ORDINARY_REQUEST_PROMPT)
-        self.assert_stop_blocked(self.main_stop(session_id))
+        self.assert_denial_is_a_noop(session_id, prompt=ORDINARY_REQUEST_PROMPT)
+
+        # 直後の checkpoint 相談の拒否は 1 回目として扱われる (まだ reset しない)。
+        self.assert_retry_requested(self.deny_checkpoint_consultation(session_id))
+        self.assert_checkpoint_still_required(session_id)
+        self.assertIsNone(self.deny_checkpoint_consultation(session_id))
+        self.assert_checkpoint_released(session_id)
+
+    # -- 条件に合わない拒否 --------------------------------------------------
 
     def test_missing_subagent_type_is_a_noop(self) -> None:
         session_id = "session-denied-no-subagent-type"
         self.drive_to_checkpoint(session_id)
-        before = self.state_for(session_id)
-        self.assertIsNone(
-            self.permission_denied(
-                session_id=session_id,
-                subagent_type=None,
-                prompt=CHECKPOINT_REQUEST_PROMPT,
-            )
+        self.assert_denial_is_a_noop(
+            session_id, subagent_type=None, prompt=CHECKPOINT_REQUEST_PROMPT
         )
-        self.assertEqual(before, self.state_for(session_id))
 
-    def test_other_subagent_type_does_not_reset(self) -> None:
+    def test_other_subagent_type_is_a_noop(self) -> None:
         session_id = "session-denied-other-runner"
         self.drive_to_checkpoint(session_id)
-        self.permission_denied(
-            session_id=session_id,
+        self.assert_denial_is_a_noop(
+            session_id,
             subagent_type=FOOTER_COUNTED_REVIEWER,
             prompt=CHECKPOINT_REQUEST_PROMPT,
         )
-        self.assert_stop_blocked(self.main_stop(session_id))
 
-    def test_bash_tool_denial_does_not_reset(self) -> None:
+    def test_bash_tool_denial_is_a_noop(self) -> None:
         session_id = "session-denied-bash"
         self.drive_to_checkpoint(session_id)
-        self.permission_denied(
-            session_id=session_id,
-            tool_name="Bash",
-            prompt=CHECKPOINT_REQUEST_PROMPT,
+        self.assert_denial_is_a_noop(
+            session_id, tool_name="Bash", prompt=CHECKPOINT_REQUEST_PROMPT
         )
-        self.assert_stop_blocked(self.main_stop(session_id))
 
     def test_denial_before_checkpoint_required_is_a_noop(self) -> None:
         session_id = "session-denied-early"
@@ -940,12 +1008,8 @@ class PermissionDeniedFailOpenTest(HookHarness):
                 agent_id=f"reviewer-{cycle}",
                 status="pass",
             )
-        before = self.state_for(session_id)
-        self.assertIsNotNone(before)
-        self.permission_denied(
-            session_id=session_id, prompt=CHECKPOINT_REQUEST_PROMPT
-        )
-        self.assertEqual(before, self.state_for(session_id))
+        self.assertIsNotNone(self.state_for(session_id))
+        self.assert_denial_is_a_noop(session_id, prompt=CHECKPOINT_REQUEST_PROMPT)
 
 
 class StopBlockEscapeInstructionTest(HookHarness):

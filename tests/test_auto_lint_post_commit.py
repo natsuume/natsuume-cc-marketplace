@@ -48,8 +48,9 @@ FAILURE_EVENT = "PostToolUseFailure"
 
 # fixture の commit コマンド (parse-commit-command.py が実 commit invocation と判定する形)。
 COMMIT_COMMAND = "git commit -m x"
-# commit を含まないコマンド。
-NON_COMMIT_COMMAND = "printf hello"
+# `git` と `commit` の両語を含む (hook の入力前置フィルタを通過する) が、実 commit
+# invocation ではないコマンド。commit 判定 (parse-commit-command.py) の分岐を実際に通す。
+NON_COMMIT_COMMAND = "git log --grep=commit --oneline"
 
 # `error` の先頭行の形。`Exit code <10 進整数>` の完全一致行だけが「コマンドが走って
 # 非 0 で終了した」ことを表す。
@@ -209,8 +210,12 @@ class PostCommitLintRunTest(unittest.TestCase):
             "-m",
             "fixture commit with a lint error",
         )
+        # git は symlink を解決した実パスを返すため (macOS の一時ディレクトリ等)、
+        # 比較側も resolve して揃える。
         self.assertEqual(
-            str(self.repo), self.git("rev-parse", "--show-toplevel"), "fixture repo"
+            str(self.repo.resolve()),
+            self.git("rev-parse", "--show-toplevel"),
+            "fixture repo",
         )
         return self.git("rev-parse", "--short", "HEAD")
 
