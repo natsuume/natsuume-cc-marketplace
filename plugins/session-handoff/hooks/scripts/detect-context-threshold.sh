@@ -1,8 +1,10 @@
 #!/bin/bash
 # detect-context-threshold.sh
-# PostToolUse (matcher "*") で毎ツール実行後に発火し、context 使用率が閾値を超えた
-# ことを検知したら、handoff ドキュメント作成を指示する additionalContext を
-# 1 セッション 1 回だけ注入する (issue #228)。
+# PostToolUse / PostToolUseFailure (どちらも matcher "*") で毎ツール実行後に発火し、
+# context 使用率が閾値を超えたことを検知したら、handoff ドキュメント作成を指示する
+# additionalContext を 1 セッション 1 回だけ注入する。判定は event に依らず同じで
+# (`tool_response` は参照しない)、出力の hookEventName は入力の hook_event_name を
+# そのまま使う。ツールが失敗した実行でも使用率は増えているため、両方の event を配送する。
 #
 # 参照する cache は natsuume-statusline plugin (#227) の producer が書き出す
 # ${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<sanitized_session_id>.json であり、

@@ -41,17 +41,23 @@
  *     `Codex-Runner-Status: success` かつ footer 直前の実質行が
  *     `Codex-Advisor-Review-Cadence: satisfied` である場合、または footer が
  *     `Codex-Runner-Status: terminal-failure` かつ同行が `unavailable` である場合
- *   - fail-open: PostToolUseFailure (`tool_name` が `Agent` または `Task`、
+ *   - fail-open: checkpoint 相談 (`tool_name` が `Agent` または `Task`、
  *     `tool_input.subagent_type` が `codex-advisor:advisor-runner`、かつ
- *     `tool_input.prompt` が文字列で `<review_cycle_checkpoint>` を含む — checkpoint
- *     相談の起動失敗であること) が checkpoint 要求中に発火した場合、`unavailable`
- *     相当としてカウンターを reset する (codex-advisor 未 install 環境で checkpoint が
- *     解除不能な block にならないため)。通常の advisor 相談 (request に
- *     `<review_cycle_checkpoint>` を含まない) の起動失敗では reset しない。`is_interrupt` が
- *     true (ユーザの Esc/Ctrl+C による abort) の場合も reset しない (cancel はカウンターを
- *     reset しないという契約との整合)。この起動失敗が PostToolUseFailure として本 script に
- *     到達すれば fail-open で自動 reset される。到達しない失敗形・環境では自動 reset されない
- *     ため、その場合は state の手動 reset (state ファイル削除) が解除手段になる
+ *     `tool_input.prompt` が文字列で `<review_cycle_checkpoint>` を含む) が checkpoint
+ *     要求中に成立しなかった場合、`unavailable` 相当としてカウンターを reset する
+ *     (codex-advisor 未 install 環境で checkpoint が解除不能な block にならないため)。
+ *     成立しない経路は 2 つあり、reset までの回数が異なる:
+ *       - PostToolUseFailure (起動後の失敗): 1 回で reset する。ただし `is_interrupt` が
+ *         true (ユーザの Esc/Ctrl+C による abort) の場合は reset しない (cancel はカウンターを
+ *         reset しないという契約との整合)
+ *       - PermissionDenied (auto mode classifier による起動拒否): 1 回目は拒否回数
+ *         (`checkpointDenials`) を state に記録して `retry: true` を返し、ユーザ確認後の
+ *         再起動を促す。同じ checkpoint 要求中の 2 回目の拒否で reset する。拒否回数は
+ *         state と一緒に消えるため、reset 後の新しい checkpoint 要求では再び 1 回目から数える
+ *     通常の advisor 相談 (request に `<review_cycle_checkpoint>` を含まない) の失敗・拒否は
+ *     どちらの経路でも reset せず、拒否回数にも数えない。どちらの event も届かない失敗形・
+ *     環境 (codex-advisor 未 install で subagent_type 自体が解決できない等) では自動 reset が
+ *     発火しないため、その場合は state の手動 reset (state ファイル削除) が解除手段になる
  *
  * enforcement:
  *   - PreToolUse (Bash): checkpoint 要求中 (完了 review が 5 回に達している間) は、
@@ -78,7 +84,7 @@
  * SessionStart イベントを扱わない)。
  *
  * 扱う hook イベント: PreToolUse, SubagentStart, PostToolUse (SubagentHandback),
- * SubagentStop, PostToolUseFailure, Stop, SessionEnd。
+ * SubagentStop, PostToolUseFailure, PermissionDenied, Stop, SessionEnd。
  */
 
 import crypto from "node:crypto";
@@ -174,6 +180,11 @@ function sanitizeHandbackReport(value) {
   };
 }
 
+/** checkpoint 相談の拒否回数 (PermissionDenied) を 0 以上の整数へ正規化する。 */
+function sanitizeCheckpointDenials(value) {
+  return Number.isInteger(value) && value > 0 ? value : 0;
+}
+
 function sanitizeHandbackReports(value) {
   const reports = {};
   if (!value || typeof value !== "object" || Array.isArray(value)) return reports;
@@ -200,6 +211,7 @@ function readState(sessionId) {
       activeReviewerAgentIds,
       handbackReports: sanitizeHandbackReports(parsed.handbackReports),
       countedRunnerAgentIds: sanitizeAgentIds(parsed.countedRunnerAgentIds),
+      checkpointDenials: sanitizeCheckpointDenials(parsed.checkpointDenials),
       checkpointRequired:
         parsed.checkpointRequired === true ||
         parsed.completedReviews >= REVIEW_CADENCE_LIMIT,
@@ -215,6 +227,7 @@ function writeState(
   activeReviewerAgentIds = [],
   handbackReports = {},
   countedRunnerAgentIds = [],
+  checkpointDenials = 0,
 ) {
   ensureRoot();
   const destination = statePath(sessionId);
@@ -231,6 +244,7 @@ function writeState(
     activeReviewerAgentIds: sanitizeAgentIds(activeReviewerAgentIds),
     handbackReports: sanitizeHandbackReports(handbackReports),
     countedRunnerAgentIds: sanitizeAgentIds(countedRunnerAgentIds),
+    checkpointDenials: sanitizeCheckpointDenials(checkpointDenials),
     checkpointRequired: normalizedCount >= REVIEW_CADENCE_LIMIT,
     updatedAt: new Date().toISOString(),
   };
@@ -270,6 +284,7 @@ function persistState(
   activeReviewerAgentIds,
   handbackReports,
   countedRunnerAgentIds = [],
+  checkpointDenials = 0,
 ) {
   if (
     completedReviews === 0 &&
@@ -285,6 +300,7 @@ function persistState(
       activeReviewerAgentIds,
       handbackReports,
       countedRunnerAgentIds,
+      checkpointDenials,
     );
   }
 }
@@ -590,6 +606,7 @@ function handleSubagentStart(input) {
     activeReviewerAgentIds,
     state?.handbackReports ?? {},
     state?.countedRunnerAgentIds ?? [],
+    state?.checkpointDenials ?? 0,
   );
   return null;
 }
@@ -624,6 +641,7 @@ function handlePostToolUse(input) {
     state?.activeReviewerAgentIds ?? [],
     handbackReports,
     state?.countedRunnerAgentIds ?? [],
+    state?.checkpointDenials ?? 0,
   );
   return null;
 }
@@ -642,6 +660,7 @@ function handleStatusLineReviewerStop(input) {
         state.activeReviewerAgentIds,
         handbackReports,
         state.countedRunnerAgentIds,
+        state.checkpointDenials,
       );
     }
     return null;
@@ -660,6 +679,7 @@ function handleStatusLineReviewerStop(input) {
     activeReviewerAgentIds,
     handbackReports,
     state.countedRunnerAgentIds,
+    state.checkpointDenials,
   );
   return null;
 }
@@ -691,6 +711,7 @@ function handleFooterReviewerStop(input) {
     state?.activeReviewerAgentIds ?? [],
     handbackReports,
     countedRunnerAgentIds,
+    state?.checkpointDenials ?? 0,
   );
   return null;
 }
@@ -720,6 +741,7 @@ function handleAdvisorCheckpointStop(input) {
       state.activeReviewerAgentIds,
       handbackReports,
       state.countedRunnerAgentIds,
+      state.checkpointDenials,
     );
   }
   return null;
@@ -752,21 +774,72 @@ function isCheckpointConsultationPrompt(toolInput) {
   return typeof prompt === "string" && prompt.includes("<review_cycle_checkpoint>");
 }
 
+/**
+ * 入力が checkpoint 相談の起動 (Agent / Task で `${ADVISOR_CHECKPOINT_RUNNER}` を
+ * checkpoint request で起動する呼び出し) を指すか。PostToolUseFailure (起動後の失敗) と
+ * PermissionDenied (起動そのものの拒否) が同じ条件を共有する。
+ */
+function isCheckpointConsultationLaunch(input) {
+  if (input.tool_name !== "Agent" && input.tool_name !== "Task") return false;
+  if (input.tool_input?.subagent_type !== ADVISOR_CHECKPOINT_RUNNER) return false;
+  return isCheckpointConsultationPrompt(input.tool_input);
+}
+
+/** checkpoint 要求中であればその state を返す。それ以外は null。 */
+function checkpointStateFor(input) {
+  if (typeof input.session_id !== "string") return null;
+  const state = readState(input.session_id);
+  return state?.checkpointRequired ? state : null;
+}
+
 function handlePostToolUseFailure(input) {
-  if (input.tool_name !== "Agent" && input.tool_name !== "Task") return null;
-  if (input.tool_input?.subagent_type !== ADVISOR_CHECKPOINT_RUNNER) return null;
-  if (!isCheckpointConsultationPrompt(input.tool_input)) return null;
+  if (!isCheckpointConsultationLaunch(input)) return null;
   // ユーザ interrupt (Esc/Ctrl+C) による abort は checkpoint 相談自体の起動失敗ではない
   // ため reset しない (rules.md の「cancel はカウンターを reset しない」契約との整合)。
   if (input.is_interrupt === true) return null;
-  if (typeof input.session_id !== "string") return null;
-  const state = readState(input.session_id);
-  if (!state?.checkpointRequired) return null;
+  if (!checkpointStateFor(input)) return null;
   removeState(input.session_id);
   process.stderr.write(
     `[pre-push-codex-review] ${ADVISOR_CHECKPOINT_RUNNER} の checkpoint 相談 (request に <review_cycle_checkpoint> を含む) の起動に失敗したため、review cadence の checkpoint を fail-open で reset しました。\n`,
   );
   return null;
+}
+
+/**
+ * PermissionDenied: auto mode の classifier が checkpoint 相談の起動そのものを拒否した。
+ * 1 回目は state を残して retry を要求し、同じ checkpoint 要求中の 2 回目で fail-open
+ * reset する。条件に合わない拒否は state を書き換えず、拒否回数にも数えない。
+ */
+function handlePermissionDenied(input) {
+  if (!isCheckpointConsultationLaunch(input)) return null;
+  const state = checkpointStateFor(input);
+  if (!state) return null;
+
+  if (state.checkpointDenials >= 1) {
+    removeState(input.session_id);
+    process.stderr.write(
+      `[pre-push-codex-review] ${ADVISOR_CHECKPOINT_RUNNER} の checkpoint 相談の起動が再び拒否されたため、review cadence の checkpoint を fail-open で reset しました。\n`,
+    );
+    return null;
+  }
+
+  writeState(
+    input.session_id,
+    state.completedReviews,
+    state.activeReviewerAgentIds,
+    state.handbackReports,
+    state.countedRunnerAgentIds,
+    state.checkpointDenials + 1,
+  );
+  process.stderr.write(
+    `[pre-push-codex-review] ${ADVISOR_CHECKPOINT_RUNNER} の checkpoint 相談の起動が classifier に拒否されました。checkpoint はまだ要求中です。ユーザに起動の可否を確認したうえで同じ相談をもう一度起動してください。再度拒否された場合は fail-open で checkpoint を reset します。\n`,
+  );
+  return {
+    hookSpecificOutput: {
+      hookEventName: "PermissionDenied",
+      retry: true,
+    },
+  };
 }
 
 function handleStop(input) {
@@ -777,7 +850,7 @@ function handleStop(input) {
   if (!state?.checkpointRequired) return null;
   return {
     decision: "block",
-    reason: `Codex review が前回の根本方針 checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。まず必ず ${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet" で起動してください。起動 mode は Claude Code が決めるため指定せず、助言は completion notification 経由で届きます。相談 request の <review_cycle_checkpoint> には次の 4 項目を省略せず含めます: Goal と受入基準・制約 / 直近 ${REVIEW_CADENCE_LIMIT} サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。通常の advisor 相談では解除されません。起動に失敗した場合、その起動失敗が fail-open reset を発火させることがあります。起動を試みた後も block が解除されない場合に限り、codex-advisor plugin の install が必要であることをユーザに報告してください (state の手動 reset 手順は plugin README に記載)。`,
+    reason: `Codex review が前回の根本方針 checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。まず必ず ${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet" で起動してください。起動 mode は Claude Code が決めるため指定せず、助言は completion notification 経由で届きます。相談 request の <review_cycle_checkpoint> には次の 4 項目を省略せず含めます: Goal と受入基準・制約 / 直近 ${REVIEW_CADENCE_LIMIT} サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。通常の advisor 相談では解除されません。起動後に失敗した場合はその 1 回で checkpoint が fail-open reset されます。classifier に起動を拒否された場合は 1 回目に retry が要求されるので、ユーザに可否を確認したうえで同じ相談をもう一度起動してください (2 回目の拒否で fail-open reset されます)。codex-advisor plugin が install されていない環境では起動失敗も拒否も hook に届かず自動 reset が発火しないため、起動を試みても block が解除されない場合は、この session の state file ${statePath(input.session_id)} を削除して脱出し、codex-advisor plugin の install が必要であることをユーザに報告してください。`,
   };
 }
 
@@ -798,6 +871,8 @@ function dispatch(input) {
       return handleSubagentStop(input);
     case "PostToolUseFailure":
       return handlePostToolUseFailure(input);
+    case "PermissionDenied":
+      return handlePermissionDenied(input);
     case "Stop":
       return handleStop(input);
     case "SessionEnd":

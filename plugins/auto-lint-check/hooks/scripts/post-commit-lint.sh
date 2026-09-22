@@ -1,17 +1,31 @@
 #!/usr/bin/env bash
 # post-commit-lint.sh
 #
-# PostToolUse / Bash で `git commit` を検出し、HEAD コミットの内容を
-# ESLint / Ruff に流して lint する。`block-commit-lint.sh` (PreToolUse) が
-# 何らかの理由で bypass された経路 (例: ユーザーが当該プラグインを一時無効化、
-# subagent 起動など hook 制御範囲外の commit、Edit/Write 後の自動 format で
-# 検出できない linter rule、etc.) を後追いでカバーするためのセーフティネット。
+# Bash tool で `git commit` を検出し、HEAD コミットの内容を ESLint / Ruff に
+# 流して lint する。`block-commit-lint.sh` (PreToolUse) が何らかの理由で bypass
+# された経路 (例: ユーザーが当該プラグインを一時無効化、subagent 起動など hook
+# 制御範囲外の commit、Edit/Write 後の自動 format で検出できない linter rule、
+# etc.) を後追いでカバーするためのセーフティネット。
 #
-# PostToolUse の時点で commit は既に作成済み (rollback 不可) のため
-# permissionDecision: "deny" は使えない。代わりに `{"decision": "block",
-# "reason": "..."}` を返すことで、Claude のターン context に lint エラーを
-# 注入し `commit --amend` 等の修正アクションを促す。tool 自体の実行を止め
-# ないため "non-blocking" な feedback として機能する。
+# 配送イベントは 2 つある。Bash が 0 で終了した実行は PostToolUse、非 0 で
+# 終了した実行は PostToolUseFailure に配信される。`git commit -m msg && git push`
+# のように commit の後段が失敗した実行は後者にしか届かないため、両方の event を
+# 同じ lint 判定へ流す。二重 lint 防止の state は持たない (1 回の Bash 実行は
+# どちらか一方の event にしか配信されない)。
+#
+# PostToolUseFailure では、`error` の先頭行が `Exit code <10 進整数>` の完全
+# 一致行である場合だけ「コマンドが実際に走って非 0 で終了した」と判断して lint に
+# 進む。プロセス起動自体が失敗した入力 (先頭行が `Exit code N` でない) と、ユーザ
+# 中断 (`is_interrupt: true`) では commit が走っていないため何も出力しない。
+#
+# どちらの event でも commit は既に作成済み (rollback 不可) のため
+# permissionDecision: "deny" は使えない。代わりに Claude のターン context へ
+# lint エラーを注入して `commit --amend` 等の修正アクションを促す。注入形は
+# event ごとに異なる:
+#   PostToolUse        : {"decision": "block", "reason": "..."}
+#   PostToolUseFailure : {"hookSpecificOutput": {"hookEventName":
+#                        "PostToolUseFailure", "additionalContext": "..."}}
+# どちらも tool 自体の実行を止めないため "non-blocking" な feedback として機能する。
 #
 # policy: fail-open (non-blocking)
 # 必須ツール (jq / python3 / git) が欠ける場合は silent skip する (non-blocking
@@ -40,6 +54,30 @@ INPUT=$(cat)
 # 高速パス: `git` と `commit` の両方を含まない入力は早期 exit。
 case "$INPUT" in
   *git*commit*) ;;
+  *) exit 0 ;;
+esac
+
+HOOK_EVENT=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty')
+case "$HOOK_EVENT" in
+  PostToolUse) ;;
+  PostToolUseFailure)
+    # ユーザ中断 (Esc/Ctrl+C) はコマンドの実行結果ではないため lint しない。
+    IS_INTERRUPT=$(printf '%s' "$INPUT" | jq -r '.is_interrupt // false')
+    if [ "$IS_INTERRUPT" = "true" ]; then
+      exit 0
+    fi
+    # `error` の先頭行が `Exit code <10 進整数>` の完全一致行である場合だけ、
+    # コマンドが実際に起動して非 0 で終了したと判断する。プロセス起動自体が
+    # 失敗した入力ではこの行が無く、commit も走っていない。
+    ERROR_FIRST_LINE=$(printf '%s' "$INPUT" | jq -r '.error // ""' | head -n 1)
+    case "$ERROR_FIRST_LINE" in
+      "Exit code "*) EXIT_CODE_DIGITS="${ERROR_FIRST_LINE#Exit code }" ;;
+      *) exit 0 ;;
+    esac
+    case "$EXIT_CODE_DIGITS" in
+      ''|*[!0-9]*) exit 0 ;;
+    esac
+    ;;
   *) exit 0 ;;
 esac
 
@@ -178,10 +216,19 @@ if [ "$HAS_ERROR" -eq 1 ]; then
     "直前の commit が原因なら \`git commit --amend\` で差し替え、過去 commit が原因なら fix 用の commit を追加してください。" \
     "" \
     "$COMBINED_OUTPUT")
-  jq -n --arg reason "$REASON" '{
-    decision: "block",
-    reason: $reason
-  }'
+  if [ "$HOOK_EVENT" = "PostToolUseFailure" ]; then
+    jq -n --arg context "$REASON" '{
+      hookSpecificOutput: {
+        hookEventName: "PostToolUseFailure",
+        additionalContext: $context
+      }
+    }'
+  else
+    jq -n --arg reason "$REASON" '{
+      decision: "block",
+      reason: $reason
+    }'
+  fi
 fi
 
 exit 0
