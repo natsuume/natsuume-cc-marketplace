@@ -34,7 +34,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v6.0.2
+v6.0.3
 
 ## インストール
 
@@ -196,6 +196,10 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 (3) このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
 
 **呼び出しタイミング (2 subagent 共通)**: `/pre-push-review:review` slash command の指示で 2 並列 `Agent` / `Task` tool calls として起動する (完了は SubagentStop で検知されるため起動 mode は問わない)。 deny メッセージにも個別起動のフォールバック手順を案内している。
+
+## 既知の制約
+
+- **gate の観測範囲は Bash tool のみ**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `git push` を gate は観測しない。これらの tool を有効にした環境はサポート外
 
 ## 関連プラグイン
 

@@ -7,7 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-context-threshold.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/detect-context-threshold.sh",
+            "args": []
           }
         ]
       }
@@ -18,7 +19,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-pending-handoff.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-pending-handoff.sh",
+            "args": []
           }
         ]
       }

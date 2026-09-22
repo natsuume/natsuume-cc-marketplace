@@ -67,6 +67,14 @@ COMMANDS = {
 }
 
 
+def hook_invocation(hook: dict) -> str:
+    """hooks.json の command hook が起動するコマンド行 (`command` + `args`)。
+
+    exec form では実行ファイルが `command`、script パスを含む引数が `args` に分かれる。
+    """
+    return " ".join([hook["command"], *hook.get("args", [])])
+
+
 class HookHarness(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -975,7 +983,7 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
         ):
             with self.subTest(event=event):
                 commands = [
-                    hook["command"]
+                    hook_invocation(hook)
                     for entry in hooks[event]
                     for hook in entry["hooks"]
                     if hook["type"] == "command"
@@ -988,8 +996,9 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
             entry["matcher"]
             for entry in hooks["PostToolUse"]
             if any(
-                "manage-codex-runners.mjs" in hook["command"]
+                "manage-codex-runners.mjs" in hook_invocation(hook)
                 for hook in entry["hooks"]
+                if hook["type"] == "command"
             )
         ]
         self.assertEqual(["^SubagentHandback$"], post_tool_use_matchers)

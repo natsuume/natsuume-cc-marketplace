@@ -70,6 +70,14 @@ REVIEW_LAUNCH_COMMANDS = {
 LEGACY_WRAPPER_COMMAND = "bash /x/run-codex-review.sh"
 
 
+def hook_invocation(hook: dict) -> str:
+    """hooks.json の command hook が起動するコマンド行 (`command` + `args`)。
+
+    exec form では実行ファイルが `command`、script パスを含む引数が `args` に分かれる。
+    """
+    return " ".join([hook["command"], *hook.get("args", [])])
+
+
 class HookHarness(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -826,7 +834,7 @@ class HooksManifestContractTest(unittest.TestCase):
             if "matcher" not in entry:
                 continue
             commands = [
-                hook["command"]
+                hook_invocation(hook)
                 for hook in entry["hooks"]
                 if hook["type"] == "command"
             ]
@@ -888,7 +896,7 @@ class HooksManifestContractTest(unittest.TestCase):
         for event in ("PreToolUse", "PostToolUseFailure", "Stop", "SessionEnd"):
             with self.subTest(event=event):
                 commands = [
-                    hook["command"]
+                    hook_invocation(hook)
                     for entry in hooks[event]
                     for hook in entry["hooks"]
                     if hook["type"] == "command"
@@ -901,7 +909,7 @@ class HooksManifestContractTest(unittest.TestCase):
                     commands,
                 )
         session_start_commands = [
-            hook["command"]
+            hook_invocation(hook)
             for entry in hooks["SessionStart"]
             for hook in entry["hooks"]
             if hook["type"] == "command"

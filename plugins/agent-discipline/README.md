@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.26.0
+v0.26.1
 
 ## 概要
 

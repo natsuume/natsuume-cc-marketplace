@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-ui-rules.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-ui-rules.sh",
+            "args": []
           }
         ]
       }
@@ -16,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-ui-rules-subagent.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-ui-rules-subagent.sh",
+            "args": []
           }
         ]
       }

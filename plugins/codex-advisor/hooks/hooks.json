@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules.sh",
+            "args": []
           }
         ]
       },
@@ -15,7 +16,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs"
+            ]
           }
         ]
       }
@@ -25,7 +29,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs"
+            ]
           }
         ]
       }
@@ -36,7 +43,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs"
+            ]
           }
         ]
       }
@@ -47,7 +57,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs"
+            ]
           }
         ]
       }
@@ -57,7 +70,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules-subagent.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/inject-advisor-rules-subagent.sh",
+            "args": []
           }
         ]
       },
@@ -66,7 +80,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs"
+            ]
           }
         ]
       }
@@ -77,7 +94,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs"
+            ]
           }
         ]
       }
@@ -88,7 +108,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs"
+            ]
           }
         ]
       }
@@ -98,7 +121,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs\""
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/manage-codex-runners.mjs"
+            ]
           }
         ]
       }

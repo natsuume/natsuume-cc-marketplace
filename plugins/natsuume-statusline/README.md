@@ -4,7 +4,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.10.1
+v0.10.2
 
 ## 表示内容
 

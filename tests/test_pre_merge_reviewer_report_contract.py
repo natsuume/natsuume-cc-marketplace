@@ -171,7 +171,9 @@ class PreMergeReviewerDocumentationTest(ContractTestCase):
 
     def test_plugin_readme_documents_current_tool_grant(self) -> None:
         self.assert_text_absent(PLUGIN_README, "TaskOutput")
-        self.assert_text_absent(PLUGIN_README, FORBIDDEN_EXECUTION_TOOL)
+        self.assert_text_absent_outside_known_constraints(
+            PLUGIN_README, FORBIDDEN_EXECUTION_TOOL
+        )
         self.assert_text_contains(PLUGIN_README, TOOL_GRANT_LITERAL)
 
     def test_plugin_readme_omits_agent_launch_mode_parameter(self) -> None:
