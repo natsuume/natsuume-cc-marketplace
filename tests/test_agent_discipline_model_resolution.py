@@ -290,7 +290,8 @@ SELF_REPAIR = (r"sonnet",)
 NAMES_ENV = (r"CLAUDE_CODE_SUBAGENT_MODEL(?!_FORCE)",)
 NAMES_FORCE = (r"CLAUDE_CODE_SUBAGENT_MODEL_FORCE",)
 
-# 判定表。FORCE 有効 (`1` / `true`、大文字小文字を区別しない) では実効モデルを
+# 判定表。FORCE 有効 (Claude Code の boolean env と同じ `1` / `true` / `yes` / `on`、大文字
+# 小文字を区別しない) では実効モデルを
 # env (非空ならその値、空なら session model state) とみなし、FORCE 無効 (`0` / `false` /
 # 空 / 未設定) では 明示 model > env > 継承 の順に判定する。`fork` は model / env に依らず
 # メインセッションのモデルを継承する経路として扱う。
@@ -472,6 +473,23 @@ DECISION_TABLE = (
     ),
     row(
         "force-absent/env-absent/state-unknown/no-pending-marker",
+        expect="allow",
+    ),
+    # FORCE の真値は Claude Code の boolean env と同じ集合 (`yes` / `on` も有効)。狭く解釈すると
+    # host が FORCE している起動を非 FORCE の順序で判定し、明示非 fable を誤って allow する。
+    row(
+        "force-yes/env-fable/model-sonnet-explicit",
+        force="yes",
+        env="fable",
+        model="sonnet",
+        expect="deny",
+        keywords=NAMES_ENV,
+    ),
+    row(
+        "force-ON-uppercase/env-sonnet/model-fable-explicit",
+        force="ON",
+        env="sonnet",
+        model="fable",
         expect="allow",
     ),
     # FORCE 有効 + env 空 + state 不明 (pending): 継承先が Fable かどうかを検知できないため

@@ -465,7 +465,7 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
         """FORCE + env が fable: 実効モデルが fable に固定され、使用率判定を通さずに全ての
         サブエージェントが Fable で走るため、専用 agent + 余裕のある枠でも deny する。"""
         for subagent_type in ALLOWED_SUBAGENT_TYPES:
-            for force in ("1", "true"):
+            for force in ("1", "true", "yes", "ON"):
                 with self.subTest(subagent_type=subagent_type, force=force):
                     result = self.run_gate(
                         tool_model="fable",

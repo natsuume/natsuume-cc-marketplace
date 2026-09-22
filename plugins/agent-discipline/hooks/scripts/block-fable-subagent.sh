@@ -9,7 +9,7 @@
 #
 # Claude Code のモデル解決順序:
 #   明示 model > agent 定義の frontmatter > CLAUDE_CODE_SUBAGENT_MODEL > メインセッション継承。
-#   CLAUDE_CODE_SUBAGENT_MODEL_FORCE (1 / true、大文字小文字は区別しない) が設定されている
+#   CLAUDE_CODE_SUBAGENT_MODEL_FORCE (1 / true / yes / on、大文字小文字は区別しない) が設定されている
 #   場合のみ、env (未設定ならメインセッションのモデル) がこの順序の全てを上書きする。
 #   subagent_type が fork のサブエージェントは、model 指定にも env にも依らずメインセッションの
 #   モデルを継承する。
@@ -102,10 +102,11 @@ if printf '%s' "$ENV_SUB" | grep -qix 'inherit'; then
   ENV_SUB=""
 fi
 
-# FORCE の真値は 1 / true のみ (大文字小文字は区別しない)。それ以外の値・空・未設定は無効。
+# FORCE の真値は Claude Code の boolean env の解釈に合わせて 1 / true / yes / on (大文字小文字は
+# 区別しない)。それ以外の値・空・未設定は無効。
 FORCE_ENABLED=0
 case "$(printf '%s' "$FORCE_RAW" | tr '[:upper:]' '[:lower:]')" in
-  1|true) FORCE_ENABLED=1 ;;
+  1|true|yes|on) FORCE_ENABLED=1 ;;
 esac
 
 # session model state と pending マーカーを読む (メインセッションのモデル判定に使う)。
