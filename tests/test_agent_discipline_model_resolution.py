@@ -746,7 +746,12 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
         if not result.stdout.strip():
             return None
         payload = json.loads(result.stdout)
-        return payload.get("hookSpecificOutput", {}).get("additionalContext")
+        hook_output = payload.get("hookSpecificOutput", {})
+        context = hook_output.get("additionalContext")
+        if context is not None:
+            # additionalContext は対象 event 名を伴って初めて session に届く。
+            self.assertEqual(POST_MODEL_SWITCH_EVENT, hook_output.get("hookEventName"))
+        return context
 
     def test_to_model_overwrites_the_session_model_state(self) -> None:
         """`to_model` が session model state file に書かれる (state dir が無くても作る)。"""
@@ -762,10 +767,35 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
         )
         self.assertEqual("claude-sonnet-5", str(outcome["state"]).strip())
 
-    def test_pending_marker_is_removed(self) -> None:
-        """pending マーカーがあれば削除される (モデルが確定したため)。"""
-        outcome = self.run_switch(to_model="claude-sonnet-5", pending=True)
-        self.assertFalse(outcome["pending"])
+    def test_pending_marker_is_removed_and_the_definitive_rules_are_pointed_at(
+        self,
+    ) -> None:
+        """pending マーカーがあれば削除し、確定版ルールの所在を additionalContext で案内する。
+
+        pending は「モデル未確定」であると同時に、常時適用ルールと分業規律の確定版が
+        まだ配送されていない (UserPromptSubmit の one-shot 補正が pending を発火条件にする)
+        ことを表す。PostModelSwitch が pending を消すと one-shot 補正は走らないので、
+        代わりに確定版 (always-<版>.md / discipline-<版>.md) を prompts ディレクトリから
+        Read して自己修復するよう案内する。fable 境界をまたがない切替でも案内する。
+        """
+        prompts_dir = str(BASE_PLUGIN / "hooks" / "prompts")
+        cases = {
+            "to-sonnet": "claude-sonnet-5",
+            "to-fable": "claude-fable-5-1",
+        }
+        for label, to_model in cases.items():
+            with self.subTest(case=label):
+                outcome = self.run_switch(
+                    from_model="claude-sonnet-5", to_model=to_model, pending=True
+                )
+                self.assertFalse(outcome["pending"])
+                self.assertEqual(to_model, str(outcome["state"]).strip())
+                context = self.additional_context(outcome)
+                self.assertIsNotNone(context, label)
+                assert context is not None
+                self.assertIn(prompts_dir, context, label)
+                for keyword in ("Read", "always-", "discipline-"):
+                    self.assertIn(keyword, context, label)
 
     def test_switch_across_the_fable_boundary_notifies_the_prompts_directory(
         self,

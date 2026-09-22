@@ -433,6 +433,11 @@ class BlockFableSubagentHookTestBase(unittest.TestCase):
         self.assertEqual("deny", output["permissionDecision"])
         reason = output["permissionDecisionReason"]
         for keyword in keywords:
+            # `CLAUDE_CODE_SUBAGENT_MODEL` は FORCE 変数名の接頭辞でもあるため、env の名指しは
+            # `_FORCE` が続かない出現を要求する (FORCE だけを名指しした理由文を通さない)。
+            if keyword == "CLAUDE_CODE_SUBAGENT_MODEL":
+                self.assertRegex(reason, r"CLAUDE_CODE_SUBAGENT_MODEL(?!_FORCE)")
+                continue
             self.assertIn(keyword, reason)
         return reason
 
