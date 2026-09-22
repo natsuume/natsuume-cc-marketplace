@@ -10,11 +10,12 @@
 #            inject-advisor-rules-subagent.sh と同方針)
 #
 # 設計:
-#   - モデル判定 (Fable/Sonnet 分岐) を持たない: subagent は原則 Sonnet / Opus であり、
-#     Fable は Fable 週次枠の使用率が閾値以下のときに限り専用 agent (fable-low-worker /
-#     fable-low-explorer) への委任として許可される (block-fable-subagent.sh の判定)。
-#     どちらの場合も SubagentStart hook input のモデル情報には保証がないため、Sonnet 向け
-#     書式の単一テンプレートを常に注入する
+#   - モデル判定 (Fable/Sonnet 分岐) を持たない: subagent は原則 Sonnet / Opus で、Fable は
+#     週次枠の使用率が閾値以下のときに限り専用 agent (fable-low-worker / fable-low-explorer)
+#     への委任として許可される (block-fable-subagent.sh の判定)。これに加えて
+#     fork / frontmatter 経路では Fable になりうる。いずれの場合も SubagentStart hook input の
+#     モデル情報には保証がないため、どのモデルで実行されても成り立つ単一テンプレートを
+#     常に注入する
 #   - agent_type による条件分岐も持たない (codex-advisor / ui-discipline の SubagentStart
 #     注入と同方針)
 #   - プレースホルダ置換なし (静的全文注入)。パス解決は script 自身の位置基準

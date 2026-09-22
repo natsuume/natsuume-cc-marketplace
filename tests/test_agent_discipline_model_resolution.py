@@ -474,6 +474,9 @@ DECISION_TABLE = (
         "force-absent/env-absent/state-unknown/no-pending-marker",
         expect="allow",
     ),
+    # session_id が空に正規化される経路は state / pending を参照できないため allow
+    # (fail-open)。sanitization の有無で結果が反転する入力は隔離 TMPDIR 内では構成できず、
+    # この行は結果の契約だけを固定する。
     row(
         "force-absent/unusable-session-id",
         session_id="///",
@@ -701,8 +704,13 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
         session_id: str | None = None,
         session_state: str | None = None,
         pending: bool = False,
+        state_dir_mode: int | None = None,
     ) -> dict[str, object]:
-        """hook を 1 回実行し、結果と state file の内容・pending マーカーの有無を返す。"""
+        """hook を 1 回実行し、結果と state file の内容・pending マーカーの有無を返す。
+
+        ``state_dir_mode`` を与えると state directory の permission をその値にして実行する
+        (書込不可の directory で書込失敗経路を再現するため)。実行後は元に戻す。
+        """
         session = self.SESSION_ID if session_id is None else session_id
         with tempfile.TemporaryDirectory() as temporary:
             temp = Path(temporary)
@@ -711,6 +719,8 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
             state_dir = self.prepare_state(
                 tmpdir, session, session_state=session_state, pending=pending
             )
+            if state_dir_mode is not None:
+                os.chmod(state_dir, state_dir_mode)
 
             payload: dict[str, object] = {
                 "hook_event_name": hook_event_name,
@@ -732,6 +742,8 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
                 check=False,
             )
 
+            if state_dir_mode is not None:
+                os.chmod(state_dir, 0o700)
             state_file = state_dir / f"model-{session}"
             state = (
                 state_file.read_text(encoding="utf-8") if state_file.is_file() else None
@@ -780,13 +792,13 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
         """
         prompts_dir = str(BASE_PLUGIN / "hooks" / "prompts")
         cases = {
-            "to-sonnet": "claude-sonnet-5",
-            "to-fable": "claude-fable-5-1",
+            "to-sonnet": ("claude-opus-5", "claude-sonnet-5"),
+            "to-fable": ("claude-sonnet-5", "claude-fable-5-1"),
         }
-        for label, to_model in cases.items():
+        for label, (from_model, to_model) in cases.items():
             with self.subTest(case=label):
                 outcome = self.run_switch(
-                    from_model="claude-sonnet-5", to_model=to_model, pending=True
+                    from_model=from_model, to_model=to_model, pending=True
                 )
                 self.assertFalse(outcome["pending"])
                 self.assertEqual(to_model, str(outcome["state"]).strip())
@@ -796,6 +808,25 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
                 self.assertIn(prompts_dir, context, label)
                 for keyword in ("Read", "always-", "discipline-"):
                     self.assertIn(keyword, context, label)
+
+    @unittest.skipIf(
+        os.geteuid() == 0, "root は書込不可の directory でも書けるため判定できない"
+    )
+    def test_failed_state_write_leaves_the_pending_marker(self) -> None:
+        """state の書込に失敗したら pending を消さず、通知も出さずに無音で exit 0 になる。
+
+        pending は「state を信頼しない期間」の合図で、state 無し + pending 無しの状態を
+        作ると下流の注入スクリプトと gate が判定不能を検知できなくなる。書込成功後にのみ
+        pending を削除する順序を固定する。
+        """
+        outcome = self.run_switch(
+            to_model="claude-fable-5-1", pending=True, state_dir_mode=0o500
+        )
+        result: subprocess.CompletedProcess[str] = outcome["result"]  # type: ignore[assignment]
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", result.stdout.strip())
+        self.assertIsNone(outcome["state"])
+        self.assertTrue(outcome["pending"])
 
     def test_switch_across_the_fable_boundary_notifies_the_prompts_directory(
         self,
