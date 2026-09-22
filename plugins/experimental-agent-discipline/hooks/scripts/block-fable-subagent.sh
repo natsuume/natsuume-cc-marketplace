@@ -323,8 +323,14 @@ GATE_EOF
   esac
 }
 
-# 1. fork は model 指定も env も無視してメインセッションのモデルを継承する
+# 1. fork は model 指定も env も無視して起動元のモデルを継承する。subagent 内 (agent_id あり)
+#    からの fork は継承先が起動元 subagent のモデルで、session model state (メインセッションの
+#    モデル) では判定できない。Fable 専用 agent から fork されると使用率判定を通らずに Fable が
+#    起動しうるため、継承経路の nested guard と同じく deny する。
 if [ "$SUBAGENT_TYPE" = "fork" ]; then
+  if [ -n "$AGENT_ID" ]; then
+    deny "experimental-agent-discipline: subagent 内からの fork を deny しました。fork は起動元 subagent のモデルを継承し、Fable 専用 agent からの fork では専用 agent 以外の subagent が使用率判定を通らずに Fable で実行されえます。fork をやめ、必要な文脈を指示文に埋め込んだ新規起動で model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
+  fi
   decide_by_session_model "agent-discipline: fork のサブエージェントは model 指定にも env にも依らずメインセッション (Fable) のモデルを継承します。fork をやめ、必要な文脈を指示文に埋め込んだ新規起動で model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
 fi
 

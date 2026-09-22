@@ -791,6 +791,27 @@ class FableSubagentGateDecisionTableTest(BlockFableSubagentHookTestBase):
                 )
                 self.assert_deny(result, "sonnet")
 
+    def test_fork_from_inside_a_subagent_is_denied(self) -> None:
+        """subagent 内 (agent_id あり) からの fork は、session state が非 Fable でも deny する。
+
+        fork は起動元 subagent のモデルを継承するため、Fable 専用 agent からの fork では
+        使用率判定を通らずに Fable が起動しうる。継承経路の nested guard と同じ扱いにする。
+        """
+        cases = {
+            "model-unspecified": {},
+            "model-sonnet-explicit": {"tool_model": "sonnet"},
+            "env-sonnet": {"env_subagent_model": "sonnet"},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(fork=label):
+                result = self.run_gate(
+                    subagent_type="fork",
+                    agent_id="agent-123",
+                    session_state="claude-sonnet-5",
+                    **overrides,  # type: ignore[arg-type]
+                )
+                self.assert_deny(result, "subagent 内", "sonnet")
+
     def test_fork_from_a_non_fable_session_is_allowed(self) -> None:
         """fork は継承元が非 Fable なら allow になる (Sonnet / Opus セッションの fork を
         妨げない)。"""
