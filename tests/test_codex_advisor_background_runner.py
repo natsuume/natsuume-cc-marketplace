@@ -253,6 +253,14 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def hook_invocation(hook: dict) -> str:
+    """hooks.json の command hook が起動するコマンド行 (`command` + `args`)。
+
+    exec form では実行ファイルが `command`、script パスを含む引数が `args` に分かれる。
+    """
+    return " ".join([hook["command"], *hook.get("args", [])])
+
+
 def compact(text: str) -> str:
     """空白 (改行を含む) を全て除去する。
 
@@ -603,7 +611,8 @@ class HookManifestStructureTest(unittest.TestCase):
             entry
             for entry in self.hooks.get(event, [])
             if any(
-                hook["type"] == "command" and HOOK_SCRIPT_MARKER in hook["command"]
+                hook["type"] == "command"
+                and HOOK_SCRIPT_MARKER in hook_invocation(hook)
                 for hook in entry["hooks"]
             )
         ]
