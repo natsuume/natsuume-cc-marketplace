@@ -752,7 +752,7 @@ note_literal_contribution() {
 # token_is_unanalyzable <raw_token> <check_kind>
 # <check_kind>:
 #   `structure` = 構造検査のみ (rule (a)/(b)/(b2)/(b3))。 全 token に適用する
-#   `head` = 構造検査 + 意味検査の厳格判定 (rule (a)〜(d))。 実 head・timeout の
+#   `head` = 構造検査 + 意味検査の厳格判定 (rule (a)〜(e))。 実 head・timeout の
 #     duration・git subcommand に適用する
 #   `option_scan` = 構造検査 + 意味検査 (rule (c) を 2 点緩和)。 find / rg / sort /
 #     git の option 走査対象に適用する
@@ -805,6 +805,14 @@ note_literal_contribution() {
 #   (d) double quote 内に、 展開開始として有効な文字 (`dollar_starts_expansion`
 #       の 11 種: 英数字/`_`/`{`/`(`/`[`/`@`/`*`/`#`/`?`/`!`/`-`/`$`) が続く
 #       `$`、 または escape されていないバッククォートが現れる
+#   (e) (<check_kind> が `head` の場合のみ) token 末尾に quote 外の孤立 `\` が
+#       ある。 共有 tokenizer は quote 外の `\` で escape された空白でも token を
+#       分割するため、 この token は bash 上では次の token と 1 つの word に連結
+#       される (`x\ --` は word `x --`)。 barrier 判定 (`is_option_scan_barrier`)
+#       は走査済み token がすべて厳格判定を通過することを「token と argv word の
+#       1 対 1 対応」 の根拠にするため、 厳格判定でこの分割を検出する。 option
+#       走査対象では、 過分割は危険 option との照合を保守的にする方向にしか
+#       働かないため適用しない (`rg -n foo\ bar <wrapper>` は mention 候補のまま)
 # quote 外の特殊文字が `\` で escape されている場合は「現れた」ことにならない
 # ため rule (c) の対象外とする (unquoted の `\` は次の 1 文字を無条件 escape
 # して読み飛ばすため、 escape pair は 2 文字纏めて消費し個別の文字判定に到達
@@ -995,6 +1003,14 @@ token_is_unanalyzable() {
       if [ -n "$_tw_nc" ]; then
         note_literal_contribution "$_tw_nc"
       else
+        if [ "$_tw_semantic" -eq 1 ] && [ "$_tw_relax" -eq 0 ]; then
+          # rule (e) (厳格判定のみ): token 末尾の孤立 `\`。 共有 tokenizer は
+          # quote 外の `\` で escape された空白でも token を分割するため、 この
+          # token は bash 上では次の token と 1 つの word に連結される
+          # (`x\ --` は word `x --`)。 token と argv word の対応が崩れている
+          # ため、 値を判定に使う token としては解析不能とする。
+          return 0
+        fi
         note_literal_contribution "$_tw_c"
       fi
       _tw_i=$((_tw_i+2))
@@ -1146,8 +1162,10 @@ option_scan_canonical() {
 #     (`rg -e >x -- …` の `>x`、 `rg -e > x -- …` の `>` と `x`) は argv word を
 #     生まず、 glob は 0 個以上の word に展開されうる (nullglob 等) ため、 これらを
 #     含む token 列では直前の shell token が `--` を消費する option の直後の argv
-#     word とは限らない。 厳格判定はこれらをすべて解析不能とするため、 通過して
-#     いれば token と argv word が 1 対 1 に対応する
+#     word とは限らない。 escape された空白で共有 tokenizer が token を過分割した
+#     場合 (`rg -e x\ -- …` の `x\` と `--` は bash 上では 1 つの word `x --`) も
+#     同様である。 厳格判定はこれらをすべて解析不能とするため (rule (e) を含む)、
+#     通過していれば token と argv word が 1 対 1 に対応する
 # 加えて、 分類前の redirection 正規化 (sed) で 1 つでも除去が起きたコマンド
 # (REDIRECTION_STRIPPED != 0) では barrier を使わない。 除去後に書き込み先の残りが
 # 通常の token として残り、 厳格判定を通過したまま argv word との対応を崩しうる

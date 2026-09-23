@@ -792,7 +792,11 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     `rg -e > x -- …` の `>` と `x`) は argv word を生まず、glob は 0 個
     以上の word に展開されうる (nullglob 等) ため、shell token 列と argv
     word 列が 1 対 1 に対応せず、直前の shell token から `--` を消費する
-    option を判定できないためである。第 2 に、分類前の redirection 正規化
+    option を判定できないためである。共有 tokenizer が escape された空白で
+    token を過分割した場合 (`rg -e x\\ -- …` の `x\\` と `--` は bash 上
+    では 1 つの word) も同じであり、厳格判定は token 末尾の quote 外の孤立
+    `\\` を解析不能とする (厳格判定のみの規則。option 走査対象では過分割
+    は照合を保守的にする方向にしか働かないため適用しない)。第 2 に、分類前の redirection 正規化
     (`2>&1` / `&>` / `>>` / `<<` 等を空白に置換する sed) で 1 つでも除去が
     起きたコマンドの場合。この正規化は演算子と限られた文字種の書き込み先
     だけを除去するため、書き込み先の残り (`>>x"y"` の `"y"`、`12>>x` の
@@ -2631,6 +2635,8 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
         f"rg -n marker -- *{WRAPPER_NAME}",
         f"rg -n marker -- --pre {WRAPPER_NAME}",
         f"sort -- *{WRAPPER_NAME}",
+        # option 走査対象の escape された空白は照合を保守的にするだけなので許容する。
+        f"rg -n foo\\ bar {WRAPPER_NAME}",
     )
 
     DENIED_COMMANDS = (
@@ -2655,6 +2661,11 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
         f'sort -o >>x"y" -- --compress-program=bash {WRAPPER_NAME}',
         f'git log -S >>x"y" -- --ext-diff {WRAPPER_NAME}',
         f"git diff -- *{WRAPPER_NAME} 2>&1",
+        # escape された空白で tokenizer が過分割した token の直後の `--` は、bash
+        # 上では前の word に連結されるため barrier とみなさない。
+        f"rg -e x\\ -- --pre=bash marker {WRAPPER_NAME}",
+        f"sort -o x\\ -- --compress-program=bash {WRAPPER_NAME}",
+        f"git log -S x\\ -- --ext-diff {WRAPPER_NAME}",
         # quote 外の `(` / `)` は値を消費しない head の operand でも構造検査で捕捉する。
         f"f () ( bash {WRAPPER_NAME} )",
         f"cat x ( {WRAPPER_NAME} )",
