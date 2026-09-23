@@ -4,7 +4,7 @@ GitHub の issue/PR タイムラインから AI タスクのリードタイム (
 
 ## バージョン
 
-v0.2.3
+v0.2.4
 
 ## 概要
 
@@ -18,6 +18,8 @@ claude plugin install repo-analytics@natsuume-plugins
 ```
 
 本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
+
+`leadtime` Skill の SKILL.md はパス参照に `${CLAUDE_SKILL_DIR}` を使うため、plugin 経由でのインストールでの利用のみをサポートします。SKILL.md を plugin 外 (`~/.claude/skills/` 等) へコピーした場合、`${CLAUDE_SKILL_DIR}` は置換されません。
 
 ## 機能一覧
 
