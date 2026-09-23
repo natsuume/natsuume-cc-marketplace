@@ -427,6 +427,20 @@ HEREDOC_DATA_ONLY_COMMANDS: frozenset[str] = frozenset(
     {"cd", "cat", "tee", "git", "gh", "echo", "printf", "mkdir", "true"}
 )
 
+# ``git`` / ``gh`` は subcommand によって stdin をシェルへ渡しうる
+# (``git submodule foreach``、``!`` で始まる alias、``gh`` の shell alias 等)。
+# そのため、command name の直後の語 (subcommand) がこの集合に含まれ、かつ
+# subcommand より前にオプションが無い場合に限り、データ専用とみなす。
+HEREDOC_DATA_ONLY_SUBCOMMANDS: dict[str, frozenset[str]] = {
+    "git": frozenset({"commit", "tag", "notes", "hash-object", "apply"}),
+    "gh": frozenset({"pr", "issue", "api", "release"}),
+}
+
+# 走査が bash と同じ quote 解釈をしない quoting の開始記号 (ANSI-C quoting
+# ``$'...'`` と locale 翻訳 quoting ``$"..."``)。command に含まれる場合は
+# heredoc 演算子の検出が bash と食い違いうるため、本文を除去しない。
+_UNMODELED_QUOTE_OPENERS: tuple[str, ...] = ("$'", '$"')
+
 # この文字の直後にある ``#`` はコメントの開始 (= 語の先頭)。
 _COMMENT_START_PRECEDERS: frozenset[str] = frozenset(" \t\n;&|()")
 
@@ -458,20 +472,22 @@ def _is_segment_separator(command: str, i: int) -> bool:
     return False
 
 
-def _simple_command_name(segment: str) -> str | None:
-    """simple command の文字列から command name を返す。
+def _simple_command_words(segment: str) -> list[str] | None:
+    """simple command の文字列から、command name 以降の語 (command name と
+    引数。redirection とその target は除く) を返す。
 
     代入 (``X=y``)、shell keyword、redirection (target を含む) を読み飛ばした
-    最初の語を返す。``env`` や透過 wrapper は読み飛ばさず、それ自体を
-    command name とする。command name を持たない segment (空、代入のみ、
-    keyword のみ、算術コマンド ``(( ... ))``) は空文字列を返す。トークン化
-    できない場合は ``None``。"""
+    最初の語を command name とする。``env`` や透過 wrapper は読み飛ばさず、
+    それ自体を command name とする。command name を持たない segment (空、
+    代入のみ、keyword のみ、算術コマンド ``(( ... ))``) は空リストを返す。
+    トークン化できない場合は ``None``。"""
     try:
         words = shlex.split(segment, comments=False, posix=True)
     except ValueError:
         return None
     if words and words[0].startswith("(("):
-        return ""
+        return []
+    result: list[str] = []
     skip_next = False
     for word in words:
         if skip_next:
@@ -480,10 +496,20 @@ def _simple_command_name(segment: str) -> str | None:
         if _is_redirection_token(word):
             skip_next = bool(_BARE_REDIRECT_RE.match(word))
             continue
-        if _is_env_assignment(word) or word in SHELL_KEYWORDS:
+        if not result and (_is_env_assignment(word) or word in SHELL_KEYWORDS):
             continue
-        return word
-    return ""
+        result.append(word)
+    return result
+
+
+def _simple_command_name(segment: str) -> str | None:
+    """simple command の文字列から command name を返す (``_simple_command_words``
+    の先頭語)。command name を持たない segment は空文字列、トークン化できない
+    場合は ``None``。"""
+    words = _simple_command_words(segment)
+    if words is None:
+        return None
+    return words[0] if words else ""
 
 
 def _is_data_only_segment(segment: str) -> bool:
@@ -491,15 +517,25 @@ def _is_data_only_segment(segment: str) -> bool:
     command name を持たない segment は True。command name が解決できない
     場合、相対パス (``./x`` 等) の場合、basename が
     ``HEREDOC_DATA_ONLY_COMMANDS`` に無い場合は False。絶対パス
-    (``/bin/cat``) は basename で判定する。"""
-    name = _simple_command_name(segment)
-    if name is None:
+    (``/bin/cat``) は basename で判定する。basename が
+    ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` のキーの場合は、command name の直後の語
+    が許可された subcommand であることも要求する (subcommand より前に
+    オプションがある場合も False)。"""
+    words = _simple_command_words(segment)
+    if words is None:
         return False
-    if name == "":
+    if not words:
         return True
+    name = words[0]
     if "/" in name and not name.startswith("/"):
         return False
-    return name.rsplit("/", 1)[-1] in HEREDOC_DATA_ONLY_COMMANDS
+    basename = name.rsplit("/", 1)[-1]
+    if basename not in HEREDOC_DATA_ONLY_COMMANDS:
+        return False
+    allowed_subcommands = HEREDOC_DATA_ONLY_SUBCOMMANDS.get(basename)
+    if allowed_subcommands is None:
+        return True
+    return len(words) > 1 and words[1] in allowed_subcommands
 
 
 def _strip_heredoc_bodies(command: str) -> str:
@@ -527,8 +563,11 @@ def _strip_heredoc_bodies(command: str) -> str:
         simple command (代入のみ・算術コマンド等) は許容する。``env`` /
         透過 wrapper / ``eval`` 等の前置語は command name として扱うため
         不成立になる。相対パス (``./x``) の command name も不成立とし、
-        絶対パス (``/bin/cat``) は basename で判定する
+        絶対パス (``/bin/cat``) は basename で判定する。basename が ``git`` /
+        ``gh`` の場合は、直後の語が ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` の
+        subcommand であることも要求する (subcommand より前のオプションは不可)
       - プロセス置換 (``<(`` / ``>(``) を含まない
+      - ANSI-C quoting (``$'``) と locale 翻訳 quoting (``$"``) を含まない
     - 除去する場合、演算子を含む行の次の行から、``WORD`` (引用符を外した
       文字列) と完全一致する行までを本文として除去する。終端行自体も除去
       する。``<<-`` の場合は各行の先頭タブを除去してから終端判定する。
@@ -669,8 +708,10 @@ def _strip_heredoc_bodies(command: str) -> str:
     segments.append(command[segment_start:n])
     if not found_heredoc:
         return command
-    if has_process_substitution or not all(
-        _is_data_only_segment(segment) for segment in segments
+    if (
+        has_process_substitution
+        or any(quote in command for quote in _UNMODELED_QUOTE_OPENERS)
+        or not all(_is_data_only_segment(segment) for segment in segments)
     ):
         return command
     return "".join(out)

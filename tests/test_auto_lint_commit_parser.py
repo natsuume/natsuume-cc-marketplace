@@ -350,6 +350,34 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.classify(command), 4)
 
+    def test_data_only_git_and_gh_subcommands_allow_body_exclusion(self) -> None:
+        for command in (
+            "git tag -a v1 -F - <<'EOF'\nfoo (git commit)\nEOF",
+            "git notes add -F - <<'EOF'\nfoo (git commit)\nEOF",
+            "gh issue comment 1 --body-file - <<'EOF'\nfoo (git commit)\nEOF",
+            "gh api repos/o/r/issues --input - <<'EOF'\nfoo (git commit)\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 4)
+
+    def test_git_and_gh_forms_that_may_run_stdin_keep_body(self) -> None:
+        for command in (
+            "git submodule foreach <<'EOF'\ngit commit -m x\nEOF",
+            "git -c alias.x=!sh x <<'EOF'\ngit commit -m x\nEOF",
+            "git <<'EOF'\ngit commit -m x\nEOF",
+            "gh myalias <<'EOF'\ngit commit -m x\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_unmodeled_quoting_keeps_body(self) -> None:
+        for command in (
+            "echo $'a' <<'EOF'\ngit commit -m x\nEOF",
+            'echo $"a" <<\'EOF\'\ngit commit -m x\nEOF',
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
     def test_wrapper_with_positional_argument_keeps_body(self) -> None:
         self.assertEqual(
             self.classify("timeout 5 bash <<'EOF'\ngit commit -m x\nEOF"),
