@@ -40,7 +40,9 @@ ImportError / 未捕捉例外 (1) と区別し、想定外の終了を必ず「�
    レイアウトを差し替える前段コマンドを排除するため)
 2. 各対象 dir の canonical 実パスが、いずれかの許可ルート配下にある
 3. 各対象 dir で実行した ``git rev-parse --git-common-dir`` の canonical 実パスが、
-   いずれかの許可ルート配下にある
+   いずれかの許可ルート配下にある。common-dir 直下の ``refs`` / ``objects`` /
+   ``HEAD`` / ``packed-refs`` / ``logs`` と、worktree 固有 git dir の ``HEAD`` /
+   ``index`` の実体も許可ルート配下にある (``dir_is_within_roots`` を参照)
 4. hook プロセスの環境に ``GIT_DIR`` / ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE`` /
    ``GIT_COMMON_DIR`` が設定されていない (コマンド内の再代入で commit 先が変わり
    うるため)
@@ -111,9 +113,11 @@ GIT_GLOBAL_VALUE_FLAGS: frozenset[str] = frozenset(
     }
 )
 
-# `2>&1` / `&>file` 等の redirection。redirection 内の `&` を segment 区切りと誤認
-# しないよう、分割前に空白へ置換する (git-guardrails の commit hook と同じ規則)。
-_REDIRECTION_RE = re.compile(r"[0-9]?(&>>|&>|>>|>&|<&|<<<|<<|<>)[ \t]*[A-Za-z0-9_./=+@:-]*")
+# common-dir 直下で、実体が許可ルート配下にあることを要求する entry。
+COMMON_DIR_ENTRIES: tuple[str, ...] = ("refs", "objects", "HEAD", "packed-refs", "logs")
+
+# worktree 固有 git dir が common-dir と異なる場合に、同じ条件を要求する entry。
+WORKTREE_GIT_DIR_ENTRIES: tuple[str, ...] = ("HEAD", "index")
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -283,6 +287,37 @@ def _split_segments(command: str) -> tuple[list[str], list[str]]:
     segments.append("".join(current))
     separators.append("")
     return segments, separators
+
+
+def _segment_has_redirection(segment: str) -> bool:
+    """quote 外に redirection 演算子 (``<`` / ``>`` を含むもの。``>>`` / ``<>`` /
+    ``>&`` / ``<&`` / ``&>`` / ``>|`` と数字 fd 前置を含む) があるか。"""
+    in_squote = False
+    in_dquote = False
+    i = 0
+    n = len(segment)
+    while i < n:
+        c = segment[i]
+        if in_squote:
+            if c == "'":
+                in_squote = False
+        elif in_dquote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_dquote = False
+        elif c == "\\":
+            i += 2
+            continue
+        elif c == "'":
+            in_squote = True
+        elif c == '"':
+            in_dquote = True
+        elif c in "<>":
+            return True
+        i += 1
+    return False
 
 
 def _tokenize(segment: str) -> list[str]:
@@ -491,7 +526,13 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
     - ``_has_unresolvable_syntax`` が検出する構文 (subshell / brace group /
       コマンド置換 / プロセス置換 / heredoc / コメント 等) を含まないこと
     - 先頭の simple command から最後の mutating な commit invocation までの区切りが
-      ``&&`` と ``;`` (改行を含む) だけであること
+      ``&&`` だけであること (``;`` / 改行は cd が実行時に失敗しても commit が元の
+      cwd で実行されるため、``||`` / ``|`` / ``&`` は cd の効果が commit に及ぶかを
+      静的に確定できないため解決不能)
+    - 先頭の simple command から最後の mutating な commit invocation まで (commit
+      invocation 自身を含む) に、quote 外の redirection 演算子 (``<`` / ``>`` /
+      ``>>`` / ``<>`` / ``>&`` / ``<&`` / ``&>`` / ``>|``、数字 fd 前置を含む) が
+      無いこと (fd 番号とパス末尾の数字の区別を静的解決に持ち込まないため)
     - 最後の mutating な commit invocation より前の simple command は、次のいずれか
       であること。それ以外 (判定時点のファイルシステム状態を commit 前に変えうる
       任意のコマンド。対象 dir の削除・移動・symlink 化や ``git config`` /
@@ -528,7 +569,12 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
         return None
     parser = _load_commit_parser()
 
-    segments, separators = _split_segments(_REDIRECTION_RE.sub(" ", command))
+    # redirection の正規化は行わず元のコマンドのまま分割する (正規化で fd 番号とみなして
+    # 剥がした数字が、bash ではパスの一部として扱われ判定と実行の対象が食い違うため)。
+    # 最後の commit invocation までの simple command に redirection があれば 2 周目で
+    # 解決不能とする。それより後ろの `2>&1` 等の `&` が区切りとして分割されても判定には
+    # 影響しない。
+    segments, separators = _split_segments(command)
     tokenized = [_tokenize(segment) for segment in segments]
 
     # 1 周目: 最後の mutating な commit invocation の位置を特定する。
@@ -555,7 +601,11 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
 
     # 2 周目: 最後の mutating な commit invocation までの simple command を解決する。
     targets: list[str] = []
-    for tokens in tokenized[: last_commit_index + 1]:
+    for segment, tokens in zip(
+        segments[: last_commit_index + 1], tokenized[: last_commit_index + 1]
+    ):
+        if _segment_has_redirection(segment):
+            return None
         if not tokens:
             continue
         position = _skip_env_assignments(tokens)
@@ -585,24 +635,64 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
         targets.append(target)
 
     for separator in separators[:last_commit_index]:
-        if separator not in ("&&", ";"):
+        if separator != "&&":
             return None
     return targets
 
 
-def dir_is_within_roots(target_dir: str, roots: list[str]) -> bool:
-    """``target_dir`` と、そこで実行した ``git rev-parse --git-common-dir`` の
-    canonical 実パスが、どちらもいずれかの許可ルート配下にあるか。
+def _is_within_any_root(path: str, roots: list[str]) -> bool:
+    return any(is_within_root(path, root) for root in roots)
 
-    ``--git-common-dir`` が相対パスで返る場合は ``target_dir`` 基準で解決する。
-    rev-parse は hook プロセスの環境を継承して実行する (実際の commit と同じ
-    解決結果を得るため)。git repo でない・rev-parse が失敗した場合は False。
+
+def _git_entry_is_within_roots(path: str, roots: list[str]) -> bool:
+    """canonical 化した git dir 直下の entry ``path`` が存在しないか、実体が許可ルート
+    配下にあるか。
+
+    ディレクトリ (symlink 経由を含む) は canonical 実パスで判定する。ファイルは
+    それ自体が symlink (リンク切れを含む) なら False、そうでなければ親 dir の
+    canonical 実パスで判定する。
     """
-    if not any(is_within_root(target_dir, root) for root in roots):
+    if os.path.isdir(path):
+        canonical = _canonical_dir(path)
+        return canonical is not None and _is_within_any_root(canonical, roots)
+    if os.path.islink(path):
+        return False
+    if not os.path.exists(path):
+        return True
+    parent = _canonical_dir(os.path.dirname(path))
+    return parent is not None and _is_within_any_root(parent, roots)
+
+
+def _canonical_git_dir(path: str, target_dir: str) -> str | None:
+    if not path:
+        return None
+    if not path.startswith("/"):
+        path = f"{target_dir}/{path}"
+    return _canonical_dir(path)
+
+
+def dir_is_within_roots(target_dir: str, roots: list[str]) -> bool:
+    """次の全てを満たすか。
+
+    - ``target_dir`` がいずれかの許可ルート配下にある
+    - ``target_dir`` で実行した ``git rev-parse --git-common-dir`` の canonical 実パスが、
+      いずれかの許可ルート配下にある
+    - common-dir 直下の ``refs`` / ``objects`` / ``HEAD`` / ``packed-refs`` / ``logs``
+      のうち存在するものの実体が、いずれかの許可ルート配下にある
+      (``_git_entry_is_within_roots``)
+    - ``git rev-parse --git-dir`` (worktree 固有 dir) が common-dir と異なる場合は、
+      その直下の ``HEAD`` / ``index`` についても同じ条件を満たす
+
+    git dir 内部の symlink でルート外 repo の ref / object を更新する経路を塞ぐ。
+    rev-parse の出力が相対パスなら ``target_dir`` 基準で解決する。rev-parse は hook
+    プロセスの環境を継承して実行する (実際の commit と同じ解決結果を得るため)。
+    git repo でない・rev-parse が失敗した場合は False。
+    """
+    if not _is_within_any_root(target_dir, roots):
         return False
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
+            ["git", "rev-parse", "--git-common-dir", "--git-dir"],
             cwd=target_dir,
             check=False,
             capture_output=True,
@@ -612,15 +702,23 @@ def dir_is_within_roots(target_dir: str, roots: list[str]) -> bool:
         return False
     if result.returncode != 0:
         return False
-    common_dir = result.stdout.rstrip("\n")
-    if not common_dir:
+    lines = result.stdout.rstrip("\n").split("\n")
+    if len(lines) != 2:
         return False
-    if not common_dir.startswith("/"):
-        common_dir = f"{target_dir}/{common_dir}"
-    canonical_common_dir = _canonical_dir(common_dir)
-    if canonical_common_dir is None:
+    canonical_common_dir = _canonical_git_dir(lines[0], target_dir)
+    canonical_git_dir = _canonical_git_dir(lines[1], target_dir)
+    if canonical_common_dir is None or canonical_git_dir is None:
         return False
-    return any(is_within_root(canonical_common_dir, root) for root in roots)
+    if not _is_within_any_root(canonical_common_dir, roots):
+        return False
+    for entry in COMMON_DIR_ENTRIES:
+        if not _git_entry_is_within_roots(f"{canonical_common_dir}/{entry}", roots):
+            return False
+    if canonical_git_dir != canonical_common_dir:
+        for entry in WORKTREE_GIT_DIR_ENTRIES:
+            if not _git_entry_is_within_roots(f"{canonical_git_dir}/{entry}", roots):
+                return False
+    return True
 
 
 def commits_only_to_isolated_roots(

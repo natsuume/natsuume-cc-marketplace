@@ -139,6 +139,7 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 - commit の対象 dir をコマンド文字列から静的に解決できる (下記)
 - 対象 dir の canonical 実パスが、いずれかの許可ルートの配下にある
 - 対象 dir で `git rev-parse --git-common-dir` が返す repo 本体の canonical 実パスも、いずれかの許可ルートの配下にある (許可ルート配下に置いた linked worktree や symlink 経由で、ルート外の repo を更新する経路は免除しません)
+- repo 本体直下の `refs` / `objects` / `HEAD` / `packed-refs` / `logs` のうち存在するものの実体も、いずれかの許可ルートの配下にある。linked worktree では worktree 固有の git dir 直下の `HEAD` / `index` も同様です (ディレクトリは symlink を解決した実パスで判定し、ファイル自体が symlink の場合は免除しません。git dir 内部の symlink でルート外 repo の ref / object を更新する経路を塞ぐため)
 - hook の実行環境に `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` が設定されていない
 
 「配下」はパス境界で判定し、ルート自身も配下に含みます (`/a/b` を許可すると `/a/b` と `/a/b/c` は配下、`/a/bc` は配下ではありません)。
@@ -146,12 +147,14 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 **対象 dir を静的に解決できる形**:
 
 - `git -C <path> commit ...` (`-C` を複数並べた場合は順に相対解決)
-- `cd <path> && git commit ...` / `cd <path>; git commit ...` (`cd` を複数連結してもよい)
+- `cd <path> && git commit ...` (`cd` を複数連結してもよい)
+- 先頭から最後の commit までの連結は `&&` だけです。`;` や改行で区切った形 (`cd <path>; git commit ...`) は、実行時に `cd` が失敗すると commit が元の cwd (保護対象の repo) で実行されるため免除しません
+- 先頭から最後の commit まで (commit 自身を含む) に redirection (`>` / `>>` / `<` / `2>&1` / `&>` / `>|` 等) を含む形は免除しません (`<path>2>&1` のように、パス末尾の数字と fd 番号を静的に区別できないため)。最後の commit より後ろのコマンドの redirection は判定に影響しません
 - 最後の commit より前に置けるのは `cd <path>` と `git add` / `git commit` だけです (例: `git -C <path> add f && git -C <path> commit -m x`)。前段の `git add` / `git commit` の対象 dir にも commit と同じ免除条件を要求します。判定は hook 実行時点のファイルシステム状態で行うため、それ以外のコマンド (`touch` のような無害に見えるものも含め、対象 dir の削除・移動・symlink への置き換えや `git config` / `git init` 等で判定後に対象を差し替えうるもの) が前段にあれば免除しません。最後の commit より後ろのコマンドは判定に影響しません (ただし下記の builtin・wrapper はどの位置にあっても deny)
 - hook の cwd (セッションの cwd) が許可ルート配下の repo であるときの素の `git commit ...`
 - `<path>` は quote なし、または全体を 1 組の quote で囲んだ静的な文字列で、`cd` の相対パスは `./` 始まりに限ります
 
-次の形は静的に解決できないため、従来どおり deny されます: 変数展開 (`cd "$DIR"`)・`~`・`cd -`・`..` を含むパス・glob・`pushd` / `popd`・subshell / brace group (`(cd <dir> && git commit)`)・`GIT_DIR=` / `--git-dir` / `--work-tree`・`||` / `|` / `&` による連結・heredoc・コメント。また、後続の語をコマンドとして実行しうる shell keyword・builtin・wrapper (`if` / `eval` / `exec` / `command` / `builtin` / `export` / `env` / `sudo` 等) を先頭に持つコマンドは、commit を隠しうるためコマンド内のどの位置にあっても deny されます。
+次の形は静的に解決できないため、従来どおり deny されます: 変数展開 (`cd "$DIR"`)・`~`・`cd -`・`..` を含むパス・glob・`pushd` / `popd`・subshell / brace group (`(cd <dir> && git commit)`)・`GIT_DIR=` / `--git-dir` / `--work-tree`・`;` / 改行 / `||` / `|` / `&` による連結・redirection・heredoc・コメント。また、後続の語をコマンドとして実行しうる shell keyword・builtin・wrapper (`if` / `eval` / `exec` / `command` / `builtin` / `export` / `env` / `sudo` 等) を先頭に持つコマンドは、commit を隠しうるためコマンド内のどの位置にあっても deny されます。
 
 **`$(...)` を含むコマンドは deny**: コマンド置換 (`$(...)` / バッククォート) を含むコマンドは、複数行メッセージの `git commit -m "$(cat <<'EOF' ... EOF)"` 形式も含めて免除しません。隔離 repo への commit では、メッセージを `-m` に直接書くか、別の Bash 呼び出しでファイルに書き出して `-F <file>` で渡してください。
 

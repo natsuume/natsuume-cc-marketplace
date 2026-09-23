@@ -21,7 +21,9 @@
 #   2. 各対象 dir の canonical 実パスが、いずれかの許可ルート配下にある
 #   3. 各対象 dir で実行した `git rev-parse --git-common-dir` の canonical 実パスが、
 #      いずれかの許可ルート配下にある (許可ルート配下に置いた linked worktree / symlink
-#      経由でルート外の repo を更新する経路を塞ぐ)
+#      経由でルート外の repo を更新する経路を塞ぐ)。common-dir 直下の `refs` /
+#      `objects` / `HEAD` / `packed-refs` / `logs` と、worktree 固有 git dir の `HEAD` /
+#      `index` の実体も許可ルート配下にある (isolated_dir_is_within_roots を参照)
 #   4. hook プロセスの環境に `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` /
 #      `GIT_COMMON_DIR` が設定されていない (コマンド内の再代入で commit 先が変わりうるため)
 # 「配下」はパス境界での前方一致で判定し、ルート自身との一致も配下とみなす
@@ -123,27 +125,82 @@ _isolated_path_is_within_any_root() {
   return 1
 }
 
-# 引数: <dir> (canonical 実パス)
-# 戻り値: 0 = <dir> と、<dir> で実行した `git rev-parse --git-common-dir` の canonical
-#         実パスが、どちらもいずれかの許可ルート配下にある / 1 = それ以外
+# 引数: <path> <roots> (<path> は canonical 化した git dir 直下の entry)
+# 戻り値: 0 = <path> が存在しない、または実体がいずれかの許可ルート配下にある / 1 = それ以外
 #
-# `--git-common-dir` が相対パスで返る場合は <dir> 基準で解決する。rev-parse は hook
-# プロセスの環境を継承して実行する (実際の commit と同じ解決結果を得るため)。
-# <dir> が git repo でない・rev-parse が失敗した場合は 1 を返す。
+# ディレクトリ (symlink 経由を含む) は `cd -P && pwd -P` の canonical 実パスで判定する。
+# ファイルはそれ自体が symlink (リンク切れを含む) なら 1 を返し、そうでなければ親 dir の
+# canonical 実パスで判定する。
+_isolated_git_entry_is_within_roots() {
+  local path="$1"
+  local roots="$2"
+  local canonical
+  if [ -d "$path" ]; then
+    canonical="$(isolated_canonical_dir "$path")" || return 1
+    _isolated_path_is_within_any_root "$canonical" "$roots"
+    return
+  fi
+  [ -L "$path" ] && return 1
+  [ -e "$path" ] || return 0
+  canonical="$(isolated_canonical_dir "${path%/*}")" || return 1
+  _isolated_path_is_within_any_root "$canonical" "$roots"
+}
+
+# 引数: <git-dir-path> <dir> (<git-dir-path> は rev-parse の出力。相対なら <dir> 基準)
+# stdout: canonical 実パス
+# 戻り値: 0 = 解決できた / 1 = 解決できない
+_isolated_canonical_git_dir() {
+  local path="$1"
+  local dir="$2"
+  [ -n "$path" ] || return 1
+  case "$path" in
+    /*) ;;
+    *) path="$dir/$path" ;;
+  esac
+  isolated_canonical_dir "$path"
+}
+
+# 引数: <dir> (canonical 実パス)
+# 戻り値: 0 = 次の全てを満たす / 1 = それ以外
+#   - <dir> がいずれかの許可ルート配下にある
+#   - <dir> で実行した `git rev-parse --git-common-dir` の canonical 実パスが、いずれかの
+#     許可ルート配下にある
+#   - common-dir 直下の `refs` / `objects` / `HEAD` / `packed-refs` / `logs` のうち存在する
+#     ものの実体が、いずれかの許可ルート配下にある (_isolated_git_entry_is_within_roots)
+#   - `git rev-parse --git-dir` (worktree 固有 dir) が common-dir と異なる場合は、その
+#     直下の `HEAD` / `index` についても同じ条件を満たす
+# git dir 内部の symlink でルート外 repo の ref / object を更新する経路を塞ぐ。
+#
+# rev-parse の出力が相対パスなら <dir> 基準で解決する。rev-parse は hook プロセスの環境を
+# 継承して実行する (実際の commit と同じ解決結果を得るため)。<dir> が git repo でない・
+# rev-parse が失敗した場合は 1 を返す。
 isolated_dir_is_within_roots() {
   local dir="$1"
-  local roots common_dir canonical_common_dir
+  local roots rev_parse_output common_dir git_dir canonical_common_dir canonical_git_dir
+  local entry
+  local nl=$'\n'
   roots="$(isolated_git_roots)" || return 1
   _isolated_path_is_within_any_root "$dir" "$roots" || return 1
-  common_dir="$(cd -P -- "$dir" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" \
-    || return 1
-  [ -n "$common_dir" ] || return 1
-  case "$common_dir" in
-    /*) ;;
-    *) common_dir="$dir/$common_dir" ;;
+  rev_parse_output="$(cd -P -- "$dir" 2>/dev/null \
+    && git rev-parse --git-common-dir --git-dir 2>/dev/null)" || return 1
+  common_dir="${rev_parse_output%%"$nl"*}"
+  git_dir="${rev_parse_output#*"$nl"}"
+  case "$git_dir" in
+    *"$nl"*) return 1 ;;
   esac
-  canonical_common_dir="$(isolated_canonical_dir "$common_dir")" || return 1
-  _isolated_path_is_within_any_root "$canonical_common_dir" "$roots"
+  [ "$common_dir" != "$rev_parse_output" ] || return 1
+  canonical_common_dir="$(_isolated_canonical_git_dir "$common_dir" "$dir")" || return 1
+  canonical_git_dir="$(_isolated_canonical_git_dir "$git_dir" "$dir")" || return 1
+  _isolated_path_is_within_any_root "$canonical_common_dir" "$roots" || return 1
+  for entry in refs objects HEAD packed-refs logs; do
+    _isolated_git_entry_is_within_roots "$canonical_common_dir/$entry" "$roots" || return 1
+  done
+  if [ "$canonical_git_dir" != "$canonical_common_dir" ]; then
+    for entry in HEAD index; do
+      _isolated_git_entry_is_within_roots "$canonical_git_dir/$entry" "$roots" || return 1
+    done
+  fi
+  return 0
 }
 
 # 引数: <command>
@@ -205,6 +262,38 @@ _isolated_has_unresolvable_syntax() {
   done
 
   [ "$in_squote" -eq 0 ] && [ "$in_dquote" -eq 0 ] || return 0
+  return 1
+}
+
+# 引数: <segment> (split_command の出力。quote / escape を保持したもの)
+# 戻り値: 0 = quote 外に redirection 演算子 (`<` / `>` を含むもの。`>>` / `<>` / `>&` /
+#         `<&` / `&>` / `>|` と数字 fd 前置を含む) がある / 1 = 無い
+_isolated_segment_has_redirection() {
+  local seg="$1"
+  local i=0 len=${#seg}
+  local in_squote=0 in_dquote=0
+  local c
+  while [ "$i" -lt "$len" ]; do
+    c="${seg:$i:1}"
+    if [ "$in_squote" -eq 1 ]; then
+      [ "$c" = "'" ] && in_squote=0
+      i=$((i+1)); continue
+    fi
+    if [ "$in_dquote" -eq 1 ]; then
+      case "$c" in
+        \\) i=$((i+2)); continue ;;
+        '"') in_dquote=0 ;;
+      esac
+      i=$((i+1)); continue
+    fi
+    case "$c" in
+      \\) i=$((i+2)); continue ;;
+      "'") in_squote=1 ;;
+      '"') in_dquote=1 ;;
+      '<'|'>') return 0 ;;
+    esac
+    i=$((i+1))
+  done
   return 1
 }
 
@@ -294,7 +383,7 @@ _isolated_resolve_path_from() {
 
 # 引数: <command> <base_dir>
 #   <command>  : hook が受け取った Bash コマンド文字列 (行継続の正規化後、redirection
-#                正規化前。heredoc を検出するため redirection は本関数内で正規化する)
+#                正規化前。パス解決には元のコマンドの token をそのまま使う)
 #   <base_dir> : hook プロセスの cwd (commit invocation の対象 dir の初期値)
 # stdout: 最後の commit invocation までの各 git invocation (`git add` / `git commit`)
 #         について、静的に解決した対象 dir の canonical 実パスを出現順に 1 行 1 件で
@@ -304,9 +393,13 @@ _isolated_resolve_path_from() {
 # 静的解決の規則 (これ以外の形は解決不能として 1 を返す):
 #   - _isolated_has_unresolvable_syntax が検出する構文 (subshell / brace group /
 #     コマンド置換 / プロセス置換 / heredoc / コメント 等) を含まないこと
-#   - 先頭 segment から最後の commit invocation までの区切りが `&&` と `;` (改行を含む)
-#     だけであること (`||` / `|` / `&` は cd の効果が commit に及ぶかを静的に確定
-#     できないため解決不能)
+#   - 先頭 segment から最後の commit invocation までの区切りが `&&` だけであること
+#     (`;` / 改行は cd が実行時に失敗しても commit が元の cwd で実行されるため、
+#     `||` / `|` / `&` は cd の効果が commit に及ぶかを静的に確定できないため解決不能)
+#   - 先頭 segment から最後の commit invocation まで (commit invocation 自身を含む) の
+#     segment に、quote 外の redirection 演算子 (`<` / `>` / `>>` / `<>` / `>&` / `<&` /
+#     `&>` / `>|`、数字 fd 前置を含む) が無いこと (fd 番号とパス末尾の数字の区別を
+#     静的解決に持ち込まないため)
 #   - 最後の commit invocation より前の segment は、次のいずれかであること。それ以外の
 #     segment (判定時点のファイルシステム状態を commit 前に変えうる任意のコマンド。
 #     対象 dir の削除・移動・symlink 化や `git config` / `git init` 等による repo
@@ -337,17 +430,16 @@ resolve_commit_target_dirs() {
   local -a _iso_segments=()
   local -a _iso_separators=()
   local -a _iso_targets=()
-  local line normalized
+  local line
   local last_commit_index=-1
 
   _isolated_has_unresolvable_syntax "$cmd" && return 1
   current_dir="$(isolated_canonical_dir "$base")" || return 1
 
-  # `2>&1` / `&>file` 等の redirection 内の `&` を segment 区切りと誤認しないよう、
-  # block-default-branch-commit.sh と同じ規則で redirection を空白に置換してから分割する。
-  normalized="$(printf '%s' "$cmd" \
-    | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')"
-
+  # redirection の正規化は行わず元のコマンドのまま分割する (正規化で fd 番号とみなして
+  # 剥がした数字が、bash ではパスの一部として扱われ判定と実行の対象が食い違うため)。
+  # 最後の commit invocation までの segment に redirection があれば 2 周目で解決不能と
+  # する。それより後ろの `2>&1` 等の `&` が区切りとして分割されても判定には影響しない。
   while IFS= read -r line; do
     case "$line" in
       SEP:*)
@@ -357,7 +449,7 @@ resolve_commit_target_dirs() {
         _iso_segments+=("$line")
         ;;
     esac
-  done < <(split_command "$normalized")
+  done < <(split_command "$cmd")
 
   local _iso_seg_count=${#_iso_segments[@]}
   local -a _iso_toks=()
@@ -398,6 +490,7 @@ resolve_commit_target_dirs() {
   # 2 周目: 最後の commit invocation までの segment を解決する。
   _iso_si=0
   while [ "$_iso_si" -le "$last_commit_index" ]; do
+    _isolated_segment_has_redirection "${_iso_segments[$_iso_si]}" && return 1
     _iso_toks=()
     _iso_idx=0
     tokenize_segment "${_iso_segments[$_iso_si]}" _iso_toks
@@ -479,7 +572,7 @@ resolve_commit_target_dirs() {
   local _iso_sep_i=0
   while [ "$_iso_sep_i" -lt "$last_commit_index" ]; do
     case "${_iso_separators[$_iso_sep_i]:-}" in
-      '&&'|';') ;;
+      '&&') ;;
       *) return 1 ;;
     esac
     _iso_sep_i=$((_iso_sep_i+1))

@@ -91,8 +91,8 @@ case "$COMMAND" in
   *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
 esac
 
-# 隔離ルート免除の判定は heredoc (`<<EOF`) の有無を見る必要があるため、redirection
-# 正規化前のコマンドを残しておく。
+# 隔離ルート免除の判定は heredoc (`<<EOF`) / redirection の有無を見て、パスも元の token
+# のまま解決する必要があるため、redirection 正規化前のコマンドを残しておく。
 COMMAND_BEFORE_REDIRECTION_NORMALIZATION="$COMMAND"
 
 # `&` を含む shell redirection (`2>&1` / `&>file` / `<<EOF` 等) を空白に置換する。

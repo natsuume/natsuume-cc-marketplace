@@ -460,5 +460,67 @@ class PrecedingSegmentsIsolatedRootsTest(IsolatedGitRootsTestBase):
                 self.assert_allowed(result)
 
 
+class ExecutionTimeTargetDivergenceIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """判定したパスと実行時の対象が食い違いうる形は免除しない (GG / AL 共通)。
+
+    - redirection の fd 番号とパス末尾の数字の混同
+    - `;` 区切りで cd が失敗したときに commit が元の cwd で実行される経路
+    - git dir 内部の symlink によるルート外 repo への脱出
+    """
+
+    HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
+
+    def assert_denied_by_both_hooks(self, command: str) -> None:
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name, command=command):
+                result = self.run_hook(hook, command, roots=str(self.allowed_root))
+
+                reason = self.deny_reason(result)
+                if hook == AL_COMMIT_HOOK:
+                    self.assertIn("repo override", reason)
+
+    def test_digit_suffixed_symlink_to_outside_repo_is_denied(self) -> None:
+        # `<root>/iso` は隔離 repo、`<root>/iso2` はルート外 repo への symlink。
+        iso2 = self.allowed_root / "iso2"
+        iso2.symlink_to(self.outside_repo, target_is_directory=True)
+
+        for command in (
+            f"cd {iso2} && git commit -m x",
+            f"git -C {iso2} commit -m x",
+            f"cd {iso2}>&1 && git commit -m x",
+        ):
+            self.assert_denied_by_both_hooks(command)
+
+    def test_digit_suffixed_git_c_path_followed_by_redirection_is_denied(self) -> None:
+        # bash は `<root>/iso2>&1` をパス `<root>/iso2` と redirection `>&1` に分ける。
+        # auto-lint-check の parser はこの形を commit invocation として検出しないため、
+        # 免除判定の対象になる git-guardrails だけを検査する。
+        iso2 = self.allowed_root / "iso2"
+        iso2.symlink_to(self.outside_repo, target_is_directory=True)
+
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {iso2}>&1 commit -m x",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_denied(result)
+
+    def test_redirection_on_commit_invocation_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} commit -m x > /dev/null"
+        )
+
+    def test_semicolon_separated_cd_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(f"cd {self.iso_repo} ; git commit -m x")
+
+    def test_refs_symlinked_to_outside_repo_is_denied(self) -> None:
+        refs = self.iso_repo / ".git" / "refs"
+        shutil.rmtree(refs)
+        refs.symlink_to(self.outside_repo / ".git" / "refs", target_is_directory=True)
+
+        self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
+
+
 if __name__ == "__main__":
     unittest.main()
