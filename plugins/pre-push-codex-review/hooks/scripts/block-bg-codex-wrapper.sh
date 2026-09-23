@@ -1144,9 +1144,26 @@ option_scan_canonical() {
   canonicalize_token "$1"
 }
 
+# segment_is_plain_ascii <segment>
+# 戻り値: 0 = segment が ASCII の印字可能文字 (0x20〜0x7E) とタブだけから成る、
+#   1 = それ以外 (CR・FF・VT・改行・DEL・非 ASCII 文字を含む)。
+# 共有 tokenizer は `[[:space:]]` (ロケールによっては非 ASCII の空白も含む) で
+# token を分割するが、 bash が word を区切る空白は space / tab / 改行だけである。
+# そのため許可リスト外の文字を含む segment では token 列と argv word 列の対応を
+# 保証できず、 option 走査の barrier を使わない。 文字範囲の解釈がロケールに依存
+# しないよう LC_ALL=C で判定する。
+segment_is_plain_ascii() {
+  local LC_ALL=C
+  case "$1" in
+    *[!\ -~$'\t']*) return 1 ;;
+  esac
+  return 0
+}
+
 # is_option_scan_barrier <canonical_token> <previous_canonical_token> <all_strict>
-# <all_strict>: 走査済みの token (head から直前まで) がすべて厳格判定
-#   (`token_is_unanalyzable ... head`) を通過していれば 1、 それ以外は 0。
+# <all_strict>: segment が `segment_is_plain_ascii` を満たし、 かつ走査済みの
+#   token (head から直前まで) がすべて厳格判定 (`token_is_unanalyzable ... head`)
+#   を通過していれば 1、 それ以外は 0。
 # 戻り値: 0 = rg / sort / git の option 走査を止める barrier、 1 = それ以外。
 #
 # barrier は canonical 値が `--` に完全一致する token のうち、 次の 2 条件を満たす
@@ -1462,6 +1479,9 @@ classify_wrapper_segment() {
   # とする (mention 判定に必要な値を静的決定できないため。 ANSI-C quote `$'...'`
   # 等の動的展開もここで落ちる)。
   local _cw_j _cw_traw _cw_tcanon _cw_prefix _cw_prev _cw_barrier_ok
+  # barrier は segment が許可リスト内の文字だけから成る場合に限る (`segment_is_plain_ascii`)。
+  local _cw_plain_seg=0
+  segment_is_plain_ascii "$_cw_seg" && _cw_plain_seg=1
   case "$_cw_base" in
     sed|awk|xargs|less|more|parallel)
       unset _cw_toks
@@ -1488,7 +1508,7 @@ classify_wrapper_segment() {
     rg)
       _cw_j=$_cw_idx
       _cw_prev=""
-      _cw_barrier_ok=1
+      _cw_barrier_ok=$_cw_plain_seg
       while [ "$_cw_j" -lt "$_cw_n" ]; do
         _cw_traw="${_cw_toks[$_cw_j]}"
         if ! _cw_tcanon="$(option_scan_canonical "$_cw_traw")"; then
@@ -1512,7 +1532,7 @@ classify_wrapper_segment() {
     sort)
       _cw_j=$_cw_idx
       _cw_prev=""
-      _cw_barrier_ok=1
+      _cw_barrier_ok=$_cw_plain_seg
       while [ "$_cw_j" -lt "$_cw_n" ]; do
         _cw_traw="${_cw_toks[$_cw_j]}"
         if ! _cw_tcanon="$(option_scan_canonical "$_cw_traw")"; then
@@ -1570,7 +1590,7 @@ classify_wrapper_segment() {
     # --ext-diff / --textconv の走査は rg / sort と同じく barrier の直前まで。
     _cw_j=$_cw_idx
     _cw_prev=""
-    _cw_barrier_ok=1
+    _cw_barrier_ok=$_cw_plain_seg
     while [ "$_cw_j" -lt "$_cw_n" ]; do
       _cw_traw="${_cw_toks[$_cw_j]}"
       if ! _cw_tcanon="$(option_scan_canonical "$_cw_traw")"; then
@@ -1673,7 +1693,7 @@ if [ "$AGENT_TYPE" != "pre-push-codex-review:codex-reviewer" ]; then
 
 wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
 
-Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せずに使ってください。 `cat` / `wc` 等の引数は、 中括弧の無い単純な変数展開 (`$VAR`)・brace expansion (`{a,b}`)・`~user` 形・glob を含んでいても deny されません。 一方、 次の形は read-only コマンドでも deny されます: コマンド置換 (`$(...)` / バッククォート) や、 評価を伴いうる `${...}` / `$[...]` 形の展開を含む / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します) / `find` / `rg` / `sort` / `git` の引数に、 `$VAR` 等の動的展開・brace expansion・`~user` 形、 または glob メタ文字で始まる path (`*/run-pre-push-codex-review.sh` 等) を置いている (option として解釈されうる位置では展開結果を静的に決定できないため)。 最後の形は、 `./*/run-pre-push-codex-review.sh` のように `./` を前置するか、 `git diff -- <path>` のように `--` の後ろに置けば allow されます (`--` の直前が `-` 始まりの option の場合、 `--` より前の引数に redirection・glob・展開を含む場合、 コマンドに `2>&1` / `>>` / `<<` 等の redirection を含む場合は、 `--` が option の値として扱われうるため対象外です)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
+Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せずに使ってください。 `cat` / `wc` 等の引数は、 中括弧の無い単純な変数展開 (`$VAR`)・brace expansion (`{a,b}`)・`~user` 形・glob を含んでいても deny されません。 一方、 次の形は read-only コマンドでも deny されます: コマンド置換 (`$(...)` / バッククォート) や、 評価を伴いうる `${...}` / `$[...]` 形の展開を含む / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します) / `find` / `rg` / `sort` / `git` の引数に、 `$VAR` 等の動的展開・brace expansion・`~user` 形、 または glob メタ文字で始まる path (`*/run-pre-push-codex-review.sh` 等) を置いている (option として解釈されうる位置では展開結果を静的に決定できないため)。 最後の形は、 `./*/run-pre-push-codex-review.sh` のように `./` を前置するか、 `git diff -- <path>` のように `--` の後ろに置けば allow されます (`--` の直前が `-` 始まりの option の場合、 `--` より前の引数に redirection・glob・展開を含む場合、 コマンドに `2>&1` / `>>` / `<<` 等の redirection を含む場合、 非 ASCII 文字や CR 等の特殊な空白を含む場合は、 `--` が option の値として扱われうるため対象外です)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
 
 対応:
   - `/pre-push-codex-review:review` で push 前レビューを並列起動してください (推奨)
@@ -1689,7 +1709,7 @@ EOF
 
 wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
 
-Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せずに使ってください。 \`cat\` / \`wc\` 等の引数は、 中括弧の無い単純な変数展開 (\`\$VAR\`)・brace expansion (\`{a,b}\`)・\`~user\` 形・glob を含んでいても deny されません。 一方、 次の形は read-only コマンドでも deny されます: コマンド置換 (\`\$(...)\` / バッククォート) や、 評価を伴いうる \`\${...}\` / \`\$[...]\` 形の展開を含む / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します) / \`find\` / \`rg\` / \`sort\` / \`git\` の引数に、 \`\$VAR\` 等の動的展開・brace expansion・\`~user\` 形、 または glob メタ文字で始まる path (\`*/run-pre-push-codex-review.sh\` 等) を置いている (option として解釈されうる位置では展開結果を静的に決定できないため)。 最後の形は、 \`./*/run-pre-push-codex-review.sh\` のように \`./\` を前置するか、 \`git diff -- <path>\` のように \`--\` の後ろに置けば allow されます (\`--\` の直前が \`-\` 始まりの option の場合、 \`--\` より前の引数に redirection・glob・展開を含む場合、 コマンドに \`2>&1\` / \`>>\` / \`<<\` 等の redirection を含む場合は、 \`--\` が option の値として扱われうるため対象外です)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
+Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せずに使ってください。 \`cat\` / \`wc\` 等の引数は、 中括弧の無い単純な変数展開 (\`\$VAR\`)・brace expansion (\`{a,b}\`)・\`~user\` 形・glob を含んでいても deny されません。 一方、 次の形は read-only コマンドでも deny されます: コマンド置換 (\`\$(...)\` / バッククォート) や、 評価を伴いうる \`\${...}\` / \`\$[...]\` 形の展開を含む / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します) / \`find\` / \`rg\` / \`sort\` / \`git\` の引数に、 \`\$VAR\` 等の動的展開・brace expansion・\`~user\` 形、 または glob メタ文字で始まる path (\`*/run-pre-push-codex-review.sh\` 等) を置いている (option として解釈されうる位置では展開結果を静的に決定できないため)。 最後の形は、 \`./*/run-pre-push-codex-review.sh\` のように \`./\` を前置するか、 \`git diff -- <path>\` のように \`--\` の後ろに置けば allow されます (\`--\` の直前が \`-\` 始まりの option の場合、 \`--\` より前の引数に redirection・glob・展開を含む場合、 コマンドに \`2>&1\` / \`>>\` / \`<<\` 等の redirection を含む場合、 非 ASCII 文字や CR 等の特殊な空白を含む場合は、 \`--\` が option の値として扱われうるため対象外です)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
 
 対応:
   - \`/pre-push-codex-review:review\` で push 前レビューを並列起動してください (推奨)

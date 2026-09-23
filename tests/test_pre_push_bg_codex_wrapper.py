@@ -796,7 +796,12 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     token を過分割した場合 (`rg -e x\\ -- …` の `x\\` と `--` は bash 上
     では 1 つの word) も同じであり、厳格判定は token 末尾の quote 外の孤立
     `\\` を解析不能とする (厳格判定のみの規則。option 走査対象では過分割
-    は照合を保守的にする方向にしか働かないため適用しない)。第 2 に、分類前の redirection 正規化
+    は照合を保守的にする方向にしか働かないため適用しない)。また segment
+    が ASCII の印字可能文字 (0x20〜0x7E) とタブ以外の文字 (CR / FF / VT /
+    非 ASCII の空白等) を含む場合も barrier とみなさない。共有 tokenizer は
+    `[[:space:]]` で token を分割するが、bash が word を区切る空白は space /
+    tab / 改行だけであり、token 列と argv word 列の対応を保証できないため
+    である (許可リスト方式。判定は LC_ALL=C で行う)。第 2 に、分類前の redirection 正規化
     (`2>&1` / `&>` / `>>` / `<<` 等を空白に置換する sed) で 1 つでも除去が
     起きたコマンドの場合。この正規化は演算子と限られた文字種の書き込み先
     だけを除去するため、書き込み先の残り (`>>x"y"` の `"y"`、`12>>x` の
@@ -2611,8 +2616,8 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
     - rg / sort / git の option 走査は barrier `--` で止まる。直前の token
       が `-` 始まり (値を取りうる option) の `--` と、走査済み token に
       厳格判定を通過しないもの (redirection / glob 等) がある `--`、
-      分類前の redirection 正規化で除去が起きたコマンドの `--` は barrier
-      とみなさない
+      分類前の redirection 正規化で除去が起きたコマンドの `--`、ASCII の
+      印字可能文字とタブ以外を含む segment の `--` は barrier とみなさない
     - quote 外の `(` / `)` と、quote 外または double quote 内の `${` / `$[`
       は構造検査の対象であり、値を消費しない head の operand でも実行形とする
 
@@ -2666,6 +2671,14 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
         f"rg -e x\\ -- --pre=bash marker {WRAPPER_NAME}",
         f"sort -o x\\ -- --compress-program=bash {WRAPPER_NAME}",
         f"git log -S x\\ -- --ext-diff {WRAPPER_NAME}",
+        # bash が word 区切りにしない空白 (CR / FF / VT / 非 ASCII の空白) を含む
+        # segment では barrier を使わない。
+        f"rg -e x\r-- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e x\f-- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e x\v-- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e x -- --pre=bash marker {WRAPPER_NAME}",
+        f"sort -o x\r-- --compress-program=bash {WRAPPER_NAME}",
+        f"git log -S x\r-- --ext-diff {WRAPPER_NAME}",
         # quote 外の `(` / `)` は値を消費しない head の operand でも構造検査で捕捉する。
         f"f () ( bash {WRAPPER_NAME} )",
         f"cat x ( {WRAPPER_NAME} )",
