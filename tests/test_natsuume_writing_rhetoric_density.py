@@ -245,6 +245,15 @@ class DraftSkillTest(unittest.TestCase):
         self.assertIn("分量はコメントの指示量に比例", self.text)
 
 
+class WatchlistSupplementTest(unittest.TestCase):
+    """希少語と誤分類語の見直しで一覧に加えた語。"""
+
+    def test_watchlist_contains_supplemented_entries(self) -> None:
+        text = read(WATCHLIST)
+        self.assertIn("- 黙って〜する", section(text, "## 直訳調・比喩的な語"))
+        self.assertIn("- 正本", section(text, "## 抽象的な漢語・評価語"))
+
+
 class NegationLimitationVariantTest(unittest.TestCase):
     """否定と限定を組み合わせた論証 (二項対立の変形)。"""
 
