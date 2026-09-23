@@ -421,6 +421,12 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             5,
         )
 
+    def test_double_quoted_delimiter_with_backslash_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify('cat > f.md <<"E\\$F"\nfoo\nE$F\ngit commit -m x'),
+            5,
+        )
+
     def test_wrapper_with_positional_argument_keeps_body(self) -> None:
         self.assertEqual(
             self.classify("timeout 5 bash <<'EOF'\ngit commit -m x\nEOF"),

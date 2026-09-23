@@ -380,6 +380,10 @@ def _read_heredoc_word(command: str, start: int) -> tuple[str | None, bool, int]
                 close = n
             if "\n" in command[i + 1 : close]:
                 return None, False, word_start
+            if ch == '"' and "\\" in command[i + 1 : close]:
+                # 二重引用符内の backslash escape は bash が除去するが、閉じ
+                # 引用符の位置判定を含め同じ解釈を再現しないため解決不能とする。
+                return None, False, word_start
             quoted = True
             chars.append(command[i + 1 : close])
             i = close + 1
@@ -464,6 +468,17 @@ _ARITH_OPENERS: tuple[tuple[str, str, str, int], ...] = (
     ("((", "(", ")", 2),
     ("$[", "[", "]", 1),
 )
+
+
+def _is_backslash_escaped(command: str, i: int) -> bool:
+    """``command[i]`` の直前に連続する backslash が奇数個あり、``command[i]``
+    が escape されているか判定する。"""
+    count = 0
+    j = i - 1
+    while j >= 0 and command[j] == "\\":
+        count += 1
+        j -= 1
+    return count % 2 == 1
 
 
 def _is_segment_separator(command: str, i: int) -> bool:
@@ -683,7 +698,13 @@ def _strip_heredoc_bodies(command: str) -> str:
             out.append("${")
             i += 2
             continue
-        if ch == "#" and (i == 0 or command[i - 1] in _COMMENT_START_PRECEDERS):
+        if ch == "#" and (
+            i == 0
+            or (
+                command[i - 1] in _COMMENT_START_PRECEDERS
+                and not _is_backslash_escaped(command, i - 1)
+            )
+        ):
             line_end = command.find("\n", i)
             if line_end == -1:
                 line_end = n
