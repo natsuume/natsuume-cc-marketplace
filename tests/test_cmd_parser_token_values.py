@@ -120,8 +120,8 @@ class WrapperClassificationTildeConsistencyTest(unittest.TestCase):
     """
 
     CASES = (
-        (f"cat ~root/{WRAPPER}", "deny"),
-        (f"cat ~ {WRAPPER}", "deny"),
+        (f"cat ~root/{WRAPPER}", "allow"),
+        (f"cat ~ {WRAPPER}", "allow"),
         (f"~/bin/frobnicate {WRAPPER}", "deny"),
         (f"~/bin/cat {WRAPPER}", "deny"),
         (f"~/bin/bash {WRAPPER}", "deny"),

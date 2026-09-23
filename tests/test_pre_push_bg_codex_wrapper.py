@@ -562,15 +562,37 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        開始 (`$'`) が現れる場合も、本検査は ANSI-C quote の内部意味論を
        模さず共有 parser の quote 状態と乖離するため、解析不能として
        実行形とする
-    3. segment の各 token が静的 literal であることを検査する: raw
-       token を正しい quote 意味論 (single quote 内は literal、double
+    3. segment の token を、性質の異なる 2 種類の検査で扱う。どちらも
+       raw token を正しい quote 意味論 (single quote 内は literal、double
        quote 内は `$` / バッククォート / `"` / `\` の前でのみ
-       backslash が escape) で走査し、次のいずれかに該当すれば解析
-       不能として実行形とする:
+       backslash が escape) で走査する。
+
+       **構造検査 (全 token)**: 次のいずれかに該当する token が 1 つでも
+       あれば、共有 tokenizer の出力 (token の境界) を信用できないため
+       解析不能として実行形とする。token の位置や値の用途に依らず、
+       segment の全 token に対して step 4 より前に一括で行う:
        - (a) 走査終了時に quote が閉じていない
        - (b) quote 外に空白が現れる (共有 tokenizer の quote 状態
-         desync (#354) により複数 shell word が 1 token に merge
-         されている)
+         desync により複数 shell word が 1 token に merge され、内側に
+         危険 option が隠れている可能性がある)
+       - (b2) quote 外に `(` / `)` が現れる (値の展開ではなく、関数定義
+         `f () ( <cmd> )` や subshell 等の compound command を作る文法
+         構造であり、head 以外の位置に現れても segment が実行面を持ちうる)
+       - (b3) quote 外または double quote 内に `${` / `$[` が現れる (展開
+         の過程で評価を伴いうる形。indexed array の添字は算術評価され
+         `${a['$(<cmd>)']}` の single quote 内のコマンド置換も実行される。
+         `${x@P}` は値を prompt 文字列として展開しコマンド置換を実行する。
+         `$[...]` は旧算術展開。値を使わない位置でも実行面を持つ。中括弧
+         の無い単純な変数展開 `$VAR` は評価を伴わないため対象外)
+       - (b4) 同じ token に quote 外の `$` と quote 外の `{` / `}` が両方
+         ある (brace expansion はパラメータ展開より先に行われるため、隣接
+         していない `$` と `{` / `[` から `${...}` / `$[...]` を合成できる。
+         `{$,x}{a['$(<cmd>)']}` は `${a['$(<cmd>)']}` になる。パラメータ
+         展開より前に文字を組み立てる展開は brace expansion だけである)
+
+       **意味検査 (値を判定に使う token のみ)**: 次のいずれかに該当する
+       token は、展開結果を静的に決定できないため値を判定に使えない。
+       該当すれば解析不能として実行形とする:
        - (c) quote 外に展開・置換・word 生成を導入する文字が現れる:
          `$` (変数展開・`${...}`・コマンド置換 `$(...)`・ANSI-C
          quoting `$'...'`・locale 翻訳 quoting `$"..."`・旧算術展開
@@ -590,11 +612,25 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        glob / brace 文字 (`rg -n 'a*b' <wrapper>` 等) は展開されない
        ため literal として許容する。
 
-       **この検査は head token と operand token で非対称である**。head
-       (= 実行面そのものを決める token) には上記 (a)〜(d) をそのまま
-       適用する厳格判定を行い、operand (= head の実行面に一切影響しない
-       token) には rule (c) のみ次の 2 点を緩和する ((a) / (b) / (d) は
-       operand でも不変):
+       意味検査を適用するのは、決定表がその token の値を判定に使う場合
+       だけである:
+       - head: step 5〜7 の launcher 剥がしを経て実際に head になった
+         token (厳格判定)
+       - step 7 の timeout の duration operand (厳格判定)
+       - step 13 の git subcommand 判定対象 token (厳格判定)
+       - step 12 の find / rg / sort と step 13 の git の option 走査
+         対象 token (下記の option 走査緩和つき)
+       それ以外の token には意味検査を適用しない。値を消費しない head
+       (cat / wc / 外部コマンド形の不明 head 等) の operand と、rg /
+       sort / git の barrier より後ろの token は、展開結果がどうであれ
+       分類判定を左右しないためである (`cat */<wrapper>` /
+       `cat "$HOME/<wrapper>"` / `cat {a,b}/<wrapper>` /
+       `cat ~root/<wrapper>` はいずれも mention 候補になる)。
+
+       **厳格判定と option 走査緩和の非対称**。head・duration・git
+       subcommand には上記 (c) / (d) をそのまま適用する厳格判定を行い、
+       option 走査対象 token には rule (c) のみ次の 2 点を緩和する
+       ((d) は option 走査対象でも不変):
 
        - 緩和 1 (先頭 redirection): quote 外の `<` / `>` が、その文字
          より前の文字がすべて 10 進数字 (0 文字も可、= token 先頭) で
@@ -645,8 +681,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
          従来どおり実行形とする。brace expansion の `{` / `}`、
          `(` / `)`、`$`、バッククォートは operand でも緩和しない
 
-       緩和の根拠は「その token が operand 位置にあるはずだ」という
-       位置推定ではなく、**字句的不変条件**である: pathname expansion
+       緩和の根拠は「その token が option ではなく operand のはずだ」
+       という位置推定ではなく、**字句的不変条件**である: pathname expansion
        は最初の glob メタ文字より前の literal prefix を必ず保存する
        ため、固定開始 `[A-Za-z0-9_/.]` を持つ token の展開結果はすべて
        同じ非 `-` 文字で始まり、`-` 始まりである列挙済み危険 option
@@ -660,13 +696,12 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        ついては、`$HOME` が `-` 始まりの異常環境であっても一致方向
        (= deny 方向) にしか働かないため bypass にはならない。
 
-       head 判定に静的な位置推定は用いない。head 基準の厳格検査は
+       head 判定に静的な位置推定は用いない。head の厳格判定は
        **launcher 剥がし (step 7) の結果として実際に head になった
        token** に対して行う (`env cat ~/x/<wrapper>` なら `cat`)。
-       したがって本 step の一括検査は segment の全 token を operand
-       基準で行い (step 4 以降の判定より前に実施)、head 基準の厳格
-       検査は step 5 の canonical 化直前に、その時点の head token
-       1 つに対して行う
+       したがって本 step で一括して行うのは構造検査だけであり、意味
+       検査は各 token の値を使う step (5 / 7 / 12 / 13) の直前に、その
+       token に対して行う
     4. leading 代入列 (segment 先頭の NAME=VALUE 連鎖) を処理する: 代入
        slot が 1 つでも存在すれば、値に関わらず実行形とする。代入値が
        指すのは wrapper path だけでなく、head コマンドの間接実行面を
@@ -675,7 +710,7 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        LESSOPEN は input preprocessor 等)、変数名の列挙ではなく代入
        slot の存在自体で判定する。処理後に head token が無い
        (assignment-only / 空) 場合も実行形
-    5. その時点の head token に対し、まず step 3 の検査を head 基準
+    5. その時点の head token に対し、まず step 3 の意味検査を厳格判定
        (緩和なし) で行う → 解析不能なら実行形 (`./b*sh <wrapper>` の
        glob head、`~/bin/bash <wrapper>` の tilde head 等をここで
        捕捉する)。続いて head token の canonical 化 (single/double
@@ -700,8 +735,9 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        doas / time / `!` に完全一致 (basename 適用なし) → 限定解析で
        剥がす: 直後の代入 slot (NAME=VALUE 列) を再評価し、存在すれば
        step 4 と同じ規則で実行形とする。timeout は数値 + 任意の s/m/h/d
-       suffix の単純形 duration operand のみ消費。`-` 始まりまたは認識
-       できない operand が現れたら実行形。剥がし後の残り token 列を
+       suffix の単純形 duration operand のみ消費する (duration operand
+       には step 3 の意味検査を厳格判定で行い、解析不能なら実行形)。
+       `-` 始まりまたは認識できない operand が現れたら実行形。剥がし後の残り token 列を
        step 5 から再評価する
     8. canonical head が通常の外部コマンド word の形 (英数字・`_`・`/` の
        いずれかで始まり `[A-Za-z0-9_/.+-]` のみで構成) でない (redirection
@@ -734,17 +770,56 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
         token として存在 → 実行形 (値を取る option の literal 引数も
         保守的 superset として deny し false positive を受容する。危険
         option の列挙は受容境界であり、列挙外の value-taking option は
-        残余ギャップとして受容する)
+        残余ギャップとして受容する)。option 走査対象 token には step 3
+        の意味検査を option 走査緩和つきで行い、解析不能なら実行形。
+        走査範囲は、find は head 以降の全 token (find の式には option
+        終端が無いため)、rg / sort は head 以降で barrier の直前まで
     13. git 特例: 縮小 subcommand 集合 (diff / log / show / status /
         ls-files / rev-parse / cat-file) に直後 token が一致し、
         --ext-diff / --textconv (canonical 値・prefix でなく完全一致) が
         無い場合のみ mention 候補 (step 14 へ)。特例に一致しない git は
-        すべて実行形 (fall-through は実行形側であり mention 側へ落ちない)
+        すべて実行形 (fall-through は実行形側であり mention 側へ落ちない)。
+        subcommand 判定対象 token には step 3 の意味検査を厳格判定で行う。
+        --ext-diff / --textconv の走査範囲と意味検査は rg / sort と同じ
+        (head 以降で barrier の直前まで、option 走査緩和つき)
     14. ここまで実行形と確定しなかった head (無害 builtin・git 特例・
         外部コマンド形の不明 head) は mention 候補: 従来の pipe chain
         検査 (neighbor は read-only allowlist の exact 判定のまま、
         basename 正規化なし — 中心 segment との非対称は受容境界) を
         通過すれば mention (allow)、通過しなければ実行形
+
+    barrier: rg / sort / git の option 走査は、canonical 値が `--` に
+    完全一致する token で止める (以降の token は option ではなく operand
+    として解釈されるため)。ただし次のいずれかに該当する `--` は barrier
+    とみなさず走査を続ける。第 1 に、走査済みの token (head から直前まで)
+    に厳格判定 (step 3 の意味検査を緩和なしで行ったもの) を通過しない
+    token がある場合。redirection (`rg -e >x -- …` の `>x`、
+    `rg -e > x -- …` の `>` と `x`) は argv word を生まず、glob は 0 個
+    以上の word に展開されうる (nullglob 等) ため、shell token 列と argv
+    word 列が 1 対 1 に対応せず、直前の shell token から `--` を消費する
+    option を判定できないためである。共有 tokenizer が escape された空白で
+    token を過分割した場合 (`rg -e x\\ -- …` の `x\\` と `--` は bash 上
+    では 1 つの word) も同じであり、厳格判定は token 末尾の quote 外の孤立
+    `\\` を解析不能とする (厳格判定のみの規則。option 走査対象では過分割
+    は照合を保守的にする方向にしか働かないため適用しない)。また segment
+    が ASCII の印字可能文字 (0x20〜0x7E) とタブ以外の文字 (CR / FF / VT /
+    非 ASCII の空白等) を含む場合も barrier とみなさない。共有 tokenizer は
+    `[[:space:]]` で token を分割するが、bash が word を区切る空白は space /
+    tab / 改行だけであり、token 列と argv word 列の対応を保証できないため
+    である (許可リスト方式。判定は LC_ALL=C で行う)。第 2 に、分類前の redirection 正規化
+    (`2>&1` / `&>` / `>>` / `<<` 等を空白に置換する sed) で 1 つでも除去が
+    起きたコマンドの場合。この正規化は演算子と限られた文字種の書き込み先
+    だけを除去するため、書き込み先の残り (`>>x"y"` の `"y"`、`12>>x` の
+    `1` 等) が通常の token として残り、厳格判定を通過したまま argv word
+    との対応を崩しうるためである。第 3 に、直前の token の canonical
+    値が `-` で始まる場合。直前の
+    token が値を取る option (`rg -e` / `sort -o` / `git log -S` 等)
+    であれば `--` はその値として消費され、後続の token が option として
+    解釈される (`rg -e -- --pre=bash <file>` は `--pre=bash` を option と
+    して受け取る) ためである。値を取るかどうかを option ごとに列挙せず、
+    `-` 始まりの直前 token を一律に「値を取りうる」とみなす保守的な規則
+    であり、`git diff --stat -- <path>` のように flag の直後に置いた
+    `--` は barrier にならない (後続 token は従来どおり走査される)。
 
     wrapper 名の判定は exact basename 一致であり、変則 path (basename が
     wrapper 名を部分包含する別名ファイル) は cooperative 境界として対象外
@@ -763,14 +838,16 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     しない — 中心 segment との判定非対称は受容境界として明示する) と
     indirection 規則 1 は現行のまま維持する。
 
-    option 走査中に canonical 化が失敗した token は、それが option 位置か
-    operand 位置かを静的に区別できないため一律に実行形とする。動的 path
-    operand を含む read-only mention (`git diff -- "$DIR/run-pre-push-codex-review.sh"`
-    等) が deny される false positive は、ANSI-C quote 形の危険 option を
-    確実に捕捉するための代償として受容する。また、コマンド行に現れず
-    呼び出し前に export された環境変数による間接実行面は本 hook から
-    観測できないため、cooperative 境界とする。step 3 の緩和 2 が
-    operand で許容する `~/` 始まり token の展開結果も `$HOME` の値に
+    option 走査中に意味検査または canonical 化が失敗した token は、それが
+    option 位置か operand 位置かを静的に区別できないため一律に実行形と
+    する。barrier より前に動的 path operand を置いた read-only mention
+    (`rg -n marker "$DIR/run-pre-push-codex-review.sh"` 等) が deny される
+    false positive は、ANSI-C quote 形の危険 option を確実に捕捉するための
+    代償として受容する (動的 path を barrier の後ろに置けば mention 候補に
+    なる: `git diff -- "$DIR/run-pre-push-codex-review.sh"`)。また、
+    コマンド行に現れず呼び出し前に export された環境変数による間接実行面は
+    本 hook から観測できないため、cooperative 境界とする。step 3 の緩和 2 が
+    option 走査対象で許容する `~/` 始まり token の展開結果も `$HOME` の値に
     依存し、その値はコマンド行に現れず本 hook から観測できないため、
     同じ受容範囲 (cooperative 境界) に属する。`$HOME` が異常値の環境
     でも、上記の字句的不変条件により一致は deny 方向にしか働かない。
@@ -790,24 +867,20 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     完全性は本 hook の保証範囲外であり、真の push gate である
     `block-pre-push.sh` の marker hash 検証が担う。
 
-    受容境界 (先頭 glob の operand): 固定開始を持たない token
-    (`*/run-pre-push-codex-review.sh` / `*run-pre-push-codex-review.sh` 等、先頭が
-    glob メタ文字である形) は operand でも実行形とする。これは
-    origin/master が allow していた形を含む既知の false positive
-    だが、安全側に倒す必要がある: pathname expansion は展開前の
-    段階では結果を確定できず、`--pre=` という名前のディレクトリが
-    存在すれば `*/x` は `--pre=/x` へ展開されうる。classifier が
-    照合するのは展開前の `*/x` であって展開結果ではないため、
-    prefix 一致の危険 option (`--pre=` / `--hostname-bin=` /
-    `--compress-program` の `--co`) を取りこぼす。回避形として
-    `./` を前置すれば固定開始 `.` を得て allow になる
-    (`cat ./*/run-pre-push-codex-review.sh` /
-    `git diff -- ./*run-pre-push-codex-review.sh`)。
-    根本解決には、tokenizer の信頼性を検査する rule (a)/(b) と、
-    token 値を分類に使えるかを検査する rule (c)/(d) を分離し、
-    後者を「値を実際に消費する head・option 走査対象」に限定する
-    再設計が要る。この再設計は本 decision table の deny 契約
-    (先頭 glob operand の実行形 pin) の再決定を伴うため、#357 で扱う。
+    受容境界 (option 走査対象の先頭 glob): find / rg / sort / git の
+    option 走査対象 token (barrier より前) のうち、固定開始を持たない
+    token (`*/run-pre-push-codex-review.sh` / `*run-pre-push-codex-review.sh`
+    等、先頭が glob メタ文字である形) は実行形とする。pathname expansion
+    は展開前の段階では結果を確定できず、`--pre=` という名前の
+    ディレクトリが存在すれば `*/x` は `--pre=/x` へ展開されうる。
+    classifier が照合するのは展開前の `*/x` であって展開結果ではない
+    ため、prefix 一致の危険 option (`--pre=` / `--hostname-bin=` /
+    `--compress-program` の `--co`) を取りこぼすためである。回避形は
+    2 つある: `./` を前置して固定開始 `.` を得る
+    (`rg -n marker ./*/run-pre-push-codex-review.sh`)、または barrier の
+    後ろに置く (`git diff -- *run-pre-push-codex-review.sh`)。値を消費
+    しない head の operand (`cat */run-pre-push-codex-review.sh`) は
+    意味検査の対象外のため、この境界に該当しない。
 
     `~` を含む token は共有 tokenizer が展開せずに返すため、step 3 の
     検査は bash のバージョンに依らず同じ結果になる (bash 3.2 系を含む
@@ -2288,13 +2361,25 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
 
-    def test_leading_glob_operand_without_dot_slash_is_denied(self) -> None:
-        # 受容境界の pin: 先頭 glob は固定開始が無く `--pre=` 等へ展開しうる。
+    def test_leading_glob_operand_of_cat_is_allowed(self) -> None:
+        # 値を消費しない head (cat) の operand は意味検査の対象外。
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {
                     "command": "cat */run-pre-push-codex-review.sh"
+                },
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_leading_glob_option_scan_target_is_denied(self) -> None:
+        # 受容境界の pin: rg の option 走査対象の先頭 glob は `--pre=` 等へ展開しうる。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "rg -n marker */run-pre-push-codex-review.sh"
                 },
             }
             result = self.run_hook(payload, Path(name))
@@ -2434,8 +2519,8 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
 
-    def test_leading_glob_operand_is_denied(self) -> None:
-        # 緩和 2 の境界: glob 自身が最初の寄与位置なら固定開始なしで実行形。
+    def test_leading_glob_operand_of_cat_with_second_path_is_allowed(self) -> None:
+        # 値を消費しない head (cat) の operand は、先頭 glob でも意味検査の対象外。
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
@@ -2447,14 +2532,43 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
                 },
             }
             result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_leading_glob_option_scan_target_with_second_path_is_denied(
+        self,
+    ) -> None:
+        # 緩和 2 の境界: rg の option 走査対象で glob 自身が最初の寄与位置なら実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": (
+                        "rg -n marker *.sh plugins/pre-push-codex-review/hooks/"
+                        "scripts/run-pre-push-codex-review.sh"
+                    )
+                },
+            }
+            result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
 
-    def test_leading_bracket_glob_operand_is_denied(self) -> None:
-        # 緩和 2 の境界: `[a]x/` 始まりも最初の寄与位置が glob なので実行形。
+    def test_leading_bracket_glob_operand_of_cat_is_allowed(self) -> None:
+        # 値を消費しない head (cat) の operand は `[a]x/` 始まりでも mention 候補。
         with tempfile.TemporaryDirectory() as name:
             payload = {
                 "tool_name": "Bash",
                 "tool_input": {"command": "cat [a]x/run-pre-push-codex-review.sh"},
+            }
+            result = self.run_hook(payload, Path(name))
+            self.assert_allowed(result)
+
+    def test_leading_bracket_glob_option_scan_target_is_denied(self) -> None:
+        # 緩和 2 の境界: rg の option 走査対象の `[a]x/` 始まりは固定開始なしで実行形。
+        with tempfile.TemporaryDirectory() as name:
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "rg -n marker [a]x/run-pre-push-codex-review.sh"
+                },
             }
             result = self.run_hook(payload, Path(name))
             self.assert_denied(result)
@@ -2488,6 +2602,141 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
+
+
+WRAPPER_NAME = "run-pre-push-codex-review.sh"
+
+
+@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
+    """step 3 の意味検査の適用範囲と barrier の契約テスト。
+
+    決定表の正本は BlockBgCodexWrapperExecPositionClassificationTest の
+    docstring にある。本クラスは次の 2 点を表形式で固定する:
+
+    - 意味検査 (rule (c) / (d)) は値を判定に使う token (head・timeout の
+      duration・git subcommand・find / rg / sort / git の option 走査対象)
+      にだけ適用し、値を消費しない head の operand と barrier より後ろの
+      token には適用しない
+    - rg / sort / git の option 走査は barrier `--` で止まる。直前の token
+      が `-` 始まり (値を取りうる option) の `--` と、走査済み token に
+      厳格判定を通過しないもの (redirection / glob 等) がある `--`、
+      分類前の redirection 正規化で除去が起きたコマンドの `--`、ASCII の
+      印字可能文字とタブ以外を含む segment の `--` は barrier とみなさない
+    - quote 外の `(` / `)`、quote 外または double quote 内の `${` / `$[`、
+      同じ token 内の quote 外の `$` と `{` / `}` の同居は構造検査の対象で
+      あり、値を消費しない head の operand でも実行形とする
+
+    payload は agent_type を持たないため、実行形と分類された segment は
+    deny、mention 候補は allow になる。
+    """
+
+    ALLOWED_COMMANDS = (
+        # 値を消費しない head の operand は意味検査の対象外。
+        f'cat "$HOME/{WRAPPER_NAME}"',
+        f"cat $D/{WRAPPER_NAME}",
+        f"cat {{a,b}}/{WRAPPER_NAME}",
+        f"cat ~root/{WRAPPER_NAME}",
+        f"cat ~ {WRAPPER_NAME}",
+        f"wc -l $D/{WRAPPER_NAME}",
+        # barrier より後ろの token は operand として扱う。
+        f"git diff -- *{WRAPPER_NAME}",
+        f'git diff -- "$DIR/{WRAPPER_NAME}"',
+        f"git log -- {{a,b}}/{WRAPPER_NAME}",
+        f"rg -n marker -- *{WRAPPER_NAME}",
+        f"rg -n marker -- --pre {WRAPPER_NAME}",
+        f"sort -- *{WRAPPER_NAME}",
+        # option 走査対象の escape された空白は照合を保守的にするだけなので許容する。
+        f"rg -n foo\\ bar {WRAPPER_NAME}",
+    )
+
+    DENIED_COMMANDS = (
+        # 値を取る option の直後の `--` は barrier ではなく、後続は option。
+        f"rg -e -- --pre=bash marker {WRAPPER_NAME}",
+        f"sort -o -- --compress-program=bash {WRAPPER_NAME}",
+        f"git log -S -- --ext-diff {WRAPPER_NAME}",
+        # flag の直後の `--` も保守的に barrier とみなさない。
+        f"git diff --stat -- *{WRAPPER_NAME}",
+        # redirection / glob を挟むと直前の shell token が argv word と対応しない
+        # ため、`--` を barrier とみなさない。
+        f"rg -e >x -- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e > x -- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e 2>x -- --pre=bash marker {WRAPPER_NAME}",
+        f"sort -o >x -- --compress-program=bash {WRAPPER_NAME}",
+        f"git log -S >x -- --ext-diff {WRAPPER_NAME}",
+        f"rg -e x* -- --pre=bash marker {WRAPPER_NAME}",
+        # 分類前の redirection 正規化で除去が起きたコマンドでは barrier を使わない
+        # (書き込み先の残りが通常の token として残り、argv word と対応しない)。
+        f'rg -e >>x"y" -- --pre=bash marker {WRAPPER_NAME}',
+        f"rg -e 12>>x -- --pre=bash marker {WRAPPER_NAME}",
+        f'sort -o >>x"y" -- --compress-program=bash {WRAPPER_NAME}',
+        f'git log -S >>x"y" -- --ext-diff {WRAPPER_NAME}',
+        f"git diff -- *{WRAPPER_NAME} 2>&1",
+        # escape された空白で tokenizer が過分割した token の直後の `--` は、bash
+        # 上では前の word に連結されるため barrier とみなさない。
+        f"rg -e x\\ -- --pre=bash marker {WRAPPER_NAME}",
+        f"sort -o x\\ -- --compress-program=bash {WRAPPER_NAME}",
+        f"git log -S x\\ -- --ext-diff {WRAPPER_NAME}",
+        # bash が word 区切りにしない空白 (CR / FF / VT / 非 ASCII の空白) を含む
+        # segment では barrier を使わない。
+        f"rg -e x\r-- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e x\f-- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e x\v-- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e x -- --pre=bash marker {WRAPPER_NAME}",
+        f"sort -o x\r-- --compress-program=bash {WRAPPER_NAME}",
+        f"git log -S x\r-- --ext-diff {WRAPPER_NAME}",
+        # quote 外の `(` / `)` は値を消費しない head の operand でも構造検査で捕捉する。
+        f"f () ( bash {WRAPPER_NAME} )",
+        f"cat x ( {WRAPPER_NAME} )",
+        # `${...}` / `$[...]` は評価を伴いうるため、値を消費しない head の operand
+        # でも構造検査で捕捉する。
+        f"cat ${{a['$(bash {WRAPPER_NAME})']}}",
+        f"cat \"${{a['$(bash {WRAPPER_NAME})']}}\"",
+        f"cat ${{x@P}} {WRAPPER_NAME}",
+        f"cat \"${{HOME}}/{WRAPPER_NAME}\"",
+        f"cat $[a['$(bash {WRAPPER_NAME})']]",
+        # brace expansion で `${` / `$[` を合成する形も構造検査で捕捉する。
+        f"cat {{$,x}}{{a['$(bash {WRAPPER_NAME})']}}",
+        f"cat {{$,x}}[a['$(bash {WRAPPER_NAME})']]",
+        f"git diff -- {{$,x}}{{a['$(bash {WRAPPER_NAME})']}}",
+        # find は option 終端が無いため全 tail を意味検査する。
+        f"find plugins -name *{WRAPPER_NAME}",
+        # barrier より前の option 走査対象は意味検査の対象。
+        f'rg -n marker "$HOME/{WRAPPER_NAME}"',
+        f"rg -n {{--pre=bash,x}} {WRAPPER_NAME}",
+        # timeout の duration と git subcommand は厳格判定。
+        f"timeout {{1,2}} cat {WRAPPER_NAME}",
+        f"git {{diff,push}} {WRAPPER_NAME}",
+        # head は厳格判定のまま。
+        f"~/bin/cat {WRAPPER_NAME}",
+        f"$X {WRAPPER_NAME}",
+    )
+
+    def decision(self, command: str) -> str:
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}}
+        with tempfile.TemporaryDirectory() as name:
+            result = subprocess.run(
+                ["bash", str(HOOK)],
+                input=json.dumps(payload).encode("utf-8"),
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=name,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        if result.stdout == b"":
+            return "allow"
+        return json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+    def test_commands_outside_semantic_check_scope_are_allowed(self) -> None:
+        for command in self.ALLOWED_COMMANDS:
+            with self.subTest(command=command):
+                self.assertEqual(self.decision(command), "allow")
+
+    def test_commands_within_semantic_check_scope_are_denied(self) -> None:
+        for command in self.DENIED_COMMANDS:
+            with self.subTest(command=command):
+                self.assertEqual(self.decision(command), "deny")
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")

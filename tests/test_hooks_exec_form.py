@@ -263,7 +263,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "enforce-draft-pr": "0.5.5",
     "auto-lint-check": "0.8.0",
     "pre-push-review": "6.1.1",
-    "pre-push-codex-review": "2.2.1",
+    "pre-push-codex-review": "2.2.2",
     "pre-merge-codex-review": "2.2.1",
     "update-default-branch": "0.4.2",
     "natsuume-statusline": "0.10.3",
