@@ -65,13 +65,20 @@
 #   次がいずれも許可ルート配下 (パス境界での前方一致。ルート自身を含む) にあること:
 #     - <ABS> の canonical 実パス (`cd -P && pwd -P`)
 #     - <ABS> で実行した `git rev-parse --git-common-dir` / `--git-dir` の canonical 実パス
-#     - common-dir 直下の `refs` / `objects` / `HEAD` / `packed-refs` / `logs` と、
-#       worktree 固有 git dir 直下の `HEAD` / `index` のうち存在するものの実体
-#       (ディレクトリは canonical 実パス。ファイルは自体が symlink なら不可、それ以外は
-#       親 dir の canonical 実パス)
-#     - HEAD が指す branch ref の格納先ディレクトリ (未作成なら存在する最も近い祖先)。
-#       ref ファイル自体が symlink なら不可。detached HEAD なら検査しない
+#     - common-dir 直下の `refs` / `objects` / `HEAD` / `packed-refs` / `logs` /
+#       `reftable` と、worktree 固有 git dir 直下の `HEAD` / `index` / `reftable` のうち
+#       存在するものの実体 (ディレクトリは canonical 実パス。ファイルは自体が symlink なら
+#       不可、それ以外は親 dir の canonical 実パス)
+#     - branch ref の格納先。ref 格納形式 (`git rev-parse --show-ref-format`。このオプション
+#       に対応しない古い git では files とみなす) で分ける:
+#         files: HEAD が指す ref (`git symbolic-ref -q HEAD`) の ref ファイルの親
+#           ディレクトリ (未作成なら存在する最も近い祖先)。ref ファイル自体が symlink なら
+#           不可。detached HEAD なら検査しない
+#         reftable: common-dir 直下の `reftable` ディレクトリ (存在しなければ不可)
+#         それ以外の形式: 不可
 #   objects / logs 配下の深い階層の symlink は検査しない (branch は動かないため)。
+#   パス・git の出力に LF / CR が含まれる場合は不可。コマンド置換で受け取る値には番兵文字を
+#   付け、コマンド置換が末尾の改行を全て削ることで値が別のパス・ref 名に化けるのを防ぐ。
 #
 # ## 許可ルート
 #
@@ -224,16 +231,17 @@ _ict_bare_is() {
 }
 
 # 引数: <index>
-# stdout: `git -C <ABS>` の <ABS>
-# 戻り値: 0 = <index> から `git -C <ABS>` の 3 語が並ぶ / 1 = それ以外
+# 戻り値: 0 = <index> から `git -C <ABS>` の 3 語が並ぶ (<ABS> を _ICT_PREFIX_ABS に設定) /
+#         1 = それ以外
 _ict_git_c_prefix_at() {
   local index="$1"
+  _ICT_PREFIX_ABS=""
   _ict_bare_is "$index" "git" || return 1
   _ict_bare_is $((index+1)) "-C" || return 1
   [ $((index+2)) -lt "${#_ICT_KINDS[@]}" ] || return 1
   [ "${_ICT_KINDS[$((index+2))]}" = "B" ] || return 1
   _ict_is_abs_path "${_ICT_VALUES[$((index+2))]}" || return 1
-  printf '%s' "${_ICT_VALUES[$((index+2))]}"
+  _ICT_PREFIX_ABS="${_ICT_VALUES[$((index+2))]}"
 }
 
 # 引数: <start> <end> (_ICT_* の半開区間 [start, end))
@@ -288,15 +296,17 @@ _ict_add_args_ok() {
 }
 
 # 引数: <command>
-# stdout: 一致したテンプレートの対象 dir (`-C` の値)
-# 戻り値: 0 = <command> 全体が T1 / T2 に完全一致 / 1 = それ以外
-isolated_commit_template_target() {
+# 戻り値: 0 = <command> 全体が T1 / T2 に完全一致 (対象 dir を _ICT_TARGET に設定) /
+#         1 = それ以外
+_ict_match_template() {
   local cmd="$1"
-  local count abs second_abs op_index i
+  local count abs op_index i
+  _ICT_TARGET=""
   _ict_tokenize "$cmd" || return 1
   count=${#_ICT_KINDS[@]}
 
-  abs="$(_ict_git_c_prefix_at 0)" || return 1
+  _ict_git_c_prefix_at 0 || return 1
+  abs="$_ICT_PREFIX_ABS"
 
   op_index=-1
   i=0
@@ -316,98 +326,166 @@ isolated_commit_template_target() {
     # T2: git -C <ABS> add <ADD_ARGS> && git -C <ABS> commit <COMMIT_ARGS>
     _ict_bare_is 3 "add" || return 1
     _ict_add_args_ok 4 "$op_index" || return 1
-    second_abs="$(_ict_git_c_prefix_at $((op_index+1)))" || return 1
-    [ "$second_abs" = "$abs" ] || return 1
+    _ict_git_c_prefix_at $((op_index+1)) || return 1
+    [ "$_ICT_PREFIX_ABS" = "$abs" ] || return 1
     _ict_bare_is $((op_index+4)) "commit" || return 1
     _ict_commit_args_ok $((op_index+5)) "$count" || return 1
   fi
-  printf '%s\n' "$abs"
+  _ICT_TARGET="$abs"
+}
+
+# 引数: <command>
+# stdout: 一致したテンプレートの対象 dir (`-C` の値)
+# 戻り値: 0 = <command> 全体が T1 / T2 に完全一致 / 1 = それ以外
+isolated_commit_template_target() {
+  _ict_match_template "$1" || return 1
+  printf '%s\n' "$_ICT_TARGET"
+}
+
+# 引数: <value>
+# 戻り値: 0 = <value> が LF / CR を含む / 1 = 含まない
+_ict_has_newline() {
+  local nl=$'\n' cr=$'\r'
+  case "$1" in
+    *"$nl"*|*"$cr"*) return 0 ;;
+  esac
+  return 1
 }
 
 # 引数: <path> (絶対パス)
-# stdout: 既存ディレクトリなら canonical 実パス (`cd -P && pwd -P`)
-# 戻り値: 0 = 解決できた / 1 = 解決できない (相対パス・存在しない・ディレクトリでない・
-#         権限不足・改行を含む)
+# 戻り値: 0 = 既存ディレクトリで canonical 実パス (`cd -P && pwd -P`) を _ICT_CANONICAL に
+#         設定した / 1 = 解決できない (相対パス・存在しない・ディレクトリでない・権限不足・
+#         入力または結果が LF / CR を含む)
+#
+# `pwd -P` の出力は番兵文字を付けてコマンド置換で受け取り、番兵と `pwd` 自身が付ける末尾
+# 改行 1 個だけを除去する (コマンド置換が末尾の改行を全て削ることで、名前が改行で終わる
+# ディレクトリの実パスが別のパスに化けるのを防ぐため)。
 _ict_canonical_dir() {
   local path="$1"
   local resolved
   local nl=$'\n'
+  _ICT_CANONICAL=""
   case "$path" in
     /*) ;;
     *) return 1 ;;
   esac
+  _ict_has_newline "$path" && return 1
   [ -d "$path" ] || return 1
-  resolved="$(cd -P -- "$path" 2>/dev/null && pwd -P)" || return 1
+  resolved="$(cd -P -- "$path" 2>/dev/null && pwd -P && printf x)" || return 1
+  case "$resolved" in
+    *x) resolved="${resolved%x}" ;;
+    *) return 1 ;;
+  esac
+  case "$resolved" in
+    *"$nl") resolved="${resolved%"$nl"}" ;;
+    *) return 1 ;;
+  esac
   case "$resolved" in
     /*) ;;
     *) return 1 ;;
   esac
-  case "$resolved" in
-    *"$nl"*) return 1 ;;
-  esac
-  printf '%s' "$resolved"
+  _ict_has_newline "$resolved" && return 1
+  _ICT_CANONICAL="$resolved"
 }
 
-# stdout: 有効な許可ルートの canonical 実パスを 1 行 1 件
-# 戻り値: 0 = 1 件以上ある / 1 = 無い
+# 引数: <dir> <git の引数...>
+# 戻り値: git の終了コード (出力を _ICT_GIT_OUT に設定) / 125 = <dir> に移動できない /
+#         126 = 出力が番兵付きで受け取れない、または git 自身が付ける末尾改行 1 個を除いた
+#         出力に LF / CR が残る
+#
+# git の出力は番兵文字を付けてコマンド置換で受け取り、番兵と末尾改行 1 個だけを除去する
+# (パスや ref 名が改行で終わる場合に、コマンド置換の末尾改行削除で別の値に化けるのを
+# 防ぐため)。git の標準エラー出力は捨てる。
+_ict_git_line() {
+  local dir="$1"
+  local out status
+  local nl=$'\n'
+  shift
+  _ICT_GIT_OUT=""
+  out="$(
+    cd -P -- "$dir" 2>/dev/null || exit 125
+    git "$@" 2>/dev/null
+    git_status=$?
+    printf x
+    exit "$git_status"
+  )"
+  status=$?
+  [ "$status" -eq 125 ] && return 125
+  case "$out" in
+    *x) out="${out%x}" ;;
+    *) return 126 ;;
+  esac
+  case "$out" in
+    *"$nl") out="${out%"$nl"}" ;;
+  esac
+  _ict_has_newline "$out" && return 126
+  _ICT_GIT_OUT="$out"
+  return "$status"
+}
+
+# 戻り値: 0 = 有効な許可ルートが 1 件以上ある (canonical 実パスを 1 行 1 件で
+#         _ICT_ROOT_LIST に設定) / 1 = 無い
 _ict_roots() {
   local rest="${CLAUDE_ISOLATED_GIT_ROOTS:-}"
-  local entry canonical
-  local found=1
+  local entry
+  local nl=$'\n'
+  _ICT_ROOT_LIST=""
   [ -n "$rest" ] || return 1
   rest="$rest:"
   while [ -n "$rest" ]; do
     entry="${rest%%:*}"
     rest="${rest#*:}"
-    canonical="$(_ict_canonical_dir "$entry")" || continue
-    printf '%s\n' "$canonical"
-    found=0
+    _ict_canonical_dir "$entry" || continue
+    _ICT_ROOT_LIST="$_ICT_ROOT_LIST$_ICT_CANONICAL$nl"
   done
-  return "$found"
+  [ -n "$_ICT_ROOT_LIST" ]
 }
 
-# 引数: <path> <roots> (<path> は canonical 実パス、<roots> は _ict_roots の出力)
-# 戻り値: 0 = <path> がいずれかの root 自身または配下 (パス境界で前方一致) / 1 = それ以外
+# 引数: <path> (canonical 実パス)
+# 戻り値: 0 = <path> が _ICT_ROOT_LIST のいずれかの root 自身または配下 (パス境界で前方
+#         一致) / 1 = それ以外
 _ict_within_roots() {
   local path="$1"
-  local roots="$2"
   local root
   case "$path" in
     /*) ;;
     *) return 1 ;;
   esac
+  _ict_has_newline "$path" && return 1
   while IFS= read -r root; do
     [ -n "$root" ] || continue
     [ "$root" = "/" ] && return 0
     case "$path" in
       "$root"|"$root"/*) return 0 ;;
     esac
-  done <<< "$roots"
+  done <<< "$_ICT_ROOT_LIST"
   return 1
 }
 
-# 引数: <path> <roots> (<path> は canonical 化した git dir 直下の entry)
+# 引数: <path> (canonical 化した git dir 直下の entry)
 # 戻り値: 0 = <path> が存在しない、または実体が許可ルート配下 / 1 = それ以外
+#
+# ディレクトリ (symlink 経由を含む) は canonical 実パスで判定する。ファイルはそれ自体が
+# symlink (リンク切れを含む) なら 1、そうでなければ親 dir の canonical 実パスで判定する。
 _ict_git_entry_within_roots() {
   local path="$1"
-  local roots="$2"
-  local canonical
   if [ -d "$path" ]; then
-    canonical="$(_ict_canonical_dir "$path")" || return 1
-    _ict_within_roots "$canonical" "$roots"
+    _ict_canonical_dir "$path" || return 1
+    _ict_within_roots "$_ICT_CANONICAL"
     return
   fi
   [ -L "$path" ] && return 1
   [ -e "$path" ] || return 0
-  canonical="$(_ict_canonical_dir "${path%/*}")" || return 1
-  _ict_within_roots "$canonical" "$roots"
+  _ict_canonical_dir "${path%/*}" || return 1
+  _ict_within_roots "$_ICT_CANONICAL"
 }
 
 # 引数: <git-dir-path> <dir> (<git-dir-path> は rev-parse の出力。相対なら <dir> 基準)
-# stdout: canonical 実パス
+# 戻り値: 0 = canonical 実パスを _ICT_CANONICAL に設定した / 1 = 解決できない
 _ict_canonical_git_dir() {
   local path="$1"
   local dir="$2"
+  _ICT_CANONICAL=""
   [ -n "$path" ] || return 1
   case "$path" in
     /*) ;;
@@ -416,17 +494,60 @@ _ict_canonical_git_dir() {
   _ict_canonical_dir "$path"
 }
 
-# 引数: <dir> <canonical_common_dir> <roots>
+# 引数: <dir>
+# 戻り値: 0 = ref 格納形式を _ICT_REF_FORMAT に設定した / 1 = 取得できない
+#
+# `git rev-parse --show-ref-format` の出力を使う。このオプションに対応しない古い git
+# (オプションを解釈せずそのまま出力する、または失敗する) では `files` とみなす (古い git
+# は reftable 形式の repo を扱えず、その場合は rev-parse --git-common-dir の時点で失敗する
+# ため)。
+_ict_ref_format() {
+  local dir="$1"
+  local status
+  _ICT_REF_FORMAT=""
+  _ict_git_line "$dir" rev-parse --show-ref-format
+  status=$?
+  case "$status" in
+    0)
+      case "$_ICT_GIT_OUT" in
+        --show-ref-format) _ICT_REF_FORMAT="files" ;;
+        *) _ICT_REF_FORMAT="$_ICT_GIT_OUT" ;;
+      esac
+      ;;
+    125|126) return 1 ;;
+    *) _ICT_REF_FORMAT="files" ;;
+  esac
+  [ -n "$_ICT_REF_FORMAT" ]
+}
+
+# 引数: <dir> <canonical_common_dir>
 # 戻り値: 0 = HEAD が指す branch ref の格納先が許可ルート配下 (detached HEAD を含む) /
 #         1 = それ以外
+#
+# ref 格納形式が files の場合は、HEAD が指す ref 名 (`git symbolic-ref -q HEAD`) の ref
+# ファイルが symlink でなく、その親ディレクトリ (未作成なら存在する最も近い祖先) の
+# canonical 実パスが許可ルート配下であることを要求する。reftable の場合は loose ref を
+# 使わないため、common-dir 直下の `reftable` ディレクトリの canonical 実パスが許可ルート
+# 配下であることを要求する。それ以外の形式は 1 を返す。
 _ict_head_ref_within_roots() {
   local dir="$1"
   local canonical_common_dir="$2"
-  local roots="$3"
-  local ref_name ref_status ref_path parent canonical_parent
-  local nl=$'\n'
-  ref_name="$(cd -P -- "$dir" 2>/dev/null && git symbolic-ref -q HEAD 2>/dev/null)"
+  local ref_name ref_status ref_path parent
+  _ict_ref_format "$dir" || return 1
+  case "$_ICT_REF_FORMAT" in
+    files) ;;
+    reftable)
+      [ -d "$canonical_common_dir/reftable" ] || return 1
+      _ict_canonical_dir "$canonical_common_dir/reftable" || return 1
+      _ict_within_roots "$_ICT_CANONICAL"
+      return
+      ;;
+    *) return 1 ;;
+  esac
+
+  _ict_git_line "$dir" symbolic-ref -q HEAD
   ref_status=$?
+  ref_name="$_ICT_GIT_OUT"
   [ "$ref_status" -eq 1 ] && [ -z "$ref_name" ] && return 0
   [ "$ref_status" -eq 0 ] || return 1
   case "$ref_name" in
@@ -434,7 +555,7 @@ _ict_head_ref_within_roots() {
     *) return 1 ;;
   esac
   case "/$ref_name/" in
-    */../*|*"$nl"*) return 1 ;;
+    */../*) return 1 ;;
   esac
   ref_path="$canonical_common_dir/$ref_name"
   [ -L "$ref_path" ] && return 1
@@ -444,53 +565,48 @@ _ict_head_ref_within_roots() {
     parent="${parent%/*}"
     [ -n "$parent" ] || return 1
   done
-  canonical_parent="$(_ict_canonical_dir "$parent")" || return 1
-  _ict_within_roots "$canonical_parent" "$roots"
+  _ict_canonical_dir "$parent" || return 1
+  _ict_within_roots "$_ICT_CANONICAL"
 }
 
-# 引数: <abs> <roots>
+# 引数: <abs>
 # 戻り値: 0 = 対象 repo 検査 (ヘッダの「対象 repo 検査」) を全て満たす / 1 = それ以外
+# 許可ルートは _ICT_ROOT_LIST を使う (_ict_roots で設定済みであること)。
 _ict_repo_is_within_roots() {
   local abs="$1"
-  local roots="$2"
-  local dir rev_parse_output common_dir git_dir canonical_common_dir canonical_git_dir
-  local entry
-  local nl=$'\n'
-  dir="$(_ict_canonical_dir "$abs")" || return 1
-  _ict_within_roots "$dir" "$roots" || return 1
-  rev_parse_output="$(cd -P -- "$dir" 2>/dev/null \
-    && git rev-parse --git-common-dir --git-dir 2>/dev/null)" || return 1
-  common_dir="${rev_parse_output%%"$nl"*}"
-  git_dir="${rev_parse_output#*"$nl"}"
-  [ "$common_dir" != "$rev_parse_output" ] || return 1
-  case "$git_dir" in
-    *"$nl"*) return 1 ;;
-  esac
-  canonical_common_dir="$(_ict_canonical_git_dir "$common_dir" "$dir")" || return 1
-  canonical_git_dir="$(_ict_canonical_git_dir "$git_dir" "$dir")" || return 1
-  _ict_within_roots "$canonical_common_dir" "$roots" || return 1
-  for entry in refs objects HEAD packed-refs logs; do
-    _ict_git_entry_within_roots "$canonical_common_dir/$entry" "$roots" || return 1
+  local dir canonical_common_dir canonical_git_dir entry
+  _ict_canonical_dir "$abs" || return 1
+  dir="$_ICT_CANONICAL"
+  _ict_within_roots "$dir" || return 1
+  _ict_git_line "$dir" rev-parse --git-common-dir || return 1
+  _ict_canonical_git_dir "$_ICT_GIT_OUT" "$dir" || return 1
+  canonical_common_dir="$_ICT_CANONICAL"
+  _ict_git_line "$dir" rev-parse --git-dir || return 1
+  _ict_canonical_git_dir "$_ICT_GIT_OUT" "$dir" || return 1
+  canonical_git_dir="$_ICT_CANONICAL"
+  _ict_within_roots "$canonical_common_dir" || return 1
+  for entry in refs objects HEAD packed-refs logs reftable; do
+    _ict_git_entry_within_roots "$canonical_common_dir/$entry" || return 1
   done
   if [ "$canonical_git_dir" != "$canonical_common_dir" ]; then
-    for entry in HEAD index; do
-      _ict_git_entry_within_roots "$canonical_git_dir/$entry" "$roots" || return 1
+    for entry in HEAD index reftable; do
+      _ict_git_entry_within_roots "$canonical_git_dir/$entry" || return 1
     done
   fi
-  _ict_head_ref_within_roots "$dir" "$canonical_common_dir" "$roots"
+  _ict_head_ref_within_roots "$dir" "$canonical_common_dir"
 }
 
 # 引数: <command>
 # 戻り値: 0 = 免除する / 1 = 免除しない (条件はヘッダの「公開関数」を参照)
 isolated_commit_template_exempts() {
   local cmd="$1"
-  local roots abs name
+  local name
   [ -n "${CLAUDE_ISOLATED_GIT_ROOTS:-}" ] || return 1
   for name in $_ICT_FORBIDDEN_ENV_NAMES; do
     eval "[ -z \"\${$name+set}\" ]" || return 1
   done
-  roots="$(_ict_roots)" || return 1
-  abs="$(isolated_commit_template_target "$cmd")" || return 1
-  [ -n "$abs" ] || return 1
-  _ict_repo_is_within_roots "$abs" "$roots"
+  _ict_roots || return 1
+  _ict_match_template "$cmd" || return 1
+  [ -n "$_ICT_TARGET" ] || return 1
+  _ict_repo_is_within_roots "$_ICT_TARGET"
 }

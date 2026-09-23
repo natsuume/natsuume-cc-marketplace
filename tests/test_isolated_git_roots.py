@@ -822,5 +822,139 @@ class CodexConfirmedBypassIsolatedRootsTest(IsolatedGitRootsTestBase):
         )
 
 
+class NewlineSuffixedPathIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """名前が改行で終わるディレクトリを、改行を落とした別パスとして検証しない。
+
+    許可ルート配下に隔離 repo `iso` と、名前が改行で終わる兄弟 `iso<LF>` を置く。
+    `iso<LF>` の `.git` はルート外 repo の `.git` への symlink。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.newline_dir = self.allowed_root / "iso\n"
+        self.newline_dir.mkdir()
+        (self.newline_dir / ".git").symlink_to(
+            self.outside_repo / ".git", target_is_directory=True
+        )
+
+    def call_template_function(
+        self, function: str, *args: str
+    ) -> subprocess.CompletedProcess[str]:
+        script = (
+            f'source "{GG_TEMPLATE_LIB}" && {function} "$@" && '
+            'printf "%s" "$_ICT_CANONICAL"'
+        )
+        env = dict(self.env)
+        env[ISOLATED_ROOTS_ENV] = str(self.allowed_root)
+        return subprocess.run(
+            ["bash", "-c", script, "bash", *args],
+            cwd=str(self.real_repo),
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+
+    def test_canonical_dir_rejects_path_ending_with_newline(self) -> None:
+        result = self.call_template_function(
+            "_ict_canonical_dir", str(self.newline_dir)
+        )
+
+        self.assertEqual(1, result.returncode, result.stderr)
+
+    def test_canonical_dir_rejects_symlink_resolving_to_newline_suffixed_dir(
+        self,
+    ) -> None:
+        link = self.allowed_root / "lnk"
+        link.symlink_to(self.newline_dir, target_is_directory=True)
+
+        result = self.call_template_function("_ict_canonical_dir", str(link))
+
+        self.assertEqual(1, result.returncode, result.stderr)
+
+    def test_canonical_dir_accepts_sibling_without_newline(self) -> None:
+        result = self.call_template_function("_ict_canonical_dir", str(self.iso_repo))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(str(self.iso_repo.resolve()), result.stdout)
+
+    def test_template_via_symlink_to_newline_suffixed_repo_is_denied(self) -> None:
+        link = self.allowed_root / "lnk"
+        link.symlink_to(self.newline_dir, target_is_directory=True)
+
+        for hook in (GG_COMMIT_HOOK, AL_COMMIT_HOOK):
+            with self.subTest(hook=hook.name):
+                result = self.run_hook(
+                    hook,
+                    f"git -C {link} commit -m x",
+                    roots=str(self.allowed_root),
+                )
+
+                reason = self.deny_reason(result)
+                if hook == AL_COMMIT_HOOK:
+                    self.assertIn("repo override", reason)
+
+
+class ReftableIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """reftable 形式の隔離 repo は `reftable` ディレクトリの実体で判定する (GG / AL 共通)。"""
+
+    HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.reftable_repo = self.allowed_root / "reftable-iso"
+        self.reftable_repo.mkdir()
+        init = subprocess.run(
+            ["git", "-C", str(self.reftable_repo), "init", "--ref-format=reftable"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        if init.returncode != 0:
+            self.skipTest(f"git が reftable 形式に未対応: {init.stderr.strip()}")
+        self.git(self.reftable_repo, "symbolic-ref", "HEAD", "refs/heads/master")
+        self.git(self.reftable_repo, "config", "user.name", "Marketplace Test")
+        self.git(
+            self.reftable_repo, "config", "user.email", "marketplace@example.invalid"
+        )
+        self.git(self.reftable_repo, "config", "commit.gpgsign", "false")
+        self.git(self.reftable_repo, "commit", "--allow-empty", "-m", "base")
+        self.assertEqual(
+            "reftable",
+            self.git(self.reftable_repo, "rev-parse", "--show-ref-format"),
+        )
+
+    def test_template_commit_into_reftable_repo_is_allowed(self) -> None:
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name):
+                result = self.run_hook(
+                    hook,
+                    f"git -C {self.reftable_repo} commit -m x",
+                    roots=str(self.allowed_root),
+                )
+
+                self.assert_allowed(result)
+
+    def test_reftable_dir_symlinked_outside_is_denied(self) -> None:
+        reftable = self.reftable_repo / ".git" / "reftable"
+        moved = self.base / "outside" / "reftable-store"
+        shutil.move(str(reftable), str(moved))
+        reftable.symlink_to(moved, target_is_directory=True)
+
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name):
+                result = self.run_hook(
+                    hook,
+                    f"git -C {self.reftable_repo} commit -m x",
+                    roots=str(self.allowed_root),
+                )
+
+                reason = self.deny_reason(result)
+                if hook == AL_COMMIT_HOOK:
+                    self.assertIn("repo override", reason)
+
+
 if __name__ == "__main__":
     unittest.main()
