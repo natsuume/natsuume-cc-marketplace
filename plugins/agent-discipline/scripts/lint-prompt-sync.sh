@@ -101,7 +101,7 @@
 #
 #   (a) 対象コマンド名の記載箇所:
 #       - 冒頭段落中の `` `if: "Bash(gh <cmd>:*)"` `` という参照
-#       - Step 0 本文中の 2 箇所: `` `gh <cmd>` literal がある `` (手順 1 の command 置換内判定) /
+#       - Step 0 本文中の 2 箇所: `` `gh <cmd>` literal が command として実行される `` (手順 1 の command 置換内判定) /
 #         `` `gh <cmd>` literal で始まる `` (手順 4 の検証対象判定)
 #       手順 1 の `` `"gh" issue create` `` は全 entry 共通の固定例であり (引用符で分断されて
 #       いるため `gh <cmd>` を含まない)、 置換対象にならず共通ブロックに残る。

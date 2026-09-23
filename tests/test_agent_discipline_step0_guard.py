@@ -11,7 +11,8 @@ best-effort であり、compound command の各 subcommand と env-prefix を剥
 
 - (A) 各 entry の Step 0 節が正典文 (`STEP0_CANONICAL_TEMPLATE`) と空白除去後に完全一致する
 - (B) 各 entry の Step 1 節が、hook 時点で存在しない `--body-file` を `ok: false` とする
-  規則 (`STEP1_TOCTOU_RULE`) を含む
+  規則 (`STEP1_TOCTOU_RULE`) と、先行する `cd <dir>` を基準に相対 PATH を解決する規則
+  (`STEP1_RELATIVE_PATH_RULE`) を含む
 - (C) 各 entry の prompt が、command 全体の先頭 literal だけで判定する Step 0 の語と、
   `if` filter を fail-permissive と説明する冒頭段落の語を含まず、冒頭段落が
   `best-effort` を述べる
@@ -80,7 +81,7 @@ STEP0_CANONICAL_TEMPLATE = """\
 
 本 prompt 末尾の `## Hook input` セクションに hook input JSON が `$ARGUMENTS` 経由で interpolate されている。 そこから `tool_input.command` フィールドを取り出し、 以下の手順で検証対象の subcommand を決める。 hook config の `if` filter は best-effort であり、 compound command の各 subcommand と env-prefix を剥がした command は正規に評価される一方、 `$(...)` / バッククォート / `$VAR` を含む Bash では対象外でも本 hook が起動しうる。
 
-1. まず command 全体を見て、 `$(...)` / バッククォートの内側に `gh <cmd>` literal がある場合、 または literal が引用符で分断されている (`"gh" issue create` のような形) 場合は、 body を静的に判定できないため `{"ok": false, "reason": "body を静的な文字列 (--body の直接指定、 または既存ファイルへの --body-file) で渡す形に書き直すこと"}` を返して終了する (以降の手順には進まない)。
+1. まず command 全体を見て、 shell が実際に実行する command 置換 (`$(...)` / バッククォート) の中で `gh <cmd>` literal が command として実行される場合、 または subcommand の command 語の位置で literal が引用符で分断されている (`"gh" issue create` のような形) 場合は、 body を静的に判定できないため `{"ok": false, "reason": "body を静的な文字列 (--body の直接指定、 または既存ファイルへの --body-file) で渡す形に書き直すこと"}` を返して終了する (以降の手順には進まない)。 single quote の内側と、 引用符付き delimiter の heredoc 本文 (`<<'EOF'` 等) の内側は shell が実行しないため、 そこに現れる `$(...)` / バッククォートや、 引数・body 本文の中で command 名に言及しているだけの文字列はこれに当たらない。
 2. command を区切り (`&&` / `||` / `;` / `|` / 改行) で subcommand に分割する。 引用符 (`'...'` / `"..."`) の内側と heredoc 本文 (`<<EOF` から終端 `EOF` まで) の内側にある区切りでは分割しない。
 3. 各 subcommand の先頭にある `VAR=value` 群 (env-prefix) と wrapper (`command` / `env` / `sudo`) を剥がす。
 4. 剥がした後の subcommand が **`gh <cmd>` literal で始まる** ものを検証対象とする。 alias / 別 command / global option を subcommand の前に置く形式 (`gh -R owner/repo ...`) は対象にしない。
@@ -96,6 +97,13 @@ STEP1_TOCTOU_RULE = (
     "body を静的に判定できないため "
     '{"ok": false, "reason": "body file を別の Bash 呼び出しで先に生成するか、 '
     '--body の静的文字列で渡すこと"} を返す'
+)
+
+# Step 1 節が含む、相対 PATH の解決基準。同じ command 内で先行する `cd <dir>` がある
+# 場合はその dir を基準に解決し、存在する body file を不在と誤判定しない。
+STEP1_RELATIVE_PATH_RULE = (
+    "PATH が相対パスで、 同じ command 内でその subcommand より前に `cd <dir>` の "
+    "subcommand がある場合は、 その dir を基準に PATH を解決してから Read する"
 )
 
 # command 全体の先頭 literal だけで判定する Step 0 の語。prompt 全文に置かない。
@@ -396,6 +404,12 @@ class Step1ToctouRuleTest(ContractTestCase):
                         self.fail(
                             f"{label}: Step 1 節に TOCTOU 規則 (STEP1_TOCTOU_RULE) が無い: "
                             f"{STEP1_TOCTOU_RULE}"
+                        )
+                    if not contains(section, STEP1_RELATIVE_PATH_RULE):
+                        self.fail(
+                            f"{label}: Step 1 節に相対 PATH の解決規則 "
+                            f"(STEP1_RELATIVE_PATH_RULE) が無い: "
+                            f"{STEP1_RELATIVE_PATH_RULE}"
                         )
 
 
