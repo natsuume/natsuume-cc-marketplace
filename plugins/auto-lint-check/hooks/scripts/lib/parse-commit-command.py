@@ -350,24 +350,56 @@ def _strip_safe_heredocs(command: str) -> str:
     return stripped
 
 
+def _strip_heredoc_bodies(command: str) -> str:
+    """heredoc の本文行と終端行を command から除去し、演算子の行は残す。
+
+    heredoc 本文はシェルコマンドではなくデータなので、本文中に
+    ``(git commit)`` のような文字列があっても commit invocation として
+    トークン化されないよう、トークン化の前に取り除く。
+
+    契約:
+
+    - 引用符の外にある ``<<WORD`` / ``<<-WORD`` / ``<<'WORD'`` /
+      ``<<"WORD"`` を heredoc 演算子として検出する。``<<<`` (here-string)
+      は heredoc として扱わない
+    - 演算子を含む行の次の行から、``WORD`` (引用符を外した文字列) と完全
+      一致する行までを本文として除去する。終端行自体も除去する。
+      ``<<-`` の場合は各行の先頭タブを除去してから終端判定する。
+      ``EOFX`` のような部分一致行は終端にしない
+    - 同一行に複数の演算子がある場合 (``cmd <<A <<B``) は、演算子の出現順
+      に本文を消費する
+    - 終端行が見つからない場合は、演算子の行より後ろの全行を本文として
+      除去する (parse failure にしない)
+    - 引用符なしの ``WORD`` の本文は bash が展開する (``$(...)`` / backtick
+      が実行される) ため、本文に ``$(`` または backtick を含む場合は除去
+      せず残し、後段の substitution fail-closed 判定 (exit 3) に委ねる
+
+    ``_strip_safe_heredocs`` の後に呼ぶこと (``-m "$(cat <<'EOF' ... EOF)"``
+    の本文を先に除去すると ``_HEREDOC_CAT_RE`` が一致しなくなる)。
+    """
+    return command
+
+
 def _normalize_command(command: str) -> str:
     """hook script から渡された raw command を shlex tokenize 可能な形に整形する。
 
-    順序が重要 (heredoc は real newline に依存するため step 1-2 を先に処理):
+    順序が重要 (heredoc は real newline に依存するため step 1-3 を先に処理):
 
     1. CRLF (``\\r\\n``) を LF (``\\n``) に正規化 (Windows / WSL クライアント
        からの input でも heredoc 検出と shlex tokenize が正しく動くように)
     2. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
-    3. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
-    4. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
+    3. 残りの heredoc の本文行を除去 (``_strip_heredoc_bodies``)
+    4. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
+    5. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
 
     bash 側 (block-commit-lint.sh / post-commit-lint.sh) はこの関数に依存
     して raw command を渡してくる前提。bash 側で先に改行を ``;`` に潰すと
-    heredoc 構造が壊れて step 2 が機能しなくなるため、両 hook の正規化は
+    heredoc 構造が壊れて step 2-3 が機能しなくなるため、両 hook の正規化は
     本関数に集約してある。
     """
     command = command.replace("\r\n", "\n")
     command = _strip_safe_heredocs(command)
+    command = _strip_heredoc_bodies(command)
     command = command.replace("\\\n", " ")
     command = command.replace("\n", ";")
     return command
