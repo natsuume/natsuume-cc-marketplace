@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # post-commit-lint.sh
 #
 # Bash tool で `git commit` を検出し、HEAD コミットの内容を ESLint / Ruff に

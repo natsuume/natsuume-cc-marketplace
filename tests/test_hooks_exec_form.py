@@ -261,8 +261,8 @@ AUTO_REMOVAL_NOTICE_WORDS = ("2.1.193", "自動")
 EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "git-guardrails": "0.7.1",
     "enforce-draft-pr": "0.5.5",
-    "auto-lint-check": "0.8.0",
-    "pre-push-review": "6.1.1",
+    "auto-lint-check": "0.8.2",
+    "pre-push-review": "6.1.2",
     "pre-push-codex-review": "2.2.3",
     "pre-merge-codex-review": "2.2.1",
     "update-default-branch": "0.4.4",
@@ -274,7 +274,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "codex-advisor": "4.0.1",
     "rate-limit": "0.5.2",
     "session-handoff": "0.5.0",
-    "repo-analytics": "0.2.5",
+    "repo-analytics": "0.2.6",
 }
 
 
