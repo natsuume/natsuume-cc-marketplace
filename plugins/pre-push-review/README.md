@@ -34,7 +34,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v6.0.4
+v6.1.0
 
 ## インストール
 
@@ -185,6 +185,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 - tools は `Bash, Read, Glob, Grep` に制限 (Edit / Write / Skill / Agent はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/security-review` skill を invoke できないようにしている (理由は下記)。 `Agent` を外すことで nested subagent も起動せず、 reviewer を read-only に保つ (nested subagent は既定で起動できるが本 reviewer は使わない)
 - subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
+- net diff に加えて `origin/HEAD..HEAD` の per-commit patch (`git log -p --cc`。merge commit で加えられた変更も含む) を読み、 後続 commit で削除・revert されて net diff に残らない中間 commit の秘匿情報・危険コードも検査する。 push すると branch の全 commit が remote 履歴に載るためである。 中間 commit の秘匿情報は、 削除 commit を積むのではなく履歴から除去し、 露出の可能性があればローテーションする修正方針で報告する。 code-reviewer は net diff のみを対象とする
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して security マーカーを更新する (`execution-failed` / 欠落 / 重複 / 未知値では書かず、silent-pass を防ぐ)
 - model は `opus` に固定、effort は指定せずセッション既定を継承
@@ -200,6 +201,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 ## 既知の制約
 
+- **中間 commit の秘匿情報検出は LLM レビューに依存する**: security-reviewer は中間 commit の per-commit patch も検査するが、 LLM による検出であり見落としがありうる。 秘匿情報の混入を決定的に止めたい場合は、 gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨する
 - **gate の観測範囲は Bash tool のみ**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `git push` を gate は観測しない。これらの tool を有効にした環境はサポート外
 
 ## 関連プラグイン
