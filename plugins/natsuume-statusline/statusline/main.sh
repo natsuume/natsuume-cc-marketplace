@@ -16,6 +16,12 @@ received_at=$(date +%s 2>/dev/null)
 # jq が無い環境では JSON を解析できないため空出力で終了する (jq は README で必須依存と明記)。
 command -v jq >/dev/null 2>&1 || exit 0
 
+# 入力が単一の JSON object でなければ空出力で終了する。不正 JSON・object 以外の JSON・
+# 複数の JSON 値の連結・空入力を後続の jq に渡すと、パースエラーや型エラーが stderr に出るため。
+# -s で入力ストリーム全体を配列に読み込み、要素がちょうど 1 つの object であることを検査する
+# (-s なしの -e は最後の値しか見ないため、"[] {}" のような連結を通してしまう)。
+printf '%s' "$input" | jq -e -s 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 || exit 0
+
 # `@sh` は安全にクオートするため injection は無いが、 入力は信頼境界外なので echo ではなく
 # printf で渡す。 cwd は workspace.current_dir → top-level cwd → 空 の順でフォールバックし、
 # キー欠落時に文字列 "null" がパスとして表示されるのを防ぐ。
