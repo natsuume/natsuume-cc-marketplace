@@ -387,6 +387,24 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.classify(command), 5)
 
+    def test_unquoted_body_with_line_continuation_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("cat > f.md <<EOF\nfoo\nEO\\\nF\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_quoted_body_with_trailing_backslash_is_excluded(self) -> None:
+        self.assertEqual(
+            self.classify("cat > f.md <<'EOF'\nfoo \\\nbar (git commit)\nEOF"),
+            4,
+        )
+
+    def test_nested_subshell_starting_with_double_paren_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("((bash) ) <<'EOF'\ngit commit -m x\nEOF"),
+            5,
+        )
+
     def test_wrapper_with_positional_argument_keeps_body(self) -> None:
         self.assertEqual(
             self.classify("timeout 5 bash <<'EOF'\ngit commit -m x\nEOF"),

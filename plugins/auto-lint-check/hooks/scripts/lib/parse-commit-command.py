@@ -492,7 +492,9 @@ def _simple_command_words(segment: str) -> list[str] | None:
     except ValueError:
         return None
     if words and words[0].startswith("(("):
-        return []
+        # ``))`` で閉じる形だけが算術コマンド。``((cmd) )`` のように閉じない
+        # 形は bash が入れ子の subshell として解釈するため、解決不能とする。
+        return [] if segment.strip().endswith("))") else None
     result: list[str] = []
     skip_next = False
     for word in words:
@@ -574,6 +576,10 @@ def _strip_heredoc_bodies(command: str) -> str:
         subcommand であることも要求する (subcommand より前のオプションは不可)
       - プロセス置換 (``<(`` / ``>(``) を含まない
       - ANSI-C quoting (``$'``) と locale 翻訳 quoting (``$"``) を含まない
+      - 引用符なし delimiter の heredoc 本文に行継続 (backslash + 改行) を
+        含まない
+      - ``((`` で始まる simple command は ``))`` で閉じる算術コマンドに限り
+        command name 無しとして許容する (閉じない形は入れ子の subshell)
     - 除去する場合、演算子を含む行の次の行から、``WORD`` (引用符を外した
       文字列) と完全一致する行までを本文として除去する。終端行自体も除去
       する。``<<-`` の場合は各行の先頭タブを除去してから終端判定する。
@@ -595,6 +601,9 @@ def _strip_heredoc_bodies(command: str) -> str:
     pending: list[_PendingHeredoc] = []
     found_heredoc = False
     has_process_substitution = False
+    # 引用符なし delimiter の本文に行継続がある場合、bash は行を連結してから
+    # 終端判定するため、終端行の位置を物理行で判定できない。
+    has_body_line_continuation = False
     # heredoc 本文とコメントを除いた simple command の文字列。
     segments: list[str] = []
     # 現在の simple command の開始 index。
@@ -703,6 +712,8 @@ def _strip_heredoc_bodies(command: str) -> str:
                     command, i, heredoc.word, heredoc.strip_tabs
                 )
                 body = command[i:end]
+                if not heredoc.quoted and "\\\n" in body:
+                    has_body_line_continuation = True
                 if not heredoc.quoted and ("$(" in body or "`" in body):
                     out.append(body)
                 i = end
@@ -716,6 +727,7 @@ def _strip_heredoc_bodies(command: str) -> str:
         return command
     if (
         has_process_substitution
+        or has_body_line_continuation
         or any(quote in command for quote in _UNMODELED_QUOTE_OPENERS)
         or not all(_is_data_only_segment(segment) for segment in segments)
     ):
