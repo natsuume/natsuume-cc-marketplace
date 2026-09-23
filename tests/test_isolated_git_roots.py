@@ -529,6 +529,14 @@ class ExecutionTimeTargetDivergenceIsolatedRootsTest(IsolatedGitRootsTestBase):
 
         self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
 
+    def test_index_symlinked_to_outside_repo_in_non_worktree_repo_is_denied(self) -> None:
+        index = self.iso_repo / ".git" / "index"
+        if index.exists() or index.is_symlink():
+            index.unlink()
+        index.symlink_to(self.outside_repo / ".git" / "index")
+
+        self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
+
 
 class CommitRecognitionMismatchIsolatedRootsTest(IsolatedGitRootsTestBase):
     """hook と免除判定の commit 認識が食い違いうる形は免除しない (GG / AL 共通)。

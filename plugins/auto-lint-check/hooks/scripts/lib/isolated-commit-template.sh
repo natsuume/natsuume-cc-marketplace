@@ -66,7 +66,8 @@
 #     - <ABS> の canonical 実パス (`cd -P && pwd -P`)
 #     - <ABS> で実行した `git rev-parse --git-common-dir` / `--git-dir` の canonical 実パス
 #     - common-dir 直下の `refs` / `objects` / `HEAD` / `packed-refs` / `logs` /
-#       `reftable` と、worktree 固有 git dir 直下の `HEAD` / `index` / `reftable` のうち
+#       `reftable` と、git dir (`--git-dir`。linked worktree では worktree 固有の git dir、
+#       通常の repo では common-dir と同じ) 直下の `HEAD` / `index` / `reftable` のうち
 #       存在するものの実体 (ディレクトリは canonical 実パス。ファイルは自体が symlink なら
 #       不可、それ以外は親 dir の canonical 実パス)
 #     - branch ref の格納先。ref 格納形式 (`git rev-parse --show-ref-format`。このオプション
@@ -588,11 +589,9 @@ _ict_repo_is_within_roots() {
   for entry in refs objects HEAD packed-refs logs reftable; do
     _ict_git_entry_within_roots "$canonical_common_dir/$entry" || return 1
   done
-  if [ "$canonical_git_dir" != "$canonical_common_dir" ]; then
-    for entry in HEAD index reftable; do
-      _ict_git_entry_within_roots "$canonical_git_dir/$entry" || return 1
-    done
-  fi
+  for entry in HEAD index reftable; do
+    _ict_git_entry_within_roots "$canonical_git_dir/$entry" || return 1
+  done
   _ict_head_ref_within_roots "$dir" "$canonical_common_dir"
 }
 
