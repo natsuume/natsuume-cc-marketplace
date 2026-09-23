@@ -473,11 +473,11 @@ for excluded_script in $EXCLUDED_SCRIPTS; do
 done
 
 # 規則 8: hooks.json の (script, arg) 集合 - 除外 と 対応表の (script, arg) 集合の一致。
-awk -F'|' 'NR == FNR { excluded[$0] = 1; next } !($2 in excluded) { print $2 "|" $3 }' \
+awk -F'|' 'FILENAME == ARGV[1] { excluded[$0] = 1; next } !($2 in excluded) { print $2 "|" $3 }' \
   "$EXCLUDED_FILE" "$REGISTERED_FILE" | LC_ALL=C sort -u > "$LINT_TMPDIR/registered-targets.txt"
 awk -F'|' '{ print $2 "|" $3 }' "$VALID_CASES_FILE" | LC_ALL=C sort -u > "$LINT_TMPDIR/table-targets.txt"
 
-awk -F'|' 'NR == FNR { excluded[$0] = 1; next } ($1 in excluded) { print $1 }' \
+awk -F'|' 'FILENAME == ARGV[1] { excluded[$0] = 1; next } ($1 in excluded) { print $1 }' \
   "$EXCLUDED_FILE" "$LINT_TMPDIR/table-targets.txt" | LC_ALL=C sort -u > "$LINT_TMPDIR/table-excluded.txt"
 if [ -s "$LINT_TMPDIR/table-excluded.txt" ]; then
   report_fail "EXCLUDED_SCRIPTS のスクリプトが対応表にも含まれています:"
