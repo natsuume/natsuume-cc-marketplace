@@ -197,7 +197,7 @@ claude plugin install agent-discipline@natsuume-plugins
 - Step 0 を通過した場合、 prompt 内で body content を抽出する:
   - `--body 'inline string'` / `--body "inline string"` (heredoc 含む) → inline 文字列を body content とする
   - `--body-file PATH` → Read tool で PATH のファイル内容を取得 (= `type: agent` を採用した直接の理由)
-  - どちらも無い (= editor 起動経路) / `--body-file -` (stdin) → 判定不能として `{"ok": true}` で通過 (= 誘導層に委ねる)
+  - どちらも無い (= editor 起動経路) / `--body-file -` (stdin) → その subcommand は判定不能として以降の検証をスキップし、 残りの対象 subcommand の検証を続ける (= 誘導層に委ねる)。 すべての対象 subcommand が通過またはスキップになった場合に `{"ok": true}` となる
 - body content に対し、 inject-always.sh セクション 2.1 / 3.1 の禁止カテゴリ (推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み) を semantic 判定
 - 該当なし → `{"ok": true}`、 該当あり → `{"ok": false, "reason": "違反箇所の引用 + カテゴリ名 + 修正方針 (= AskUserQuestion でユーザの decision を取り、 確定 1 案だけを残す)"}` で block
 
@@ -205,10 +205,12 @@ claude plugin install agent-discipline@natsuume-plugins
 
 `gh pr create` entry の prompt にのみ、 上記 Step 2 (禁止カテゴリの semantic 判定) の直後・Step 3 (返り値、 v0.7.0 で Step 4 に繰り下げ) の前に追加の判定 Step 3 を挿入する (#151/#153 対応、親 issue #173 決定事項 9)。 他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt はこの Step を持たない。 branch 名からの issue 推定は PR 作成時にのみ意味を持つ判定のため、 4 entries の prompt 完全 duplicate は維持しつつ本 Step だけ 1 entry に閉じる (= entry を増やさず model pin の保守対象も増やさない)。
 
+判定の起点 `<cwd>` は、 同じ command 内で対象 subcommand より前に `cd <dir>` の subcommand があればその dir (相対パスなら hook input の `cwd` を基準に解決する)、 無ければ hook input の `cwd` とする。
+
 判定手順 (codex review P2 指摘 2 件を反映した最終形):
 
 1. まず `<cwd>/.git` を Read tool で読む
-2. 読み取れた内容が `gitdir: <path>` 形式 (worktree) の場合: `<path>` が相対パスであれば、 `.git` ファイルの所在ディレクトリ (= `cwd` そのもの) を基準に解決したうえで、 解決後の `<path>/HEAD` を Read tool で読む (linked worktree では `.git` 自体が `gitdir:` ファイルであり `<cwd>/.git/HEAD` を先に読む実装は常に fail-open するバグだったため、 `.git` を先に読んでから分岐する順序に修正した)
+2. 読み取れた内容が `gitdir: <path>` 形式 (worktree) の場合: `<path>` が相対パスであれば、 `.git` ファイルの所在ディレクトリ (= `<cwd>` そのもの) を基準に解決したうえで、 解決後の `<path>/HEAD` を Read tool で読む (linked worktree では `.git` 自体が `gitdir:` ファイルであり `<cwd>/.git/HEAD` を先に読む実装は常に fail-open するバグだったため、 `.git` を先に読んでから分岐する順序に修正した)
 3. `<cwd>/.git` の Read が「ディレクトリである」ことを理由に失敗する場合 (= worktree ではない通常のリポジトリ): `<cwd>/.git/HEAD` を Read tool で読む
 4. 上記いずれの経路でも HEAD が取得できない場合、 または取得できた内容が `ref: refs/heads/<branch>` 形式でない場合 (detached HEAD 等) は、 本 Step を判定不能として通過する (fail-open で誘導層の `rule:closing-keyword` に委ねる)。 `.git` 自体が存在しない bare リポジトリも本 Step の対象外として同様に通過する
 5. branch 名が `*/issue-<数字>-*` パターンに一致しない場合は本 Step を通過する

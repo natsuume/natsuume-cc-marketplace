@@ -106,6 +106,26 @@ STEP1_RELATIVE_PATH_RULE = (
     "subcommand がある場合は、 その dir を基準に PATH を解決してから Read する"
 )
 
+# Step 1 節が含む、body を取得できない subcommand (editor 起動経路 / stdin 経路) の扱い。
+# Step 0 は全対象 subcommand の検証を求めるため、その subcommand だけを飛ばして残りを
+# 検証する。hook 全体を即 `ok: true` で終える文は置かない。
+STEP1_SKIP_RULE = (
+    "その subcommand は判定不能として本 Step 以降の検証をスキップし、 "
+    "残りの対象 subcommand の検証を続ける"
+)
+STEP1_FORBIDDEN_EARLY_EXIT_PHRASE = "を返して終了 (= hook visibility 外"
+
+# gh pr create entry の Step 3 (Closes 検証) が branch を読む起点ディレクトリ。先行する
+# `cd <dir>` があれば、`gh pr create` が実際に動く dir の branch を読む。
+STEP3_HEADING_PREFIX = "## Step 3: Closes 検証"
+STEP4_HEADING_PREFIX = "## Step 4"
+PR_CREATE_IF_FILTER = "Bash(gh pr create:*)"
+STEP3_EFFECTIVE_CWD_RULE = (
+    "同じ command 内で対象 subcommand より前に `cd <dir>` の subcommand がある場合は、 "
+    "その dir (相対パスなら hook input の `cwd` を基準に解決する) を本 Step の `<cwd>` とし、 "
+    "無い場合は hook input の `cwd` を `<cwd>` とする"
+)
+
 # command 全体の先頭 literal だけで判定する Step 0 の語。prompt 全文に置かない。
 PROMPT_FORBIDDEN_HEAD_ONLY_PHRASES = (
     "先頭 literal のみ judge",
@@ -411,6 +431,74 @@ class Step1ToctouRuleTest(ContractTestCase):
                             f"(STEP1_RELATIVE_PATH_RULE) が無い: "
                             f"{STEP1_RELATIVE_PATH_RULE}"
                         )
+
+    def test_step1_section_skips_only_the_undecidable_subcommand(self) -> None:
+        for plugin in PLUGIN_NAMES:
+            entries = self.entries_or_fail(plugin)
+            for if_filter in EXPECTED_IF_FILTERS:
+                with self.subTest(plugin=plugin, entry=if_filter):
+                    label = entry_label(plugin, if_filter)
+                    section = prompt_section(
+                        str(entries[if_filter]["prompt"]),
+                        STEP1_HEADING,
+                        STEP2_HEADING_PREFIX,
+                    )
+                    self.assert_scope_found(
+                        label,
+                        section,
+                        f"`{STEP1_HEADING}` から `{STEP2_HEADING_PREFIX}` までの節が無い",
+                    )
+                    if not contains(section, STEP1_SKIP_RULE):
+                        self.fail(
+                            f"{label}: Step 1 節に、body を取得できない subcommand だけを "
+                            f"飛ばす規則 (STEP1_SKIP_RULE) が無い: {STEP1_SKIP_RULE}"
+                        )
+                    self.assert_phrase_absent(
+                        f"{label} の Step 1 節",
+                        section,
+                        STEP1_FORBIDDEN_EARLY_EXIT_PHRASE,
+                    )
+
+
+class Step3EffectiveCwdTest(ContractTestCase):
+    """gh pr create の Step 3 が、先行する `cd <dir>` を branch の読み取り起点にする。"""
+
+    def test_step3_reads_branch_from_effective_directory(self) -> None:
+        for plugin in PLUGIN_NAMES:
+            entries = self.entries_or_fail(plugin)
+            with self.subTest(plugin=plugin):
+                label = entry_label(plugin, PR_CREATE_IF_FILTER)
+                prompt = str(entries[PR_CREATE_IF_FILTER]["prompt"])
+                lines = prompt.splitlines(keepends=True)
+                start = next(
+                    (
+                        index
+                        for index, line in enumerate(lines)
+                        if line.startswith(STEP3_HEADING_PREFIX)
+                    ),
+                    None,
+                )
+                section = ""
+                if start is not None:
+                    end = next(
+                        (
+                            index
+                            for index in range(start + 1, len(lines))
+                            if lines[index].startswith(STEP4_HEADING_PREFIX)
+                        ),
+                        len(lines),
+                    )
+                    section = "".join(lines[start:end])
+                self.assert_scope_found(
+                    label,
+                    section,
+                    f"`{STEP3_HEADING_PREFIX}` から `{STEP4_HEADING_PREFIX}` までの節が無い",
+                )
+                if not contains(section, STEP3_EFFECTIVE_CWD_RULE):
+                    self.fail(
+                        f"{label}: Step 3 節に起点ディレクトリの規則 "
+                        f"(STEP3_EFFECTIVE_CWD_RULE) が無い: {STEP3_EFFECTIVE_CWD_RULE}"
+                    )
 
 
 class PromptHeadOnlyGuardAbsenceTest(ContractTestCase):
