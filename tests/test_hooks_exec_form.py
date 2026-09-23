@@ -259,22 +259,22 @@ AUTO_REMOVAL_NOTICE_WORDS = ("2.1.193", "自動")
 # 4 箇所 (plugin.json / marketplace.json / 直下 README の一覧テーブル /
 # plugin README の `## バージョン` 節) で一致させる version。
 EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
-    "git-guardrails": "0.6.6",
-    "enforce-draft-pr": "0.5.4",
-    "auto-lint-check": "0.7.0",
-    "pre-push-review": "6.0.4",
-    "pre-push-codex-review": "2.2.0",
+    "git-guardrails": "0.7.1",
+    "enforce-draft-pr": "0.5.5",
+    "auto-lint-check": "0.8.0",
+    "pre-push-review": "6.1.1",
+    "pre-push-codex-review": "2.2.1",
     "pre-merge-codex-review": "2.2.1",
     "update-default-branch": "0.4.2",
-    "natsuume-statusline": "0.10.2",
-    "agent-discipline": "0.27.1",
-    "experimental-agent-discipline": "0.3.1",
+    "natsuume-statusline": "0.10.3",
+    "agent-discipline": "0.29.0",
+    "experimental-agent-discipline": "0.5.0",
     "ui-discipline": "0.4.4",
-    "natsuume-writing": "0.6.3",
+    "natsuume-writing": "0.6.4",
     "codex-advisor": "4.0.1",
     "rate-limit": "0.5.2",
     "session-handoff": "0.5.0",
-    "repo-analytics": "0.2.3",
+    "repo-analytics": "0.2.5",
 }
 
 

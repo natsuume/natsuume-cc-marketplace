@@ -4,7 +4,7 @@
 
 ## バージョン
 
-v0.3.1
+v0.5.0
 
 ## 位置づけ
 
@@ -133,10 +133,20 @@ fork 側にのみ存在するファイル:
 - `hooks/scripts/inject-subagent-rules.sh` (ヘッダコメントの前提説明のみ。挙動は同一)
 - `hooks/prompts/discipline-fable.md` / `discipline-sonnet.md` / `discipline-opus.md` (rule:delegation-rules 節の Fable 委任条件と effort の記述のみ)
 - `scripts/lint-prompt-sync.sh` (検査対象 path が本 plugin 配下を指す。検査内容は同一)
+- `scripts/lint-payload-size.sh` (検査対象 path が本 plugin 配下を指す。検査内容・対応表は同一)
 
 ## その他の機能
 
 常時適用ルールの配送 (`inject-always.sh` / `inject-rules-part.sh` / `inject-discipline.sh` / `inject-temporary.sh` / `resolve-model-on-prompt.sh` / `inject-auto.sh` / `check-uncommitted-on-session-start.sh` / `inject-subagent-rules.sh`)、`/model` 切替を session model state へ反映する `PostModelSwitch` hook (`update-model-on-switch.sh`)、`gh issue/pr create|edit` の body 検知 hook、`issue-plan` / `issue-start` skill は agent-discipline と同一です。skill は `experimental-agent-discipline:issue-plan` / `experimental-agent-discipline:issue-start` の namespace で提供されます。詳細は [agent-discipline の README](../agent-discipline/README.md) を参照してください。
+
+### CI (lint)
+
+`.github/workflows/agent-discipline-prompt-lint.yml` が、agent-discipline と同じ 2 本の lint を本 plugin 配下に対しても実行します。
+
+- `scripts/lint-prompt-sync.sh`: モデル別プロンプトファイルの rule ID 集合と `hooks.json` の type:agent entries の同期ドリフトを検査する
+- `scripts/lint-payload-size.sh`: `additionalContext` を出力する全注入スクリプトを模擬 hook input で実行し、各要素の文字数を実測する。7,800 字を超えると WARN (exit code に影響しない)、8,000 字を超えると FAIL。対応表で出力ありの分岐で出力が無い・JSON が不正・要素が空、出力なしの分岐で出力がある、`hooks.json` の `type: command` エントリと対応表が一致しない、といった場合も FAIL にする (fail-closed)。注入スクリプトは `mktemp -d` の隔離 `TMPDIR` 上で実行し、実システムの state には触れない
+
+どちらもリポジトリルートから引数なしで実行します (例: `./plugins/experimental-agent-discipline/scripts/lint-payload-size.sh`)。検査内容の詳細は agent-discipline の README の「CI (lint)」節とスクリプトのヘッダコメントを参照してください。
 
 ## キーワード
 

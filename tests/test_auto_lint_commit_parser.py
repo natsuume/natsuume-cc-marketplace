@@ -1,4 +1,4 @@
-"""auto-lint-check commit parser の cd 順序契約テスト (issue #146)。"""
+"""auto-lint-check commit parser の契約テスト (cd 順序 / heredoc 本文の除外)。"""
 
 from __future__ import annotations
 
@@ -103,6 +103,457 @@ class AutoLintCommitParserCdOrderTest(unittest.TestCase):
         self.assertEqual(
             self.classify("cd /tmp && git commit --dry-run"),
             4,
+        )
+
+
+class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
+    """heredoc 本文はデータであり、本文中の `git commit` を実 commit と
+    判定しないことの契約。"""
+
+    def classify(self, command: str) -> int:
+        result = subprocess.run(
+            [sys.executable, str(PARSER), command],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.stdout, b"")
+        self.assertEqual(result.stderr, b"")
+        return result.returncode
+
+    def test_subshell_commit_in_body_after_cd_is_not_repo_override(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cd /tmp/x && cat > f.md <<'EOF'\nfoo (git commit)\nEOF"
+            ),
+            4,
+        )
+
+    def test_subshell_commit_in_body_is_not_commit(self) -> None:
+        self.assertEqual(
+            self.classify("cat > f.md <<'EOF'\nfoo (git commit)\nEOF"),
+            4,
+        )
+
+    def test_git_commit_words_in_body_after_cd_is_not_commit(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cd /tmp/x && cat > f.md <<'EOF'\nsee git commit docs\nEOF"
+            ),
+            4,
+        )
+
+    def test_parenthesized_word_before_commit_in_body_is_not_commit(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cd /tmp/x && cat > f.md <<'EOF'\nx (git-guardrails) commit\nEOF"
+            ),
+            4,
+        )
+
+    def test_commit_reading_message_from_heredoc_remains_commit(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "git commit -F - <<'EOF'\nfix: message body\n\nsecond paragraph\nEOF"
+            ),
+            5,
+        )
+
+    def test_safe_message_substitution_heredoc_remains_commit(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "git commit -m \"$(cat <<'EOF'\nfix: message (git commit)\nEOF\n)\""
+            ),
+            5,
+        )
+
+    def test_double_quoted_delimiter_body_is_not_commit(self) -> None:
+        self.assertEqual(
+            self.classify('cat > f.md <<"EOF"\nfoo (git commit)\nEOF'),
+            4,
+        )
+
+    def test_forms_outside_single_trailing_quoted_heredoc_keep_body(self) -> None:
+        # 本文除去の対象は「heredoc が 1 つ・引用符付き識別子の delimiter・
+        # 終端行が最終行」に限る。それ以外は本文もトークン化する (本文中の
+        # ``(git commit)`` を commit と数える保守側の挙動)。
+        for command, expected in (
+            ("cat > f.md <<EOF\nfoo (git commit)\nEOF", 0),
+            ("cat > f.md <<-EOF\n\tfoo (git commit)\n\tEOF\n", 0),
+            ("cat > f.md <<'EOF'\nfoo (git commit)\n", 0),
+            ("cat > f.md <<'EOF'\nit's (git commit)", 2),
+            ("cat <<A <<B\nfirst (git commit)\nA\nsecond (git commit)\nB", 0),
+            ("cat <<A <<B\nB\nA\nfoo (git commit)\nB", 0),
+            ("cat > f.md <<'-' bash\ngit commit -m x\n-", 5),
+            ("cat > f.md <<'E\rOF'\ngit commit -m x\nE\rOF", 5),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), expected)
+
+    def test_command_after_terminator_is_still_parsed(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat > f.md <<'EOF'\nfoo (git commit)\nEOF\n"
+                "git add f.md && git commit -m change"
+            ),
+            0,
+        )
+
+    def test_dash_heredoc_tab_indented_terminator_ends_body(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat > f.md <<-'EOF'\n\tbody\n\tEOF\ngit commit -m change"
+            ),
+            5,
+        )
+
+    def test_tab_indented_line_does_not_end_plain_heredoc(self) -> None:
+        self.assertEqual(
+            self.classify("cat > f.md <<'EOF'\n\tEOF\nfoo (git commit)\nEOF"),
+            4,
+        )
+
+    def test_command_after_multiple_heredocs_is_still_parsed(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat <<A <<B\nfirst\nA\nsecond\nB\ngit commit -m change"
+            ),
+            5,
+        )
+
+    def test_here_string_is_not_treated_as_heredoc(self) -> None:
+        self.assertEqual(
+            self.classify("cat <<<EOF\ngit commit -m change\nEOF"),
+            5,
+        )
+
+    def test_partial_delimiter_line_does_not_end_body(self) -> None:
+        self.assertEqual(
+            self.classify("cat > f.md <<'EOF'\nEOFX\nfoo (git commit)\nEOF"),
+            4,
+        )
+
+    def test_quoted_delimiter_body_substitution_is_data(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat > f.md <<'EOF'\nrun $(git commit -am x) here\nEOF"
+            ),
+            4,
+        )
+
+    def test_commit_message_heredoc_with_backtick_quoted_escape_is_commit(
+        self,
+    ) -> None:
+        self.assertEqual(
+            self.classify(
+                "git commit -F - <<'EOF'\nfix: handle quotes\n\n"
+                "escape `\\'` in the parser\nEOF"
+            ),
+            5,
+        )
+
+    def test_shift_in_arithmetic_command_is_not_heredoc(self) -> None:
+        self.assertEqual(
+            self.classify("(( x = 1 << 2 )) && true\ngit commit -m x"),
+            5,
+        )
+
+    def test_shift_in_arithmetic_expansion_keeps_substitution_fail_closed(
+        self,
+    ) -> None:
+        self.assertEqual(
+            self.classify("echo $(( 1 << 2 ))\ngit commit -m x"),
+            3,
+        )
+
+    def test_arithmetic_command_keeps_all_heredoc_bodies(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "(( x = 1 << 2 )); cat > f.md <<'EOF'\nfoo (git commit)\nEOF"
+            ),
+            0,
+        )
+
+    def test_double_paren_nested_subshell_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("((echo a); (bash)) <<'EOF'\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_body_fed_to_shell_interpreter_is_parsed_as_commands(self) -> None:
+        self.assertEqual(
+            self.classify("bash <<'EOF'\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_staging_in_body_fed_to_shell_interpreter_is_detected(self) -> None:
+        self.assertEqual(
+            self.classify("bash <<'EOF'\ngit add f.py\ngit commit -m x\nEOF"),
+            0,
+        )
+
+    def test_body_fed_to_interpreter_after_cd_is_repo_override(self) -> None:
+        self.assertEqual(
+            self.classify("cd /tmp && bash <<'EOF'\ngit commit -m x\nEOF"),
+            3,
+        )
+
+    def test_interpreter_name_is_resolved_past_prefixes_and_paths(self) -> None:
+        for command in (
+            "/bin/sh -s <<'EOF'\ngit commit -m x\nEOF",
+            "env FOO=1 zsh <<'EOF'\ngit commit -m x\nEOF",
+            "source /dev/stdin <<'EOF'\ngit commit -m x\nEOF",
+            ". /dev/stdin <<'EOF'\ngit commit -m x\nEOF",
+            "bash 2>&1 <<'EOF'\ngit commit -m x\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_command_outside_allowlist_keeps_all_heredoc_bodies(self) -> None:
+        for command in (
+            "cat <<'EOF'; bash <<'X'\nfoo (git commit)\nEOF\ngit commit -m x\nX",
+            "cat <<'EOF' | grep x\nfoo (git commit)\nEOF",
+            "cat <<'EOF' || bash\nfoo (git commit)\nEOF",
+            "env cat <<'EOF'\nfoo (git commit)\nEOF",
+            "./cat <<'EOF'\nfoo (git commit)\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 0)
+
+    def test_data_only_commands_allow_body_exclusion(self) -> None:
+        for command in (
+            "gh pr create --body-file - <<'EOF'\nfoo (git commit)\nEOF",
+            "cat <<'EOF' | tee out.txt\nfoo (git commit)\nEOF",
+            "cat <<'EOF' || true\nfoo (git commit)\nEOF",
+            "/bin/cat <<'EOF'\nfoo (git commit)\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 4)
+
+    def test_data_only_git_and_gh_subcommands_allow_body_exclusion(self) -> None:
+        for command in (
+            "git tag -a v1 -F - <<'EOF'\nfoo (git commit)\nEOF",
+            "git notes add -F - <<'EOF'\nfoo (git commit)\nEOF",
+            "gh issue comment 1 --body-file - <<'EOF'\nfoo (git commit)\nEOF",
+            "gh api repos/o/r/issues --input - <<'EOF'\nfoo (git commit)\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 4)
+
+    def test_git_and_gh_forms_that_may_run_stdin_keep_body(self) -> None:
+        for command in (
+            "git submodule foreach <<'EOF'\ngit commit -m x\nEOF",
+            "git -c alias.x=!sh x <<'EOF'\ngit commit -m x\nEOF",
+            "git <<'EOF'\ngit commit -m x\nEOF",
+            "gh myalias <<'EOF'\ngit commit -m x\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_unmodeled_quoting_keeps_body(self) -> None:
+        for command in (
+            "echo $'a' <<'EOF'\ngit commit -m x\nEOF",
+            'echo $"a" <<\'EOF\'\ngit commit -m x\nEOF',
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_delimiter_with_line_continuation_keeps_body(self) -> None:
+        for command in (
+            "cat > f.md <<E\\\nOF\nfoo\nEOF\ngit commit -m x",
+            "cat > f.md <<\\\nEOF\nfoo\nEOF\ngit commit -m x",
+            "cat > f.md <<'E\nOF'\nfoo\nE\nOF\ngit commit -m x",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_unquoted_body_with_line_continuation_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("cat > f.md <<EOF\nfoo\nEO\\\nF\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_quoted_body_with_trailing_backslash_is_excluded(self) -> None:
+        self.assertEqual(
+            self.classify("cat > f.md <<'EOF'\nfoo \\\nbar (git commit)\nEOF"),
+            4,
+        )
+
+    def test_nested_subshell_starting_with_double_paren_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("((bash) ) <<'EOF'\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_function_definition_keeps_body(self) -> None:
+        for command in (
+            "function cat { bash; }; cat <<'EOF'\ngit commit -m x\nEOF",
+            "cat() { bash; }; cat <<'EOF'\ngit commit -m x\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_unresolved_delimiter_keeps_all_bodies(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat <<E\\\nOF\ncat <<'Y'\nEOF\ngit commit -m x"
+            ),
+            5,
+        )
+
+    def test_double_quoted_delimiter_with_backslash_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify('cat > f.md <<"E\\$F"\nfoo\nE$F\ngit commit -m x'),
+            5,
+        )
+
+    def test_delimiter_with_expansion_keeps_body(self) -> None:
+        for command in (
+            "cat > f.md <<E${a b}F\nfoo\nEF\ngit commit -m x",
+            "cat > f.md <<E$[1 + 1]F\nfoo\nE2F\ngit commit -m x",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_command_after_operator_terminated_heredoc_line_is_parsed(self) -> None:
+        for operator in ("&&", "||", "|", ";"):
+            command = f"cat > f.md <<'EOF' {operator}\nfoo\nEOF\ngit commit -am x"
+            with self.subTest(operator=operator):
+                self.assertEqual(self.classify(command), 0)
+
+    def test_escaped_operator_at_heredoc_line_end_keeps_separator(self) -> None:
+        for operator in ("\\;", "\\&", "\\|"):
+            command = f"cat > f.md <<'EOF' x{operator}\nfoo\nEOF\ngit commit -am x"
+            with self.subTest(operator=operator):
+                self.assertEqual(self.classify(command), 0)
+
+    def test_escaped_redirect_char_before_separator_splits_commands(self) -> None:
+        for command in (
+            "cat x\\>&bash <<'EOF'\ngit commit -m x\nEOF",
+            "cat x\\||bash <<'EOF'\ngit commit -m x\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_command_after_subshell_closing_heredoc_line_is_parsed(self) -> None:
+        for command in (
+            "(cat > f.md <<'EOF')\nfoo\nEOF\ngit commit -am x",
+            "(cat > f.md <<'EOF';)\nfoo\nEOF\ngit commit -am x",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 0)
+
+    def test_quoted_operator_in_safe_heredoc_message_does_not_hide_commit(
+        self,
+    ) -> None:
+        for tail, expected in (("git commit -am y", 0), ("cd /tmp && git commit -m y", 3)):
+            command = f"git commit -m \"$(cat <<'EOF'\na \" <<B \"\nEOF\n)\"\n{tail}"
+            with self.subTest(tail=tail):
+                self.assertEqual(self.classify(command), expected)
+
+    def test_here_string_or_line_continuation_outside_body_keeps_body(
+        self,
+    ) -> None:
+        for command in (
+            "<<< cat bash <<'EOF'\ngit commit -m x\nEOF",
+            "echo $\\\n{x:-a<<b}\ngit commit -m x",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_nested_quote_in_parameter_expansion_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify('echo "${x:-"a <<B"}"\ngit commit -m x'),
+            5,
+        )
+
+    def test_editor_or_env_prefix_forms_keep_body(self) -> None:
+        for command, expected in (
+            ("git tag -a v1 <<'EOF'\ngit commit -am x\nEOF", 0),
+            ("git notes add <<'EOF'\ngit commit -am x\nEOF", 0),
+            ("git commit -F - -e <<'EOF'\ngit commit -am x\nEOF", 0),
+            ("GIT_EDITOR=x git tag -a v1 -F - <<'EOF'\ngit commit -am x\nEOF", 0),
+            ("X=1 cat <<'EOF'\nfoo (git commit)\nEOF", 0),
+            ("PATH=/tmp/x; cat <<'EOF'\nfoo (git commit)\nEOF", 0),
+            ("gh pr create <<'EOF'\ngit commit -am x\nEOF", 0),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), expected)
+
+    def test_extglob_pattern_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("cat @(x<<EOF) f\ngit commit -am x\nEOF"),
+            0,
+        )
+
+    def test_wrapper_with_positional_argument_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("timeout 5 bash <<'EOF'\ngit commit -m x\nEOF"),
+            3,
+        )
+
+    def test_process_substitution_keeps_body(self) -> None:
+        for command in (
+            "bash <(cat <<'EOF'\ngit commit -m x\nEOF\n)",
+            "source <(cat <<'EOF'\ngit commit -m x\nEOF\n)",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_script_written_by_heredoc_and_run_later_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat > s.sh <<'EOF'\ngit commit -m x\nEOF\nbash s.sh"
+            ),
+            5,
+        )
+
+    def test_shift_in_legacy_arithmetic_expansion_is_not_heredoc(self) -> None:
+        self.assertEqual(
+            self.classify("echo $[1<<2]\ngit commit -m x"),
+            5,
+        )
+
+    def test_body_piped_to_shell_interpreter_is_parsed_as_commands(self) -> None:
+        for command in (
+            "cat <<'EOF' | bash\ngit commit -m x\nEOF",
+            "cat <<'EOF' |& sh -s\ngit commit -m x\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_pipeline_closed_by_later_separator_keeps_interpreter_body(
+        self,
+    ) -> None:
+        self.assertEqual(
+            self.classify("cat <<'EOF' | bash; echo done\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_heredoc_operator_in_comment_is_ignored(self) -> None:
+        self.assertEqual(
+            self.classify("echo hi # see <<'EOF'\n$(git commit -am x)\nEOF"),
+            3,
+        )
+
+    def test_hash_inside_word_is_not_comment(self) -> None:
+        self.assertEqual(
+            self.classify("echo a#b <<'EOF'\n$(git commit -am x)\nEOF"),
+            4,
+        )
+
+    def test_shift_in_parameter_expansion_is_not_heredoc(self) -> None:
+        self.assertEqual(
+            self.classify("echo ${x:-a<<b}\ngit commit -m x"),
+            5,
+        )
+
+    def test_unquoted_delimiter_body_substitution_still_fails_closed(
+        self,
+    ) -> None:
+        self.assertEqual(
+            self.classify("cat > f.md <<EOF\n$(git commit -am bypass)\nEOF"),
+            3,
         )
 
 

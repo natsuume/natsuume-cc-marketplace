@@ -192,7 +192,7 @@ strip_squoted_text() {
       if [ "$c" = "\\" ]; then
         local nc="${cmd:$((i+1)):1}"
         case "$nc" in
-          '$'|'`'|'"'|'\\')
+          '$'|'`'|'"'|'\')
             result+="$c$nc"; i=$((i+2)); continue ;;
         esac
       fi
@@ -206,7 +206,7 @@ strip_squoted_text() {
     case "$c" in
       "'") in_squote=1; i=$((i+1)) ;;
       '"') in_dquote=1; result+="$c"; i=$((i+1)) ;;
-      '\\')
+      '\')
         local nc="${cmd:$((i+1)):1}"
         result+="$c$nc"
         i=$((i+2))
@@ -253,7 +253,7 @@ find_group_close() {
       if [ "$c" = "\\" ]; then
         local nc="${seg:$((i+1)):1}"
         case "$nc" in
-          '$'|'`'|'"'|'\\') i=$((i+2)); continue ;;
+          '$'|'`'|'"'|'\') i=$((i+2)); continue ;;
         esac
       fi
       [ "$c" = '"' ] && in_dquote=0
@@ -263,7 +263,7 @@ find_group_close() {
     case "$c" in
       "'") in_squote=1; i=$((i+1)) ;;
       '"') in_dquote=1; i=$((i+1)) ;;
-      '\\') i=$((i+2)) ;;
+      '\') i=$((i+2)) ;;
       '('|'{') depth=$((depth+1)); i=$((i+1)) ;;
       ')'|'}')
         depth=$((depth-1))
@@ -441,4 +441,5 @@ has_target_mismatch_prefix() {
 readonly TARGET_MISMATCH_DENY_REASON='デフォルトブランチ保護フックは hook 実行時の cwd / カレントブランチを基に判定するため、対象 repo / branch を切り替える前段を含むコマンドは保護を素通りさせる経路になります。具体的には:
   - 対象 repo を切り替える: `cd <dir> && ...` / `git -C <dir> ...` / `GIT_DIR=...`
   - 対象 branch を切り替える: `git switch master && ...` / `git checkout main && ...`
-これらは保守的に deny します。対象 repo / branch へ切り替えた後、別の Bash 呼び出しとして実コマンドを実行してください (master/main 上の commit / push / PR 作成は他の guardrail でも引き続き deny されます)。'
+これらは保守的に deny します。対象 repo / branch へ切り替えた後、別の Bash 呼び出しとして実コマンドを実行してください (master/main 上の commit / push / PR 作成は他の guardrail でも引き続き deny されます)。
+使い捨ての隔離 repo への commit であれば、env `CLAUDE_ISOLATED_GIT_ROOTS` に許可ルート (コロン区切りの絶対パス) を設定し、`git -C <絶対パス> commit -m ...` (または `git -C <絶対パス> add ... && git -C <絶対パス> commit ...`) の 1 行で実行すると、その配下の repo への commit は免除されます (commit のみ。push / PR 作成は対象外)。'
