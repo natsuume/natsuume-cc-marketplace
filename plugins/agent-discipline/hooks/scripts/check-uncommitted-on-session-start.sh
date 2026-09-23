@@ -17,16 +17,24 @@ INPUT=$(cat)
 # hook の stderr は利用者に見えるため、不正 JSON の解析エラーは表に出さず、
 # 空値として後段の無音終了に委ねる。
 {
+  IFS= read -r -d '' HOOK_EVENT
   IFS= read -r -d '' RAW_SESSION_ID
   IFS= read -r -d '' PERMISSION_MODE
   IFS= read -r -d '' CWD
 } < <(
   printf '%s' "$INPUT" | jq -j '
+    (.hook_event_name // ""), "\u0000",
     (.session_id // ""), "\u0000",
     (.permission_mode // ""), "\u0000",
     (.cwd // ""), "\u0000"
   ' 2>/dev/null
 )
+
+# 出力の hookEventName は入力の hook_event_name をそのまま返す。誤った既定値で別 event の
+# 文脈に誘導しないため、空なら発火マーカーを作る前に無音終了する。
+if [ -z "$HOOK_EVENT" ]; then
+  exit 0
+fi
 
 # permission_mode が literal auto のときだけ配送する。
 SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
@@ -109,9 +117,9 @@ esac
 
 CONTEXT="$T1$CWD_SAFE$T2$DIRTY_SAFE$T3"
 
-jq -n --arg ctx "$CONTEXT" '{
+jq -n --arg evt "$HOOK_EVENT" --arg ctx "$CONTEXT" '{
   hookSpecificOutput: {
-    hookEventName: "UserPromptSubmit",
+    hookEventName: $evt,
     additionalContext: $ctx
   }
 }'
