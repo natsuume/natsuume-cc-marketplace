@@ -786,7 +786,12 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     `rg -e > x -- …` の `>` と `x`) は argv word を生まず、glob は 0 個
     以上の word に展開されうる (nullglob 等) ため、shell token 列と argv
     word 列が 1 対 1 に対応せず、直前の shell token から `--` を消費する
-    option を判定できないためである。第 2 に、直前の token の canonical
+    option を判定できないためである。第 2 に、分類前の redirection 正規化
+    (`2>&1` / `&>` / `>>` / `<<` 等を空白に置換する sed) で 1 つでも除去が
+    起きたコマンドの場合。この正規化は演算子と限られた文字種の書き込み先
+    だけを除去するため、書き込み先の残り (`>>x"y"` の `"y"`、`12>>x` の
+    `1` 等) が通常の token として残り、厳格判定を通過したまま argv word
+    との対応を崩しうるためである。第 3 に、直前の token の canonical
     値が `-` で始まる場合。直前の
     token が値を取る option (`rg -e` / `sort -o` / `git log -S` 等)
     であれば `--` はその値として消費され、後続の token が option として
@@ -2595,8 +2600,9 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
       token には適用しない
     - rg / sort / git の option 走査は barrier `--` で止まる。直前の token
       が `-` 始まり (値を取りうる option) の `--` と、走査済み token に
-      厳格判定を通過しないもの (redirection / glob 等) がある `--` は
-      barrier とみなさない
+      厳格判定を通過しないもの (redirection / glob 等) がある `--`、
+      分類前の redirection 正規化で除去が起きたコマンドの `--` は barrier
+      とみなさない
     - quote 外の `(` / `)` は構造検査の対象であり、値を消費しない head の
       operand でも実行形とする
 
@@ -2636,6 +2642,13 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
         f"sort -o >x -- --compress-program=bash {WRAPPER_NAME}",
         f"git log -S >x -- --ext-diff {WRAPPER_NAME}",
         f"rg -e x* -- --pre=bash marker {WRAPPER_NAME}",
+        # 分類前の redirection 正規化で除去が起きたコマンドでは barrier を使わない
+        # (書き込み先の残りが通常の token として残り、argv word と対応しない)。
+        f'rg -e >>x"y" -- --pre=bash marker {WRAPPER_NAME}',
+        f"rg -e 12>>x -- --pre=bash marker {WRAPPER_NAME}",
+        f'sort -o >>x"y" -- --compress-program=bash {WRAPPER_NAME}',
+        f'git log -S >>x"y" -- --ext-diff {WRAPPER_NAME}',
+        f"git diff -- *{WRAPPER_NAME} 2>&1",
         # quote 外の `(` / `)` は値を消費しない head の operand でも構造検査で捕捉する。
         f"f () ( bash {WRAPPER_NAME} )",
         f"cat x ( {WRAPPER_NAME} )",
