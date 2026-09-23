@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CLAUDE_CODE_VERSION: "2.1.210"
+  CLAUDE_CODE_VERSION: "2.1.280"
 
 jobs:
   validate:
@@ -42,11 +42,16 @@ jobs:
       - name: Run unit and adapter tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
 
-      - name: Install pinned Claude Code and validate the marketplace
+      - name: Install pinned Claude Code and validate the marketplace and each plugin
         if: matrix.os == 'ubuntu-latest'
+        shell: bash
         run: |
+          set -euo pipefail
           npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           claude plugin validate . --strict
+          for dir in plugins/*/; do
+            claude plugin validate "$dir" --strict
+          done
 
       - name: Check all shell scripts with the platform Bash
         shell: bash
@@ -86,3 +91,8 @@ jobs:
             exit 0
           fi
           python3 scripts/check_plugin_versions.py --direct "$BASE_REVISION"
+
+      - name: Warn when the pinned Claude Code falls behind the latest release
+        if: matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: python3 scripts/check_claude_code_pin_age.py "$CLAUDE_CODE_VERSION"

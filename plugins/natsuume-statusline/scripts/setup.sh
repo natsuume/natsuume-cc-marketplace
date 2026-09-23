@@ -154,7 +154,7 @@ WRAPPER_BODY
   trap - EXIT
 fi
 
-# --- (2) settings.json の statusLine.command を NEW_COMMAND に差し替える。---
+# --- (2) settings.json の statusLine を NEW_COMMAND で更新する。---
 # settings.json はトークン等を含む可能性があるため world-readable な temp を作らない。
 # また `mktemp` の default (/tmp) はターゲットと別 FS の可能性があり、その場合
 # 後段の `mv` が copy+unlink フォールバックで非アトミックになる。同一ディレクトリに
@@ -163,11 +163,15 @@ umask 077
 TMP=$(mktemp "$SETTINGS.XXXXXX")
 trap 'rm -f "$TMP"' EXIT
 
+# 既存 statusLine の type / command 以外のキー (padding 等) は保持し、本プラグインが
+# 所有する type と command だけを上書きする。statusLine が object でない場合 (文字列・
+# null・配列・キー欠落) は保持すべき既存キーが無いため {} として扱う。
 jq --arg cmd "$NEW_COMMAND" '
-  .statusLine = {
-    "type": "command",
-    "command": $cmd
-  }
+  ((.statusLine | select(type == "object")) // {}) as $existing
+  | .statusLine = ($existing + {
+      "type": "command",
+      "command": $cmd
+    })
 ' "$SETTINGS" > "$TMP"
 
 # 念のため出力 JSON が valid か再検証してから差し替える。

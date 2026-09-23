@@ -1116,7 +1116,29 @@ class CodexJobHelperTest(unittest.TestCase):
                     self.assertIn(str(prompt), invoked)
                     self.assertNotIn("private prompt body", " ".join(invoked))
 
+    def resolve_real_node_path(self) -> str:
+        """環境差し替え前に実 node バイナリの絶対パスを解決する。
+
+        node が HOME 配下を参照する version manager (asdf 等) の shim の場合、
+        HOME を差し替えた subprocess から起動すると shim が実体を解決できず
+        失敗する。差し替え前に `node -p process.execPath` で解決した絶対パス
+        を使うことで、shim を経由せず実バイナリを直接起動できるようにする。
+        """
+        result = subprocess.run(
+            ["node", "-p", "process.execPath"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=5,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        real_node = result.stdout.strip()
+        self.assertTrue(real_node)
+        return real_node
+
     def test_status_wait_polls_the_v106_single_status_contract(self) -> None:
+        real_node = self.resolve_real_node_path()
         with tempfile.TemporaryDirectory() as temporary_name:
             temp = Path(temporary_name)
             companion = self.fake_companion_home(temp)
@@ -1127,10 +1149,25 @@ class CodexJobHelperTest(unittest.TestCase):
                 "console.log(JSON.stringify({job:{id:'task-test',status:'completed'}}));\n",
                 encoding="utf-8",
             )
+            # run-codex-job.sh 内部でも `node` を PATH 経由で起動するため、
+            # 解決済みの絶対パスへ転送する shim を PATH の先頭に置く。これにより
+            # HOME 差し替え後の `node` 起動もすべてこの shim 経由になり、
+            # version manager の shim を経由しない。
+            node_shim_dir = temp / "node-shim"
+            node_shim_dir.mkdir()
+            node_shim = node_shim_dir / "node"
+            node_shim.write_text(
+                "#!/bin/bash\n"
+                f'exec "{real_node}" "$@"\n',
+                encoding="utf-8",
+            )
+            node_shim.chmod(0o755)
+
             env = os.environ.copy()
             env["HOME"] = str(temp / "home")
+            env["PATH"] = os.pathsep.join([str(node_shim_dir), env.get("PATH", "")])
             direct = subprocess.run(
-                ["node", str(companion), "status", "task-test", "--json"],
+                [real_node, str(companion), "status", "task-test", "--json"],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

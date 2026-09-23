@@ -9,6 +9,9 @@ pre-push-codex-review 側は byte-identical なコピーを保つ契約とする
 `codex-companion-resolver.sh` は逆方向で、pre-push-codex-review 側が正本、
 codex-advisor 側がそのコピーを保つ。
 
+`isolated-commit-template.sh` (隔離ルート免除の判定器) は git-guardrails 側が正本、
+auto-lint-check 側がそのコピーを保つ。
+
 `markers.sh` は plugin ごとにマーカー集合が異なる (pre-push-review core は
 code / security の 2 マーカー、pre-push-codex-review は codex マーカーのみ) ため、
 本テストの同一性検査の対象外とする。
@@ -32,6 +35,16 @@ SPLIT_LIB = (
 CODEX_ADVISOR_RESOLVER = (
     ROOT / "plugins" / "codex-advisor" / "scripts" / "lib"
     / "codex-companion-resolver.sh"
+)
+# 隔離ルート免除の判定器。git-guardrails 側が正本で、auto-lint-check 側が
+# byte-identical なコピーを保つ。
+ISOLATED_COMMIT_TEMPLATE_CANONICAL = (
+    ROOT / "plugins" / "git-guardrails" / "hooks" / "scripts" / "lib"
+    / "isolated-commit-template.sh"
+)
+ISOLATED_COMMIT_TEMPLATE_COPY = (
+    ROOT / "plugins" / "auto-lint-check" / "hooks" / "scripts" / "lib"
+    / "isolated-commit-template.sh"
 )
 
 # pre-push-review core が canonical。pre-push-codex-review はこの byte-identical
@@ -68,6 +81,13 @@ class SharedLibCopiesTest(unittest.TestCase):
     ) -> None:
         self.assert_byte_identical(
             SPLIT_LIB / "codex-companion-resolver.sh", CODEX_ADVISOR_RESOLVER
+        )
+
+    def test_isolated_commit_template_is_byte_identical_in_auto_lint_check(
+        self,
+    ) -> None:
+        self.assert_byte_identical(
+            ISOLATED_COMMIT_TEMPLATE_CANONICAL, ISOLATED_COMMIT_TEMPLATE_COPY
         )
 
 
