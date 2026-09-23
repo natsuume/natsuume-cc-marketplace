@@ -490,7 +490,7 @@ done
 #     norm_b (Closes 検証 Step の除去) が対象とするブロックそのものを、 除去 (norm_b_pr_create_only
 #     の呼び出し) より前に抽出し、 実在を確認する。 このブロックはチェック 3 の入力としても
 #     再利用する (#185 のチェック 3 の対象ブロックと同一であるため)。
-sed -n '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!p}' "$WORKDIR/raw_pr_create.txt" > "$WORKDIR/step3_block.txt"
+sed -n '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!p;}' "$WORKDIR/raw_pr_create.txt" > "$WORKDIR/step3_block.txt"
 if [ ! -s "$WORKDIR/step3_block.txt" ]; then
   echo "ERROR: gh pr create entry の prompt から '## Step 3: Closes 検証' ブロックが抽出できませんでした (norm_b の除去対象が実在しません)。見出しの変更または削除の可能性があります。" >&2
   exit 1
@@ -520,7 +520,7 @@ norm_a() {
 #     除去対象の実在検証は上記 (raw 抽出直後の step3_block.txt 抽出 + 非空チェック) で
 #     完了済みのため、 ここでは除去のみを行う (#187)。
 norm_b_pr_create_only() {
-  sed -e '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!d}' \
+  sed -e '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!d;}' \
     -e 's/^## Step 4: 返り値/## Step 3: 返り値/' \
     -e 's/Step 2 (禁止カテゴリ判定) に該当なし/該当なし/' \
     -e 's/Step 2 に該当あり/該当あり/'
