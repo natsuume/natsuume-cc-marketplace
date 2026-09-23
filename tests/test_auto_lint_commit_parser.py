@@ -258,6 +258,25 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             4,
         )
 
+    def test_quoted_delimiter_body_substitution_is_data(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat > f.md <<'EOF'\nrun $(git commit -am x) here\nEOF"
+            ),
+            4,
+        )
+
+    def test_commit_message_heredoc_with_backtick_quoted_escape_is_commit(
+        self,
+    ) -> None:
+        self.assertEqual(
+            self.classify(
+                "git commit -F - <<'EOF'\nfix: handle quotes\n\n"
+                "escape `\\'` in the parser\nEOF"
+            ),
+            5,
+        )
+
     def test_unquoted_delimiter_body_substitution_still_fails_closed(
         self,
     ) -> None:

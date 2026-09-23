@@ -350,6 +350,66 @@ def _strip_safe_heredocs(command: str) -> str:
     return stripped
 
 
+# heredoc の delimiter WORD を終える文字 (引用符の外に現れた場合)。
+_HEREDOC_WORD_END_CHARS: frozenset[str] = frozenset(" \t\n;&|()<>")
+
+
+def _read_heredoc_word(command: str, start: int) -> tuple[str | None, bool, int]:
+    """heredoc 演算子 (``<<`` / ``<<-``) の直後の ``start`` から delimiter WORD
+    を読む。
+
+    戻り値は (引用符と backslash を外した WORD, WORD の一部でも引用符または
+    backslash で quote されているか, WORD の直後の index)。WORD が無い場合
+    の WORD は ``None``。
+    """
+    n = len(command)
+    i = start
+    while i < n and command[i] in " \t":
+        i += 1
+    word_start = i
+    chars: list[str] = []
+    quoted = False
+    while i < n and command[i] not in _HEREDOC_WORD_END_CHARS:
+        ch = command[i]
+        if ch in ("'", '"'):
+            close = command.find(ch, i + 1)
+            if close == -1:
+                close = n
+            quoted = True
+            chars.append(command[i + 1 : close])
+            i = close + 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            quoted = True
+            chars.append(command[i + 1])
+            i += 2
+            continue
+        chars.append(ch)
+        i += 1
+    if i == word_start:
+        return None, False, i
+    return "".join(chars), quoted, min(i, n)
+
+
+def _find_heredoc_body_end(
+    command: str, start: int, word: str, strip_tabs: bool
+) -> int:
+    """本文 1 行目の先頭 ``start`` から、終端行 (``WORD`` と完全一致する行。
+    ``strip_tabs`` なら先頭タブを除去して比較) の直後の index を返す。
+    終端行が無ければ ``len(command)`` を返す。"""
+    n = len(command)
+    pos = start
+    while pos < n:
+        newline = command.find("\n", pos)
+        line_end = n if newline == -1 else newline
+        next_pos = n if newline == -1 else newline + 1
+        line = command[pos:line_end]
+        if (line.lstrip("\t") if strip_tabs else line) == word:
+            return next_pos
+        pos = next_pos
+    return n
+
+
 def _strip_heredoc_bodies(command: str) -> str:
     """heredoc の本文行と終端行を command から除去し、演算子の行は残す。
 
@@ -377,7 +437,65 @@ def _strip_heredoc_bodies(command: str) -> str:
     ``_strip_safe_heredocs`` の後に呼ぶこと (``-m "$(cat <<'EOF' ... EOF)"``
     の本文を先に除去すると ``_HEREDOC_CAT_RE`` が一致しなくなる)。
     """
-    return command
+    out: list[str] = []
+    # 演算子を検出済みで、本文をまだ読んでいない heredoc の (WORD, quoted,
+    # strip_tabs)。本文は演算子の行の改行の後から出現順に読む。
+    pending: list[tuple[str, bool, bool]] = []
+    quote: str | None = None
+    n = len(command)
+    i = 0
+    while i < n:
+        ch = command[i]
+        if quote == "'":
+            out.append(ch)
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if ch == "\\":
+            out.append(command[i : i + 2])
+            i += 2
+            continue
+        if quote == '"':
+            out.append(ch)
+            if ch == '"':
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if command.startswith("<<<", i):
+            out.append("<<<")
+            i += 3
+            continue
+        if command.startswith("<<", i):
+            j = i + 2
+            strip_tabs = command.startswith("-", j)
+            if strip_tabs:
+                j += 1
+            word, quoted, j = _read_heredoc_word(command, j)
+            if word is not None:
+                pending.append((word, quoted, strip_tabs))
+            out.append(command[i:j])
+            i = j
+            continue
+        if ch == "\n" and pending:
+            out.append(ch)
+            i += 1
+            for word, quoted, strip_tabs in pending:
+                end = _find_heredoc_body_end(command, i, word, strip_tabs)
+                body = command[i:end]
+                if not quoted and ("$(" in body or "`" in body):
+                    out.append(body)
+                i = end
+            pending = []
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _normalize_command(command: str) -> str:
