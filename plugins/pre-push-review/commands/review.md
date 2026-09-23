@@ -54,6 +54,7 @@ reviewer は confidence による自己フィルタをしない契約のため�
 
 4. valid finding と、needs-user-decision からユーザー判断により修正対象となった finding は、修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)。invalid finding はこの修正工程へ進めない。
 5. **code-reviewer / security-reviewer subagent の修正対象 finding** は通常具体的な対処 (バグ修正 / input validation / 秘匿情報削除 / injection 対策) なので追加の壁打ちは optional。 ただし設計判断が絡む修正では壁打ち推奨。
+   - security-reviewer は net diff に加えて branch の各 commit の patch も検査するため、net diff に残らない中間 commit の秘匿情報も報告されます。秘匿情報の finding は、上に削除 commit を積んでも push される履歴に残るため、push 前に該当 commit を履歴から除去します (未 push の branch なら `git reset --soft <merge-base>` で変更をまとめ直して commit し直す等)。履歴の書き換えは破壊的操作なので、push 済みの branch では force push の要否を含めてユーザーの判断を得ます。露出した可能性がある秘匿情報はローテーションします。
 6. parent-safe report だけでは追加検証が必要な場合は、 raw detail を親へ要求せず、 対象の同一 reviewer subagent を resume して focused question を渡す。 reviewer は自分の context / transcript に残る詳細で検証し、 結果だけを parent-safe report で返す。 resume 後の再 stop では launch attestation が消費済みのため marker は更新されない (marker 更新には該当 reviewer の新規起動が必要)。
 7. 修正後に branch 差分が変わるとマーカーは自動失効するため、 再度 `/pre-push-review:review` を実行して 2 subagent を再走させる。
 

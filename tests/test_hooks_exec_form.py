@@ -262,11 +262,11 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "git-guardrails": "0.6.7",
     "enforce-draft-pr": "0.5.4",
     "auto-lint-check": "0.7.0",
-    "pre-push-review": "6.0.4",
+    "pre-push-review": "6.1.0",
     "pre-push-codex-review": "2.2.0",
     "pre-merge-codex-review": "2.2.1",
     "update-default-branch": "0.4.2",
-    "natsuume-statusline": "0.10.2",
+    "natsuume-statusline": "0.10.3",
     "agent-discipline": "0.28.0",
     "experimental-agent-discipline": "0.4.0",
     "ui-discipline": "0.4.4",
@@ -274,7 +274,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "codex-advisor": "4.0.1",
     "rate-limit": "0.5.2",
     "session-handoff": "0.5.0",
-    "repo-analytics": "0.2.3",
+    "repo-analytics": "0.2.5",
 }
 
 

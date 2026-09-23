@@ -7,8 +7,6 @@ description: スケルトン付き記事ファイル (outline skill の成果物
 
 outline skill (`/natsuume-writing:outline`) が書き込んだインファイルスケルトン (見出し + HTML コメント) から、執筆ルール準拠のたたき台を**一括生成**するフェーズの詳細手順です。常時注入 (SessionStart) が配送する執筆ルール要点 (`rules/core-summary.md`) を前提に、本 skill はスケルトンの本文化と、未検証事項の TODO 明示までの具体的な手順を提供します。
 
-この `SKILL.md` を含む `skills/draft/` の 2 階層上を `<plugin-root>` として解決する。通常の Skill 実行では hook 用の `${CLAUDE_PLUGIN_ROOT}` が設定される保証はないため、reference file は実パスから解決する。
-
 以下の「ユーザーに確認」は `AskUserQuestion` を使い、未確定事項を推測で埋めない。
 
 対象は Markdown ファイルのみです (ReVIEW 形式の技術書原稿はスコープ外のため扱いません)。
@@ -29,7 +27,7 @@ outline skill (`/natsuume-writing:outline`) が書き込んだインファイル
 
 ## 2. 執筆ルールの読み込み
 
-`<plugin-root>/rules/writing-rules.md` を読み込みます。以下を適用します。
+`${CLAUDE_PLUGIN_ROOT}/rules/writing-rules.md` を読み込みます。以下を適用します。
 
 - 共通コア (セクション 0〜10): 通底原則・人称・文末表現・語彙・表記・文のリズム・構成の型・コード/図表との絡め方・誠実性の刻印・構造化とレトリックの密度
 - outline コメントで確定した媒体・記事タイプに対応するプロファイル差分 (書籍プロファイル / ブログプロファイル、企業ブログ/個人ブログのさらなる差分)

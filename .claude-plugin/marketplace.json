@@ -35,7 +35,7 @@
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "git push 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "6.0.4",
+      "version": "6.1.0",
       "keywords": ["push", "review", "quality", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
@@ -63,7 +63,7 @@
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
       "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。/natsuume-statusline:setup で ~/.claude/settings.json に登録する。",
-      "version": "0.10.2",
+      "version": "0.10.3",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
@@ -119,7 +119,7 @@
       "name": "repo-analytics",
       "source": "./plugins/repo-analytics",
       "description": "GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン。",
-      "version": "0.2.3",
+      "version": "0.2.5",
       "keywords": ["analytics", "leadtime", "github", "metrics", "report"]
     }
   ]
