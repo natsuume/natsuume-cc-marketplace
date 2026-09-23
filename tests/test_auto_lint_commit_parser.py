@@ -299,6 +299,62 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             4,
         )
 
+    def test_body_fed_to_shell_interpreter_is_parsed_as_commands(self) -> None:
+        self.assertEqual(
+            self.classify("bash <<'EOF'\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_staging_in_body_fed_to_shell_interpreter_is_detected(self) -> None:
+        self.assertEqual(
+            self.classify("bash <<'EOF'\ngit add f.py\ngit commit -m x\nEOF"),
+            0,
+        )
+
+    def test_body_fed_to_interpreter_after_cd_is_repo_override(self) -> None:
+        self.assertEqual(
+            self.classify("cd /tmp && bash <<'EOF'\ngit commit -m x\nEOF"),
+            3,
+        )
+
+    def test_interpreter_name_is_resolved_past_prefixes_and_paths(self) -> None:
+        for command in (
+            "/bin/sh -s <<'EOF'\ngit commit -m x\nEOF",
+            "env FOO=1 zsh <<'EOF'\ngit commit -m x\nEOF",
+            "source /dev/stdin <<'EOF'\ngit commit -m x\nEOF",
+            ". /dev/stdin <<'EOF'\ngit commit -m x\nEOF",
+            "bash 2>&1 <<'EOF'\ngit commit -m x\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_only_heredoc_of_interpreter_command_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat <<'EOF'; bash <<'X'\nfoo (git commit)\nEOF\n"
+                "git commit -m x\nX"
+            ),
+            5,
+        )
+
+    def test_heredoc_operator_in_comment_is_ignored(self) -> None:
+        self.assertEqual(
+            self.classify("echo hi # see <<'EOF'\n$(git commit -am x)\nEOF"),
+            3,
+        )
+
+    def test_hash_inside_word_is_not_comment(self) -> None:
+        self.assertEqual(
+            self.classify("echo a#b <<'EOF'\n$(git commit -am x)\nEOF"),
+            4,
+        )
+
+    def test_shift_in_parameter_expansion_is_not_heredoc(self) -> None:
+        self.assertEqual(
+            self.classify("echo ${x:-a<<b}\ngit commit -m x"),
+            5,
+        )
+
     def test_unquoted_delimiter_body_substitution_still_fails_closed(
         self,
     ) -> None:

@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 import shlex
 import sys
+from dataclasses import dataclass
 
 COMMIT_VALUE_FLAGS: frozenset[str] = frozenset(
     {
@@ -410,6 +411,83 @@ def _find_heredoc_body_end(
     return n
 
 
+@dataclass
+class _PendingHeredoc:
+    """演算子を検出済みで本文をまだ読んでいない heredoc。"""
+
+    word: str
+    quoted: bool
+    strip_tabs: bool
+    # 演算子を含む simple command の開始 index。
+    segment_start: int
+    # 演算子を含む simple command がシェルインタプリタか (本文を実行するか)。
+    feeds_interpreter: bool = False
+
+
+# heredoc の本文をシェルスクリプトとして実行する command name (basename)。
+HEREDOC_INTERPRETER_COMMANDS: frozenset[str] = frozenset(
+    {"bash", "sh", "zsh", "dash", "ksh", "source", "."}
+)
+
+# この文字の直後にある ``#`` はコメントの開始 (= 語の先頭)。
+_COMMENT_START_PRECEDERS: frozenset[str] = frozenset(" \t\n;&|()")
+
+# target が別トークンに分かれている redirection 演算子 (``>`` ``out`` 等)。
+_BARE_REDIRECT_RE = re.compile(r"^\d*(?:<<-?|<>|>>|>\||<&|>&|<|>)$")
+
+
+def _is_segment_separator(command: str, i: int) -> bool:
+    """``command[i]`` が simple command を区切る文字 (``;`` ``&`` ``|`` ``(``
+    ``)`` 改行) か判定する。``2>&1`` / ``&>`` / ``>|`` のように redirection
+    の一部として現れる ``&`` / ``|`` は区切りにしない。"""
+    ch = command[i]
+    prev = command[i - 1] if i > 0 else ""
+    nxt = command[i + 1] if i + 1 < len(command) else ""
+    if ch in ";()\n":
+        return True
+    if ch == "&":
+        return prev not in ("<", ">") and nxt != ">"
+    if ch == "|":
+        return prev != ">"
+    return False
+
+
+def _simple_command_name(segment: str) -> str | None:
+    """simple command の文字列から command name を返す。
+
+    代入 (``X=y``)、``env`` と透過 wrapper (``COMMAND_WRAPPERS``) およびその
+    直後の option、shell keyword、redirection (target を含む) を読み飛ばした
+    最初の語を返す。無い場合やトークン化できない場合は ``None``。"""
+    try:
+        words = shlex.split(segment, comments=False, posix=True)
+    except ValueError:
+        return None
+    skip_next = False
+    after_wrapper = False
+    for word in words:
+        if skip_next:
+            skip_next = False
+            continue
+        if _is_redirection_token(word):
+            skip_next = bool(_BARE_REDIRECT_RE.match(word))
+            continue
+        if _is_env_assignment(word) or word in SHELL_KEYWORDS:
+            continue
+        if word == "env" or word in COMMAND_WRAPPERS:
+            after_wrapper = True
+            continue
+        if after_wrapper and word.startswith("-"):
+            continue
+        return word
+    return None
+
+
+def _is_heredoc_interpreter(name: str | None) -> bool:
+    if name is None:
+        return False
+    return name.rsplit("/", 1)[-1] in HEREDOC_INTERPRETER_COMMANDS
+
+
 def _strip_heredoc_bodies(command: str) -> str:
     """heredoc の本文行と終端行を command から除去し、演算子の行は残す。
 
@@ -434,20 +512,43 @@ def _strip_heredoc_bodies(command: str) -> str:
     - 引用符なしの ``WORD`` の本文は bash が展開する (``$(...)`` / backtick
       が実行される) ため、本文に ``$(`` または backtick を含む場合は除去
       せず残し、後段の substitution fail-closed 判定 (exit 3) に委ねる
+    - 演算子を持つ simple command の command name (代入・``env``・透過
+      wrapper・shell keyword・redirection を読み飛ばした最初の語) の
+      basename が ``HEREDOC_INTERPRETER_COMMANDS`` に含まれる場合、本文は
+      シェルがコマンドとして実行するため除去せず残す
+    - 語の境界 (行頭・空白・区切り文字の直後) にある ``#`` から行末までは
+      コメントとし、その中の ``<<`` は heredoc 演算子として扱わない。語の
+      途中の ``#`` (``a#b``) はコメントではない
+    - parameter expansion (``${`` ... ``}``、ネストを追跡) の内側の ``<<``
+      は heredoc 演算子として扱わない
 
     ``_strip_safe_heredocs`` の後に呼ぶこと (``-m "$(cat <<'EOF' ... EOF)"``
     の本文を先に除去すると ``_HEREDOC_CAT_RE`` が一致しなくなる)。
     """
     out: list[str] = []
-    # 演算子を検出済みで、本文をまだ読んでいない heredoc の (WORD, quoted,
-    # strip_tabs)。本文は演算子の行の改行の後から出現順に読む。
-    pending: list[tuple[str, bool, bool]] = []
+    # 演算子を検出済みで、本文をまだ読んでいない heredoc。本文は演算子の行の
+    # 改行の後から出現順に読む。
+    pending: list[_PendingHeredoc] = []
+    # pending のうち、演算子を含む simple command がまだ閉じておらず
+    # command name を判定していないもの。
+    unresolved: list[_PendingHeredoc] = []
+    # 現在の simple command の開始 index。
+    segment_start = 0
     quote: str | None = None
     # 算術コンテキスト (``((`` ... ``))`` / ``$((`` ... ``))``) の内側で未対応の
     # 括弧の数。0 より大きい間は ``<<`` を shift 演算子とみなし、heredoc
     # 演算子として扱わない。
     arith_depth = 0
+    # parameter expansion (``${`` ... ``}``) の内側で未対応の ``${`` の数。
+    param_depth = 0
     n = len(command)
+
+    def close_segment(end: int) -> None:
+        for heredoc in unresolved:
+            name = _simple_command_name(command[heredoc.segment_start : end])
+            heredoc.feeds_interpreter = _is_heredoc_interpreter(name)
+        unresolved.clear()
+
     i = 0
     while i < n:
         ch = command[i]
@@ -480,6 +581,17 @@ def _strip_heredoc_bodies(command: str) -> str:
             out.append(ch)
             i += 1
             continue
+        if param_depth:
+            if command.startswith("${", i):
+                param_depth += 1
+                out.append("${")
+                i += 2
+                continue
+            if ch == "}":
+                param_depth -= 1
+            out.append(ch)
+            i += 1
+            continue
         arith_open = next(
             (op for op in ("$((", "((") if command.startswith(op, i)), None
         )
@@ -487,6 +599,18 @@ def _strip_heredoc_bodies(command: str) -> str:
             arith_depth = 2
             out.append(arith_open)
             i += len(arith_open)
+            continue
+        if command.startswith("${", i):
+            param_depth = 1
+            out.append("${")
+            i += 2
+            continue
+        if ch == "#" and (i == 0 or command[i - 1] in _COMMENT_START_PRECEDERS):
+            line_end = command.find("\n", i)
+            if line_end == -1:
+                line_end = n
+            out.append(command[i:line_end])
+            i = line_end
             continue
         if command.startswith("<<<", i):
             out.append("<<<")
@@ -499,20 +623,31 @@ def _strip_heredoc_bodies(command: str) -> str:
                 j += 1
             word, quoted, j = _read_heredoc_word(command, j)
             if word is not None:
-                pending.append((word, quoted, strip_tabs))
+                heredoc = _PendingHeredoc(word, quoted, strip_tabs, segment_start)
+                pending.append(heredoc)
+                unresolved.append(heredoc)
             out.append(command[i:j])
             i = j
             continue
+        if _is_segment_separator(command, i):
+            close_segment(i)
+            segment_start = i + 1
         if ch == "\n" and pending:
             out.append(ch)
             i += 1
-            for word, quoted, strip_tabs in pending:
-                end = _find_heredoc_body_end(command, i, word, strip_tabs)
+            for heredoc in pending:
+                end = _find_heredoc_body_end(
+                    command, i, heredoc.word, heredoc.strip_tabs
+                )
                 body = command[i:end]
-                if not quoted and ("$(" in body or "`" in body):
+                expands_substitution = not heredoc.quoted and (
+                    "$(" in body or "`" in body
+                )
+                if heredoc.feeds_interpreter or expands_substitution:
                     out.append(body)
                 i = end
             pending = []
+            segment_start = i
             continue
         out.append(ch)
         i += 1
