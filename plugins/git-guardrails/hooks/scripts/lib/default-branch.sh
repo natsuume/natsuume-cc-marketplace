@@ -192,7 +192,7 @@ strip_squoted_text() {
       if [ "$c" = "\\" ]; then
         local nc="${cmd:$((i+1)):1}"
         case "$nc" in
-          '$'|'`'|'"'|'\\')
+          '$'|'`'|'"'|'\')
             result+="$c$nc"; i=$((i+2)); continue ;;
         esac
       fi
@@ -206,7 +206,7 @@ strip_squoted_text() {
     case "$c" in
       "'") in_squote=1; i=$((i+1)) ;;
       '"') in_dquote=1; result+="$c"; i=$((i+1)) ;;
-      '\\')
+      '\')
         local nc="${cmd:$((i+1)):1}"
         result+="$c$nc"
         i=$((i+2))
@@ -253,7 +253,7 @@ find_group_close() {
       if [ "$c" = "\\" ]; then
         local nc="${seg:$((i+1)):1}"
         case "$nc" in
-          '$'|'`'|'"'|'\\') i=$((i+2)); continue ;;
+          '$'|'`'|'"'|'\') i=$((i+2)); continue ;;
         esac
       fi
       [ "$c" = '"' ] && in_dquote=0
@@ -263,7 +263,7 @@ find_group_close() {
     case "$c" in
       "'") in_squote=1; i=$((i+1)) ;;
       '"') in_dquote=1; i=$((i+1)) ;;
-      '\\') i=$((i+2)) ;;
+      '\') i=$((i+2)) ;;
       '('|'{') depth=$((depth+1)); i=$((i+1)) ;;
       ')'|'}')
         depth=$((depth-1))
