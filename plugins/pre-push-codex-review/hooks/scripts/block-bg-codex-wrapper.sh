@@ -77,9 +77,9 @@
 #      - **規則 2/3 (executable 位置分類)**: 規則 1 / 1.5 に該当しない segment は
 #        `classify_wrapper_segment` (戻り値 0 = 実行形、 1 = mention 候補) が判定する。
 #        判定は「canonical token 値」 (single/double quote 除去・backslash escape 解決・
-#        fragment 連結を行った shell word の静的な値。 `canonicalize_token` 関数参照) に
+#        fragment 連結を行った shell word の静的な値。 `analyze_shell_word` 関数参照) に
 #        対して行う 14-step の順序付き決定表であり、 概略は次のとおり: token 検査
-#        (`token_is_unanalyzable`) は構造検査と意味検査の 2 種類に分かれる。 構造検査
+#        (`analyze_shell_word`) は構造検査と意味検査の 2 種類に分かれる。 構造検査
 #        (quote が閉じない・quote 外の空白 = 共有 tokenizer の quote 状態 desync で
 #        複数 word が 1 token に merge され危険 option を隠す経路、 quote 外の
 #        `(`/`)` = 関数定義や subshell 等の compound command を作る文法構造、
@@ -540,10 +540,8 @@ pipe_chain_all_mention_safe() {
 # 戻り値: 0 = `$` + <next_char> が展開を開始する、 1 = `$` は literal。
 #
 # **この表が「`$` の直後 1 文字で展開が始まるか」 の単一の正本である**。
-# `canonicalize_token` (double quote 分岐・unquoted 分岐) と
-# `token_is_unanalyzable` の rule (d) はいずれもこの helper だけを参照し、
-# 列挙をインラインで複製しない (以前は 3 箇所に複製されており、 旧算術展開
-# `$[...]` の `[` が 1 箇所も入っていないという drift を実際に生んでいた)。
+# `analyze_shell_word` の rule (d) はこの helper だけを参照し、 列挙をインラインで
+# 複製しない (複製すると一部の箇所だけ列挙が欠ける drift が起きうるため)。
 #
 # 集合は bash の展開文法から導かれる**閉じた集合**である: 変数名の先頭文字
 # (`[A-Za-z0-9_]`。 数字は位置パラメータ `$1` 等)、 `${...}` の `{`、
@@ -556,7 +554,7 @@ pipe_chain_all_mention_safe() {
 # `$'` の `'` が single quote 開始にならず `$` が literal になり、 `$"` は
 # double quote の終端になるため、 いずれも展開を開始しないためである
 # (quote 外に現れる `$'` / `$"` は `segment_is_unanalyzable` および
-# `token_is_unanalyzable` の rule (c) が `$` の出現だけで一括して覆う)。
+# `analyze_shell_word` の rule (c) が `$` の出現だけで一括して覆う)。
 dollar_starts_expansion() {
   case "$1" in
     [A-Za-z0-9_]|'{'|'('|'['|'@'|'*'|'#'|'?'|'!'|'-'|'$') return 0 ;;
@@ -569,16 +567,16 @@ dollar_starts_expansion() {
 #   <check_kind> (`head` / `option_scan`) では canonical token 値を _SW_CANONICAL に
 #   設定する)、 1 = 解析不能 (呼び出し側は実行形とする)。
 #
-# 1 つの shell word (共有 tokenizer `tokenize_segment` が返す 1 token) を、 bash の
-# quote 意味論に従って 1 文字ずつ 1 回だけ走査し、 次の 2 つを同時に行う:
-#   - 検査: <check_kind> ごとの規則 (構造検査 / 意味検査) に 1 つでも該当すれば
+# 決定表 step 3。 1 つの shell word (共有 tokenizer `tokenize_segment` が返す 1 token)
+# を、 bash の quote 意味論に従って 1 文字ずつ 1 回だけ走査し、 次の 2 つを同時に行う:
+#   - 検査: <check_kind> ごとの規則 (下記の構造検査 / 意味検査) に 1 つでも該当すれば
 #     解析不能
 #   - canonical 値の生成: single / double quote 除去・backslash escape 解決・
 #     fragment 連結を行った静的な値 (`--'pre'` → `--pre`)
 # quote / escape の状態機械を検査と canonical 値生成で共有するため、 両者の意味論が
 # 食い違う (一方でだけ quote 区間や escape を正しく扱える) ことが構造的に起きない。
 #
-# <check_kind> と適用規則 (規則の内容は `token_is_unanalyzable` 節を参照):
+# <check_kind>:
 #   `structure`   構造検査のみ (rule (a)/(b)/(b2)/(b3)/(b4))。 全 token に適用する。
 #                 canonical 値は設定しない
 #   `head`        構造検査 + 意味検査の厳格判定 (rule (a)〜(e))。 実 head・timeout の
@@ -587,224 +585,24 @@ dollar_starts_expansion() {
 #                 rg / sort / git の option 走査対象に適用する
 #   未知の値は `head` と同じ厳格判定 (fail-closed 側の既定)。
 #
-# 意味検査を通過した token は quote 外の `$` と、 double quote 内の展開開始 `$` を
-# 含まないため、 canonical 値の生成は必ず成功する (動的展開が残る token は検査の
-# 段階で解析不能になる)。
-#
-# bash 3.2 互換 (mapfile / declare -A / `${var,,}` / nameref を使わない)。 canonical
-# 値は stdout ではなく _SW_CANONICAL で返し、 呼び出し側のコマンド置換 (subshell) を
-# 不要にする。
-_SW_CANONICAL=""
-analyze_shell_word() {
-  _SW_CANONICAL=""
-  return 1
-}
-
-# canonicalize_token <raw_token>
-# stdout: canonical token 値 (single/double quote 除去・backslash escape 解決・
-#   fragment 連結を行った、 shell word の静的な値)。
-# 戻り値: 0 = canonical 化成功 (stdout に値)、 1 = 失敗 (single quote 外に解決不能な
-#   `$` (動的展開、 例: `$VAR` / `${VAR}`) が残る。 コマンド置換 `$(` 等は
-#   `segment_has_indirection` (規則 1) が本関数より先に検知済みのため、 ここに残る
-#   `$` は素の変数展開のみ)。
-#
-# **backslash の意味論は quote 文脈で分岐する** (bash 実挙動 / lib/cmd-parser.sh
-# の `tokenize_segment` / `split_command` の double quote 分岐と同じ意味論):
-#   - unquoted (single quote 外): `\` は次の 1 文字を無条件に escape する
-#     (`\x` → `x`)。
+# **backslash の意味論は quote 文脈で分岐する** (bash 実挙動 / lib/cmd-parser.sh の
+# `tokenize_segment` / `split_command` の double quote 分岐と同じ意味論):
+#   - unquoted: `\` は次の 1 文字を無条件に escape する (`\x` → `x`)。 token 末尾の
+#     孤立した `\` (次の文字が無い) は `\` 自体を literal として残す。
 #   - single quote 内: `\` を含めすべて literal (escape 無効)。
-#   - double quote 内: `\` は次の文字が `$` / バッククォート / `"` / `\` の
-#     場合のみ escape として消費し、 それ以外 (例 `\-`) は `\` 自体を literal
-#     として保持する (bash は `"\-\-pre"` を `\-\-pre` のまま解決し `--pre`
-#     にはしない。 これを無条件 escape すると `"\-\-pre"` が誤って `--pre` に
-#     一致してしまう false positive を生む)。 escaped backslash (`\\`) は 1 つの
-#     `\` に collapse し、 その直後に現れる文字は改めて通常どおり評価する
-#     (直後が escape されていない `$` なら動的展開として canonical 化失敗と
-#     判定する。 `"\\$HOME"` の regression 修正: escape 判定の case pattern が
-#     2 文字 arity (`'\\'`) で書かれており、 1 文字の backslash しか保持しない
-#     `_ct_nc` とは一致し得なかった。 escape が常に不発になり `\\$HOME` を
-#     静的解決不能な動的展開として検知できていなかったバグを修正した。
-#     修正後の pattern は 1 文字 (`'\'`) で `_ct_nc` と正しく一致する)。
-#
-# **`$` 判定の精密化 (issue #339 3 巡目レビュー、 codex P2 may-defer 採用)**: `$`
-# の直後の 1 文字が展開開始として有効な文字 (英数字 / `_` / `{` / `(` / `[` /
-# `@` / `*` / `#` / `?` / `!` / `-` / `$`。 `$VAR` / `${...}` / `$(...)` /
-# 旧算術展開 `$[...]` / `$@` / `$*` / `$#` / `$?` / `$!` / `$-` / `$$` に対応)
-# の場合のみ動的展開として canonical 化失敗
-# (`_ct_failed=1`) とする。 **この列挙は本関数内に複製せず、 単一の正本である
-# `dollar_starts_expansion` helper を double quote 分岐・unquoted 分岐の
-# 両方から呼ぶ** (`token_is_unanalyzable` の rule (d) も同じ helper を参照する
-# ため、 3 箇所の列挙 drift が構造的に起きない。 5 巡目レビュー時点では `[` が
-# 3 箇所すべてから欠落しており、 `"marker$[1]"` (bash 実挙動では `marker1` へ
-# 展開される) を literal と誤認していた)。 それ以外 (token 末尾の `$`、 または `"marker$"` の
-# ような正規表現の行末アンカーとして使われる literal な `$`) は展開を開始しない
-# ため literal 文字として結果に含める。 コマンド置換 `$(` は `segment_has_indirection`
-# (規則 1) が本関数より先に検知済みなので、 ここでの `$(` 判定は主に「規則 1 を
-# すり抜けた single quote 内の `$(` を canonicalize_token 内で再度誤検知しない」
-# ための一貫性維持であり、 実質的な検知は規則 1 が担う。
-#
-# **意味検査との関係 (決定表 step 3)**: 本関数は値を判定に使う token に対してだけ
-# 呼ばれ、 その token は呼び出し前に `token_is_unanalyzable` の意味検査を通過して
-# いる。 quote 外の `$` (変数展開・`${...}`・`$(...)`・ANSI-C quoting `$'...'`・
-# locale 翻訳 quoting `$"..."`・旧算術展開 `$[...]` を含む) を持つ token は意味検査
-# が解析不能 (実行形) と判定して落とすため、 本関数が実際に処理する `$` は
-# **double quote 内の残余ケースのみ**である (unquoted 領域の `$` 分岐は理論上
-# 到達しないが、 保険として残す)。 double quote 内の `$` 判定・backslash の quote
-# 別意味論の詳細は `token_is_unanalyzable` 関数コメント参照。
-#
-# **cmd-parser.sh の `unquote_token` との違い**: `unquote_token` はトークン両端の
-# quote ペアを 1 段剥がすだけで、 `--'pre'` や `--'ext-diff'` のような fragment
-# 分断形 (先頭 `--` が quote 外、 残りが quote 内という 1 token 内の quote 混在) を
-# 解決できない (両端が quote で揃っていないため無変化のまま返る)。 本関数はトークン
-# 全体を 1 文字ずつ走査し、 quote 区間をまたいで literal 文字を連結するため、
-# `--'pre'` → `--pre` のように正しい canonical 値が得られる (issue #339 の
-# `BlockBgCodexWrapperExecPositionClassificationTest` 決定表 step 5 / 12 / 13 で
-# 使用)。 segment 全体ではなく個々の token (数十〜数百 byte) に対してのみ呼ぶため、
-# `result+="$c"` の 1 文字ループの計算コストは許容する (cmd-parser.sh の
-# `split_command` / `tokenize_segment` と同じ設計判断)。 bash 3.2 互換
-# (mapfile / declare -A / `${var,,}` / nameref を使わない)。
-#
-# **lib/cmd-parser.sh の同型 arity 不一致 (修正済み)**: `tokenize_segment` /
-# `split_command` の double quote 分岐にあった同型の case pattern arity 不一致
-# (`'$'|'`'|'"'|'\\'` が 1 文字変数 `$nc` / `$c` に一致しない) は issue #354 で
-# cmd-parser.sh 側も修正済み。 本 hook の検知層 (`token_is_unanalyzable` の
-# rule (b) 等) は、 共有 parser (cmd-parser.sh) 側の同種の回帰に対する多重防御
-# として引き続き維持する。
-canonicalize_token() {
-  local _ct_tok="$1"
-  local _ct_i=0 _ct_len=${#_ct_tok}
-  local _ct_in_squote=0 _ct_in_dquote=0
-  local _ct_result="" _ct_c _ct_nc
-  local _ct_failed=0
-
-  while [ "$_ct_i" -lt "$_ct_len" ]; do
-    _ct_c="${_ct_tok:$_ct_i:1}"
-
-    if [ "$_ct_in_squote" -eq 1 ]; then
-      # single quote 内: quote 終端のみ判定し、 それ以外 (`\` を含む) はすべて literal。
-      if [ "$_ct_c" = "'" ]; then
-        _ct_in_squote=0
-      else
-        _ct_result+="$_ct_c"
-      fi
-      _ct_i=$((_ct_i+1))
-      continue
-    fi
-
-    if [ "$_ct_in_dquote" -eq 1 ]; then
-      if [ "$_ct_c" = '"' ]; then
-        _ct_in_dquote=0
-        _ct_i=$((_ct_i+1))
-        continue
-      fi
-      if [ "$_ct_c" = "\\" ]; then
-        # double quote 内の `\` は、 次の文字が `$` / バッククォート / `"` /
-        # `\` の場合のみ escape として消費する (bash の実意味論)。 それ以外は
-        # `\` 自体を literal として結果に残し、 次の文字は改めて通常どおり
-        # 処理する (2 文字纏めて消費しない)。
-        _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
-        case "$_ct_nc" in
-          '$'|'`'|'"'|'\')
-            _ct_result+="$_ct_nc"
-            _ct_i=$((_ct_i+2))
-            continue
-            ;;
-        esac
-        _ct_result+="$_ct_c"
-        _ct_i=$((_ct_i+1))
-        continue
-      fi
-      if [ "$_ct_c" = '$' ]; then
-        # `$` 直後が展開開始として有効な文字の場合のみ動的展開 (canonical 化
-        # 失敗) とする。 判定表は `dollar_starts_expansion` に単一化されている
-        # (詳細は関数コメント「`$` 判定の精密化」節および同 helper 参照)。
-        _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
-        if dollar_starts_expansion "$_ct_nc"; then
-          _ct_failed=1
-        fi
-      fi
-      _ct_result+="$_ct_c"
-      _ct_i=$((_ct_i+1))
-      continue
-    fi
-
-    # unquoted 領域
-    if [ "$_ct_c" = "\\" ]; then
-      # unquoted (single quote 外) の `\` は次の 1 文字を無条件に escape する
-      # (`\x` → `x`)。 token 末尾の孤立した `\` (次の文字が無い) は `\` 自体を
-      # literal として残す。
-      _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
-      if [ -z "$_ct_nc" ]; then
-        _ct_result+="$_ct_c"
-        _ct_i=$((_ct_i+1))
-      else
-        _ct_result+="$_ct_nc"
-        _ct_i=$((_ct_i+2))
-      fi
-      continue
-    fi
-
-    if [ "$_ct_c" = '$' ]; then
-      # 同上 (double quote 内と同じ `dollar_starts_expansion` の表を参照)。
-      _ct_nc="${_ct_tok:$((_ct_i+1)):1}"
-      if dollar_starts_expansion "$_ct_nc"; then
-        _ct_failed=1
-      fi
-    fi
-    case "$_ct_c" in
-      "'") _ct_in_squote=1; _ct_i=$((_ct_i+1)); continue ;;
-      '"') _ct_in_dquote=1; _ct_i=$((_ct_i+1)); continue ;;
-    esac
-    _ct_result+="$_ct_c"
-    _ct_i=$((_ct_i+1))
-  done
-
-  if [ "$_ct_failed" -eq 1 ]; then
-    return 1
-  fi
-  printf '%s' "$_ct_result"
-  return 0
-}
-
-# note_literal_contribution <literal_char>
-# `token_is_unanalyzable` の走査ループ専用の記録 helper。 引数はその位置で
-# **word へ literal として寄与する文字** (quote 除去・backslash escape 解決を
-# 反映した値の 1 文字) であり、 最初の 1 文字だけを見て「固定開始 (fixed
-# start) を持つか」 を確定する。 2 文字目以降の呼び出しは何もしない。
-#
-# 呼び出し元の局所変数 `_tw_first_seen` / `_tw_fixed_start` を bash の動的
-# スコープ経由で更新する。 呼び出し元は `token_is_unanalyzable` の走査ループ
-# 1 箇所だけで再帰も並行呼び出しも無いため、 状態を引数と戻り値で往復させる
-# より意図が読み取りやすい。 本 helper は quote 状態を一切持たない (第 2 の
-# quote 状態機械を作らないための設計。 #355 の重複指摘参照)。
-note_literal_contribution() {
-  [ "$_tw_first_seen" -eq 0 ] || return 0
-  _tw_first_seen=1
-  case "$1" in
-    [A-Za-z0-9_/.]) _tw_fixed_start=1 ;;
-  esac
-}
-
-# token_is_unanalyzable <raw_token> <check_kind>
-# <check_kind>:
-#   `structure` = 構造検査のみ (rule (a)/(b)/(b2)/(b3)/(b4))。 全 token に適用する
-#   `head` = 構造検査 + 意味検査の厳格判定 (rule (a)〜(e))。 実 head・timeout の
-#     duration・git subcommand に適用する
-#   `option_scan` = 構造検査 + 意味検査 (rule (c) を 2 点緩和)。 find / rg / sort /
-#     git の option 走査対象に適用する
-#   未知の値は `head` と同じ厳格判定 (fail-closed 側の既定)。
-# 戻り値: 0 = 解析不能 (quote 状態 desync の疑い、 または値を判定に使うのに静的
-#   literal ではない)、 1 = 解析可能。
-#
-# 決定表 step 3。
+#   - double quote 内: `\` は次の文字が `$` / バッククォート / `"` / `\` の場合のみ
+#     escape として消費し、 それ以外 (例 `\-`) は `\` 自体を literal として保持して
+#     次の文字を改めて通常どおり評価する (bash は `"\-\-pre"` を `\-\-pre` のまま
+#     解決し `--pre` にはしない)。 escaped backslash (`\\`) は 1 つの `\` に collapse
+#     し、 その直後の文字も通常どおり評価する (`"\\$HOME"` の `$HOME` は展開される)。
 #
 # **なぜ「静的 literal であること」を積極要件にするか**: bash は quote 外の
 # `$` (変数展開・コマンド置換・各種 quoting)・brace expansion・pathname
 # expansion (glob)・tilde expansion を **parse 後、実際にコマンドへ渡す前** に
 # 展開する。 そのため、 これらの構文を含む token の raw 文字列は、 実際にコマンド
 # へ渡される引数と一致する保証が無い (例: `{--pre=bash,--pre=bash}` は brace
-# expansion 後 `--pre=bash` という別 token に展開されるが、 raw 文字列だけを見て
-# `--pre` との exact / prefix 一致を判定する `canonicalize_token` はこれを見抜け
+# expansion 後 `--pre=bash` という別 token に展開されるが、 raw 文字列から作った
+# canonical 値だけを見て `--pre` との exact / prefix 一致を判定するとこれを見抜け
 # ない)。 `$` の直後文字を精査して構文ごとに判別する方式は、 bash が `$` を消費
 # する quoting form (`$"..."` locale 翻訳、 `$[...]` 旧算術展開等) を取りこぼし
 # やすいため、 個別の構文を列挙して塞ぐのではなく、 **mention 判定の材料に
@@ -813,10 +611,7 @@ note_literal_contribution() {
 # 検査) が必要なのは値を判定に使う token だけであり、 値を消費しない head の
 # operand などは展開結果がどうであれ判定を左右しないため、 構造検査だけを行う。
 #
-# 本関数は raw token 文字列を quote 意味論 (single quote 内は escape 無効、
-# double quote 内は `$`/バッククォート/`"`/`\` の前でのみ escape、 それ以外は
-# unquoted として次の 1 文字を無条件 escape。 `canonicalize_token` と同じ規約)
-# で 1 文字ずつ走査し、 次のいずれかに該当すれば解析不能 (実行形) とする。
+# 次のいずれかに該当すれば解析不能 (実行形) とする。
 # 構造検査 (全 <check_kind>):
 #   (a) 走査終了時に single/double quote が閉じていない
 #   (b) quote 外 (unquoted) の空白文字が現れる (= 本来 tokenize_segment が
@@ -861,6 +656,11 @@ note_literal_contribution() {
 # `"marker$"` 等) と、 quote 内の glob / brace 文字 (`'a*b'` 等) は bash が
 # 展開しないため literal として許容する (対応する allow テストあり)。
 #
+# 意味検査を通過した token は quote 外の `$` と、 double quote 内の展開開始 `$` を
+# 含まないため、 canonical 値は必ず静的に決まる (動的展開が残る token は検査の
+# 段階で解析不能になる)。 canonical 値には、 緩和 1 / 2 で許容した quote 外の
+# `<` / `>`・glob 文字・token 先頭の `~` も raw のまま含める。
+#
 # **厳格判定と option 走査緩和の非対称**: option 走査対象 token は、 危険 option
 # (列挙済みの `-` 始まりの値) と一致するかどうかだけに値を使う。 そのため
 # <check_kind> = `option_scan` の場合に限り rule (c) を次の 2 点だけ緩和する
@@ -883,13 +683,13 @@ note_literal_contribution() {
 #     argv word として渡し、 残りを redirection の書き込み先にする
 #     (実測でも bash 5.2.21 / 3.2.57 の双方が `--pre>x ARG` から argv
 #     `[--pre] [ARG]` を生む)。 したがって canonical 値 `--pre>x` は実 argv の
-#     `--pre` と乖離する (#353 と同根)。 この乖離が判定を誤らせるのは argv
-#     word 側が危険 option になり得る場合だけなので、 語中の `<` / `>` は
-#     **その token が既に固定開始 (下記 緩和 2 の定義) を持つ場合に限り**
-#     許容する (緩和 1b)。 `<path>/run-pre-push-codex-review.sh>out.txt` の argv word は
+#     `--pre` と乖離する。 この乖離が判定を誤らせるのは argv word 側が危険
+#     option になり得る場合だけなので、 語中の `<` / `>` は **その token が既に
+#     固定開始 (下記 緩和 2 の定義) を持つ場合に限り** 許容する (緩和 1b)。
+#     `<path>/run-pre-push-codex-review.sh>out.txt` の argv word は
 #     `<path>/run-pre-push-codex-review.sh` で非 `-` 始まりなので安全である一方、
 #     `--pre>x` / `-'-pre'>x` は最初の寄与文字が `-` で固定開始を持たないため
-#     従来どおり解析不能とする。 書き込み先が `-` 始まり
+#     解析不能とする。 書き込み先が `-` 始まり
 #     (`<path>/run-pre-push-codex-review.sh>--pre`) でも argv word には現れないため
 #     判定に影響しない。
 #   - **緩和 2 (固定開始を持つ token の pathname / tilde expansion)**: token が
@@ -902,21 +702,19 @@ note_literal_contribution() {
 #     後に unquoted な glob が続く形 (`'plugins'/*/<wrapper>` /
 #     `"plugins"/*/<wrapper>` / `\plugins/*/<wrapper>`) が実際には固定開始
 #     `p` を持つのに、 raw の 1 文字目 (`'` / `"` / `\`) だけを見ると
-#     取りこぼすためである (origin/master では allow だった read-only 形が
-#     deny に退行していた)。 逆に `'--pre'*` / `"--pre"*` / `'-'-pre*` は
-#     最初の寄与文字が `-` であるため固定開始を持たず、 従来どおり解析不能
-#     とする。 quote 区切りの `'` / `"`、 緩和 1 で許容した token 先頭の
-#     `<` / `>`、 緩和 2 で許容した token 先頭の `~` は word へ literal
-#     文字を寄与しないため固定開始の判定に算入しない (`~/x` では続く `/` が
-#     最初の寄与文字になる)。 glob 文字自身が最初の寄与位置になる token
-#     (`*.sh` / `[a]x/<wrapper>`) も固定開始を持たない。 固定開始を持たない
-#     token (`-` 始まり、 `*` 始まり、 `[` 始まり、 `~` 単独や `~name` 形、
-#     `<`/`>` 始まり等) では従来どおり解析不能とする。 `{`/`}` (brace
-#     expansion)・`(`/`)`・`$`・バッククォートは option 走査対象でも緩和しない。
-#     固定開始の判定は**走査ループの中で遅延的に**行う (`_tw_first_seen` /
-#     `_tw_fixed_start` を `note_literal_contribution` が更新する)。 事前に
-#     raw token を別途走査して判定すると、 quote 意味論を扱う第 2 の状態機械
-#     を持つことになり #355 が指摘する重複が悪化するためである。
+#     取りこぼすためである。 逆に `'--pre'*` / `"--pre"*` / `'-'-pre*` は
+#     最初の寄与文字が `-` であるため固定開始を持たず、 解析不能とする。
+#     quote 区切りの `'` / `"`、 緩和 1 で許容した token 先頭の `<` / `>`、
+#     緩和 2 で許容した token 先頭の `~` は word へ literal 文字を寄与しないため
+#     固定開始の判定に算入しない (`~/x` では続く `/` が最初の寄与文字になる)。
+#     glob 文字自身が最初の寄与位置になる token (`*.sh` / `[a]x/<wrapper>`) も
+#     固定開始を持たない。 固定開始を持たない token (`-` 始まり、 `*` 始まり、
+#     `[` 始まり、 `~` 単独や `~name` 形、 `<`/`>` 始まり等) では解析不能とする。
+#     `{`/`}` (brace expansion)・`(`/`)`・`$`・バッククォートは option 走査対象
+#     でも緩和しない。 固定開始の判定は**走査ループの中で遅延的に**行う
+#     (`_sw_first_seen` / `_sw_fixed_start` を `record_word_literal` が更新する)。
+#     事前に raw token を別途走査して判定すると、 quote 意味論を扱う第 2 の状態
+#     機械を持つことになるためである。
 # 緩和の根拠は「この token は option ではなく operand のはずだ」 という位置推定ではなく
 # **字句的不変条件**である: pathname expansion は最初の glob メタ文字より前の
 # literal prefix を必ず保存するため、 固定開始 `[A-Za-z0-9_/.]` を持つ token の
@@ -934,209 +732,227 @@ note_literal_contribution() {
 # 呼び (merge された token は option 位置に限らずどこにでも現れうるため)、 決定表
 # step 4 (leading 代入列) より前に実施する。 `head` 判定は静的な位置推定を行わず、
 # step 5〜7 の launcher 剥がし loop の中で「その時点で実際に head になった token」
-# に対して canonical 化の直前に 1 回ずつ呼ぶ (`env cat ~/x/<wrapper>` なら剥がし後の
-# `cat`)。 timeout の duration (step 7) と git subcommand (step 13) も `head` で、
-# option 走査対象 (step 12 / 13) は `option_scan` で、 それぞれ値を使う直前に呼ぶ。
+# に対して 1 回ずつ呼ぶ (`env cat ~/x/<wrapper>` なら剥がし後の `cat`)。 timeout の
+# duration (step 7) と git subcommand (step 13) も `head` で、 option 走査対象
+# (step 12 / 13) は `option_scan` で、 それぞれ値を使う直前に呼ぶ。
+#
+# **cmd-parser.sh の `unquote_token` との違い**: `unquote_token` はトークン両端の
+# quote ペアを 1 段剥がすだけで、 `--'pre'` や `--'ext-diff'` のような fragment
+# 分断形 (先頭 `--` が quote 外、 残りが quote 内という 1 token 内の quote 混在) を
+# 解決できない。 本関数はトークン全体を 1 文字ずつ走査し、 quote 区間をまたいで
+# literal 文字を連結するため、 `--'pre'` → `--pre` のように正しい canonical 値が
+# 得られる。
 #
 # 共有 tokenizer (`lib/cmd-parser.sh` の `tokenize_segment`) は token 値を展開せず
 # 切り出した文字列のまま返すため、 `~` を含む token は bash のバージョンに依らず
 # `~` を保ったまま本関数に届き、 rule (c) と緩和 2 の `~/` 分岐が同じく適用される。
-# bash 3.2 互換 (mapfile / declare -A / `${var,,}` を使わない)。
-token_is_unanalyzable() {
-  local _tw_tok="$1"
-  local _tw_pos="$2"
-  local _tw_i=0 _tw_len=${#_tw_tok}
-  local _tw_in_squote=0 _tw_in_dquote=0
-  local _tw_c _tw_nc
-  local _tw_semantic=1 _tw_relax=0 _tw_first_seen=0 _tw_fixed_start=0
-  local _tw_unquoted_dollar=0 _tw_unquoted_brace=0
+# segment 全体ではなく個々の token (数十〜数百 byte) に対してのみ呼ぶため、
+# 1 文字ループの計算コストは許容する (cmd-parser.sh の `split_command` /
+# `tokenize_segment` と同じ設計判断)。 bash 3.2 互換 (mapfile / declare -A /
+# `${var,,}` / nameref を使わない)。 canonical 値は stdout ではなく _SW_CANONICAL
+# で返し、 呼び出し側のコマンド置換 (subshell) を不要にする。
+_SW_CANONICAL=""
+analyze_shell_word() {
+  local _sw_tok="$1"
+  local _sw_kind="$2"
+  local _sw_i=0 _sw_len=${#_sw_tok}
+  local _sw_in_squote=0 _sw_in_dquote=0
+  local _sw_c _sw_nc
+  local _sw_semantic=1 _sw_relax=0 _sw_first_seen=0 _sw_fixed_start=0
+  local _sw_unquoted_dollar=0 _sw_unquoted_brace=0
+  local _sw_result=""
+  _SW_CANONICAL=""
 
-  case "$_tw_pos" in
+  case "$_sw_kind" in
     structure)
-      # 構造検査のみ (rule (a)/(b)/(b2)/(b3)/(b4))。 意味検査 (rule (c)/(d)) は行わない。
-      _tw_semantic=0
+      # 構造検査のみ (rule (a)/(b)/(b2)/(b3)/(b4))。 意味検査 (rule (c)/(d)/(e)) と
+      # canonical 値の設定は行わない。
+      _sw_semantic=0
       ;;
     option_scan)
       # option 走査対象のみ rule (c) を 2 点緩和する (関数コメント「厳格判定と
       # option 走査緩和の非対称」 節参照)。
-      _tw_relax=1
+      _sw_relax=1
       ;;
   esac
   # `head` と未知の値は緩和なしの厳格判定 (fail-closed 側の既定)。
 
-  while [ "$_tw_i" -lt "$_tw_len" ]; do
-    _tw_c="${_tw_tok:$_tw_i:1}"
+  while [ "$_sw_i" -lt "$_sw_len" ]; do
+    _sw_c="${_sw_tok:$_sw_i:1}"
 
-    if [ "$_tw_in_squote" -eq 1 ]; then
-      # single quote 内: quote 終端のみ判定し、 それ以外はすべて literal
-      # (展開・置換の対象にならないため rule (c)/(d) は適用しない)。 終端
-      # `'` 以外の全文字が word への寄与文字である (quote 内の空白も含む)。
-      if [ "$_tw_c" = "'" ]; then
-        _tw_in_squote=0
+    if [ "$_sw_in_squote" -eq 1 ]; then
+      # single quote 内: quote 終端のみ判定し、 それ以外 (`\` や空白を含む) は
+      # すべて literal として word へ寄与する (展開・置換の対象にならないため
+      # rule (c)/(d) は適用しない)。
+      if [ "$_sw_c" = "'" ]; then
+        _sw_in_squote=0
       else
-        note_literal_contribution "$_tw_c"
+        record_word_literal "$_sw_c"
       fi
-      _tw_i=$((_tw_i+1))
+      _sw_i=$((_sw_i+1))
       continue
     fi
 
-    if [ "$_tw_in_dquote" -eq 1 ]; then
-      if [ "$_tw_c" = '"' ]; then
-        _tw_in_dquote=0
-        _tw_i=$((_tw_i+1))
+    if [ "$_sw_in_dquote" -eq 1 ]; then
+      if [ "$_sw_c" = '"' ]; then
+        _sw_in_dquote=0
+        _sw_i=$((_sw_i+1))
         continue
       fi
-      if [ "$_tw_c" = "\\" ]; then
-        _tw_nc="${_tw_tok:$((_tw_i+1)):1}"
-        case "$_tw_nc" in
+      if [ "$_sw_c" = "\\" ]; then
+        _sw_nc="${_sw_tok:$((_sw_i+1)):1}"
+        case "$_sw_nc" in
           '$'|'`'|'"'|'\')
             # escape pair: word へ寄与するのは escape された側の文字。
-            note_literal_contribution "$_tw_nc"
-            _tw_i=$((_tw_i+2))
+            record_word_literal "$_sw_nc"
+            _sw_i=$((_sw_i+2))
             continue
             ;;
         esac
         # escape として消費されない `\` は double quote 内では literal で
-        # あり、 `\` 自身が word へ寄与する。
-        note_literal_contribution "$_tw_c"
-        _tw_i=$((_tw_i+1))
+        # あり、 `\` 自身が word へ寄与する。 次の文字は改めて通常どおり評価する。
+        record_word_literal "$_sw_c"
+        _sw_i=$((_sw_i+1))
         continue
       fi
-      if [ "$_tw_c" = '$' ]; then
-        case "${_tw_tok:$((_tw_i+1)):1}" in
+      if [ "$_sw_c" = '$' ]; then
+        case "${_sw_tok:$((_sw_i+1)):1}" in
           '{'|'[')
-            # rule (b3): `${...}` / `$[...]` は構造検査でも解析不能 (関数
-            # コメント参照)。 全 <check_kind> に適用する。
-            return 0
+            # rule (b3): `${...}` / `$[...]` は構造検査でも解析不能。 全
+            # <check_kind> に適用する。
+            return 1
             ;;
         esac
       fi
-      if [ "$_tw_semantic" -eq 1 ] && [ "$_tw_c" = '`' ]; then
+      if [ "$_sw_semantic" -eq 1 ] && [ "$_sw_c" = '`' ]; then
         # rule (d): escape されていないバッククォート。
-        return 0
+        return 1
       fi
-      if [ "$_tw_semantic" -eq 1 ] && [ "$_tw_c" = '$' ]; then
+      if [ "$_sw_semantic" -eq 1 ] && [ "$_sw_c" = '$' ]; then
         # rule (d): 展開開始として有効な文字が続く `$` (判定表は
-        # `dollar_starts_expansion` に単一化。 `$[` の旧算術展開も含む)。
-        _tw_nc="${_tw_tok:$((_tw_i+1)):1}"
-        if dollar_starts_expansion "$_tw_nc"; then
-          return 0
+        # `dollar_starts_expansion` に単一化)。
+        _sw_nc="${_sw_tok:$((_sw_i+1)):1}"
+        if dollar_starts_expansion "$_sw_nc"; then
+          return 1
         fi
       fi
       # 展開を開始しない `$` (行末アンカー等) とその他の文字は literal と
       # して word へ寄与する。
-      note_literal_contribution "$_tw_c"
-      _tw_i=$((_tw_i+1))
+      record_word_literal "$_sw_c"
+      _sw_i=$((_sw_i+1))
       continue
     fi
 
     # unquoted 領域。
-    if [[ "$_tw_c" == [[:space:]] ]]; then
+    if [[ "$_sw_c" == [[:space:]] ]]; then
       # rule (b): quote 外の空白 (quote 状態 desync の証跡)。
-      return 0
+      return 1
     fi
 
-    if [ "$_tw_c" = "\\" ]; then
+    if [ "$_sw_c" = "\\" ]; then
       # unquoted の `\` は次の 1 文字を無条件に escape する。 escape された
       # 展開開始文字は rule (c) の対象外 (2 文字纏めて読み飛ばす)。 word へ
       # 寄与するのは escape された側の文字であり (`\p` なら `p`)、 次の文字が
       # 無い token 末尾の孤立 `\` では `\` 自身が寄与する。
-      _tw_nc="${_tw_tok:$((_tw_i+1)):1}"
-      if [ -n "$_tw_nc" ]; then
-        note_literal_contribution "$_tw_nc"
+      _sw_nc="${_sw_tok:$((_sw_i+1)):1}"
+      if [ -n "$_sw_nc" ]; then
+        record_word_literal "$_sw_nc"
       else
-        if [ "$_tw_semantic" -eq 1 ] && [ "$_tw_relax" -eq 0 ]; then
+        if [ "$_sw_semantic" -eq 1 ] && [ "$_sw_relax" -eq 0 ]; then
           # rule (e) (厳格判定のみ): token 末尾の孤立 `\`。 共有 tokenizer は
           # quote 外の `\` で escape された空白でも token を分割するため、 この
           # token は bash 上では次の token と 1 つの word に連結される
           # (`x\ --` は word `x --`)。 token と argv word の対応が崩れている
           # ため、 値を判定に使う token としては解析不能とする。
-          return 0
+          return 1
         fi
-        note_literal_contribution "$_tw_c"
+        record_word_literal "$_sw_c"
       fi
-      _tw_i=$((_tw_i+2))
+      _sw_i=$((_sw_i+2))
       continue
     fi
 
-    if [ "$_tw_semantic" -eq 0 ]; then
+    if [ "$_sw_semantic" -eq 0 ]; then
       # 構造検査のみ: quote の開始を追跡し、 rule (b2) の `(` / `)`、 rule (b3)
       # の `${` / `$[`、 rule (b4) の `$` と `{` / `}` の同居を検出する。 それ
-      # 以外の unquoted 文字は rule (c) の対象にせず読み飛ばす。
-      case "$_tw_c" in
-        "'") _tw_in_squote=1 ;;
-        '"') _tw_in_dquote=1 ;;
+      # 以外の unquoted 文字は rule (c) の対象にせず読み飛ばす (canonical 値は
+      # 設定しないため記録もしない)。
+      case "$_sw_c" in
+        "'") _sw_in_squote=1 ;;
+        '"') _sw_in_dquote=1 ;;
         '('|')')
           # rule (b2): quote 外の `(` / `)` は値の展開ではなく、 関数定義
           # (`f () ( <cmd> )`) や subshell 等の compound command を作る文法
           # 構造である。 head 以外の位置に現れても segment が実行面を持ちうる
           # ため、 値の用途に依らず解析不能とする。
-          return 0
+          return 1
           ;;
         '$')
-          case "${_tw_tok:$((_tw_i+1)):1}" in
+          case "${_sw_tok:$((_sw_i+1)):1}" in
             '{'|'[')
               # rule (b3): `${...}` / `$[...]` は展開の過程で評価を伴いうる
               # (算術評価される配列添字 `${a['$(<cmd>)']}`、 prompt 展開
               # `${x@P}`、 旧算術展開 `$[...]`)。 値を使わない位置でもコマンド
               # 置換が実行されるため、 値の用途に依らず解析不能とする。
-              return 0
+              return 1
               ;;
           esac
-          _tw_unquoted_dollar=1
+          _sw_unquoted_dollar=1
           ;;
         '{'|'}')
-          _tw_unquoted_brace=1
+          _sw_unquoted_brace=1
           ;;
       esac
-      if [ "$_tw_unquoted_dollar" -eq 1 ] && [ "$_tw_unquoted_brace" -eq 1 ]; then
+      if [ "$_sw_unquoted_dollar" -eq 1 ] && [ "$_sw_unquoted_brace" -eq 1 ]; then
         # rule (b4): 同じ token に quote 外の `$` と `{` / `}` がある。 brace
         # expansion はパラメータ展開より先に行われるため、 隣接していない
         # `$` と `{` / `[` から `${...}` / `$[...]` を合成できる
         # (`{$,x}{a['$(<cmd>)']}` は `${a['$(<cmd>)']}` になる)。
-        return 0
+        return 1
       fi
-      _tw_i=$((_tw_i+1))
+      _sw_i=$((_sw_i+1))
       continue
     fi
 
-    if [ "$_tw_i" -eq 0 ] && [ "$_tw_c" = '~' ]; then
+    if [ "$_sw_i" -eq 0 ] && [ "$_sw_c" = '~' ]; then
       # 緩和 2 の `~/` 分岐だけは raw token の 2 文字目を直接見る。 固定開始は
       # 走査が進むまで確定しない遅延判定であり、 token 先頭の `~` に到達した
       # 時点ではまだ寄与文字が 1 つも無いためである。
-      if [ "$_tw_relax" -eq 1 ] && [ "${_tw_tok:1:1}" = "/" ]; then
+      if [ "$_sw_relax" -eq 1 ] && [ "${_sw_tok:1:1}" = "/" ]; then
         # 緩和 2 (option 走査対象かつ `~/` 始まり): `$HOME` + `/` + 残りへ展開
         # されるため、 展開結果は必ず `/` を含む path 形になり、 exact 一致の
         # 危険 option とは一致しない (prefix 一致の option も deny 方向にしか
-        # 働かない)。 `~` 自身は word へ literal 文字を寄与しないため記録
-        # せず、 続く `/` が最初の寄与文字になる。
-        _tw_i=$((_tw_i+1))
+        # 働かない)。 `~` は canonical 値には raw のまま含めるが、 word へ
+        # literal 文字を寄与しないため固定開始の判定には算入せず、 続く `/` が
+        # 最初の寄与文字になる。
+        _sw_result+="$_sw_c"
+        _sw_i=$((_sw_i+1))
         continue
       fi
       # rule (c): token 先頭の tilde expansion。
-      return 0
+      return 1
     fi
 
-    case "$_tw_c" in
-      "'") _tw_in_squote=1; _tw_i=$((_tw_i+1)); continue ;;
-      '"') _tw_in_dquote=1; _tw_i=$((_tw_i+1)); continue ;;
+    case "$_sw_c" in
+      "'") _sw_in_squote=1; _sw_i=$((_sw_i+1)); continue ;;
+      '"') _sw_in_dquote=1; _sw_i=$((_sw_i+1)); continue ;;
       '<'|'>')
-        if [ "$_tw_relax" -eq 1 ]; then
+        if [ "$_sw_relax" -eq 1 ]; then
           # 緩和 1 (option 走査対象): 直前の文字がすべて 10 進数字 (0 文字も可、
           # = token 先頭) なら、 その `<` / `>` は fd 数字列を前置した
           # redirection である。 この token が実 argv へ渡しうる word は
           # 「無し」 か「全数字の word 1 つ」 (fd 番号が実装上限を超える場合。
           # 関数コメント緩和 1 の実測参照) に限られ、 どちらも `-` 始まりの
-          # 危険 option にはなり得ない。 redirection 演算子は word へ literal
-          # 文字を寄与しないため固定開始の判定には算入しないが、 その後ろの
-          # 文字は通常どおり寄与する (`>out*` は固定開始 `o` を持つため
-          # 緩和 2 の経路でも許容される。 argv word を生まない token なので
-          # どちらの経路でも危険 option にはなり得ない)。
-          case "${_tw_tok:0:$_tw_i}" in
+          # 危険 option にはなり得ない。 redirection 演算子は canonical 値には
+          # raw のまま含めるが、 word へ literal 文字を寄与しないため固定開始の
+          # 判定には算入しない。 その後ろの文字は通常どおり寄与する (`>out*` は
+          # 固定開始 `o` を持つため緩和 2 の経路でも許容される。 argv word を
+          # 生まない token なのでどちらの経路でも危険 option にはなり得ない)。
+          case "${_sw_tok:0:$_sw_i}" in
             *[!0-9]*) ;;
-            *) _tw_i=$((_tw_i+1)); continue ;;
+            *) _sw_result+="$_sw_c"; _sw_i=$((_sw_i+1)); continue ;;
           esac
-          if [ "$_tw_fixed_start" -eq 1 ]; then
+          if [ "$_sw_fixed_start" -eq 1 ]; then
             # 緩和 1b (option 走査対象かつ固定開始): 語中の `<` / `>` であっても、
             # bash が argv word として渡すのはこの演算子より前の prefix だけで
             # ある (`<path>/run-pre-push-codex-review.sh>out.txt` なら
@@ -1144,57 +960,75 @@ token_is_unanalyzable() {
             # 展開結果は非 `-` 文字で始まり、 `-` 始まりの列挙済み危険 option に
             # なり得ないため、 canonical 値との乖離が判定を誤らせない。
             # `--pre>x` は最初の寄与文字が `-` で固定開始を持たないため、
-            # 従来どおりこの分岐に入らず解析不能 (実行形) となる。
-            _tw_i=$((_tw_i+1))
+            # この分岐に入らず解析不能 (実行形) となる。
+            _sw_result+="$_sw_c"
+            _sw_i=$((_sw_i+1))
             continue
           fi
         fi
         # rule (c): 語中の `<` / `>` (bash は `--pre>x` を argv word `--pre` と
         # redirection に分割するため、 canonical 値が実 argv と乖離する)。
-        return 0
+        return 1
         ;;
       '*'|'?'|'['|']')
-        if [ "$_tw_relax" -eq 1 ] && [ "$_tw_first_seen" -eq 1 ] && [ "$_tw_fixed_start" -eq 1 ]; then
+        if [ "$_sw_relax" -eq 1 ] && [ "$_sw_first_seen" -eq 1 ] && [ "$_sw_fixed_start" -eq 1 ]; then
           # 緩和 2 (option 走査対象かつ固定開始): pathname expansion は最初の glob
           # メタ文字より前の literal prefix を必ず保存するため、 固定開始
           # `[A-Za-z0-9_/.]` を持つ token の展開結果はすべて同じ非 `-` 文字で
-          # 始まり、 `-` 始まりの列挙済み危険 option になり得ない。
-          _tw_i=$((_tw_i+1))
+          # 始まり、 `-` 始まりの列挙済み危険 option になり得ない。 glob 文字は
+          # canonical 値に raw のまま含める。
+          _sw_result+="$_sw_c"
+          _sw_i=$((_sw_i+1))
           continue
         fi
         # rule (c): pathname expansion。 寄与文字がまだ 1 つも無い
-        # (`_tw_first_seen` が 0 = この glob が最初の寄与位置) 場合は固定開始
+        # (`_sw_first_seen` が 0 = この glob が最初の寄与位置) 場合は固定開始
         # を持たないため、 固定開始が `-` 等だった場合と同じく解析不能とする。
-        return 0
+        return 1
         ;;
       '$'|'`'|'{'|'}'|'('|')')
         # rule (c): 展開・置換・word 生成を導入する quote 外の文字。 brace
         # expansion (`{`/`}`) は literal prefix を保存しない (`{--pre,x}` が
         # `--pre` を生む) ため option 走査対象でも緩和しない。
-        return 0
+        return 1
         ;;
     esac
     # 上記のいずれにも該当しない unquoted の文字は literal として word へ
     # 寄与する。
-    note_literal_contribution "$_tw_c"
-    _tw_i=$((_tw_i+1))
+    record_word_literal "$_sw_c"
+    _sw_i=$((_sw_i+1))
   done
 
-  if [ "$_tw_in_squote" -eq 1 ] || [ "$_tw_in_dquote" -eq 1 ]; then
+  if [ "$_sw_in_squote" -eq 1 ] || [ "$_sw_in_dquote" -eq 1 ]; then
     # rule (a): 走査終了時に quote が閉じていない。
-    return 0
+    return 1
   fi
-  return 1
+  if [ "$_sw_semantic" -eq 1 ]; then
+    _SW_CANONICAL="$_sw_result"
+  fi
+  return 0
 }
 
-# option_scan_canonical <raw_token>
-# 戻り値: 0 = option 走査対象 token として意味検査 (option 走査緩和つき) を通過し、
-#   canonical 化にも成功した (canonical 値を stdout に出力)、 1 = 解析不能 (呼び出し
-#   側は実行形とする)。
-# 決定表 step 12 / 13 の option 走査で、 値を判定に使う前に必ず通す。
-option_scan_canonical() {
-  token_is_unanalyzable "$1" option_scan && return 1
-  canonicalize_token "$1"
+# record_word_literal <literal_char>
+# `analyze_shell_word` の走査ループ専用の記録 helper。 引数はその位置で **word へ
+# literal として寄与する文字** (quote 除去・backslash escape 解決を反映した値の
+# 1 文字) であり、 次の 2 つを記録する:
+#   - canonical 値 (`_sw_result`) への追記
+#   - 最初の 1 文字だけを見た「固定開始 (fixed start) を持つか」 の確定
+#     (`_sw_first_seen` / `_sw_fixed_start`。 2 文字目以降は固定開始を更新しない)
+#
+# 呼び出し元の局所変数を bash の動的スコープ経由で更新する。 呼び出し元は
+# `analyze_shell_word` の走査ループ 1 箇所だけで再帰も並行呼び出しも無いため、
+# 状態を引数と戻り値で往復させるより意図が読み取りやすい。 本 helper は quote
+# 状態を一切持たない (quote 意味論の状態機械を `analyze_shell_word` の 1 つに
+# 保つため)。
+record_word_literal() {
+  _sw_result+="$1"
+  [ "$_sw_first_seen" -eq 0 ] || return 0
+  _sw_first_seen=1
+  case "$1" in
+    [A-Za-z0-9_/.]) _sw_fixed_start=1 ;;
+  esac
 }
 
 # segment_is_plain_ascii <segment>
@@ -1215,7 +1049,7 @@ segment_is_plain_ascii() {
 
 # is_option_scan_barrier <canonical_token> <previous_canonical_token> <all_strict>
 # <all_strict>: segment が `segment_is_plain_ascii` を満たし、 かつ走査済みの
-#   token (head から直前まで) がすべて厳格判定 (`token_is_unanalyzable ... head`)
+#   token (head から直前まで) がすべて厳格判定 (`analyze_shell_word ... head`)
 #   を通過していれば 1、 それ以外は 0。
 # 戻り値: 0 = rg / sort / git の option 走査を止める barrier、 1 = それ以外。
 #
@@ -1265,13 +1099,13 @@ is_option_scan_barrier() {
 # `BlockBgCodexWrapperExecPositionClassificationTest` docstring にある 14-step の
 # 順序付き決定表 (step 3〜14。 step 1 は規則 1、 step 2 は規則 1.5 として既に呼び出し
 # 元で処理済み)。 各 step は上から順に評価し、 最初に確定した判定を採用する:
-#   - step 3: token 検査 (`token_is_unanalyzable`) を構造検査と意味検査に分けて
+#   - step 3: token 検査 (`analyze_shell_word`) を構造検査と意味検査に分けて
 #     行う。 1 つでも解析不能な token があれば実行形とする。
 #       (i) 構造検査 (`structure`): segment の全 token (`tokenize_segment` の
 #           出力) に対して step 4 (leading 代入列) より前に一括で行う。 共有
 #           tokenizer の quote 状態 desync により複数 shell word が 1 token に
 #           merge され、 内側に危険 option (`--pre` 等) を隠して
-#           canonicalize_token の exact / prefix 一致を逃れる経路と、 quote 外の
+#           canonical 値の exact / prefix 一致を逃れる経路と、 quote 外の
 #           `(`/`)` による関数定義 (`f () ( <cmd> )`) 等の compound command や、
 #           `${`/`$[` による評価を伴う展開 (`${a['$(<cmd>)']}` / `${x@P}`) が
 #           head 以外の位置から実行面を作る経路を塞ぐ。
@@ -1285,7 +1119,7 @@ is_option_scan_barrier() {
 #           `option_scan`)。 値を消費しない head (cat / wc / 外部コマンド形の
 #           不明 head 等) の operand と、 rg / sort / git の barrier より後ろの
 #           token には行わない (展開結果がどうであれ判定を左右しないため)。
-#     判定内容の詳細は `token_is_unanalyzable` 関数コメント参照。
+#     判定内容の詳細は `analyze_shell_word` 関数コメント参照。
 #   - step 4: segment 先頭の `NAME=VALUE` (leading 代入 slot) が存在すれば、 値に
 #     関わらず実行形とする (issue #339 2 巡目レビュー、 codex P1 must-fix)。 代入値が
 #     指すのは wrapper path だけでなく、 head コマンドの間接実行面を有効化する設定値
@@ -1295,12 +1129,12 @@ is_option_scan_barrier() {
 #     代入 slot は segment 先頭に連続してのみ現れる (途中からは現れない) ため、 先頭
 #     token 1 つの判定で十分 (先頭が代入でなければそれ以降にも代入は無い)。 先頭 token
 #     が無い (空 segment) 場合も実行形。
-#   - step 5: その時点の head token を `token_is_unanalyzable ... head` で厳格
-#     判定し (step 3 (ii) の意味検査。 `./b*sh` の glob head・`~/bin/bash` の tilde head 等を
-#     捕捉する)、 解析不能なら実行形。 続けて head token の canonical 化が失敗
-#     (single quote 外に `$VAR` 等の動的展開が残る) すれば実行形。 この 2 つは
-#     step 7 の launcher 剥がし loop の内側で毎周回評価されるため、 剥がした
-#     結果として head になった token にも同じ厳格判定が適用される。
+#   - step 5: その時点の head token を `analyze_shell_word ... head` で厳格
+#     判定し (step 3 (ii) の意味検査。 `./b*sh` の glob head・`~/bin/bash` の tilde head・
+#     `$VAR` 等の動的展開が残る head を捕捉する)、 解析不能なら実行形。 通過した
+#     token の canonical 値を以降の step の head とする。 この判定は step 7 の
+#     launcher 剥がし loop の内側で毎周回評価されるため、 剥がした結果として head に
+#     なった token にも同じ厳格判定が適用される。
 #   - step 6: canonical head が無害 builtin (echo/true/false/pwd/type、 basename
 #     適用なし) に完全一致すれば mention 候補 (word-shape・keyword・builtin
 #     superset 検査より前に評価する)。 `test` / `[` は bash の算術評価による
@@ -1365,11 +1199,11 @@ classify_wrapper_segment() {
   # 複数 shell word が 1 token に merge され、 内側の危険 option (`--pre` 等) が
   # exact / prefix 一致から隠れる経路を塞ぐ。 token の位置や値の用途に依らず
   # 全 token に適用し、 leading 代入列の判定 (step 4) より前に行う。 意味検査
-  # (rule (c)/(d)) は値を判定に使う token に対してだけ、 その値を使う step
-  # (5 / 7 / 12 / 13) の直前で行う (詳細は `token_is_unanalyzable` 関数コメント
+  # (rule (c)/(d)/(e)) は値を判定に使う token に対してだけ、 その値を使う step
+  # (5 / 7 / 12 / 13) の直前で行う (詳細は `analyze_shell_word` 関数コメント
   # 参照)。
   for _cw_raw in "${_cw_toks[@]}"; do
-    if token_is_unanalyzable "$_cw_raw" structure; then
+    if ! analyze_shell_word "$_cw_raw" structure; then
       unset _cw_toks
       return 0
     fi
@@ -1403,17 +1237,13 @@ classify_wrapper_segment() {
     # 「実際に head になった」 token に対して、 rule (c) を緩和しない厳格判定を
     # 行う (`./b*sh` が bash に展開しうる glob head や `~/bin/bash` の tilde
     # head を捕捉する)。 静的な位置推定は行わず、 剥がしの各周回で都度評価
-    # する (詳細は `token_is_unanalyzable` 関数コメント参照)。
-    if token_is_unanalyzable "$_cw_raw_head" head; then
+    # する。 通過した token の canonical 値を head として使う (詳細は
+    # `analyze_shell_word` 関数コメント参照)。
+    if ! analyze_shell_word "$_cw_raw_head" head; then
       unset _cw_toks
       return 0
     fi
-
-    if ! _cw_canon_head="$(canonicalize_token "$_cw_raw_head")"; then
-      # step 5: canonical 化失敗 (動的展開が残る)。
-      unset _cw_toks
-      return 0
-    fi
+    _cw_canon_head="$_SW_CANONICAL"
 
     case "$_cw_canon_head" in
       echo|true|false|pwd|type)
@@ -1449,14 +1279,11 @@ classify_wrapper_segment() {
           fi
           _cw_draw="${_cw_toks[$_cw_idx]}"
           # duration operand は値を判定に使うため意味検査 (厳格判定) を行う。
-          if token_is_unanalyzable "$_cw_draw" head; then
+          if ! analyze_shell_word "$_cw_draw" head; then
             unset _cw_toks
             return 0
           fi
-          if ! _cw_dcanon="$(canonicalize_token "$_cw_draw")"; then
-            unset _cw_toks
-            return 0
-          fi
+          _cw_dcanon="$_SW_CANONICAL"
           if [[ "$_cw_dcanon" =~ ^[0-9]+(\.[0-9]+)?[smhd]?$ ]]; then
             _cw_idx=$((_cw_idx+1))
           else
@@ -1527,10 +1354,11 @@ classify_wrapper_segment() {
   esac
 
   # step 12: script/対話内実行面を持つコマンド + option-aware 検査。 option 走査
-  # 対象 token は値を判定に使うため、 `option_scan_canonical` で意味検査 (option
-  # 走査緩和つき) と canonical 化を行い、 どちらかが失敗すれば解析不能として実行形
-  # とする (mention 判定に必要な値を静的決定できないため。 ANSI-C quote `$'...'`
-  # 等の動的展開もここで落ちる)。
+  # 対象 token は値を判定に使うため、 `analyze_shell_word ... option_scan` で意味
+  # 検査 (option 走査緩和つき) と canonical 化を行い、 解析不能なら実行形とする
+  # (mention 判定に必要な値を静的決定できないため。 ANSI-C quote `$'...'` 等の
+  # 動的展開もここで落ちる)。 barrier 判定用の厳格判定 (`head`) は _SW_CANONICAL を
+  # 上書きするため、 option 走査の canonical 値を `_cw_tcanon` へ退避した後に呼ぶ。
   local _cw_j _cw_traw _cw_tcanon _cw_prefix _cw_prev _cw_barrier_ok
   # barrier は segment が許可リスト内の文字だけから成る場合に限る (`segment_is_plain_ascii`)。
   local _cw_plain_seg=0
@@ -1545,10 +1373,11 @@ classify_wrapper_segment() {
       _cw_j=$_cw_idx
       while [ "$_cw_j" -lt "$_cw_n" ]; do
         _cw_traw="${_cw_toks[$_cw_j]}"
-        if ! _cw_tcanon="$(option_scan_canonical "$_cw_traw")"; then
+        if ! analyze_shell_word "$_cw_traw" option_scan; then
           unset _cw_toks
           return 0
         fi
+        _cw_tcanon="$_SW_CANONICAL"
         case "$_cw_tcanon" in
           -exec|-execdir|-ok|-okdir)
             unset _cw_toks
@@ -1564,10 +1393,11 @@ classify_wrapper_segment() {
       _cw_barrier_ok=$_cw_plain_seg
       while [ "$_cw_j" -lt "$_cw_n" ]; do
         _cw_traw="${_cw_toks[$_cw_j]}"
-        if ! _cw_tcanon="$(option_scan_canonical "$_cw_traw")"; then
+        if ! analyze_shell_word "$_cw_traw" option_scan; then
           unset _cw_toks
           return 0
         fi
+        _cw_tcanon="$_SW_CANONICAL"
         is_option_scan_barrier "$_cw_tcanon" "$_cw_prev" "$_cw_barrier_ok" && break
         case "$_cw_tcanon" in
           --pre|--pre=*|--hostname-bin|--hostname-bin=*)
@@ -1577,7 +1407,7 @@ classify_wrapper_segment() {
             return 0
             ;;
         esac
-        token_is_unanalyzable "$_cw_traw" head && _cw_barrier_ok=0
+        analyze_shell_word "$_cw_traw" head || _cw_barrier_ok=0
         _cw_prev="$_cw_tcanon"
         _cw_j=$((_cw_j+1))
       done
@@ -1588,10 +1418,11 @@ classify_wrapper_segment() {
       _cw_barrier_ok=$_cw_plain_seg
       while [ "$_cw_j" -lt "$_cw_n" ]; do
         _cw_traw="${_cw_toks[$_cw_j]}"
-        if ! _cw_tcanon="$(option_scan_canonical "$_cw_traw")"; then
+        if ! analyze_shell_word "$_cw_traw" option_scan; then
           unset _cw_toks
           return 0
         fi
+        _cw_tcanon="$_SW_CANONICAL"
         is_option_scan_barrier "$_cw_tcanon" "$_cw_prev" "$_cw_barrier_ok" && break
         _cw_prefix="${_cw_tcanon%%=*}"
         if [ "${#_cw_prefix}" -ge 4 ]; then
@@ -1611,7 +1442,7 @@ classify_wrapper_segment() {
               ;;
           esac
         fi
-        token_is_unanalyzable "$_cw_traw" head && _cw_barrier_ok=0
+        analyze_shell_word "$_cw_traw" head || _cw_barrier_ok=0
         _cw_prev="$_cw_tcanon"
         _cw_j=$((_cw_j+1))
       done
@@ -1622,16 +1453,13 @@ classify_wrapper_segment() {
   if [ "$_cw_base" = "git" ]; then
     local _cw_gi=$((_cw_idx+1))
     local _cw_sub_ok=0
-    local _cw_subcanon
     # subcommand 判定対象 token は値を判定に使うため意味検査 (厳格判定) を行う。
-    if [ "$_cw_gi" -lt "$_cw_n" ] && ! token_is_unanalyzable "${_cw_toks[$_cw_gi]}" head; then
-      if _cw_subcanon="$(canonicalize_token "${_cw_toks[$_cw_gi]}")"; then
-        case "$_cw_subcanon" in
-          diff|log|show|status|ls-files|rev-parse|cat-file)
-            _cw_sub_ok=1
-            ;;
-        esac
-      fi
+    if [ "$_cw_gi" -lt "$_cw_n" ] && analyze_shell_word "${_cw_toks[$_cw_gi]}" head; then
+      case "$_SW_CANONICAL" in
+        diff|log|show|status|ls-files|rev-parse|cat-file)
+          _cw_sub_ok=1
+          ;;
+      esac
     fi
 
     if [ "$_cw_sub_ok" -eq 0 ]; then
@@ -1646,10 +1474,11 @@ classify_wrapper_segment() {
     _cw_barrier_ok=$_cw_plain_seg
     while [ "$_cw_j" -lt "$_cw_n" ]; do
       _cw_traw="${_cw_toks[$_cw_j]}"
-      if ! _cw_tcanon="$(option_scan_canonical "$_cw_traw")"; then
+      if ! analyze_shell_word "$_cw_traw" option_scan; then
         unset _cw_toks
         return 0
       fi
+      _cw_tcanon="$_SW_CANONICAL"
       is_option_scan_barrier "$_cw_tcanon" "$_cw_prev" "$_cw_barrier_ok" && break
       case "$_cw_tcanon" in
         --ext-diff|--textconv)
@@ -1657,7 +1486,7 @@ classify_wrapper_segment() {
           return 0
           ;;
       esac
-      token_is_unanalyzable "$_cw_traw" head && _cw_barrier_ok=0
+      analyze_shell_word "$_cw_traw" head || _cw_barrier_ok=0
       _cw_prev="$_cw_tcanon"
       _cw_j=$((_cw_j+1))
     done
