@@ -185,8 +185,9 @@ if [ -n "$LISTING" ]; then
 $LISTING"
 fi
 
-# 長さは jq の length で Unicode code point 数として計測する (byte 数ではない)。
-CONTEXT_LENGTH=$(jq -n --arg s "$CONTEXT" '$s | length' 2>/dev/null)
+# 長さは jq の length で Unicode code point 数として計測する (byte 数ではない)。本文は
+# 上限を大きく超えうるため、コマンドライン引数 (OS の引数長上限がある) ではなく標準入力で渡す。
+CONTEXT_LENGTH=$(printf '%s' "$CONTEXT" | jq -Rs 'length' 2>/dev/null)
 if ! [[ "$CONTEXT_LENGTH" =~ ^[0-9]+$ ]]; then
   mv "$consumed_path" "$claimed_path" 2>/dev/null
   exit 0

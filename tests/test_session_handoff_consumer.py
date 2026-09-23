@@ -273,6 +273,22 @@ class SessionHandoffPendingConsumerTest(unittest.TestCase):
             self.assertFalse(pending.exists())
             self.assertNotIn(REMAINING_HEADING, context)
 
+    def test_context_beyond_argument_size_limit_degrades(self) -> None:
+        # OS のコマンドライン引数長の上限 (Linux で 1 引数あたり約 128 KiB) を超える本文でも、
+        # 長さの計測に失敗せず縮退注入になる。
+        with tempfile.TemporaryDirectory() as temporary_name:
+            repo, handoff_dir = self.make_handoff_dir(Path(temporary_name))
+            pending = handoff_dir / "pending-fixture.md"
+            consumed = handoff_dir / "consumed-fixture.md"
+            body = body_for_context_length(50000, [])
+            self.assertGreater(len(body.encode("utf-8")), 128 * 1024)
+            pending.write_text(body + "\n", encoding="utf-8")
+
+            context = self.consume_on_clear(repo)
+
+            self.assert_degraded_context(context, consumed, body)
+            self.assertFalse(pending.exists())
+
     def test_context_over_limit_with_remaining_pending_lists_them(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             repo, handoff_dir = self.make_handoff_dir(Path(temporary_name))
