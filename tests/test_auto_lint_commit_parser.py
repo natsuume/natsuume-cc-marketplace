@@ -337,6 +337,34 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             5,
         )
 
+    def test_body_piped_to_shell_interpreter_is_parsed_as_commands(self) -> None:
+        for command in (
+            "cat <<'EOF' | bash\ngit commit -m x\nEOF",
+            "cat <<'EOF' |& sh -s\ngit commit -m x\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_body_piped_to_non_interpreter_is_excluded(self) -> None:
+        self.assertEqual(
+            self.classify("cat <<'EOF' | grep x\nfoo (git commit)\nEOF"),
+            4,
+        )
+
+    def test_pipeline_closed_by_later_separator_keeps_interpreter_body(
+        self,
+    ) -> None:
+        self.assertEqual(
+            self.classify("cat <<'EOF' | bash; echo done\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_logical_or_is_not_pipe_to_interpreter(self) -> None:
+        self.assertEqual(
+            self.classify("cat <<'EOF' || bash\nfoo (git commit)\nEOF"),
+            4,
+        )
+
     def test_heredoc_operator_in_comment_is_ignored(self) -> None:
         self.assertEqual(
             self.classify("echo hi # see <<'EOF'\n$(git commit -am x)\nEOF"),

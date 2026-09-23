@@ -418,9 +418,8 @@ class _PendingHeredoc:
     word: str
     quoted: bool
     strip_tabs: bool
-    # 演算子を含む simple command の開始 index。
-    segment_start: int
-    # 演算子を含む simple command がシェルインタプリタか (本文を実行するか)。
+    # 演算子を含む simple command、または同じパイプライン内の後続 simple
+    # command がシェルインタプリタか (本文をコマンドとして実行するか)。
     feeds_interpreter: bool = False
 
 
@@ -439,17 +438,25 @@ _BARE_REDIRECT_RE = re.compile(r"^\d*(?:<<-?|<>|>>|>\||<&|>&|<|>)$")
 def _is_segment_separator(command: str, i: int) -> bool:
     """``command[i]`` が simple command を区切る文字 (``;`` ``&`` ``|`` ``(``
     ``)`` 改行) か判定する。``2>&1`` / ``&>`` / ``>|`` のように redirection
-    の一部として現れる ``&`` / ``|`` は区切りにしない。"""
+    の一部として現れる ``&`` / ``|`` と、``|&`` の ``&`` は区切りにしない。"""
     ch = command[i]
     prev = command[i - 1] if i > 0 else ""
     nxt = command[i + 1] if i + 1 < len(command) else ""
     if ch in ";()\n":
         return True
     if ch == "&":
-        return prev not in ("<", ">") and nxt != ">"
+        return prev not in ("<", ">", "|") and nxt != ">"
     if ch == "|":
         return prev != ">"
     return False
+
+
+def _is_pipe(command: str, i: int) -> bool:
+    """区切り文字 ``command[i]`` がパイプ (``|`` / ``|&``) か判定する。
+    ``||`` はパイプではない。"""
+    prev = command[i - 1] if i > 0 else ""
+    nxt = command[i + 1] if i + 1 < len(command) else ""
+    return command[i] == "|" and prev != "|" and nxt != "|"
 
 
 def _simple_command_name(segment: str) -> str | None:
@@ -512,10 +519,13 @@ def _strip_heredoc_bodies(command: str) -> str:
     - 引用符なしの ``WORD`` の本文は bash が展開する (``$(...)`` / backtick
       が実行される) ため、本文に ``$(`` または backtick を含む場合は除去
       せず残し、後段の substitution fail-closed 判定 (exit 3) に委ねる
-    - 演算子を持つ simple command の command name (代入・``env``・透過
+    - 演算子を持つ simple command、または同じパイプライン (``|`` / ``|&``
+      で連結された simple command 群。``||`` はパイプではない) 内の後続
+      simple command のいずれかの command name (代入・``env``・透過
       wrapper・shell keyword・redirection を読み飛ばした最初の語) の
       basename が ``HEREDOC_INTERPRETER_COMMANDS`` に含まれる場合、本文は
-      シェルがコマンドとして実行するため除去せず残す
+      シェルがコマンドとして実行するため除去せず残す。パイプラインは
+      演算子の行の末尾までに閉じるものとして判定する
     - 語の境界 (行頭・空白・区切り文字の直後) にある ``#`` から行末までは
       コメントとし、その中の ``<<`` は heredoc 演算子として扱わない。語の
       途中の ``#`` (``a#b``) はコメントではない
@@ -529,9 +539,9 @@ def _strip_heredoc_bodies(command: str) -> str:
     # 演算子を検出済みで、本文をまだ読んでいない heredoc。本文は演算子の行の
     # 改行の後から出現順に読む。
     pending: list[_PendingHeredoc] = []
-    # pending のうち、演算子を含む simple command がまだ閉じておらず
-    # command name を判定していないもの。
-    unresolved: list[_PendingHeredoc] = []
+    # pending のうち、演算子が現在のパイプライン内にあるもの。パイプラインの
+    # simple command が閉じるたびに、その command name で判定する。
+    pipeline: list[_PendingHeredoc] = []
     # 現在の simple command の開始 index。
     segment_start = 0
     quote: str | None = None
@@ -543,11 +553,14 @@ def _strip_heredoc_bodies(command: str) -> str:
     param_depth = 0
     n = len(command)
 
-    def close_segment(end: int) -> None:
-        for heredoc in unresolved:
-            name = _simple_command_name(command[heredoc.segment_start : end])
-            heredoc.feeds_interpreter = _is_heredoc_interpreter(name)
-        unresolved.clear()
+    def close_segment(end: int, continues_pipeline: bool) -> None:
+        if pipeline and _is_heredoc_interpreter(
+            _simple_command_name(command[segment_start:end])
+        ):
+            for heredoc in pipeline:
+                heredoc.feeds_interpreter = True
+        if not continues_pipeline:
+            pipeline.clear()
 
     i = 0
     while i < n:
@@ -623,15 +636,15 @@ def _strip_heredoc_bodies(command: str) -> str:
                 j += 1
             word, quoted, j = _read_heredoc_word(command, j)
             if word is not None:
-                heredoc = _PendingHeredoc(word, quoted, strip_tabs, segment_start)
+                heredoc = _PendingHeredoc(word, quoted, strip_tabs)
                 pending.append(heredoc)
-                unresolved.append(heredoc)
+                pipeline.append(heredoc)
             out.append(command[i:j])
             i = j
             continue
         if _is_segment_separator(command, i):
-            close_segment(i)
-            segment_start = i + 1
+            close_segment(i, _is_pipe(command, i))
+            segment_start = i + 2 if command.startswith("|&", i) else i + 1
         if ch == "\n" and pending:
             out.append(ch)
             i += 1
