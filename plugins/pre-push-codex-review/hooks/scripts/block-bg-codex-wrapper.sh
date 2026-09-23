@@ -865,17 +865,9 @@ note_literal_contribution() {
 # tokenizer 側の quote 状態 desync の根本原因そのものは #354 で追跡中であり、
 # 本関数はその症状 (b) を検知する防御層の 1 つにすぎない。
 #
-# **platform caveat (bash 3.2 系では tilde 規則が発火しない)**: 共有 tokenizer
-# (`lib/cmd-parser.sh` の `tokenize_segment`) は結果配列を `printf '%q'` +
-# `eval` で書き戻す。 bash 3.2.57 の `printf '%q'` は先頭 `~` を escape せず
-# (bash 5.2.21 は `\~` にする)、 書き戻しの `eval` で tilde expansion が起きる
-# ため、 bash 3.2 系 (macOS の system bash) では `~` を含む token が展開済み
-# path として本関数に届く。 結果として rule (c) の「token 先頭の `~`」 も
-# 緩和 2 の `~/` 分岐も bash 3.2 では発火しない。 判定差は緩和方向にのみ生じ
-# (`cat ~root/<wrapper>` が bash 5 では実行形、 bash 3.2 では mention 候補)、
-# 展開後 path でも basename 判定は機能するため wrapper 起動・interpreter
-# 起動・script 実行面コマンドは両者とも実行形のままである (bypass ではない)。
-# 根本原因は本 hook の変更スコープ外 (共有 parser) のため #356 で追跡する。
+# 共有 tokenizer (`lib/cmd-parser.sh` の `tokenize_segment`) は token 値を展開せず
+# 切り出した文字列のまま返すため、 `~` を含む token は bash のバージョンに依らず
+# `~` を保ったまま本関数に届き、 rule (c) と緩和 2 の `~/` 分岐が同じく適用される。
 # bash 3.2 互換 (mapfile / declare -A / `${var,,}` を使わない)。
 token_is_unanalyzable() {
   local _tw_tok="$1"

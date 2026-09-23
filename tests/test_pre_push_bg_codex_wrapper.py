@@ -809,19 +809,9 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     再設計が要る。この再設計は本 decision table の deny 契約
     (先頭 glob operand の実行形 pin) の再決定を伴うため、#357 で扱う。
 
-    platform caveat (bash 3.2 系では tilde 規則が発火しない): 共有
-    tokenizer (`lib/cmd-parser.sh` の `tokenize_segment`) は結果配列を
-    `printf '%q'` + `eval` で書き戻す。bash 3.2.57 の `printf '%q'` は
-    先頭 `~` を escape せず (bash 5.2.21 は `\\~` にする)、書き戻しの
-    `eval` で tilde expansion が起きるため、bash 3.2 系 (macOS の
-    system bash) では `~` を含む token が展開済み path として step 3 の
-    検査に届く。結果として rule (c) の「token 先頭の `~`」も緩和 2 の
-    `~/` 分岐も bash 3.2 では発火せず、`cat ~root/run-pre-push-codex-review.sh`
-    のような形の判定が bash 5 (実行形) と bash 3.2 (mention 候補) で
-    分かれる。差は緩和方向にのみ生じ、展開後 path でも basename 判定は
-    機能するため wrapper 起動・shell interpreter 起動・script 実行面
-    コマンドは両者とも実行形のままである (bypass ではない)。根本原因は
-    共有 parser 側にあり本 hook の変更スコープ外のため、#356 で追跡する。
+    `~` を含む token は共有 tokenizer が展開せずに返すため、step 3 の
+    検査は bash のバージョンに依らず同じ結果になる (bash 3.2 系を含む
+    platform 一致は test_cmd_parser_token_values.py が検査する)。
     """
 
     def run_hook(
