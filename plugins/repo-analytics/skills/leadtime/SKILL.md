@@ -7,14 +7,12 @@ description: GitHub の issue/PR タイムラインから AI タスクのリー�
 
 GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち切り censoring) とサイズ交絡 (PR の大きさ) を統制したリードタイム推移レポートを Artifact として発行する。
 
-まず、この `SKILL.md` を含む `skills/leadtime/` の 2 階層上を `<plugin-root>` として解決する。通常の Skill 実行では hook 用の `${CLAUDE_PLUGIN_ROOT}` が設定される保証はないため、SKILL.md の実パスを正本にする。以降 `<plugin-root>/skills/leadtime/scripts/...` はこの解決結果を指す。
-
 ## 1. 引数の解釈
 
 - 対象: 省略時はカレントの git リポジトリ (origin remote から `owner/repo` を解決)。ディレクトリパスが与えられた場合は配下の git リポジトリを再帰探索する。`owner/repo` のカンマ区切りリストも受け付ける。
 - `since=YYYY-MM-DD` (省略可)。省略時は全期間を対象にする。
 - remote が GitHub でない、remote が存在しない、owner/repo の識別子が charset 不正 (明示指定エントリを含む)、またはパスに危険文字を含む (次項) リポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
-- **コマンド template への置換値の共通規律**: 本 skill の bash コマンド例は、エージェントがコマンド文字列へ値を文字列置換して実行する。パス値 (対象ディレクトリ・再帰探索で発見した checkout パス) に `"`・`$`・バッククォート・`\`・改行のいずれかが含まれる場合、その値をコマンドに使用せず fail-closed で扱う: 対象ディレクトリ自体なら中断してユーザーに報告し、発見した checkout パスなら `{"repo": "<パス文字列>", "reason": "unsafe_path"}` を `skippedRepos` に追記してスキップする (これらの文字はディレクトリ名として合法だが、双引用符付き template への文字列置換では quoting を破って任意コマンド実行に到達しうるため)。owner/name (手順 4・5) と default branch 名 (第 6 章) には別途の charset 検証を適用しており、この規律はパス値を対象とする。`<work>` / `<plugin-root>` は harness / エージェント自身が解決・生成する値であり、provenance が操作者と harness の信頼境界内に閉じる (第三者が内容を制御しうる経路が無い) ため、この規律 — 第三者制御でありうる値への adversarial-input 検査 — の対象外とする。
+- **コマンド template への置換値の共通規律**: 本 skill の bash コマンド例は、エージェントがコマンド文字列へ値を文字列置換して実行する。パス値 (対象ディレクトリ・再帰探索で発見した checkout パス) に `"`・`$`・バッククォート・`\`・改行のいずれかが含まれる場合、その値をコマンドに使用せず fail-closed で扱う: 対象ディレクトリ自体なら中断してユーザーに報告し、発見した checkout パスなら `{"repo": "<パス文字列>", "reason": "unsafe_path"}` を `skippedRepos` に追記してスキップする (これらの文字はディレクトリ名として合法だが、双引用符付き template への文字列置換では quoting を破って任意コマンド実行に到達しうるため)。owner/name (手順 4・5) と default branch 名 (第 6 章) には別途の charset 検証を適用しており、この規律はパス値を対象とする。`<work>` / `${CLAUDE_SKILL_DIR}` は harness が解決・生成する値であり、provenance が操作者と harness の信頼境界内に閉じる (第三者が内容を制御しうる経路が無い) ため、この規律 — 第三者制御でありうる値への adversarial-input 検査 — の対象外とする。
 - すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。この重複排除は 2 段階の契約である。第 1 段はここで述べる、収集キー (owner/repo の入力文字列) を小文字化して比較する case-insensitive dedup である。第 2 段はセクション 3 の収集ループ冒頭で、API が解決した canonical 名 (nameWithOwner) を基準に行う dedup であり、リネーム・移管によって収集キー上は別名に見えるが実体が同一リポジトリであるケースを捕捉する。JSONL レコードに書く repo 値はこの正規化キー (第 1 段のキー) ではなく、API が返す canonical な nameWithOwner を使う。各収集キー (owner/repo) に、解決に使ったローカル checkout パスを optional として保持する。owner/repo 直接指定と発見済み checkout が同一リポジトリに重複した場合も checkout の関連付けを失わない。同一リポジトリに複数の checkout がある場合は最初に発見したものを代表として選ぶ。保持した checkout はセクション 6 のリポジトリイベント抽出で使う。
 
 ### 手順
@@ -51,13 +49,24 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ## 2. 前提確認 (fail-closed)
 
+- `python3 --version` で Python のバージョンを確認する。3.11 未満の場合は GitHub API 呼び出し前に fail-closed で中断し、必要バージョン (Python 3.11+) を報告する。
 - `command -v jq` と `jq --version` で jq の有無とバージョンを確認する。不在、または 1.5 未満の場合は GitHub API 呼び出し前に fail-closed で中断し、必要バージョン (jq 1.5+) を報告する。
 - `gh auth status --hostname github.com` で github.com の認証状態を確認する。
 - 未認証、または後続の GraphQL クエリがエラーを返した場合は、部分データのまま分析を進めず中断し、原因をユーザーに報告する。
 
 ### 手順
 
-1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで jq の有無とバージョンを確認する。
+1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで Python のバージョンを確認する。
+
+   ```bash
+   python3 --version
+   ```
+
+   報告されるバージョンが 3.11 未満の場合、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+   - Python のバージョンが 3.11 未満であったこと (コマンドの出力を含める)
+   - 必要バージョン (Python 3.11+) であること、および対応方法 (Python のアップグレード)
+   - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
+2. Python の前提を満たしていれば、続けて必ず次のコマンドで jq の有無とバージョンを確認する。
 
    ```bash
    command -v jq
@@ -68,21 +77,21 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    - jq が不在、またはバージョンが 1.5 未満であったこと (コマンドの出力を含める)
    - 必要バージョン (jq 1.5+) であること、および対応方法 (jq のインストール・更新)
    - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
-2. jq の前提を満たしていれば、続けて必ず次のコマンドで認証状態を確認する。
+3. jq の前提を満たしていれば、続けて必ず次のコマンドで認証状態を確認する。
 
    ```bash
    gh auth status --hostname github.com
    ```
 
-3. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+4. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
    - `gh auth status --hostname github.com` が未認証を示したこと (コマンドの出力を含める)
    - 対応方法 (`gh auth login --hostname github.com` を実行してから再実行する)
    - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
-4. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql --hostname github.com` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
+5. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql --hostname github.com` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
 
 ## 3. データ収集
 
-- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 5 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` / `fetch-pr-snapshot.graphql`) を `gh api graphql --hostname github.com` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
+- `${CLAUDE_SKILL_DIR}/scripts/` 配下の GraphQL テンプレート 5 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` / `fetch-pr-snapshot.graphql`) を `gh api graphql --hostname github.com` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
 - 各行の repo フィールドには API が返す canonical な nameWithOwner を使う (ユーザ入力の owner/repo 文字列を使わない。closer や closingIssuesReferences が返す nameWithOwner と join キーのケーシングを一致させるため)。
 - 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (issue / PR 番号を受け取る3テンプレートの `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --hostname github.com --paginate -f owner="<owner>" -f name="<name>" -F query=@<file>`。
 - `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を先頭から全ページ取得し、一覧クエリ由来の timelineItems を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の timelineItems は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する。
@@ -116,7 +125,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issues.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-issues.graphql" \
      --jq '.data.repository as $r | $r.issues.nodes[] | . + {repo: $r.nameWithOwner}' \
      >> "<work>/issues.jsonl"
    ```
@@ -126,7 +135,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-prs.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-prs.graphql" \
      --jq '.data.repository as $r | $r.pullRequests.nodes[] | . + {repo: $r.nameWithOwner}' \
      >> "<work>/prs.jsonl"
    ```
@@ -146,7 +155,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" -F number=<issue_number> \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issue-timeline.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-issue-timeline.graphql" \
      --jq '.data.repository.issue.timelineItems' \
      > "<work>/_overflow-issue-timeline.pages.jsonl"
    ```
@@ -182,7 +191,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" -F number=<pr_number> \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-pr-closing-issues.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-pr-closing-issues.graphql" \
      --jq '.data.repository.pullRequest.closingIssuesReferences' \
      > "<work>/_overflow-pr-closing-issues.pages.jsonl"
    ```
@@ -234,7 +243,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com \
      -f owner="<owner>" -f name="<name>" -F number=<pr_number> \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-pr-snapshot.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-pr-snapshot.graphql" \
      --jq '.data.repository as $r | if ($r == null or $r.pullRequest == null) then empty else $r.pullRequest + {repo: $r.nameWithOwner} end' \
      > "<work>/_stale-pr-snapshot.json"
    ```
@@ -282,7 +291,7 @@ patterns.json への書き出し: 上記 JSON block を一言一句そのまま 
 
 ## 5. 集計の実行
 
-`<plugin-root>/skills/leadtime/scripts/compute_leadtime.py` を次の CLI 契約で実行する。
+`${CLAUDE_SKILL_DIR}/scripts/compute_leadtime.py` を次の CLI 契約で実行する。
 
 ```
 python3 compute_leadtime.py \
@@ -296,7 +305,7 @@ python3 compute_leadtime.py \
 
 - `--issues` / `--prs` / `--claim-patterns-file` / `--as-of` は必須。`--as-of` にはデータ収集完了時刻 (UTC) を渡す。
 - stdout に結果 JSON (`schemaVersion` を含む) のみを出力する。診断メッセージはすべて stderr に出る。
-- exit code: `0` = 成功 (空データ含む)。`2` = 入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`--as-of`/`--since` の形式不正・`--boundaries-file` の検証失敗 (ファイル不存在・JSON parse 失敗・形状不正・`at` の ISO8601/UTC 不正または naive 時刻・`id`/`label` の欠落または空文字列・`id` の重複))。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
+- exit code: `0` = 成功 (空データ含む)。`2` = 実行環境エラー (Python 3.11 未満。stderr に必要バージョンと検出バージョンを出す) または入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`--as-of`/`--since` の形式不正・`--boundaries-file` の検証失敗 (ファイル不存在・JSON parse 失敗・形状不正・`at` の ISO8601/UTC 不正または naive 時刻・`id`/`label` の欠落または空文字列・`id` の重複))。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
 - ターミナルサマリで提示する数値は、この stdout JSON の**決定的な投影**とする。Claude はここで得た JSON の数値を再計算・改変・丸め直ししない (中央値・件数などはすべて JSON の値をそのまま転記する)。
 
 ### 手順
@@ -305,7 +314,7 @@ python3 compute_leadtime.py \
 2. 初回実行 (この時点では第 6 章のイベント注釈がまだ無いため `--boundaries-file` は付けない)。
 
    ```bash
-   python3 "<plugin-root>/skills/leadtime/scripts/compute_leadtime.py" \
+   python3 "${CLAUDE_SKILL_DIR}/scripts/compute_leadtime.py" \
      --issues "<work>/issues.jsonl" \
      --prs "<work>/prs.jsonl" \
      --claim-patterns-file "<work>/patterns.json" \
@@ -316,7 +325,7 @@ python3 compute_leadtime.py \
 
 3. exit code に応じて次のように対応する。
    - `0`: 成功 (対象 0 件の空データを含む)。`<work>/result.json` を後続 (第 6〜9 章) の入力として使い続行する。
-   - `2`: 入力エラー。stderr の診断メッセージを確認し、`issues.jsonl` / `prs.jsonl` の欠落フィールドや overflow 置換漏れ (第 3 章手順 1c/1d)、`--as-of` / `--since` の形式、`--boundaries-file` (再実行時) の形状を点検して修正し、再実行する。原因を特定・修正できない場合は部分データのまま先へ進まず、第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。
+   - `2`: 実行環境エラーまたは入力エラー。stderr の診断メッセージが Python のバージョン不足 (3.11 未満) を示す場合は、入力ファイルを点検せずに作業を中断し、必要バージョン (Python 3.11+) と検出バージョンをユーザーに報告する。それ以外は入力エラーとして、stderr の診断メッセージを確認し、`issues.jsonl` / `prs.jsonl` の欠落フィールドや overflow 置換漏れ (第 3 章手順 1c/1d)、`--as-of` / `--since` の形式、`--boundaries-file` (再実行時) の形状を点検して修正し、再実行する。原因を特定・修正できない場合は部分データのまま先へ進まず、第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。
    - `3`: `patterns.json` の契約違反。第 4 章の JSON block と一言一句一致しているか (キー欠落・regex 不正) を確認し、修正して再実行する。修正できない場合は同様に中断してユーザーに報告する。
 4. 第 6 章でイベント注釈 (`boundaries.json`) を作成したら、`--boundaries-file <work>/boundaries.json` を追加して同じコマンドを再実行し、`<work>/result.json` を上書きする。以降の第 7〜9 章はこの (boundaries 込みの) 最終版 `result.json` を正本として使う (`intervalStats` は boundaries 無指定だと常に `[]` になるため、区間統計を含むレポートにはこの再実行が必須)。イベント注釈が 1 件も収集できなかった場合 (第 6 章参照) は再実行を省略し、初回の `result.json` をそのまま最終版として扱う。
 
