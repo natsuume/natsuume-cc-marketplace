@@ -197,6 +197,11 @@ class ExpressionWatchlistTest(unittest.TestCase):
                     self.assertNotIn(topic_word, entry)
                 self.assertNotRegex(entry, r"[0-9０-９A-Za-zＡ-Ｚａ-ｚ]")
 
+    def test_watchlist_entries_are_unique(self) -> None:
+        entries = [line[2:] for line in self.text.splitlines() if line.startswith("- ")]
+        duplicates = sorted({entry for entry in entries if entries.count(entry) > 1})
+        self.assertEqual(duplicates, [])
+
     def test_watchlist_is_not_a_ban_list(self) -> None:
         self.assertIn("使用禁止ではない", self.text)
 
