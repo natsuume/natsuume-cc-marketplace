@@ -77,7 +77,7 @@ Phase A のテストは「承認済みだが改訂可能な契約」です。実
 
 Phase B の実装差分が branch / working tree にある状態で契約を改訂すると、全差分レビューは「実装と改訂後の契約が整合している」ことしか確かめられません。仕様の穴に複数の解釈があり実装が既に一方を採用している場合、改訂後の契約が受入基準から一意に導けるかの評価が実装に引きずられます (anchoring)。改訂後の契約を実装から独立に評価するため、改訂を push する前に次の契約レビューを別枠で行うことを推奨します。
 
-- **入力**: issue の受入基準、承認済みの契約 (Phase A 時点の契約差分 `git diff <merge-base> <Phase A 最終 commit>` と、それ以前に承認された改訂 commit の patch。Phase A 最終 commit は draft PR を作成した時点の head)、今回の改訂 commit の patch (`git show <改訂 commit>`)。Phase B の実装差分は入力に含めません
+- **入力**: issue の受入基準、承認済みの契約 (Phase A 時点の契約差分 `git diff <merge-base> <Phase A 最終 commit>` と、それ以前に承認された改訂 commit の patch。Phase A 最終 commit は draft PR を作成した時点の head)、今回の改訂 commit の patch (`git show -U0 <改訂 commit>`)。Phase B の実装差分は入力に含めません。改訂 commit の patch は Phase B 以後の commit なので、文脈行に実装の本体が入らないよう、承認済みの改訂分も含めて `-U0` (文脈行なし) で取り出します
 - **改訂 commit の作り方**: 契約ファイル (テストコード・型・関数シグネチャ・インタフェース・データ設計、テスト不能な成果物では設計記述) の変更だけを stage して commit し、実装の変更と混ぜません。改訂 commit の patch がそのまま契約差分になります
 - **実施者**: fresh context の汎用 subagent (general-purpose 等) に、上記の入力と「受入基準から改訂後の契約が一意に導けるか」の評価を依頼します。`pre-push-review:*` の agent type は使いません。これらの reviewer は lifecycle hook が全差分レビュー済みの marker を発行するため、全差分を見ていないレビューで push gate を通すことになります
 - **順序**: 改訂 commit → 契約レビュー → 指摘の反映 → push。push 時の pre-push-review は通常どおり実装を含む全差分をレビューします (契約レビューは gate の代わりではなく追加のレビューです)
