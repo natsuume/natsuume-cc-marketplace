@@ -245,5 +245,24 @@ class DraftSkillTest(unittest.TestCase):
         self.assertIn("分量はコメントの指示量に比例", self.text)
 
 
+class NegationLimitationVariantTest(unittest.TestCase):
+    """否定と限定を組み合わせた論証 (二項対立の変形)。"""
+
+    def test_density_section_names_negation_limitation_variants(self) -> None:
+        dichotomy_line = next(
+            line
+            for line in section(
+                read(WRITING_RULES), DENSITY_SECTION_HEADING
+            ).splitlines()
+            if line.startswith("- **二項対立**")
+        )
+        for variant in ("〜ではない。ただ〜だけ", "〜だけではない", "〜かではない"):
+            with self.subTest(variant=variant):
+                self.assertIn(variant, dichotomy_line)
+
+    def test_review_counts_variants_as_dichotomy(self) -> None:
+        self.assertIn("否定と限定", read(REVIEW_SKILL))
+
+
 if __name__ == "__main__":
     unittest.main()
