@@ -474,6 +474,7 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             ("git commit -F - -e <<'EOF'\ngit commit -am x\nEOF", 0),
             ("GIT_EDITOR=x git tag -a v1 -F - <<'EOF'\ngit commit -am x\nEOF", 0),
             ("X=1 cat <<'EOF'\nfoo (git commit)\nEOF", 0),
+            ("PATH=/tmp/x; cat <<'EOF'\nfoo (git commit)\nEOF", 0),
             ("gh pr create <<'EOF'\ngit commit -am x\nEOF", 0),
         ):
             with self.subTest(command=command):

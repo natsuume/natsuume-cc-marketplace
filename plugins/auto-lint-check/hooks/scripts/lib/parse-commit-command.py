@@ -590,15 +590,17 @@ def _simple_command_name(segment: str) -> str | None:
 
 def _is_data_only_segment(segment: str) -> bool:
     """simple command が heredoc 本文をデータとしてのみ扱うか判定する。
-    command name を持たない segment は True。command name が解決できない
+    環境変数の代入を含む segment は、代入だけの segment も含めて False
+    (``PATH`` 等の代入で後続コマンドの解決先が変わりうるため)。それ以外で
+    command name を持たない segment (空・shell keyword のみ) は True。
+    command name が解決できない
     場合、相対パス (``./x`` 等) の場合、basename が
     ``HEREDOC_DATA_ONLY_COMMANDS`` に無い場合は False。絶対パス
     (``/bin/cat``) は basename で判定する。basename が
     ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` のキーの場合は、command name の直後の語
     が許可された subcommand であり、その subcommand が要求する stdin 読み込み
     フラグを伴い、エディタ起動フラグを伴わないことも要求する (subcommand
-    より前にオプションがある場合も False)。環境変数の代入を前置した simple
-    command (``GIT_EDITOR=... git ...`` 等) も False。"""
+    より前にオプションがある場合も False)。"""
     if _has_env_assignment_prefix(segment):
         return False
     words = _simple_command_words(segment)
@@ -694,7 +696,8 @@ def _strip_heredoc_bodies(command: str) -> str:
       - すべての simple command の command name (代入・shell keyword・
         redirection を読み飛ばした最初の語) が解決でき、その basename が
         ``HEREDOC_DATA_ONLY_COMMANDS`` に含まれる。command name を持たない
-        simple command (代入のみ・算術コマンド等) は許容する。``env`` /
+        simple command は、空・shell keyword のみの場合に限り許容する (代入
+        を含む simple command は代入だけでも不成立)。``env`` /
         透過 wrapper / ``eval`` 等の前置語は command name として扱うため
         不成立になる。相対パス (``./x``) の command name も不成立とし、
         絶対パス (``/bin/cat``) は basename で判定する。basename が ``git`` /
