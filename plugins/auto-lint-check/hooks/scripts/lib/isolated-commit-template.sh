@@ -72,9 +72,10 @@
 #       不可、それ以外は親 dir の canonical 実パス)
 #     - branch ref の格納先。ref 格納形式 (`git rev-parse --show-ref-format`。このオプション
 #       に対応しない古い git では files とみなす) で分ける:
-#         files: HEAD が指す ref (`git symbolic-ref -q HEAD`) の ref ファイルの親
-#           ディレクトリ (未作成なら存在する最も近い祖先)。ref ファイル自体が symlink なら
-#           不可。detached HEAD なら検査しない
+#         files: HEAD が指す ref (`git symbolic-ref -q HEAD`) の ref ファイル
+#           (`git rev-parse --git-path <ref名>` で解決したパス) の親ディレクトリ (未作成なら
+#           存在する最も近い祖先)。ref ファイル自体が symlink なら不可。detached HEAD なら
+#           検査しない
 #         reftable: common-dir 直下の `reftable` ディレクトリ (存在しなければ不可)
 #         それ以外の形式: 不可
 #   加えて、common-dir と git dir の直下 (ドットで始まる名前を含む) に symlink が 1 つでも
@@ -544,7 +545,10 @@ _ict_ref_format() {
 #
 # ref 格納形式が files の場合は、HEAD が指す ref 名 (`git symbolic-ref -q HEAD`) の ref
 # ファイルが symlink でなく、その親ディレクトリ (未作成なら存在する最も近い祖先) の
-# canonical 実パスが許可ルート配下であることを要求する。reftable の場合は loose ref を
+# canonical 実パスが許可ルート配下であることを要求する。ref ファイルのパスは
+# `git rev-parse --git-path <ref名>` で解決する (linked worktree では `refs/worktree/*` 等の
+# worktree 固有の ref が common dir ではなく worktree の git dir に格納されるため、common dir
+# から組み立てたパスでは実際の書き込み先を検査できない)。reftable の場合は loose ref を
 # 使わないため、common-dir 直下の `reftable` ディレクトリの canonical 実パスが許可ルート
 # 配下であることを要求する。それ以外の形式は 1 を返す。
 _ict_head_ref_within_roots() {
@@ -575,7 +579,13 @@ _ict_head_ref_within_roots() {
   case "/$ref_name/" in
     */../*) return 1 ;;
   esac
-  ref_path="$canonical_common_dir/$ref_name"
+  _ict_git_line "$dir" rev-parse --git-path "$ref_name" || return 1
+  ref_path="$_ICT_GIT_OUT"
+  case "$ref_path" in
+    /*) ;;
+    ?*) ref_path="$dir/$ref_path" ;;
+    *) return 1 ;;
+  esac
   [ -L "$ref_path" ] && return 1
   parent="${ref_path%/*}"
   while [ ! -d "$parent" ]; do

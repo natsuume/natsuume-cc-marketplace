@@ -610,6 +610,7 @@ class CommitRecognitionMismatchIsolatedRootsTest(IsolatedGitRootsTestBase):
 class SingleLineAndNestedRefIsolatedRootsTest(IsolatedGitRootsTestBase):
     """改行を含むコマンドと、branch ref 格納先の入れ子の symlink は免除しない (GG / AL 共通)。
 
+    対照として、許可ルート配下の repo の linked worktree (通常の branch) は免除する。
     hook cwd は master 上の実 repo 相当。
     """
 
@@ -642,6 +643,33 @@ class SingleLineAndNestedRefIsolatedRootsTest(IsolatedGitRootsTestBase):
         )
 
         self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
+
+    def test_worktree_specific_ref_symlinked_to_outside_repo_is_denied(self) -> None:
+        # linked worktree の HEAD が worktree 固有の ref (refs/worktree/*) を指す場合、ref は
+        # common dir ではなく worktree の git dir 配下に格納される。その入れ子の symlink 経由で
+        # ルート外 repo の refs/heads を更新する経路は免除しない。
+        worktree = self.allowed_root / "wt"
+        self.git(self.iso_repo, "worktree", "add", str(worktree), "-b", "side")
+        self.git(worktree, "symbolic-ref", "HEAD", "refs/worktree/x")
+        worktree_git_dir = Path(self.git(worktree, "rev-parse", "--absolute-git-dir"))
+        (worktree_git_dir / "refs").mkdir(exist_ok=True)
+        (worktree_git_dir / "refs" / "worktree").symlink_to(
+            self.outside_repo / ".git" / "refs" / "heads", target_is_directory=True
+        )
+
+        self.assert_denied_by_both_hooks(f"git -C {worktree} commit -m x")
+
+    def test_linked_worktree_of_repo_under_root_is_allowed(self) -> None:
+        worktree = self.allowed_root / "wt"
+        self.git(self.iso_repo, "worktree", "add", str(worktree), "-b", "side")
+
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name):
+                result = self.run_hook(
+                    hook, f"git -C {worktree} commit -m x", roots=str(self.allowed_root)
+                )
+
+                self.assert_allowed(result)
 
 
 # 免除テンプレートに一致する入力 ({I} は対象 dir、{F} は -F に渡す絶対パスに置換する)。
