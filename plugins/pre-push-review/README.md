@@ -34,7 +34,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v6.1.1
+v6.1.2
 
 ## インストール
 
