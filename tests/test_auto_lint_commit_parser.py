@@ -441,6 +441,12 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             with self.subTest(operator=operator):
                 self.assertEqual(self.classify(command), 0)
 
+    def test_escaped_operator_at_heredoc_line_end_keeps_separator(self) -> None:
+        for operator in ("\\;", "\\&", "\\|"):
+            command = f"cat > f.md <<'EOF' x{operator}\nfoo\nEOF\ngit commit -am x"
+            with self.subTest(operator=operator):
+                self.assertEqual(self.classify(command), 0)
+
     def test_wrapper_with_positional_argument_keeps_body(self) -> None:
         self.assertEqual(
             self.classify("timeout 5 bash <<'EOF'\ngit commit -m x\nEOF"),

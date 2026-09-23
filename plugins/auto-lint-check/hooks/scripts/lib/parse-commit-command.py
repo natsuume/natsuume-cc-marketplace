@@ -747,7 +747,11 @@ def _strip_heredoc_bodies(command: str) -> str:
             # 演算子の行がリスト演算子・パイプで終わる場合、後続の改行は継続で
             # あり、本文除去後に改行を残すと正規化で ``&&;`` のような区切りと
             # 認識されないトークンになる。空白に置き換えて後続コマンドへ繋ぐ。
-            if _LIST_OPERATOR_TAIL_RE.search("".join(out)):
+            line_so_far = "".join(out).rstrip(" \t")
+            if (
+                _LIST_OPERATOR_TAIL_RE.search(line_so_far)
+                and not _is_backslash_escaped(line_so_far, len(line_so_far) - 1)
+            ):
                 out.append(" ")
             else:
                 out.append(ch)
