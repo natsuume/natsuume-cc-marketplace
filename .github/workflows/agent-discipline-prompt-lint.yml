@@ -49,7 +49,10 @@ on:
       - "plugins/experimental-agent-discipline/hooks/prompts/discipline-sonnet.md"
       - "plugins/experimental-agent-discipline/hooks/prompts/discipline-opus.md"
       - "plugins/experimental-agent-discipline/hooks/prompts/subagent-rules.md"
+      - "plugins/experimental-agent-discipline/hooks/prompts/**/*.md"
+      - "plugins/experimental-agent-discipline/hooks/scripts/**"
       - "plugins/experimental-agent-discipline/scripts/lint-prompt-sync.sh"
+      - "plugins/experimental-agent-discipline/scripts/lint-payload-size.sh"
   push:
     branches: [master]
     paths:
@@ -76,7 +79,10 @@ on:
       - "plugins/experimental-agent-discipline/hooks/prompts/discipline-sonnet.md"
       - "plugins/experimental-agent-discipline/hooks/prompts/discipline-opus.md"
       - "plugins/experimental-agent-discipline/hooks/prompts/subagent-rules.md"
+      - "plugins/experimental-agent-discipline/hooks/prompts/**/*.md"
+      - "plugins/experimental-agent-discipline/hooks/scripts/**"
       - "plugins/experimental-agent-discipline/scripts/lint-prompt-sync.sh"
+      - "plugins/experimental-agent-discipline/scripts/lint-payload-size.sh"
 
 permissions:
   contents: read
@@ -106,3 +112,6 @@ jobs:
       # 参照する同内容の lint スクリプトを持つため、同じ job 内で続けて実行する。
       - name: Run lint-prompt-sync.sh for experimental-agent-discipline (fork)
         run: ./plugins/experimental-agent-discipline/scripts/lint-prompt-sync.sh
+
+      - name: Run lint-payload-size.sh for experimental-agent-discipline (fork)
+        run: ./plugins/experimental-agent-discipline/scripts/lint-payload-size.sh
