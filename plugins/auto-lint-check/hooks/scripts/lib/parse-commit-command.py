@@ -455,6 +455,12 @@ HEREDOC_DATA_ONLY_SUBCOMMANDS: dict[str, frozenset[str]] = {
 # heredoc 演算子の検出が bash と食い違いうるため、本文を除去しない。
 _UNMODELED_QUOTE_OPENERS: tuple[str, ...] = ("$'", '$"')
 
+# 除去する本文以外の部分に現れた場合に本文除去をやめる構文。コマンド置換
+# (``$(`` / backtick) は二重引用符内の入れ子の quoting を、here-string
+# (``<<<``) はその語の読み飛ばしを、行継続 (backslash + 改行) は複数文字の
+# 開始記号を分断した場合の文脈を、それぞれ走査が bash と同じように再現しない。
+_UNMODELED_OUTSIDE_BODY_MARKERS: tuple[str, ...] = ("$(", "`", "<<<", "\\\n")
+
 # 関数定義 (``function NAME`` / ``NAME ()``)。allowlist 内の名前を再定義して
 # stdin を実行させうるため、関数定義を含むコマンドでは本文を除去しない。
 _FUNCTION_DEFINITION_RE = re.compile(r"(?:^|[\s;&|(){}])function(?:\s|$)|\(\s*\)")
@@ -601,9 +607,10 @@ def _strip_heredoc_bodies(command: str) -> str:
         ``gh`` の場合は、直後の語が ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` の
         subcommand であることも要求する (subcommand より前のオプションは不可)
       - プロセス置換 (``<(`` / ``>(``) を含まない
-      - 除去する本文以外の部分にコマンド置換 (``$(`` / backtick) を含まない
-        (二重引用符内の入れ子の quoting を再現しないため。これらを含む
-        コマンドは後段の fail-closed または safe heredoc の除去で扱う)
+      - 除去する本文以外の部分に、コマンド置換 (``$(`` / backtick)、
+        here-string (``<<<``)、行継続 (backslash + 改行) を含まない
+        (``_UNMODELED_OUTSIDE_BODY_MARKERS``。コマンド置換を含むコマンドは
+        後段の fail-closed または safe heredoc の除去で扱う)
       - ANSI-C quoting (``$'``) と locale 翻訳 quoting (``$"``) を含まない
       - 引用符なし delimiter の heredoc 本文に行継続 (backslash + 改行) を
         含まない
@@ -775,8 +782,7 @@ def _strip_heredoc_bodies(command: str) -> str:
         return command
     if (
         has_process_substitution
-        or "$(" in "".join(out)
-        or "`" in "".join(out)
+        or any(marker in "".join(out) for marker in _UNMODELED_OUTSIDE_BODY_MARKERS)
         or has_body_line_continuation
         or has_unresolved_heredoc_word
         or _FUNCTION_DEFINITION_RE.search("".join(out)) is not None
