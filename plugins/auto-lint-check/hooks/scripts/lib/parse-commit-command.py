@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 import shlex
 import sys
+from dataclasses import dataclass
 
 COMMIT_VALUE_FLAGS: frozenset[str] = frozenset(
     {
@@ -350,23 +351,575 @@ def _strip_safe_heredocs(command: str) -> str:
     return stripped
 
 
+# heredoc の delimiter WORD を終える文字 (引用符の外に現れた場合)。
+_HEREDOC_WORD_END_CHARS: frozenset[str] = frozenset(" \t\n;&|()<>")
+
+
+def _read_heredoc_word(command: str, start: int) -> tuple[str | None, bool, int]:
+    """heredoc 演算子 (``<<`` / ``<<-``) の直後の ``start`` から delimiter WORD
+    を読む。
+
+    戻り値は (引用符と backslash を外した WORD, WORD の一部でも引用符または
+    backslash で quote されているか, WORD の直後の index)。WORD が無い場合
+    の WORD は ``None``。WORD に行継続 (backslash + 改行)、改行を含む引用符、
+    backslash を含む二重引用符、引用符の外の ``$`` が現れる場合も、bash と同じ WORD を読める保証が無いため ``None`` を返す
+    (呼び出し側はそのコマンドのすべての heredoc 本文を除去しない)。
+    """
+    n = len(command)
+    i = start
+    while i < n and command[i] in " \t":
+        i += 1
+    word_start = i
+    chars: list[str] = []
+    quoted = False
+    while i < n and command[i] not in _HEREDOC_WORD_END_CHARS:
+        ch = command[i]
+        if ch in ("'", '"'):
+            close = command.find(ch, i + 1)
+            if close == -1:
+                close = n
+            if "\n" in command[i + 1 : close]:
+                return None, False, word_start
+            if ch == '"' and "\\" in command[i + 1 : close]:
+                # 二重引用符内の backslash escape は bash が除去するが、閉じ
+                # 引用符の位置判定を含め同じ解釈を再現しないため解決不能とする。
+                return None, False, word_start
+            quoted = True
+            chars.append(command[i + 1 : close])
+            i = close + 1
+            continue
+        if ch == "\\" and i + 1 < n and command[i + 1] == "\n":
+            return None, False, word_start
+        if ch == "$":
+            # ``${...}`` / ``$[...]`` 等の展開は内側の空白を同じ語に含めるが、
+            # その範囲を再現しないため解決不能とする。
+            return None, False, word_start
+        if ch == "\\" and i + 1 < n:
+            quoted = True
+            chars.append(command[i + 1])
+            i += 2
+            continue
+        chars.append(ch)
+        i += 1
+    if i == word_start:
+        return None, False, i
+    return "".join(chars), quoted, min(i, n)
+
+
+def _find_heredoc_body_end(
+    command: str, start: int, word: str, strip_tabs: bool
+) -> tuple[int, bool]:
+    """本文 1 行目の先頭 ``start`` から、終端行 (``WORD`` と完全一致する行。
+    ``strip_tabs`` なら先頭タブを除去して比較) を探す。
+
+    戻り値は (終端行の直後の index, 終端行が見つかったか)。終端行が無ければ
+    (``len(command)``, False)。"""
+    n = len(command)
+    pos = start
+    while pos < n:
+        newline = command.find("\n", pos)
+        line_end = n if newline == -1 else newline
+        next_pos = n if newline == -1 else newline + 1
+        line = command[pos:line_end]
+        if (line.lstrip("\t") if strip_tabs else line) == word:
+            return next_pos, True
+        pos = next_pos
+    return n, False
+
+
+@dataclass
+class _PendingHeredoc:
+    """演算子を検出済みで本文をまだ読んでいない heredoc。"""
+
+    word: str
+    quoted: bool
+    strip_tabs: bool
+
+
+# heredoc 本文をデータとしてのみ扱う (本文をコマンドとして実行しない)
+# command name (basename)。コマンド全体の simple command がすべてこの集合に
+# 含まれる場合に限り、heredoc 本文を除去する。
+HEREDOC_DATA_ONLY_COMMANDS: frozenset[str] = frozenset(
+    {"cd", "cat", "tee", "git", "gh", "echo", "printf", "mkdir", "true"}
+)
+
+# ``git`` / ``gh`` は subcommand や起動するエディタによって stdin をシェルへ
+# 渡しうる (``git submodule foreach``、``!`` で始まる alias、``gh`` の shell
+# alias、stdin を読むよう設定したエディタ等)。そのため、command name の直後
+# の語 (subcommand) がこの集合に含まれ、かつ subcommand より前にオプションが
+# 無い場合に限り、データ専用とみなす。値が空集合でない subcommand は、stdin
+# をメッセージ・入力として読むフラグ (値) のいずれかを伴い、エディタを起動
+# するフラグ (``HEREDOC_EDITOR_FLAGS``) を伴わない場合に限る。
+HEREDOC_DATA_ONLY_SUBCOMMANDS: dict[str, dict[str, frozenset[str]]] = {
+    "git": {
+        "commit": frozenset({"-F -", "-F-", "--file=-", "--file -"}),
+        "tag": frozenset({"-F -", "-F-", "--file=-", "--file -"}),
+        "notes": frozenset({"-F -", "-F-", "--file=-", "--file -"}),
+        "hash-object": frozenset(),
+        "apply": frozenset(),
+    },
+    "gh": {
+        "pr": frozenset({"--body-file -", "--body-file=-", "-F -"}),
+        "issue": frozenset({"--body-file -", "--body-file=-", "-F -"}),
+        "release": frozenset({"--notes-file -", "--notes-file=-", "-F -"}),
+        "api": frozenset({"--input -", "--input=-"}),
+    },
+}
+
+# エディタを起動するフラグ。
+HEREDOC_EDITOR_FLAGS: frozenset[str] = frozenset({"-e", "--edit"})
+
+# 走査が bash と同じ quote 解釈をしない quoting の開始記号 (ANSI-C quoting
+# ``$'...'`` と locale 翻訳 quoting ``$"..."``)。command に含まれる場合は
+# heredoc 演算子の検出が bash と食い違いうるため、本文を除去しない。
+_UNMODELED_QUOTE_OPENERS: tuple[str, ...] = ("$'", '$"')
+
+# 除去する本文以外の部分に現れた場合に本文除去をやめる構文。コマンド置換
+# (``$(`` / backtick) と parameter expansion (``${``) は二重引用符内の入れ子の
+# quoting を、here-string (``<<<``) はその語の読み飛ばしを、行継続
+# (backslash + 改行) は複数文字の開始記号を分断した場合の文脈を、それぞれ
+# 走査が bash と同じように再現しない。
+_UNMODELED_OUTSIDE_BODY_MARKERS: tuple[str, ...] = (
+    "$(",
+    "`",
+    "${",
+    "<<<",
+    "\\\n",
+    # extglob のパターン (``shopt -s extglob`` 時は内側の ``<<`` が
+    # heredoc 演算子にならない)
+    "?(",
+    "*(",
+    "+(",
+    "@(",
+    "!(",
+)
+
+# 本文除去の対象にする heredoc delimiter (引用符を外した WORD) の形。
+_HEREDOC_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# 関数定義 (``function NAME`` / ``NAME ()``)。allowlist 内の名前を再定義して
+# stdin を実行させうるため、関数定義を含むコマンドでは本文を除去しない。
+_FUNCTION_DEFINITION_RE = re.compile(r"(?:^|[\s;&|(){}])function(?:\s|$)|\(\s*\)")
+
+# この文字の直後にある ``#`` はコメントの開始 (= 語の先頭)。
+_COMMENT_START_PRECEDERS: frozenset[str] = frozenset(" \t\n;&|()")
+
+# target が別トークンに分かれている redirection 演算子 (``>`` ``out`` 等)。
+_BARE_REDIRECT_RE = re.compile(r"^\d*(?:<<-?|<>|>>|>\||<&|>&|<|>)$")
+
+# 算術コンテキストの開始記号と、その内側で深さを数える (開き, 閉じ) 括弧。
+# 開始記号は括弧を 2 個 (``((``) または 1 個 (``$[``) 開く。
+_ARITH_OPENERS: tuple[tuple[str, str, str, int], ...] = (
+    ("$((", "(", ")", 2),
+    ("((", "(", ")", 2),
+    ("$[", "[", "]", 1),
+)
+
+
+def _is_backslash_escaped(command: str, i: int) -> bool:
+    """``command[i]`` の直前に連続する backslash が奇数個あり、``command[i]``
+    が escape されているか判定する。"""
+    count = 0
+    j = i - 1
+    while j >= 0 and command[j] == "\\":
+        count += 1
+        j -= 1
+    return count % 2 == 1
+
+
+def _is_segment_separator(command: str, i: int) -> bool:
+    """``command[i]`` が simple command を区切る文字 (``;`` ``&`` ``|`` ``(``
+    ``)`` 改行) か判定する。``2>&1`` / ``&>`` / ``>|`` のように redirection
+    の一部として現れる ``&`` / ``|`` と、``|&`` の ``&`` は区切りにしない。"""
+    ch = command[i]
+    # escape された直前文字 (``\>`` 等) はリテラルであり redirection を作らない。
+    prev = (
+        command[i - 1] if i > 0 and not _is_backslash_escaped(command, i - 1) else ""
+    )
+    nxt = command[i + 1] if i + 1 < len(command) else ""
+    if ch in ";()\n":
+        return True
+    if ch == "&":
+        return prev not in ("<", ">", "|") and nxt != ">"
+    if ch == "|":
+        return prev != ">"
+    return False
+
+
+def _simple_command_words(segment: str) -> list[str] | None:
+    """simple command の文字列から、command name 以降の語 (command name と
+    引数。redirection とその target は除く) を返す。
+
+    代入 (``X=y``)、shell keyword、redirection (target を含む) を読み飛ばした
+    最初の語を command name とする。``env`` や透過 wrapper は読み飛ばさず、
+    それ自体を command name とする。command name を持たない segment (空、
+    代入のみ、keyword のみ、算術コマンド ``(( ... ))``) は空リストを返す。
+    トークン化できない場合は ``None``。"""
+    try:
+        words = shlex.split(segment, comments=False, posix=True)
+    except ValueError:
+        return None
+    if words and words[0].startswith("(("):
+        # ``((`` は算術コマンドとして不正な中身のとき bash が入れ子の subshell
+        # として実行しうる。算術かどうかを確定できないため解決不能とする。
+        return None
+    result: list[str] = []
+    skip_next = False
+    for word in words:
+        if skip_next:
+            skip_next = False
+            continue
+        if _is_redirection_token(word):
+            skip_next = bool(_BARE_REDIRECT_RE.match(word))
+            continue
+        if not result and (_is_env_assignment(word) or word in SHELL_KEYWORDS):
+            continue
+        result.append(word)
+    return result
+
+
+def _simple_command_name(segment: str) -> str | None:
+    """simple command の文字列から command name を返す (``_simple_command_words``
+    の先頭語)。command name を持たない segment は空文字列、トークン化できない
+    場合は ``None``。"""
+    words = _simple_command_words(segment)
+    if words is None:
+        return None
+    return words[0] if words else ""
+
+
+def _is_data_only_segment(segment: str) -> bool:
+    """simple command が heredoc 本文をデータとしてのみ扱うか判定する。
+    環境変数の代入を含む segment は、代入だけの segment も含めて False
+    (``PATH`` 等の代入で後続コマンドの解決先が変わりうるため)。それ以外で
+    command name を持たない segment (空・shell keyword のみ) は True。
+    command name が解決できない
+    場合、相対パス (``./x`` 等) の場合、basename が
+    ``HEREDOC_DATA_ONLY_COMMANDS`` に無い場合は False。絶対パス
+    (``/bin/cat``) は basename で判定する。basename が
+    ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` のキーの場合は、command name の直後の語
+    が許可された subcommand であり、その subcommand が要求する stdin 読み込み
+    フラグを伴い、エディタ起動フラグを伴わないことも要求する (subcommand
+    より前にオプションがある場合も False)。"""
+    if _has_env_assignment_prefix(segment):
+        return False
+    words = _simple_command_words(segment)
+    if words is None:
+        return False
+    if not words:
+        return True
+    name = words[0]
+    if "/" in name and not name.startswith("/"):
+        return False
+    basename = name.rsplit("/", 1)[-1]
+    if basename not in HEREDOC_DATA_ONLY_COMMANDS:
+        return False
+    allowed_subcommands = HEREDOC_DATA_ONLY_SUBCOMMANDS.get(basename)
+    if allowed_subcommands is None:
+        return True
+    if len(words) < 2 or words[1] not in allowed_subcommands:
+        return False
+    stdin_flags = allowed_subcommands[words[1]]
+    args = words[2:]
+    if any(arg in HEREDOC_EDITOR_FLAGS for arg in args):
+        return False
+    if not stdin_flags:
+        return True
+    joined_args = " ".join(args)
+    return any(
+        flag in args or f" {flag} " in f" {joined_args} " for flag in stdin_flags
+    )
+
+
+def _has_env_assignment_prefix(segment: str) -> bool:
+    """simple command が command name の前に環境変数の代入 (``X=y``) を持つか
+    判定する。トークン化できない場合は True (保守側)。"""
+    try:
+        words = shlex.split(segment, comments=False, posix=True)
+    except ValueError:
+        return True
+    for word in words:
+        if _is_env_assignment(word):
+            return True
+        if _is_redirection_token(word) or word in SHELL_KEYWORDS:
+            continue
+        return False
+    return False
+
+
+def _is_single_trailing_heredoc(
+    command: str, consumed_heredocs: list[tuple[_PendingHeredoc, bool, int]]
+) -> bool:
+    """本文除去の対象になる構造か判定する。
+
+    コマンド中の heredoc がちょうど 1 つで、delimiter が引用符付きの識別子
+    (``<<-`` ではない)、かつ終端行がコマンドの最終行 (後ろに空白以外が無い)
+    の場合に限り True。終端行より後ろに行が無いため、本文の範囲の推定が
+    bash と食い違っても後続のコマンドを除去する経路が生じない。"""
+    if len(consumed_heredocs) != 1:
+        return False
+    heredoc, terminated, end = consumed_heredocs[0]
+    return (
+        heredoc.quoted
+        and not heredoc.strip_tabs
+        and _HEREDOC_IDENTIFIER_RE.fullmatch(heredoc.word) is not None
+        and terminated
+        and command[end:].strip() == ""
+    )
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """heredoc の本文行と終端行を command から除去し、演算子の行は残す。
+
+    heredoc 本文を読むコマンドがデータとしてのみ扱う場合、本文中に
+    ``(git commit)`` のような文字列があっても commit invocation として
+    トークン化されないよう、トークン化の前に取り除く。
+
+    契約:
+
+    - 引用符の外にある ``<<WORD`` / ``<<-WORD`` / ``<<'WORD'`` /
+      ``<<"WORD"`` を heredoc 演算子として検出する。次の ``<<`` は heredoc
+      演算子として扱わない: ``<<<`` (here-string)、算術コンテキスト
+      (``((`` ... ``))`` / ``$((`` ... ``))`` / ``$[`` ... ``]``) の内側、
+      parameter expansion (``${`` ... ``}``、ネストを追跡) の内側、語の境界
+      (行頭・空白・区切り文字の直後) にある ``#`` から行末までのコメントの
+      内側。語の途中の ``#`` (``a#b``) はコメントではない
+    - 本文を除去するのは、heredoc がコマンド中にちょうど 1 つで、その
+      delimiter が引用符付きの識別子 (``<<-`` ではない) で、終端行が
+      コマンドの最終行である場合 (``_is_single_trailing_heredoc``) に限る。
+      複数の heredoc、引用符なし delimiter、``<<-``、終端行が無い heredoc、
+      終端行の後ろに行が続く heredoc は、本文を除去せず command をそのまま
+      返す
+    - 加えて、コマンド全体 (heredoc 本文を除いた部分) が次をすべて満たす
+      必要がある。1 つでも満たさなければ本文を除去せず command をそのまま
+      返す
+      - すべての simple command の command name (代入・shell keyword・
+        redirection を読み飛ばした最初の語) が解決でき、その basename が
+        ``HEREDOC_DATA_ONLY_COMMANDS`` に含まれる。command name を持たない
+        simple command は、空・shell keyword のみの場合に限り許容する (代入
+        を含む simple command は代入だけでも不成立)。``env`` /
+        透過 wrapper / ``eval`` 等の前置語は command name として扱うため
+        不成立になる。相対パス (``./x``) の command name も不成立とし、
+        絶対パス (``/bin/cat``) は basename で判定する。basename が ``git`` /
+        ``gh`` の場合は、直後の語が ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` の
+        subcommand であり、stdin を読むフラグを伴いエディタ起動フラグを伴わ
+        ないことも要求する (subcommand より前のオプションは不可)。環境変数の
+        代入を前置した simple command は不成立
+      - プロセス置換 (``<(`` / ``>(``) を含まない
+      - 除去する本文以外の部分に、コマンド置換 (``$(`` / backtick)、
+        parameter expansion (``${``)、here-string (``<<<``)、行継続
+        (backslash + 改行) を含まない
+        (``_UNMODELED_OUTSIDE_BODY_MARKERS``。コマンド置換を含むコマンドは
+        後段の fail-closed または safe heredoc の除去で扱う)
+      - ANSI-C quoting (``$'``) と locale 翻訳 quoting (``$"``) を含まない
+      - 引用符なし delimiter の heredoc 本文に行継続 (backslash + 改行) を
+        含まない
+      - ``((`` で始まる simple command を含まない (算術コマンドか入れ子の
+        subshell かを確定できないため)
+      - すべての heredoc 演算子の delimiter WORD を読める
+      - 関数定義 (``function NAME`` / ``NAME ()``) を含まない
+    - 除去する場合、演算子を含む行の次の行から、``WORD`` (引用符を外した
+      文字列) と完全一致する行までを本文として除去する。終端行自体も除去
+      する。``<<-`` の場合は各行の先頭タブを除去してから終端判定する。
+      ``EOFX`` のような部分一致行は終端にしない
+    - 走査では、同一行に複数の演算子がある場合 (``cmd <<A <<B``) は演算子
+      の出現順に本文を消費し、終端行が見つからない場合は演算子の行より
+      後ろの全行を本文とみなす (いずれも除去の対象外と判定するため)
+    - 引用符なしの ``WORD`` の本文は bash が展開する (``$(...)`` / backtick
+      が実行される) ため、本文に ``$(`` または backtick を含む場合は除去
+      せず残し、後段の substitution fail-closed 判定 (exit 3) に委ねる
+
+    ``_strip_safe_heredocs`` より前に呼ぶこと (``-m "$(cat <<'EOF' ... EOF)"``
+    は二重引用符内にあり演算子として検出しないため、この関数を通過しても
+    ``_HEREDOC_CAT_RE`` で後から除去できる。逆順では ``_HEREDOC_CAT_RE`` が
+    別の heredoc の本文データに一致して本文境界を壊しうる)。
+    """
+    out: list[str] = []
+    # 演算子を検出済みで、本文をまだ読んでいない heredoc。本文は演算子の行の
+    # 改行の後から出現順に読む。
+    pending: list[_PendingHeredoc] = []
+    found_heredoc = False
+    has_process_substitution = False
+    # 引用符なし delimiter の本文に行継続がある場合、bash は行を連結してから
+    # 終端判定するため、終端行の位置を物理行で判定できない。
+    has_body_line_continuation = False
+    # delimiter WORD を読めなかった heredoc 演算子がある場合、その本文の範囲が
+    # 決まらず、以降の本文境界もすべて bash と食い違いうる。
+    has_unresolved_heredoc_word = False
+    # 本文を消費した heredoc の (演算子情報, 終端行が見つかったか, 本文終端の
+    # 直後の index)。
+    consumed_heredocs: list[tuple[_PendingHeredoc, bool, int]] = []
+    # heredoc 本文とコメントを除いた simple command の文字列。
+    segments: list[str] = []
+    # 現在の simple command の開始 index。
+    segment_start = 0
+    quote: str | None = None
+    # 算術コンテキストの内側で未対応の括弧の数と、数える (開き, 閉じ) 括弧。
+    # 0 より大きい間は ``<<`` を shift 演算子とみなし、heredoc 演算子として
+    # 扱わない。
+    arith_depth = 0
+    arith_open_char = ""
+    arith_close_char = ""
+    # parameter expansion (``${`` ... ``}``) の内側で未対応の ``${`` の数。
+    param_depth = 0
+    n = len(command)
+    i = 0
+    while i < n:
+        ch = command[i]
+        if quote == "'":
+            out.append(ch)
+            if ch == "'":
+                quote = None
+            i += 1
+            continue
+        if ch == "\\":
+            out.append(command[i : i + 2])
+            i += 2
+            continue
+        if quote == '"':
+            out.append(ch)
+            if ch == '"':
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if arith_depth:
+            if ch == arith_open_char:
+                arith_depth += 1
+            elif ch == arith_close_char:
+                arith_depth -= 1
+            out.append(ch)
+            i += 1
+            continue
+        if param_depth:
+            if command.startswith("${", i):
+                param_depth += 1
+                out.append("${")
+                i += 2
+                continue
+            if ch == "}":
+                param_depth -= 1
+            out.append(ch)
+            i += 1
+            continue
+        arith_opener = next(
+            (op for op in _ARITH_OPENERS if command.startswith(op[0], i)), None
+        )
+        if arith_opener is not None:
+            opener, arith_open_char, arith_close_char, arith_depth = arith_opener
+            out.append(opener)
+            i += len(opener)
+            continue
+        if command.startswith("${", i):
+            param_depth = 1
+            out.append("${")
+            i += 2
+            continue
+        if ch == "#" and (
+            i == 0
+            or (
+                command[i - 1] in _COMMENT_START_PRECEDERS
+                and not _is_backslash_escaped(command, i - 1)
+            )
+        ):
+            line_end = command.find("\n", i)
+            if line_end == -1:
+                line_end = n
+            segments.append(command[segment_start:i])
+            segment_start = line_end
+            out.append(command[i:line_end])
+            i = line_end
+            continue
+        if ch in ("<", ">") and command.startswith("(", i + 1):
+            has_process_substitution = True
+        if command.startswith("<<<", i):
+            out.append("<<<")
+            i += 3
+            continue
+        if command.startswith("<<", i):
+            j = i + 2
+            strip_tabs = command.startswith("-", j)
+            if strip_tabs:
+                j += 1
+            word, quoted, j = _read_heredoc_word(command, j)
+            if word is None:
+                has_unresolved_heredoc_word = True
+            else:
+                found_heredoc = True
+                pending.append(_PendingHeredoc(word, quoted, strip_tabs))
+            out.append(command[i:j])
+            i = j
+            continue
+        if _is_segment_separator(command, i):
+            segments.append(command[segment_start:i])
+            segment_start = i + 1
+        if ch == "\n" and pending:
+            # 本文除去後は演算子の行の末尾と後続行が改行 1 つで隣接する。正規化で
+            # 改行が ``;`` に置き換わったとき、行末の記号 (``&&`` / ``)`` 等) と
+            # 結合して区切りと認識されないトークンにならないよう、前後を空白で
+            # 挟んで独立させる。
+            out.append(f" {ch} ")
+            i += 1
+            for heredoc in pending:
+                end, terminated = _find_heredoc_body_end(
+                    command, i, heredoc.word, heredoc.strip_tabs
+                )
+                consumed_heredocs.append((heredoc, terminated, end))
+                body = command[i:end]
+                if not heredoc.quoted and "\\\n" in body:
+                    has_body_line_continuation = True
+                if not heredoc.quoted and ("$(" in body or "`" in body):
+                    out.append(body)
+                i = end
+            pending = []
+            segment_start = i
+            continue
+        out.append(ch)
+        i += 1
+    segments.append(command[segment_start:n])
+    if not found_heredoc:
+        return command
+    if not _is_single_trailing_heredoc(command, consumed_heredocs):
+        return command
+    if (
+        has_process_substitution
+        or any(marker in "".join(out) for marker in _UNMODELED_OUTSIDE_BODY_MARKERS)
+        or has_body_line_continuation
+        or has_unresolved_heredoc_word
+        or _FUNCTION_DEFINITION_RE.search("".join(out)) is not None
+        or any(quote in command for quote in _UNMODELED_QUOTE_OPENERS)
+        or not all(_is_data_only_segment(segment) for segment in segments)
+    ):
+        return command
+    return "".join(out)
+
+
 def _normalize_command(command: str) -> str:
     """hook script から渡された raw command を shlex tokenize 可能な形に整形する。
 
-    順序が重要 (heredoc は real newline に依存するため step 1-2 を先に処理):
+    順序が重要 (heredoc は real newline に依存するため step 1-3 を先に処理):
 
     1. CRLF (``\\r\\n``) を LF (``\\n``) に正規化 (Windows / WSL クライアント
        からの input でも heredoc 検出と shlex tokenize が正しく動くように)
-    2. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
-    3. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
-    4. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
+    2. heredoc の本文行を除去 (``_strip_heredoc_bodies``)。二重引用符内の
+       安全な heredoc は演算子として検出しないため、この段階では残る。
+       step 3 より先に行うのは、step 3 の正規表現が別の heredoc の本文データ
+       に一致して本文境界を壊さないようにするため
+    3. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
+    4. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
+    5. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
 
     bash 側 (block-commit-lint.sh / post-commit-lint.sh) はこの関数に依存
     して raw command を渡してくる前提。bash 側で先に改行を ``;`` に潰すと
-    heredoc 構造が壊れて step 2 が機能しなくなるため、両 hook の正規化は
+    heredoc 構造が壊れて step 2-3 が機能しなくなるため、両 hook の正規化は
     本関数に集約してある。
     """
     command = command.replace("\r\n", "\n")
+    command = _strip_heredoc_bodies(command)
     command = _strip_safe_heredocs(command)
     command = command.replace("\\\n", " ")
     command = command.replace("\n", ";")
