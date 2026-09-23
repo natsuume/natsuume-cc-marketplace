@@ -363,7 +363,7 @@ def _read_heredoc_word(command: str, start: int) -> tuple[str | None, bool, int]
     backslash で quote されているか, WORD の直後の index)。WORD が無い場合
     の WORD は ``None``。WORD に行継続 (backslash + 改行) や改行を含む引用符
     が現れる場合も、bash と同じ WORD を読める保証が無いため ``None`` を返す
-    (その heredoc の本文は除去されずトークン化の対象に残る)。
+    (呼び出し側はそのコマンドのすべての heredoc 本文を除去しない)。
     """
     n = len(command)
     i = start
@@ -446,6 +446,10 @@ HEREDOC_DATA_ONLY_SUBCOMMANDS: dict[str, frozenset[str]] = {
 # ``$'...'`` と locale 翻訳 quoting ``$"..."``)。command に含まれる場合は
 # heredoc 演算子の検出が bash と食い違いうるため、本文を除去しない。
 _UNMODELED_QUOTE_OPENERS: tuple[str, ...] = ("$'", '$"')
+
+# 関数定義 (``function NAME`` / ``NAME ()``)。allowlist 内の名前を再定義して
+# stdin を実行させうるため、関数定義を含むコマンドでは本文を除去しない。
+_FUNCTION_DEFINITION_RE = re.compile(r"(?:^|[\s;&|(){}])function(?:\s|$)|\(\s*\)")
 
 # この文字の直後にある ``#`` はコメントの開始 (= 語の先頭)。
 _COMMENT_START_PRECEDERS: frozenset[str] = frozenset(" \t\n;&|()")
@@ -580,6 +584,8 @@ def _strip_heredoc_bodies(command: str) -> str:
         含まない
       - ``((`` で始まる simple command は ``))`` で閉じる算術コマンドに限り
         command name 無しとして許容する (閉じない形は入れ子の subshell)
+      - すべての heredoc 演算子の delimiter WORD を読める
+      - 関数定義 (``function NAME`` / ``NAME ()``) を含まない
     - 除去する場合、演算子を含む行の次の行から、``WORD`` (引用符を外した
       文字列) と完全一致する行までを本文として除去する。終端行自体も除去
       する。``<<-`` の場合は各行の先頭タブを除去してから終端判定する。
@@ -604,6 +610,9 @@ def _strip_heredoc_bodies(command: str) -> str:
     # 引用符なし delimiter の本文に行継続がある場合、bash は行を連結してから
     # 終端判定するため、終端行の位置を物理行で判定できない。
     has_body_line_continuation = False
+    # delimiter WORD を読めなかった heredoc 演算子がある場合、その本文の範囲が
+    # 決まらず、以降の本文境界もすべて bash と食い違いうる。
+    has_unresolved_heredoc_word = False
     # heredoc 本文とコメントを除いた simple command の文字列。
     segments: list[str] = []
     # 現在の simple command の開始 index。
@@ -695,7 +704,9 @@ def _strip_heredoc_bodies(command: str) -> str:
             if strip_tabs:
                 j += 1
             word, quoted, j = _read_heredoc_word(command, j)
-            if word is not None:
+            if word is None:
+                has_unresolved_heredoc_word = True
+            else:
                 found_heredoc = True
                 pending.append(_PendingHeredoc(word, quoted, strip_tabs))
             out.append(command[i:j])
@@ -728,6 +739,8 @@ def _strip_heredoc_bodies(command: str) -> str:
     if (
         has_process_substitution
         or has_body_line_continuation
+        or has_unresolved_heredoc_word
+        or _FUNCTION_DEFINITION_RE.search("".join(out)) is not None
         or any(quote in command for quote in _UNMODELED_QUOTE_OPENERS)
         or not all(_is_data_only_segment(segment) for segment in segments)
     ):
