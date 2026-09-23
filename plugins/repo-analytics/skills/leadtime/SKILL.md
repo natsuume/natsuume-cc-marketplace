@@ -49,13 +49,24 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ## 2. 前提確認 (fail-closed)
 
+- `python3 --version` で Python のバージョンを確認する。3.11 未満の場合は GitHub API 呼び出し前に fail-closed で中断し、必要バージョン (Python 3.11+) を報告する。
 - `command -v jq` と `jq --version` で jq の有無とバージョンを確認する。不在、または 1.5 未満の場合は GitHub API 呼び出し前に fail-closed で中断し、必要バージョン (jq 1.5+) を報告する。
 - `gh auth status --hostname github.com` で github.com の認証状態を確認する。
 - 未認証、または後続の GraphQL クエリがエラーを返した場合は、部分データのまま分析を進めず中断し、原因をユーザーに報告する。
 
 ### 手順
 
-1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで jq の有無とバージョンを確認する。
+1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで Python のバージョンを確認する。
+
+   ```bash
+   python3 --version
+   ```
+
+   報告されるバージョンが 3.11 未満の場合、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+   - Python のバージョンが 3.11 未満であったこと (コマンドの出力を含める)
+   - 必要バージョン (Python 3.11+) であること、および対応方法 (Python のアップグレード)
+   - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
+2. Python の前提を満たしていれば、続けて必ず次のコマンドで jq の有無とバージョンを確認する。
 
    ```bash
    command -v jq
@@ -66,17 +77,17 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    - jq が不在、またはバージョンが 1.5 未満であったこと (コマンドの出力を含める)
    - 必要バージョン (jq 1.5+) であること、および対応方法 (jq のインストール・更新)
    - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
-2. jq の前提を満たしていれば、続けて必ず次のコマンドで認証状態を確認する。
+3. jq の前提を満たしていれば、続けて必ず次のコマンドで認証状態を確認する。
 
    ```bash
    gh auth status --hostname github.com
    ```
 
-3. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+4. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
    - `gh auth status --hostname github.com` が未認証を示したこと (コマンドの出力を含める)
    - 対応方法 (`gh auth login --hostname github.com` を実行してから再実行する)
    - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
-4. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql --hostname github.com` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
+5. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql --hostname github.com` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
 
 ## 3. データ収集
 
@@ -294,7 +305,7 @@ python3 compute_leadtime.py \
 
 - `--issues` / `--prs` / `--claim-patterns-file` / `--as-of` は必須。`--as-of` にはデータ収集完了時刻 (UTC) を渡す。
 - stdout に結果 JSON (`schemaVersion` を含む) のみを出力する。診断メッセージはすべて stderr に出る。
-- exit code: `0` = 成功 (空データ含む)。`2` = 入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`--as-of`/`--since` の形式不正・`--boundaries-file` の検証失敗 (ファイル不存在・JSON parse 失敗・形状不正・`at` の ISO8601/UTC 不正または naive 時刻・`id`/`label` の欠落または空文字列・`id` の重複))。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
+- exit code: `0` = 成功 (空データ含む)。`2` = 実行環境エラー (Python 3.11 未満。stderr に必要バージョンと検出バージョンを出す) または入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`--as-of`/`--since` の形式不正・`--boundaries-file` の検証失敗 (ファイル不存在・JSON parse 失敗・形状不正・`at` の ISO8601/UTC 不正または naive 時刻・`id`/`label` の欠落または空文字列・`id` の重複))。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
 - ターミナルサマリで提示する数値は、この stdout JSON の**決定的な投影**とする。Claude はここで得た JSON の数値を再計算・改変・丸め直ししない (中央値・件数などはすべて JSON の値をそのまま転記する)。
 
 ### 手順
@@ -314,7 +325,7 @@ python3 compute_leadtime.py \
 
 3. exit code に応じて次のように対応する。
    - `0`: 成功 (対象 0 件の空データを含む)。`<work>/result.json` を後続 (第 6〜9 章) の入力として使い続行する。
-   - `2`: 入力エラー。stderr の診断メッセージを確認し、`issues.jsonl` / `prs.jsonl` の欠落フィールドや overflow 置換漏れ (第 3 章手順 1c/1d)、`--as-of` / `--since` の形式、`--boundaries-file` (再実行時) の形状を点検して修正し、再実行する。原因を特定・修正できない場合は部分データのまま先へ進まず、第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。
+   - `2`: 実行環境エラーまたは入力エラー。stderr の診断メッセージが Python のバージョン不足 (3.11 未満) を示す場合は、入力ファイルを点検せずに作業を中断し、必要バージョン (Python 3.11+) と検出バージョンをユーザーに報告する。それ以外は入力エラーとして、stderr の診断メッセージを確認し、`issues.jsonl` / `prs.jsonl` の欠落フィールドや overflow 置換漏れ (第 3 章手順 1c/1d)、`--as-of` / `--since` の形式、`--boundaries-file` (再実行時) の形状を点検して修正し、再実行する。原因を特定・修正できない場合は部分データのまま先へ進まず、第 2 章と同じ fail-closed 規則でユーザーに報告して中断する。
    - `3`: `patterns.json` の契約違反。第 4 章の JSON block と一言一句一致しているか (キー欠落・regex 不正) を確認し、修正して再実行する。修正できない場合は同様に中断してユーザーに報告する。
 4. 第 6 章でイベント注釈 (`boundaries.json`) を作成したら、`--boundaries-file <work>/boundaries.json` を追加して同じコマンドを再実行し、`<work>/result.json` を上書きする。以降の第 7〜9 章はこの (boundaries 込みの) 最終版 `result.json` を正本として使う (`intervalStats` は boundaries 無指定だと常に `[]` になるため、区間統計を含むレポートにはこの再実行が必須)。イベント注釈が 1 件も収集できなかった場合 (第 6 章参照) は再実行を省略し、初回の `result.json` をそのまま最終版として扱う。
 
