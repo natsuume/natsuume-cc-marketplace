@@ -575,6 +575,9 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        - (b) quote 外に空白が現れる (共有 tokenizer の quote 状態
          desync により複数 shell word が 1 token に merge され、内側に
          危険 option が隠れている可能性がある)
+       - (b2) quote 外に `(` / `)` が現れる (値の展開ではなく、関数定義
+         `f () ( <cmd> )` や subshell 等の compound command を作る文法
+         構造であり、head 以外の位置に現れても segment が実行面を持ちうる)
 
        **意味検査 (値を判定に使う token のみ)**: 次のいずれかに該当する
        token は、展開結果を静的に決定できないため値を判定に使えない。
@@ -776,8 +779,15 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
 
     barrier: rg / sort / git の option 走査は、canonical 値が `--` に
     完全一致する token で止める (以降の token は option ではなく operand
-    として解釈されるため)。ただし直前の token の canonical 値が `-` で
-    始まる場合、その `--` は barrier とみなさず走査を続ける。直前の
+    として解釈されるため)。ただし次のいずれかに該当する `--` は barrier
+    とみなさず走査を続ける。第 1 に、走査済みの token (head から直前まで)
+    に厳格判定 (step 3 の意味検査を緩和なしで行ったもの) を通過しない
+    token がある場合。redirection (`rg -e >x -- …` の `>x`、
+    `rg -e > x -- …` の `>` と `x`) は argv word を生まず、glob は 0 個
+    以上の word に展開されうる (nullglob 等) ため、shell token 列と argv
+    word 列が 1 対 1 に対応せず、直前の shell token から `--` を消費する
+    option を判定できないためである。第 2 に、直前の token の canonical
+    値が `-` で始まる場合。直前の
     token が値を取る option (`rg -e` / `sort -o` / `git log -S` 等)
     であれば `--` はその値として消費され、後続の token が option として
     解釈される (`rg -e -- --pre=bash <file>` は `--pre=bash` を option と
@@ -2584,7 +2594,11 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
       にだけ適用し、値を消費しない head の operand と barrier より後ろの
       token には適用しない
     - rg / sort / git の option 走査は barrier `--` で止まる。直前の token
-      が `-` 始まり (値を取りうる option) の `--` は barrier とみなさない
+      が `-` 始まり (値を取りうる option) の `--` と、走査済み token に
+      厳格判定を通過しないもの (redirection / glob 等) がある `--` は
+      barrier とみなさない
+    - quote 外の `(` / `)` は構造検査の対象であり、値を消費しない head の
+      operand でも実行形とする
 
     payload は agent_type を持たないため、実行形と分類された segment は
     deny、mention 候補は allow になる。
@@ -2614,6 +2628,17 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
         f"git log -S -- --ext-diff {WRAPPER_NAME}",
         # flag の直後の `--` も保守的に barrier とみなさない。
         f"git diff --stat -- *{WRAPPER_NAME}",
+        # redirection / glob を挟むと直前の shell token が argv word と対応しない
+        # ため、`--` を barrier とみなさない。
+        f"rg -e >x -- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e > x -- --pre=bash marker {WRAPPER_NAME}",
+        f"rg -e 2>x -- --pre=bash marker {WRAPPER_NAME}",
+        f"sort -o >x -- --compress-program=bash {WRAPPER_NAME}",
+        f"git log -S >x -- --ext-diff {WRAPPER_NAME}",
+        f"rg -e x* -- --pre=bash marker {WRAPPER_NAME}",
+        # quote 外の `(` / `)` は値を消費しない head の operand でも構造検査で捕捉する。
+        f"f () ( bash {WRAPPER_NAME} )",
+        f"cat x ( {WRAPPER_NAME} )",
         # find は option 終端が無いため全 tail を意味検査する。
         f"find plugins -name *{WRAPPER_NAME}",
         # barrier より前の option 走査対象は意味検査の対象。
