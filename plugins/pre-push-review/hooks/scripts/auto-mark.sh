@@ -127,15 +127,14 @@
 #
 # **Skill 検知は行わない**: `/code-review` / `/security-review` 標準 skill を Skill tool
 # 経由で直接呼んでも marker は書かれない。 2 レビューはいずれも subagent に統一されて
-# いるため Skill 検知は不要であり、 標準 skill を直接呼んだ場合は subagent 経由を案内する
-# block-pre-push.sh の deny メッセージで誘導される (主 session の Claude が
-# `/code-review` を直接呼ぶと turn が終了して後続フローが止まるため、 そもそも実用上の
-# パスではない)。
+# おり、 SubagentStart / SubagentStop の lifecycle hook で reviewer の実行を検知するため
+# Skill 検知は不要である。 標準 skill を直接呼んだ場合は subagent 経由を案内する
+# block-pre-push.sh の deny メッセージで誘導される。
 #
 # **subagent 内 Skill invoke の silent-pass 防止**: 各 subagent (code-reviewer /
-# security-reviewer) は tools から `Skill` を外している。 subagent が標準 skill を invoke
-# することを構造的に塞いでおり、 「subagent → 標準 skill → sub-task が nested 制約で動かず
-# degraded mode で完了 → でも Agent 完了で marker は書かれる」 経路は発生しない。
+# security-reviewer) は tools に `Skill` / `Agent` を持たない。 subagent からの標準 skill
+# の invoke も nested subagent の起動も構造的に起きないため、 reviewer 自身のレビューを
+# 経ずに marker が書かれる経路は発生しない。
 #
 # 設計意図:
 #   - マーカー: 「Claude が手動で mark-reviewed を呼ぶ」 方式は修正後の状態を

@@ -28,7 +28,7 @@ Phase 文脈は code-reviewer と security-reviewer の両方に渡します。
 - **順次起動ではなく並列起動**: wall-clock が最遅レビュー 1 本の時間で完了します (順次より大幅に高速)。 2 レビューは互いに独立しているため並列化に乗ります。
 - **Skill ではなく subagent**: 2 レビューを subagent 呼び出しに統一することで、 (1) raw output・具体的な再現手順・実行可能な詳細は subagent context に閉じ込められ、 (2) 親 session に返るのは severity / location / impact / fix direction 等を保った parent-safe report だけになり、 (3) lifecycle 検知 (SubagentStart が発行する launch attestation + SubagentStop での report 検証) が subagent の完了を捕捉するため、 background 起動でも launch をレビュー完了と誤認せず final report の `Status` を親と hook が確認できます。
 - **Claude による自律判断ではなく確定的実行**: Claude が判断するのは上記の Phase 分類だけで、「どのレビューを走らせるか / どの順番で / 引数は何か」は判断しません。 Phase 文脈を置換した上記 2 つを **そのまま** 並列発出するだけです。 これによりレビューの抜けや順序揺れによる無駄ループが構造的に排除されます。
-- **`/code-review` / `/security-review` 標準 skill を直接呼ばない理由**: いずれの標準 skill も末尾で「最終応答をマークダウンレポートだけにする」 ことを Claude に指示するか、 内部で sub-task (Task tool) を spawn する設計です。 主 session の Claude が直接呼ぶと turn が終了して push まで進めず、 subagent 内から呼んでも nested subagent 制約で sub-task が動かない degraded mode に倒れます。 `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` の 2 subagent はそれぞれ同等のレビュー内容を self-contained に持ち、 親 session の turn を止めずに report を返します。
+- **`/code-review` / `/security-review` 標準 skill を直接呼ばない理由**: `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` の 2 subagent はそれぞれ同等のレビュー内容を self-contained に持ち、 (1) confidence / severity 付きの parent-safe report 契約を reviewer 側に固定し、 (2) SubagentStart / SubagentStop / SubagentHandback の lifecycle hook で reviewer の実行を marker として検知でき、 (3) `tools` から `Agent` を除外して reviewer を read-only に保ちます (nested subagent は既定で起動できるが本 reviewer は使わない)。 2 subagent は親 session の turn を止めずに report を返します。
 
 ## 並列発出が技術的に成立しない / 一部のレビューが失敗した場合
 
