@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
 
       # cmd-parser.sh は plugin 配布の制約 (cache 経由 install で plugin 外ファイルは
-      # 解決されない、 https://docs.claude.com/en/docs/claude-code/plugins-reference) のため
+      # 解決されない、 https://code.claude.com/docs/en/plugins-reference) のため
       # 各 plugin に物理コピーで配置している。 canonical は pre-push-review 配下とし、
       # 他の plugin 配下のコピーが drift していないことを sha256 で強制する。
       # canonical 側を編集したら、 PR で他コピーも同時に更新する運用とする。

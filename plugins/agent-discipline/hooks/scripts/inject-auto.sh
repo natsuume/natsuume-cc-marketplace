@@ -22,6 +22,8 @@ INPUT=$(cat)
 
 # hook_event_name / permission_mode を 1 回の jq 呼び出しで取得する。
 # 値境界は Linux / macOS bash 3.2 で扱える NUL delimiter とする。
+# hook の stderr は利用者に見えるため、不正 JSON の解析エラーは表に出さず、
+# 空値として後段の無音終了に委ねる。
 {
   IFS= read -r -d '' HOOK_EVENT
   IFS= read -r -d '' PERMISSION_MODE
@@ -29,7 +31,7 @@ INPUT=$(cat)
   printf '%s' "$INPUT" | jq -j '
     (.hook_event_name // ""), "\u0000",
     (.permission_mode // ""), "\u0000"
-  '
+  ' 2>/dev/null
 )
 
 # permission_mode が literal auto のときだけ配送する。

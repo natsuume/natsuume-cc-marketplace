@@ -7,14 +7,12 @@ description: GitHub の issue/PR タイムラインから AI タスクのリー�
 
 GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち切り censoring) とサイズ交絡 (PR の大きさ) を統制したリードタイム推移レポートを Artifact として発行する。
 
-まず、この `SKILL.md` を含む `skills/leadtime/` の 2 階層上を `<plugin-root>` として解決する。通常の Skill 実行では hook 用の `${CLAUDE_PLUGIN_ROOT}` が設定される保証はないため、SKILL.md の実パスを正本にする。以降 `<plugin-root>/skills/leadtime/scripts/...` はこの解決結果を指す。
-
 ## 1. 引数の解釈
 
 - 対象: 省略時はカレントの git リポジトリ (origin remote から `owner/repo` を解決)。ディレクトリパスが与えられた場合は配下の git リポジトリを再帰探索する。`owner/repo` のカンマ区切りリストも受け付ける。
 - `since=YYYY-MM-DD` (省略可)。省略時は全期間を対象にする。
 - remote が GitHub でない、remote が存在しない、owner/repo の識別子が charset 不正 (明示指定エントリを含む)、またはパスに危険文字を含む (次項) リポジトリはスキップし、スキップ件数と理由をレポート・ターミナルサマリの双方に明記する。
-- **コマンド template への置換値の共通規律**: 本 skill の bash コマンド例は、エージェントがコマンド文字列へ値を文字列置換して実行する。パス値 (対象ディレクトリ・再帰探索で発見した checkout パス) に `"`・`$`・バッククォート・`\`・改行のいずれかが含まれる場合、その値をコマンドに使用せず fail-closed で扱う: 対象ディレクトリ自体なら中断してユーザーに報告し、発見した checkout パスなら `{"repo": "<パス文字列>", "reason": "unsafe_path"}` を `skippedRepos` に追記してスキップする (これらの文字はディレクトリ名として合法だが、双引用符付き template への文字列置換では quoting を破って任意コマンド実行に到達しうるため)。owner/name (手順 4・5) と default branch 名 (第 6 章) には別途の charset 検証を適用しており、この規律はパス値を対象とする。`<work>` / `<plugin-root>` は harness / エージェント自身が解決・生成する値であり、provenance が操作者と harness の信頼境界内に閉じる (第三者が内容を制御しうる経路が無い) ため、この規律 — 第三者制御でありうる値への adversarial-input 検査 — の対象外とする。
+- **コマンド template への置換値の共通規律**: 本 skill の bash コマンド例は、エージェントがコマンド文字列へ値を文字列置換して実行する。パス値 (対象ディレクトリ・再帰探索で発見した checkout パス) に `"`・`$`・バッククォート・`\`・改行のいずれかが含まれる場合、その値をコマンドに使用せず fail-closed で扱う: 対象ディレクトリ自体なら中断してユーザーに報告し、発見した checkout パスなら `{"repo": "<パス文字列>", "reason": "unsafe_path"}` を `skippedRepos` に追記してスキップする (これらの文字はディレクトリ名として合法だが、双引用符付き template への文字列置換では quoting を破って任意コマンド実行に到達しうるため)。owner/name (手順 4・5) と default branch 名 (第 6 章) には別途の charset 検証を適用しており、この規律はパス値を対象とする。`<work>` / `${CLAUDE_SKILL_DIR}` は harness が解決・生成する値であり、provenance が操作者と harness の信頼境界内に閉じる (第三者が内容を制御しうる経路が無い) ため、この規律 — 第三者制御でありうる値への adversarial-input 検査 — の対象外とする。
 - すべてのターゲット (カレントリポジトリ・再帰探索で発見した checkout・明示指定の owner/repo エントリ) は、クエリ実行前に owner/repo の収集キーへ正規化して重複排除する。キーの比較は case-insensitive で行い、同一リポジトリは 1 回だけ収集する (worktree や clone が複数あっても二重集計しない)。この重複排除は 2 段階の契約である。第 1 段はここで述べる、収集キー (owner/repo の入力文字列) を小文字化して比較する case-insensitive dedup である。第 2 段はセクション 3 の収集ループ冒頭で、API が解決した canonical 名 (nameWithOwner) を基準に行う dedup であり、リネーム・移管によって収集キー上は別名に見えるが実体が同一リポジトリであるケースを捕捉する。JSONL レコードに書く repo 値はこの正規化キー (第 1 段のキー) ではなく、API が返す canonical な nameWithOwner を使う。各収集キー (owner/repo) に、解決に使ったローカル checkout パスを optional として保持する。owner/repo 直接指定と発見済み checkout が同一リポジトリに重複した場合も checkout の関連付けを失わない。同一リポジトリに複数の checkout がある場合は最初に発見したものを代表として選ぶ。保持した checkout はセクション 6 のリポジトリイベント抽出で使う。
 
 ### 手順
@@ -82,7 +80,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ## 3. データ収集
 
-- `<plugin-root>/skills/leadtime/scripts/` 配下の GraphQL テンプレート 5 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` / `fetch-pr-snapshot.graphql`) を `gh api graphql --hostname github.com` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
+- `${CLAUDE_SKILL_DIR}/scripts/` 配下の GraphQL テンプレート 5 本 (`fetch-issues.graphql` / `fetch-prs.graphql` / `fetch-issue-timeline.graphql` / `fetch-pr-closing-issues.graphql` / `fetch-pr-snapshot.graphql`) を `gh api graphql --hostname github.com` で実行し、`--jq` で 1 行 1 レコードの JSONL に整形してセッションの scratchpad に保存する (プロジェクト内には作成しない)。
 - 各行の repo フィールドには API が返す canonical な nameWithOwner を使う (ユーザ入力の owner/repo 文字列を使わない。closer や closingIssuesReferences が返す nameWithOwner と join キーのケーシングを一致させるため)。
 - 変数の型に応じて `-f` (`--raw-field`、型変換なし) と `-F` (`--field`、`true`/`false`/`null`/数値に見える値を JSON 型へ変換し `@` をファイル読み込みとして解釈する) を使い分ける: 文字列変数 (`owner` / `name`) は `-f` で渡す (`-F` だと `2026` のような repo 名が数値へ変換され GraphQL `String!` と型不一致になるため)。数値変数 (issue / PR 番号を受け取る3テンプレートの `$number: Int!`) とクエリファイル展開 (`query=@<file>`、`-f` だと `@` がリテラル送信されてしまう) は `-F` で渡す。例: `gh api graphql --hostname github.com --paginate -f owner="<owner>" -f name="<name>" -F query=@<file>`。
 - `issues.jsonl` の各行で `timelineItems.totalCount > len(nodes)` の issue は、`fetch-issue-timeline.graphql` で当該 issue の timeline を先頭から全ページ取得し、一覧クエリ由来の timelineItems を丸ごと置き換える (部分結果とのマージはページ重複を生むため行わない)。置換後の timelineItems は totalCount と全 nodes を保持し、totalCount == len(nodes) を満たす形に再構成する。
@@ -116,7 +114,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issues.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-issues.graphql" \
      --jq '.data.repository as $r | $r.issues.nodes[] | . + {repo: $r.nameWithOwner}' \
      >> "<work>/issues.jsonl"
    ```
@@ -126,7 +124,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-prs.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-prs.graphql" \
      --jq '.data.repository as $r | $r.pullRequests.nodes[] | . + {repo: $r.nameWithOwner}' \
      >> "<work>/prs.jsonl"
    ```
@@ -146,7 +144,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" -F number=<issue_number> \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-issue-timeline.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-issue-timeline.graphql" \
      --jq '.data.repository.issue.timelineItems' \
      > "<work>/_overflow-issue-timeline.pages.jsonl"
    ```
@@ -182,7 +180,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com --paginate \
      -f owner="<owner>" -f name="<name>" -F number=<pr_number> \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-pr-closing-issues.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-pr-closing-issues.graphql" \
      --jq '.data.repository.pullRequest.closingIssuesReferences' \
      > "<work>/_overflow-pr-closing-issues.pages.jsonl"
    ```
@@ -234,7 +232,7 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    ```bash
    gh api graphql --hostname github.com \
      -f owner="<owner>" -f name="<name>" -F number=<pr_number> \
-     -F query=@"<plugin-root>/skills/leadtime/scripts/fetch-pr-snapshot.graphql" \
+     -F query=@"${CLAUDE_SKILL_DIR}/scripts/fetch-pr-snapshot.graphql" \
      --jq '.data.repository as $r | if ($r == null or $r.pullRequest == null) then empty else $r.pullRequest + {repo: $r.nameWithOwner} end' \
      > "<work>/_stale-pr-snapshot.json"
    ```
@@ -282,7 +280,7 @@ patterns.json への書き出し: 上記 JSON block を一言一句そのまま 
 
 ## 5. 集計の実行
 
-`<plugin-root>/skills/leadtime/scripts/compute_leadtime.py` を次の CLI 契約で実行する。
+`${CLAUDE_SKILL_DIR}/scripts/compute_leadtime.py` を次の CLI 契約で実行する。
 
 ```
 python3 compute_leadtime.py \
@@ -305,7 +303,7 @@ python3 compute_leadtime.py \
 2. 初回実行 (この時点では第 6 章のイベント注釈がまだ無いため `--boundaries-file` は付けない)。
 
    ```bash
-   python3 "<plugin-root>/skills/leadtime/scripts/compute_leadtime.py" \
+   python3 "${CLAUDE_SKILL_DIR}/scripts/compute_leadtime.py" \
      --issues "<work>/issues.jsonl" \
      --prs "<work>/prs.jsonl" \
      --claim-patterns-file "<work>/patterns.json" \
