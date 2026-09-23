@@ -134,6 +134,15 @@ case "$PARSER_RC" in
     # repo を指す場合も exit 0 で skip すれば lint をすり抜ける経路になる。
     # 静的に同一性を判別できないため fail closed (deny) する。利用者は
     # 対象 repo に `cd` してから別の Bash 呼び出しで commit すれば通る。
+    #
+    # 例外: 全ての commit invocation が env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート
+    # 配下の repo を対象とする場合は deny せず、lint も行わずに通す。判定器は
+    # exit 10 のときだけ免除を意味し、それ以外 (Python の異常終了を含む) は免除しない
+    # (免除条件・静的解決の規則は lib/check-isolated-commit-target.py 参照)。
+    python3 "$SCRIPT_DIR/lib/check-isolated-commit-target.py" "$COMMAND" "$PWD"
+    if [ "$?" -eq 10 ]; then
+      exit 0
+    fi
     log_warn "block-commit-lint: repo override (-C / --git-dir / --work-tree / GIT_DIR= / cd 等) を伴う commit はサポート対象外。"
     emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` / \`cd dir &&\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。"
     ;;

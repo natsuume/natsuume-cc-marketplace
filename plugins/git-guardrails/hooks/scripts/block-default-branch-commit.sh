@@ -13,6 +13,11 @@
 #     経路は `has_target_mismatch_prefix` で本フック自身が deny に倒す (lib 経由の
 #     自前防御で、pre-push-review プラグインへの依存はない)。
 #
+# 免除対象:
+#   - 全ての commit invocation が env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の
+#     repo を対象とするコマンド (判定は lib/isolated-roots.sh の
+#     `command_commits_only_to_isolated_roots`)
+#
 # detached HEAD (cherry-pick 中・rebase 中など) では通す: ブランチ名が空文字列で
 # is_default_branch は false 判定になるため、自然に exit 0 経路に流れる。
 #
@@ -99,6 +104,11 @@ require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
   is_default_branch current_branch strip_shell_quotes normalize_refspec_part \
   strip_quoted_text strip_squoted_text find_group_close emit_deny \
   has_target_mismatch_prefix || exit $?
+
+# shellcheck source=lib/isolated-roots.sh
+source "$SCRIPT_DIR/lib/isolated-roots.sh" || exit $?
+require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
+  command_commits_only_to_isolated_roots || exit $?
 
 # コマンドを segment (top-level `;`/`&&`/`||`/`&`/`|`/改行区切り) に分割する。
 # SEPARATORS は本 hook では使わないため配列化せず読み捨てる。
@@ -283,6 +293,14 @@ done
 
 # commit invocation を 1 つも含まないなら本 hook 対象外。
 if [ "${#COMMIT_INVOCATION_INDICES[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+# 全ての commit invocation が env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の repo を
+# 対象とする場合は、target-mismatch deny と default branch 上 commit の deny の両方を
+# 免除する。1 つでも免除条件を満たさない invocation があれば、以降の従来判定に進む
+# (免除条件・静的解決の規則・fail-closed 条件は lib/isolated-roots.sh 参照)。
+if command_commits_only_to_isolated_roots "$COMMAND" "$PWD"; then
   exit 0
 fi
 

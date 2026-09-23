@@ -1,0 +1,410 @@
+"""隔離ルート (env CLAUDE_ISOLATED_GIT_ROOTS) 配下の repo への commit 免除の契約テスト。
+
+git-guardrails の commit hook (block-default-branch-commit.sh) と auto-lint-check の
+block-commit-lint.sh に PreToolUse JSON を stdin で渡し、許可ルート配下の repo だけを
+対象とする commit が免除され、それ以外は従来どおり deny されることを検査する。
+
+hook の cwd には許可ルート外に作る「実 repo 相当」(master 上) を使い、テストを実行する
+worktree 自身の git 状態に依存しない。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+GIT_GUARDRAILS_HOOK_DIR = ROOT / "plugins" / "git-guardrails" / "hooks" / "scripts"
+GG_COMMIT_HOOK = GIT_GUARDRAILS_HOOK_DIR / "block-default-branch-commit.sh"
+GG_PUSH_HOOK = GIT_GUARDRAILS_HOOK_DIR / "block-default-branch-push.sh"
+AL_COMMIT_HOOK = (
+    ROOT / "plugins" / "auto-lint-check" / "hooks" / "scripts" / "block-commit-lint.sh"
+)
+
+ISOLATED_ROOTS_ENV = "CLAUDE_ISOLATED_GIT_ROOTS"
+
+# hook / fixture の git 解決をテスト側の環境から切り離すため、継承しない env。
+INHERITED_GIT_ENV_TO_DROP = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_CEILING_DIRECTORIES",
+)
+
+
+@unittest.skipUnless(
+    shutil.which("bash")
+    and shutil.which("git")
+    and shutil.which("jq")
+    and shutil.which("python3"),
+    "hook integration requires bash, git, jq, and python3",
+)
+class IsolatedGitRootsTestBase(unittest.TestCase):
+    """隔離ルート・隔離 repo・実 repo 相当の fixture と hook 起動を提供する。
+
+    fixture のレイアウト (すべて一時ディレクトリ ``base`` 配下):
+
+    - ``real``: 許可ルート外の「実 repo 相当」。master 上。hook の cwd に使う
+    - ``roots/allowed``: 許可ルート
+    - ``roots/allowed/iso``: 許可ルート配下の隔離 repo。master 上
+    - ``roots/allowedc/iso``: 許可ルートと接頭辞だけ一致するルート外の repo
+    - ``outside/repo``: 許可ルート外の repo
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+
+        empty_git_config = self.base / "gitconfig"
+        empty_git_config.write_text("", encoding="utf-8")
+        self.env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in INHERITED_GIT_ENV_TO_DROP and key != ISOLATED_ROOTS_ENV
+        }
+        self.env["GIT_CONFIG_GLOBAL"] = str(empty_git_config)
+        self.env["GIT_CONFIG_SYSTEM"] = str(empty_git_config)
+
+        self.real_repo = self.base / "real"
+        self.init_repo(self.real_repo)
+
+        self.allowed_root = self.base / "roots" / "allowed"
+        self.allowed_root.mkdir(parents=True)
+        self.iso_repo = self.allowed_root / "iso"
+        self.init_repo(self.iso_repo)
+
+        self.outside_repo = self.base / "outside" / "repo"
+        self.init_repo(self.outside_repo)
+
+    # -- fixture ------------------------------------------------------------
+
+    def git(self, repo: Path, *args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            text=True,
+            capture_output=True,
+            env=self.env,
+        )
+        return result.stdout.strip()
+
+    def init_repo(self, repo: Path) -> None:
+        """master 上に 1 commit を持つ repo を作る (user.name / user.email はローカル設定)。"""
+        repo.mkdir(parents=True)
+        self.git(repo, "init")
+        self.git(repo, "symbolic-ref", "HEAD", "refs/heads/master")
+        self.git(repo, "config", "user.name", "Marketplace Test")
+        self.git(repo, "config", "user.email", "marketplace@example.invalid")
+        self.git(repo, "config", "commit.gpgsign", "false")
+        (repo / "file.txt").write_text("base\n", encoding="utf-8")
+        self.git(repo, "add", "file.txt")
+        self.git(repo, "commit", "-m", "base")
+        self.assertEqual("master", self.git(repo, "symbolic-ref", "--short", "HEAD"))
+
+    # -- hook 実行 ----------------------------------------------------------
+
+    def run_hook(
+        self,
+        hook: Path,
+        command: str,
+        *,
+        roots: str | None,
+        cwd: Path | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        hook_cwd = self.real_repo if cwd is None else cwd
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "session_id": "session-isolated-git-roots",
+            "cwd": str(hook_cwd),
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        env = dict(self.env)
+        if roots is not None:
+            env[ISOLATED_ROOTS_ENV] = roots
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["bash", str(hook)],
+            cwd=str(hook_cwd),
+            input=json.dumps(payload).encode("utf-8"),
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=120,
+        )
+
+    # -- assertions ---------------------------------------------------------
+
+    def assert_allowed(self, result: subprocess.CompletedProcess[bytes]) -> None:
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(
+            result.stdout,
+            b"",
+            f"allow を期待したが hook が出力した: {result.stdout.decode()}",
+        )
+
+    def deny_reason(self, result: subprocess.CompletedProcess[bytes]) -> str:
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertNotEqual(result.stdout, b"", "deny を期待したが hook が allow した")
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        return output["permissionDecisionReason"]
+
+    def assert_denied(self, result: subprocess.CompletedProcess[bytes]) -> None:
+        self.deny_reason(result)
+
+
+class GitGuardrailsCommitHookIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """git-guardrails block-default-branch-commit.sh の免除契約。"""
+
+    # -- allow ----------------------------------------------------------------
+
+    def test_git_c_commit_into_isolated_repo_is_allowed(self) -> None:
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {self.iso_repo} commit -m x",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_allowed(result)
+
+    def test_cd_then_commit_into_isolated_repo_is_allowed(self) -> None:
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"cd {self.iso_repo} && git commit -m x",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_allowed(result)
+
+    def test_plain_commit_with_hook_cwd_in_isolated_repo_on_master_is_allowed(
+        self,
+    ) -> None:
+        # 対象 dir = hook cwd (隔離 repo、master 上)。default branch 上 commit の deny も免除する。
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            "git commit -m x",
+            roots=str(self.allowed_root),
+            cwd=self.iso_repo,
+        )
+
+        self.assert_allowed(result)
+
+    def test_root_given_as_symlink_allows_repo_under_its_target(self) -> None:
+        root_link = self.base / "root-link"
+        root_link.symlink_to(self.allowed_root, target_is_directory=True)
+
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {self.iso_repo.resolve()} commit -m x",
+            roots=str(root_link),
+        )
+
+        self.assert_allowed(result)
+
+    def test_invalid_entries_are_ignored_and_valid_entry_is_used(self) -> None:
+        roots = ":".join(
+            [
+                "",
+                "relative/root",
+                str(self.base / "does-not-exist"),
+                "",
+                str(self.allowed_root),
+                "",
+            ]
+        )
+
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {self.iso_repo} commit -m x",
+            roots=roots,
+        )
+
+        self.assert_allowed(result)
+
+    # -- deny -----------------------------------------------------------------
+
+    def test_without_env_git_c_commit_remains_target_mismatch_denied(self) -> None:
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {self.iso_repo} commit -m x",
+            roots=None,
+        )
+
+        self.assertIn("git -C", self.deny_reason(result))
+
+    def test_without_env_cd_commit_remains_target_mismatch_denied(self) -> None:
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"cd {self.iso_repo} && git commit -m x",
+            roots=None,
+        )
+
+        self.assertIn("git -C", self.deny_reason(result))
+
+    def test_empty_env_git_c_commit_remains_denied(self) -> None:
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {self.iso_repo} commit -m x",
+            roots="",
+        )
+
+        self.assert_denied(result)
+
+    def test_target_outside_allowed_root_is_denied(self) -> None:
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {self.outside_repo} commit -m x",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_denied(result)
+
+    def test_linked_worktree_of_outside_repo_under_root_is_denied(self) -> None:
+        # ルート外 repo の master を、許可ルート配下の linked worktree として checkout する。
+        self.git(self.outside_repo, "switch", "-c", "other")
+        worktree = self.allowed_root / "wt"
+        self.git(self.outside_repo, "worktree", "add", str(worktree), "master")
+
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {worktree} commit -m x",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_denied(result)
+
+    def test_symlink_under_root_pointing_outside_is_denied(self) -> None:
+        link = self.allowed_root / "link"
+        link.symlink_to(self.outside_repo, target_is_directory=True)
+
+        for command in (
+            f"git -C {link} commit -m x",
+            f"cd {link} && git commit -m x",
+        ):
+            with self.subTest(command=command):
+                result = self.run_hook(
+                    GG_COMMIT_HOOK, command, roots=str(self.allowed_root)
+                )
+
+                self.assert_denied(result)
+
+    def test_path_boundary_prefix_match_is_denied(self) -> None:
+        sibling_repo = self.base / "roots" / "allowedc" / "iso"
+        self.init_repo(sibling_repo)
+
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {sibling_repo} commit -m x",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_denied(result)
+
+    def test_statically_unresolvable_forms_are_denied(self) -> None:
+        # 実行時には隔離 repo を指す形でも、静的に解決できなければ免除しない。
+        extra_env = {
+            "ISO": str(self.iso_repo),
+            "HOME": str(self.allowed_root),
+        }
+        iso = self.iso_repo
+        commands = (
+            'cd "$ISO" && git commit -m x',
+            "cd $ISO && git commit -m x",
+            'git -C "$ISO" commit -m x',
+            "cd ~/iso && git commit -m x",
+            f"cd {iso} && cd - && git commit -m x",
+            f"pushd {iso} && git commit -m x",
+            f"cd {iso} && popd && git commit -m x",
+            f"(cd {iso} && git commit -m x)",
+            f"{{ cd {iso} && git commit -m x; }}",
+            f"GIT_DIR={iso}/.git git commit -m x",
+            f"git --git-dir={iso}/.git commit -m x",
+            f"git --work-tree={iso} commit -m x",
+            f"export GIT_DIR={iso}/.git && git commit -m x",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result = self.run_hook(
+                    GG_COMMIT_HOOK,
+                    command,
+                    roots=str(self.allowed_root),
+                    extra_env=extra_env,
+                )
+
+                self.assert_denied(result)
+
+    def test_mixed_isolated_and_non_isolated_commits_are_denied(self) -> None:
+        # 2 つ目の commit は hook cwd (実 repo 相当、master 上) を対象とする。
+        result = self.run_hook(
+            GG_COMMIT_HOOK,
+            f"git -C {self.iso_repo} commit -m a && git commit -m b",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_denied(result)
+
+
+class GitGuardrailsPushHookIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """免除は commit hook に限定され、push hook は従来どおり deny する。"""
+
+    def test_git_c_push_from_isolated_repo_remains_denied(self) -> None:
+        result = self.run_hook(
+            GG_PUSH_HOOK,
+            f"git -C {self.iso_repo} push",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_denied(result)
+
+
+class AutoLintBlockCommitLintIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """auto-lint-check block-commit-lint.sh の repo override deny の免除契約。"""
+
+    def assert_repo_override_denied(
+        self, result: subprocess.CompletedProcess[bytes]
+    ) -> None:
+        self.assertIn("repo override", self.deny_reason(result))
+
+    def test_git_c_commit_into_isolated_repo_is_allowed(self) -> None:
+        result = self.run_hook(
+            AL_COMMIT_HOOK,
+            f"git -C {self.iso_repo} commit -m x",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_allowed(result)
+
+    def test_without_env_git_c_commit_remains_repo_override_denied(self) -> None:
+        result = self.run_hook(
+            AL_COMMIT_HOOK,
+            f"git -C {self.iso_repo} commit -m x",
+            roots=None,
+        )
+
+        self.assert_repo_override_denied(result)
+
+    def test_target_outside_allowed_root_remains_repo_override_denied(self) -> None:
+        result = self.run_hook(
+            AL_COMMIT_HOOK,
+            f"git -C {self.outside_repo} commit -m x",
+            roots=str(self.allowed_root),
+        )
+
+        self.assert_repo_override_denied(result)
+
+
+if __name__ == "__main__":
+    unittest.main()
