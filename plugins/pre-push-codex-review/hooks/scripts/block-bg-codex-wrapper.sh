@@ -564,6 +564,42 @@ dollar_starts_expansion() {
   return 1
 }
 
+# analyze_shell_word <raw_token> <check_kind>
+# 戻り値: 0 = 解析可能 (<check_kind> の検査をすべて通過した。 値を判定に使う
+#   <check_kind> (`head` / `option_scan`) では canonical token 値を _SW_CANONICAL に
+#   設定する)、 1 = 解析不能 (呼び出し側は実行形とする)。
+#
+# 1 つの shell word (共有 tokenizer `tokenize_segment` が返す 1 token) を、 bash の
+# quote 意味論に従って 1 文字ずつ 1 回だけ走査し、 次の 2 つを同時に行う:
+#   - 検査: <check_kind> ごとの規則 (構造検査 / 意味検査) に 1 つでも該当すれば
+#     解析不能
+#   - canonical 値の生成: single / double quote 除去・backslash escape 解決・
+#     fragment 連結を行った静的な値 (`--'pre'` → `--pre`)
+# quote / escape の状態機械を検査と canonical 値生成で共有するため、 両者の意味論が
+# 食い違う (一方でだけ quote 区間や escape を正しく扱える) ことが構造的に起きない。
+#
+# <check_kind> と適用規則 (規則の内容は `token_is_unanalyzable` 節を参照):
+#   `structure`   構造検査のみ (rule (a)/(b)/(b2)/(b3)/(b4))。 全 token に適用する。
+#                 canonical 値は設定しない
+#   `head`        構造検査 + 意味検査の厳格判定 (rule (a)〜(e))。 実 head・timeout の
+#                 duration・git subcommand に適用する
+#   `option_scan` 構造検査 + 意味検査 (rule (c) を 2 点緩和、 rule (e) なし)。 find /
+#                 rg / sort / git の option 走査対象に適用する
+#   未知の値は `head` と同じ厳格判定 (fail-closed 側の既定)。
+#
+# 意味検査を通過した token は quote 外の `$` と、 double quote 内の展開開始 `$` を
+# 含まないため、 canonical 値の生成は必ず成功する (動的展開が残る token は検査の
+# 段階で解析不能になる)。
+#
+# bash 3.2 互換 (mapfile / declare -A / `${var,,}` / nameref を使わない)。 canonical
+# 値は stdout ではなく _SW_CANONICAL で返し、 呼び出し側のコマンド置換 (subshell) を
+# 不要にする。
+_SW_CANONICAL=""
+analyze_shell_word() {
+  _SW_CANONICAL=""
+  return 1
+}
+
 # canonicalize_token <raw_token>
 # stdout: canonical token 値 (single/double quote 除去・backslash escape 解決・
 #   fragment 連結を行った、 shell word の静的な値)。
