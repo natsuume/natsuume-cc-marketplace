@@ -427,6 +427,14 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             5,
         )
 
+    def test_delimiter_with_expansion_keeps_body(self) -> None:
+        for command in (
+            "cat > f.md <<E${a b}F\nfoo\nEF\ngit commit -m x",
+            "cat > f.md <<E$[1 + 1]F\nfoo\nE2F\ngit commit -m x",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
     def test_wrapper_with_positional_argument_keeps_body(self) -> None:
         self.assertEqual(
             self.classify("timeout 5 bash <<'EOF'\ngit commit -m x\nEOF"),
