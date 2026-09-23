@@ -73,6 +73,21 @@ pre-push-review のレビューループ自体が何をレビューし何を den
 
 Phase A のテストは「承認済みだが改訂可能な契約」です。実装に接触して初めて分かる不自然さや実装不可能性が判明したら、Phase B の途中でテストを黙って書き換えるのではなく、実装を止めて Phase A に戻り、テストを改訂して再レビュー (pre-push-review が有効な環境では push 時の diff hash 失効により自動的に再審査になります) を経てから Phase B を再開します。改訂が Phase A で固定した契約 (テストコード・型・関数シグネチャ・インタフェース・データ設計。テスト不能な成果物では設計記述 commit に固定した内容を含む) の変更に及ぶ場合、または改訂に `rule:design-approval` の対象となる設計・仕様レベルの判断が伴う場合は、`rule:design-approval` / `rule:autonomy-boundary` に従いユーザの決定を得てから改訂します (受入基準からテストコードへの翻訳誤りのみを修正する場合はこの限りではありません)。
 
+#### 契約改訂時のレビュー入力の隔離 (推奨手順)
+
+Phase B の実装差分が branch / working tree にある状態で契約を改訂すると、全差分レビューは「実装と改訂後の契約が整合している」ことしか確かめられません。仕様の穴に複数の解釈があり実装が既に一方を採用している場合、改訂後の契約が受入基準から一意に導けるかの評価が実装に引きずられます (anchoring)。改訂後の契約を実装から独立に評価するため、改訂を push する前に次の契約レビューを別枠で行うことを推奨します。
+
+- **入力**: issue の受入基準、Phase A 時点の契約差分 (`git diff <merge-base> <Phase A 最終 commit>`。Phase A 最終 commit は draft PR を作成した時点の head)、改訂 commit の patch (`git show <改訂 commit>`)。Phase B の実装差分は入力に含めません
+- **改訂 commit の作り方**: 契約ファイル (テストコード・型・関数シグネチャ・インタフェース・データ設計、テスト不能な成果物では設計記述) の変更だけを stage して commit し、実装の変更と混ぜません。改訂 commit の patch がそのまま契約差分になります
+- **実施者**: fresh context の汎用 subagent (general-purpose 等) に、上記の入力と「受入基準から改訂後の契約が一意に導けるか」の評価を依頼します。`pre-push-review:*` の agent type は使いません。これらの reviewer は lifecycle hook が全差分レビュー済みの marker を発行するため、全差分を見ていないレビューで push gate を通すことになります
+- **順序**: 改訂 commit → 契約レビュー → 指摘の反映 → push。push 時の pre-push-review は通常どおり実装を含む全差分をレビューします (契約レビューは gate の代わりではなく追加のレビューです)
+- **実装差分の扱い**: 退避は不要で、working tree / branch に残したままで構いません。ただし pre-push-review が有効な環境では staged / unstaged の差分が残っていると push が deny されるため、push 前に Phase B の未 commit 差分も commit します
+
+実装差分を物理的にも隔離したい場合は、次の代替手段を任意で使えます。いずれも共有の stash スタックと破壊的な reset を使いません。
+
+- **未 commit の差分**: ローカルの WIP branch に commit して退避します (`git switch -c <branch>-phase-b-wip` → `git add -A` → `git commit -m "wip: phase b"` → `git switch <branch>`)。契約の承認後に `git cherry-pick <WIP commit>` → `git reset --soft HEAD~1` で working tree に戻します。WIP branch は push せず、復帰後に `git branch -D` で削除します
+- **push 済みの Phase B commit**: `git revert --no-edit <Phase A 最終 commit>..HEAD` で打ち消してから改訂し、契約の承認後に revert commit を revert して実装を戻します。force push も branch の切り直しも不要です
+
 ### 4.3 Phase A の評価基準
 
 Phase A の質は次の 3 点で評価します:
@@ -87,7 +102,7 @@ Phase A で固定するもの: テストコード・型・関数シグネチャ�
 
 ### 4.5 Phase B 内の進め方
 
-承認済みテスト集合を 1 つずつ green 化して進めます。途中の学習で契約の欠陥 (テストの誤り・仕様の穴) が見えたら、4.2 の Phase A ループへ戻ります。
+承認済みテスト集合を 1 つずつ green 化して進めます。途中の学習で契約の欠陥 (テストの誤り・仕様の穴) が見えたら、4.2 の Phase A ループへ戻ります (改訂した契約のレビューは 4.2 の「契約改訂時のレビュー入力の隔離」に従います)。
 
 ## 5. closing keyword
 
