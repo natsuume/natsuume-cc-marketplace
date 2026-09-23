@@ -49,13 +49,24 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
 
 ## 2. 前提確認 (fail-closed)
 
+- `python3 --version` で Python のバージョンを確認する。3.11 未満の場合は GitHub API 呼び出し前に fail-closed で中断し、必要バージョン (Python 3.11+) を報告する。
 - `command -v jq` と `jq --version` で jq の有無とバージョンを確認する。不在、または 1.5 未満の場合は GitHub API 呼び出し前に fail-closed で中断し、必要バージョン (jq 1.5+) を報告する。
 - `gh auth status --hostname github.com` で github.com の認証状態を確認する。
 - 未認証、または後続の GraphQL クエリがエラーを返した場合は、部分データのまま分析を進めず中断し、原因をユーザーに報告する。
 
 ### 手順
 
-1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで jq の有無とバージョンを確認する。
+1. データ収集 (第 3 章) を始める前に、必ず次のコマンドで Python のバージョンを確認する。
+
+   ```bash
+   python3 --version
+   ```
+
+   報告されるバージョンが 3.11 未満の場合、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+   - Python のバージョンが 3.11 未満であったこと (コマンドの出力を含める)
+   - 必要バージョン (Python 3.11+) であること、および対応方法 (Python のアップグレード)
+   - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
+2. Python の前提を満たしていれば、続けて必ず次のコマンドで jq の有無とバージョンを確認する。
 
    ```bash
    command -v jq
@@ -66,17 +77,17 @@ GitHub issue/PR のタイムラインを収集し、生存バイアス (打ち�
    - jq が不在、またはバージョンが 1.5 未満であったこと (コマンドの出力を含める)
    - 必要バージョン (jq 1.5+) であること、および対応方法 (jq のインストール・更新)
    - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
-2. jq の前提を満たしていれば、続けて必ず次のコマンドで認証状態を確認する。
+3. jq の前提を満たしていれば、続けて必ず次のコマンドで認証状態を確認する。
 
    ```bash
    gh auth status --hostname github.com
    ```
 
-3. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
+4. 上記コマンドが非 0 の exit code で終了する、または出力が未認証を示す場合 (例: `You are not logged into any GitHub hosts`)、これ以降の手順に進まず、ここで作業を中断する。中断時にユーザーへ報告する内容:
    - `gh auth status --hostname github.com` が未認証を示したこと (コマンドの出力を含める)
    - 対応方法 (`gh auth login --hostname github.com` を実行してから再実行する)
    - この時点で発生した副作用は無い (gh の read-only query すら未実行) こと
-4. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql --hostname github.com` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
+5. 認証済みであれば第 3 章のデータ収集に進む。第 3 章以降で個々の `gh api graphql --hostname github.com` 呼び出しがエラー (非 0 exit code、または応答 JSON に `errors` 配列を含む) を返した場合も同じ fail-closed 規則を適用する — 取得済みの部分データ (JSONL や中間ファイル) を集計・可視化には使わず、収集が完了していたリポジトリ数・失敗したリポジトリと owner/repo・エラーメッセージをユーザーに報告して中断する。
 
 ## 3. データ収集
 
