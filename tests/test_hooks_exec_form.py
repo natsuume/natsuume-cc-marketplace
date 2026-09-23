@@ -273,7 +273,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "natsuume-writing": "0.6.3",
     "codex-advisor": "4.0.1",
     "rate-limit": "0.5.2",
-    "session-handoff": "0.4.0",
+    "session-handoff": "0.5.0",
     "repo-analytics": "0.2.3",
 }
 
