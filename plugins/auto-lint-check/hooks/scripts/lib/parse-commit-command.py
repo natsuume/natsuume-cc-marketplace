@@ -493,7 +493,10 @@ def _is_segment_separator(command: str, i: int) -> bool:
     ``)`` 改行) か判定する。``2>&1`` / ``&>`` / ``>|`` のように redirection
     の一部として現れる ``&`` / ``|`` と、``|&`` の ``&`` は区切りにしない。"""
     ch = command[i]
-    prev = command[i - 1] if i > 0 else ""
+    # escape された直前文字 (``\>`` 等) はリテラルであり redirection を作らない。
+    prev = (
+        command[i - 1] if i > 0 and not _is_backslash_escaped(command, i - 1) else ""
+    )
     nxt = command[i + 1] if i + 1 < len(command) else ""
     if ch in ";()\n":
         return True
