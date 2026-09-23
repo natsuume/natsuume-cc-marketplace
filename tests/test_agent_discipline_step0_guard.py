@@ -88,7 +88,7 @@ STEP0_CANONICAL_TEMPLATE = """\
 5. 対象 subcommand が 1 つも無い場合のみ、 一切の semantic 検証をせずに即座に `{"ok": true}` を返して終了する (= `if` filter が best-effort で通した非対象 Bash)。
 6. 対象 subcommand が複数ある場合は、 そのすべてを Step 1 以降で検証し、 1 つでも違反があれば `{"ok": false, "reason": ...}` とする。
 
-該当する対象 subcommand ごとに Step 1 以降へ進む。
+該当する対象 subcommand ごとに Step 1 以降へ進む。 すべての対象 subcommand が通過した、 または Step 1 で検証をスキップされた場合は `{"ok": true}` を返す。
 """
 
 # Step 1 節が含む、hook 時点で存在しない body file の扱い (fail-closed)。
