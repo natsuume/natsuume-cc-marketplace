@@ -81,6 +81,13 @@ Phase A (spec-first) の位置づけ:
   より ERROR として報告され、`main` はまだこの契約を呼び出していないため
   T59 は exit code の不一致により FAIL として報告される。これらも意図した
   red 状態である。
+- T60 / T61: `--issues` / `--prs` の `timelineItems.nodes` に非 object の要素
+  (null・文字列) が含まれる構文的に正しい JSONL で、`main` が uncaught
+  traceback ではなく、`timelineItems` に言及する診断メッセージ付きの exit
+  code 2 を返し、stdout に結果 JSON を出力しないことの検証。T62: claim
+  パターンの regex template が置換前には compile できても `{issue_number}` の
+  置換後に不正なパターンになる場合に、`main` が uncaught traceback ではなく
+  exit code 3 を返すことの検証。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -92,6 +99,7 @@ Phase A (spec-first) の位置づけ:
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -2647,6 +2655,114 @@ class MainTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 2)
             self.assertEqual(captured_stdout.getvalue(), "")
+
+    def _run_main_capturing(
+        self,
+        tmp_path: Path,
+        *,
+        issues: list[dict],
+        prs: list[dict],
+        patterns_dict: dict,
+    ) -> tuple[int, str, str]:
+        """main を実行し、(exit code, stdout, stderr) を返す。"""
+        issues_path = tmp_path / "issues.jsonl"
+        prs_path = tmp_path / "prs.jsonl"
+        patterns_path = tmp_path / "patterns.json"
+        issues_path.write_text(
+            "".join(json.dumps(issue) + "\n" for issue in issues), encoding="utf-8"
+        )
+        prs_path.write_text(
+            "".join(json.dumps(pr) + "\n" for pr in prs), encoding="utf-8"
+        )
+        write_claim_patterns_file(patterns_path, patterns_dict)
+        captured_stdout = io.StringIO()
+        captured_stderr = io.StringIO()
+        with (
+            contextlib.redirect_stdout(captured_stdout),
+            contextlib.redirect_stderr(captured_stderr),
+        ):
+            exit_code = compute_leadtime.main(
+                [
+                    "--issues",
+                    str(issues_path),
+                    "--prs",
+                    str(prs_path),
+                    "--claim-patterns-file",
+                    str(patterns_path),
+                    "--as-of",
+                    "2026-07-17T04:00:00Z",
+                ]
+            )
+        return exit_code, captured_stdout.getvalue(), captured_stderr.getvalue()
+
+    def test_t60_non_object_issue_timeline_node_exits_two(self):
+        # T60: issues.jsonl の timelineItems.nodes に非 object の要素 (null・
+        # 文字列) が含まれる構文的に正しい JSONL は入力エラーであり、main は
+        # uncaught traceback ではなく診断メッセージ付きの exit code 2 を返す。
+        for case_name, bad_node in {"null": None, "string": "not-an-object"}.items():
+            with self.subTest(case=case_name):
+                issue = make_issue(
+                    number=1,
+                    timeline_nodes=[
+                        issue_comment("2026-07-01T00:00:00Z", "hello"),
+                        bad_node,
+                    ],
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    exit_code, stdout, stderr = self._run_main_capturing(
+                        Path(tmp),
+                        issues=[issue],
+                        prs=[],
+                        patterns_dict=DEFAULT_PATTERNS_DICT,
+                    )
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("timelineItems", stderr)
+                self.assertNotIn("Traceback", stderr)
+
+    def test_t61_non_object_pr_timeline_node_exits_two(self):
+        # T61: prs.jsonl の timelineItems.nodes に非 object の要素が含まれる
+        # 場合も T60 と同じく診断メッセージ付きの exit code 2 を返す。
+        for case_name, bad_node in {"null": None, "string": "not-an-object"}.items():
+            with self.subTest(case=case_name):
+                pr = make_pr(
+                    number=940,
+                    state="OPEN",
+                    timeline_nodes=[ready_event("2026-07-01T00:00:00Z"), bad_node],
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    exit_code, stdout, stderr = self._run_main_capturing(
+                        Path(tmp),
+                        issues=[],
+                        prs=[pr],
+                        patterns_dict=DEFAULT_PATTERNS_DICT,
+                    )
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("timelineItems", stderr)
+                self.assertNotIn("Traceback", stderr)
+
+    def test_t62_claim_regex_invalid_after_substitution_exits_three(self):
+        # T62: claim パターンの regex template が置換前には compile できても、
+        # {issue_number} を実際の番号へ置換した後に不正なパターンになる場合
+        # (直前のバックスラッシュと番号が存在しないグループへの後方参照になる)、
+        # main は uncaught traceback ではなく exit code 3 (パターン契約違反) を返す。
+        patterns = copy.deepcopy(DEFAULT_PATTERNS_DICT)
+        patterns["strict"].append(
+            {"id": "broken-after-substitution", "regex": "\\{issue_number}"}
+        )
+        issue = make_issue(
+            number=42,
+            timeline_nodes=[issue_comment("2026-07-01T00:00:00Z", "hello")],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            exit_code, stdout, stderr = self._run_main_capturing(
+                Path(tmp), issues=[issue], prs=[], patterns_dict=patterns
+            )
+        self.assertEqual(exit_code, 3)
+        self.assertEqual(stdout, "")
+        self.assertNotEqual(stderr.strip(), "")
+        self.assertNotIn("Traceback", stderr)
 
 
 if __name__ == "__main__":
