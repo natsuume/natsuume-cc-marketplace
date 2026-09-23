@@ -594,5 +594,42 @@ class CommitRecognitionMismatchIsolatedRootsTest(IsolatedGitRootsTestBase):
                 self.assertEqual(1, exemption_status(mismatched))
 
 
+class SingleLineAndNestedRefIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """改行を含むコマンドと、branch ref 格納先の入れ子の symlink は免除しない (GG / AL 共通)。
+
+    hook cwd は master 上の実 repo 相当。
+    """
+
+    HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
+
+    def assert_denied_by_both_hooks(self, command: str) -> None:
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name, command=command):
+                result = self.run_hook(hook, command, roots=str(self.allowed_root))
+
+                reason = self.deny_reason(result)
+                if hook == AL_COMMIT_HOOK:
+                    self.assertIn("repo override", reason)
+
+    def test_escaped_backslash_before_newline_does_not_hide_later_commit(self) -> None:
+        # 行末の `\\` は escape された backslash で行継続ではない。bash は改行の後ろを
+        # 別コマンドとして hook cwd の repo で実行する。
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} commit -m x \\\\\ngit commit -m y"
+        )
+
+    def test_newline_inside_quoted_message_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(f'git -C {self.iso_repo} commit -m "a\nb"')
+
+    def test_refs_heads_symlinked_to_outside_repo_is_denied(self) -> None:
+        heads = self.iso_repo / ".git" / "refs" / "heads"
+        shutil.rmtree(heads)
+        heads.symlink_to(
+            self.outside_repo / ".git" / "refs" / "heads", target_is_directory=True
+        )
+
+        self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
+
+
 if __name__ == "__main__":
     unittest.main()

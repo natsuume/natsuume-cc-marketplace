@@ -32,8 +32,8 @@ ImportError / 未捕捉例外 (1) と区別し、想定外の終了を必ず「�
 
 免除条件 (全て満たす場合のみ免除):
 
-1. コマンド内に mutating な commit invocation (``--dry-run`` / ``--help`` / ``-h``
-   を除く) が 1 つ以上あり、最後の mutating な commit invocation より前に
+1. コマンドが改行 (LF / CR) を含まず、mutating な commit invocation (``--dry-run`` /
+   ``--help`` / ``-h`` を除く) が 1 つ以上あり、最後の mutating な commit invocation より前に
    ``cd <path>`` と ``git add`` / ``git commit`` 以外の simple command が無く、
    それらの git invocation 全ての対象 dir を静的に解決できる (解決規則は
    ``resolve_commit_target_dirs`` を参照。判定後・commit 前に対象 dir や repo
@@ -43,7 +43,8 @@ ImportError / 未捕捉例外 (1) と区別し、想定外の終了を必ず「�
 3. 各対象 dir で実行した ``git rev-parse --git-common-dir`` の canonical 実パスが、
    いずれかの許可ルート配下にある。common-dir 直下の ``refs`` / ``objects`` /
    ``HEAD`` / ``packed-refs`` / ``logs`` と、worktree 固有 git dir の ``HEAD`` /
-   ``index`` の実体も許可ルート配下にある (``dir_is_within_roots`` を参照)
+   ``index`` の実体と、HEAD が指す branch ref の格納先も許可ルート配下にある
+   (``dir_is_within_roots`` を参照)
 4. hook プロセスの環境に ``GIT_DIR`` / ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE`` /
    ``GIT_COMMON_DIR`` が設定されていない (コマンド内の再代入で commit 先が変わり
    うるため)
@@ -174,6 +175,16 @@ def is_within_root(path: str, root: str) -> bool:
     if root == "/":
         return True
     return path == root or path.startswith(root + "/")
+
+
+def _has_newline(command: str) -> bool:
+    """改行 (LF / CR) を quote の内外・行継続か否かを問わず 1 文字でも含むか。
+
+    行末の escape された ``\\\\`` を行継続と誤認するような正規化の食い違いで、別
+    コマンドを 1 つに結合して commit を隠す経路を塞ぐため、改行を含むコマンドは
+    免除しない (複数行の commit メッセージは ``-F <file>`` で渡す)。
+    """
+    return "\n" in command or "\r" in command
 
 
 def _has_unresolvable_syntax(command: str) -> bool:
@@ -516,6 +527,8 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
     または規則どおりに解決できない場合は ``None`` を返す。静的解決の規則 (これ以外の
     形は解決不能):
 
+    - 元のコマンド文字列が改行 (LF / CR) を含まないこと (``_has_newline``。行継続の
+      正規化・分割より前に判定する)
     - ``_has_unresolvable_syntax`` が検出する構文 (subshell / brace group /
       コマンド置換 / プロセス置換 / redirection / heredoc / コメント 等) を、
       コマンド内のどの位置にも含まないこと
@@ -555,12 +568,14 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
       相対パスは直前までに解決した dir を基準に解決する
     - 各段階で既存ディレクトリとして canonical 化できること
     """
+    # 改行 (LF / CR) は正規化・分割より前に、元のコマンド文字列で判定する。
+    if _has_newline(command):
+        return None
     parser = _load_commit_parser()
     expected_commit_count = _parser_mutating_commit_count(parser, command)
     if expected_commit_count is None:
         return None
 
-    command = command.replace("\r\n", "\n").replace("\\\n", " ")
     if _has_unresolvable_syntax(command):
         return None
     current_dir = _canonical_dir(base_dir)
@@ -675,6 +690,8 @@ def dir_is_within_roots(target_dir: str, roots: list[str]) -> bool:
       (``_git_entry_is_within_roots``)
     - ``git rev-parse --git-dir`` (worktree 固有 dir) が common-dir と異なる場合は、
       その直下の ``HEAD`` / ``index`` についても同じ条件を満たす
+    - HEAD が指す branch ref の格納先が許可ルート配下にある
+      (``_head_ref_is_within_roots``)
 
     git dir 内部の symlink でルート外 repo の ref / object を更新する経路を塞ぐ。
     rev-parse の出力が相対パスなら ``target_dir`` 基準で解決する。rev-parse は hook
@@ -711,7 +728,56 @@ def dir_is_within_roots(target_dir: str, roots: list[str]) -> bool:
         for entry in WORKTREE_GIT_DIR_ENTRIES:
             if not _git_entry_is_within_roots(f"{canonical_git_dir}/{entry}", roots):
                 return False
-    return True
+    return _head_ref_is_within_roots(target_dir, canonical_common_dir, roots)
+
+
+def _head_ref_is_within_roots(
+    target_dir: str, canonical_common_dir: str, roots: list[str]
+) -> bool:
+    """commit が更新する branch ref の格納先が許可ルート配下にあるか。
+
+    ``target_dir`` で ``git symbolic-ref -q HEAD`` を実行して ref 名 (例
+    ``refs/heads/master``) を得る。終了コード 1 (detached HEAD) なら ref 更新が無い
+    ので True。それ以外の失敗・``refs/`` で始まらない ref 名・``..`` 要素や改行を含む
+    ref 名は False。ref ファイル (``<canonical_common_dir>/<ref 名>``) 自体が symlink
+    なら False。そうでなければ、その親ディレクトリ (未作成なら存在する最も近い祖先。
+    途中の entry がリンク切れの symlink やディレクトリ以外なら False) の canonical
+    実パスが許可ルート配下であることを要求する (``refs/heads`` 等の入れ子の symlink で
+    ルート外 repo の branch を更新する経路を塞ぐため)。objects / logs 配下の深い階層の
+    symlink は branch を動かさないため検査しない。
+    """
+    try:
+        result = subprocess.run(
+            ["git", "symbolic-ref", "-q", "HEAD"],
+            cwd=target_dir,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    ref_name = result.stdout.rstrip("\n")
+    if result.returncode == 1 and not ref_name:
+        return True
+    if result.returncode != 0:
+        return False
+    if not ref_name.startswith("refs/") or "\n" in ref_name:
+        return False
+    if "/../" in f"/{ref_name}/":
+        return False
+    ref_path = f"{canonical_common_dir}/{ref_name}"
+    if os.path.islink(ref_path):
+        return False
+    parent = os.path.dirname(ref_path)
+    while not os.path.isdir(parent):
+        if os.path.islink(parent) or os.path.exists(parent):
+            return False
+        next_parent = os.path.dirname(parent)
+        if next_parent == parent:
+            return False
+        parent = next_parent
+    canonical_parent = _canonical_dir(parent)
+    return canonical_parent is not None and _is_within_any_root(canonical_parent, roots)
 
 
 def commits_only_to_isolated_roots(

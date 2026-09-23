@@ -140,6 +140,7 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 - 対象 dir の canonical 実パスが、いずれかの許可ルートの配下にある
 - 対象 dir で `git rev-parse --git-common-dir` が返す repo 本体の canonical 実パスも、いずれかの許可ルートの配下にある (許可ルート配下に置いた linked worktree や symlink 経由で、ルート外の repo を更新する経路は免除しません)
 - repo 本体直下の `refs` / `objects` / `HEAD` / `packed-refs` / `logs` のうち存在するものの実体も、いずれかの許可ルートの配下にある。linked worktree では worktree 固有の git dir 直下の `HEAD` / `index` も同様です (ディレクトリは symlink を解決した実パスで判定し、ファイル自体が symlink の場合は免除しません。git dir 内部の symlink でルート外 repo の ref / object を更新する経路を塞ぐため)
+- HEAD が指す branch の ref (`git symbolic-ref -q HEAD` の ref 名。例 `refs/heads/master`) の格納先ディレクトリも、symlink を解決した実パスがいずれかの許可ルートの配下にある (ディレクトリが未作成なら存在する最も近い祖先で判定し、ref ファイル自体が symlink の場合は免除しません。`refs/heads` 等の入れ子の symlink でルート外 repo の branch を更新する経路を塞ぐため)。detached HEAD では branch を更新しないため、この検査は行いません
 - hook の実行環境に `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` が設定されていない
 
 「配下」はパス境界で判定し、ルート自身も配下に含みます (`/a/b` を許可すると `/a/b` と `/a/b/c` は配下、`/a/bc` は配下ではありません)。
@@ -148,7 +149,8 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 
 - `git -C <path> commit ...` (`-C` を複数並べた場合は順に相対解決)
 - `cd <path> && git commit ...` (`cd` を複数連結してもよい)
-- 先頭から最後の commit までの連結は `&&` だけです。`;` や改行で区切った形 (`cd <path>; git commit ...`) は、実行時に `cd` が失敗すると commit が元の cwd (保護対象の repo) で実行されるため免除しません。`&&` の直後で改行した複数行の形も免除の対象外なので、1 行で書いてください
+- コマンドは 1 行 (改行 (LF / CR) を含まない) であることが必要です。quote 内の改行・行継続 (`\` + 改行)・`&&` の直後の改行を含め、改行を 1 文字でも含むコマンドは免除しません (行継続の解釈の食い違いで別コマンドを結合し commit を隠す経路を塞ぐため)。複数行の commit メッセージは、別の Bash 呼び出しでファイルに書き出して `-F <file>` で渡してください
+- 先頭から最後の commit までの連結は `&&` だけです。`;` で区切った形 (`cd <path>; git commit ...`) は、実行時に `cd` が失敗すると commit が元の cwd (保護対象の repo) で実行されるため免除しません
 - redirection (`>` / `>>` / `<` / `2>&1` / `&>` / `>|` / heredoc 等) を含むコマンドは、redirection がコマンド内のどの位置 (最後の commit より後ろを含む) にあっても免除しません。`<path>2>&1` のようにパス末尾の数字と fd 番号を静的に区別できず、`>/dev/null git commit` のように redirection が先行する commit を免除判定が hook と異なる形で解析しうるためです
 - 免除判定が認識した commit 呼び出しの件数が、block-default-branch-commit が検出した件数と一致しない場合は免除しません (両者の解析が食い違い、一部の commit を見落とす経路を塞ぐため)
 - 最後の commit より前に置けるのは `cd <path>` と `git add` / `git commit` だけです (例: `git -C <path> add f && git -C <path> commit -m x`)。前段の `git add` / `git commit` の対象 dir にも commit と同じ免除条件を要求します。判定は hook 実行時点のファイルシステム状態で行うため、それ以外のコマンド (`touch` のような無害に見えるものも含め、対象 dir の削除・移動・symlink への置き換えや `git config` / `git init` 等で判定後に対象を差し替えうるもの) が前段にあれば免除しません。最後の commit より後ろのコマンドは判定に影響しません (ただし redirection と、下記の builtin・wrapper はどの位置にあっても deny)
@@ -172,6 +174,8 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 ```
 
 許可ルートには、使い捨ての検証用 repo だけを置く専用ディレクトリを指定してください。実プロジェクトの repo を含むディレクトリ (ホームディレクトリ全体等) を指定すると、その配下の repo の default branch 保護 (commit) が外れます。
+
+**既知の制約**: `objects` / `logs` 配下の深い階層にある symlink は検査しません (これらを経由しても branch は動かないため)。
 
 ## 共通 lib
 

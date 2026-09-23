@@ -77,6 +77,11 @@ _jq_status=$?
 # cmd-parser.sh の「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
 case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
+# 隔離ルート免除の判定は、改行 (行継続を含む) と redirection (heredoc `<<EOF` を含む) の
+# 有無を元のコマンドで見て、パスも元の token のまま解決する必要があるため、行継続・
+# redirection の正規化前のコマンドを残しておく。
+COMMAND_BEFORE_NORMALIZATION="$COMMAND"
+
 # 行継続 `\<改行>` を空白に正規化する (詳細は push hook 側のコメント参照)。
 # macOS bash 3.2 互換性のため `${var//$'\\\n'/...}` は使わず cmd-parser.sh の純 bash +
 # sed fallback 実装に委譲する。
@@ -90,10 +95,6 @@ require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
 case "$COMMAND" in
   *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
 esac
-
-# 隔離ルート免除の判定は redirection (heredoc `<<EOF` を含む) の有無を見て、パスも元の
-# token のまま解決する必要があるため、redirection 正規化前のコマンドを残しておく。
-COMMAND_BEFORE_REDIRECTION_NORMALIZATION="$COMMAND"
 
 # `&` を含む shell redirection (`2>&1` / `&>file` / `<<EOF` 等) を空白に置換する。
 # cmd-parser (split_command) は `&` を一律 separator として扱うため、redirection 内の
@@ -306,7 +307,7 @@ fi
 # (免除条件・静的解決の規則・fail-closed 条件は lib/isolated-roots.sh 参照)。本 hook が
 # 検出した commit invocation の件数を渡し、免除判定側の認識と一致しなければ免除しない。
 if command_commits_only_to_isolated_roots \
-  "$COMMAND_BEFORE_REDIRECTION_NORMALIZATION" "$PWD" \
+  "$COMMAND_BEFORE_NORMALIZATION" "$PWD" \
   "${#COMMIT_INVOCATION_INDICES[@]}"; then
   exit 0
 fi

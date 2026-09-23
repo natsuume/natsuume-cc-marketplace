@@ -13,8 +13,9 @@
 # ## 免除条件
 #
 # 次の全てを満たす場合のみ免除する:
-#   1. コマンド内に commit invocation が 1 つ以上あり、最後の commit invocation より前に
-#      `cd <path>` と `git add` / `git commit` 以外の segment が無く、それらの git
+#   1. コマンドが改行 (LF / CR) を含まず、commit invocation が 1 つ以上あり、最後の
+#      commit invocation より前に `cd <path>` と `git add` / `git commit` 以外の segment
+#      が無く、それらの git
 #      invocation 全ての対象 dir を静的に解決できる (解決規則は
 #      resolve_commit_target_dirs を参照。判定後・commit 前に対象 dir や repo レイアウトを
 #      差し替える前段コマンドを排除するため)。認識した commit invocation の件数が、
@@ -24,7 +25,8 @@
 #      いずれかの許可ルート配下にある (許可ルート配下に置いた linked worktree / symlink
 #      経由でルート外の repo を更新する経路を塞ぐ)。common-dir 直下の `refs` /
 #      `objects` / `HEAD` / `packed-refs` / `logs` と、worktree 固有 git dir の `HEAD` /
-#      `index` の実体も許可ルート配下にある (isolated_dir_is_within_roots を参照)
+#      `index` の実体と、HEAD が指す branch ref の格納先も許可ルート配下にある
+#      (isolated_dir_is_within_roots を参照)
 #   4. hook プロセスの環境に `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` /
 #      `GIT_COMMON_DIR` が設定されていない (コマンド内の再代入で commit 先が変わりうるため)
 # 「配下」はパス境界での前方一致で判定し、ルート自身との一致も配下とみなす
@@ -170,6 +172,8 @@ _isolated_canonical_git_dir() {
 #     ものの実体が、いずれかの許可ルート配下にある (_isolated_git_entry_is_within_roots)
 #   - `git rev-parse --git-dir` (worktree 固有 dir) が common-dir と異なる場合は、その
 #     直下の `HEAD` / `index` についても同じ条件を満たす
+#   - HEAD が指す branch ref の格納先が許可ルート配下にある
+#     (_isolated_head_ref_is_within_roots)
 # git dir 内部の symlink でルート外 repo の ref / object を更新する経路を塞ぐ。
 #
 # rev-parse の出力が相対パスなら <dir> 基準で解決する。rev-parse は hook プロセスの環境を
@@ -201,7 +205,48 @@ isolated_dir_is_within_roots() {
       _isolated_git_entry_is_within_roots "$canonical_git_dir/$entry" "$roots" || return 1
     done
   fi
-  return 0
+  _isolated_head_ref_is_within_roots "$dir" "$canonical_common_dir" "$roots"
+}
+
+# 引数: <dir> <canonical_common_dir> <roots>
+# 戻り値: 0 = commit が更新する branch ref の格納先が許可ルート配下にある (または detached
+#         HEAD で branch ref を更新しない) / 1 = それ以外
+#
+# <dir> で `git symbolic-ref -q HEAD` を実行して ref 名 (例 `refs/heads/master`) を得る。
+# 終了コード 1 (detached HEAD) なら ref 更新が無いので 0 を返す。それ以外の失敗・`refs/`
+# で始まらない ref 名・`..` 要素や改行を含む ref 名は 1 を返す。
+# ref ファイル (<canonical_common_dir>/<ref 名>) 自体が symlink なら 1 を返す。そうで
+# なければ、その親ディレクトリ (未作成なら存在する最も近い祖先。途中の entry がリンク
+# 切れの symlink やディレクトリ以外なら 1) の canonical 実パスが許可ルート配下であることを
+# 要求する (`refs/heads` 等の入れ子の symlink でルート外 repo の branch を更新する経路を
+# 塞ぐため)。objects / logs 配下の深い階層の symlink は branch を動かさないため検査しない。
+_isolated_head_ref_is_within_roots() {
+  local dir="$1"
+  local canonical_common_dir="$2"
+  local roots="$3"
+  local ref_name ref_status ref_path parent canonical_parent
+  local nl=$'\n'
+  ref_name="$(cd -P -- "$dir" 2>/dev/null && git symbolic-ref -q HEAD 2>/dev/null)"
+  ref_status=$?
+  [ "$ref_status" -eq 1 ] && [ -z "$ref_name" ] && return 0
+  [ "$ref_status" -eq 0 ] || return 1
+  case "$ref_name" in
+    refs/*) ;;
+    *) return 1 ;;
+  esac
+  case "/$ref_name/" in
+    */../*|*"$nl"*) return 1 ;;
+  esac
+  ref_path="$canonical_common_dir/$ref_name"
+  [ -L "$ref_path" ] && return 1
+  parent="${ref_path%/*}"
+  while [ ! -d "$parent" ]; do
+    { [ -L "$parent" ] || [ -e "$parent" ]; } && return 1
+    parent="${parent%/*}"
+    [ -n "$parent" ] || return 1
+  done
+  canonical_parent="$(isolated_canonical_dir "$parent")" || return 1
+  _isolated_path_is_within_any_root "$canonical_parent" "$roots"
 }
 
 # 引数: <command>
@@ -218,12 +263,20 @@ isolated_dir_is_within_roots() {
 #   - quote 外の `#` (コメント。後続を segment と誤認させないため)
 #   - quote 外の CR / VT / FF (bash は単語区切りとして扱わないため token 分割がずれる)
 #   - 閉じていない quote
+# これらに先立ち、改行 (LF / CR) を quote の内外・行継続か否かを問わず 1 文字でも含めば
+# 解決不能とする (行末の escape された `\\` を行継続と誤認するような正規化の食い違いで、
+# 別コマンドを 1 segment に結合して commit を隠す経路を塞ぐため。複数行の commit
+# メッセージは `-F <file>` で渡す)。
 _isolated_has_unresolvable_syntax() {
   local cmd="$1"
   local i=0 len=${#cmd}
   local in_squote=0 in_dquote=0
   local c nc
-  local cr=$'\r' vt=$'\v' ff=$'\f'
+  local nl=$'\n' cr=$'\r' vt=$'\v' ff=$'\f'
+
+  case "$cmd" in
+    *"$nl"*|*"$cr"*) return 0 ;;
+  esac
 
   while [ "$i" -lt "$len" ]; do
     c="${cmd:$i:1}"
@@ -353,8 +406,8 @@ _isolated_resolve_path_from() {
 }
 
 # 引数: <command> <base_dir> <expected_commit_count>
-#   <command>  : hook が受け取った Bash コマンド文字列 (行継続の正規化後、redirection
-#                正規化前。パス解決には元のコマンドの token をそのまま使う)
+#   <command>  : hook が受け取った Bash コマンド文字列 (行継続・redirection の正規化前。
+#                改行の有無を元の文字列で判定し、パス解決にも元の token をそのまま使う)
 #   <base_dir> : hook プロセスの cwd (commit invocation の対象 dir の初期値)
 #   <expected_commit_count> : hook 自身が検出した commit invocation の件数
 # stdout: 最後の commit invocation までの各 git invocation (`git add` / `git commit`)
@@ -363,7 +416,7 @@ _isolated_resolve_path_from() {
 # 戻り値: 0 = commit invocation が 1 つ以上あり、規則どおりに全て解決できた / 1 = それ以外
 #
 # 静的解決の規則 (これ以外の形は解決不能として 1 を返す):
-#   - _isolated_has_unresolvable_syntax が検出する構文 (subshell / brace group /
+#   - _isolated_has_unresolvable_syntax が検出する構文 (改行 / subshell / brace group /
 #     コマンド置換 / プロセス置換 / redirection / heredoc / コメント 等) を、コマンド内の
 #     どの位置にも含まないこと
 #   - 本関数が認識した commit invocation の件数が <expected_commit_count> と一致すること
