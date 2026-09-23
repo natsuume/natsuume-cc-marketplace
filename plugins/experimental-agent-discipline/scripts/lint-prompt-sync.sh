@@ -101,9 +101,9 @@
 #
 #   (a) 対象コマンド名の記載箇所:
 #       - 冒頭段落中の `` `if: "Bash(gh <cmd>:*)"` `` という参照
-#       - Step 0 本文中の 2 箇所: `` `gh <cmd>` literal で始まる `` (手順 3 の検証対象判定) /
-#         `` `gh <cmd>` literal がある `` (手順 6 の command 置換内判定)
-#       手順 6 の `` `"gh" issue create` `` は全 entry 共通の固定例であり (引用符で分断されて
+#       - Step 0 本文中の 2 箇所: `` `gh <cmd>` literal がある `` (手順 1 の command 置換内判定) /
+#         `` `gh <cmd>` literal で始まる `` (手順 4 の検証対象判定)
+#       手順 1 の `` `"gh" issue create` `` は全 entry 共通の固定例であり (引用符で分断されて
 #       いるため `gh <cmd>` を含まない)、 置換対象にならず共通ブロックに残る。
 #       ここで `<cmd>` は entry の `if` フィールドから機械的に導出できる
 #       (`Bash(gh ` プレフィクスと `:*)` サフィックスを取り除いた文字列。 例:
@@ -507,8 +507,8 @@ for name in raw_pr_create raw_pr_edit; do
 done
 
 # (a) 対象コマンド名の記載箇所の除去: "gh <cmd>" というリテラルをプレースホルダに置換する。
-#     冒頭段落の `if: "Bash(gh <cmd>:*)"` 参照、 Step 0 内の 2 箇所 (手順 3 の literal 判定 /
-#     手順 6 の command 置換内判定) をまとめて吸収できる (いずれも文字列 "gh <cmd>" を含むため)。
+#     冒頭段落の `if: "Bash(gh <cmd>:*)"` 参照、 Step 0 内の 2 箇所 (手順 1 の command 置換内判定 /
+#     手順 4 の literal 判定) をまとめて吸収できる (いずれも文字列 "gh <cmd>" を含むため)。
 norm_a() {
   # $1 = cmd literal (例: "issue create")。 stdin = raw prompt、 stdout = 正規化後。
   sed "s/gh $1/gh __CMD__/g"

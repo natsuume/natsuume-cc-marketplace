@@ -71,19 +71,21 @@ STEP2_HEADING_PREFIX = "## Step 2"
 
 # Step 0 節の正典文 (見出し行を含む)。`<cmd>` は entry の `if` filter から導出した
 # literal (`issue create` / `issue edit` / `pr create` / `pr edit`) に置換して照合する。
-# 6. の `"gh" issue create` は全 entry 共通の固定例であり、置換しない。
+# 1. の `"gh" issue create` は全 entry 共通の固定例であり、置換しない。静的判定不能の
+# 判定を先頭に置くのは、対象 subcommand が無い場合の早期 `ok: true` (5.) より前に
+# 評価させ、`$(...)` 内にしか literal が無い command を通さないため。
 STEP0_CMD_PLACEHOLDER = "<cmd>"
 STEP0_CANONICAL_TEMPLATE = """\
 ## Step 0: defense-in-depth command guard
 
 本 prompt 末尾の `## Hook input` セクションに hook input JSON が `$ARGUMENTS` 経由で interpolate されている。 そこから `tool_input.command` フィールドを取り出し、 以下の手順で検証対象の subcommand を決める。 hook config の `if` filter は best-effort であり、 compound command の各 subcommand と env-prefix を剥がした command は正規に評価される一方、 `$(...)` / バッククォート / `$VAR` を含む Bash では対象外でも本 hook が起動しうる。
 
-1. command を区切り (`&&` / `||` / `;` / `|` / 改行) で subcommand に分割する。 引用符 (`'...'` / `"..."`) の内側と heredoc 本文 (`<<EOF` から終端 `EOF` まで) の内側にある区切りでは分割しない。
-2. 各 subcommand の先頭にある `VAR=value` 群 (env-prefix) と wrapper (`command` / `env` / `sudo`) を剥がす。
-3. 剥がした後の subcommand が **`gh <cmd>` literal で始まる** ものを検証対象とする。 alias / 別 command / global option を subcommand の前に置く形式 (`gh -R owner/repo ...`) は対象にしない。
-4. 対象 subcommand が 1 つも無い場合のみ、 一切の semantic 検証をせずに即座に `{"ok": true}` を返して終了する (= `if` filter が best-effort で通した非対象 Bash)。
-5. 対象 subcommand が複数ある場合は、 そのすべてを Step 1 以降で検証し、 1 つでも違反があれば `{"ok": false, "reason": ...}` とする。
-6. `$(...)` / バッククォートの内側に `gh <cmd>` literal がある場合、 または literal が引用符で分断されている (`"gh" issue create` のような形) 場合は、 body を静的に判定できないため `{"ok": false, "reason": "body を静的な文字列 (--body の直接指定、 または既存ファイルへの --body-file) で渡す形に書き直すこと"}` を返す。
+1. まず command 全体を見て、 `$(...)` / バッククォートの内側に `gh <cmd>` literal がある場合、 または literal が引用符で分断されている (`"gh" issue create` のような形) 場合は、 body を静的に判定できないため `{"ok": false, "reason": "body を静的な文字列 (--body の直接指定、 または既存ファイルへの --body-file) で渡す形に書き直すこと"}` を返して終了する (以降の手順には進まない)。
+2. command を区切り (`&&` / `||` / `;` / `|` / 改行) で subcommand に分割する。 引用符 (`'...'` / `"..."`) の内側と heredoc 本文 (`<<EOF` から終端 `EOF` まで) の内側にある区切りでは分割しない。
+3. 各 subcommand の先頭にある `VAR=value` 群 (env-prefix) と wrapper (`command` / `env` / `sudo`) を剥がす。
+4. 剥がした後の subcommand が **`gh <cmd>` literal で始まる** ものを検証対象とする。 alias / 別 command / global option を subcommand の前に置く形式 (`gh -R owner/repo ...`) は対象にしない。
+5. 対象 subcommand が 1 つも無い場合のみ、 一切の semantic 検証をせずに即座に `{"ok": true}` を返して終了する (= `if` filter が best-effort で通した非対象 Bash)。
+6. 対象 subcommand が複数ある場合は、 そのすべてを Step 1 以降で検証し、 1 つでも違反があれば `{"ok": false, "reason": ...}` とする。
 
 該当する対象 subcommand ごとに Step 1 以降へ進む。
 """

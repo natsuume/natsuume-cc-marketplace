@@ -193,7 +193,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **動作**:
 
 - 各 hook の `if` field で target command に反応する prefilter を構成する。 `if` filter は best-effort であり、 compound command の各 subcommand と env-prefix を剥がした command は正規に評価される一方、 `$()` / バッククォート / `$VAR` を含む Bash では非対象 (= `ls` / `git status` / `rg` / `gh issue view` など) でも agent subagent が起動しうる。 非対象 Bash で起動した場合は **Step 0 の defense-in-depth command guard** が semantic 検証をせず即 `{"ok": true}` を返して影響を最小化する
-- Step 0 は command を subcommand に分割し、 各 subcommand の env-prefix (`VAR=value`) と wrapper (`command` / `env` / `sudo`) を剥がした後、 当該 hook entry の `gh <cmd>` literal で始まる subcommand を検証対象とする (複数あればすべて検証する)。 `$()` / バッククォートの内側にある対象 command と、 引用符で分断された literal (`"gh" issue create` 等) は body を静的に判定できないため `{"ok": false}` で block する
+- Step 0 はまず command 全体を見て、 `$()` / バッククォートの内側にある対象 command と、 引用符で分断された literal (`"gh" issue create` 等) を、 body を静的に判定できないため `{"ok": false}` で block する。 それ以外は command を subcommand に分割し、 各 subcommand の env-prefix (`VAR=value`) と wrapper (`command` / `env` / `sudo`) を剥がした後、 当該 hook entry の `gh <cmd>` literal で始まる subcommand を検証対象とする (複数あればすべて検証する)
 - Step 0 を通過した場合、 prompt 内で body content を抽出する:
   - `--body 'inline string'` / `--body "inline string"` (heredoc 含む) → inline 文字列を body content とする
   - `--body-file PATH` → Read tool で PATH のファイル内容を取得 (= `type: agent` を採用した直接の理由)
