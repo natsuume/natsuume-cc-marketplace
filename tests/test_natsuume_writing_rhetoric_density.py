@@ -203,7 +203,16 @@ class ExpressionWatchlistTest(unittest.TestCase):
     def test_watchlist_defers_to_phrases_required_by_writing_rules(self) -> None:
         self.assertIn("writing-rules.md の規則を優先する", self.text)
         entries = {line[2:] for line in self.text.splitlines() if line.startswith("- ")}
-        for required_phrase in ("観点", "具体的", "仕組み", "限界", "事実", "検証する"):
+        for required_phrase in (
+            "観点",
+            "具体的",
+            "仕組み",
+            "限界",
+            "事実",
+            "検証する",
+            "安全",
+            "可能性",
+        ):
             with self.subTest(required_phrase=required_phrase):
                 self.assertNotIn(required_phrase, entries)
 
