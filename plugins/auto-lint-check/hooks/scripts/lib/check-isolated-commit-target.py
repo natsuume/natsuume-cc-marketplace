@@ -16,7 +16,7 @@ commit は lint しない (隔離ルートは使い捨ての検証用 repo を�
 
 判定結果は exit code で返す:
 
-    10  免除する (全 commit invocation の対象が隔離ルート配下)
+    10  免除する (免除条件を全て満たす)
     11  免除しない
 
 免除の exit code を 0 にしないのは、Python の正常終了 (0) や SyntaxError /
@@ -33,8 +33,11 @@ ImportError / 未捕捉例外 (1) と区別し、想定外の終了を必ず「�
 免除条件 (全て満たす場合のみ免除):
 
 1. コマンド内に mutating な commit invocation (``--dry-run`` / ``--help`` / ``-h``
-   を除く) が 1 つ以上あり、その全てについて対象 dir を静的に解決できる
-   (解決規則は ``resolve_commit_target_dirs`` を参照)
+   を除く) が 1 つ以上あり、最後の mutating な commit invocation より前に
+   ``cd <path>`` と ``git add`` / ``git commit`` 以外の simple command が無く、
+   それらの git invocation 全ての対象 dir を静的に解決できる (解決規則は
+   ``resolve_commit_target_dirs`` を参照。判定後・commit 前に対象 dir や repo
+   レイアウトを差し替える前段コマンドを排除するため)
 2. 各対象 dir の canonical 実パスが、いずれかの許可ルート配下にある
 3. 各対象 dir で実行した ``git rev-parse --git-common-dir`` の canonical 実パスが、
    いずれかの許可ルート配下にある
@@ -74,8 +77,9 @@ REPO_ENV_NAMES: frozenset[str] = frozenset(
 # コマンド内で代入されると cd / commit 先の解決を静的に追えなくなる変数。
 UNRESOLVABLE_ASSIGNMENT_NAMES: frozenset[str] = REPO_ENV_NAMES | {"PWD", "CDPATH"}
 
-# segment の先頭 word にあると、shell の cwd / 環境 / 実行コマンドの解決を静的に
-# 追えなくなる shell keyword / builtin / 透過 wrapper。
+# simple command の先頭 word にあると、後続の word を command として実行しうる、または
+# shell の cwd / 環境の解決を静的に追えなくする shell keyword / builtin / 透過 wrapper。
+# commit invocation を隠しうるため、コマンド内のどの位置にあっても解決不能とする。
 UNRESOLVABLE_COMMAND_WORDS: frozenset[str] = frozenset(
     {
         "!", "time", "if", "then", "else", "elif", "fi", "while", "until", "do",
@@ -399,27 +403,116 @@ def _resolve_path_from(base: str, value: str) -> str | None:
     return _canonical_dir(f"{base}/{value}")
 
 
-def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
-    """mutating な commit invocation ごとの対象 dir (canonical 実パス) を出現順に返す。
+def _skip_env_assignments(tokens: list[str]) -> int | None:
+    """先頭の env assignment 列を読み飛ばした位置を返す。
 
-    commit invocation が無い、または 1 つでも静的に解決できない場合は ``None`` を
-    返す。静的解決の規則 (これ以外の形は解決不能):
+    解決を変える変数 (``UNRESOLVABLE_ASSIGNMENT_NAMES``) への代入があれば ``None``。
+    """
+    position = 0
+    while position < len(tokens):
+        word = _normalize_word(tokens[position])
+        if not _ENV_ASSIGN_RE.match(word):
+            break
+        if word.split("=", 1)[0] in UNRESOLVABLE_ASSIGNMENT_NAMES:
+            return None
+        position += 1
+    return position
+
+
+def _git_subcommand_index(values: list[str], git_index: int) -> int:
+    """``git`` token の位置から global option を読み飛ばし、subcommand の位置を返す。
+
+    option の walk は parse-commit-command.py の commit invocation 検出と同じ規則。
+    subcommand が無ければ -1。
+    """
+    cursor = git_index + 1
+    while cursor < len(values):
+        option = values[cursor]
+        if option in GIT_GLOBAL_VALUE_FLAGS:
+            cursor += 2
+            continue
+        if option.startswith("-"):
+            cursor += 1
+            continue
+        return cursor
+    return -1
+
+
+def _is_git_word(word: str) -> bool:
+    return word == "git" or word.endswith("/git")
+
+
+def _resolve_git_target(
+    tokens: list[str], values: list[str], git_index: int, current_dir: str
+) -> tuple[str, int] | None:
+    """git invocation の ``-C`` を順に解決し、(対象 dir, subcommand の位置) を返す。
+
+    ``--git-dir`` / ``--work-tree`` / ``-C<path>`` の連結形・静的でない ``-C`` の値・
+    subcommand 不在は ``None``。
+    """
+    target = current_dir
+    cursor = git_index + 1
+    while cursor < len(tokens):
+        option = values[cursor]
+        if option == "-C":
+            if cursor + 1 >= len(tokens):
+                return None
+            value = _static_path_value(tokens[cursor + 1])
+            if value is None:
+                return None
+            resolved = _resolve_path_from(target, value)
+            if resolved is None:
+                return None
+            target = resolved
+            cursor += 2
+            continue
+        if option.startswith("-C") or option.split("=", 1)[0] in (
+            UNRESOLVABLE_REPO_OPTIONS
+        ):
+            return None
+        if option in GIT_GLOBAL_VALUE_FLAGS:
+            cursor += 2
+            continue
+        if option.startswith("-"):
+            cursor += 1
+            continue
+        return target, cursor
+    return None
+
+
+def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
+    """最後の mutating な commit invocation までの各 git invocation (``git add`` /
+    ``git commit``) の対象 dir (canonical 実パス) を出現順に返す。
+
+    呼び出し側はその全てに免除条件を要求する。mutating な commit invocation が無い、
+    または規則どおりに解決できない場合は ``None`` を返す。静的解決の規則 (これ以外の
+    形は解決不能):
 
     - ``_has_unresolvable_syntax`` が検出する構文 (subshell / brace group /
       コマンド置換 / プロセス置換 / heredoc / コメント 等) を含まないこと
-    - 先頭の simple command から最後の commit invocation までの区切りが ``&&`` と
-      ``;`` (改行を含む) だけであること
-    - commit invocation より前の simple command で cwd を変えるのは ``cd <path>``
-      (引数ちょうど 1 個) だけであること。先頭 word が ``cd`` 以外の cwd / 環境を
-      変えうる shell keyword・builtin・透過 wrapper (``pushd`` / ``popd`` /
-      ``export`` / ``declare`` / ``source`` / ``eval`` / ``exec`` / ``builtin`` /
-      ``command`` / ``env`` / ``sudo`` 等) の simple command、および ``GIT_DIR`` /
-      ``GIT_WORK_TREE`` / ``GIT_INDEX_FILE`` / ``GIT_COMMON_DIR`` / ``PWD`` /
-      ``CDPATH`` への代入があれば解決不能
-    - commit invocation の global option で対象を切り替えるものは ``-C <path>``
-      だけを受け付ける (複数指定時は git と同じく順に相対解決する)。
-      ``--git-dir`` / ``--work-tree`` (および ``=`` 形式)、``-C<path>`` の連結形は
+    - 先頭の simple command から最後の mutating な commit invocation までの区切りが
+      ``&&`` と ``;`` (改行を含む) だけであること
+    - 最後の mutating な commit invocation より前の simple command は、次のいずれか
+      であること。それ以外 (判定時点のファイルシステム状態を commit 前に変えうる
+      任意のコマンド。対象 dir の削除・移動・symlink 化や ``git config`` /
+      ``git init`` 等による repo レイアウトの変更を含む) があれば解決不能:
+
+      1. ``cd <path>`` (引数ちょうど 1 個)
+      2. subcommand が ``add`` または ``commit`` の git invocation (その対象 dir も
+         戻り値に含め、commit と同じ免除条件を要求する)
+
+      最後の mutating な commit invocation より後ろの simple command は、次の規則を
+      除き判定に影響しない
+    - commit invocation を隠しうる先頭 word (shell keyword / ``eval`` / ``exec`` /
+      ``command`` / ``builtin`` / ``env`` / ``sudo`` 等。``UNRESOLVABLE_COMMAND_WORDS``)
+      の simple command は、コマンド内のどの位置にあっても解決不能
+    - env assignment のみの simple command は上記のいずれにも当たらない。git / cd
+      直前の env assignment のうち ``GIT_DIR`` / ``GIT_WORK_TREE`` /
+      ``GIT_INDEX_FILE`` / ``GIT_COMMON_DIR`` / ``PWD`` / ``CDPATH`` への代入は
       解決不能
+    - git invocation の global option で対象を切り替えるものは ``-C <path>`` だけを
+      受け付ける (複数指定時は git と同じく順に相対解決する)。``--git-dir`` /
+      ``--work-tree`` (および ``=`` 形式)、``-C<path>`` の連結形は解決不能
     - ``cd`` / ``-C`` の <path> は ``_static_path_value`` が受け付ける静的な文字列で
       あること (変数展開・先頭の ``~``・glob 文字・バックスラッシュ・``-`` 始まり・
       ``..`` 要素は解決不能)
@@ -436,75 +529,61 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
     parser = _load_commit_parser()
 
     segments, separators = _split_segments(_REDIRECTION_RE.sub(" ", command))
-    targets: list[str] = []
+    tokenized = [_tokenize(segment) for segment in segments]
+
+    # 1 周目: 最後の mutating な commit invocation の位置を特定する。
     last_commit_index = -1
-    for index, segment in enumerate(segments):
-        tokens = _tokenize(segment)
-        position = 0
-        while position < len(tokens) and _ENV_ASSIGN_RE.match(
-            _normalize_word(tokens[position])
-        ):
-            name = _normalize_word(tokens[position]).split("=", 1)[0]
-            if name in UNRESOLVABLE_ASSIGNMENT_NAMES:
-                return None
-            position += 1
+    for index, tokens in enumerate(tokenized):
+        position = _skip_env_assignments(tokens)
+        if position is None:
+            return None
         if position >= len(tokens):
             continue
-        word = _normalize_word(tokens[position])
+        values = [_normalize_word(token) for token in tokens]
+        if values[position] in UNRESOLVABLE_COMMAND_WORDS:
+            return None
+        if not _is_git_word(values[position]):
+            continue
+        subcommand_index = _git_subcommand_index(values, position)
+        if subcommand_index < 0 or values[subcommand_index] != "commit":
+            continue
+        if parser._commit_is_non_mutating(values, subcommand_index):
+            continue
+        last_commit_index = index
+    if last_commit_index < 0:
+        return None
+
+    # 2 周目: 最後の mutating な commit invocation までの simple command を解決する。
+    targets: list[str] = []
+    for tokens in tokenized[: last_commit_index + 1]:
+        if not tokens:
+            continue
+        position = _skip_env_assignments(tokens)
+        if position is None or position >= len(tokens):
+            return None
+        values = [_normalize_word(token) for token in tokens]
+        word = values[position]
         if word == "cd":
             if len(tokens) != position + 2:
                 return None
             value = _static_path_value(tokens[position + 1])
             if value is None or not (value.startswith("/") or value.startswith("./")):
                 return None
-            current_dir = _resolve_path_from(current_dir, value)
-            if current_dir is None:
+            resolved_dir = _resolve_path_from(current_dir, value)
+            if resolved_dir is None:
                 return None
+            current_dir = resolved_dir
             continue
-        if word in UNRESOLVABLE_COMMAND_WORDS:
+        if not _is_git_word(word):
             return None
-        if word != "git" and not word.endswith("/git"):
-            continue
-
-        values = [_normalize_word(token) for token in tokens]
-        target = current_dir
-        cursor = position + 1
-        subcommand_index = -1
-        while cursor < len(tokens):
-            option = values[cursor]
-            if option == "-C":
-                if cursor + 1 >= len(tokens):
-                    return None
-                value = _static_path_value(tokens[cursor + 1])
-                if value is None:
-                    return None
-                resolved = _resolve_path_from(target, value)
-                if resolved is None:
-                    return None
-                target = resolved
-                cursor += 2
-                continue
-            if option.startswith("-C") or option.split("=", 1)[0] in (
-                UNRESOLVABLE_REPO_OPTIONS
-            ):
-                return None
-            if option in GIT_GLOBAL_VALUE_FLAGS:
-                cursor += 2
-                continue
-            if option.startswith("-"):
-                cursor += 1
-                continue
-            subcommand_index = cursor
-            break
-        if subcommand_index < 0 or values[subcommand_index] != "commit":
-            continue
-        if parser._commit_is_non_mutating(values, subcommand_index):
-            continue
+        resolved = _resolve_git_target(tokens, values, position, current_dir)
+        if resolved is None:
+            return None
+        target, subcommand_index = resolved
+        if values[subcommand_index] not in ("add", "commit"):
+            return None
         targets.append(target)
-        last_commit_index = index
 
-    if not targets:
-        return None
     for separator in separators[:last_commit_index]:
         if separator not in ("&&", ";"):
             return None
@@ -547,7 +626,8 @@ def dir_is_within_roots(target_dir: str, roots: list[str]) -> bool:
 def commits_only_to_isolated_roots(
     command: str, base_dir: str, env_value: str | None
 ) -> bool:
-    """全 commit invocation が免除条件を満たすときだけ True を返す。
+    """``resolve_commit_target_dirs`` が返した全対象 dir (git add / git commit) が
+    免除条件を満たすときだけ True を返す。
 
     ``env_value`` が未設定・空ならコマンドを解析せずに False を返す。
     """

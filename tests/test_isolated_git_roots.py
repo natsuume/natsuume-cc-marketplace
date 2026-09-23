@@ -406,5 +406,59 @@ class AutoLintBlockCommitLintIsolatedRootsTest(IsolatedGitRootsTestBase):
         self.assert_repo_override_denied(result)
 
 
+class PrecedingSegmentsIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """最後の commit より前に置けるのは `cd` と `git add` / `git commit` だけ。
+
+    判定は hook 実行時点のファイルシステム状態で行うため、判定後・commit 前に対象 dir
+    や repo レイアウトを差し替えうる前段コマンドがあれば免除しない (GG / AL 共通)。
+    """
+
+    HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
+
+    def assert_denied_by_both_hooks(self, command: str) -> None:
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name):
+                result = self.run_hook(hook, command, roots=str(self.allowed_root))
+
+                reason = self.deny_reason(result)
+                if hook == AL_COMMIT_HOOK:
+                    self.assertIn("repo override", reason)
+
+    def test_replacing_target_with_symlink_before_commit_is_denied(self) -> None:
+        iso = self.iso_repo
+        self.assert_denied_by_both_hooks(
+            f"rm -rf {iso} && ln -s {self.real_repo} {iso} && git -C {iso} commit -m x"
+        )
+
+    def test_moving_target_before_commit_is_denied(self) -> None:
+        iso = self.iso_repo
+        self.assert_denied_by_both_hooks(
+            f"mv {iso} {self.allowed_root / 'moved'} && git -C {iso} commit -m x"
+        )
+
+    def test_harmless_looking_preceding_command_is_denied(self) -> None:
+        iso = self.iso_repo
+        self.assert_denied_by_both_hooks(f"touch {iso}/f && git -C {iso} commit -m x")
+
+    def test_repo_layout_change_before_commit_is_denied(self) -> None:
+        iso = self.iso_repo
+        self.assert_denied_by_both_hooks(
+            f"git -C {iso} config core.worktree {self.real_repo} "
+            f"&& git -C {iso} commit -m x"
+        )
+
+    def test_git_add_in_isolated_repo_before_commit_is_allowed(self) -> None:
+        iso = self.iso_repo
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name):
+                result = self.run_hook(
+                    hook,
+                    f"git -C {iso} add f && git -C {iso} commit -m x",
+                    roots=str(self.allowed_root),
+                )
+
+                self.assert_allowed(result)
+
+
 if __name__ == "__main__":
     unittest.main()

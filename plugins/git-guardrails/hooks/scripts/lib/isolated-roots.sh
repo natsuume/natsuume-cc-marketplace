@@ -13,8 +13,11 @@
 # ## 免除条件
 #
 # 次の全てを満たす場合のみ免除する:
-#   1. コマンド内に commit invocation が 1 つ以上あり、その全てについて対象 dir を静的に
-#      解決できる (解決規則は resolve_commit_target_dirs を参照)
+#   1. コマンド内に commit invocation が 1 つ以上あり、最後の commit invocation より前に
+#      `cd <path>` と `git add` / `git commit` 以外の segment が無く、それらの git
+#      invocation 全ての対象 dir を静的に解決できる (解決規則は
+#      resolve_commit_target_dirs を参照。判定後・commit 前に対象 dir や repo レイアウトを
+#      差し替える前段コマンドを排除するため)
 #   2. 各対象 dir の canonical 実パスが、いずれかの許可ルート配下にある
 #   3. 各対象 dir で実行した `git rev-parse --git-common-dir` の canonical 実パスが、
 #      いずれかの許可ルート配下にある (許可ルート配下に置いた linked worktree / symlink
@@ -248,14 +251,18 @@ _isolated_static_path_value() {
 }
 
 # 引数: <word> (segment の先頭 word。quote / escape を正規化済み)
-# 戻り値: 0 = <word> が、shell の cwd / 環境 / 実行コマンドの解決を静的に追えなくする
-#         shell keyword / builtin / 1 = それ以外
+# 戻り値: 0 = <word> が、後続の word を command として実行しうる、または shell の cwd /
+#         環境の解決を静的に追えなくする shell keyword / builtin / 透過 wrapper /
+#         1 = それ以外
+# これらが先頭にある segment は、commit invocation を隠しうるためコマンド内のどの位置に
+# あっても解決不能とする。
 _isolated_is_unresolvable_command_word() {
   case "$1" in
     '!'|'time'|'if'|'then'|'else'|'elif'|'fi'|'while'|'until'|'do'|'done') return 0 ;;
     'for'|'in'|'case'|'esac'|'select'|'function'|'coproc'|'[['|']]') return 0 ;;
     pushd|popd|export|declare|typeset|readonly|unset|local|source|.|eval|exec) return 0 ;;
     builtin|command|trap|alias|unalias|shopt|enable|hash|set) return 0 ;;
+    env|sudo|doas|nice|ionice|timeout|chrt|stdbuf) return 0 ;;
   esac
   return 1
 }
@@ -289,9 +296,10 @@ _isolated_resolve_path_from() {
 #   <command>  : hook が受け取った Bash コマンド文字列 (行継続の正規化後、redirection
 #                正規化前。heredoc を検出するため redirection は本関数内で正規化する)
 #   <base_dir> : hook プロセスの cwd (commit invocation の対象 dir の初期値)
-# stdout: commit invocation ごとに、静的に解決した対象 dir の canonical 実パスを
-#         出現順に 1 行 1 件で出力する
-# 戻り値: 0 = commit invocation が 1 つ以上あり全て解決できた / 1 = それ以外
+# stdout: 最後の commit invocation までの各 git invocation (`git add` / `git commit`)
+#         について、静的に解決した対象 dir の canonical 実パスを出現順に 1 行 1 件で
+#         出力する (呼び出し側はその全てに免除条件を要求する)
+# 戻り値: 0 = commit invocation が 1 つ以上あり、規則どおりに全て解決できた / 1 = それ以外
 #
 # 静的解決の規則 (これ以外の形は解決不能として 1 を返す):
 #   - _isolated_has_unresolvable_syntax が検出する構文 (subshell / brace group /
@@ -299,13 +307,21 @@ _isolated_resolve_path_from() {
 #   - 先頭 segment から最後の commit invocation までの区切りが `&&` と `;` (改行を含む)
 #     だけであること (`||` / `|` / `&` は cd の効果が commit に及ぶかを静的に確定
 #     できないため解決不能)
-#   - commit invocation より前の segment で cwd を変えるのは `cd <path>` (引数ちょうど
-#     1 個) だけであること。先頭 word が `cd` 以外の cwd / 環境を変えうる shell keyword・
-#     builtin (`pushd` / `popd` / `export` / `declare` / `typeset` / `readonly` / `unset` /
-#     `source` / `.` / `eval` / `exec` / `builtin` / `command` / `trap` / `set` 等) の
-#     segment、および `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` /
-#     `PWD` / `CDPATH` への代入を含む segment があれば解決不能
-#   - commit invocation の global option で対象を切り替えるものは `-C <path>` だけを
+#   - 最後の commit invocation より前の segment は、次のいずれかであること。それ以外の
+#     segment (判定時点のファイルシステム状態を commit 前に変えうる任意のコマンド。
+#     対象 dir の削除・移動・symlink 化や `git config` / `git init` 等による repo
+#     レイアウトの変更を含む) があれば解決不能:
+#       1. `cd <path>` (引数ちょうど 1 個)
+#       2. subcommand が `add` または `commit` の git invocation (その対象 dir も
+#          出力に含め、commit と同じ免除条件を要求する)
+#     最後の commit invocation より後ろの segment は、次の規則を除き判定に影響しない
+#   - commit invocation を隠しうる先頭 word (shell keyword / `eval` / `exec` /
+#     `command` / `builtin` / `env` / `sudo` 等。_isolated_is_unresolvable_command_word
+#     参照) の segment は、コマンド内のどの位置にあっても解決不能
+#   - env assignment のみの segment は上記のいずれにも当たらない。git / cd 直前の env
+#     assignment のうち `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` /
+#     `GIT_COMMON_DIR` / `PWD` / `CDPATH` への代入は解決不能
+#   - git invocation の global option で対象を切り替えるものは `-C <path>` だけを
 #     受け付ける (複数指定時は git と同じく順に相対解決する)。`--git-dir` /
 #     `--work-tree` (および `=` 形式)、`-C<path>` の連結形は解決不能
 #   - `cd` / `-C` の <path> は _isolated_static_path_value が受け付ける静的な文字列で
@@ -343,13 +359,49 @@ resolve_commit_target_dirs() {
     esac
   done < <(split_command "$normalized")
 
-  local _iso_si=0
   local _iso_seg_count=${#_iso_segments[@]}
+  local -a _iso_toks=()
+  local _iso_idx _iso_tok_count _iso_word _iso_oi _iso_opt
+
+  # 1 周目: 最後の commit invocation の segment を特定する。global option の walk は
+  # block-default-branch-commit.sh の commit invocation 検出と同じ規則で行う。
+  # commit invocation を隠しうる先頭 word の segment は、位置に関わらず解決不能とする。
+  local _iso_si=0
   while [ "$_iso_si" -lt "$_iso_seg_count" ]; do
-    local -a _iso_toks=()
-    local _iso_idx=0
+    _iso_toks=()
+    _iso_idx=0
     tokenize_segment "${_iso_segments[$_iso_si]}" _iso_toks
-    local _iso_tok_count=${#_iso_toks[@]}
+    _iso_tok_count=${#_iso_toks[@]}
+    skip_env_assignments _iso_toks _iso_idx
+    if [ "$_iso_idx" -lt "$_iso_tok_count" ]; then
+      _iso_word="$(normalize_shell_word_syntax "${_iso_toks[$_iso_idx]}")"
+      _isolated_is_unresolvable_command_word "$_iso_word" && return 1
+      case "$_iso_word" in
+        git|*/git)
+          _iso_oi=$((_iso_idx+1))
+          while [ "$_iso_oi" -lt "$_iso_tok_count" ]; do
+            _iso_opt="$(normalize_shell_word_syntax "${_iso_toks[$_iso_oi]}")"
+            case "$_iso_opt" in
+              -C|--git-dir|--work-tree|-c|--config|--config-env) _iso_oi=$((_iso_oi+2)) ;;
+              -*) _iso_oi=$((_iso_oi+1)) ;;
+              commit) last_commit_index="$_iso_si"; break ;;
+              *) break ;;
+            esac
+          done
+          ;;
+      esac
+    fi
+    _iso_si=$((_iso_si+1))
+  done
+  [ "$last_commit_index" -ge 0 ] || return 1
+
+  # 2 周目: 最後の commit invocation までの segment を解決する。
+  _iso_si=0
+  while [ "$_iso_si" -le "$last_commit_index" ]; do
+    _iso_toks=()
+    _iso_idx=0
+    tokenize_segment "${_iso_segments[$_iso_si]}" _iso_toks
+    _iso_tok_count=${#_iso_toks[@]}
     if [ "$_iso_tok_count" -eq 0 ]; then
       _iso_si=$((_iso_si+1))
       continue
@@ -361,12 +413,9 @@ resolve_commit_target_dirs() {
       _isolated_is_unresolvable_assignment "${_iso_toks[$_iso_ai]}" && return 1
       _iso_ai=$((_iso_ai+1))
     done
-    if [ "$_iso_idx" -ge "$_iso_tok_count" ]; then
-      _iso_si=$((_iso_si+1))
-      continue
-    fi
+    # env assignment のみの segment は cd / git add / git commit のいずれでもない。
+    [ "$_iso_idx" -lt "$_iso_tok_count" ] || return 1
 
-    local _iso_word
     _iso_word="$(normalize_shell_word_syntax "${_iso_toks[$_iso_idx]}")"
     case "$_iso_word" in
       cd)
@@ -382,12 +431,10 @@ resolve_commit_target_dirs() {
           || return 1
         ;;
       git|*/git)
-        # global option の walk は block-default-branch-commit.sh の commit invocation
-        # 検出と同じ規則で行い、最初の non-option token を subcommand とみなす。
+        # 最初の non-option token を subcommand とみなし、`add` / `commit` だけを受け付ける。
         local _iso_target="$current_dir"
-        local _iso_oi=$((_iso_idx+1))
-        local _iso_is_commit=1
-        local _iso_opt
+        local _iso_subcommand=""
+        _iso_oi=$((_iso_idx+1))
         while [ "$_iso_oi" -lt "$_iso_tok_count" ]; do
           _iso_opt="$(normalize_shell_word_syntax "${_iso_toks[$_iso_oi]}")"
           case "$_iso_opt" in
@@ -409,22 +456,19 @@ resolve_commit_target_dirs() {
             -*)
               _iso_oi=$((_iso_oi+1))
               ;;
-            commit)
-              _iso_is_commit=0
-              break
-              ;;
             *)
+              _iso_subcommand="$_iso_opt"
               break
               ;;
           esac
         done
-        if [ "$_iso_is_commit" -eq 0 ]; then
-          _iso_targets+=("$_iso_target")
-          last_commit_index="$_iso_si"
-        fi
+        case "$_iso_subcommand" in
+          add|commit) _iso_targets+=("$_iso_target") ;;
+          *) return 1 ;;
+        esac
         ;;
       *)
-        _isolated_is_unresolvable_command_word "$_iso_word" && return 1
+        return 1
         ;;
     esac
     _iso_si=$((_iso_si+1))
@@ -445,8 +489,8 @@ resolve_commit_target_dirs() {
 }
 
 # 引数: <command> <base_dir> (意味は resolve_commit_target_dirs と同じ)
-# 戻り値: 0 = 免除する (許可ルートが有効で、全 commit invocation の対象 dir が免除条件を
-#         満たす) / 1 = 免除しない
+# 戻り値: 0 = 免除する (許可ルートが有効で、resolve_commit_target_dirs が出力した全対象
+#         dir (git add / git commit) が免除条件を満たす) / 1 = 免除しない
 # env `CLAUDE_ISOLATED_GIT_ROOTS` が未設定・空なら、コマンドを解析せずに 1 を返す。
 command_commits_only_to_isolated_roots() {
   local cmd="$1"
