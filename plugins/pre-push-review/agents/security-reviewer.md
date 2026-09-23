@@ -19,13 +19,18 @@ git log --no-decorate origin/HEAD...
 git diff origin/HEAD...
 git diff --cached
 git diff
+git log -p --no-ext-diff --no-textconv origin/HEAD..HEAD
 ```
 
 If `origin/HEAD` is not set, fall back to `origin/master` or `origin/main`. Combine the committed branch diff with any staged / unstaged hunks — both are within scope (the push gate verifies against the same combined hash).
 
+The per-commit patches from the last command are also within scope. Every commit in `origin/HEAD..HEAD` reaches the remote history on push, including content that a later commit on the branch removed or reverted and that therefore no longer appears in the net diff.
+
 ## Objective
 
 Identify vulnerability candidates newly introduced by this branch and report every candidate that passes the exclusions below, each labeled with a calibrated confidence of real exploitability. Do not self-filter by confidence or severity; selection happens in the parent session's classification pass. This is not a general code review; focus on **security implications newly introduced by this branch**. Do not flag pre-existing concerns.
+
+Also review every intermediate commit in the per-commit patches, not only the net diff. A secret or dangerous code that one commit adds and a later commit removes is absent from the net diff but still published with the branch history, so report it as a finding of the commit that introduced it.
 
 ## Categories to examine
 
@@ -40,7 +45,7 @@ Identify vulnerability candidates newly introduced by this branch and report eve
 - DoS / rate-limiting / resource exhaustion
 - Secrets-on-disk issues (handled by other processes)
 - Memory safety in memory-safe languages (Rust, Go, JS, Python, ...)
-- Issues only in test files or documentation
+- Issues only in test files or documentation (except credentials or secrets committed in any file, including an intermediate commit, because they are published with the branch history)
 - Log spoofing from un-sanitized user input
 - SSRF that only controls path (not host/protocol)
 - Regex injection / ReDoS
@@ -54,7 +59,7 @@ Identify vulnerability candidates newly introduced by this branch and report eve
 
 ## Procedure
 
-1. Run the scope commands listed above to gather the diff and working-tree state.
+1. Run the scope commands listed above to gather the diff, the per-commit patches, and the working-tree state.
 2. Read the changed files to understand context. Use `Grep` to confirm whether suspicious patterns appear in actually-reachable code paths (not dead branches, not test fixtures).
 3. For each candidate finding, ask:
    - Is there a concrete, exploitable vulnerability with a clear attack path?
@@ -82,7 +87,7 @@ Status: findings
 - Severity: P1 | P2 | P3
 - Source severity: P0 | P1 | P2 | P3 | not-applicable | unknown
 - Confidence: high | medium | low
-- Location: <file>:<line-or-range>
+- Location: <file>:<line-or-range> [(commit <short-sha>)]
 - Cause class: <conceptual cause>
 - Violated invariant: <expected property>
 - Impact: <decision-relevant impact>
@@ -90,6 +95,10 @@ Status: findings
 - Fix direction: <conceptual remediation>
 - Disposition: must-fix-before-push | may-defer
 ```
+
+Append `(commit <short-sha>)` to `Location` when the finding exists only in an intermediate commit and not in the net diff.
+
+For a secret found in any commit of the branch (including an intermediate commit), set `Disposition: must-fix-before-push` and write a `Fix direction` that tells the parent to remove it from the branch history before pushing (adding a later commit that deletes it does not remove it from the published history) and to rotate the credential if it may already have been exposed.
 
 Derive a deterministic ID from `SEC`, the normalized location, and a non-sensitive cause-class slug. Never derive it from a command, payload, secret, or concrete environment value. If multiple reviewers or symptoms identify the same cause, report the cause once and refer to its finding ID instead of repeating mechanics.
 
