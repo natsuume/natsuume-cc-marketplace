@@ -34,7 +34,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v6.0.3
+v6.0.4
 
 ## インストール
 
@@ -157,7 +157,7 @@ hooks.json の matcher は SubagentStart / SubagentStop とも `^pre-push-review
 | `.claude-pre-push-done-<agent_id>` | attestation 消費時に排他作成される launch tombstone。同一 agent_id での SubagentStart 再発火 (resume 等) による attestation 再鋳造を遮断する。再レビューは新規 spawn (新しい agent_id) で行う | 無期限保持 (prune しない)。resume の成立期間は transcript 保持期間 (cleanupPeriodDays で延長可能) に従うため、期限付き掃除では遮断に穴が開く。1 件 64 byte で実害なし |
 | `.claude-pre-push-handback-<agent_id>` | PostToolUse (`SubagentHandback`) が記録する hand-back された report の Status 判定結果 (`pass` / `findings` / `invalid` の 1 語)。launch attestation が存在し tombstone が無い場合のみ書かれる | 最初の SubagentStop で消費 (削除)。1 日より古い残存分は次回 SubagentStart が掃除 |
 
-マーカーは reviewer subagent の agent_type に対して発行され、実効モデルは検証しません。`CLAUDE_CODE_SUBAGENT_MODEL` は起動時の model 指定や agent frontmatter より優先されるため、この環境変数を設定した環境では既定 model での実行保証が失われます。本プラグインはこの環境変数を設定しない運用を前提とします。
+マーカーは reviewer subagent の agent_type に対して発行され、実効モデルは検証しません。明示 model / agent frontmatter が `CLAUDE_CODE_SUBAGENT_MODEL` より優先されます。`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` 設定時のみ env が全てを上書きするため、この環境変数を設定した環境では既定 model での実行保証が失われます。本プラグインはこの環境変数を設定しない運用を前提とします。
 
 ### Agents
 
@@ -169,7 +169,7 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 
 **動作**:
 
-- tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/code-review` skill を invoke できないようにしている (理由は security-reviewer と同じ; 下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため
+- tools は `Bash, Read, Glob, Grep` に制限 (Edit / Write / Skill / Agent はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/code-review` skill を invoke できないようにしている (理由は security-reviewer と同じ; 下記)。 `Agent` を外すことで nested subagent も起動せず、 reviewer を read-only に保つ (nested subagent は既定で起動できるが本 reviewer は使わない)
 - subagent body には logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリと exclusion ルール (style / docs / perf / refactor / security / pre-existing bug 等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して code-reviewed マーカーを更新する
@@ -183,7 +183,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 **動作**:
 
-- tools は `Bash, Read, Glob, Grep, LS` に制限 (Edit / Write / Skill / Task はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/security-review` skill を invoke できないようにしている (理由は下記)。 `Task` を外すのは Claude Code が subagent からの nested subagent 起動を禁止しているため
+- tools は `Bash, Read, Glob, Grep` に制限 (Edit / Write / Skill / Agent はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/security-review` skill を invoke できないようにしている (理由は下記)。 `Agent` を外すことで nested subagent も起動せず、 reviewer を read-only に保つ (nested subagent は既定で起動できるが本 reviewer は使わない)
 - subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して security マーカーを更新する (`execution-failed` / 欠落 / 重複 / 未知値では書かず、silent-pass を防ぐ)
@@ -191,9 +191,10 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 #### code-reviewer / security-reviewer subagent が標準 skill を invoke しない理由 (共通)
 
-(1) 主 session の Claude が直接 `/code-review` / `/security-review` を呼ぶと skill prompt 末尾「Your final reply must contain the markdown report and nothing else.」 によって turn が終了し、 後続フロー (`git push`) まで進まない。
-(2) subagent 内から invoke しても、 標準 skill 本体は内部で sub-task (Task tool) を spawn する設計だが、 Claude Code は **subagent 内での nested subagent 起動を禁止** している (公式ドキュメント `subagents cannot spawn other subagents`)。 sub-task が動かないため degraded mode で実行される。 auto-mark.sh は Skill 検知を行わないため、 degraded mode の完了でマーカーが書かれる silent-pass の経路は存在しない。
-(3) このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
+(1) confidence / severity 付きの parent-safe report 契約を reviewer 側に固定し、 親 session が同じ書式で findings を分類できるようにする。
+(2) SubagentStart / SubagentStop / SubagentHandback の lifecycle hook で reviewer の実行を marker として検知する。 auto-mark.sh は Skill 検知を行わないため、 reviewer subagent を経ない完了でマーカーが書かれる silent-pass の経路は存在しない。
+(3) `tools` から `Agent` を除外して reviewer を read-only に保つ (nested subagent は既定で起動できるが本 reviewer は使わない)。
+このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
 
 **呼び出しタイミング (2 subagent 共通)**: `/pre-push-review:review` slash command の指示で 2 並列 `Agent` / `Task` tool calls として起動する (完了は SubagentStop で検知されるため起動 mode は問わない)。 deny メッセージにも個別起動のフォールバック手順を案内している。
 
