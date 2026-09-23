@@ -79,7 +79,11 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
 ## exit code 契約
 
 - `0`: 成功 (集計対象が 0 件の空データも含む)。
-- `2`: 入力エラー (`--issues` / `--prs` のファイル不存在・JSONL parse 失敗・
+- `2`: 実行中の Python が `MIN_PYTHON_VERSION` (3.11) 未満 (`diagnose_python_version`
+  が非 `None` を返した場合。`main` は引数解析の直後、他の入力ファイル読み込み
+  より前にこれを検査し、非 `None` ならその診断メッセージを stderr に出力して
+  即座に exit code `2` で終了する)、または入力エラー (`--issues` / `--prs` の
+  ファイル不存在・JSONL parse 失敗・
   必須フィールド欠落・実際に処理される日時フィールド (`IssueComment.createdAt`
   / `LabeledEvent.createdAt` / `ClosedEvent.createdAt` / PR の `createdAt` /
   `mergedAt` / `ReadyForReviewEvent.createdAt` 等) が tz 情報の無い naive
@@ -138,6 +142,54 @@ SIZE_BANDS: list[tuple[str, int, int | None]] = [
 - 出力 JSON の `sizeBands` はこの定数をそのまま
   `[{"band": b, "min": lo, "max": hi}, ...]` へ投影したもの。
 """
+
+
+MIN_PYTHON_VERSION: tuple[int, int] = (3, 11)
+"""このスクリプトが要求する Python の最小 (major, minor) バージョン。
+
+`_parse_datetime` が使う `datetime.fromisoformat()` の末尾 `Z` サフィックス
+受理は Python 3.11 で追加された挙動であり、このバージョン未満の実行環境では
+`--as-of` 等 ISO8601 `Z` 形式の値が正しくても `ValueError` になる。
+`diagnose_python_version` はこの定数を基準に実行中の Python バージョンを
+検査する。
+"""
+
+
+def diagnose_python_version(
+    version_info: tuple[int, ...] = sys.version_info,
+) -> str | None:
+    """実行中の Python バージョンが `MIN_PYTHON_VERSION` を満たすか検査する。
+
+    `sys.version_info` を関数内部で直接参照せず引数として受け取ることで、
+    バージョン判定ロジックを実行環境の参照から分離する (I/O 分離)。呼び出し側
+    は任意の `sys.version_info` 相当のタプルを注入して判定結果を検証できる。
+    本関数自身は stderr への出力やプロセス終了を行わない。
+
+    Args:
+        version_info: `sys.version_info` 相当のタプル。先頭 2 要素
+            (`major`, `minor`) のみを判定に使うため、`(major, minor)` の
+            2 要素タプルでもよい。省略時は実行中の `sys.version_info`。
+
+    Returns:
+        str | None: `(version_info[0], version_info[1])` が
+        `MIN_PYTHON_VERSION` 以上なら `None` (合格)。未満なら、要求バージョン
+        (`MIN_PYTHON_VERSION`) と検出バージョン (`version_info` の先頭 2 要素)
+        の両方を含む診断メッセージを返す (不合格)。
+
+    呼び出し側の契約 (`main` の起動処理内で満たす):
+        戻り値が `None` でない場合、呼び出し側はその文字列を GitHub API
+        呼び出し・入力ファイル読み込みより前に stderr へ出力し、exit code
+        `2` で終了しなければならない (fail-closed)。
+    """
+    detected = (version_info[0], version_info[1])
+    if detected >= MIN_PYTHON_VERSION:
+        return None
+    required_str = ".".join(str(part) for part in MIN_PYTHON_VERSION)
+    detected_str = ".".join(str(part) for part in detected)
+    return (
+        f"Python {required_str} 以上が必要です (検出されたバージョン: "
+        f"{detected_str})"
+    )
 
 
 class ClaimPatternsError(Exception):
@@ -1886,8 +1938,11 @@ def main(argv: list[str] | None = None) -> int:
         int: exit code。
             - `0`: 成功 (集計対象が 0 件の空データも含む)。結果 JSON を
               stdout に書き出す。
-            - `2`: 入力エラー (`--issues` / `--prs` のファイル不存在・JSONL
-              parse 失敗・必須フィールド欠落・`--as-of` / `--since` の形式不正・
+            - `2`: 実行中の Python が `MIN_PYTHON_VERSION` 未満
+              (`diagnose_python_version` が非 `None` を返した場合。引数解析の
+              直後、他のファイル読み込みより前に検査する)、または入力エラー
+              (`--issues` / `--prs` のファイル不存在・JSONL parse 失敗・
+              必須フィールド欠落・`--as-of` / `--since` の形式不正・
               `--prs` の行に `closingIssuesReferences.totalCount >
               len(closingIssuesReferences.nodes)` が 1 件でも存在する場合・
               `--boundaries-file` の検証失敗。詳細はモジュール docstring
@@ -1909,6 +1964,11 @@ def main(argv: list[str] | None = None) -> int:
         claim patterns file の契約違反は exit code `3` として明確に区別する。
     """
     args = parse_args(argv)
+
+    version_diagnosis = diagnose_python_version(sys.version_info)
+    if version_diagnosis is not None:
+        print(version_diagnosis, file=sys.stderr)
+        return 2
 
     try:
         patterns = load_claim_patterns(args.claim_patterns_file)
