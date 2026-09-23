@@ -86,7 +86,7 @@ Phase B の実装差分が branch / working tree にある状態で契約を改�
 実装差分を物理的にも隔離したい場合は、次の代替手段を任意で使えます。いずれも共有の stash スタックと破壊的な reset を使いません。
 
 - **未 commit の差分**: ローカルの WIP branch に commit して退避します (`git switch -c <branch>-phase-b-wip` → `git add -A` → `git commit -m "wip: phase b"` → `git switch <branch>`)。契約の承認後に `git cherry-pick <WIP commit>` → `git reset --soft HEAD~1` で working tree に戻します。WIP branch は push せず、復帰後に `git branch -D` で削除します
-- **push 済みの Phase B commit**: Phase B の実装 commit だけを `git revert --no-edit <commit>...` で新しい順に打ち消してから改訂し、契約の承認後に revert commit を新しい順 (作成と逆の順) に revert して実装を戻します。force push も branch の切り直しも不要です。承認済みの改訂 commit は打ち消す対象に含めません。範囲に merge commit (default branch の取り込み等) がある場合、`git revert` は mainline の指定なしでは停止するため、この手段は使わず入力の隔離だけで進めます (停止した場合は `git revert --abort` で元に戻します)
+- **push 済みの Phase B commit**: Phase B の実装 commit だけを、範囲指定ではなく 1 つずつ個別の引数として新しい順に並べ (`git revert --no-edit <最新の実装 commit> <その前の実装 commit>`)、打ち消してから改訂し、契約の承認後に revert commit を新しい順 (作成と逆の順) に revert して実装を戻します。force push も branch の切り直しも不要です。承認済みの改訂 commit は打ち消す対象に含めません。Phase A 最終 commit 以降に merge commit (default branch の取り込み等) がある場合、実装 commit の打ち消しが merge の結果と衝突しうるため、この手段は使わず入力の隔離だけで進めます (停止した場合は `git revert --abort` で元に戻します)
 
 ### 4.3 Phase A の評価基準
 
