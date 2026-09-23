@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.26.1
+v0.27.0
 
 ## 概要
 
@@ -192,12 +192,12 @@ claude plugin install agent-discipline@natsuume-plugins
 
 **動作**:
 
-- 各 hook の `if` field で target command にのみ反応する物理 prefilter を構成。 該当 Bash 呼び出しで初めて agent subagent が起動し、 それ以外の Bash (= `ls` / `git status` / `rg` / `gh issue view` などの非対象) では agent は **起動さえしない** (= LLM 呼び出しゼロ、 latency 影響ゼロ、 SPOF 露出なし)
-- agent 起動時は **Step 0 で defense-in-depth command guard を実行**: prompt 冒頭で再度 command head を確認し、 当該 hook entry の `if` filter と一致する literal で始まらなければ semantic 検証せず即 `{"ok": true}` で通す。 これは Claude Code が複雑な command (`$(...)` 置換、 env var prefix、 多段 pipeline、 quoting) を parse できず `if` が fail-permissive で fall through した場合の偽 trigger 対策 (codex P2 指摘への対処)
+- 各 hook の `if` field で target command に反応する prefilter を構成する。 `if` filter は best-effort であり、 compound command の各 subcommand と env-prefix を剥がした command は正規に評価される一方、 `$()` / バッククォート / `$VAR` を含む Bash では非対象 (= `ls` / `git status` / `rg` / `gh issue view` など) でも agent subagent が起動しうる。 非対象 Bash で起動した場合は **Step 0 の defense-in-depth command guard** が semantic 検証をせず即 `{"ok": true}` を返して影響を最小化する
+- Step 0 はまず command 全体を見て、 shell が実際に実行する `$()` / バッククォートの中で command として実行される対象 command と、 command 語の位置で引用符に分断された literal (`"gh" issue create` 等) を、 body を静的に判定できないため `{"ok": false}` で block する。 single quote の内側や `<<'EOF'` heredoc 本文の中の言及は shell が実行しないため対象外とする。 それ以外は行末の `\` による行継続を連結してから command を subcommand に分割し、 各 subcommand の env-prefix (`VAR=value`) と wrapper (`command` / `env` / `sudo`) を剥がした後、 当該 hook entry の `gh <cmd>` literal で始まる subcommand を検証対象とする (複数あればすべて検証する)
 - Step 0 を通過した場合、 prompt 内で body content を抽出する:
   - `--body 'inline string'` / `--body "inline string"` (heredoc 含む) → inline 文字列を body content とする
   - `--body-file PATH` → Read tool で PATH のファイル内容を取得 (= `type: agent` を採用した直接の理由)
-  - どちらも無い (= editor 起動経路) / `--body-file -` (stdin) → 判定不能として `{"ok": true}` で通過 (= 誘導層に委ねる)
+  - どちらも無い (= editor 起動経路) / `--body-file -` (stdin) → その subcommand は判定不能として以降の検証をスキップし、 残りの対象 subcommand の検証を続ける (= 誘導層に委ねる)。 すべての対象 subcommand が通過またはスキップになった場合に `{"ok": true}` となる
 - body content に対し、 inject-always.sh セクション 2.1 / 3.1 の禁止カテゴリ (推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み) を semantic 判定
 - 該当なし → `{"ok": true}`、 該当あり → `{"ok": false, "reason": "違反箇所の引用 + カテゴリ名 + 修正方針 (= AskUserQuestion でユーザの decision を取り、 確定 1 案だけを残す)"}` で block
 
@@ -205,10 +205,12 @@ claude plugin install agent-discipline@natsuume-plugins
 
 `gh pr create` entry の prompt にのみ、 上記 Step 2 (禁止カテゴリの semantic 判定) の直後・Step 3 (返り値、 v0.7.0 で Step 4 に繰り下げ) の前に追加の判定 Step 3 を挿入する (#151/#153 対応、親 issue #173 決定事項 9)。 他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt はこの Step を持たない。 branch 名からの issue 推定は PR 作成時にのみ意味を持つ判定のため、 4 entries の prompt 完全 duplicate は維持しつつ本 Step だけ 1 entry に閉じる (= entry を増やさず model pin の保守対象も増やさない)。
 
+判定の起点 `<cwd>` は、 hook input の `cwd` を起点に、 同じ command 内で対象 subcommand より前にある `cd <dir>` の subcommand を先頭から順にすべて適用した dir (各 `<dir>` が相対パスならその時点の dir を基準に解決する) とする (`cd` が無ければ hook input の `cwd`)。
+
 判定手順 (codex review P2 指摘 2 件を反映した最終形):
 
 1. まず `<cwd>/.git` を Read tool で読む
-2. 読み取れた内容が `gitdir: <path>` 形式 (worktree) の場合: `<path>` が相対パスであれば、 `.git` ファイルの所在ディレクトリ (= `cwd` そのもの) を基準に解決したうえで、 解決後の `<path>/HEAD` を Read tool で読む (linked worktree では `.git` 自体が `gitdir:` ファイルであり `<cwd>/.git/HEAD` を先に読む実装は常に fail-open するバグだったため、 `.git` を先に読んでから分岐する順序に修正した)
+2. 読み取れた内容が `gitdir: <path>` 形式 (worktree) の場合: `<path>` が相対パスであれば、 `.git` ファイルの所在ディレクトリ (= `<cwd>` そのもの) を基準に解決したうえで、 解決後の `<path>/HEAD` を Read tool で読む (linked worktree では `.git` 自体が `gitdir:` ファイルであり `<cwd>/.git/HEAD` を先に読む実装は常に fail-open するバグだったため、 `.git` を先に読んでから分岐する順序に修正した)
 3. `<cwd>/.git` の Read が「ディレクトリである」ことを理由に失敗する場合 (= worktree ではない通常のリポジトリ): `<cwd>/.git/HEAD` を Read tool で読む
 4. 上記いずれの経路でも HEAD が取得できない場合、 または取得できた内容が `ref: refs/heads/<branch>` 形式でない場合 (detached HEAD 等) は、 本 Step を判定不能として通過する (fail-open で誘導層の `rule:closing-keyword` に委ねる)。 `.git` 自体が存在しない bare リポジトリも本 Step の対象外として同様に通過する
 5. branch 名が `*/issue-<数字>-*` パターンに一致しない場合は本 Step を通過する
@@ -223,7 +225,7 @@ editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのま�
 
 - `if` field は単一 command pattern (`Bash(prefix:*)` 形式) のみで、 alternation (`Bash(gh (issue|pr) (create|edit):*)`) は公式 syntax では非対応
 - 1 entry に `if: "Bash(gh issue:*)"` のような broader filter を置くと、 `gh issue view` / `gh issue list` / `gh issue close` 等にも agent が起動して narrow scope が損なわれる
-- 4 つの target command (`create` / `edit` × `issue` / `pr`) ごとに個別 entry を持ち、 prompt は 4× 完全 duplicate という maintenance トレードオフを受け入れる代わりに、 真の narrow scope (= 非 target command では agent 完全非起動) を確保している
+- 4 つの target command (`create` / `edit` × `issue` / `pr`) ごとに個別 entry を持ち、 prompt は 4× 完全 duplicate という maintenance トレードオフを受け入れる代わりに、 真の narrow scope (= `if` filter が target command にだけ反応するよう hook config 段階で prefilter し、 `$()` / `$VAR` 等を含むために `if` filter が通した非対象 Bash は Step 0 が即終了する) を確保している
 - prompt 更新時は 4 箇所同期する必要あり (`jq` で各 entry の `.prompt` を抽出して比較する scripts での lint が将来必要になり得る)
 
 **なぜ `type: agent` か (vs `type: prompt`)**:
@@ -236,7 +238,7 @@ editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのま�
 
 - 旧 `llm-default-branch-push-poc` 廃止教訓: 全 Bash 発火 prompt hook が暗黙の default model (haiku) ダウン時に全 Bash を PreToolUse error にする非対称 SPOF があった (memory: `reference_prompt_hook_model_spof.md`)
 - 今回はこれを 2 段で緩和:
-  - **narrow scope (物理層)**: 個別 hook の `if: "Bash(gh <cmd>:*)"` filter で target command にだけ反応するよう **hook config 段階で** 物理 prefilter。 prompt 内 early return ではなく hook config 段階の filter なので、 非該当 Bash 呼び出しでは agent subagent が **そもそも起動しない**。 結果として LLM 不可用時の影響は「`gh issue/pr create/edit` のみ失敗」 に narrow され、 通常の Bash 呼び出し (= `ls` / `git status` / `rg` 等) は影響ゼロ
+  - **narrow scope (物理層 + Step 0)**: 個別 hook の `if: "Bash(gh <cmd>:*)"` filter で target command に反応するよう **hook config 段階で** prefilter する。 `if` filter は best-effort のため、 `$()` / `$VAR` を含む非対象 Bash でも agent subagent が起動しうるが、 その場合は Step 0 guard が semantic 検証をせず即終了する。 結果として LLM 不可用時の影響は「`gh issue/pr create/edit` に加えて、 `$()` / `$VAR` を含む Bash も PreToolUse error になりうる」 範囲に narrow され、 それ以外の通常の Bash 呼び出し (= `ls` / `git status` / `rg` 等) は影響を受けない
   - **model pin**: `model` field を明示的に `claude-sonnet-5` に固定 (v0.7.0、#151/#174 V2 実測による変更。 従来は `claude-opus-4-7` に pin していた)。 #174 V2 の実測検証で、 hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず pin 値がそのまま dispatch されることが確認された (= 「env var が優先され pin は env 未設定環境向けの既定として機能する」 という当初の想定は誤りで、 pin は env 設定の有無に関わらず常に有効な確定値)。 sonnet 5 は実装系メインセッション (= Sonnet ベースの Claude Code session) およびこの環境の全 subagent (`CLAUDE_CODE_SUBAGENT_MODEL=sonnet` によりこの環境の Agent tool 経由の Task 委任は実質 sonnet 固定) と同系列のため、 Sonnet がダウンした場合は subagent への委任自体が同時に止まっており hook 単独の新規障害面にはならない (= 「hook だけが落ちて他は動く」 非対称を避ける従来方針を維持)。 ただし **Fable メインセッション時はこの対称性が崩れる** (= メインセッションは Fable で正常動作していても、 hook は Sonnet 側の障害時に落ちうる非対称が残る。 下記「既知の制約」参照)
 
 これにより SPOF は「実装系メインセッション (Sonnet) が動いている時は hook も動く」 という対称構造に閉じる (Fable メインセッション時のみ非対称が残存)。 個別 call の transient error (rate limit / network blip) は残るが、 これは Claude Code 通常使用の背景ノイズと同レベル
@@ -245,7 +247,7 @@ editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのま�
 
 v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh (issue|pr) (create|edit)` 以外は即 ok:true」 という early return 構成だった。 これは codex review で「prompt 内 early return は agent subagent が **既に起動済み** の状態で起こるため、 全 Bash 呼び出しで Opus subagent が起動してしまい narrow blast radius が成立せず、 ordinary commands (tests / git status / rg 等) の latency / cost / model 可用性依存が増える」 と P1 指摘された (該当指摘の解は「`if` filter または lightweight command prefilter」)。 この指摘を受けて、 hook config 段階で物理 prefilter する `if` field (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) を採用し、 4 entries に分割した現在の設計に変更した。
 
-さらに codex P2 指摘 (= 複雑な Bash command で Claude Code parser が `if` を fail-permissive で fall through した場合に偶発通過した unrelated command が semantic 検証されて誤 block される可能性) への対処として、 各 prompt 冒頭に **defense-in-depth command guard (Step 0)** を追加した。 第一の narrow scope は引き続き `if` field の hook config 段階だが、 prompt 内 guard が二段目として偽 trigger を catch する非対称設計
+各 prompt 冒頭には **defense-in-depth command guard (Step 0)** を置いている。 `if` filter は best-effort であり、 `$()` / `$VAR` を含む Bash では対象外でも hook が起動しうるため、 unrelated command が semantic 検証されて誤 block されないよう、 prompt 内 guard が二段目として subcommand 単位で検証対象を決める。 `if` filter が通した非対象 Bash は即 `{"ok": true}` で通し、 静的判定不能な形 (command 置換内の対象 command、 引用符で分断された literal) は `{"ok": false}` で受け止める。 第一の narrow scope は `if` field の hook config 段階で、 prompt 内 guard が二段目を担う非対称設計
 
 **fail-closed の原則**:
 
@@ -480,13 +482,12 @@ agent-discipline/
 ## 既知の制約
 
 - **誘導層は強制ではない**: `additionalContext` の追加だけなので Claude が指示を無視することは原理的に可能。 v0.4.0 で gh issue/pr 経路のみ検知層 (PreToolUse type:agent hook) を追加したが、 それ以外の leak 経路 (`gh api` 直接叩き / editor 起動経路 / 実装コード内コメント等) は誘導層のみ
-- **検知層の `if` filter は literal prefix match のみ対応で、 一部の gh CLI 呼び出し形式は bypass する**: 公式 syntax `Bash(prefix:*)` は先頭固定 prefix match のため、 以下の形式は検知層を bypass する (= agent hook が発火せず誘導層のみが防衛):
+- **検知層は一部の gh CLI 呼び出し形式を bypass し、 静的判定不能な形は拒否する**: `if` filter (`Bash(prefix:*)`) は best-effort であり、 compound command の各 subcommand と env-prefix を剥がした command は評価され、 Step 0 も subcommand 単位で env-prefix を剥がして判定する。 ただし以下の形式は検知層を bypass する (= agent hook が発火しない、 または Step 0 が検証対象外とし、 誘導層のみが防衛) か、 静的判定不能として拒否される:
   - **global option を subcommand 前に置く形式**: `gh -R owner/repo issue create ...` / `gh --repo owner/repo pr create ...` (= cross-repo 操作で頻出するが、 通常は `cd` で repo に入って操作するため Claude のデフォルト出力では稀)
-  - **env-prefix 形式**: `GH_TOKEN=... gh issue create ...` / `GH_REPO=... gh pr create ...` (= auth 切替や repo override で稀に使う)
   - **wrapper 経路**: `eval "gh issue create ..."` / `bash -c "..."` / `xargs gh ...` (= 既に section 1 Bash 分解規律で禁止されているため、 規律遵守時には発生しない)
-  - **compound command 経路 (`cd dir` prefix)**: `cd repo && gh issue create ...` のような形式は section 1 Bash 分解規律で「cwd 制約の場合の例外」 として allowed だが、 検知層の Step 0 は先頭 literal 一致のみ判定するため bypass される (= 上流の section 1 例外と検知層の strict head check が非対称、 当該 compound 形式は誘導層のみが上流防衛)
-  - **PreToolUse の構造的 TOCTOU (`cat ... && gh ... -F body.md` 系)**: heredoc 等で body file を生成する compound (例: `cat > body.md <<'EOF' ... EOF && gh issue create -F body.md`) は PreToolUse hook が Bash 実行 **前** に発火するため、 body file は hook 時点で未生成 → Read tool で取得不能。 仮に検知層が compound を catch しても validate 不能 (TOCTOU 構造)。 そもそも section 1 の「不関連 command の連結」 禁止規律で発生抑制される
-  - これらは誘導層 (section 2.1 / 3.1 の禁止表現規範) が上流防衛として catch する想定。 完全に塞ぐには parser-backed command hook (= 別 plugin として再設計) が必要だが、 v0.4.0 の小修正範囲を超えるため意図的に既知制約として残している
+  - **command 置換内の起票**: shell が実際に実行する `$()` / バッククォートの内側で `gh issue create` 等を実行する形式と、 command 語の位置で引用符に literal を分断する形式 (`"gh" issue create` 等) は body を静的に判定できないため、 Step 0 が静的判定不能として `{"ok": false}` で拒否する。 single quote の内側や `<<'EOF'` heredoc 本文の中で command 名に言及しているだけの文字列 (commit message 本文等) は対象外
+  - **PreToolUse の構造的 TOCTOU (`cat ... && gh ... -F body.md` 系)**: 同じ command 内で生成する body file (例: `cat > body.md <<'EOF' ... EOF && gh issue create -F body.md`) は、 PreToolUse hook が Bash 実行 **前** に発火するため hook 時点で存在しない。 検知層はこれを静的判定不能として `{"ok": false}` で拒否するため、 body file は別の Bash 呼び出しで先に生成するか、 `--body` の静的文字列で渡す。 相対 PATH は、 hook input の `cwd` に同じ command 内で先行する `cd <dir>` を先頭から順にすべて適用した dir を基準に解決してから存在を判定する
+  - bypass する形式は誘導層 (section 2.1 / 3.1 の禁止表現規範) が上流防衛として catch する想定。 完全に塞ぐには parser-backed command hook (= 別 plugin として再設計) が必要だが、 v0.4.0 の小修正範囲を超えるため意図的に既知制約として残している
 - **検知層の SPOF**: 検知層は LLM 呼び出しに依存するため、 hook の model (`claude-sonnet-5`) が API 不可用な状況では `gh issue/pr create/edit` が PreToolUse error で失敗する。 narrow scope と model pin で「実装系メインセッションが動いている時は hook も動く」 対称構造に閉じているが、 個別 call の transient エラー (rate limit / network blip) は残る
 - **model pin は env var の影響を受けない** (#151/#174 V2 実測、v0.7.0): `CLAUDE_CODE_SUBAGENT_MODEL` env var は hooks.json の `type: agent` hook の `model` field を上書きしない。 pin 値は env var の設定有無に関わらず常に dispatch される確定値であり、 「env 未設定環境向けの既定」 ではない。 実測の詳細は #174 のコメント参照
 - **Fable メインセッション時は model pin の対称性が崩れる** (#151、v0.7.0): 検知層の model pin (`claude-sonnet-5`) は実装系メインセッション (Sonnet) およびこの環境の全 subagent と同系列だが、 メインセッションが Fable の場合はこの対称性が成立しない (= メインセッションは Fable で正常動作していても、 hook は Sonnet 側の障害時に落ちうる)。 発生確率は Fable メインセッションでの `gh issue/pr create|edit` 実行頻度に依存するが、 構造的には未解消の非対称として残る

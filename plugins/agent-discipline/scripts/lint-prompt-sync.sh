@@ -101,9 +101,10 @@
 #
 #   (a) 対象コマンド名の記載箇所:
 #       - 冒頭段落中の `` `if: "Bash(gh <cmd>:*)"` `` という参照
-#       - Step 0 本文中の 3 箇所: `` `gh <cmd>` literal で始まらない `` /
-#         `` `cd repo && gh <cmd> ...` `` (compound 例) /
-#         `` `cat > body.md && gh <cmd> -F body.md` `` (compound 例)
+#       - Step 0 本文中の 2 箇所: `` `gh <cmd>` literal が command として実行される `` (手順 1 の command 置換内判定) /
+#         `` `gh <cmd>` literal で始まる `` (手順 4 の検証対象判定)
+#       手順 1 の `` `"gh" issue create` `` は全 entry 共通の固定例であり (引用符で分断されて
+#       いるため `gh <cmd>` を含まない)、 置換対象にならず共通ブロックに残る。
 #       ここで `<cmd>` は entry の `if` フィールドから機械的に導出できる
 #       (`Bash(gh ` プレフィクスと `:*)` サフィックスを取り除いた文字列。 例:
 #       `Bash(gh pr create:*)` -> `pr create`)。 正規化時はこの `<cmd>` 文字列を含む
@@ -489,7 +490,7 @@ done
 #     norm_b (Closes 検証 Step の除去) が対象とするブロックそのものを、 除去 (norm_b_pr_create_only
 #     の呼び出し) より前に抽出し、 実在を確認する。 このブロックはチェック 3 の入力としても
 #     再利用する (#185 のチェック 3 の対象ブロックと同一であるため)。
-sed -n '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!p}' "$WORKDIR/raw_pr_create.txt" > "$WORKDIR/step3_block.txt"
+sed -n '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!p;}' "$WORKDIR/raw_pr_create.txt" > "$WORKDIR/step3_block.txt"
 if [ ! -s "$WORKDIR/step3_block.txt" ]; then
   echo "ERROR: gh pr create entry の prompt から '## Step 3: Closes 検証' ブロックが抽出できませんでした (norm_b の除去対象が実在しません)。見出しの変更または削除の可能性があります。" >&2
   exit 1
@@ -506,8 +507,8 @@ for name in raw_pr_create raw_pr_edit; do
 done
 
 # (a) 対象コマンド名の記載箇所の除去: "gh <cmd>" というリテラルをプレースホルダに置換する。
-#     冒頭段落の `if: "Bash(gh <cmd>:*)"` 参照、 Step 0 内の 3 箇所 (literal 判定 /
-#     cd 複合例 / cat 複合例) をまとめて吸収できる (いずれも文字列 "gh <cmd>" を含むため)。
+#     冒頭段落の `if: "Bash(gh <cmd>:*)"` 参照、 Step 0 内の 2 箇所 (手順 1 の command 置換内判定 /
+#     手順 4 の literal 判定) をまとめて吸収できる (いずれも文字列 "gh <cmd>" を含むため)。
 norm_a() {
   # $1 = cmd literal (例: "issue create")。 stdin = raw prompt、 stdout = 正規化後。
   sed "s/gh $1/gh __CMD__/g"
@@ -519,7 +520,7 @@ norm_a() {
 #     除去対象の実在検証は上記 (raw 抽出直後の step3_block.txt 抽出 + 非空チェック) で
 #     完了済みのため、 ここでは除去のみを行う (#187)。
 norm_b_pr_create_only() {
-  sed -e '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!d}' \
+  sed -e '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!d;}' \
     -e 's/^## Step 4: 返り値/## Step 3: 返り値/' \
     -e 's/Step 2 (禁止カテゴリ判定) に該当なし/該当なし/' \
     -e 's/Step 2 に該当あり/該当あり/'

@@ -10,7 +10,7 @@ PreToolUse hook が許可する。本ファイルは次の 6 契約を固定す�
   意図的な差分ファイル以外は byte-identical であること。意図的な差分ファイルは実際に
   内容が異なり、fork 側にのみ存在してよいのは 2 つの agent 定義だけであること。
 - version 整合 (``PluginVersionConsistencyTest``): plugin.json / marketplace.json /
-  リポジトリ直下 README / plugin README の 4 箇所が name と v0.2.1 で一致すること。
+  リポジトリ直下 README / plugin README の 4 箇所が name と v0.3.0 で一致すること。
 - agent 定義 (``FableLowAgentFrontmatterTest``): 両 agent の frontmatter が
   `model: fable` と `effort: low` を持ち、explorer だけが読み取り系 tools に制限されること。
 - hook 判定表 (``FableSubagentGateDecisionTableTest`` /
@@ -58,7 +58,7 @@ WORKER_AGENT = FORK_PLUGIN / "agents" / "fable-low-worker.md"
 EXPLORER_AGENT = FORK_PLUGIN / "agents" / "fable-low-explorer.md"
 
 PLUGIN_NAME = "experimental-agent-discipline"
-PLUGIN_VERSION = "0.2.1"
+PLUGIN_VERSION = "0.3.0"
 
 WORKER_SUBAGENT_TYPE = f"{PLUGIN_NAME}:fable-low-worker"
 EXPLORER_SUBAGENT_TYPE = f"{PLUGIN_NAME}:fable-low-explorer"
@@ -214,7 +214,7 @@ class PluginVersionConsistencyTest(unittest.TestCase):
     """(b) version 整合: plugin.json / marketplace.json / 2 つの README が一致する。"""
 
     def test_plugin_json_declares_experimental_name_and_version(self) -> None:
-        """plugin.json の name と version が experimental-agent-discipline / 0.2.1 である。"""
+        """plugin.json の name と version が experimental-agent-discipline / 0.3.0 である。"""
         manifest = json.loads(read(FORK_PLUGIN_JSON))
         self.assertEqual(PLUGIN_NAME, manifest["name"])
         self.assertEqual(PLUGIN_VERSION, manifest["version"])
@@ -237,7 +237,7 @@ class PluginVersionConsistencyTest(unittest.TestCase):
         )
 
     def test_plugin_readme_version_heading_declares_the_version(self) -> None:
-        """plugin README の `## バージョン` 直下の行が v0.2.1 である。"""
+        """plugin README の `## バージョン` 直下の行が v0.3.0 である。"""
         lines = read(FORK_README).splitlines()
         self.assertIn("## バージョン", lines)
         index = lines.index("## バージョン")
