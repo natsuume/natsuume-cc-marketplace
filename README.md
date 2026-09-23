@@ -48,7 +48,7 @@ Claude Code 側で fable-risk-labeler を install していた場合は、Claude
 | [agent-discipline](#agent-discipline) | 0.29.0 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [experimental-agent-discipline](#experimental-agent-discipline) | 0.5.0 | agent-discipline の実験的 fork。Fable 週次枠の使用率が閾値 (既定 50%) 以下のあいだ、effort low 固定の専用 agent への Fable subagent 委任を許可する (agent-discipline と切替運用) |
 | [ui-discipline](#ui-discipline) | 0.4.4 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
-| [natsuume-writing](#natsuume-writing) | 0.7.0 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
+| [natsuume-writing](#natsuume-writing) | 0.8.0 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
 | [codex-advisor](#codex-advisor) | 4.0.1 | Codex rescue / review / advisor を role 固有 runner subagent に閉じ込め、追跡喪失から復旧する。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.2 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.5.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |

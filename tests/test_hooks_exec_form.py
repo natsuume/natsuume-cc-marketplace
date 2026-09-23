@@ -270,7 +270,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "agent-discipline": "0.29.0",
     "experimental-agent-discipline": "0.5.0",
     "ui-discipline": "0.4.4",
-    "natsuume-writing": "0.7.0",
+    "natsuume-writing": "0.8.0",
     "codex-advisor": "4.0.1",
     "rate-limit": "0.5.2",
     "session-handoff": "0.5.0",
