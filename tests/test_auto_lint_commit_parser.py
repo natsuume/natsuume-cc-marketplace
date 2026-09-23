@@ -480,6 +480,14 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.classify(command), 0)
 
+    def test_quoted_operator_in_safe_heredoc_message_does_not_hide_commit(
+        self,
+    ) -> None:
+        for tail, expected in (("git commit -am y", 0), ("cd /tmp && git commit -m y", 3)):
+            command = f"git commit -m \"$(cat <<'EOF'\na \" <<B \"\nEOF\n)\"\n{tail}"
+            with self.subTest(tail=tail):
+                self.assertEqual(self.classify(command), expected)
+
     def test_wrapper_with_positional_argument_keeps_body(self) -> None:
         self.assertEqual(
             self.classify("timeout 5 bash <<'EOF'\ngit commit -m x\nEOF"),

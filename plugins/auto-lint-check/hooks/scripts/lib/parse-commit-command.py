@@ -601,6 +601,9 @@ def _strip_heredoc_bodies(command: str) -> str:
         ``gh`` の場合は、直後の語が ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` の
         subcommand であることも要求する (subcommand より前のオプションは不可)
       - プロセス置換 (``<(`` / ``>(``) を含まない
+      - 除去する本文以外の部分にコマンド置換 (``$(`` / backtick) を含まない
+        (二重引用符内の入れ子の quoting を再現しないため。これらを含む
+        コマンドは後段の fail-closed または safe heredoc の除去で扱う)
       - ANSI-C quoting (``$'``) と locale 翻訳 quoting (``$"``) を含まない
       - 引用符なし delimiter の heredoc 本文に行継続 (backslash + 改行) を
         含まない
@@ -772,6 +775,8 @@ def _strip_heredoc_bodies(command: str) -> str:
         return command
     if (
         has_process_substitution
+        or "$(" in "".join(out)
+        or "`" in "".join(out)
         or has_body_line_continuation
         or has_unresolved_heredoc_word
         or _FUNCTION_DEFINITION_RE.search("".join(out)) is not None
