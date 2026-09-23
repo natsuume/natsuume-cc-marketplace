@@ -522,5 +522,77 @@ class ExecutionTimeTargetDivergenceIsolatedRootsTest(IsolatedGitRootsTestBase):
         self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
 
 
+class CommitRecognitionMismatchIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """hook と免除判定の commit 認識が食い違いうる形は免除しない (GG / AL 共通)。
+
+    hook cwd は master 上の実 repo 相当。redirection はコマンド内のどの位置にあっても
+    免除しない。
+    """
+
+    HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
+
+    def assert_denied_by_both_hooks(self, command: str) -> None:
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name, command=command):
+                result = self.run_hook(hook, command, roots=str(self.allowed_root))
+
+                reason = self.deny_reason(result)
+                if hook == AL_COMMIT_HOOK:
+                    self.assertIn("repo override", reason)
+
+    def test_later_commit_preceded_by_stdout_redirection_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} commit -m x && >/dev/null git commit -m y"
+        )
+
+    def test_later_commit_preceded_by_stderr_redirection_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} commit -m x && 2>/dev/null git commit -m y"
+        )
+
+    def test_redirection_after_last_commit_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} commit -m x && git log 2>&1"
+        )
+
+    def test_exemption_requires_hook_commit_count_to_match(self) -> None:
+        # 免除判定は hook が検出した commit invocation の件数を受け取り、自身の認識と
+        # 一致する場合だけ免除する。
+        lib_dir = GIT_GUARDRAILS_HOOK_DIR / "lib"
+        script = (
+            f'source "{lib_dir}/cmd-parser.sh" && '
+            f'source "{lib_dir}/default-branch.sh" && '
+            f'source "{lib_dir}/isolated-roots.sh" && '
+            'command_commits_only_to_isolated_roots "$1" "$2" "$3"'
+        )
+        command = f"git -C {self.iso_repo} commit -m x"
+        env = dict(self.env)
+        env[ISOLATED_ROOTS_ENV] = str(self.allowed_root)
+
+        def exemption_status(expected_count: str) -> int:
+            return subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    script,
+                    "bash",
+                    command,
+                    str(self.real_repo),
+                    expected_count,
+                ],
+                cwd=str(self.real_repo),
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=60,
+            ).returncode
+
+        self.assertEqual(0, exemption_status("1"))
+        for mismatched in ("0", "2", ""):
+            with self.subTest(expected_count=mismatched):
+                self.assertEqual(1, exemption_status(mismatched))
+
+
 if __name__ == "__main__":
     unittest.main()

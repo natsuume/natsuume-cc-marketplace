@@ -37,7 +37,8 @@ ImportError / 未捕捉例外 (1) と区別し、想定外の終了を必ず「�
    ``cd <path>`` と ``git add`` / ``git commit`` 以外の simple command が無く、
    それらの git invocation 全ての対象 dir を静的に解決できる (解決規則は
    ``resolve_commit_target_dirs`` を参照。判定後・commit 前に対象 dir や repo
-   レイアウトを差し替える前段コマンドを排除するため)
+   レイアウトを差し替える前段コマンドを排除するため)。認識した mutating な commit
+   invocation の件数が、parse-commit-command.py が検出する件数と一致する
 2. 各対象 dir の canonical 実パスが、いずれかの許可ルート配下にある
 3. 各対象 dir で実行した ``git rev-parse --git-common-dir`` の canonical 実パスが、
    いずれかの許可ルート配下にある。common-dir 直下の ``refs`` / ``objects`` /
@@ -125,7 +126,8 @@ _PARSER_PATH = Path(__file__).resolve().parent / "parse-commit-command.py"
 
 
 def _load_commit_parser() -> ModuleType:
-    """commit 引数の解釈 (non-mutating 判定) を parse-commit-command.py と共有する。"""
+    """commit invocation の検出 (``_collect_invocations``) と commit 引数の解釈
+    (``_commit_is_non_mutating``) を parse-commit-command.py と共有する。"""
     spec = importlib.util.spec_from_file_location("parse_commit_command", _PARSER_PATH)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {_PARSER_PATH}")
@@ -179,7 +181,11 @@ def _has_unresolvable_syntax(command: str) -> bool:
 
     - quote 外の ``(`` / ``)`` / ``{`` / ``}`` (subshell・brace group・プロセス置換 等)
     - quote 外・double quote 内のバッククォートと ``$(`` (コマンド置換)
-    - quote 外の ``<<`` (heredoc / here-string)
+    - quote 外の ``<`` / ``>`` (redirection 演算子全般。``>>`` / ``<>`` / ``>&`` /
+      ``<&`` / ``&>`` / ``>|`` / heredoc ``<<`` / here-string ``<<<`` と数字 fd 前置を
+      含む。fd 番号とパス末尾の数字を区別できず、``>/dev/null git commit`` のように
+      redirection が先行する commit を parser と異なる形で解析しうるため、コマンド内の
+      どの位置にあっても解決不能とする)
     - quote 外の ``$'`` / ``$"`` (ANSI-C / locale quoting)
     - quote 外の ``#`` (コメント)
     - quote 外の CR / VT / FF
@@ -218,7 +224,7 @@ def _has_unresolvable_syntax(command: str) -> bool:
             return True
         elif c == "$" and nc in ("'", '"'):
             return True
-        elif c == "<" and nc == "<":
+        elif c in "<>":
             return True
         i += 1
     return in_squote or in_dquote
@@ -287,37 +293,6 @@ def _split_segments(command: str) -> tuple[list[str], list[str]]:
     segments.append("".join(current))
     separators.append("")
     return segments, separators
-
-
-def _segment_has_redirection(segment: str) -> bool:
-    """quote 外に redirection 演算子 (``<`` / ``>`` を含むもの。``>>`` / ``<>`` /
-    ``>&`` / ``<&`` / ``&>`` / ``>|`` と数字 fd 前置を含む) があるか。"""
-    in_squote = False
-    in_dquote = False
-    i = 0
-    n = len(segment)
-    while i < n:
-        c = segment[i]
-        if in_squote:
-            if c == "'":
-                in_squote = False
-        elif in_dquote:
-            if c == "\\":
-                i += 2
-                continue
-            if c == '"':
-                in_dquote = False
-        elif c == "\\":
-            i += 2
-            continue
-        elif c == "'":
-            in_squote = True
-        elif c == '"':
-            in_dquote = True
-        elif c in "<>":
-            return True
-        i += 1
-    return False
 
 
 def _tokenize(segment: str) -> list[str]:
@@ -515,6 +490,24 @@ def _resolve_git_target(
     return None
 
 
+def _parser_mutating_commit_count(parser: ModuleType, command: str) -> int | None:
+    """parse-commit-command.py が検出する mutating な commit invocation の件数を返す。
+
+    parser が解析前に結論を出す形 (substitution / wrapper / トークン化失敗等) は
+    ``None``。
+    """
+    collected = parser._collect_invocations(command)
+    if isinstance(collected, int):
+        return None
+    toks, invocations = collected
+    return sum(
+        1
+        for subcommand, subcommand_index, _has_override in invocations
+        if subcommand == "commit"
+        and not parser._commit_is_non_mutating(toks, subcommand_index)
+    )
+
+
 def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
     """最後の mutating な commit invocation までの各 git invocation (``git add`` /
     ``git commit``) の対象 dir (canonical 実パス) を出現順に返す。
@@ -524,15 +517,16 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
     形は解決不能):
 
     - ``_has_unresolvable_syntax`` が検出する構文 (subshell / brace group /
-      コマンド置換 / プロセス置換 / heredoc / コメント 等) を含まないこと
+      コマンド置換 / プロセス置換 / redirection / heredoc / コメント 等) を、
+      コマンド内のどの位置にも含まないこと
+    - 本関数が認識した mutating な commit invocation の件数が、parse-commit-command.py
+      (``_collect_invocations`` と ``_commit_is_non_mutating``) が検出する件数と一致
+      すること (parser と本関数の解析が食い違い、免除判定が一部の commit を見落とす
+      経路を塞ぐ)
     - 先頭の simple command から最後の mutating な commit invocation までの区切りが
       ``&&`` だけであること (``;`` / 改行は cd が実行時に失敗しても commit が元の
       cwd で実行されるため、``||`` / ``|`` / ``&`` は cd の効果が commit に及ぶかを
       静的に確定できないため解決不能)
-    - 先頭の simple command から最後の mutating な commit invocation まで (commit
-      invocation 自身を含む) に、quote 外の redirection 演算子 (``<`` / ``>`` /
-      ``>>`` / ``<>`` / ``>&`` / ``<&`` / ``&>`` / ``>|``、数字 fd 前置を含む) が
-      無いこと (fd 番号とパス末尾の数字の区別を静的解決に持ち込まないため)
     - 最後の mutating な commit invocation より前の simple command は、次のいずれか
       であること。それ以外 (判定時点のファイルシステム状態を commit 前に変えうる
       任意のコマンド。対象 dir の削除・移動・symlink 化や ``git config`` /
@@ -561,24 +555,26 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
       相対パスは直前までに解決した dir を基準に解決する
     - 各段階で既存ディレクトリとして canonical 化できること
     """
+    parser = _load_commit_parser()
+    expected_commit_count = _parser_mutating_commit_count(parser, command)
+    if expected_commit_count is None:
+        return None
+
     command = command.replace("\r\n", "\n").replace("\\\n", " ")
     if _has_unresolvable_syntax(command):
         return None
     current_dir = _canonical_dir(base_dir)
     if current_dir is None:
         return None
-    parser = _load_commit_parser()
 
-    # redirection の正規化は行わず元のコマンドのまま分割する (正規化で fd 番号とみなして
-    # 剥がした数字が、bash ではパスの一部として扱われ判定と実行の対象が食い違うため)。
-    # 最後の commit invocation までの simple command に redirection があれば 2 周目で
-    # 解決不能とする。それより後ろの `2>&1` 等の `&` が区切りとして分割されても判定には
-    # 影響しない。
+    # redirection は _has_unresolvable_syntax で解決不能にしているため、元のコマンドを
+    # そのまま分割する (パス解決にも元の token を使う)。
     segments, separators = _split_segments(command)
     tokenized = [_tokenize(segment) for segment in segments]
 
     # 1 周目: 最後の mutating な commit invocation の位置を特定する。
     last_commit_index = -1
+    commit_count = 0
     for index, tokens in enumerate(tokenized):
         position = _skip_env_assignments(tokens)
         if position is None:
@@ -596,16 +592,13 @@ def resolve_commit_target_dirs(command: str, base_dir: str) -> list[str] | None:
         if parser._commit_is_non_mutating(values, subcommand_index):
             continue
         last_commit_index = index
-    if last_commit_index < 0:
+        commit_count += 1
+    if last_commit_index < 0 or commit_count != expected_commit_count:
         return None
 
     # 2 周目: 最後の mutating な commit invocation までの simple command を解決する。
     targets: list[str] = []
-    for segment, tokens in zip(
-        segments[: last_commit_index + 1], tokenized[: last_commit_index + 1]
-    ):
-        if _segment_has_redirection(segment):
-            return None
+    for tokens in tokenized[: last_commit_index + 1]:
         if not tokens:
             continue
         position = _skip_env_assignments(tokens)

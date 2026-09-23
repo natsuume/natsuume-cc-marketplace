@@ -17,7 +17,8 @@
 #      `cd <path>` と `git add` / `git commit` 以外の segment が無く、それらの git
 #      invocation 全ての対象 dir を静的に解決できる (解決規則は
 #      resolve_commit_target_dirs を参照。判定後・commit 前に対象 dir や repo レイアウトを
-#      差し替える前段コマンドを排除するため)
+#      差し替える前段コマンドを排除するため)。認識した commit invocation の件数が、
+#      hook 自身が検出した件数と一致する
 #   2. 各対象 dir の canonical 実パスが、いずれかの許可ルート配下にある
 #   3. 各対象 dir で実行した `git rev-parse --git-common-dir` の canonical 実パスが、
 #      いずれかの許可ルート配下にある (許可ルート配下に置いた linked worktree / symlink
@@ -209,7 +210,10 @@ isolated_dir_is_within_roots() {
 # quote 文脈を追跡する文字 walk で、次のいずれかを検出する:
 #   - quote 外の `(` / `)` / `{` / `}` (subshell・brace group・プロセス置換・算術・関数定義)
 #   - quote 外・double quote 内のバッククォートと `$(` (コマンド置換)
-#   - quote 外の `<<` (heredoc / here-string。本文の行を segment と誤認させないため)
+#   - quote 外の `<` / `>` (redirection 演算子全般。`>>` / `<>` / `>&` / `<&` / `&>` /
+#     `>|` / heredoc `<<` / here-string `<<<` と数字 fd 前置を含む。fd 番号とパス末尾の
+#     数字を区別できず、`>/dev/null git commit` のように redirection が先行する commit を
+#     hook 側と異なる形で解析しうるため、コマンド内のどの位置にあっても解決不能とする)
 #   - quote 外の `$'` / `$"` (ANSI-C / locale quoting。quote 境界を静的に追えないため)
 #   - quote 外の `#` (コメント。後続を segment と誤認させないため)
 #   - quote 外の CR / VT / FF (bash は単語区切りとして扱わないため token 分割がずれる)
@@ -254,46 +258,13 @@ _isolated_has_unresolvable_syntax() {
           "'"|'"') return 0 ;;
         esac
         ;;
-      '<')
-        [ "$nc" = "<" ] && return 0 ;;
+      '<'|'>') return 0 ;;
       "$cr"|"$vt"|"$ff") return 0 ;;
     esac
     i=$((i+1))
   done
 
   [ "$in_squote" -eq 0 ] && [ "$in_dquote" -eq 0 ] || return 0
-  return 1
-}
-
-# 引数: <segment> (split_command の出力。quote / escape を保持したもの)
-# 戻り値: 0 = quote 外に redirection 演算子 (`<` / `>` を含むもの。`>>` / `<>` / `>&` /
-#         `<&` / `&>` / `>|` と数字 fd 前置を含む) がある / 1 = 無い
-_isolated_segment_has_redirection() {
-  local seg="$1"
-  local i=0 len=${#seg}
-  local in_squote=0 in_dquote=0
-  local c
-  while [ "$i" -lt "$len" ]; do
-    c="${seg:$i:1}"
-    if [ "$in_squote" -eq 1 ]; then
-      [ "$c" = "'" ] && in_squote=0
-      i=$((i+1)); continue
-    fi
-    if [ "$in_dquote" -eq 1 ]; then
-      case "$c" in
-        \\) i=$((i+2)); continue ;;
-        '"') in_dquote=0 ;;
-      esac
-      i=$((i+1)); continue
-    fi
-    case "$c" in
-      \\) i=$((i+2)); continue ;;
-      "'") in_squote=1 ;;
-      '"') in_dquote=1 ;;
-      '<'|'>') return 0 ;;
-    esac
-    i=$((i+1))
-  done
   return 1
 }
 
@@ -381,10 +352,11 @@ _isolated_resolve_path_from() {
   esac
 }
 
-# 引数: <command> <base_dir>
+# 引数: <command> <base_dir> <expected_commit_count>
 #   <command>  : hook が受け取った Bash コマンド文字列 (行継続の正規化後、redirection
 #                正規化前。パス解決には元のコマンドの token をそのまま使う)
 #   <base_dir> : hook プロセスの cwd (commit invocation の対象 dir の初期値)
+#   <expected_commit_count> : hook 自身が検出した commit invocation の件数
 # stdout: 最後の commit invocation までの各 git invocation (`git add` / `git commit`)
 #         について、静的に解決した対象 dir の canonical 実パスを出現順に 1 行 1 件で
 #         出力する (呼び出し側はその全てに免除条件を要求する)
@@ -392,14 +364,13 @@ _isolated_resolve_path_from() {
 #
 # 静的解決の規則 (これ以外の形は解決不能として 1 を返す):
 #   - _isolated_has_unresolvable_syntax が検出する構文 (subshell / brace group /
-#     コマンド置換 / プロセス置換 / heredoc / コメント 等) を含まないこと
+#     コマンド置換 / プロセス置換 / redirection / heredoc / コメント 等) を、コマンド内の
+#     どの位置にも含まないこと
+#   - 本関数が認識した commit invocation の件数が <expected_commit_count> と一致すること
+#     (hook と本関数の解析が食い違い、免除判定が一部の commit を見落とす経路を塞ぐ)
 #   - 先頭 segment から最後の commit invocation までの区切りが `&&` だけであること
 #     (`;` / 改行は cd が実行時に失敗しても commit が元の cwd で実行されるため、
 #     `||` / `|` / `&` は cd の効果が commit に及ぶかを静的に確定できないため解決不能)
-#   - 先頭 segment から最後の commit invocation まで (commit invocation 自身を含む) の
-#     segment に、quote 外の redirection 演算子 (`<` / `>` / `>>` / `<>` / `>&` / `<&` /
-#     `&>` / `>|`、数字 fd 前置を含む) が無いこと (fd 番号とパス末尾の数字の区別を
-#     静的解決に持ち込まないため)
 #   - 最後の commit invocation より前の segment は、次のいずれかであること。それ以外の
 #     segment (判定時点のファイルシステム状態を commit 前に変えうる任意のコマンド。
 #     対象 dir の削除・移動・symlink 化や `git config` / `git init` 等による repo
@@ -426,20 +397,23 @@ _isolated_resolve_path_from() {
 resolve_commit_target_dirs() {
   local cmd="$1"
   local base="$2"
+  local expected_commit_count="$3"
   local current_dir
   local -a _iso_segments=()
   local -a _iso_separators=()
   local -a _iso_targets=()
   local line
   local last_commit_index=-1
+  local commit_count=0
 
+  case "$expected_commit_count" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
   _isolated_has_unresolvable_syntax "$cmd" && return 1
   current_dir="$(isolated_canonical_dir "$base")" || return 1
 
-  # redirection の正規化は行わず元のコマンドのまま分割する (正規化で fd 番号とみなして
-  # 剥がした数字が、bash ではパスの一部として扱われ判定と実行の対象が食い違うため)。
-  # 最後の commit invocation までの segment に redirection があれば 2 周目で解決不能と
-  # する。それより後ろの `2>&1` 等の `&` が区切りとして分割されても判定には影響しない。
+  # redirection は _isolated_has_unresolvable_syntax で解決不能にしているため、元の
+  # コマンドをそのまま分割する (パス解決にも元の token を使う)。
   while IFS= read -r line; do
     case "$line" in
       SEP:*)
@@ -476,7 +450,11 @@ resolve_commit_target_dirs() {
             case "$_iso_opt" in
               -C|--git-dir|--work-tree|-c|--config|--config-env) _iso_oi=$((_iso_oi+2)) ;;
               -*) _iso_oi=$((_iso_oi+1)) ;;
-              commit) last_commit_index="$_iso_si"; break ;;
+              commit)
+                last_commit_index="$_iso_si"
+                commit_count=$((commit_count+1))
+                break
+                ;;
               *) break ;;
             esac
           done
@@ -486,11 +464,11 @@ resolve_commit_target_dirs() {
     _iso_si=$((_iso_si+1))
   done
   [ "$last_commit_index" -ge 0 ] || return 1
+  [ "$commit_count" -eq "$expected_commit_count" ] || return 1
 
   # 2 周目: 最後の commit invocation までの segment を解決する。
   _iso_si=0
   while [ "$_iso_si" -le "$last_commit_index" ]; do
-    _isolated_segment_has_redirection "${_iso_segments[$_iso_si]}" && return 1
     _iso_toks=()
     _iso_idx=0
     tokenize_segment "${_iso_segments[$_iso_si]}" _iso_toks
@@ -581,20 +559,21 @@ resolve_commit_target_dirs() {
   printf '%s\n' "${_iso_targets[@]}"
 }
 
-# 引数: <command> <base_dir> (意味は resolve_commit_target_dirs と同じ)
+# 引数: <command> <base_dir> <expected_commit_count> (意味は resolve_commit_target_dirs と同じ)
 # 戻り値: 0 = 免除する (許可ルートが有効で、resolve_commit_target_dirs が出力した全対象
 #         dir (git add / git commit) が免除条件を満たす) / 1 = 免除しない
 # env `CLAUDE_ISOLATED_GIT_ROOTS` が未設定・空なら、コマンドを解析せずに 1 を返す。
 command_commits_only_to_isolated_roots() {
   local cmd="$1"
   local base="$2"
+  local expected_commit_count="$3"
   local targets target name
   [ -n "${CLAUDE_ISOLATED_GIT_ROOTS:-}" ] || return 1
   for name in $_ISOLATED_REPO_ENV_NAMES; do
     eval "[ -z \"\${$name+set}\" ]" || return 1
   done
   isolated_git_roots >/dev/null || return 1
-  targets="$(resolve_commit_target_dirs "$cmd" "$base")" || return 1
+  targets="$(resolve_commit_target_dirs "$cmd" "$base" "$expected_commit_count")" || return 1
   [ -n "$targets" ] || return 1
   while IFS= read -r target; do
     [ -n "$target" ] || continue

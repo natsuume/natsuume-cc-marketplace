@@ -91,8 +91,8 @@ case "$COMMAND" in
   *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
 esac
 
-# 隔離ルート免除の判定は heredoc (`<<EOF`) / redirection の有無を見て、パスも元の token
-# のまま解決する必要があるため、redirection 正規化前のコマンドを残しておく。
+# 隔離ルート免除の判定は redirection (heredoc `<<EOF` を含む) の有無を見て、パスも元の
+# token のまま解決する必要があるため、redirection 正規化前のコマンドを残しておく。
 COMMAND_BEFORE_REDIRECTION_NORMALIZATION="$COMMAND"
 
 # `&` を含む shell redirection (`2>&1` / `&>file` / `<<EOF` 等) を空白に置換する。
@@ -303,9 +303,11 @@ fi
 # 全ての commit invocation が env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の repo を
 # 対象とする場合は、target-mismatch deny と default branch 上 commit の deny の両方を
 # 免除する。1 つでも免除条件を満たさない invocation があれば、以降の従来判定に進む
-# (免除条件・静的解決の規則・fail-closed 条件は lib/isolated-roots.sh 参照)。
+# (免除条件・静的解決の規則・fail-closed 条件は lib/isolated-roots.sh 参照)。本 hook が
+# 検出した commit invocation の件数を渡し、免除判定側の認識と一致しなければ免除しない。
 if command_commits_only_to_isolated_roots \
-  "$COMMAND_BEFORE_REDIRECTION_NORMALIZATION" "$PWD"; then
+  "$COMMAND_BEFORE_REDIRECTION_NORMALIZATION" "$PWD" \
+  "${#COMMIT_INVOCATION_INDICES[@]}"; then
   exit 0
 fi
 

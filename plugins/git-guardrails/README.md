@@ -148,9 +148,10 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 
 - `git -C <path> commit ...` (`-C` を複数並べた場合は順に相対解決)
 - `cd <path> && git commit ...` (`cd` を複数連結してもよい)
-- 先頭から最後の commit までの連結は `&&` だけです。`;` や改行で区切った形 (`cd <path>; git commit ...`) は、実行時に `cd` が失敗すると commit が元の cwd (保護対象の repo) で実行されるため免除しません
-- 先頭から最後の commit まで (commit 自身を含む) に redirection (`>` / `>>` / `<` / `2>&1` / `&>` / `>|` 等) を含む形は免除しません (`<path>2>&1` のように、パス末尾の数字と fd 番号を静的に区別できないため)。最後の commit より後ろのコマンドの redirection は判定に影響しません
-- 最後の commit より前に置けるのは `cd <path>` と `git add` / `git commit` だけです (例: `git -C <path> add f && git -C <path> commit -m x`)。前段の `git add` / `git commit` の対象 dir にも commit と同じ免除条件を要求します。判定は hook 実行時点のファイルシステム状態で行うため、それ以外のコマンド (`touch` のような無害に見えるものも含め、対象 dir の削除・移動・symlink への置き換えや `git config` / `git init` 等で判定後に対象を差し替えうるもの) が前段にあれば免除しません。最後の commit より後ろのコマンドは判定に影響しません (ただし下記の builtin・wrapper はどの位置にあっても deny)
+- 先頭から最後の commit までの連結は `&&` だけです。`;` や改行で区切った形 (`cd <path>; git commit ...`) は、実行時に `cd` が失敗すると commit が元の cwd (保護対象の repo) で実行されるため免除しません。`&&` の直後で改行した複数行の形も免除の対象外なので、1 行で書いてください
+- redirection (`>` / `>>` / `<` / `2>&1` / `&>` / `>|` / heredoc 等) を含むコマンドは、redirection がコマンド内のどの位置 (最後の commit より後ろを含む) にあっても免除しません。`<path>2>&1` のようにパス末尾の数字と fd 番号を静的に区別できず、`>/dev/null git commit` のように redirection が先行する commit を免除判定が hook と異なる形で解析しうるためです
+- 免除判定が認識した commit 呼び出しの件数が、block-default-branch-commit が検出した件数と一致しない場合は免除しません (両者の解析が食い違い、一部の commit を見落とす経路を塞ぐため)
+- 最後の commit より前に置けるのは `cd <path>` と `git add` / `git commit` だけです (例: `git -C <path> add f && git -C <path> commit -m x`)。前段の `git add` / `git commit` の対象 dir にも commit と同じ免除条件を要求します。判定は hook 実行時点のファイルシステム状態で行うため、それ以外のコマンド (`touch` のような無害に見えるものも含め、対象 dir の削除・移動・symlink への置き換えや `git config` / `git init` 等で判定後に対象を差し替えうるもの) が前段にあれば免除しません。最後の commit より後ろのコマンドは判定に影響しません (ただし redirection と、下記の builtin・wrapper はどの位置にあっても deny)
 - hook の cwd (セッションの cwd) が許可ルート配下の repo であるときの素の `git commit ...`
 - `<path>` は quote なし、または全体を 1 組の quote で囲んだ静的な文字列で、`cd` の相対パスは `./` 始まりに限ります
 
