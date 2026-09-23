@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # block-commit-lint.sh
 #
 # PreToolUse / Bash で `git commit` を検出し、commit 対象になるファイルを
