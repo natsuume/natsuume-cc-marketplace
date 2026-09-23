@@ -305,7 +305,7 @@ python3 compute_leadtime.py \
 
 - `--issues` / `--prs` / `--claim-patterns-file` / `--as-of` は必須。`--as-of` にはデータ収集完了時刻 (UTC) を渡す。
 - stdout に結果 JSON (`schemaVersion` を含む) のみを出力する。診断メッセージはすべて stderr に出る。
-- exit code: `0` = 成功 (空データ含む)。`2` = 実行環境エラー (Python 3.11 未満。stderr に必要バージョンと検出バージョンを出す) または入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`--as-of`/`--since` の形式不正・`--boundaries-file` の検証失敗 (ファイル不存在・JSON parse 失敗・形状不正・`at` の ISO8601/UTC 不正または naive 時刻・`id`/`label` の欠落または空文字列・`id` の重複))。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
+- exit code: `0` = 成功 (空データ含む)。`2` = 実行環境エラー (Python 3.11 未満。stderr に必要バージョンと検出バージョンを出す) または入力エラー (ファイル不存在・JSONL parse 失敗・必須フィールド欠落・`timelineItems.nodes` の非 object 要素・`--as-of`/`--since` の形式不正・`--boundaries-file` の検証失敗 (ファイル不存在・JSON parse 失敗・形状不正・`at` の ISO8601/UTC 不正または naive 時刻・`id`/`label` の欠落または空文字列・`id` の重複))。`3` = claim patterns file の契約違反 (欠落キー・regex compile 失敗。`{issue_number}` 置換後の compile 失敗を含む)。0/2/3 いずれでも部分データで黙って続行しない (fail-closed)。
 - ターミナルサマリで提示する数値は、この stdout JSON の**決定的な投影**とする。Claude はここで得た JSON の数値を再計算・改変・丸め直ししない (中央値・件数などはすべて JSON の値をそのまま転記する)。
 
 ### 手順

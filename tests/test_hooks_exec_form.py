@@ -274,7 +274,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "codex-advisor": "4.0.1",
     "rate-limit": "0.5.2",
     "session-handoff": "0.5.0",
-    "repo-analytics": "0.2.5",
+    "repo-analytics": "0.2.6",
 }
 
 

@@ -84,7 +84,8 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
   より前にこれを検査し、非 `None` ならその診断メッセージを stderr に出力して
   即座に exit code `2` で終了する)、または入力エラー (`--issues` / `--prs` の
   ファイル不存在・JSONL parse 失敗・
-  必須フィールド欠落・実際に処理される日時フィールド (`IssueComment.createdAt`
+  必須フィールド欠落・`timelineItems.nodes` に非 object の要素 (null・文字列等)
+  が含まれる場合・実際に処理される日時フィールド (`IssueComment.createdAt`
   / `LabeledEvent.createdAt` / `ClosedEvent.createdAt` / PR の `createdAt` /
   `mergedAt` / `ReadyForReviewEvent.createdAt` 等) が tz 情報の無い naive
   datetime 文字列である場合・`--as-of` / `--since` の形式不正・`--prs` の行に
@@ -101,7 +102,8 @@ issue #288 Phase A 契約ドキュメント セクション 4 が正本)
   検証を通過した boundaries は `(at, id)` の辞書順 (`at` 昇順、同一 `at`
   は `id` の辞書順で tie-break) に正規化してから `compute` へ渡す。
 - `3`: claim patterns file (`--claim-patterns-file`) の契約違反 (必須キー欠落・
-  regex compile 失敗)。`ClaimPatternsError` を捕捉して変換する。
+  regex compile 失敗。`{issue_number}` を実際の issue 番号へ置換した後の compile
+  失敗を含む)。`ClaimPatternsError` を捕捉して変換する。
 
 いずれの exit code でも部分データのまま黙って処理を続行しない (fail-closed)。
 診断メッセージはすべて stderr に出力し、stdout には結果 JSON のみを書く。
@@ -195,7 +197,8 @@ def diagnose_python_version(
 class ClaimPatternsError(Exception):
     """claim patterns file (`--claim-patterns-file` が指す patterns.json) が
     公開契約 (SKILL.md 「claim 判定パターン (正本)」セクション) に違反する場合に
-    `load_claim_patterns` が送出する例外。
+    `load_claim_patterns` が送出する例外。`{issue_number}` の置換後に初めて
+    compile できなくなるパターンは、`resolve_start` (経由で `compute`) が送出する。
 
     `main` はこの例外を捕捉し、診断メッセージを stderr に出力したうえで
     exit code `3` に変換する。
@@ -507,20 +510,11 @@ def resolve_start(issue: dict, patterns: ClaimPatterns) -> StartResolution:
     """
     issue_number_escaped = re.escape(str(issue["number"]))
     strict_matchers = [
-        (
-            pattern.id,
-            re.compile(
-                _substitute_issue_number(pattern.regex_template, issue_number_escaped),
-                re.MULTILINE,
-            ),
-        )
+        (pattern.id, _compile_claim_pattern(pattern, issue_number_escaped))
         for pattern in patterns.strict
     ]
     loose_matchers = [
-        re.compile(
-            _substitute_issue_number(pattern.regex_template, issue_number_escaped),
-            re.MULTILINE,
-        )
+        _compile_claim_pattern(pattern, issue_number_escaped)
         for pattern in patterns.loose
     ]
 
@@ -582,6 +576,28 @@ def resolve_start(issue: dict, patterns: ClaimPatterns) -> StartResolution:
 def _substitute_issue_number(regex_template: str, issue_number_escaped: str) -> str:
     """claim パターンの `{issue_number}` プレースホルダを実際の issue 番号へ置換する。"""
     return regex_template.replace("{issue_number}", issue_number_escaped)
+
+
+def _compile_claim_pattern(
+    pattern: ClaimPattern, issue_number_escaped: str
+) -> re.Pattern[str]:
+    """`{issue_number}` を置換した claim パターンを `re.MULTILINE` で compile する。
+
+    `load_claim_patterns` は置換前の template を compile して検証するため、置換後に
+    初めて不正になるパターン (例: `\\{issue_number}` が存在しないグループへの後方参照
+    `\\42` になる) はここで検出される。その `re.error` は patterns file の契約違反として
+    `ClaimPatternsError` に変換し、`main` が exit code `3` で報告する。
+    """
+    try:
+        return re.compile(
+            _substitute_issue_number(pattern.regex_template, issue_number_escaped),
+            re.MULTILINE,
+        )
+    except re.error as exc:
+        raise ClaimPatternsError(
+            "regex が {issue_number} の置換後に compile できません "
+            f"(id={pattern.id}): {exc}"
+        ) from exc
 
 
 def resolve_ready(pr: dict) -> ReadyResolution:
@@ -1942,13 +1958,15 @@ def main(argv: list[str] | None = None) -> int:
               (`diagnose_python_version` が非 `None` を返した場合。引数解析の
               直後、他のファイル読み込みより前に検査する)、または入力エラー
               (`--issues` / `--prs` のファイル不存在・JSONL parse 失敗・
-              必須フィールド欠落・`--as-of` / `--since` の形式不正・
+              必須フィールド欠落・`timelineItems.nodes` の非 object 要素・
+              `--as-of` / `--since` の形式不正・
               `--prs` の行に `closingIssuesReferences.totalCount >
               len(closingIssuesReferences.nodes)` が 1 件でも存在する場合・
               `--boundaries-file` の検証失敗。詳細はモジュール docstring
               「exit code 契約」セクションを参照)。
             - `3`: `--claim-patterns-file` の契約違反
-              (`load_claim_patterns` が `ClaimPatternsError` を送出した場合)。
+              (`load_claim_patterns`、または `{issue_number}` 置換後の compile
+              失敗により `compute` が `ClaimPatternsError` を送出した場合)。
 
     副作用:
         - `parse_args` が返す各パスのファイルを読み込む
@@ -2002,12 +2020,17 @@ def main(argv: list[str] | None = None) -> int:
         issues = _read_jsonl(args.issues)
         prs = _read_jsonl(args.prs)
         _validate_closing_issues_complete(prs)
+        _validate_timeline_nodes(issues, "--issues")
+        _validate_timeline_nodes(prs, "--prs")
     except (OSError, json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
         print(f"入力データの読み込みに失敗しました: {exc}", file=sys.stderr)
         return 2
 
     try:
         result = compute(issues, prs, patterns, as_of, since, boundaries)
+    except ClaimPatternsError as exc:
+        print(f"claim patterns file の契約に違反しています: {exc}", file=sys.stderr)
+        return 3
     except (KeyError, TypeError, ValueError) as exc:
         print(f"入力データの処理中にエラーが発生しました: {exc}", file=sys.stderr)
         return 2
@@ -2038,6 +2061,30 @@ def _validate_closing_issues_complete(prs: list[dict]) -> None:
                 "closingIssuesReferences のページングが未完了です "
                 f"(repo={pr.get('repo')}, pr={pr.get('number')})"
             )
+
+
+def _validate_timeline_nodes(rows: list[dict], source: str) -> None:
+    """各行の `timelineItems.nodes` の要素がすべて object であることを検証する。
+
+    resolver 関数群は node を dict として扱うため、null・文字列等の非 object の node は
+    ここで `ValueError` として検出し、`main` が exit code `2` の入力エラーとして報告する。
+    `timelineItems` / `nodes` の欠落・型不正は `KeyError` / `TypeError` として伝播し、
+    同じく exit code `2` になる。
+    """
+    for row in rows:
+        nodes = row["timelineItems"]["nodes"]
+        if not isinstance(nodes, list):
+            raise TypeError(
+                f"{source} の timelineItems.nodes が配列ではありません "
+                f"(repo={row.get('repo')}, number={row.get('number')})"
+            )
+        for index, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                raise ValueError(
+                    f"{source} の timelineItems.nodes に object ではない要素があります "
+                    f"(repo={row.get('repo')}, number={row.get('number')}, "
+                    f"index={index}, type={type(node).__name__})"
+                )
 
 
 def _load_boundaries_file(path: Path) -> list[dict]:
