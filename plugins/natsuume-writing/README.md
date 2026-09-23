@@ -4,7 +4,7 @@ natsuume の過去執筆物から抽象化した執筆ルールを使い、Markd
 
 ## バージョン
 
-v0.6.3
+v0.6.4
 
 ## 構成
 
@@ -23,3 +23,5 @@ claude plugin install natsuume-writing@natsuume-plugins
 ```
 
 本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
+
+各 Skill の SKILL.md はパス参照に `${CLAUDE_PLUGIN_ROOT}` を使うため、plugin 経由でのインストールでの利用のみをサポートします。SKILL.md を plugin 外 (`~/.claude/skills/` 等) へコピーした場合、`${CLAUDE_PLUGIN_ROOT}` は置換されません。

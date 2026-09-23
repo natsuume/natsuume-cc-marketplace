@@ -71,6 +71,16 @@ Phase A (spec-first) の位置づけ:
   qualifying 候補だった着手済み open issue を `censored` に入れず、
   `exclusions.prReadyTimeUnknown` に `{repo, issue, prRepo, pr}` で列挙して、
   `elapsedHoursLowerBound` の下限値契約を維持することの検証。
+- T58: `diagnose_python_version` が要求バージョン未満のとき要求バージョンと
+  検出バージョンの両方を含む診断メッセージ文字列を返し、要求バージョン以上
+  のときは `None` を返すことの単体テスト。T59: 実行中の Python が要求
+  バージョン未満のとき `main` が入力ファイル読み込みより前に fail-closed で
+  exit code 2 を返すことの main 起動時テスト (`sys.version_info` を
+  monkeypatch して模擬する)。`diagnose_python_version` の本体は契約定義のみの
+  骨格であり `NotImplementedError` を送出するため T58 は捕捉されない例外に
+  より ERROR として報告され、`main` はまだこの契約を呼び出していないため
+  T59 は exit code の不一致により FAIL として報告される。これらも意図した
+  red 状態である。
 - 契約の「存在」を検証するテスト (`ContractExistenceTests`) は Phase A 時点で
   pass する。挙動を検証するテスト (T1〜T39) は本物の期待値アサーションを
   書いたうえで実装本体を直接呼び出す (`assertRaises(NotImplementedError)` で
@@ -91,6 +101,7 @@ import tempfile
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS_DIR = (
     Path(__file__).resolve().parents[1]
@@ -2342,6 +2353,31 @@ class ComputeTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# T58: diagnose_python_version
+# ---------------------------------------------------------------------------
+
+
+class DiagnosePythonVersionTests(unittest.TestCase):
+    def test_t58_below_minimum_version_fails_with_required_and_detected_versions(
+        self,
+    ):
+        message = compute_leadtime.diagnose_python_version((3, 10, 0, "final", 0))
+        self.assertIsNotNone(message)
+        self.assertIn("3.11", message)
+        self.assertIn("3.10", message)
+
+    def test_t58_minimum_version_passes(self):
+        self.assertIsNone(
+            compute_leadtime.diagnose_python_version((3, 11, 0, "final", 0))
+        )
+
+    def test_t58_above_minimum_version_passes(self):
+        self.assertIsNone(
+            compute_leadtime.diagnose_python_version((3, 12, 0, "final", 0))
+        )
+
+
+# ---------------------------------------------------------------------------
 # T28〜T30, T52: main (tempfile 経由。subprocess は使わない)
 # ---------------------------------------------------------------------------
 
@@ -2573,6 +2609,44 @@ class MainTests(unittest.TestCase):
             stderr_output = captured_stderr.getvalue()
             self.assertNotEqual(stderr_output.strip(), "")
             self.assertNotIn("Traceback", stderr_output)
+
+    def test_t59_python_version_below_minimum_exits_two(self):
+        # T59: 実行中の Python が MIN_PYTHON_VERSION 未満のとき、main は
+        # 入力ファイル読み込み・GitHub API 呼び出しより前に fail-closed で
+        # exit code 2 を返し、stdout には結果 JSON を出力しない。
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            issues_path = tmp_path / "issues.jsonl"
+            prs_path = tmp_path / "prs.jsonl"
+            patterns_path = tmp_path / "patterns.json"
+            issues_path.write_text("", encoding="utf-8")
+            prs_path.write_text("", encoding="utf-8")
+            write_claim_patterns_file(patterns_path, DEFAULT_PATTERNS_DICT)
+
+            captured_stdout = io.StringIO()
+            captured_stderr = io.StringIO()
+            with mock.patch.object(
+                compute_leadtime.sys, "version_info", (3, 10, 0, "final", 0)
+            ):
+                with (
+                    contextlib.redirect_stdout(captured_stdout),
+                    contextlib.redirect_stderr(captured_stderr),
+                ):
+                    exit_code = compute_leadtime.main(
+                        [
+                            "--issues",
+                            str(issues_path),
+                            "--prs",
+                            str(prs_path),
+                            "--claim-patterns-file",
+                            str(patterns_path),
+                            "--as-of",
+                            "2026-07-17T04:00:00Z",
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(captured_stdout.getvalue(), "")
 
 
 if __name__ == "__main__":
