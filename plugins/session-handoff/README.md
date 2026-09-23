@@ -6,7 +6,7 @@ context 使用率が閾値を超えたときに handoff ドキュメントの作
 
 ## バージョン
 
-v0.4.0
+v0.5.0
 
 ## 機能概要
 
@@ -53,6 +53,11 @@ producer と consumer で構成されます。
 - **staleness**: 24 時間を超えた pending は注入しない (作成から時間が経ちすぎた handoff を
   無条件に新セッションへ流し込まない)。24 時間以内に複数の pending がある場合、最新の 1 件のみを
   本文注入し、残りはパスの列挙に留める
+- **注入文字数の上限**: 注入する文 (前置き文 + handoff 本文 + 残り pending の列挙) が 8,000
+  code point を超える場合は本文を注入せず、consumed 側 (`consumed-*.md`) の絶対パスを Read で
+  全文読了するよう指示する定型文に置き換える (残り pending の列挙は維持する)。このとき handoff
+  ファイルは consumed 側に残る。Claude Code が additionalContext を 10,000 文字で打ち切るため、
+  余裕を持たせた上限にしている
 
 ## producer 依存 (context 使用率キャッシュ)
 

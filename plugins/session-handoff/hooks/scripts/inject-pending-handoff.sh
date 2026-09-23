@@ -14,9 +14,19 @@
 #   6. 候補なしなら無音 exit
 #   7. rename-first claim: 新しい順に pending- → consumed- への mv を試み、
 #      成功した最初の 1 件だけを採用する (mv の atomic 性で at-most-once を保証)
-#   8. 採用した handoff 全文 + preamble + 残り pending の列挙を additionalContext として出力
-#   9. 手順 8 の途中で失敗したら、出力前に限り consumed- → pending- へ best-effort で
-#      差し戻してから無音終了する
+#   8. preamble + 採用した handoff 全文 + 残り pending の列挙を組み立て、その長さ
+#      (Unicode code point 数) を計測する。CONTEXT_CHAR_LIMIT 以下ならそのまま、
+#      超える場合は本文の代わりに consumed 側の絶対パスを Read するよう指示する定型文へ
+#      縮退した文 (preamble + 定型文 + 残り pending の列挙) を additionalContext として出力する。
+#      縮退時も handoff ファイルは consumed 側に残す
+#   9. 手順 8 の途中で失敗したら (長さ計測の失敗を含む)、出力前に限り consumed- → pending-
+#      へ best-effort で差し戻してから無音終了する
+
+# additionalContext として注入する文字数 (Unicode code point 数) の上限。Claude Code は
+# additionalContext を 10,000 文字で打ち切り、超過分をファイルへ退避して先頭 2,000 文字の
+# プレビューに置き換える。その上限は UTF-16 code unit 基準で数えられうるため、code point
+# 基準の計測との差 (サロゲートペア等) を吸収する安全マージンとして 8,000 にする。
+CONTEXT_CHAR_LIMIT=8000
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -156,19 +166,43 @@ if [ -z "$HANDOFF_BODY" ]; then
   exit 0
 fi
 
-CONTEXT="$PREAMBLE
-
-$HANDOFF_BODY"
-
+# 残り pending の列挙は全文注入と縮退注入の両方で同じ文字列を使うため、先に組み立てる。
+LISTING=""
 if [ "${#remaining_paths[@]}" -gt 0 ]; then
   LISTING="他にも直近の handoff が残っています:"
   for p in "${remaining_paths[@]}"; do
     LISTING="$LISTING
 - $p"
   done
+fi
+
+CONTEXT="$PREAMBLE
+
+$HANDOFF_BODY"
+if [ -n "$LISTING" ]; then
   CONTEXT="$CONTEXT
 
 $LISTING"
+fi
+
+# 長さは jq の length で Unicode code point 数として計測する (byte 数ではない)。
+CONTEXT_LENGTH=$(jq -n --arg s "$CONTEXT" '$s | length' 2>/dev/null)
+if ! [[ "$CONTEXT_LENGTH" =~ ^[0-9]+$ ]]; then
+  mv "$consumed_path" "$claimed_path" 2>/dev/null
+  exit 0
+fi
+
+# 上限を超える場合は本文を注入せず、consumed 側の handoff ファイルを Read するよう
+# 指示する定型文へ縮退する。handoff ファイルは consumed 側に残し、pending には戻さない。
+if [ "$CONTEXT_LENGTH" -gt "$CONTEXT_CHAR_LIMIT" ]; then
+  CONTEXT="$PREAMBLE
+
+(session-handoff) 直前セッションの handoff が長いため本文は注入していない。\`$consumed_path\` を Read で全文読了してから作業を開始すること。"
+  if [ -n "$LISTING" ]; then
+    CONTEXT="$CONTEXT
+
+$LISTING"
+  fi
 fi
 
 CONTEXT_JSON=$(jq -n --arg evt "$HOOK_EVENT" --arg ctx "$CONTEXT" '{
