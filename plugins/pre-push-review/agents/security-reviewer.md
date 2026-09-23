@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: pre-push-review のセキュリティレビュー専用 subagent。 `git push` 前のレビューループで block-pre-push.sh の deny メッセージが「security review (subagent 経由)」のマーカーを「未実行」または「失効」と指摘したときに呼び出す。 branch 全差分 (現在ブランチ ↔ origin/HEAD (= default branch、 通常は origin/master または origin/main) の diff + working tree の未コミット差分) に対して self-contained なセキュリティレビューを実行し、 検出された脆弱性を markdown report として親 session に返す。 標準 skill `/security-review` を直接呼び出さず専用 subagent で実行するのは、 (1) confidence / severity 付きの parent-safe report 契約を reviewer 側に固定するため、 (2) SubagentStart / SubagentStop / SubagentHandback の lifecycle hook で reviewer の実行を marker として検知するため、 (3) `tools` から `Agent` を除外して reviewer を read-only に保つため (nested subagent は既定で起動できるが本 reviewer は使わない) である。
+description: pre-push-review のセキュリティレビュー専用 subagent。 `git push` 前のレビューループで block-pre-push.sh の deny メッセージが「security review (security-reviewed)」のマーカーを「未実行」または「失効」と指摘したときに呼び出す。 branch 全差分 (現在ブランチ ↔ origin/HEAD (= default branch、 通常は origin/master または origin/main) の diff + working tree の未コミット差分) に対して self-contained なセキュリティレビューを実行し、 検出された脆弱性を markdown report として親 session に返す。 標準 skill `/security-review` を直接呼び出さず専用 subagent で実行するのは、 (1) confidence / severity 付きの parent-safe report 契約を reviewer 側に固定するため、 (2) SubagentStart / SubagentStop / SubagentHandback の lifecycle hook で reviewer の実行を marker として検知するため、 (3) `tools` から `Agent` を除外して reviewer を read-only に保つため (nested subagent は既定で起動できるが本 reviewer は使わない) である。
 tools: Bash, Read, Glob, Grep
 model: opus
 color: red
