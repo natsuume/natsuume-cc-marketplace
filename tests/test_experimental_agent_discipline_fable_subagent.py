@@ -75,6 +75,7 @@ INTENTIONAL_DIFF_FILES = {
     "hooks/prompts/discipline-sonnet.md",
     "hooks/prompts/discipline-opus.md",
     "scripts/lint-prompt-sync.sh",
+    "scripts/lint-payload-size.sh",
 }
 
 # fork 側にのみ存在してよいファイル (相対パス)。
