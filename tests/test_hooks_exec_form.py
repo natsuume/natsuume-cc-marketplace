@@ -259,9 +259,9 @@ AUTO_REMOVAL_NOTICE_WORDS = ("2.1.193", "自動")
 # 4 箇所 (plugin.json / marketplace.json / 直下 README の一覧テーブル /
 # plugin README の `## バージョン` 節) で一致させる version。
 EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
-    "git-guardrails": "0.6.7",
+    "git-guardrails": "0.7.0",
     "enforce-draft-pr": "0.5.4",
-    "auto-lint-check": "0.7.1",
+    "auto-lint-check": "0.8.0",
     "pre-push-review": "6.1.0",
     "pre-push-codex-review": "2.2.0",
     "pre-merge-codex-review": "2.2.1",

@@ -13,6 +13,12 @@
 #     経路は `has_target_mismatch_prefix` で本フック自身が deny に倒す (lib 経由の
 #     自前防御で、pre-push-review プラグインへの依存はない)。
 #
+# 免除対象:
+#   - コマンド全体が免除テンプレート (env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の
+#     repo への `git -C <ABS> commit ...` / `git -C <ABS> add ... && git -C <ABS> commit ...`)
+#     に一致するもの (判定は lib/isolated-commit-template.sh の
+#     `isolated_commit_template_exempts`)
+#
 # detached HEAD (cherry-pick 中・rebase 中など) では通す: ブランチ名が空文字列で
 # is_default_branch は false 判定になるため、自然に exit 0 経路に流れる。
 #
@@ -72,6 +78,10 @@ _jq_status=$?
 # cmd-parser.sh の「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
 case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
+# 隔離ルート免除の判定はコマンド全体を元の文字列のままテンプレートと照合するため、行継続・
+# redirection の正規化前のコマンドを残しておく。
+COMMAND_BEFORE_NORMALIZATION="$COMMAND"
+
 # 行継続 `\<改行>` を空白に正規化する (詳細は push hook 側のコメント参照)。
 # macOS bash 3.2 互換性のため `${var//$'\\\n'/...}` は使わず cmd-parser.sh の純 bash +
 # sed fallback 実装に委譲する。
@@ -99,6 +109,11 @@ require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
   is_default_branch current_branch strip_shell_quotes normalize_refspec_part \
   strip_quoted_text strip_squoted_text find_group_close emit_deny \
   has_target_mismatch_prefix || exit $?
+
+# shellcheck source=lib/isolated-commit-template.sh
+source "$SCRIPT_DIR/lib/isolated-commit-template.sh" || exit $?
+require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
+  isolated_commit_template_exempts || exit $?
 
 # コマンドを segment (top-level `;`/`&&`/`||`/`&`/`|`/改行区切り) に分割する。
 # SEPARATORS は本 hook では使わないため配列化せず読み捨てる。
@@ -283,6 +298,16 @@ done
 
 # commit invocation を 1 つも含まないなら本 hook 対象外。
 if [ "${#COMMIT_INVOCATION_INDICES[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+# コマンド全体が免除テンプレート (env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の
+# repo への `git -C <ABS> commit ...` / `git -C <ABS> add ... && git -C <ABS> commit ...`)
+# に一致する場合は、target-mismatch deny と default branch 上 commit の deny の両方を
+# 免除する (テンプレート・対象 repo 検査・fail-closed 条件は lib/isolated-commit-template.sh
+# 参照)。本 hook が検出した commit invocation が 1 件であることも補助的に要求する。
+if [ "${#COMMIT_INVOCATION_INDICES[@]}" -eq 1 ] \
+  && isolated_commit_template_exempts "$COMMAND_BEFORE_NORMALIZATION"; then
   exit 0
 fi
 
