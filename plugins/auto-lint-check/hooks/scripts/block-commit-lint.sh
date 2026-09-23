@@ -135,16 +135,19 @@ case "$PARSER_RC" in
     # 静的に同一性を判別できないため fail closed (deny) する。利用者は
     # 対象 repo に `cd` してから別の Bash 呼び出しで commit すれば通る。
     #
-    # 例外: 全ての commit invocation が env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート
-    # 配下の repo を対象とする場合は deny せず、lint も行わずに通す。判定器は
-    # exit 10 のときだけ免除を意味し、それ以外 (Python の異常終了を含む) は免除しない
-    # (免除条件・静的解決の規則は lib/check-isolated-commit-target.py 参照)。
-    python3 "$SCRIPT_DIR/lib/check-isolated-commit-target.py" "$COMMAND" "$PWD"
-    if [ "$?" -eq 10 ]; then
+    # 例外: コマンド全体が免除テンプレート (env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート
+    # 配下の repo への `git -C <ABS> commit ...` / `git -C <ABS> add ... &&
+    # git -C <ABS> commit ...`) に一致する場合は deny せず、lint も行わずに通す
+    # (テンプレート・対象 repo 検査は lib/isolated-commit-template.sh 参照)。判定器の
+    # 読み込みに失敗した場合は免除しない。判定器の変数・関数を本 hook に持ち込まない
+    # よう subshell で評価する。
+    # shellcheck source=lib/isolated-commit-template.sh
+    if ( source "$SCRIPT_DIR/lib/isolated-commit-template.sh" \
+      && isolated_commit_template_exempts "$COMMAND" ); then
       exit 0
     fi
     log_warn "block-commit-lint: repo override (-C / --git-dir / --work-tree / GIT_DIR= / cd 等) を伴う commit はサポート対象外。"
-    emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` / \`cd dir &&\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。使い捨ての隔離 repo への commit であれば、env \`CLAUDE_ISOLATED_GIT_ROOTS\` に許可ルート (コロン区切りの絶対パス) を設定すると、その配下の repo への commit は deny されず lint も行われません。"
+    emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` / \`cd dir &&\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。使い捨ての隔離 repo への commit であれば、env \`CLAUDE_ISOLATED_GIT_ROOTS\` に許可ルート (コロン区切りの絶対パス) を設定し、\`git -C <絶対パス> commit -m ...\` (または \`git -C <絶対パス> add ... && git -C <絶対パス> commit ...\`) の 1 行で実行すると、その配下の repo への commit は deny されず lint も行われません。"
     ;;
   4) exit 0 ;;  # 実 commit が走らない (dry-run / help / 非 command position の git 等)
   *)

@@ -112,7 +112,7 @@ pathspec の検出には Python の `shlex` でクォート対応トークン化
 **Edge case**:
 
 - `git -C dir commit` / `git --git-dir ... commit` / `git --work-tree ... commit` / `GIT_DIR=... git commit` のように global option / env-var で repo override する commit は、本フックが cwd の git を見るため対象 repo がズレます。`git -C . commit` のように cwd と一致する場合も静的に判別できず lint をすり抜ける経路になるため、これらの形式は **fail closed (deny) でブロック** します。対象 repo に `cd` してから別の Bash 呼び出しとして `git commit` を実行してください。
-  - 例外として、コマンド内の全ての commit が env `CLAUDE_ISOLATED_GIT_ROOTS` (コロン区切りの絶対パス) で指定した許可ルート配下の repo を対象とする場合は、repo override の deny を行わず、その commit の lint も行わずに通します。使い捨ての検証用 repo への commit を想定した免除で、許可ルートの書式・免除条件 (対象 dir と `git rev-parse --git-common-dir` の実パスが両方とも許可ルート配下であること、静的に解決できない形や `$(...)` を含むコマンドは deny のままであること等) は git-guardrails プラグインと同じ基準です。詳細は [git-guardrails README の「隔離 repo への commit の免除」](../git-guardrails/README.md#隔離-repo-への-commit-の免除-claude_isolated_git_roots) を参照してください。
+  - 例外として、コマンド全体が免除テンプレート (env `CLAUDE_ISOLATED_GIT_ROOTS` (コロン区切りの絶対パス) で指定した許可ルート配下の repo への `git -C <ABS> commit ...` / `git -C <ABS> add ... && git -C <ABS> commit ...` の 1 行) に一致する場合は、repo override の deny を行わず、その commit の lint も行わずに通します。使い捨ての検証用 repo への commit を想定した免除で、判定は git-guardrails プラグインと同じ判定器 (`hooks/scripts/lib/isolated-commit-template.sh`。git-guardrails 側が正本で、本プラグインは byte-identical なコピーを保持) で行います。受理される形・字句規則・対象 repo の検査は [git-guardrails README の「隔離 repo への commit の免除」](../git-guardrails/README.md#隔離-repo-への-commit-の免除-claude_isolated_git_roots) を参照してください。
 - `cd /other && git commit` のように同一コマンド内で cwd を切り替える形式も、`cd` 自体は本フックの検出対象外で、後段の `git commit` は cwd repo を対象として lint します (実行時には cwd が変わっているが hook はそれを認識できない)。同様に対象 repo に `cd` してから別の Bash 呼び出しで commit してください。
 - `git add path` で stage 後、その path を working tree でさらに変更してから `git commit` (path に対する `git add` を含まない) を実行した場合、本フックは「working tree 上書き」モードに入らないため staged blob (古い内容) を lint します。実害は少ないですが、認識ズレを避けるため commit 直前に再 stage することを推奨します。
 
@@ -223,8 +223,8 @@ auto-lint-check/
 │       └── lib/
 │           ├── common.sh
 │           ├── find-config-root.sh
+│           ├── isolated-commit-template.sh    # git-guardrails 正本の byte-identical コピー
 │           ├── build-lint-plan.py
-│           ├── check-isolated-commit-target.py
 │           ├── detect-new-ignores.py
 │           └── parse-commit-command.py
 └── README.md

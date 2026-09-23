@@ -1,8 +1,11 @@
 """隔離ルート (env CLAUDE_ISOLATED_GIT_ROOTS) 配下の repo への commit 免除の契約テスト。
 
 git-guardrails の commit hook (block-default-branch-commit.sh) と auto-lint-check の
-block-commit-lint.sh に PreToolUse JSON を stdin で渡し、許可ルート配下の repo だけを
-対象とする commit が免除され、それ以外は従来どおり deny されることを検査する。
+block-commit-lint.sh に PreToolUse JSON を stdin で渡し、コマンド全体が免除テンプレート
+(`git -C <ABS> commit ...` / `git -C <ABS> add ... && git -C <ABS> commit ...`) に
+一致し、対象が許可ルート配下の repo である commit だけが免除され、それ以外は従来どおり
+deny されることを検査する。判定器 (isolated-commit-template.sh) を bash で直接呼ぶ
+単体テストも含む。
 
 hook の cwd には許可ルート外に作る「実 repo 相当」(master 上) を使い、テストを実行する
 worktree 自身の git 状態に依存しない。
@@ -26,6 +29,7 @@ GG_PUSH_HOOK = GIT_GUARDRAILS_HOOK_DIR / "block-default-branch-push.sh"
 AL_COMMIT_HOOK = (
     ROOT / "plugins" / "auto-lint-check" / "hooks" / "scripts" / "block-commit-lint.sh"
 )
+GG_TEMPLATE_LIB = GIT_GUARDRAILS_HOOK_DIR / "lib" / "isolated-commit-template.sh"
 
 ISOLATED_ROOTS_ENV = "CLAUDE_ISOLATED_GIT_ROOTS"
 
@@ -180,19 +184,21 @@ class GitGuardrailsCommitHookIsolatedRootsTest(IsolatedGitRootsTestBase):
 
         self.assert_allowed(result)
 
-    def test_cd_then_commit_into_isolated_repo_is_allowed(self) -> None:
+    def test_cd_then_commit_into_isolated_repo_is_denied(self) -> None:
+        # `cd <dir> && git commit` は免除テンプレートに含まれない。
         result = self.run_hook(
             GG_COMMIT_HOOK,
             f"cd {self.iso_repo} && git commit -m x",
             roots=str(self.allowed_root),
         )
 
-        self.assert_allowed(result)
+        self.assert_denied(result)
 
-    def test_plain_commit_with_hook_cwd_in_isolated_repo_on_master_is_allowed(
+    def test_plain_commit_with_hook_cwd_in_isolated_repo_on_master_is_denied(
         self,
     ) -> None:
-        # 対象 dir = hook cwd (隔離 repo、master 上)。default branch 上 commit の deny も免除する。
+        # 免除テンプレートは `git -C <ABS>` を必須とするため、hook cwd が隔離 repo
+        # (master 上) でも素の `git commit` は従来どおり default branch 上 commit として deny。
         result = self.run_hook(
             GG_COMMIT_HOOK,
             "git commit -m x",
@@ -200,7 +206,7 @@ class GitGuardrailsCommitHookIsolatedRootsTest(IsolatedGitRootsTestBase):
             cwd=self.iso_repo,
         )
 
-        self.assert_allowed(result)
+        self.assert_denied(result)
 
     def test_root_given_as_symlink_allows_repo_under_its_target(self) -> None:
         root_link = self.base / "root-link"
@@ -407,7 +413,7 @@ class AutoLintBlockCommitLintIsolatedRootsTest(IsolatedGitRootsTestBase):
 
 
 class PrecedingSegmentsIsolatedRootsTest(IsolatedGitRootsTestBase):
-    """最後の commit より前に置けるのは `cd` と `git add` / `git commit` だけ。
+    """commit の前段に置けるのは、同じ対象への `git -C <ABS> add` (テンプレート T2) だけ。
 
     判定は hook 実行時点のファイルシステム状態で行うため、判定後・commit 前に対象 dir
     や repo レイアウトを差し替えうる前段コマンドがあれば免除しない (GG / AL 共通)。
@@ -466,6 +472,8 @@ class ExecutionTimeTargetDivergenceIsolatedRootsTest(IsolatedGitRootsTestBase):
     - redirection の fd 番号とパス末尾の数字の混同
     - `;` 区切りで cd が失敗したときに commit が元の cwd で実行される経路
     - git dir 内部の symlink によるルート外 repo への脱出
+
+    redirection・`;`・`cd` はいずれも免除テンプレートに含まれないため deny になる。
     """
 
     HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
@@ -526,7 +534,7 @@ class CommitRecognitionMismatchIsolatedRootsTest(IsolatedGitRootsTestBase):
     """hook と免除判定の commit 認識が食い違いうる形は免除しない (GG / AL 共通)。
 
     hook cwd は master 上の実 repo 相当。redirection はコマンド内のどの位置にあっても
-    免除しない。
+    免除テンプレートに一致しない。
     """
 
     HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
@@ -555,31 +563,17 @@ class CommitRecognitionMismatchIsolatedRootsTest(IsolatedGitRootsTestBase):
             f"git -C {self.iso_repo} commit -m x && git log 2>&1"
         )
 
-    def test_exemption_requires_hook_commit_count_to_match(self) -> None:
-        # 免除判定は hook が検出した commit invocation の件数を受け取り、自身の認識と
-        # 一致する場合だけ免除する。
-        lib_dir = GIT_GUARDRAILS_HOOK_DIR / "lib"
-        script = (
-            f'source "{lib_dir}/cmd-parser.sh" && '
-            f'source "{lib_dir}/default-branch.sh" && '
-            f'source "{lib_dir}/isolated-roots.sh" && '
-            'command_commits_only_to_isolated_roots "$1" "$2" "$3"'
-        )
-        command = f"git -C {self.iso_repo} commit -m x"
+    def test_exemption_requires_exactly_one_commit_invocation(self) -> None:
+        # 免除判定器は commit invocation がちょうど 1 つのテンプレートだけを免除する。
+        # commit が無い・2 つ以上あるコマンドは免除しない。
+        script = f'source "{GG_TEMPLATE_LIB}" && isolated_commit_template_exempts "$1"'
         env = dict(self.env)
         env[ISOLATED_ROOTS_ENV] = str(self.allowed_root)
+        iso = self.iso_repo
 
-        def exemption_status(expected_count: str) -> int:
+        def exemption_status(command: str) -> int:
             return subprocess.run(
-                [
-                    "bash",
-                    "-c",
-                    script,
-                    "bash",
-                    command,
-                    str(self.real_repo),
-                    expected_count,
-                ],
+                ["bash", "-c", script, "bash", command],
                 cwd=str(self.real_repo),
                 check=False,
                 stdout=subprocess.PIPE,
@@ -588,10 +582,13 @@ class CommitRecognitionMismatchIsolatedRootsTest(IsolatedGitRootsTestBase):
                 timeout=60,
             ).returncode
 
-        self.assertEqual(0, exemption_status("1"))
-        for mismatched in ("0", "2", ""):
-            with self.subTest(expected_count=mismatched):
-                self.assertEqual(1, exemption_status(mismatched))
+        self.assertEqual(0, exemption_status(f"git -C {iso} commit -m x"))
+        for command in (
+            f"git -C {iso} add f",
+            f"git -C {iso} commit -m a && git -C {iso} commit -m b",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(1, exemption_status(command))
 
 
 class SingleLineAndNestedRefIsolatedRootsTest(IsolatedGitRootsTestBase):
@@ -629,6 +626,200 @@ class SingleLineAndNestedRefIsolatedRootsTest(IsolatedGitRootsTestBase):
         )
 
         self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
+
+
+# 免除テンプレートに一致する入力 ({I} は対象 dir、{F} は -F に渡す絶対パスに置換する)。
+TEMPLATE_ALLOW_CASES = (
+    "git -C {I} commit -m 'msg'",
+    'git -C {I} commit -m "msg with spaces"',
+    "git -C {I} commit -m msg",
+    "git -C {I} commit -m ''",
+    "git -C {I} commit -m fix:a@b%c+d=e,f",
+    "git -C {I} commit -F {F}",
+    "git -C {I} commit --allow-empty -m x",
+    "git -C {I} commit -a -m x",
+    "git -C {I} commit -m x --all -q --quiet --no-verify -n --allow-empty-message",
+    "git -C {I} commit -m a -m 'b c' -F {F}",
+    "git -C {I} add -A && git -C {I} commit -m x",
+    "git -C {I} add path/to/f && git -C {I} commit -m x",
+    "git -C {I} add . --all f.txt && git -C {I} commit -m x",
+    "  git   -C\t{I}  commit  -m x  ",
+)
+
+# 免除テンプレートに一致しない入力 ({I} / {F} は同上、{O} はルート外 repo)。
+TEMPLATE_DENY_CASES = (
+    "/usr/bin/git -C {I} commit -m x",
+    "'git' -C {I} commit -m x",
+    "git -c a.b=c -C {I} commit -m x",
+    "git -C {I} -c a.b=c commit -m x",
+    "git -C {I} -C {I} commit -m x",
+    "FOO=1 git -C {I} commit -m x",
+    "git -C {I} add f && git -C {I}2 commit -m x",
+    "git -C {I} commit -am x",
+    "git -C {I} commit --author=x -m y",
+    "git -C {I} commit --message=x",
+    "git -C {I} commit",
+    "git -C {I} commit --allow-empty",
+    "git -C {I} commit -m",
+    "git -C {I} commit -F relative.txt",
+    "git -C {I} add -f x && git -C {I} commit -m y",
+    "git -C {I} add ../x && git -C {I} commit -m y",
+    "git -C {I} add /abs/x && git -C {I} commit -m y",
+    "git -C {I} add f && git -C {I} add g && git -C {I} commit -m x",
+    "git -C {I} add f || git -C {I} commit -m x",
+    "git -C {I} commit -m x && git -C {I} commit -m y",
+    'git -C {I} commit -m "a$b"',
+    'git -C {I} commit -m "a!b"',
+    'git -C {I} commit -m "a\\b"',
+    'git -C {I} commit -m "a`id`"',
+    "git -C {I} commit -m 'a'b",
+    "git -C {I} commit -m a'b'",
+    "git -C '{I}' commit -m x",
+    'git -C "{I}" commit -m x',
+    "git -C {I}/../iso commit -m x",
+    "git -C {I}/. commit -m x",
+    "git -C relative/iso commit -m x",
+    "git -C {I} commit -m 'a\nb'",
+    "git -C {I} commit -m x;",
+    "git -C {I} commit -m x &",
+    "git -C {I} commit -m x | cat",
+    "git -C {I} commit -m x > /dev/null",
+    "git -C {I} commit -m x # c",
+    "git -C {I} commit -m $(id)",
+    "git -C {I} commit -m ~x",
+    "git -C {I} commit -m x&&git -C {I} commit -m y",
+    "git -C {I} add f &&git -C {I} commit -m x",
+    "cd {I} && git commit -m x",
+    "git -C {I} -c x.y=z$IFS--git-dir={O}/.git commit -m x",
+    "git -C {I} commit -m x && bash -c 'git -C {O} commit -m y'",
+    "git -C {I} commit -m x && git -C {O} commit -am --dry-run",
+)
+
+# commit invocation を含まないため、hook end-to-end では検査対象外 (hook が素通しする)。
+TEMPLATE_DENY_CASES_WITHOUT_COMMIT = frozenset({"git -C {I} add f"})
+
+
+@unittest.skipUnless(shutil.which("bash"), "template judge requires bash")
+class IsolatedCommitTemplateLexicalTest(unittest.TestCase):
+    """判定器 `isolated_commit_template_target` を bash で直接呼ぶ字句規則の単体テスト。
+
+    ファイルシステムを見ない関数なので、実在しない絶対パスで検査する。
+    """
+
+    ISO = "/tmp/isolated-root/iso"
+    MESSAGE_FILE = "/tmp/isolated-root/msg.txt"
+    OUTSIDE = "/tmp/outside/repo"
+
+    def target(self, command: str) -> subprocess.CompletedProcess[str]:
+        script = f'source "{GG_TEMPLATE_LIB}" && isolated_commit_template_target "$1"'
+        return subprocess.run(
+            ["bash", "-c", script, "bash", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def fill(self, template: str) -> str:
+        return (
+            template.replace("{I}", self.ISO)
+            .replace("{F}", self.MESSAGE_FILE)
+            .replace("{O}", self.OUTSIDE)
+        )
+
+    def test_template_allow_cases_print_the_target_dir(self) -> None:
+        for template in TEMPLATE_ALLOW_CASES:
+            command = self.fill(template)
+            with self.subTest(command=command):
+                result = self.target(command)
+
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(f"{self.ISO}\n", result.stdout)
+
+    def test_template_deny_cases_do_not_match(self) -> None:
+        for template in (*TEMPLATE_DENY_CASES, *TEMPLATE_DENY_CASES_WITHOUT_COMMIT):
+            command = self.fill(template)
+            with self.subTest(command=command):
+                result = self.target(command)
+
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertEqual("", result.stdout)
+
+
+class IsolatedCommitTemplateHookTest(IsolatedGitRootsTestBase):
+    """免除テンプレートの hook end-to-end (allow は GG / AL、deny は GG)。"""
+
+    HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.message_file = self.base / "message.txt"
+        self.message_file.write_text("message\n", encoding="utf-8")
+
+    def fill(self, template: str) -> str:
+        return (
+            template.replace("{I}", str(self.iso_repo))
+            .replace("{F}", str(self.message_file))
+            .replace("{O}", str(self.outside_repo))
+        )
+
+    def test_template_allow_cases_are_exempted_by_both_hooks(self) -> None:
+        for template in TEMPLATE_ALLOW_CASES:
+            command = self.fill(template)
+            for hook in self.HOOKS:
+                with self.subTest(hook=hook.name, command=command):
+                    result = self.run_hook(hook, command, roots=str(self.allowed_root))
+
+                    self.assert_allowed(result)
+
+    def test_template_deny_cases_are_denied_by_commit_hook(self) -> None:
+        for template in TEMPLATE_DENY_CASES:
+            command = self.fill(template)
+            with self.subTest(command=command):
+                result = self.run_hook(
+                    GG_COMMIT_HOOK, command, roots=str(self.allowed_root)
+                )
+
+                self.assert_denied(result)
+
+
+class CodexConfirmedBypassIsolatedRootsTest(IsolatedGitRootsTestBase):
+    """免除判定をすり抜けることが実確認された形は免除しない (GG / AL 共通)。"""
+
+    HOOKS = (GG_COMMIT_HOOK, AL_COMMIT_HOOK)
+
+    def assert_denied_by_both_hooks(self, command: str) -> None:
+        for hook in self.HOOKS:
+            with self.subTest(hook=hook.name, command=command):
+                result = self.run_hook(hook, command, roots=str(self.allowed_root))
+
+                reason = self.deny_reason(result)
+                if hook == AL_COMMIT_HOOK:
+                    self.assertIn("repo override", reason)
+
+    def test_config_value_with_ifs_switching_git_dir_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} -c x.y=z$IFS--git-dir="
+            f"{self.outside_repo}/.git commit -m x"
+        )
+
+    def test_command_after_isolated_commit_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} commit -m x && "
+            f"bash -c 'git -C {self.outside_repo} commit -m y'"
+        )
+
+    def test_background_commit_with_concurrent_command_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} commit -m x & "
+            f"mv {self.iso_repo} {self.base / 'moved'}"
+        )
+
+    def test_attached_all_flag_misread_as_dry_run_is_denied(self) -> None:
+        self.assert_denied_by_both_hooks(
+            f"git -C {self.iso_repo} commit -m x && "
+            f"git -C {self.outside_repo} commit -am --dry-run"
+        )
 
 
 if __name__ == "__main__":

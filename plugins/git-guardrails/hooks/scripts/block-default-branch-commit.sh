@@ -14,9 +14,10 @@
 #     自前防御で、pre-push-review プラグインへの依存はない)。
 #
 # 免除対象:
-#   - 全ての commit invocation が env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の
-#     repo を対象とするコマンド (判定は lib/isolated-roots.sh の
-#     `command_commits_only_to_isolated_roots`)
+#   - コマンド全体が免除テンプレート (env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の
+#     repo への `git -C <ABS> commit ...` / `git -C <ABS> add ... && git -C <ABS> commit ...`)
+#     に一致するもの (判定は lib/isolated-commit-template.sh の
+#     `isolated_commit_template_exempts`)
 #
 # detached HEAD (cherry-pick 中・rebase 中など) では通す: ブランチ名が空文字列で
 # is_default_branch は false 判定になるため、自然に exit 0 経路に流れる。
@@ -77,8 +78,7 @@ _jq_status=$?
 # cmd-parser.sh の「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
 case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
-# 隔離ルート免除の判定は、改行 (行継続を含む) と redirection (heredoc `<<EOF` を含む) の
-# 有無を元のコマンドで見て、パスも元の token のまま解決する必要があるため、行継続・
+# 隔離ルート免除の判定はコマンド全体を元の文字列のままテンプレートと照合するため、行継続・
 # redirection の正規化前のコマンドを残しておく。
 COMMAND_BEFORE_NORMALIZATION="$COMMAND"
 
@@ -110,10 +110,10 @@ require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
   strip_quoted_text strip_squoted_text find_group_close emit_deny \
   has_target_mismatch_prefix || exit $?
 
-# shellcheck source=lib/isolated-roots.sh
-source "$SCRIPT_DIR/lib/isolated-roots.sh" || exit $?
+# shellcheck source=lib/isolated-commit-template.sh
+source "$SCRIPT_DIR/lib/isolated-commit-template.sh" || exit $?
 require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
-  normalize_shell_word_syntax command_commits_only_to_isolated_roots || exit $?
+  isolated_commit_template_exempts || exit $?
 
 # コマンドを segment (top-level `;`/`&&`/`||`/`&`/`|`/改行区切り) に分割する。
 # SEPARATORS は本 hook では使わないため配列化せず読み捨てる。
@@ -301,14 +301,13 @@ if [ "${#COMMIT_INVOCATION_INDICES[@]}" -eq 0 ]; then
   exit 0
 fi
 
-# 全ての commit invocation が env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の repo を
-# 対象とする場合は、target-mismatch deny と default branch 上 commit の deny の両方を
-# 免除する。1 つでも免除条件を満たさない invocation があれば、以降の従来判定に進む
-# (免除条件・静的解決の規則・fail-closed 条件は lib/isolated-roots.sh 参照)。本 hook が
-# 検出した commit invocation の件数を渡し、免除判定側の認識と一致しなければ免除しない。
-if command_commits_only_to_isolated_roots \
-  "$COMMAND_BEFORE_NORMALIZATION" "$PWD" \
-  "${#COMMIT_INVOCATION_INDICES[@]}"; then
+# コマンド全体が免除テンプレート (env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の
+# repo への `git -C <ABS> commit ...` / `git -C <ABS> add ... && git -C <ABS> commit ...`)
+# に一致する場合は、target-mismatch deny と default branch 上 commit の deny の両方を
+# 免除する (テンプレート・対象 repo 検査・fail-closed 条件は lib/isolated-commit-template.sh
+# 参照)。本 hook が検出した commit invocation が 1 件であることも補助的に要求する。
+if [ "${#COMMIT_INVOCATION_INDICES[@]}" -eq 1 ] \
+  && isolated_commit_template_exempts "$COMMAND_BEFORE_NORMALIZATION"; then
   exit 0
 fi
 

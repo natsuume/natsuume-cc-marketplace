@@ -442,4 +442,4 @@ readonly TARGET_MISMATCH_DENY_REASON='デフォルトブランチ保護フック
   - 対象 repo を切り替える: `cd <dir> && ...` / `git -C <dir> ...` / `GIT_DIR=...`
   - 対象 branch を切り替える: `git switch master && ...` / `git checkout main && ...`
 これらは保守的に deny します。対象 repo / branch へ切り替えた後、別の Bash 呼び出しとして実コマンドを実行してください (master/main 上の commit / push / PR 作成は他の guardrail でも引き続き deny されます)。
-使い捨ての隔離 repo への commit であれば、env `CLAUDE_ISOLATED_GIT_ROOTS` に許可ルート (コロン区切りの絶対パス) を設定すると、その配下の repo への commit は免除されます (commit のみ。push / PR 作成は対象外)。'
+使い捨ての隔離 repo への commit であれば、env `CLAUDE_ISOLATED_GIT_ROOTS` に許可ルート (コロン区切りの絶対パス) を設定し、`git -C <絶対パス> commit -m ...` (または `git -C <絶対パス> add ... && git -C <絶対パス> commit ...`) の 1 行で実行すると、その配下の repo への commit は免除されます (commit のみ。push / PR 作成は対象外)。'

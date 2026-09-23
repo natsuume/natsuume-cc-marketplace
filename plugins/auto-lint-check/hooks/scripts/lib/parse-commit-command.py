@@ -527,16 +527,7 @@ def _commit_triggers_staging(toks: list[str], sub_idx: int) -> bool:
     return False
 
 
-def _collect_invocations(
-    command: str,
-) -> tuple[list[str], list[tuple[str, int, bool]]] | int:
-    """raw command をトークン化し、command position の git invocation を抽出する。
-
-    戻り値は (トークン列, [(subcommand, subcommand の index, repo override 有無)])。
-    解析前に結論が決まる場合は ``_classify`` の exit code (substitution / wrapper
-    等は 3、トークン化失敗は 2) を int で返す。check-isolated-commit-target.py も
-    commit invocation の件数照合に本関数を共有する。
-    """
+def _classify(command: str) -> int:
     # 1) raw command を tokenize 可能な形に正規化する (heredoc 除去 → 行継続展開
     # → 改行 → ;)。詳細は _normalize_command の docstring を参照。
     command = _normalize_command(command)
@@ -657,15 +648,6 @@ def _collect_invocations(
         invocations.append((sub, sub_idx, has_override))
         i = sub_idx + 1
         at_command_position = False
-
-    return toks, invocations
-
-
-def _classify(command: str) -> int:
-    collected = _collect_invocations(command)
-    if isinstance(collected, int):
-        return collected
-    toks, invocations = collected
 
     # Phase 2: invocation 列を解析。`add` / `stage` で repo override がないもの
     # は cwd repo の staging trigger としてフラグ立て (後続の cwd commit で
