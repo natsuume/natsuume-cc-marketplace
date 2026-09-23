@@ -4,7 +4,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.6.7
+v0.7.1
 
 ## 概要
 
@@ -41,6 +41,7 @@ claude plugin install git-guardrails@natsuume-plugins
 - master/main なら deny、それ以外なら exit 0
 - detached HEAD (cherry-pick / rebase 中など) はブランチ名が空なので自然に通る
 - **chained 形式**: `git commit -m a && cd /other && git commit -m b` のように複数の commit を連結したコマンドは、各 commit 呼び出しを独立に target-mismatch 検査します。最初の commit が問題なくても、その後の cd で対象 repo を切り替えて 2 つ目の commit を行う経路は detect されて deny
+- **隔離ルートの免除**: コマンド全体が免除テンプレート (env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の repo への `git -C <ABS> commit ...` / `git -C <ABS> add ... && git -C <ABS> commit ...`) に一致する場合は、target-mismatch の deny と master/main 上 commit の deny の両方を行わずに通します (条件は「[隔離 repo への commit の免除](#隔離-repo-への-commit-の免除-claude_isolated_git_roots)」参照)
 
 **deny 例**:
 
@@ -123,6 +124,96 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 - 「master/main を取り込む」
 - 「ブランチを最新にしたい」
 
+## 隔離 repo への commit の免除 (`CLAUDE_ISOLATED_GIT_ROOTS`)
+
+**目的**: Claude Code の Bash は呼び出しごとに cwd が戻るため、scratchpad 等に作った使い捨ての検証用 repo へ commit するには `git -C <dir> commit` の形が必要になります。block-default-branch-commit はこの形を対象 repo に関わらず target-mismatch として deny するため、利用者が明示した「隔離ルート」配下の repo への commit に限り、決まった形 (免除テンプレート) で書かれたコマンドだけを検査から免除します。
+
+**書式**: env `CLAUDE_ISOLATED_GIT_ROOTS` に、PATH と同じコロン区切りで絶対パスを列挙します。
+
+- 未設定・空なら免除は一切行いません (従来どおりの判定)
+- 空文字 entry・相対パス entry・存在しないディレクトリの entry は無視します
+- 各 entry は symlink を解決した実パス (canonical 実パス) に変換して比較します。macOS の `/tmp` → `/private/tmp` のような symlink を含むパスを指定しても実体で判定されます
+
+**受理される形 (免除テンプレート)**: Bash コマンド文字列 **全体** が次のどちらかに完全一致する場合だけ免除の対象になります。それ以外の形は全て従来どおり判定されます。
+
+- T1: `git -C <ABS> commit <COMMIT_ARGS>`
+- T2: `git -C <ABS> add <ADD_ARGS> && git -C <ABS> commit <COMMIT_ARGS>` (2 つの `<ABS>` は文字列として完全一致)
+
+例:
+
+```bash
+git -C /tmp/claude-sandbox/repo commit -m 'test commit'
+git -C /tmp/claude-sandbox/repo add -A && git -C /tmp/claude-sandbox/repo commit -m "add fixture"
+git -C /tmp/claude-sandbox/repo commit --allow-empty -F /tmp/claude-sandbox/message.txt
+```
+
+**字句規則**:
+
+- コマンドは 1 行 (改行 LF / CR を含まない) であること。複数行の commit メッセージは、別の Bash 呼び出しでファイルに書き出して `-F <file>` で渡してください
+- 語の区切りは空白 (スペース / タブ) の 1 個以上。先頭・末尾の空白は許容します
+- command word は `git` だけです (`/usr/bin/git` 等のパス指定・環境変数代入の前置は不可)。`git` の直後に置けるのは `-C <ABS>` 1 つだけです (`-c`・追加の `-C`・その他の global option は不可)
+- `git` / `-C` / `commit` / `add` / 各フラグは quote なしで書きます
+- 区切り演算子は T2 の `&&` 1 つだけです (前後に空白が必要)。`;` `|` `&` `||` `(` `)` `{` `}` `<` `>` `#` `$` バッククォート `\` 等を quote 外に含む形は一致しません
+- `<ABS>`: quote なしの絶対パスで `^/[A-Za-z0-9._/-]+$` に一致し、`/./`・`/../`・末尾の `/..`・末尾の `/.` を含まないもの
+- メッセージの語 (LIT) は次のいずれか 1 形式だけから成る語です (`'a'b` のような形式の結合は不可)
+  - `'...'` (内部に `'` を含まない)
+  - `"..."` (内部に `"` `$` バッククォート `\` `!` を含まない)
+  - quote なしで `^[A-Za-z0-9._/:@%+=,-]+$` に一致する語
+
+**COMMIT_ARGS** (1 個以上。順序自由。`-m` か `-F` が少なくとも 1 つ必要):
+
+| 形 | 説明 |
+|---|---|
+| `-m <LIT>` | メッセージ (`--message=...` 形は不可) |
+| `-F <ABS>` | メッセージファイル (絶対パス) |
+| `--allow-empty` / `--allow-empty-message` / `-q` / `--quiet` / `-a` / `--all` / `--no-verify` / `-n` | 単体フラグ (`-am` のような結合は不可) |
+
+これ以外のオプション (`--author=...`・`--amend` 等) を含む形は一致しません。
+
+**ADD_ARGS** (1 個以上):
+
+| 形 | 説明 |
+|---|---|
+| `-A` / `--all` / `.` | 全体の stage |
+| 相対パス | quote なしで `^[A-Za-z0-9._/-]+$` に一致し、`-` / `/` で始まらず `..` 要素を含まないもの |
+
+`-f` 等のオプションや `../x`・絶対パスを含む形は一致しません。
+
+**使えない形**: `cd <dir> && git commit ...`・hook の cwd が隔離 repo であるときの素の `git commit`・`$(...)` を含む形 (`git commit -m "$(cat <<'EOF' ... EOF)"` を含む)・redirection 付きの形・後続コマンドを連結した形などは免除されません。隔離 repo への commit は、必ず `git -C <ABS>` を付けた上記テンプレートの 1 行で実行してください。
+
+**対象 repo の検査**: テンプレートに一致した上で、次がいずれも許可ルートの配下にある場合だけ免除します。「配下」はパス境界で判定し、ルート自身も配下に含みます (`/a/b` を許可すると `/a/b` と `/a/b/c` は配下、`/a/bc` は配下ではありません)。
+
+- `<ABS>` の canonical 実パス
+- `<ABS>` で `git rev-parse --git-common-dir` / `--git-dir` が返す repo 本体・git dir (linked worktree では worktree 固有の git dir) の canonical 実パス (許可ルート配下に置いた linked worktree や symlink 経由で、ルート外の repo を更新する経路は免除しません)
+- repo 本体直下の `refs` / `objects` / `HEAD` / `packed-refs` / `logs` / `reftable` と、git dir (linked worktree では worktree 固有の git dir、通常の repo では repo 本体) 直下の `HEAD` / `index` / `reftable` のうち存在するものの実体 (ディレクトリは symlink を解決した実パスで判定し、ファイル自体が symlink の場合は免除しません)
+- repo 本体と git dir の直下 (ドットで始まる名前を含む) に symlink が 1 つも無い (指す先が許可ルート内でも免除しません。commit が書き込む `COMMIT_EDITMSG` や `logs` 等を symlink 経由で許可ルート外へ書き込む経路をまとめて塞ぐため)
+- branch ref の格納先。repo の ref 格納形式 (`git rev-parse --show-ref-format`。このオプションに対応しない古い git では files とみなします) で判定を分けます
+  - files 形式: HEAD が指す branch の ref (`git symbolic-ref -q HEAD` の ref 名。例 `refs/heads/master`) の格納先ディレクトリ (未作成なら存在する最も近い祖先。ref ファイル自体が symlink の場合は免除しません。detached HEAD では branch を更新しないため検査しません)。ref ファイルのパスは `git rev-parse --git-path <ref名>` で解決します (linked worktree の `refs/worktree/*` 等、worktree 固有の ref は common dir ではなく worktree の git dir 側に格納されるため)
+  - reftable 形式: repo 本体直下の `reftable` ディレクトリ (存在しない場合は免除しません)
+  - それ以外の形式: 免除しません
+- 上記のパスや git の出力が改行 (LF / CR) を含む場合は免除しません (名前が改行で終わるディレクトリを、改行を落とした別のパスとして検証しないため)
+
+また、hook の実行環境に `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` / `GIT_OBJECT_DIRECTORY` / `GIT_ALTERNATE_OBJECT_DIRECTORIES` / `GIT_CONFIG_PARAMETERS` / `GIT_CONFIG_COUNT` のいずれかが設定されている場合は免除しません。block-default-branch-commit は、自身が検出した commit 呼び出しが 1 件であることも併せて要求します。
+
+**免除範囲**: 免除するのは block-default-branch-commit (target-mismatch の deny と master/main 上 commit の deny) だけです。block-default-branch-push / block-default-branch-pr の判定は変わらず、`git -C <隔離 repo> push` 等は従来どおり deny されます。auto-lint-check プラグインの block-commit-lint も、同じ判定器 (`isolated-commit-template.sh` の byte-identical なコピー) で repo override の deny を免除します。
+
+**設定例** (`~/.claude/settings.json` などの `env`):
+
+```json
+{
+  "env": {
+    "CLAUDE_ISOLATED_GIT_ROOTS": "/tmp/claude-sandbox:/home/me/scratch-repos"
+  }
+}
+```
+
+許可ルートには、使い捨ての検証用 repo だけを置く専用ディレクトリを指定してください。実プロジェクトの repo を含むディレクトリ (ホームディレクトリ全体等) を指定すると、その配下の repo の default branch 保護 (commit) が外れます。
+
+**既知の制約**:
+
+- `objects` / `logs` 配下の深い階層にある symlink は検査しません (これらを経由しても branch は動かないため)
+- 判定は hook 実行時点のファイルシステム状態で行います。commit と並行して別の Bash 呼び出しが対象 repo を差し替える状況は想定していません
+
 ## 共通 lib
 
 3 つの hook (`block-default-branch-{commit,push,pr}.sh`) が source する共有ライブラリ:
@@ -132,6 +223,7 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 | `hooks/scripts/lib/default-branch.sh` | デフォルトブランチ名集合 (`master`/`main`) と、`is_default_branch` / `current_branch` / `strip_shell_quotes` / `normalize_refspec_part` / `strip_quoted_text` / `strip_squoted_text` (v0.4.0 追加。single quote 領域のみ空白化し dquote 内容は残す。dquote 内 command substitution の opener-anchored 検出用) / `emit_deny` / `has_target_mismatch_prefix` の関数群 + `readonly TARGET_MISMATCH_DENY_REASON` を集約。3 hook が source して使う |
 | `hooks/scripts/lib/cmd-parser.sh` | pre-push-review から **byte-identical でベンダリング** している共有パーサ。v0.4.0 以降、git-guardrails の 3 hook は `normalize_line_continuations_to_space` に加えて `split_command` / `tokenize_segment` / `skip_env_assignments` / `unquote_token` も実際に使用する (segment/token ベースの invocation 検出のため)。canonical 実装とのドリフト防止のためファイル全体を丸ごとベンダリングしている (ヘッダコメントが pre-push-review を指すのはこのため) |
 | `hooks/scripts/lib/exit-trap.sh` | 予期せぬ非ゼロ終了を stderr に可視化する `install_exit_trap`。3 hook が冒頭で呼ぶ (#61) |
+| `hooks/scripts/lib/isolated-commit-template.sh` | env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の repo への commit を免除するかの判定器 (公開関数 `isolated_commit_template_exempts` / `isolated_commit_template_target`)。他の lib に依存しない自己完結ファイルで、block-default-branch-commit だけが source する。本ファイルが正本で、auto-lint-check が byte-identical なコピーを保持する |
 
 ## 既知の制約 (cooperative 利用前提)
 
@@ -172,7 +264,8 @@ git-guardrails/
 │       └── lib/
 │           ├── default-branch.sh
 │           ├── cmd-parser.sh    # pre-push-review から byte-identical ベンダリング
-│           └── exit-trap.sh
+│           ├── exit-trap.sh
+│           └── isolated-commit-template.sh    # auto-lint-check が byte-identical コピーを保持
 ├── skills/
 │   └── rebase-workflow/
 │       └── SKILL.md

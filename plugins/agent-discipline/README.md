@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.28.0
+v0.29.0
 
 ## 概要
 
@@ -368,11 +368,29 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 - **引数**: なし。**実行位置**: リポジトリルートを前提とする (それ以外や前提ファイル欠如は fail-closed で exit 1)。**依存**: `jq` (CI・ローカルとも前提。不在時は明確なエラーメッセージで exit 1)。**exit code**: 全チェック (1〜5) pass で 0、いずれか fail または実行時エラーで 1
 - POSIX sh (`#!/bin/sh`) で記述しており `dash` でも動作する。ローカルでリポジトリルートから直接実行できる (`./plugins/agent-discipline/scripts/lint-prompt-sync.sh`)
 
+#### lint-payload-size.sh
+
+**ファイル**: `scripts/lint-payload-size.sh` (plugin 直下、`hooks/` 配下ではない)
+**呼び出し元**: `.github/workflows/agent-discipline-prompt-lint.yml`
+
+**目的**: Claude Code は hook の `additionalContext` 1 要素が inline 閾値 (約 9〜10K 文字) を超えると本文をファイルへ退避し、先頭 2KB のプレビューしか context に載せません。これを防ぐため、`additionalContext` を出力する全注入スクリプトを模擬 hook input で実際に実行し、各要素の文字数を実測して 8,000 字以下に保たれていることを検査します。prompt ファイル単体の静的サイズではなくスクリプトの実出力を測るため、前置き・連結・分岐といった組み立てロジックの変更にも自動で追従します。
+
+**動作**:
+
+- **対象と分岐**: 対象スクリプト × 分岐 × 期待 (出力あり / 出力なし) の対応表をスクリプト内定数 `CASE_TABLE` として持つ。対象は `inject-always.sh` / `inject-rules-part.sh` (part 2・part 3) / `inject-discipline.sh` / `resolve-model-on-prompt.sh` / `inject-temporary.sh` / `inject-subagent-rules.sh` / `inject-auto.sh` / `check-uncommitted-on-session-start.sh` / `update-model-on-switch.sh`。モデル分岐 (fable / sonnet / opus / その他 / 判定不能) と one-shot 補正経路を含む、要素を出力しうる全分岐を検査する。`inject-temporary.sh` は `hooks/prompts/temporary/*.md` の実在ファイルを連結した現物を測り、temporary md が 0 件なら「出力なし」を期待する
+- **閾値 (2 段階)**: 要素が 8,000 字 (`PAYLOAD_LIMIT_CHARS`) を超えたら FAIL (exit 1)。7,800 字 (`PAYLOAD_WARN_CHARS`) を超え 8,000 字以下なら WARN を出すが exit code には影響しない。文字数は Unicode code point 数 (`wc -m` を UTF-8 ロケールで実行した値と同じ) で数える
+- **fail-closed**: 対応表で「出力あり」の分岐で出力が無い・JSON として parse できない・`additionalContext` が空、「出力なし」の分岐で出力がある、対象スクリプトが exit 0 以外で終わる、といった場合はサイズ 0 として pass させず FAIL にする。加えて、`hooks.json` の `type: command` エントリと対応表 (と検査対象外リスト `EXCLUDED_SCRIPTS`) を照合し、注入スクリプトの追加・登録解除に対応表が追従していない場合も FAIL にする
+- **隔離**: `mktemp -d` の隔離ディレクトリをケースごとの `TMPDIR` として対象スクリプトを実行し、実システムの `${TMPDIR:-/tmp}/agent-discipline-state` には読み書きしない。隔離ディレクトリは終了時に削除する
+- **引数**: なし。**実行位置**: リポジトリルート。**依存**: `jq` / `git` / `bash`。**exit code**: 全ケース pass (WARN のみを含む場合も) で 0、FAIL が 1 件以上または前提エラーで 1
+- **出力**: ケースごとに `OK:` / `WARN:` / `FAIL:` + 対象スクリプト・ケース ID・実測値 (または不成立理由) を 1 行で出す
+- **実行**: `./plugins/agent-discipline/scripts/lint-payload-size.sh`。POSIX sh で記述しており `dash` でも動作する。`inject-always.sh` のランタイム 8K ガードと同じ判定にするため UTF-8 ロケールで実行する
+- **スコープ外**: prompts ディレクトリの絶対パスや cwd・git status 行など実行環境に依存する可変部の長さは、lint 実行環境のパスと fixture で測った値のみを検査する。`inject-always.sh` はランタイム 8K ガードの適用後の実出力を測る
+
 #### agent-discipline-prompt-lint (workflow)
 
 **ファイル**: `.github/workflows/agent-discipline-prompt-lint.yml`
 
-`always-fable.md` / `always-sonnet-{1,2,3}.md` / `hooks.json` / `discipline-fable.md` / `discipline-sonnet.md` / `discipline-opus.md` / `subagent-rules.md` / lint スクリプト自身 / 本 workflow 自身のいずれかが変更された `push` (master 向け) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `actions/checkout@v4` の後に `lint-prompt-sync.sh` を実行する。ubuntu-latest には `jq` が標準搭載されているため追加のセットアップ step は無い。
+`always-fable.md` / `always-sonnet-{1,2,3}.md` / `hooks.json` / `discipline-fable.md` / `discipline-sonnet.md` / `discipline-opus.md` / `subagent-rules.md` / `hooks/prompts/` 配下の全 md (`temporary/` を含む) / `hooks/scripts/` 配下の全ファイル / lint スクリプト 2 本 / 本 workflow 自身のいずれかが変更された `push` (master 向け) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `actions/checkout@v4` の後に `lint-prompt-sync.sh` と `lint-payload-size.sh` を実行する。ubuntu-latest には `jq` と `git` が標準搭載されているため追加のセットアップ step は無い。
 
 ## 旧 plugin との関係 (移行ガイド)
 
@@ -457,19 +475,20 @@ agent-discipline/
 │   └── issue-start/
 │       └── SKILL.md
 ├── scripts/
+│   ├── lint-payload-size.sh
 │   └── lint-prompt-sync.sh
 └── README.md
 ```
 
 `always-sonnet-1.md` / `always-sonnet-2.md` / `always-sonnet-3.md` は issue #236 (v0.15.0) で単一ファイル `always-sonnet.md` を rule 境界で 3 分割したもの。`delivery-note.md` / `part-self-gate.md` も同 issue で新設した (それぞれ SessionStart / UserPromptSubmit の自己ゲート・配送前置き用)。`temporary/` は問題修正までの一時規律ディレクトリで、中身の md を削除すると注入が消える (v0.12.0)。
 
-`.github/workflows/agent-discipline-prompt-lint.yml` (リポジトリ直下、plugin 配布に含まれない CI 専用 workflow) が `scripts/lint-prompt-sync.sh` を呼び出します。
+`.github/workflows/agent-discipline-prompt-lint.yml` (リポジトリ直下、plugin 配布に含まれない CI 専用 workflow) が `scripts/lint-prompt-sync.sh` と `scripts/lint-payload-size.sh` を呼び出します。
 
 ## 必要な実行環境
 
 - `bash`
 - `jq`
-- POSIX `sh` (`lint-prompt-sync.sh` の実行、CI (`ubuntu-latest`) およびローカル)
+- POSIX `sh` (`lint-prompt-sync.sh` / `lint-payload-size.sh` の実行、CI (`ubuntu-latest`) およびローカル)
 - `git` (check-uncommitted-on-session-start.sh の worktree 解決)
 
 ## 関連プラグイン

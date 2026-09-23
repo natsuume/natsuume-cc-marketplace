@@ -14,35 +14,35 @@
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
       "description": "GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する。",
-      "version": "0.6.7",
+      "version": "0.7.1",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
       "name": "enforce-draft-pr",
       "source": "./plugins/enforce-draft-pr",
       "description": "gh pr create に --draft を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft で作成させ、レビューを経て ready 化する運用を支える。",
-      "version": "0.5.4",
+      "version": "0.5.5",
       "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
       "name": "auto-lint-check",
       "source": "./plugins/auto-lint-check",
       "description": "編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する。",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "keywords": ["lint", "format", "eslint", "prettier", "ruff", "quality"]
     },
     {
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "git push 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "6.1.0",
+      "version": "6.1.1",
       "keywords": ["push", "review", "quality", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
       "name": "pre-push-codex-review",
       "source": "./plugins/pre-push-codex-review",
       "description": "git push 前に codex review (OpenAI クロスモデルレビュー) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、codex review を経ていない commit が remote に到達するのを構造的にブロックする。pre-push-review core (code + security の 2 レビュー gate) との併用で 3 レビュー構成になる。",
-      "version": "2.2.0",
+      "version": "2.2.2",
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
@@ -63,21 +63,21 @@
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
       "description": "Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。/natsuume-statusline:setup で ~/.claude/settings.json に登録する。",
-      "version": "0.10.3",
+      "version": "0.10.5",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。",
-      "version": "0.28.0",
+      "version": "0.29.0",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
       "name": "experimental-agent-discipline",
       "source": "./plugins/experimental-agent-discipline",
       "description": "agent-discipline の実験的 fork。Fable 週次枠の使用率が閾値 (既定 50%) 以下のあいだ、effort low 固定の専用 agent (fable-low-worker / fable-low-explorer) への Fable subagent 委任を PreToolUse hook が許可する。agent-discipline と同時 enable はしない (切替運用)。",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "keywords": ["experimental", "system-prompt", "discipline", "fable", "subagent", "effort", "rate-limit", "hook", "guardrail"]
     },
     {

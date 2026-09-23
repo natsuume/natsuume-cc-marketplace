@@ -344,14 +344,16 @@ skip_env_assignments() {
 # 動作: segment をトークン (空白区切り) に分割。 quote 内の空白は分割しない。
 #       quote 文字自体はトークンに残す (呼び出し側が unquote_token を使う想定)。
 #
-# bash 3.2 には nameref がないため、 内部でローカル配列に蓄積したあと `printf '%q'`
-# でシェル安全形式にクオートし、 `eval` で呼び出し側変数に代入する。 各要素は printf
-# でクオート済みのため値経由の eval injection はない。 出力先変数名 (`$2`) は呼び出し
-# 側のハードコード文字列に限定する (eval injection 回避)。
+# bash 3.2 には nameref がないため、 内部でローカル配列に蓄積したあと、 `eval` で
+# 呼び出し側変数へ配列ごとコピーする。 eval する文字列は出力先変数名と固定の展開式
+# (`"${_result[@]}"`) だけから成り、 token 値を埋め込まない。 token 値は quote された
+# パラメータ展開として渡るため、 tilde expansion・pathname expansion 等の再解釈を
+# 受けず、 bash のバージョンに依らず切り出した文字列のまま呼び出し側に届く。 出力先
+# 変数名 (`$2`) は呼び出し側のハードコード文字列に限定する (eval injection 回避)。
 #
 # **呼び出し側変数名衝突に注意**: 本関数内のローカル変数 `_out_var` / `_result` /
-# `_quoted` / `_e` / `seg` / `i` / `len` / `in_squote` / `in_dquote` / `current` / `c` /
-# `nc` と一致する名前を呼び出し側で使うと、 eval 経由の間接代入で値が壊れる。 呼び出し
+# `seg` / `i` / `len` / `in_squote` / `in_dquote` / `current` / `c` / `nc` と一致する
+# 名前を呼び出し側で使うと、 eval 経由の間接代入で値が壊れる。 呼び出し
 # 側は別 prefix (例: `_first_toks`, `PUSH_TOKENS`) を使うこと。
 tokenize_segment() {
   local seg="$1"
@@ -398,10 +400,6 @@ tokenize_segment() {
 
   [ -n "$current" ] && _result+=("$current")
 
-  # 呼び出し側配列に書き戻す。 空配列でも `eval "name=()"` で正しく初期化される。
-  local _quoted="" _e
-  for _e in "${_result[@]}"; do
-    _quoted+=" $(printf '%q' "$_e")"
-  done
-  eval "${_out_var}=(${_quoted})"
+  # 呼び出し側配列に書き戻す。 空配列でも `name=()` として正しく初期化される。
+  eval "${_out_var}=(\"\${_result[@]}\")"
 }
