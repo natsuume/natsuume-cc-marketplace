@@ -18,8 +18,8 @@ runtime 概念を含む) のままであり、本ファイルは red で正し�
     b. 全 plugin で version の後退 (current < base) を禁止
     c. plugin.json の version と marketplace.json の対応 entry の version の一致
     d. marketplace.json の plugin 名集合と plugins/ 直下のディレクトリ名集合の一致 (双方向)
-    e. リポジトリ直下 README.md の plugin 一覧テーブルに全 marketplace plugin が存在し、
-       version が plugin.json と一致
+    e. リポジトリ直下 README.md の plugin 一覧テーブルと marketplace の plugin 名集合が
+       一致し (双方向)、version が plugin.json と一致
     f. plugins/<name>/README.md の `## バージョン` 見出し直下の `vX.Y.Z` が plugin.json の
        version と一致
 """
@@ -551,6 +551,28 @@ class RootReadmeTableConsistencyTest(unittest.TestCase):
 
             failures = check_fixture_versions(repository, revision)
             self.assertTrue(any("sample" in failure for failure in failures), failures)
+
+    def test_readme_table_row_without_marketplace_entry_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            repository = Path(name)
+            initialize_repository(repository)
+            write_full_consistent_repository(repository, [("sample", "1.0.0")])
+            # plugin を marketplace.json と plugins/ から削除した後に README 表の行だけが
+            # 残った状態 ("stale" は marketplace.json にも plugins/ にも存在しない)。
+            write_root_readme(
+                repository,
+                [
+                    ("sample", "1.0.0", "sample plugin"),
+                    ("stale", "1.0.0", "removed plugin"),
+                ],
+            )
+            revision = commit_all(repository, "root README keeps a removed plugin row")
+
+            failures = check_fixture_versions(repository, revision)
+            self.assertTrue(
+                any("stale" in failure and "README.md" in failure for failure in failures),
+                failures,
+            )
 
     def test_matching_readme_table_version_passes(self) -> None:
         with tempfile.TemporaryDirectory() as name:

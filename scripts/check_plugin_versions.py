@@ -8,8 +8,9 @@ Checks enforced (see README / issue history for the full rationale):
      corresponding .claude-plugin/marketplace.json entry version
   d. the marketplace.json plugin name set and the plugins/ directory name set
      (directories with a .claude-plugin/plugin.json) must match, both ways
-  e. the repository root README.md plugin table must list every marketplace
-     plugin with a version matching plugin.json
+  e. the repository root README.md plugin table and the marketplace.json
+     plugin name set must match, both ways, with each row's version matching
+     plugin.json
   f. plugins/<name>/README.md must have a `## バージョン` heading followed by
      `vX.Y.Z` matching plugin.json
 
@@ -369,8 +370,9 @@ def check_versions(base_revision: str, *, direct: bool = False) -> list[str]:
             "marketplace.json does not list it"
         )
 
-    # check e: the root README.md plugin table must list every marketplace
-    # plugin with a version matching plugin.json.
+    # check e: the root README.md plugin table and the marketplace.json plugin
+    # name set must match, both ways, and each row's version must match
+    # plugin.json.
     readme_versions = _root_readme_plugin_versions()
     for name in sorted(current_marketplace):
         if name not in readme_versions:
@@ -382,6 +384,11 @@ def check_versions(base_revision: str, *, direct: bool = False) -> list[str]:
                 f"{name}: README.md table version ({readme_versions[name]}) does not "
                 f"match plugin.json version ({manifest_version})"
             )
+    for name in sorted(set(readme_versions) - set(current_marketplace)):
+        failures.append(
+            f"{name}: README.md plugin table lists this plugin but "
+            "marketplace.json does not"
+        )
 
     # check f: plugins/<name>/README.md must carry a `## バージョン` heading with
     # a `vX.Y.Z` line matching plugin.json.
