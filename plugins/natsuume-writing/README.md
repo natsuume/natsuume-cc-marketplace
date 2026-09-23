@@ -14,6 +14,8 @@ v0.7.0
 | `draft` | 未執筆セクションを一括で本文化し、未検証事項を TODO として残す |
 | `review` | 文体・構成・技術的正確さ・表記の 4 観点で読み取り専用レビューを行う |
 
+`rules/expression-watchlist.md` は、生成 AI の普及後の技術記事で増えた直訳調・比喩的な語と抽象的な漢語・評価語を見直し候補として列挙した参照ファイルで、draft と review が読み込みます。
+
 `hooks/hooks.json` の SessionStart hook から `rules/core-summary.md` を追加 context として注入します。詳細な執筆規則は各 Skill が必要時に `rules/writing-rules.md` から読み込みます。
 
 ## インストール

@@ -16,6 +16,9 @@ writing-rules.md の共通コアに、文章全体でのレトリック・論証
 - review skill が全文スコープの密度チェックと、削っても情報・論理が失われないメタ文の確認と、
   見直しを促す目安を持つ
 - draft skill が同じ論証テンプレートの反復と、予告・本説明・再要約の重複を避ける
+- rules/expression-watchlist.md が、生成 AI の普及後に増えた直訳調・比喩的な語と
+  抽象的な漢語・評価語を見直し候補 (使用禁止ではない) として列挙し、話題語を含まない。
+  writing-rules.md と draft / review skill がこの一覧を参照する
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ WRITING_RULES = PLUGIN_DIR / "rules" / "writing-rules.md"
 CORE_SUMMARY = PLUGIN_DIR / "rules" / "core-summary.md"
 DRAFT_SKILL = PLUGIN_DIR / "skills" / "draft" / "SKILL.md"
 REVIEW_SKILL = PLUGIN_DIR / "skills" / "review" / "SKILL.md"
+WATCHLIST = PLUGIN_DIR / "rules" / "expression-watchlist.md"
 
 DENSITY_PRINCIPLE = "読者の理解に必要な分だけ整える"
 DENSITY_SECTION_HEADING = "## 10. 構造化・レトリックの密度"
@@ -166,6 +170,44 @@ class ReviewSkillTest(unittest.TestCase):
     def test_review_has_rereading_thresholds_not_violations(self) -> None:
         self.assertIn("見直しを促す目安", self.text)
         self.assertIn("太字", self.text)
+
+
+class ExpressionWatchlistTest(unittest.TestCase):
+    """見直し候補の語の一覧 (直訳調・比喩的な語と、抽象的な漢語・評価語)。"""
+
+    def setUp(self) -> None:
+        self.text = read(WATCHLIST)
+
+    def test_watchlist_has_translationese_and_abstract_sections(self) -> None:
+        self.assertIn("## 直訳調・比喩的な語", self.text)
+        self.assertIn("## 抽象的な漢語・評価語", self.text)
+
+    def test_watchlist_contains_data_backed_examples(self) -> None:
+        translationese = section(self.text, "## 直訳調・比喩的な語")
+        for example in ("効く", "壊れる", "瞬間"):
+            with self.subTest(example=example):
+                self.assertIn(example, translationese)
+
+    def test_watchlist_entries_exclude_topic_words_and_digits(self) -> None:
+        entries = [line[2:] for line in self.text.splitlines() if line.startswith("- ")]
+        self.assertTrue(entries)
+        for entry in entries:
+            with self.subTest(entry=entry):
+                for topic_word in ("エージェント", "プロンプト", "LLM", "AI"):
+                    self.assertNotIn(topic_word, entry)
+                self.assertNotRegex(entry, r"[0-9０-９A-Za-zＡ-Ｚａ-ｚ]")
+
+    def test_watchlist_is_not_a_ban_list(self) -> None:
+        self.assertIn("使用禁止ではない", self.text)
+
+    def test_rules_and_skills_reference_watchlist(self) -> None:
+        for path in (WRITING_RULES, DRAFT_SKILL, REVIEW_SKILL):
+            with self.subTest(file=str(path.relative_to(PLUGIN_DIR))):
+                self.assertIn("expression-watchlist.md", read(path))
+
+    def test_density_section_names_data_backed_translationese(self) -> None:
+        body = section(read(WRITING_RULES), DENSITY_SECTION_HEADING)
+        self.assertIn("壊れる", body)
 
 
 class DraftSkillTest(unittest.TestCase):
