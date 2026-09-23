@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -30,6 +32,14 @@ HOOK = (
     / "scripts"
     / "block-bg-codex-wrapper.sh"
 )
+SCRIPTS_DIR = HOOK.parent
+MERGE_GATE = SCRIPTS_DIR / "block-pre-merge.sh"
+CMD_PARSER_LIB = SCRIPTS_DIR / "lib" / "cmd-parser.sh"
+
+# パターン部に ANSI-C quoting (`$'...'`) を含む bash のパターン置換
+# (`${VAR//...$'...'...}`)。macOS 既定の bash 3.2 はパターン部の `$'...'` を展開
+# しないため、この形の置換は bash のバージョンによって結果が変わる。
+ANSI_C_PATTERN_SUBSTITUTION = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*//[^}]*\$'")
 
 WRAPPER_COMMAND = (
     "bash /opt/claude/plugins/pre-merge-codex-review/hooks/scripts/"
@@ -235,6 +245,165 @@ class BlockBgCodexWrapperAgentTypeGateTest(unittest.TestCase):
             }
             result = self.run_hook(payload, Path(name))
             self.assert_allowed(result)
+
+
+def code_lines(path: Path) -> list[str]:
+    """コメント行 (先頭の空白を除いて `#` で始まる行) を除いた本文の行。"""
+    return [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+
+
+def copy_scripts_without_cmd_parser(destination: Path) -> Path:
+    """hook scripts ディレクトリを複製し、複製先から `lib/cmd-parser.sh` を除く。"""
+    copied = destination / "scripts"
+    shutil.copytree(SCRIPTS_DIR, copied)
+    (copied / "lib" / "cmd-parser.sh").unlink(missing_ok=True)
+    return copied
+
+
+class LineContinuationNormalizationTest(unittest.TestCase):
+    """hook script の行継続 `\\<改行>` 正規化の契約。
+
+    - block-bg-codex-wrapper.sh と block-pre-merge.sh は、行継続の正規化を
+      `lib/cmd-parser.sh` の `normalize_line_continuations` で行う。パターン部に
+      ANSI-C quoting を使う bash のパターン置換は bash 3.2 と 4 以降で結果が変わる
+      ため使わない。
+    - helper の入出力は、テストを実行する bash のバージョンに依らない形で固定する。
+    - `lib/cmd-parser.sh` を読み込めない場合、block-bg-codex-wrapper.sh は生の
+      コマンドが wrapper basename か行継続を含むときだけ deny し (reason に
+      `cmd-parser.sh` を含める)、それ以外のコマンドには関与しない (無出力)。
+    """
+
+    def run_hook_without_cmd_parser(
+        self, payload: dict[str, object]
+    ) -> subprocess.CompletedProcess[bytes]:
+        with tempfile.TemporaryDirectory() as name:
+            scripts = copy_scripts_without_cmd_parser(Path(name))
+            return subprocess.run(
+                ["bash", str(scripts / HOOK.name)],
+                input=json.dumps(payload).encode("utf-8"),
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=name,
+            )
+
+    def assert_denied_for_missing_cmd_parser(
+        self, result: subprocess.CompletedProcess[bytes]
+    ) -> None:
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertNotEqual(
+            result.stdout,
+            b"",
+            "cmd-parser.sh を読み込めない状態で deny されませんでした",
+        )
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn("cmd-parser.sh", output["permissionDecisionReason"])
+
+    def test_scripts_do_not_use_ansi_c_quoting_in_pattern_substitution(
+        self,
+    ) -> None:
+        for script in (HOOK, MERGE_GATE):
+            with self.subTest(script=script.name):
+                offending = [
+                    line
+                    for line in code_lines(script)
+                    if ANSI_C_PATTERN_SUBSTITUTION.search(line)
+                ]
+                self.assertEqual(
+                    offending,
+                    [],
+                    f"{script.name} がパターン部に ANSI-C quoting を使う"
+                    "パターン置換を含みます (bash 3.2 では展開されません)",
+                )
+
+    def test_scripts_normalize_with_cmd_parser_helper(self) -> None:
+        for script in (HOOK, MERGE_GATE):
+            with self.subTest(script=script.name):
+                code = "\n".join(code_lines(script))
+                self.assertTrue(
+                    "lib/cmd-parser.sh" in code,
+                    f"{script.name} が lib/cmd-parser.sh を source していません",
+                )
+                self.assertTrue(
+                    'normalize_line_continuations "$COMMAND"' in code,
+                    f"{script.name} が normalize_line_continuations で"
+                    "行継続を正規化していません",
+                )
+
+    @unittest.skipUnless(shutil.which("bash"), "helper test requires bash")
+    def test_helper_normalizes_line_continuations(self) -> None:
+        self.assertTrue(
+            CMD_PARSER_LIB.is_file(), f"lib が見つかりません: {CMD_PARSER_LIB}"
+        )
+        cases = {
+            "split_word": ("gh pr me\\\nrge 1", "gh pr merge 1"),
+            "inside_single_quotes": ("echo 'a\\\nb'", "echo 'ab'"),
+            "inside_double_quotes": ('echo "a\\\nb"', 'echo "ab"'),
+            "trailing_backslash_without_newline": ("echo a\\", "echo a\\"),
+            "trailing_line_continuation": ("git push\\\n", "git push"),
+            "no_line_continuation": (
+                "gh pr merge 1 --squash",
+                "gh pr merge 1 --squash",
+            ),
+        }
+        for label, (command, expected) in cases.items():
+            with self.subTest(case=label):
+                env = os.environ.copy()
+                env["LIB"] = str(CMD_PARSER_LIB)
+                env["INPUT"] = command
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        'source "$LIB"; normalize_line_continuations "$INPUT"',
+                    ],
+                    env=env,
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertEqual(
+                    result.stdout.decode("utf-8"), expected, f"case={label}"
+                )
+
+    @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+    def test_wrapper_launch_is_denied_without_cmd_parser(self) -> None:
+        # lib があれば allow される正規の起動でも、正規化できない状態では通さない。
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": WRAPPER_COMMAND},
+            "agent_type": CODEX_REVIEWER_AGENT_TYPE,
+        }
+        result = self.run_hook_without_cmd_parser(payload)
+        self.assert_denied_for_missing_cmd_parser(result)
+
+    @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+    def test_line_continuation_command_is_denied_without_cmd_parser(
+        self,
+    ) -> None:
+        # 行継続を含むコマンドは正規化しないと wrapper 起動かを判定できない。
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo a\\\nb"},
+        }
+        result = self.run_hook_without_cmd_parser(payload)
+        self.assert_denied_for_missing_cmd_parser(result)
+
+    @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
+    def test_unrelated_command_passes_without_cmd_parser(self) -> None:
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls -la"},
+        }
+        result = self.run_hook_without_cmd_parser(payload)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout, b"")
 
 
 if __name__ == "__main__":

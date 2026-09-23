@@ -1347,5 +1347,86 @@ class PreMergeGateLocalAttestationTest(unittest.TestCase):
         self.assert_no_review_posted()
 
 
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq"),
+    "gate integration requires bash and jq",
+)
+class PreMergeGateMissingCmdParserTest(unittest.TestCase):
+    """`lib/cmd-parser.sh` を読み込めない場合の fail-closed 契約。
+
+    gate は行継続の正規化を `lib/cmd-parser.sh` の helper に依存する。粗フィルタを
+    通過したコマンドについて helper を読み込めなければ、正規化できないまま照合へ
+    進まず deny する (reason に `cmd-parser.sh` を含める)。粗フィルタで抜ける無関係な
+    コマンドには関与しない (無出力)。
+
+    fake gh はレビューコメントを持たない PR を返す。gate が helper の読み込み失敗を
+    判定せずに照合へ進んだ場合も、実 gh を呼ばずに済ませるため PATH の先頭に置く。
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        temporary_path = Path(self.temporary.name)
+        self.work = temporary_path / "work"
+        self.work.mkdir()
+
+        self.scripts_dir = temporary_path / "scripts"
+        shutil.copytree(SCRIPTS_DIR, self.scripts_dir)
+        (self.scripts_dir / "lib" / "cmd-parser.sh").unlink(missing_ok=True)
+
+        self.fake_bin_dir = temporary_path / "fake-bin"
+        self.fake_bin_dir.mkdir()
+        gh_path = self.fake_bin_dir / "gh"
+        gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
+        gh_path.chmod(
+            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
+        config = {
+            "payload": {"reviews": [], "headRefOid": HEAD_SHA},
+            "fail": False,
+        }
+        (self.fake_bin_dir / "gh-config.json").write_text(
+            json.dumps(config), encoding="utf-8"
+        )
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def run_gate(self, command: str) -> subprocess.CompletedProcess[bytes]:
+        payload = {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "cwd": str(self.work),
+        }
+        env = os.environ.copy()
+        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        return subprocess.run(
+            ["bash", str(self.scripts_dir / GATE.name)],
+            cwd=self.work,
+            input=json.dumps(payload).encode("utf-8"),
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def test_merge_is_denied_without_cmd_parser(self) -> None:
+        result = self.run_gate(MERGE_COMMAND)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertNotEqual(result.stdout, b"")
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn(
+            "cmd-parser.sh",
+            output["permissionDecisionReason"],
+            "cmd-parser.sh の読み込み失敗を理由とする deny ではありません",
+        )
+
+    def test_unrelated_command_passes_without_cmd_parser(self) -> None:
+        result = self.run_gate("ls -la")
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(result.stdout, b"")
+
+
 if __name__ == "__main__":
     unittest.main()
