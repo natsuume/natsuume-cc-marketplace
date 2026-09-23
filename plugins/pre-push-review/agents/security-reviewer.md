@@ -19,12 +19,12 @@ git log --no-decorate origin/HEAD...
 git diff origin/HEAD...
 git diff --cached
 git diff
-git log -p --no-ext-diff --no-textconv origin/HEAD..HEAD
+git log -p --cc --no-ext-diff --no-textconv origin/HEAD..HEAD
 ```
 
 If `origin/HEAD` is not set, fall back to `origin/master` or `origin/main`. Combine the committed branch diff with any staged / unstaged hunks — both are within scope (the push gate verifies against the same combined hash).
 
-The per-commit patches from the last command are also within scope. Every commit in `origin/HEAD..HEAD` reaches the remote history on push, including content that a later commit on the branch removed or reverted and that therefore no longer appears in the net diff.
+The per-commit patches from the last command are also within scope. Every commit in `origin/HEAD..HEAD` reaches the remote history on push, including content that a later commit on the branch removed or reverted and that therefore no longer appears in the net diff. `--cc` also shows the changes a merge commit introduced beyond its parents (for example, edits made while resolving a merge).
 
 ## Objective
 

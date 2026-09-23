@@ -20,7 +20,7 @@ CODE_REVIEWER = PLUGIN / "agents" / "code-reviewer.md"
 REVIEW_COMMAND = PLUGIN / "commands" / "review.md"
 PLUGIN_README = PLUGIN / "README.md"
 
-PER_COMMIT_PATCH_COMMAND = "git log -p --no-ext-diff --no-textconv origin/HEAD..HEAD"
+PER_COMMIT_PATCH_COMMAND = "git log -p --cc --no-ext-diff --no-textconv origin/HEAD..HEAD"
 
 
 def read(path: Path) -> str:
