@@ -328,12 +328,53 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.classify(command), 5)
 
-    def test_only_heredoc_of_interpreter_command_keeps_body(self) -> None:
+    def test_command_outside_allowlist_keeps_all_heredoc_bodies(self) -> None:
+        for command in (
+            "cat <<'EOF'; bash <<'X'\nfoo (git commit)\nEOF\ngit commit -m x\nX",
+            "cat <<'EOF' | grep x\nfoo (git commit)\nEOF",
+            "cat <<'EOF' || bash\nfoo (git commit)\nEOF",
+            "env cat <<'EOF'\nfoo (git commit)\nEOF",
+            "./cat <<'EOF'\nfoo (git commit)\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 0)
+
+    def test_data_only_commands_allow_body_exclusion(self) -> None:
+        for command in (
+            "gh pr create --body-file - <<'EOF'\nfoo (git commit)\nEOF",
+            "cat <<'EOF' | tee out.txt\nfoo (git commit)\nEOF",
+            "cat <<'EOF' || true\nfoo (git commit)\nEOF",
+            "/bin/cat <<'EOF'\nfoo (git commit)\nEOF",
+            "X=1 cat <<'EOF'\nfoo (git commit)\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 4)
+
+    def test_wrapper_with_positional_argument_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("timeout 5 bash <<'EOF'\ngit commit -m x\nEOF"),
+            3,
+        )
+
+    def test_process_substitution_keeps_body(self) -> None:
+        for command in (
+            "bash <(cat <<'EOF'\ngit commit -m x\nEOF\n)",
+            "source <(cat <<'EOF'\ngit commit -m x\nEOF\n)",
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), 5)
+
+    def test_script_written_by_heredoc_and_run_later_keeps_body(self) -> None:
         self.assertEqual(
             self.classify(
-                "cat <<'EOF'; bash <<'X'\nfoo (git commit)\nEOF\n"
-                "git commit -m x\nX"
+                "cat > s.sh <<'EOF'\ngit commit -m x\nEOF\nbash s.sh"
             ),
+            5,
+        )
+
+    def test_shift_in_legacy_arithmetic_expansion_is_not_heredoc(self) -> None:
+        self.assertEqual(
+            self.classify("echo $[1<<2]\ngit commit -m x"),
             5,
         )
 
@@ -345,24 +386,12 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(self.classify(command), 5)
 
-    def test_body_piped_to_non_interpreter_is_excluded(self) -> None:
-        self.assertEqual(
-            self.classify("cat <<'EOF' | grep x\nfoo (git commit)\nEOF"),
-            4,
-        )
-
     def test_pipeline_closed_by_later_separator_keeps_interpreter_body(
         self,
     ) -> None:
         self.assertEqual(
             self.classify("cat <<'EOF' | bash; echo done\ngit commit -m x\nEOF"),
             5,
-        )
-
-    def test_logical_or_is_not_pipe_to_interpreter(self) -> None:
-        self.assertEqual(
-            self.classify("cat <<'EOF' || bash\nfoo (git commit)\nEOF"),
-            4,
         )
 
     def test_heredoc_operator_in_comment_is_ignored(self) -> None:
