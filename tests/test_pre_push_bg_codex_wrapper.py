@@ -584,6 +584,11 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
          `${x@P}` は値を prompt 文字列として展開しコマンド置換を実行する。
          `$[...]` は旧算術展開。値を使わない位置でも実行面を持つ。中括弧
          の無い単純な変数展開 `$VAR` は評価を伴わないため対象外)
+       - (b4) 同じ token に quote 外の `$` と quote 外の `{` / `}` が両方
+         ある (brace expansion はパラメータ展開より先に行われるため、隣接
+         していない `$` と `{` / `[` から `${...}` / `$[...]` を合成できる。
+         `{$,x}{a['$(<cmd>)']}` は `${a['$(<cmd>)']}` になる。パラメータ
+         展開より前に文字を組み立てる展開は brace expansion だけである)
 
        **意味検査 (値を判定に使う token のみ)**: 次のいずれかに該当する
        token は、展開結果を静的に決定できないため値を判定に使えない。
@@ -2618,8 +2623,9 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
       厳格判定を通過しないもの (redirection / glob 等) がある `--`、
       分類前の redirection 正規化で除去が起きたコマンドの `--`、ASCII の
       印字可能文字とタブ以外を含む segment の `--` は barrier とみなさない
-    - quote 外の `(` / `)` と、quote 外または double quote 内の `${` / `$[`
-      は構造検査の対象であり、値を消費しない head の operand でも実行形とする
+    - quote 外の `(` / `)`、quote 外または double quote 内の `${` / `$[`、
+      同じ token 内の quote 外の `$` と `{` / `}` の同居は構造検査の対象で
+      あり、値を消費しない head の operand でも実行形とする
 
     payload は agent_type を持たないため、実行形と分類された segment は
     deny、mention 候補は allow になる。
@@ -2689,6 +2695,10 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
         f"cat ${{x@P}} {WRAPPER_NAME}",
         f"cat \"${{HOME}}/{WRAPPER_NAME}\"",
         f"cat $[a['$(bash {WRAPPER_NAME})']]",
+        # brace expansion で `${` / `$[` を合成する形も構造検査で捕捉する。
+        f"cat {{$,x}}{{a['$(bash {WRAPPER_NAME})']}}",
+        f"cat {{$,x}}[a['$(bash {WRAPPER_NAME})']]",
+        f"git diff -- {{$,x}}{{a['$(bash {WRAPPER_NAME})']}}",
         # find は option 終端が無いため全 tail を意味検査する。
         f"find plugins -name *{WRAPPER_NAME}",
         # barrier より前の option 走査対象は意味検査の対象。

@@ -751,7 +751,7 @@ note_literal_contribution() {
 
 # token_is_unanalyzable <raw_token> <check_kind>
 # <check_kind>:
-#   `structure` = 構造検査のみ (rule (a)/(b)/(b2)/(b3))。 全 token に適用する
+#   `structure` = 構造検査のみ (rule (a)/(b)/(b2)/(b3)/(b4))。 全 token に適用する
 #   `head` = 構造検査 + 意味検査の厳格判定 (rule (a)〜(e))。 実 head・timeout の
 #     duration・git subcommand に適用する
 #   `option_scan` = 構造検査 + 意味検査 (rule (c) を 2 点緩和)。 find / rg / sort /
@@ -795,6 +795,11 @@ note_literal_contribution() {
 #       `${x@P}` は値を prompt 文字列として展開しコマンド置換を実行する。
 #       `$[...]` は旧算術展開。 値を使わない位置でも実行面を持つ。 中括弧の
 #       無い単純な変数展開 `$VAR` は評価を伴わないため対象外)
+#   (b4) 同じ token に quote 外の `$` と quote 外の `{` / `}` が両方ある (brace
+#       expansion はパラメータ展開より先に行われるため、 隣接していない `$` と
+#       `{` / `[` から `${...}` / `$[...]` を合成できる。 `{$,x}{a['$(<cmd>)']}`
+#       は `${a['$(<cmd>)']}` に、 `{$,x}[a['$(<cmd>)']]` は `$[...]` になる。
+#       パラメータ展開より前に文字を組み立てる展開は brace expansion だけである)
 # 意味検査 (<check_kind> が `head` / `option_scan`):
 #   (c) quote 外に展開・置換・word 生成を導入する文字が現れる: `$` (変数展開・
 #       `${...}`・コマンド置換 `$(...)`・ANSI-C quoting `$'...'`・locale 翻訳
@@ -823,7 +828,7 @@ note_literal_contribution() {
 # **厳格判定と option 走査緩和の非対称**: option 走査対象 token は、 危険 option
 # (列挙済みの `-` 始まりの値) と一致するかどうかだけに値を使う。 そのため
 # <check_kind> = `option_scan` の場合に限り rule (c) を次の 2 点だけ緩和する
-# (rule (a)/(b)/(b2)/(b3)/(d) は不変)。 `rg -n marker plugins/*/<wrapper>` や
+# (rule (a)/(b)/(b2)/(b3)/(b4)/(d) は不変)。 `rg -n marker plugins/*/<wrapper>` や
 # `rg -n marker ~/.claude/plugins/cache/.../<wrapper>` (installed wrapper を参照
 # する正規の書き方) のような path operand を、 option 走査の途中でも mention
 # 候補として扱うためである:
@@ -908,10 +913,11 @@ token_is_unanalyzable() {
   local _tw_in_squote=0 _tw_in_dquote=0
   local _tw_c _tw_nc
   local _tw_semantic=1 _tw_relax=0 _tw_first_seen=0 _tw_fixed_start=0
+  local _tw_unquoted_dollar=0 _tw_unquoted_brace=0
 
   case "$_tw_pos" in
     structure)
-      # 構造検査のみ (rule (a)/(b)/(b2)/(b3))。 意味検査 (rule (c)/(d)) は行わない。
+      # 構造検査のみ (rule (a)/(b)/(b2)/(b3)/(b4))。 意味検査 (rule (c)/(d)) は行わない。
       _tw_semantic=0
       ;;
     option_scan)
@@ -1018,9 +1024,9 @@ token_is_unanalyzable() {
     fi
 
     if [ "$_tw_semantic" -eq 0 ]; then
-      # 構造検査のみ: quote の開始を追跡し、 rule (b2) の `(` / `)` と rule (b3)
-      # の `${` / `$[` を検出する。 それ以外の unquoted 文字は rule (c) の対象に
-      # せず読み飛ばす。
+      # 構造検査のみ: quote の開始を追跡し、 rule (b2) の `(` / `)`、 rule (b3)
+      # の `${` / `$[`、 rule (b4) の `$` と `{` / `}` の同居を検出する。 それ
+      # 以外の unquoted 文字は rule (c) の対象にせず読み飛ばす。
       case "$_tw_c" in
         "'") _tw_in_squote=1 ;;
         '"') _tw_in_dquote=1 ;;
@@ -1041,8 +1047,19 @@ token_is_unanalyzable() {
               return 0
               ;;
           esac
+          _tw_unquoted_dollar=1
+          ;;
+        '{'|'}')
+          _tw_unquoted_brace=1
           ;;
       esac
+      if [ "$_tw_unquoted_dollar" -eq 1 ] && [ "$_tw_unquoted_brace" -eq 1 ]; then
+        # rule (b4): 同じ token に quote 外の `$` と `{` / `}` がある。 brace
+        # expansion はパラメータ展開より先に行われるため、 隣接していない
+        # `$` と `{` / `[` から `${...}` / `$[...]` を合成できる
+        # (`{$,x}{a['$(<cmd>)']}` は `${a['$(<cmd>)']}` になる)。
+        return 0
+      fi
       _tw_i=$((_tw_i+1))
       continue
     fi
