@@ -456,10 +456,17 @@ HEREDOC_DATA_ONLY_SUBCOMMANDS: dict[str, frozenset[str]] = {
 _UNMODELED_QUOTE_OPENERS: tuple[str, ...] = ("$'", '$"')
 
 # 除去する本文以外の部分に現れた場合に本文除去をやめる構文。コマンド置換
-# (``$(`` / backtick) は二重引用符内の入れ子の quoting を、here-string
-# (``<<<``) はその語の読み飛ばしを、行継続 (backslash + 改行) は複数文字の
-# 開始記号を分断した場合の文脈を、それぞれ走査が bash と同じように再現しない。
-_UNMODELED_OUTSIDE_BODY_MARKERS: tuple[str, ...] = ("$(", "`", "<<<", "\\\n")
+# (``$(`` / backtick) と parameter expansion (``${``) は二重引用符内の入れ子の
+# quoting を、here-string (``<<<``) はその語の読み飛ばしを、行継続
+# (backslash + 改行) は複数文字の開始記号を分断した場合の文脈を、それぞれ
+# 走査が bash と同じように再現しない。
+_UNMODELED_OUTSIDE_BODY_MARKERS: tuple[str, ...] = (
+    "$(",
+    "`",
+    "${",
+    "<<<",
+    "\\\n",
+)
 
 # 関数定義 (``function NAME`` / ``NAME ()``)。allowlist 内の名前を再定義して
 # stdin を実行させうるため、関数定義を含むコマンドでは本文を除去しない。
@@ -608,7 +615,8 @@ def _strip_heredoc_bodies(command: str) -> str:
         subcommand であることも要求する (subcommand より前のオプションは不可)
       - プロセス置換 (``<(`` / ``>(``) を含まない
       - 除去する本文以外の部分に、コマンド置換 (``$(`` / backtick)、
-        here-string (``<<<``)、行継続 (backslash + 改行) を含まない
+        parameter expansion (``${``)、here-string (``<<<``)、行継続
+        (backslash + 改行) を含まない
         (``_UNMODELED_OUTSIDE_BODY_MARKERS``。コマンド置換を含むコマンドは
         後段の fail-closed または safe heredoc の除去で扱う)
       - ANSI-C quoting (``$'``) と locale 翻訳 quoting (``$"``) を含まない
