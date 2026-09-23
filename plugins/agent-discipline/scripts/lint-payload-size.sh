@@ -30,8 +30,9 @@
 #     FAIL: <script>[ <arg>] / <case-id>: <fail-closed 規則に該当した理由>
 #     ERROR: <前提エラーの説明>
 #   すべての OK / WARN / FAIL に対象スクリプト・ケース ID (分岐)・実測値 (または不成立理由) を
-#   含める。最終行は `lint-payload-size.sh: OK (<ケース数> cases, <WARN 数> warnings)` または
-#   `lint-payload-size.sh: FAIL`。
+#   含める。最終行は
+#   `lint-payload-size.sh: OK (<ケース数> cases, <サイズ実測数> measured, <WARN 数> warnings)`
+#   または `lint-payload-size.sh: FAIL`。
 # - 文字数の定義: Unicode code point 数 (`wc -m` を UTF-8 ロケールで実行した値と同じ)。
 #   ロケール設定に依存させないため jq の `length` (文字列に対しては code point 数を返す) で
 #   数える。
@@ -71,17 +72,22 @@
 #      (除外理由「additionalContext を出力しない」が崩れた場合の検知)
 #  10. CASE_TABLE の各ケースの hook_event_name が、hooks.json で当該 (script, arg) が登録
 #      されている event のいずれかであること (模擬 input の event 不備の検知)
-#  11. CASE_TABLE に現れる各 (script, arg) について、期待 = 出力あり のケースが 1 件以上
-#      あること (サイズを 1 度も測らない対象を作らない。output-if-temporary は temporary md
-#      が 1 件以上ある場合のみ出力ありとして数える)
-#  12. CASE_TABLE の各行が 6 フィールドを持ち、EXPECT と前提トークンが既知の値であること
+#  11. CASE_TABLE に現れる各 (script, arg) について、EXPECT が output または
+#      output-if-temporary のケースが 1 件以上あること (サイズを測る分岐を持たない対象を
+#      作らない。temporary md が 0 件の状態は暫定ルール撤去後の正常状態であり、その場合の
+#      output-if-temporary ケースは出力なしの確認として pass させる)
+#  12. CASE_TABLE の各行が `|` 区切りでちょうど 6 フィールドを持ち (INPUT_JSON に `|` を
+#      含めない)、CASE_ID が英数字と `._-` のみで一意、SCRIPT が hooks/scripts/ 直下に実在し、
+#      EXPECT と前提トークンが既知の値で、INPUT_JSON が空でない hook_event_name を持つ JSON
+#      object であること。不成立の行は実行しない
 #
 # ============================================================================
 # 実行環境の隔離
 # ============================================================================
 #
-# - 起動時に `mktemp -d` で隔離ディレクトリ LINT_TMPDIR を作り、`trap ... EXIT INT TERM HUP`
-#   で終了時に `rm -rf` する。mktemp -d 自体が失敗した場合は ERROR (exit 1)。
+# - 起動時に `mktemp -d` で隔離ディレクトリ LINT_TMPDIR を作り、EXIT の trap で終了時に
+#   `rm -rf` する (INT / TERM / HUP は exit 1 に変換して EXIT の trap を通す)。mktemp -d 自体が
+#   失敗した場合は ERROR (exit 1)。
 # - ケースごとに LINT_TMPDIR/case-<case-id>/ を新規作成し、そのディレクトリを TMPDIR として
 #   env 指定して対象スクリプトを実行する。これにより各スクリプトの state
 #   (`${TMPDIR}/agent-discipline-state/` と `${TMPDIR}/agent-discipline-markers/`) はケースごとに
@@ -89,7 +95,12 @@
 #   `${TMPDIR:-/tmp}/agent-discipline-state` には読み書きしない。
 # - 対象スクリプトの実行時は CLAUDE_PLUGIN_ROOT を空文字列で渡す (update-model-on-switch.sh が
 #   prompts ディレクトリをスクリプト位置基準で解決するようにし、呼び出し元の環境に依存させない)。
-# - 実行時の cwd はリポジトリルートとする。
+# - 実行時の cwd はリポジトリルートとし、対象スクリプトは絶対パスで起動する (prompts
+#   ディレクトリの実パス行が実運用と同じく絶対パスになるようにするため)。
+# - ロケールは呼び出し元の設定をそのまま対象スクリプトへ引き継ぐ。inject-always.sh の
+#   ランタイム 8K ガードは `wc -m` で計測するため、実運用と同じ判定にするには UTF-8 ロケールで
+#   実行する (CI の ubuntu-latest は既定で C.UTF-8)。lint 自身の sort / comm だけは
+#   LC_ALL=C を個別に指定してバイト順に固定する。
 #
 # ============================================================================
 # スコープ外
@@ -267,8 +278,420 @@ EOF
 )
 
 # ============================================================================
-# 検査ロジック (未実装)
+# pre-flight: 引数 / 実行位置 / 依存コマンド / 隔離ディレクトリ
 # ============================================================================
 
-echo "lint-payload-size.sh: 未実装 (契約・閾値・対応表の定義のみ。検査ロジック本体は未実装)" >&2
-exit 1
+if [ "$#" -ne 0 ]; then
+  echo "ERROR: lint-payload-size.sh は引数を取りません (渡された引数: $*)。リポジトリルートから引数なしで実行してください。" >&2
+  exit 1
+fi
+
+if [ ! -d "$HOOK_SCRIPTS_DIR" ] || [ ! -f "$HOOKS_JSON" ]; then
+  echo "ERROR: $HOOK_SCRIPTS_DIR または $HOOKS_JSON が見つかりません。リポジトリルートから実行してください。" >&2
+  exit 1
+fi
+
+for required_command in jq git bash; do
+  if ! command -v "$required_command" >/dev/null 2>&1; then
+    echo "ERROR: $required_command が見つかりません。インストールしてから再実行してください。" >&2
+    exit 1
+  fi
+done
+
+REPO_ROOT=$(pwd -P) || {
+  echo "ERROR: カレントディレクトリの絶対パスを取得できません。" >&2
+  exit 1
+}
+
+LINT_TMPDIR=$(mktemp -d 2>/dev/null) || {
+  echo "ERROR: 一時ディレクトリの作成 (mktemp -d) に失敗しました。" >&2
+  exit 1
+}
+trap 'rm -rf "$LINT_TMPDIR"' EXIT
+trap 'exit 1' INT TERM HUP
+
+TABLE_FILE="$LINT_TMPDIR/case-table.txt"
+VALID_CASES_FILE="$LINT_TMPDIR/valid-cases.txt"
+CASE_IDS_FILE="$LINT_TMPDIR/case-ids.txt"
+REGISTERED_FILE="$LINT_TMPDIR/registered-entries.txt"
+EXCLUDED_FILE="$LINT_TMPDIR/excluded-scripts.txt"
+
+overall_fail=0
+warn_count=0
+measured_count=0
+
+# $1 = FAIL メッセージ本文。stderr に出力し、全体結果を FAIL にする。
+report_fail() {
+  echo "FAIL: $1" >&2
+  overall_fail=1
+}
+
+# temporary md のうち、inject-temporary.sh が注入対象にするもの (本文が空でない .md) の件数。
+temporary_count=0
+for temporary_file in "$TEMPORARY_PROMPTS_DIR"/*.md; do
+  [ -f "$temporary_file" ] || continue
+  temporary_body=$(cat "$temporary_file" 2>/dev/null)
+  [ -n "$temporary_body" ] || continue
+  temporary_count=$((temporary_count + 1))
+done
+
+if ! printf '%s\n' "$CASE_TABLE" > "$TABLE_FILE"; then
+  echo "ERROR: 対応表を一時ファイルに書き出せませんでした。" >&2
+  exit 1
+fi
+
+# ============================================================================
+# check 1: 対応表の形式 (fail-closed 規則 12)
+# ============================================================================
+
+echo "== check 1: case table format =="
+
+# $1 = 前提トークン 1 個。既知のトークンなら 0 を返す。
+is_known_precondition() {
+  case "$1" in
+    pending | git-dirty-repo | transcript=none) return 0 ;;
+    state=?* | discipline-marker=?* | transcript=?*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+: > "$VALID_CASES_FILE"
+: > "$CASE_IDS_FILE"
+table_line_no=0
+table_format_fail=0
+while IFS= read -r table_row || [ -n "$table_row" ]; do
+  table_line_no=$((table_line_no + 1))
+  row_problems=""
+
+  field_count=$(printf '%s\n' "$table_row" | awk -F'|' '{ print NF }')
+  if [ "$field_count" != "6" ]; then
+    report_fail "対応表 ${table_line_no} 行目: フィールド数が 6 ではありません (${field_count}): $table_row"
+    table_format_fail=1
+    continue
+  fi
+
+  IFS='|' read -r c_id c_script c_arg c_pre c_expect c_json <<ROW
+$table_row
+ROW
+
+  case "$c_id" in
+    '' | *[!A-Za-z0-9._-]*) row_problems="$row_problems CASE_ID が不正 ($c_id);" ;;
+    *)
+      if grep -Fqx "$c_id" "$CASE_IDS_FILE"; then
+        row_problems="$row_problems CASE_ID が重複 ($c_id);"
+      fi
+      ;;
+  esac
+  case "$c_script" in
+    '' | */*) row_problems="$row_problems SCRIPT が不正 ($c_script);" ;;
+    *)
+      if [ ! -f "$HOOK_SCRIPTS_DIR/$c_script" ]; then
+        row_problems="$row_problems SCRIPT が $HOOK_SCRIPTS_DIR/ に実在しない ($c_script);"
+      fi
+      ;;
+  esac
+  if [ -z "$c_arg" ]; then
+    row_problems="$row_problems ARG が空 (引数なしは -);"
+  fi
+  if [ "$c_pre" != "-" ]; then
+    if [ -z "$c_pre" ]; then
+      row_problems="$row_problems PRECONDITIONS が空 (前提なしは -);"
+    fi
+    for pre_token in $c_pre; do
+      if ! is_known_precondition "$pre_token"; then
+        row_problems="$row_problems 未知の前提トークン ($pre_token);"
+      fi
+    done
+  fi
+  case "$c_expect" in
+    output | none | output-if-temporary) ;;
+    *) row_problems="$row_problems 未知の EXPECT ($c_expect);" ;;
+  esac
+  if ! printf '%s' "$c_json" | jq -e 'type == "object" and ((.hook_event_name | type) == "string") and ((.hook_event_name | length) > 0)' >/dev/null 2>&1; then
+    row_problems="$row_problems INPUT_JSON が hook_event_name を持つ JSON object ではない;"
+  fi
+
+  printf '%s\n' "$c_id" >> "$CASE_IDS_FILE"
+  if [ -n "$row_problems" ]; then
+    report_fail "対応表 ${table_line_no} 行目:${row_problems}"
+    table_format_fail=1
+    continue
+  fi
+  printf '%s\n' "$table_row" >> "$VALID_CASES_FILE"
+done < "$TABLE_FILE"
+
+if [ ! -s "$VALID_CASES_FILE" ]; then
+  echo "ERROR: 対応表に実行可能なケースが 1 件もありません。" >&2
+  exit 1
+fi
+if [ "$table_format_fail" -eq 0 ]; then
+  echo "OK: 対応表 ${table_line_no} ケースの形式が正しいです"
+fi
+
+# ============================================================================
+# check 2: 対応表と hooks.json の整合 (fail-closed 規則 8〜11)
+# ============================================================================
+
+echo ""
+echo "== check 2: case table <-> hooks.json consistency =="
+
+# hooks.json の type: command エントリを `<event>|<script basename>|<args>` (args なしは `-`、
+# 複数 args は空白区切り) の 1 行 1 エントリで抽出する。
+if ! jq -r '
+  .hooks | to_entries[] | .key as $event | .value[] | .hooks[]?
+  | select(.type == "command")
+  | [ $event,
+      (.command | sub("^.*/"; "")),
+      (if ((.args // []) | length) == 0 then "-" else (.args | join(" ")) end) ]
+  | join("|")
+' "$HOOKS_JSON" > "$REGISTERED_FILE" 2>/dev/null; then
+  echo "ERROR: $HOOKS_JSON の type: command エントリを抽出できませんでした (.hooks の構造が想定と異なる可能性があります)。" >&2
+  exit 1
+fi
+if [ ! -s "$REGISTERED_FILE" ]; then
+  echo "ERROR: $HOOKS_JSON に type: command エントリが 1 件もありません。" >&2
+  exit 1
+fi
+
+consistency_fail=0
+
+# 規則 9 と、除外スクリプトの hooks.json 登録確認 (規則 8 の和集合の片側)。
+: > "$EXCLUDED_FILE"
+for excluded_script in $EXCLUDED_SCRIPTS; do
+  printf '%s\n' "$excluded_script" >> "$EXCLUDED_FILE"
+  if ! cut -d'|' -f2 "$REGISTERED_FILE" | grep -Fqx "$excluded_script"; then
+    report_fail "除外スクリプト $excluded_script が $HOOKS_JSON に登録されていません (EXCLUDED_SCRIPTS の更新漏れ)"
+    consistency_fail=1
+  fi
+  if [ ! -f "$HOOK_SCRIPTS_DIR/$excluded_script" ]; then
+    report_fail "除外スクリプト $excluded_script が $HOOK_SCRIPTS_DIR/ に実在しません"
+    consistency_fail=1
+  elif grep -q 'additionalContext' "$HOOK_SCRIPTS_DIR/$excluded_script"; then
+    report_fail "除外スクリプト $excluded_script が additionalContext に言及しています (除外理由「additionalContext を出力しない」が崩れた可能性。対応表へ移してください)"
+    consistency_fail=1
+  fi
+done
+
+# 規則 8: hooks.json の (script, arg) 集合 - 除外 と 対応表の (script, arg) 集合の一致。
+awk -F'|' 'NR == FNR { excluded[$0] = 1; next } !($2 in excluded) { print $2 "|" $3 }' \
+  "$EXCLUDED_FILE" "$REGISTERED_FILE" | LC_ALL=C sort -u > "$LINT_TMPDIR/registered-targets.txt"
+awk -F'|' '{ print $2 "|" $3 }' "$VALID_CASES_FILE" | LC_ALL=C sort -u > "$LINT_TMPDIR/table-targets.txt"
+
+awk -F'|' 'NR == FNR { excluded[$0] = 1; next } ($1 in excluded) { print $1 }' \
+  "$EXCLUDED_FILE" "$LINT_TMPDIR/table-targets.txt" | LC_ALL=C sort -u > "$LINT_TMPDIR/table-excluded.txt"
+if [ -s "$LINT_TMPDIR/table-excluded.txt" ]; then
+  report_fail "EXCLUDED_SCRIPTS のスクリプトが対応表にも含まれています:"
+  sed 's/^/  - /' "$LINT_TMPDIR/table-excluded.txt" >&2
+  consistency_fail=1
+fi
+
+LC_ALL=C comm -23 "$LINT_TMPDIR/registered-targets.txt" "$LINT_TMPDIR/table-targets.txt" > "$LINT_TMPDIR/only-registered.txt"
+LC_ALL=C comm -13 "$LINT_TMPDIR/registered-targets.txt" "$LINT_TMPDIR/table-targets.txt" > "$LINT_TMPDIR/only-table.txt"
+if [ -s "$LINT_TMPDIR/only-registered.txt" ]; then
+  report_fail "$HOOKS_JSON に登録されているが対応表にも EXCLUDED_SCRIPTS にも無い (script|arg) があります (対応表への追加漏れ):"
+  sed 's/^/  - /' "$LINT_TMPDIR/only-registered.txt" >&2
+  consistency_fail=1
+fi
+if [ -s "$LINT_TMPDIR/only-table.txt" ]; then
+  report_fail "対応表にあるが $HOOKS_JSON に登録されていない (script|arg) があります (登録解除・改名への追従漏れ):"
+  sed 's/^/  - /' "$LINT_TMPDIR/only-table.txt" >&2
+  consistency_fail=1
+fi
+
+# 規則 10: 各ケースの hook_event_name が、当該 (script, arg) の登録 event であること。
+while IFS='|' read -r c_id c_script c_arg c_pre c_expect c_json; do
+  case_event=$(printf '%s' "$c_json" | jq -r '.hook_event_name' 2>/dev/null)
+  if ! grep -Fqx "$case_event|$c_script|$c_arg" "$REGISTERED_FILE"; then
+    report_fail "$c_script / $c_id: hook_event_name ($case_event) で $c_script (arg: $c_arg) は $HOOKS_JSON に登録されていません (模擬 input の event 不備)"
+    consistency_fail=1
+  fi
+done < "$VALID_CASES_FILE"
+
+# 規則 11: 各 (script, arg) に、サイズを測るケース (output / output-if-temporary) があること。
+while IFS= read -r table_target; do
+  if ! awk -F'|' -v target="$table_target" \
+    '($2 "|" $3) == target && ($5 == "output" || $5 == "output-if-temporary") { found = 1 } END { exit found ? 0 : 1 }' \
+    "$VALID_CASES_FILE"; then
+    report_fail "対応表の $table_target に EXPECT が output (または output-if-temporary) のケースがありません (サイズを測らない対象)"
+    consistency_fail=1
+  fi
+done < "$LINT_TMPDIR/table-targets.txt"
+
+if [ "$consistency_fail" -eq 0 ]; then
+  target_count=$(wc -l < "$LINT_TMPDIR/table-targets.txt" | tr -d ' ')
+  echo "OK: 対応表の対象 ${target_count} 組 (script|arg) と $HOOKS_JSON の type: command エントリ (EXCLUDED_SCRIPTS を除く) が一致しました"
+fi
+
+# ============================================================================
+# check 3: 各ケースの実行と要素サイズの実測 (fail-closed 規則 1〜7、2 段階閾値)
+# ============================================================================
+
+echo ""
+echo "== check 3: additionalContext size per case (warn > ${PAYLOAD_WARN_CHARS}, fail > ${PAYLOAD_LIMIT_CHARS}) =="
+echo "(temporary md: ${temporary_count} 件)"
+
+# $1 = ケース用 TMPDIR、$2 = 前提トークン列 (`-` = なし)。前提をすべて作成できたら 0 を返す。
+setup_preconditions() {
+  setup_dir=$1
+  setup_state_dir="$setup_dir/agent-discipline-state"
+  if ! mkdir -p "$setup_state_dir" 2>/dev/null; then
+    return 1
+  fi
+  if [ "$2" = "-" ]; then
+    return 0
+  fi
+  for setup_token in $2; do
+    case "$setup_token" in
+      state=*)
+        printf '%s' "${setup_token#state=}" 2>/dev/null > "$setup_state_dir/model-$LINT_SESSION_ID" || return 1
+        ;;
+      pending)
+        : 2>/dev/null > "$setup_state_dir/pending-model-$LINT_SESSION_ID" || return 1
+        ;;
+      discipline-marker=*)
+        printf '%s' "${setup_token#discipline-marker=}" 2>/dev/null > "$setup_state_dir/delivered-discipline-$LINT_SESSION_ID" || return 1
+        ;;
+      transcript=none)
+        : 2>/dev/null > "$setup_dir/transcript.jsonl" || return 1
+        ;;
+      transcript=*)
+        jq -cn --arg model "${setup_token#transcript=}" \
+          '{type: "assistant", message: {model: $model}}' 2>/dev/null > "$setup_dir/transcript.jsonl" || return 1
+        ;;
+      git-dirty-repo)
+        git init -q "$setup_dir/repo" >/dev/null 2>&1 < /dev/null || return 1
+        : 2>/dev/null > "$setup_dir/repo/untracked.txt" || return 1
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done
+  return 0
+}
+
+while IFS='|' read -r c_id c_script c_arg c_pre c_expect c_json; do
+  case_label="$c_script"
+  if [ "$c_arg" != "-" ]; then
+    case_label="$c_script $c_arg"
+  fi
+  case_label="$case_label / $c_id"
+
+  case_dir="$LINT_TMPDIR/case-$c_id"
+  case_stdout="$LINT_TMPDIR/stdout-$c_id"
+  case_stderr="$LINT_TMPDIR/stderr-$c_id"
+
+  # 規則 7: 前提の作成
+  if ! setup_preconditions "$case_dir" "$c_pre"; then
+    report_fail "$case_label: 分岐の前提 ($c_pre) を作成できませんでした"
+    continue
+  fi
+
+  case_json=$(printf '%s' "$c_json" | jq -c \
+    --arg transcript "$case_dir/transcript.jsonl" \
+    --arg cwd "$case_dir/repo" \
+    'walk(if . == "@TRANSCRIPT@" then $transcript elif . == "@CWD@" then $cwd else . end)' 2>/dev/null)
+  if [ -z "$case_json" ]; then
+    report_fail "$case_label: 模擬 hook input のプレースホルダを置換できませんでした"
+    continue
+  fi
+
+  if [ "$c_arg" = "-" ]; then
+    printf '%s' "$case_json" \
+      | env TMPDIR="$case_dir" CLAUDE_PLUGIN_ROOT= bash "$REPO_ROOT/$HOOK_SCRIPTS_DIR/$c_script" \
+        > "$case_stdout" 2> "$case_stderr"
+  else
+    printf '%s' "$case_json" \
+      | env TMPDIR="$case_dir" CLAUDE_PLUGIN_ROOT= bash "$REPO_ROOT/$HOOK_SCRIPTS_DIR/$c_script" "$c_arg" \
+        > "$case_stdout" 2> "$case_stderr"
+  fi
+  case_rc=$?
+
+  # 規則 1: exit code
+  if [ "$case_rc" -ne 0 ]; then
+    report_fail "$case_label: 対象スクリプトが exit $case_rc で終了しました (注入スクリプトは常に exit 0 の契約)"
+    continue
+  fi
+
+  has_output=0
+  if [ -n "$(tr -d ' \t\r\n' < "$case_stdout")" ]; then
+    has_output=1
+  fi
+
+  effective_expect="$c_expect"
+  if [ "$c_expect" = "output-if-temporary" ]; then
+    if [ "$temporary_count" -gt 0 ]; then
+      effective_expect="output"
+    else
+      effective_expect="none"
+    fi
+  fi
+
+  # 規則 6: 出力なしの期待
+  if [ "$effective_expect" = "none" ]; then
+    if [ "$has_output" -eq 1 ]; then
+      report_fail "$case_label: 出力あり (対応表の期待: 出力なし)"
+    else
+      echo "OK: $case_label: 出力なし (対応表の期待どおり)"
+    fi
+    continue
+  fi
+
+  # 規則 2: 出力ありの期待で出力なし
+  if [ "$has_output" -eq 0 ]; then
+    report_fail "$case_label: 出力なし (対応表の期待: 出力あり)"
+    continue
+  fi
+
+  # 規則 3: 1 個の JSON として parse できること
+  if ! jq -e -s 'length == 1' < "$case_stdout" >/dev/null 2>&1; then
+    report_fail "$case_label: 出力が 1 個の JSON として parse できません"
+    continue
+  fi
+
+  # 規則 4: additionalContext が文字列であること
+  context_type=$(jq -r '.hookSpecificOutput.additionalContext | type' < "$case_stdout" 2>/dev/null)
+  if [ "$context_type" != "string" ]; then
+    report_fail "$case_label: .hookSpecificOutput.additionalContext が存在しないか文字列ではありません (type: ${context_type:-取得不能})"
+    continue
+  fi
+
+  context_length=$(jq -r '.hookSpecificOutput.additionalContext | length' < "$case_stdout" 2>/dev/null)
+  case "$context_length" in
+    '' | *[!0-9]*)
+      report_fail "$case_label: additionalContext の文字数を取得できませんでした (${context_length})"
+      continue
+      ;;
+  esac
+
+  # 規則 5: 空文字列
+  if [ "$context_length" -eq 0 ]; then
+    report_fail "$case_label: additionalContext が空文字列です"
+    continue
+  fi
+
+  measured_count=$((measured_count + 1))
+  if [ "$context_length" -gt "$PAYLOAD_LIMIT_CHARS" ]; then
+    report_fail "$case_label: additionalContext ${context_length} 字 (上限 ${PAYLOAD_LIMIT_CHARS} 超)"
+  elif [ "$context_length" -gt "$PAYLOAD_WARN_CHARS" ]; then
+    echo "WARN: $case_label: additionalContext ${context_length} 字 (警告閾値 ${PAYLOAD_WARN_CHARS} 超、上限 ${PAYLOAD_LIMIT_CHARS} 以下)" >&2
+    warn_count=$((warn_count + 1))
+  else
+    echo "OK: $case_label: additionalContext ${context_length} 字"
+  fi
+done < "$VALID_CASES_FILE"
+
+# ============================================================================
+# 結果
+# ============================================================================
+
+case_count=$(wc -l < "$VALID_CASES_FILE" | tr -d ' ')
+
+echo ""
+if [ "$overall_fail" -ne 0 ]; then
+  echo "lint-payload-size.sh: FAIL" >&2
+  exit 1
+fi
+
+echo "lint-payload-size.sh: OK (${case_count} cases, ${measured_count} measured, ${warn_count} warnings)"
+exit 0

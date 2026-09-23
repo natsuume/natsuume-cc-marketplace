@@ -7,8 +7,13 @@ name: agent-discipline-prompt-lint
 # チェック内容の詳細契約はスクリプト本体のヘッダコメントを参照:
 #   plugins/agent-discipline/scripts/lint-prompt-sync.sh
 #
-# ubuntu-latest には jq が標準搭載されているため、 スクリプトが依存する jq の追加
-# セットアップ step は不要 (jq 不在時はスクリプト自身が明確なエラーで exit 1 する)。
+# 同じ job で、agent-discipline の注入スクリプトを模擬 hook input で実行し、
+# additionalContext 1 要素の文字数を実測するサイズ lint (警告 7,800 字 / 上限 8,000 字) も
+# 実行する。契約と「対象スクリプト × 分岐 × 期待」の対応表はスクリプト本体を参照:
+#   plugins/agent-discipline/scripts/lint-payload-size.sh
+#
+# ubuntu-latest には jq と git が標準搭載されているため、 スクリプトが依存するツールの追加
+# セットアップ step は不要 (不在時はスクリプト自身が明確なエラーで exit 1 する)。
 
 on:
   pull_request:
@@ -26,8 +31,13 @@ on:
       - "plugins/agent-discipline/hooks/prompts/discipline-opus.md"
       # subagent 向けルールファイル (チェック 5 のサブセット検査対象、#221)
       - "plugins/agent-discipline/hooks/prompts/subagent-rules.md"
+      # サイズ lint の実測対象: hooks/prompts/ 配下の全 md (temporary/ を含む) と、
+      # 注入スクリプト・除外スクリプト・共有 lib を含む hooks/scripts/ 配下の全ファイル
+      - "plugins/agent-discipline/hooks/prompts/**/*.md"
+      - "plugins/agent-discipline/hooks/scripts/**"
       # lint スクリプト自身と本 workflow 自身 (契約変更時も CI が追従することを保証する)
       - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
+      - "plugins/agent-discipline/scripts/lint-payload-size.sh"
       - ".github/workflows/agent-discipline-prompt-lint.yml"
       # experimental-agent-discipline (fork) 側の同じ検査対象一式
       - "plugins/experimental-agent-discipline/hooks/prompts/always-fable.md"
@@ -52,7 +62,10 @@ on:
       - "plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
       - "plugins/agent-discipline/hooks/prompts/discipline-opus.md"
       - "plugins/agent-discipline/hooks/prompts/subagent-rules.md"
+      - "plugins/agent-discipline/hooks/prompts/**/*.md"
+      - "plugins/agent-discipline/hooks/scripts/**"
       - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
+      - "plugins/agent-discipline/scripts/lint-payload-size.sh"
       - ".github/workflows/agent-discipline-prompt-lint.yml"
       - "plugins/experimental-agent-discipline/hooks/prompts/always-fable.md"
       - "plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-1.md"
@@ -82,6 +95,12 @@ jobs:
       # working-directory を指定せずリポジトリルートのまま実行する。
       - name: Run lint-prompt-sync.sh (rule ID set + hooks.json common block sync check)
         run: ./plugins/agent-discipline/scripts/lint-prompt-sync.sh
+
+      # lint-payload-size.sh も引数を取らず、 リポジトリルートからの相対パスで hooks/scripts/ と
+      # hooks.json を参照する。 注入スクリプトは lint が mktemp -d で作る隔離 TMPDIR 上で実行される。
+      # WARN (7,800 字超) は exit code に影響せず、 FAIL (8,000 字超・fail-closed 規則違反) で失敗する。
+      - name: Run lint-payload-size.sh (additionalContext element size check)
+        run: ./plugins/agent-discipline/scripts/lint-payload-size.sh
 
       # fork 側 (experimental-agent-discipline) は plugins/experimental-agent-discipline/ 配下を
       # 参照する同内容の lint スクリプトを持つため、同じ job 内で続けて実行する。
