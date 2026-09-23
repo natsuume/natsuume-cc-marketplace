@@ -91,6 +91,10 @@ case "$COMMAND" in
   *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
 esac
 
+# 隔離ルート免除の判定は heredoc (`<<EOF`) の有無を見る必要があるため、redirection
+# 正規化前のコマンドを残しておく。
+COMMAND_BEFORE_REDIRECTION_NORMALIZATION="$COMMAND"
+
 # `&` を含む shell redirection (`2>&1` / `&>file` / `<<EOF` 等) を空白に置換する。
 # cmd-parser (split_command) は `&` を一律 separator として扱うため、redirection 内の
 # `&` を parallel separator と誤認して false-positive な segment 分割を起こす経路を
@@ -108,7 +112,7 @@ require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
 # shellcheck source=lib/isolated-roots.sh
 source "$SCRIPT_DIR/lib/isolated-roots.sh" || exit $?
 require_git_guardrails_functions "$_GIT_GUARDRAILS_HOOK_TAG" \
-  command_commits_only_to_isolated_roots || exit $?
+  normalize_shell_word_syntax command_commits_only_to_isolated_roots || exit $?
 
 # コマンドを segment (top-level `;`/`&&`/`||`/`&`/`|`/改行区切り) に分割する。
 # SEPARATORS は本 hook では使わないため配列化せず読み捨てる。
@@ -300,7 +304,8 @@ fi
 # 対象とする場合は、target-mismatch deny と default branch 上 commit の deny の両方を
 # 免除する。1 つでも免除条件を満たさない invocation があれば、以降の従来判定に進む
 # (免除条件・静的解決の規則・fail-closed 条件は lib/isolated-roots.sh 参照)。
-if command_commits_only_to_isolated_roots "$COMMAND" "$PWD"; then
+if command_commits_only_to_isolated_roots \
+  "$COMMAND_BEFORE_REDIRECTION_NORMALIZATION" "$PWD"; then
   exit 0
 fi
 

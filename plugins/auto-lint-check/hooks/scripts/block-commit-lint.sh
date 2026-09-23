@@ -144,7 +144,7 @@ case "$PARSER_RC" in
       exit 0
     fi
     log_warn "block-commit-lint: repo override (-C / --git-dir / --work-tree / GIT_DIR= / cd 等) を伴う commit はサポート対象外。"
-    emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` / \`cd dir &&\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。"
+    emit_deny "auto-lint-check の block-commit-lint hook は repo override (\`git -C\` / \`--git-dir\` / \`--work-tree\` / \`GIT_DIR=\` / \`cd dir &&\` 等) を伴う commit をサポートしません。silent skip すると別 repo の lint を取り違える / 同一 repo でも lint を素通りさせる経路になるため fail closed (deny) しています。対象 repo に \`cd\` してから別の Bash 呼び出しで \`git commit\` を実行してください。使い捨ての隔離 repo への commit であれば、env \`CLAUDE_ISOLATED_GIT_ROOTS\` に許可ルート (コロン区切りの絶対パス) を設定すると、その配下の repo への commit は deny されず lint も行われません。"
     ;;
   4) exit 0 ;;  # 実 commit が走らない (dry-run / help / 非 command position の git 等)
   *)

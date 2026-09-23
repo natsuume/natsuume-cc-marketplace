@@ -41,6 +41,7 @@ claude plugin install git-guardrails@natsuume-plugins
 - master/main なら deny、それ以外なら exit 0
 - detached HEAD (cherry-pick / rebase 中など) はブランチ名が空なので自然に通る
 - **chained 形式**: `git commit -m a && cd /other && git commit -m b` のように複数の commit を連結したコマンドは、各 commit 呼び出しを独立に target-mismatch 検査します。最初の commit が問題なくても、その後の cd で対象 repo を切り替えて 2 つ目の commit を行う経路は detect されて deny
+- **隔離ルートの免除**: コマンド内の全 commit 呼び出しが env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の repo を対象とする場合は、target-mismatch の deny と master/main 上 commit の deny の両方を行わずに通します (条件は「[隔離 repo への commit の免除](#隔離-repo-への-commit-の免除-claude_isolated_git_roots)」参照)
 
 **deny 例**:
 
@@ -123,6 +124,50 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 - 「master/main を取り込む」
 - 「ブランチを最新にしたい」
 
+## 隔離 repo への commit の免除 (`CLAUDE_ISOLATED_GIT_ROOTS`)
+
+**目的**: Claude Code の Bash は呼び出しごとに cwd が戻るため、scratchpad 等に作った使い捨ての検証用 repo へ commit するには `git -C <dir> commit` / `cd <dir> && git commit` の形が必要になります。block-default-branch-commit はこれらを対象 repo に関わらず target-mismatch として deny するため、利用者が明示した「隔離ルート」配下の repo に限って commit の検査を免除します。
+
+**書式**: env `CLAUDE_ISOLATED_GIT_ROOTS` に、PATH と同じコロン区切りで絶対パスを列挙します。
+
+- 未設定・空なら免除は一切行いません (従来どおりの判定)
+- 空文字 entry・相対パス entry・存在しないディレクトリの entry は無視します
+- 各 entry は symlink を解決した実パス (canonical 実パス) に変換して比較します。macOS の `/tmp` → `/private/tmp` のような symlink を含むパスを指定しても実体で判定されます
+
+**免除条件**: コマンド内の **全ての** commit 呼び出しについて、次の全てを満たす場合だけ免除します。1 つでも満たさない commit 呼び出しがあれば、コマンド全体を従来どおり判定します (deny)。
+
+- commit の対象 dir をコマンド文字列から静的に解決できる (下記)
+- 対象 dir の canonical 実パスが、いずれかの許可ルートの配下にある
+- 対象 dir で `git rev-parse --git-common-dir` が返す repo 本体の canonical 実パスも、いずれかの許可ルートの配下にある (許可ルート配下に置いた linked worktree や symlink 経由で、ルート外の repo を更新する経路は免除しません)
+- hook の実行環境に `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` が設定されていない
+
+「配下」はパス境界で判定し、ルート自身も配下に含みます (`/a/b` を許可すると `/a/b` と `/a/b/c` は配下、`/a/bc` は配下ではありません)。
+
+**対象 dir を静的に解決できる形**:
+
+- `git -C <path> commit ...` (`-C` を複数並べた場合は順に相対解決)
+- `cd <path> && git commit ...` / `cd <path>; git commit ...` (`cd` を複数連結してもよく、間に `git add` 等の通常コマンドを挟んでもよい)
+- hook の cwd (セッションの cwd) が許可ルート配下の repo であるときの素の `git commit ...`
+- `<path>` は quote なし、または全体を 1 組の quote で囲んだ静的な文字列で、`cd` の相対パスは `./` 始まりに限ります
+
+次の形は静的に解決できないため、従来どおり deny されます: 変数展開 (`cd "$DIR"`)・`~`・`cd -`・`..` を含むパス・glob・`pushd` / `popd`・subshell / brace group (`(cd <dir> && git commit)`)・`GIT_DIR=` / `--git-dir` / `--work-tree`・`export` 等の builtin・`||` / `|` / `&` による連結・heredoc・コメント。
+
+**`$(...)` を含むコマンドは deny**: コマンド置換 (`$(...)` / バッククォート) を含むコマンドは、複数行メッセージの `git commit -m "$(cat <<'EOF' ... EOF)"` 形式も含めて免除しません。隔離 repo への commit では、メッセージを `-m` に直接書くか、別の Bash 呼び出しでファイルに書き出して `-F <file>` で渡してください。
+
+**免除範囲**: 免除するのは block-default-branch-commit (target-mismatch の deny と master/main 上 commit の deny) だけです。block-default-branch-push / block-default-branch-pr の判定は変わらず、`git -C <隔離 repo> push` 等は従来どおり deny されます。auto-lint-check プラグインの block-commit-lint も同じ env と基準で repo override の deny を免除します。
+
+**設定例** (`~/.claude/settings.json` などの `env`):
+
+```json
+{
+  "env": {
+    "CLAUDE_ISOLATED_GIT_ROOTS": "/tmp/claude-sandbox:/home/me/scratch-repos"
+  }
+}
+```
+
+許可ルートには、使い捨ての検証用 repo だけを置く専用ディレクトリを指定してください。実プロジェクトの repo を含むディレクトリ (ホームディレクトリ全体等) を指定すると、その配下の repo の default branch 保護 (commit) が外れます。
+
 ## 共通 lib
 
 3 つの hook (`block-default-branch-{commit,push,pr}.sh`) が source する共有ライブラリ:
@@ -132,6 +177,7 @@ rebase を用いてリモートのデフォルトブランチの変更を作業�
 | `hooks/scripts/lib/default-branch.sh` | デフォルトブランチ名集合 (`master`/`main`) と、`is_default_branch` / `current_branch` / `strip_shell_quotes` / `normalize_refspec_part` / `strip_quoted_text` / `strip_squoted_text` (v0.4.0 追加。single quote 領域のみ空白化し dquote 内容は残す。dquote 内 command substitution の opener-anchored 検出用) / `emit_deny` / `has_target_mismatch_prefix` の関数群 + `readonly TARGET_MISMATCH_DENY_REASON` を集約。3 hook が source して使う |
 | `hooks/scripts/lib/cmd-parser.sh` | pre-push-review から **byte-identical でベンダリング** している共有パーサ。v0.4.0 以降、git-guardrails の 3 hook は `normalize_line_continuations_to_space` に加えて `split_command` / `tokenize_segment` / `skip_env_assignments` / `unquote_token` も実際に使用する (segment/token ベースの invocation 検出のため)。canonical 実装とのドリフト防止のためファイル全体を丸ごとベンダリングしている (ヘッダコメントが pre-push-review を指すのはこのため) |
 | `hooks/scripts/lib/exit-trap.sh` | 予期せぬ非ゼロ終了を stderr に可視化する `install_exit_trap`。3 hook が冒頭で呼ぶ (#61) |
+| `hooks/scripts/lib/isolated-roots.sh` | env `CLAUDE_ISOLATED_GIT_ROOTS` の許可ルート配下の repo への commit を免除するかの判定 (`command_commits_only_to_isolated_roots` ほか)。block-default-branch-commit だけが source する |
 
 ## 既知の制約 (cooperative 利用前提)
 
@@ -172,7 +218,8 @@ git-guardrails/
 │       └── lib/
 │           ├── default-branch.sh
 │           ├── cmd-parser.sh    # pre-push-review から byte-identical ベンダリング
-│           └── exit-trap.sh
+│           ├── exit-trap.sh
+│           └── isolated-roots.sh
 ├── skills/
 │   └── rebase-workflow/
 │       └── SKILL.md

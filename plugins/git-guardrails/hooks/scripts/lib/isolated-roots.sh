@@ -19,6 +19,8 @@
 #   3. 各対象 dir で実行した `git rev-parse --git-common-dir` の canonical 実パスが、
 #      いずれかの許可ルート配下にある (許可ルート配下に置いた linked worktree / symlink
 #      経由でルート外の repo を更新する経路を塞ぐ)
+#   4. hook プロセスの環境に `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` /
+#      `GIT_COMMON_DIR` が設定されていない (コマンド内の再代入で commit 先が変わりうるため)
 # 「配下」はパス境界での前方一致で判定し、ルート自身との一致も配下とみなす
 # (`/a/b` は `/a/b` と `/a/b/c` を含み、`/a/bc` を含まない)。
 #
@@ -34,27 +36,87 @@
 # `mapfile` / nameref / `${x,,}` / `realpath` / `readlink -f` を使わない)。canonical 化は
 # `cd -P && pwd -P` で行い、macOS の `/tmp` → `/private/tmp` のような symlink を実体に
 # 解決する。
-# cmd-parser.sh (split_command / tokenize_segment / unquote_token / skip_env_assignments)
-# を先に source しておくこと。
+# cmd-parser.sh (split_command / tokenize_segment / skip_env_assignments) と
+# default-branch.sh (normalize_shell_word_syntax) を先に source しておくこと。
 
-# 引数: <path>
+# commit 先 repo の解決を変える環境変数。コマンド内での代入も hook 環境での設定も
+# 免除しない理由になる。
+_ISOLATED_REPO_ENV_NAMES="GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR"
+
+# 引数: <path> (絶対パス)
 # stdout: <path> が既存ディレクトリなら、その canonical 実パス (`cd -P <path> && pwd -P`)
-# 戻り値: 0 = 解決できた / 1 = 解決できない (存在しない・ディレクトリでない・権限不足)
+# 戻り値: 0 = 解決できた / 1 = 解決できない (相対パス・存在しない・ディレクトリでない・
+#         権限不足・改行を含む)
+# 相対パスを受け付けないのは、`cd` が CDPATH を参照して別の dir へ移動しうるため。
 isolated_canonical_dir() {
-  return 1
+  local path="$1"
+  local resolved
+  case "$path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  [ -d "$path" ] || return 1
+  resolved="$(cd -P -- "$path" 2>/dev/null && pwd -P)" || return 1
+  case "$resolved" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "$resolved" in
+    *$'\n'*) return 1 ;;
+  esac
+  printf '%s' "$resolved"
 }
 
 # 引数: なし (env `CLAUDE_ISOLATED_GIT_ROOTS` を読む)
 # stdout: 有効な許可ルートの canonical 実パスを 1 行 1 件で出力する
 # 戻り値: 0 = 有効な許可ルートが 1 件以上ある / 1 = 無い (未設定・空・全 entry が無効)
 isolated_git_roots() {
-  return 1
+  local rest="${CLAUDE_ISOLATED_GIT_ROOTS:-}"
+  local entry canonical
+  local found=1
+  [ -n "$rest" ] || return 1
+  rest="$rest:"
+  while [ -n "$rest" ]; do
+    entry="${rest%%:*}"
+    rest="${rest#*:}"
+    canonical="$(isolated_canonical_dir "$entry")" || continue
+    printf '%s\n' "$canonical"
+    found=0
+  done
+  return "$found"
 }
 
 # 引数: <path> <root> (どちらも canonical 実パスであること)
 # 戻り値: 0 = <path> が <root> 自身または <root> 配下 (パス境界で前方一致) / 1 = それ以外
 # <root> が `/` の場合は全ての絶対パスを配下とみなす。
 isolated_path_is_within() {
+  local path="$1"
+  local root="$2"
+  case "$path" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "$root" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  [ "$root" = "/" ] && return 0
+  case "$path" in
+    "$root"|"$root"/*) return 0 ;;
+  esac
+  return 1
+}
+
+# 引数: <path> <roots> (<roots> は isolated_git_roots の出力 = 1 行 1 件)
+# 戻り値: 0 = <path> がいずれかの root 配下 / 1 = それ以外
+_isolated_path_is_within_any_root() {
+  local path="$1"
+  local roots="$2"
+  local root
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    isolated_path_is_within "$path" "$root" && return 0
+  done <<< "$roots"
   return 1
 }
 
@@ -66,37 +128,320 @@ isolated_path_is_within() {
 # プロセスの環境を継承して実行する (実際の commit と同じ解決結果を得るため)。
 # <dir> が git repo でない・rev-parse が失敗した場合は 1 を返す。
 isolated_dir_is_within_roots() {
+  local dir="$1"
+  local roots common_dir canonical_common_dir
+  roots="$(isolated_git_roots)" || return 1
+  _isolated_path_is_within_any_root "$dir" "$roots" || return 1
+  common_dir="$(cd -P -- "$dir" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" \
+    || return 1
+  [ -n "$common_dir" ] || return 1
+  case "$common_dir" in
+    /*) ;;
+    *) common_dir="$dir/$common_dir" ;;
+  esac
+  canonical_common_dir="$(isolated_canonical_dir "$common_dir")" || return 1
+  _isolated_path_is_within_any_root "$canonical_common_dir" "$roots"
+}
+
+# 引数: <command>
+# 戻り値: 0 = 静的解決を妨げる構文を含む / 1 = 含まない
+#
+# quote 文脈を追跡する文字 walk で、次のいずれかを検出する:
+#   - quote 外の `(` / `)` / `{` / `}` (subshell・brace group・プロセス置換・算術・関数定義)
+#   - quote 外・double quote 内のバッククォートと `$(` (コマンド置換)
+#   - quote 外の `<<` (heredoc / here-string。本文の行を segment と誤認させないため)
+#   - quote 外の `$'` / `$"` (ANSI-C / locale quoting。quote 境界を静的に追えないため)
+#   - quote 外の `#` (コメント。後続を segment と誤認させないため)
+#   - quote 外の CR / VT / FF (bash は単語区切りとして扱わないため token 分割がずれる)
+#   - 閉じていない quote
+_isolated_has_unresolvable_syntax() {
+  local cmd="$1"
+  local i=0 len=${#cmd}
+  local in_squote=0 in_dquote=0
+  local c nc
+  local cr=$'\r' vt=$'\v' ff=$'\f'
+
+  while [ "$i" -lt "$len" ]; do
+    c="${cmd:$i:1}"
+    nc="${cmd:$((i+1)):1}"
+
+    if [ "$in_squote" -eq 1 ]; then
+      [ "$c" = "'" ] && in_squote=0
+      i=$((i+1)); continue
+    fi
+
+    if [ "$in_dquote" -eq 1 ]; then
+      case "$c" in
+        \\)
+          i=$((i+2)); continue ;;
+        '`')
+          return 0 ;;
+        '$')
+          [ "$nc" = "(" ] && return 0 ;;
+        '"')
+          in_dquote=0 ;;
+      esac
+      i=$((i+1)); continue
+    fi
+
+    case "$c" in
+      \\) i=$((i+2)); continue ;;
+      "'") in_squote=1 ;;
+      '"') in_dquote=1 ;;
+      '`'|'('|')'|'{'|'}'|'#') return 0 ;;
+      '$')
+        case "$nc" in
+          "'"|'"') return 0 ;;
+        esac
+        ;;
+      '<')
+        [ "$nc" = "<" ] && return 0 ;;
+      "$cr"|"$vt"|"$ff") return 0 ;;
+    esac
+    i=$((i+1))
+  done
+
+  [ "$in_squote" -eq 0 ] && [ "$in_dquote" -eq 0 ] || return 0
   return 1
 }
 
+# 引数: <raw-token>
+# stdout: token が静的なパス文字列なら quote を外した値
+# 戻り値: 0 = 静的なパス / 1 = それ以外
+#
+# 受け付ける形は、token 全体が quote されていない文字列・token 全体が 1 組の single
+# quote・token 全体が 1 組の double quote (内部に `$` / バッククォート / `\` を含まない)
+# のいずれか。値が空・`-` 始まり・`~` 始まり・glob 文字 (`*` / `?` / `[`)・改行・`..`
+# 要素を含む場合は受け付けない (`..` は `cd` の論理パス解決と実パス解決が symlink 越しに
+# 食い違うため)。
+_isolated_static_path_value() {
+  local raw="$1"
+  local value
+  case "$raw" in
+    \'*\')
+      value="${raw#\'}"; value="${value%\'}"
+      case "$value" in
+        *\'*) return 1 ;;
+      esac
+      ;;
+    \"*\")
+      value="${raw#\"}"; value="${value%\"}"
+      case "$value" in
+        *\"*|*'$'*|*'`'*|*\\*) return 1 ;;
+      esac
+      ;;
+    *)
+      case "$raw" in
+        *\'*|*\"*|*'$'*|*'`'*|*\\*) return 1 ;;
+      esac
+      value="$raw"
+      ;;
+  esac
+  [ -n "$value" ] || return 1
+  case "$value" in
+    -*|'~'*|*'*'*|*'?'*|*'['*|*$'\n'*) return 1 ;;
+  esac
+  case "/$value/" in
+    */../*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+# 引数: <word> (segment の先頭 word。quote / escape を正規化済み)
+# 戻り値: 0 = <word> が、shell の cwd / 環境 / 実行コマンドの解決を静的に追えなくする
+#         shell keyword / builtin / 1 = それ以外
+_isolated_is_unresolvable_command_word() {
+  case "$1" in
+    '!'|'time'|'if'|'then'|'else'|'elif'|'fi'|'while'|'until'|'do'|'done') return 0 ;;
+    'for'|'in'|'case'|'esac'|'select'|'function'|'coproc'|'[['|']]') return 0 ;;
+    pushd|popd|export|declare|typeset|readonly|unset|local|source|.|eval|exec) return 0 ;;
+    builtin|command|trap|alias|unalias|shopt|enable|hash|set) return 0 ;;
+  esac
+  return 1
+}
+
+# 引数: <assignment-token> (`NAME=VALUE` 形式、quote 付きでもよい)
+# 戻り値: 0 = commit 先 repo / cd の解決を変える変数への代入 / 1 = それ以外
+_isolated_is_unresolvable_assignment() {
+  local name
+  name="$(normalize_shell_word_syntax "$1")"
+  name="${name%%=*}"
+  local candidate
+  for candidate in $_ISOLATED_REPO_ENV_NAMES PWD CDPATH; do
+    [ "$name" = "$candidate" ] && return 0
+  done
+  return 1
+}
+
+# 引数: <base-dir> <path-value>
+# stdout: <path-value> を <base-dir> 基準で解決した canonical 実パス
+# 戻り値: 0 = 解決できた / 1 = 解決できない
+_isolated_resolve_path_from() {
+  local base="$1"
+  local value="$2"
+  case "$value" in
+    /*) isolated_canonical_dir "$value" ;;
+    *) isolated_canonical_dir "$base/$value" ;;
+  esac
+}
+
 # 引数: <command> <base_dir>
-#   <command>  : hook が受け取った Bash コマンド文字列 (行継続・redirection 正規化後)
+#   <command>  : hook が受け取った Bash コマンド文字列 (行継続の正規化後、redirection
+#                正規化前。heredoc を検出するため redirection は本関数内で正規化する)
 #   <base_dir> : hook プロセスの cwd (commit invocation の対象 dir の初期値)
 # stdout: commit invocation ごとに、静的に解決した対象 dir の canonical 実パスを
 #         出現順に 1 行 1 件で出力する
 # 戻り値: 0 = commit invocation が 1 つ以上あり全て解決できた / 1 = それ以外
 #
 # 静的解決の規則 (これ以外の形は解決不能として 1 を返す):
-#   - コマンド全体に subshell / brace group (`(` / `{`)、コマンド置換・プロセス置換
-#     (`$(` / バッククォート / `<(` / `>(`) が無いこと
+#   - _isolated_has_unresolvable_syntax が検出する構文 (subshell / brace group /
+#     コマンド置換 / プロセス置換 / heredoc / コメント 等) を含まないこと
 #   - 先頭 segment から最後の commit invocation までの区切りが `&&` と `;` (改行を含む)
 #     だけであること (`||` / `|` / `&` は cd の効果が commit に及ぶかを静的に確定
 #     できないため解決不能)
-#   - commit invocation より前の segment のうち cwd / repo 解決に影響するものは
-#     `cd <path>` (引数ちょうど 1 個) だけであること。`cd` 単独・`cd -`・`pushd` /
-#     `popd`・`export` / `declare` / `typeset` / `readonly` / `unset`・`source` / `.` /
-#     `eval` / `exec`、および `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` /
-#     `GIT_COMMON_DIR` の assignment を含む segment があれば解決不能
+#   - commit invocation より前の segment で cwd を変えるのは `cd <path>` (引数ちょうど
+#     1 個) だけであること。先頭 word が `cd` 以外の cwd / 環境を変えうる shell keyword・
+#     builtin (`pushd` / `popd` / `export` / `declare` / `typeset` / `readonly` / `unset` /
+#     `source` / `.` / `eval` / `exec` / `builtin` / `command` / `trap` / `set` 等) の
+#     segment、および `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` / `GIT_COMMON_DIR` /
+#     `PWD` / `CDPATH` への代入を含む segment があれば解決不能
 #   - commit invocation の global option で対象を切り替えるものは `-C <path>` だけを
 #     受け付ける (複数指定時は git と同じく順に相対解決する)。`--git-dir` /
-#     `--work-tree` (および `=` 形式)、invocation 直前の上記 env assignment は解決不能
-#   - `cd` / `-C` の <path> は quote を外した結果が静的な文字列であること。変数展開
-#     (`$`)、先頭の `~`、glob 文字 (`*` / `?` / `[`)、バックスラッシュ、`-` 始まりを
-#     含む場合は解決不能
-#   - 相対パスは直前までに解決した dir を基準に解決し、各段階で既存ディレクトリとして
-#     canonical 化できること
+#     `--work-tree` (および `=` 形式)、`-C<path>` の連結形は解決不能
+#   - `cd` / `-C` の <path> は _isolated_static_path_value が受け付ける静的な文字列で
+#     あること (変数展開・先頭の `~`・glob 文字・バックスラッシュ・`-` 始まり・`..` 要素は
+#     解決不能)
+#   - `cd` の相対パスは CDPATH の影響を受けない `./` 始まりに限る。`-C` の相対パスは
+#     直前までに解決した dir を基準に解決する
+#   - 各段階で既存ディレクトリとして canonical 化できること
 resolve_commit_target_dirs() {
-  return 1
+  local cmd="$1"
+  local base="$2"
+  local current_dir
+  local -a _iso_segments=()
+  local -a _iso_separators=()
+  local -a _iso_targets=()
+  local line normalized
+  local last_commit_index=-1
+
+  _isolated_has_unresolvable_syntax "$cmd" && return 1
+  current_dir="$(isolated_canonical_dir "$base")" || return 1
+
+  # `2>&1` / `&>file` 等の redirection 内の `&` を segment 区切りと誤認しないよう、
+  # block-default-branch-commit.sh と同じ規則で redirection を空白に置換してから分割する。
+  normalized="$(printf '%s' "$cmd" \
+    | sed -E 's/[0-9]?(&>>|&>|>>|>\&|<\&|<<<|<<|<>)[[:space:]]*[A-Za-z0-9_./=+@:-]*/ /g')"
+
+  while IFS= read -r line; do
+    case "$line" in
+      SEP:*)
+        _iso_separators[${#_iso_segments[@]}-1]="${line#SEP:}"
+        ;;
+      *)
+        _iso_segments+=("$line")
+        ;;
+    esac
+  done < <(split_command "$normalized")
+
+  local _iso_si=0
+  local _iso_seg_count=${#_iso_segments[@]}
+  while [ "$_iso_si" -lt "$_iso_seg_count" ]; do
+    local -a _iso_toks=()
+    local _iso_idx=0
+    tokenize_segment "${_iso_segments[$_iso_si]}" _iso_toks
+    local _iso_tok_count=${#_iso_toks[@]}
+    if [ "$_iso_tok_count" -eq 0 ]; then
+      _iso_si=$((_iso_si+1))
+      continue
+    fi
+
+    skip_env_assignments _iso_toks _iso_idx
+    local _iso_ai=0
+    while [ "$_iso_ai" -lt "$_iso_idx" ]; do
+      _isolated_is_unresolvable_assignment "${_iso_toks[$_iso_ai]}" && return 1
+      _iso_ai=$((_iso_ai+1))
+    done
+    if [ "$_iso_idx" -ge "$_iso_tok_count" ]; then
+      _iso_si=$((_iso_si+1))
+      continue
+    fi
+
+    local _iso_word
+    _iso_word="$(normalize_shell_word_syntax "${_iso_toks[$_iso_idx]}")"
+    case "$_iso_word" in
+      cd)
+        [ "$_iso_tok_count" -eq $((_iso_idx+2)) ] || return 1
+        local _iso_cd_value
+        _iso_cd_value="$(_isolated_static_path_value "${_iso_toks[$((_iso_idx+1))]}")" \
+          || return 1
+        case "$_iso_cd_value" in
+          /*|./*) ;;
+          *) return 1 ;;
+        esac
+        current_dir="$(_isolated_resolve_path_from "$current_dir" "$_iso_cd_value")" \
+          || return 1
+        ;;
+      git|*/git)
+        # global option の walk は block-default-branch-commit.sh の commit invocation
+        # 検出と同じ規則で行い、最初の non-option token を subcommand とみなす。
+        local _iso_target="$current_dir"
+        local _iso_oi=$((_iso_idx+1))
+        local _iso_is_commit=1
+        local _iso_opt
+        while [ "$_iso_oi" -lt "$_iso_tok_count" ]; do
+          _iso_opt="$(normalize_shell_word_syntax "${_iso_toks[$_iso_oi]}")"
+          case "$_iso_opt" in
+            -C)
+              [ $((_iso_oi+1)) -lt "$_iso_tok_count" ] || return 1
+              local _iso_c_value
+              _iso_c_value="$(_isolated_static_path_value "${_iso_toks[$((_iso_oi+1))]}")" \
+                || return 1
+              _iso_target="$(_isolated_resolve_path_from "$_iso_target" "$_iso_c_value")" \
+                || return 1
+              _iso_oi=$((_iso_oi+2))
+              ;;
+            -C?*|--git-dir|--git-dir=*|--work-tree|--work-tree=*)
+              return 1
+              ;;
+            -c|--config|--config-env)
+              _iso_oi=$((_iso_oi+2))
+              ;;
+            -*)
+              _iso_oi=$((_iso_oi+1))
+              ;;
+            commit)
+              _iso_is_commit=0
+              break
+              ;;
+            *)
+              break
+              ;;
+          esac
+        done
+        if [ "$_iso_is_commit" -eq 0 ]; then
+          _iso_targets+=("$_iso_target")
+          last_commit_index="$_iso_si"
+        fi
+        ;;
+      *)
+        _isolated_is_unresolvable_command_word "$_iso_word" && return 1
+        ;;
+    esac
+    _iso_si=$((_iso_si+1))
+  done
+
+  [ "${#_iso_targets[@]}" -gt 0 ] || return 1
+
+  local _iso_sep_i=0
+  while [ "$_iso_sep_i" -lt "$last_commit_index" ]; do
+    case "${_iso_separators[$_iso_sep_i]:-}" in
+      '&&'|';') ;;
+      *) return 1 ;;
+    esac
+    _iso_sep_i=$((_iso_sep_i+1))
+  done
+
+  printf '%s\n' "${_iso_targets[@]}"
 }
 
 # 引数: <command> <base_dir> (意味は resolve_commit_target_dirs と同じ)
@@ -104,5 +449,19 @@ resolve_commit_target_dirs() {
 #         満たす) / 1 = 免除しない
 # env `CLAUDE_ISOLATED_GIT_ROOTS` が未設定・空なら、コマンドを解析せずに 1 を返す。
 command_commits_only_to_isolated_roots() {
-  return 1
+  local cmd="$1"
+  local base="$2"
+  local targets target name
+  [ -n "${CLAUDE_ISOLATED_GIT_ROOTS:-}" ] || return 1
+  for name in $_ISOLATED_REPO_ENV_NAMES; do
+    eval "[ -z \"\${$name+set}\" ]" || return 1
+  done
+  isolated_git_roots >/dev/null || return 1
+  targets="$(resolve_commit_target_dirs "$cmd" "$base")" || return 1
+  [ -n "$targets" ] || return 1
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    isolated_dir_is_within_roots "$target" || return 1
+  done <<< "$targets"
+  return 0
 }
