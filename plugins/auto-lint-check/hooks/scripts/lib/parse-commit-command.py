@@ -518,9 +518,9 @@ def _simple_command_words(segment: str) -> list[str] | None:
     except ValueError:
         return None
     if words and words[0].startswith("(("):
-        # ``))`` で閉じる形だけが算術コマンド。``((cmd) )`` のように閉じない
-        # 形は bash が入れ子の subshell として解釈するため、解決不能とする。
-        return [] if segment.strip().endswith("))") else None
+        # ``((`` は算術コマンドとして不正な中身のとき bash が入れ子の subshell
+        # として実行しうる。算術かどうかを確定できないため解決不能とする。
+        return None
     result: list[str] = []
     skip_next = False
     for word in words:
@@ -604,8 +604,8 @@ def _strip_heredoc_bodies(command: str) -> str:
       - ANSI-C quoting (``$'``) と locale 翻訳 quoting (``$"``) を含まない
       - 引用符なし delimiter の heredoc 本文に行継続 (backslash + 改行) を
         含まない
-      - ``((`` で始まる simple command は ``))`` で閉じる算術コマンドに限り
-        command name 無しとして許容する (閉じない形は入れ子の subshell)
+      - ``((`` で始まる simple command を含まない (算術コマンドか入れ子の
+        subshell かを確定できないため)
       - すべての heredoc 演算子の delimiter WORD を読める
       - 関数定義 (``function NAME`` / ``NAME ()``) を含まない
     - 除去する場合、演算子を含む行の次の行から、``WORD`` (引用符を外した
@@ -620,8 +620,10 @@ def _strip_heredoc_bodies(command: str) -> str:
       が実行される) ため、本文に ``$(`` または backtick を含む場合は除去
       せず残し、後段の substitution fail-closed 判定 (exit 3) に委ねる
 
-    ``_strip_safe_heredocs`` の後に呼ぶこと (``-m "$(cat <<'EOF' ... EOF)"``
-    の本文を先に除去すると ``_HEREDOC_CAT_RE`` が一致しなくなる)。
+    ``_strip_safe_heredocs`` より前に呼ぶこと (``-m "$(cat <<'EOF' ... EOF)"``
+    は二重引用符内にあり演算子として検出しないため、この関数を通過しても
+    ``_HEREDOC_CAT_RE`` で後から除去できる。逆順では ``_HEREDOC_CAT_RE`` が
+    別の heredoc の本文データに一致して本文境界を壊しうる)。
     """
     out: list[str] = []
     # 演算子を検出済みで、本文をまだ読んでいない heredoc。本文は演算子の行の
@@ -787,8 +789,11 @@ def _normalize_command(command: str) -> str:
 
     1. CRLF (``\\r\\n``) を LF (``\\n``) に正規化 (Windows / WSL クライアント
        からの input でも heredoc 検出と shlex tokenize が正しく動くように)
-    2. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
-    3. 残りの heredoc の本文行を除去 (``_strip_heredoc_bodies``)
+    2. heredoc の本文行を除去 (``_strip_heredoc_bodies``)。二重引用符内の
+       安全な heredoc は演算子として検出しないため、この段階では残る。
+       step 3 より先に行うのは、step 3 の正規表現が別の heredoc の本文データ
+       に一致して本文境界を壊さないようにするため
+    3. 安全な heredoc (`$(cat <<'DELIM' ... DELIM)`) を空文字列に除去
     4. line continuation ``\\<newline>`` を space に変換 (bash 継続行を 1 行展開)
     5. real newline を ``;`` に変換 (shlex は newline を separator として扱わない)
 
@@ -798,8 +803,8 @@ def _normalize_command(command: str) -> str:
     本関数に集約してある。
     """
     command = command.replace("\r\n", "\n")
-    command = _strip_safe_heredocs(command)
     command = _strip_heredoc_bodies(command)
+    command = _strip_safe_heredocs(command)
     command = command.replace("\\\n", " ")
     command = command.replace("\n", ";")
     return command

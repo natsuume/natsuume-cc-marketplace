@@ -291,12 +291,29 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             3,
         )
 
-    def test_heredoc_after_arithmetic_command_is_excluded(self) -> None:
+    def test_arithmetic_command_keeps_all_heredoc_bodies(self) -> None:
         self.assertEqual(
             self.classify(
                 "(( x = 1 << 2 )); cat > f.md <<'EOF'\nfoo (git commit)\nEOF"
             ),
-            4,
+            0,
+        )
+
+    def test_double_paren_nested_subshell_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("((echo a); (bash)) <<'EOF'\ngit commit -m x\nEOF"),
+            5,
+        )
+
+    def test_safe_heredoc_pattern_inside_body_data_does_not_break_boundaries(
+        self,
+    ) -> None:
+        self.assertEqual(
+            self.classify(
+                "cat > f.md <<'OUT'\n-m \"$(cat <<'X'\nOUT\n"
+                "git commit -am y\ncat <<'Z'\nX)\"\nZ"
+            ),
+            0,
         )
 
     def test_body_fed_to_shell_interpreter_is_parsed_as_commands(self) -> None:
