@@ -26,10 +26,13 @@ rate_color() {
 }
 
 # プログレスバーを描画（幅は第2引数、デフォルト 20 文字）
+# 呼び出し側の幅予算はバー長 = width を前提とするため、pct は [0, 100] にクランプする
 progress_bar() {
   local pct=${1:-0}
   local width=${2:-20}
   [ "$width" -lt 1 ] && width=1
+  [ "$pct" -lt 0 ] && pct=0
+  [ "$pct" -gt 100 ] && pct=100
   local filled=$((pct * width / 100))
   local empty=$((width - filled))
   local bar="" i
