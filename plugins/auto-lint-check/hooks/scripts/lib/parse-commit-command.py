@@ -459,6 +459,9 @@ _UNMODELED_QUOTE_OPENERS: tuple[str, ...] = ("$'", '$"')
 # stdin を実行させうるため、関数定義を含むコマンドでは本文を除去しない。
 _FUNCTION_DEFINITION_RE = re.compile(r"(?:^|[\s;&|(){}])function(?:\s|$)|\(\s*\)")
 
+# 行末のリスト演算子・パイプ (``&&`` / ``||`` / ``|`` / ``;`` / ``&``)。
+_LIST_OPERATOR_TAIL_RE = re.compile(r"(?:&&|\|\||[|;&])[ \t]*$")
+
 # この文字の直後にある ``#`` はコメントの開始 (= 語の先頭)。
 _COMMENT_START_PRECEDERS: frozenset[str] = frozenset(" \t\n;&|()")
 
@@ -741,7 +744,13 @@ def _strip_heredoc_bodies(command: str) -> str:
             segments.append(command[segment_start:i])
             segment_start = i + 1
         if ch == "\n" and pending:
-            out.append(ch)
+            # 演算子の行がリスト演算子・パイプで終わる場合、後続の改行は継続で
+            # あり、本文除去後に改行を残すと正規化で ``&&;`` のような区切りと
+            # 認識されないトークンになる。空白に置き換えて後続コマンドへ繋ぐ。
+            if _LIST_OPERATOR_TAIL_RE.search("".join(out)):
+                out.append(" ")
+            else:
+                out.append(ch)
             i += 1
             for heredoc in pending:
                 end = _find_heredoc_body_end(
