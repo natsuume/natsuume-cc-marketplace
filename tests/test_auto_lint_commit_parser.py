@@ -173,11 +173,22 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             4,
         )
 
-    def test_unquoted_delimiter_body_is_not_commit(self) -> None:
-        self.assertEqual(
-            self.classify("cat > f.md <<EOF\nfoo (git commit)\nEOF"),
-            4,
-        )
+    def test_forms_outside_single_trailing_quoted_heredoc_keep_body(self) -> None:
+        # 本文除去の対象は「heredoc が 1 つ・引用符付き識別子の delimiter・
+        # 終端行が最終行」に限る。それ以外は本文もトークン化する (本文中の
+        # ``(git commit)`` を commit と数える保守側の挙動)。
+        for command, expected in (
+            ("cat > f.md <<EOF\nfoo (git commit)\nEOF", 0),
+            ("cat > f.md <<-EOF\n\tfoo (git commit)\n\tEOF\n", 0),
+            ("cat > f.md <<'EOF'\nfoo (git commit)\n", 0),
+            ("cat > f.md <<'EOF'\nit's (git commit)", 2),
+            ("cat <<A <<B\nfirst (git commit)\nA\nsecond (git commit)\nB", 0),
+            ("cat <<A <<B\nB\nA\nfoo (git commit)\nB", 0),
+            ("cat > f.md <<'-' bash\ngit commit -m x\n-", 5),
+            ("cat > f.md <<'E\rOF'\ngit commit -m x\nE\rOF", 5),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), expected)
 
     def test_command_after_terminator_is_still_parsed(self) -> None:
         self.assertEqual(
@@ -186,14 +197,6 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
                 "git add f.md && git commit -m change"
             ),
             0,
-        )
-
-    def test_dash_heredoc_body_with_tab_indented_terminator_is_not_commit(
-        self,
-    ) -> None:
-        self.assertEqual(
-            self.classify("cat > f.md <<-EOF\n\tfoo (git commit)\n\tEOF\n"),
-            4,
         )
 
     def test_dash_heredoc_tab_indented_terminator_ends_body(self) -> None:
@@ -207,34 +210,6 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
     def test_tab_indented_line_does_not_end_plain_heredoc(self) -> None:
         self.assertEqual(
             self.classify("cat > f.md <<'EOF'\n\tEOF\nfoo (git commit)\nEOF"),
-            4,
-        )
-
-    def test_unterminated_heredoc_excludes_rest_as_body(self) -> None:
-        self.assertEqual(
-            self.classify("cat > f.md <<'EOF'\nfoo (git commit)\n"),
-            4,
-        )
-
-    def test_unterminated_heredoc_with_unbalanced_quote_is_not_parse_failure(
-        self,
-    ) -> None:
-        self.assertEqual(
-            self.classify("cat > f.md <<'EOF'\nit's (git commit)"),
-            4,
-        )
-
-    def test_multiple_heredocs_on_one_line_are_all_excluded(self) -> None:
-        self.assertEqual(
-            self.classify(
-                "cat <<A <<B\nfirst (git commit)\nA\nsecond (git commit)\nB"
-            ),
-            4,
-        )
-
-    def test_multiple_heredocs_consume_bodies_in_operator_order(self) -> None:
-        self.assertEqual(
-            self.classify("cat <<A <<B\nB\nA\nfoo (git commit)\nB"),
             4,
         )
 
@@ -303,17 +278,6 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
         self.assertEqual(
             self.classify("((echo a); (bash)) <<'EOF'\ngit commit -m x\nEOF"),
             5,
-        )
-
-    def test_safe_heredoc_pattern_inside_body_data_does_not_break_boundaries(
-        self,
-    ) -> None:
-        self.assertEqual(
-            self.classify(
-                "cat > f.md <<'OUT'\n-m \"$(cat <<'X'\nOUT\n"
-                "git commit -am y\ncat <<'Z'\nX)\"\nZ"
-            ),
-            0,
         )
 
     def test_body_fed_to_shell_interpreter_is_parsed_as_commands(self) -> None:

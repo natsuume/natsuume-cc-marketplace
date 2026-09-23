@@ -408,10 +408,12 @@ def _read_heredoc_word(command: str, start: int) -> tuple[str | None, bool, int]
 
 def _find_heredoc_body_end(
     command: str, start: int, word: str, strip_tabs: bool
-) -> int:
+) -> tuple[int, bool]:
     """本文 1 行目の先頭 ``start`` から、終端行 (``WORD`` と完全一致する行。
-    ``strip_tabs`` なら先頭タブを除去して比較) の直後の index を返す。
-    終端行が無ければ ``len(command)`` を返す。"""
+    ``strip_tabs`` なら先頭タブを除去して比較) を探す。
+
+    戻り値は (終端行の直後の index, 終端行が見つかったか)。終端行が無ければ
+    (``len(command)``, False)。"""
     n = len(command)
     pos = start
     while pos < n:
@@ -420,9 +422,9 @@ def _find_heredoc_body_end(
         next_pos = n if newline == -1 else newline + 1
         line = command[pos:line_end]
         if (line.lstrip("\t") if strip_tabs else line) == word:
-            return next_pos
+            return next_pos, True
         pos = next_pos
-    return n
+    return n, False
 
 
 @dataclass
@@ -467,6 +469,9 @@ _UNMODELED_OUTSIDE_BODY_MARKERS: tuple[str, ...] = (
     "<<<",
     "\\\n",
 )
+
+# 本文除去の対象にする heredoc delimiter (引用符を外した WORD) の形。
+_HEREDOC_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # 関数定義 (``function NAME`` / ``NAME ()``)。allowlist 内の名前を再定義して
 # stdin を実行させうるため、関数定義を含むコマンドでは本文を除去しない。
@@ -585,6 +590,27 @@ def _is_data_only_segment(segment: str) -> bool:
     return len(words) > 1 and words[1] in allowed_subcommands
 
 
+def _is_single_trailing_heredoc(
+    command: str, consumed_heredocs: list[tuple[_PendingHeredoc, bool, int]]
+) -> bool:
+    """本文除去の対象になる構造か判定する。
+
+    コマンド中の heredoc がちょうど 1 つで、delimiter が引用符付きの識別子
+    (``<<-`` ではない)、かつ終端行がコマンドの最終行 (後ろに空白以外が無い)
+    の場合に限り True。終端行より後ろに行が無いため、本文の範囲の推定が
+    bash と食い違っても後続のコマンドを除去する経路が生じない。"""
+    if len(consumed_heredocs) != 1:
+        return False
+    heredoc, terminated, end = consumed_heredocs[0]
+    return (
+        heredoc.quoted
+        and not heredoc.strip_tabs
+        and _HEREDOC_IDENTIFIER_RE.fullmatch(heredoc.word) is not None
+        and terminated
+        and command[end:].strip() == ""
+    )
+
+
 def _strip_heredoc_bodies(command: str) -> str:
     """heredoc の本文行と終端行を command から除去し、演算子の行は残す。
 
@@ -601,9 +627,15 @@ def _strip_heredoc_bodies(command: str) -> str:
       parameter expansion (``${`` ... ``}``、ネストを追跡) の内側、語の境界
       (行頭・空白・区切り文字の直後) にある ``#`` から行末までのコメントの
       内側。語の途中の ``#`` (``a#b``) はコメントではない
-    - 本文を除去するのは、コマンド全体 (heredoc 本文を除いた部分) が次を
-      すべて満たす場合に限る。1 つでも満たさなければ、すべての heredoc
-      本文を除去せず command をそのまま返す
+    - 本文を除去するのは、heredoc がコマンド中にちょうど 1 つで、その
+      delimiter が引用符付きの識別子 (``<<-`` ではない) で、終端行が
+      コマンドの最終行である場合 (``_is_single_trailing_heredoc``) に限る。
+      複数の heredoc、引用符なし delimiter、``<<-``、終端行が無い heredoc、
+      終端行の後ろに行が続く heredoc は、本文を除去せず command をそのまま
+      返す
+    - 加えて、コマンド全体 (heredoc 本文を除いた部分) が次をすべて満たす
+      必要がある。1 つでも満たさなければ本文を除去せず command をそのまま
+      返す
       - すべての simple command の command name (代入・shell keyword・
         redirection を読み飛ばした最初の語) が解決でき、その basename が
         ``HEREDOC_DATA_ONLY_COMMANDS`` に含まれる。command name を持たない
@@ -630,10 +662,9 @@ def _strip_heredoc_bodies(command: str) -> str:
       文字列) と完全一致する行までを本文として除去する。終端行自体も除去
       する。``<<-`` の場合は各行の先頭タブを除去してから終端判定する。
       ``EOFX`` のような部分一致行は終端にしない
-    - 同一行に複数の演算子がある場合 (``cmd <<A <<B``) は、演算子の出現順
-      に本文を消費する
-    - 終端行が見つからない場合は、演算子の行より後ろの全行を本文として
-      除去する (parse failure にしない)
+    - 走査では、同一行に複数の演算子がある場合 (``cmd <<A <<B``) は演算子
+      の出現順に本文を消費し、終端行が見つからない場合は演算子の行より
+      後ろの全行を本文とみなす (いずれも除去の対象外と判定するため)
     - 引用符なしの ``WORD`` の本文は bash が展開する (``$(...)`` / backtick
       が実行される) ため、本文に ``$(`` または backtick を含む場合は除去
       せず残し、後段の substitution fail-closed 判定 (exit 3) に委ねる
@@ -655,6 +686,9 @@ def _strip_heredoc_bodies(command: str) -> str:
     # delimiter WORD を読めなかった heredoc 演算子がある場合、その本文の範囲が
     # 決まらず、以降の本文境界もすべて bash と食い違いうる。
     has_unresolved_heredoc_word = False
+    # 本文を消費した heredoc の (演算子情報, 終端行が見つかったか, 本文終端の
+    # 直後の index)。
+    consumed_heredocs: list[tuple[_PendingHeredoc, bool, int]] = []
     # heredoc 本文とコメントを除いた simple command の文字列。
     segments: list[str] = []
     # 現在の simple command の開始 index。
@@ -771,9 +805,10 @@ def _strip_heredoc_bodies(command: str) -> str:
             out.append(f" {ch} ")
             i += 1
             for heredoc in pending:
-                end = _find_heredoc_body_end(
+                end, terminated = _find_heredoc_body_end(
                     command, i, heredoc.word, heredoc.strip_tabs
                 )
+                consumed_heredocs.append((heredoc, terminated, end))
                 body = command[i:end]
                 if not heredoc.quoted and "\\\n" in body:
                     has_body_line_continuation = True
@@ -787,6 +822,8 @@ def _strip_heredoc_bodies(command: str) -> str:
         i += 1
     segments.append(command[segment_start:n])
     if not found_heredoc:
+        return command
+    if not _is_single_trailing_heredoc(command, consumed_heredocs):
         return command
     if (
         has_process_substitution
