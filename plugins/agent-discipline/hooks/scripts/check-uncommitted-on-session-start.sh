@@ -14,6 +14,8 @@ fi
 INPUT=$(cat)
 
 # cwd の改行を壊さないよう、Linux / macOS bash 3.2 で扱える NUL delimiter を使う。
+# hook の stderr は利用者に見えるため、不正 JSON の解析エラーは表に出さず、
+# 空値として後段の無音終了に委ねる。
 {
   IFS= read -r -d '' RAW_SESSION_ID
   IFS= read -r -d '' PERMISSION_MODE
@@ -23,7 +25,7 @@ INPUT=$(cat)
     (.session_id // ""), "\u0000",
     (.permission_mode // ""), "\u0000",
     (.cwd // ""), "\u0000"
-  '
+  ' 2>/dev/null
 )
 
 # permission_mode が literal auto のときだけ配送する。

@@ -58,7 +58,7 @@ WORKER_AGENT = FORK_PLUGIN / "agents" / "fable-low-worker.md"
 EXPLORER_AGENT = FORK_PLUGIN / "agents" / "fable-low-explorer.md"
 
 PLUGIN_NAME = "experimental-agent-discipline"
-PLUGIN_VERSION = "0.3.0"
+PLUGIN_VERSION = "0.3.1"
 
 WORKER_SUBAGENT_TYPE = f"{PLUGIN_NAME}:fable-low-worker"
 EXPLORER_SUBAGENT_TYPE = f"{PLUGIN_NAME}:fable-low-explorer"
