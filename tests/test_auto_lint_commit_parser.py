@@ -277,6 +277,28 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             5,
         )
 
+    def test_shift_in_arithmetic_command_is_not_heredoc(self) -> None:
+        self.assertEqual(
+            self.classify("(( x = 1 << 2 )) && true\ngit commit -m x"),
+            5,
+        )
+
+    def test_shift_in_arithmetic_expansion_keeps_substitution_fail_closed(
+        self,
+    ) -> None:
+        self.assertEqual(
+            self.classify("echo $(( 1 << 2 ))\ngit commit -m x"),
+            3,
+        )
+
+    def test_heredoc_after_arithmetic_command_is_excluded(self) -> None:
+        self.assertEqual(
+            self.classify(
+                "(( x = 1 << 2 )); cat > f.md <<'EOF'\nfoo (git commit)\nEOF"
+            ),
+            4,
+        )
+
     def test_unquoted_delimiter_body_substitution_still_fails_closed(
         self,
     ) -> None:

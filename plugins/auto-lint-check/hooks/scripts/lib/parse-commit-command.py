@@ -421,7 +421,8 @@ def _strip_heredoc_bodies(command: str) -> str:
 
     - 引用符の外にある ``<<WORD`` / ``<<-WORD`` / ``<<'WORD'`` /
       ``<<"WORD"`` を heredoc 演算子として検出する。``<<<`` (here-string)
-      は heredoc として扱わない
+      と、算術コンテキスト (``((`` ... ``))`` / ``$((`` ... ``))``) の内側の
+      ``<<`` (shift 演算子) は heredoc として扱わない
     - 演算子を含む行の次の行から、``WORD`` (引用符を外した文字列) と完全
       一致する行までを本文として除去する。終端行自体も除去する。
       ``<<-`` の場合は各行の先頭タブを除去してから終端判定する。
@@ -442,6 +443,10 @@ def _strip_heredoc_bodies(command: str) -> str:
     # strip_tabs)。本文は演算子の行の改行の後から出現順に読む。
     pending: list[tuple[str, bool, bool]] = []
     quote: str | None = None
+    # 算術コンテキスト (``((`` ... ``))`` / ``$((`` ... ``))``) の内側で未対応の
+    # 括弧の数。0 より大きい間は ``<<`` を shift 演算子とみなし、heredoc
+    # 演算子として扱わない。
+    arith_depth = 0
     n = len(command)
     i = 0
     while i < n:
@@ -466,6 +471,22 @@ def _strip_heredoc_bodies(command: str) -> str:
             quote = ch
             out.append(ch)
             i += 1
+            continue
+        if arith_depth:
+            if ch == "(":
+                arith_depth += 1
+            elif ch == ")":
+                arith_depth -= 1
+            out.append(ch)
+            i += 1
+            continue
+        arith_open = next(
+            (op for op in ("$((", "((") if command.startswith(op, i)), None
+        )
+        if arith_open is not None:
+            arith_depth = 2
+            out.append(arith_open)
+            i += len(arith_open)
             continue
         if command.startswith("<<<", i):
             out.append("<<<")
