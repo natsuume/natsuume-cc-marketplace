@@ -537,6 +537,14 @@ class ExecutionTimeTargetDivergenceIsolatedRootsTest(IsolatedGitRootsTestBase):
 
         self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
 
+    def test_any_symlink_directly_under_git_dir_is_denied(self) -> None:
+        editmsg = self.iso_repo / ".git" / "COMMIT_EDITMSG"
+        if editmsg.exists() or editmsg.is_symlink():
+            editmsg.unlink()
+        editmsg.symlink_to(self.outside_repo / "COMMIT_EDITMSG_TARGET")
+
+        self.assert_denied_by_both_hooks(f"git -C {self.iso_repo} commit -m x")
+
 
 class CommitRecognitionMismatchIsolatedRootsTest(IsolatedGitRootsTestBase):
     """hook と免除判定の commit 認識が食い違いうる形は免除しない (GG / AL 共通)。

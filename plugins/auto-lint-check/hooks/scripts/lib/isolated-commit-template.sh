@@ -77,6 +77,9 @@
 #           不可。detached HEAD なら検査しない
 #         reftable: common-dir 直下の `reftable` ディレクトリ (存在しなければ不可)
 #         それ以外の形式: 不可
+#   加えて、common-dir と git dir の直下 (ドットで始まる名前を含む) に symlink が 1 つでも
+#   あれば、指す先が許可ルート内かどうかに関わらず不可 (commit が書き込む entry を列挙せずに
+#   symlink 経由の書き込みをまとめて塞ぐ)。
 #   objects / logs 配下の深い階層の symlink は検査しない (branch は動かないため)。
 #   パス・git の出力に LF / CR が含まれる場合は不可。コマンド置換で受け取る値には番兵文字を
 #   付け、コマンド置換が末尾の改行を全て削ることで値が別のパス・ref 名に化けるのを防ぐ。
@@ -481,6 +484,20 @@ _ict_git_entry_within_roots() {
   _ict_within_roots "$_ICT_CANONICAL"
 }
 
+# 引数: <dir>
+# 戻り値: 0 = <dir> の直下 (ドットで始まる名前を含む) に symlink が 1 つ以上ある / 1 = 無い
+# commit が git dir 直下に書き込む entry (COMMIT_EDITMSG・logs 等) を列挙せずに、symlink 経由で
+# 許可ルート外へ書き込む経路をまとめて塞ぐために使う。glob が一致しない場合はパターン文字列が
+# そのまま残るが、存在しないパスは symlink ではないため判定に影響しない。
+_ict_dir_has_symlink_entry() {
+  local dir="$1"
+  local entry
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -L "$entry" ] && return 0
+  done
+  return 1
+}
+
 # 引数: <git-dir-path> <dir> (<git-dir-path> は rev-parse の出力。相対なら <dir> 基準)
 # 戻り値: 0 = canonical 実パスを _ICT_CANONICAL に設定した / 1 = 解決できない
 _ict_canonical_git_dir() {
@@ -592,6 +609,8 @@ _ict_repo_is_within_roots() {
   for entry in HEAD index reftable; do
     _ict_git_entry_within_roots "$canonical_git_dir/$entry" || return 1
   done
+  _ict_dir_has_symlink_entry "$canonical_common_dir" && return 1
+  _ict_dir_has_symlink_entry "$canonical_git_dir" && return 1
   _ict_head_ref_within_roots "$dir" "$canonical_common_dir"
 }
 

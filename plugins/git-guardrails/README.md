@@ -186,6 +186,7 @@ git -C /tmp/claude-sandbox/repo commit --allow-empty -F /tmp/claude-sandbox/mess
 - `<ABS>` の canonical 実パス
 - `<ABS>` で `git rev-parse --git-common-dir` / `--git-dir` が返す repo 本体・git dir (linked worktree では worktree 固有の git dir) の canonical 実パス (許可ルート配下に置いた linked worktree や symlink 経由で、ルート外の repo を更新する経路は免除しません)
 - repo 本体直下の `refs` / `objects` / `HEAD` / `packed-refs` / `logs` / `reftable` と、git dir (linked worktree では worktree 固有の git dir、通常の repo では repo 本体) 直下の `HEAD` / `index` / `reftable` のうち存在するものの実体 (ディレクトリは symlink を解決した実パスで判定し、ファイル自体が symlink の場合は免除しません)
+- repo 本体と git dir の直下 (ドットで始まる名前を含む) に symlink が 1 つも無い (指す先が許可ルート内でも免除しません。commit が書き込む `COMMIT_EDITMSG` や `logs` 等を symlink 経由で許可ルート外へ書き込む経路をまとめて塞ぐため)
 - branch ref の格納先。repo の ref 格納形式 (`git rev-parse --show-ref-format`。このオプションに対応しない古い git では files とみなします) で判定を分けます
   - files 形式: HEAD が指す branch の ref (`git symbolic-ref -q HEAD` の ref 名。例 `refs/heads/master`) の格納先ディレクトリ (未作成なら存在する最も近い祖先。ref ファイル自体が symlink の場合は免除しません。detached HEAD では branch を更新しないため検査しません)
   - reftable 形式: repo 本体直下の `reftable` ディレクトリ (存在しない場合は免除しません)
