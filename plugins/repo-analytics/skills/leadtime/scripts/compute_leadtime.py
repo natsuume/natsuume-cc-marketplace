@@ -140,6 +140,50 @@ SIZE_BANDS: list[tuple[str, int, int | None]] = [
 """
 
 
+MIN_PYTHON_VERSION: tuple[int, int] = (3, 11)
+"""このスクリプトが要求する Python の最小 (major, minor) バージョン。
+
+`_parse_datetime` が使う `datetime.fromisoformat()` の末尾 `Z` サフィックス
+受理は Python 3.11 で追加された挙動であり、このバージョン未満の実行環境では
+`--as-of` 等 ISO8601 `Z` 形式の値が正しくても `ValueError` になる。
+`diagnose_python_version` はこの定数を基準に実行中の Python バージョンを
+検査する。
+"""
+
+
+def diagnose_python_version(
+    version_info: tuple[int, ...] = sys.version_info,
+) -> str | None:
+    """実行中の Python バージョンが `MIN_PYTHON_VERSION` を満たすか検査する。
+
+    `sys.version_info` を関数内部で直接参照せず引数として受け取ることで、
+    バージョン判定ロジックを実行環境の参照から分離する (I/O 分離)。呼び出し側
+    は任意の `sys.version_info` 相当のタプルを注入して判定結果を検証できる。
+    本関数自身は stderr への出力やプロセス終了を行わない。
+
+    Args:
+        version_info: `sys.version_info` 相当のタプル。先頭 2 要素
+            (`major`, `minor`) のみを判定に使うため、`(major, minor)` の
+            2 要素タプルでもよい。省略時は実行中の `sys.version_info`。
+
+    Returns:
+        str | None: `(version_info[0], version_info[1])` が
+        `MIN_PYTHON_VERSION` 以上なら `None` (合格)。未満なら、要求バージョン
+        (`MIN_PYTHON_VERSION`) と検出バージョン (`version_info` の先頭 2 要素)
+        の両方を含む診断メッセージを返す (不合格)。
+
+    呼び出し側の契約 (`main` の起動処理内で満たす):
+        戻り値が `None` でない場合、呼び出し側はその文字列を GitHub API
+        呼び出し・入力ファイル読み込みより前に stderr へ出力し、exit code
+        `2` で終了しなければならない (fail-closed)。
+
+    未実装:
+        本関数は契約定義のみの骨格であり、`NotImplementedError` を送出する。
+        実装が入るまでは常に例外を送出し、呼び出し側からの配線も行わない。
+    """
+    raise NotImplementedError
+
+
 class ClaimPatternsError(Exception):
     """claim patterns file (`--claim-patterns-file` が指す patterns.json) が
     公開契約 (SKILL.md 「claim 判定パターン (正本)」セクション) に違反する場合に
