@@ -54,7 +54,7 @@ BASE_PLUGIN = ROOT / "plugins" / "agent-discipline"
 FORK_PLUGIN = ROOT / "plugins" / "experimental-agent-discipline"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "0.27.1"
+PLUGIN_VERSION = "0.28.0"
 
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 REPO_README = ROOT / "README.md"
