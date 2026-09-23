@@ -361,7 +361,9 @@ def _read_heredoc_word(command: str, start: int) -> tuple[str | None, bool, int]
 
     戻り値は (引用符と backslash を外した WORD, WORD の一部でも引用符または
     backslash で quote されているか, WORD の直後の index)。WORD が無い場合
-    の WORD は ``None``。
+    の WORD は ``None``。WORD に行継続 (backslash + 改行) や改行を含む引用符
+    が現れる場合も、bash と同じ WORD を読める保証が無いため ``None`` を返す
+    (その heredoc の本文は除去されずトークン化の対象に残る)。
     """
     n = len(command)
     i = start
@@ -376,10 +378,14 @@ def _read_heredoc_word(command: str, start: int) -> tuple[str | None, bool, int]
             close = command.find(ch, i + 1)
             if close == -1:
                 close = n
+            if "\n" in command[i + 1 : close]:
+                return None, False, word_start
             quoted = True
             chars.append(command[i + 1 : close])
             i = close + 1
             continue
+        if ch == "\\" and i + 1 < n and command[i + 1] == "\n":
+            return None, False, word_start
         if ch == "\\" and i + 1 < n:
             quoted = True
             chars.append(command[i + 1])
