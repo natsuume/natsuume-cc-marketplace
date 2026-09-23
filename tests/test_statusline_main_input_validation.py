@@ -15,8 +15,8 @@ STATUSLINE_MAIN = ROOT / "plugins" / "natsuume-statusline" / "statusline" / "mai
 class StatuslineMainInputValidationTest(unittest.TestCase):
     """main.sh が stdin の JSON を事前検証する契約を検証する。
 
-    トップレベルが JSON object でない入力 (不正 JSON・object 以外の JSON・空入力) では、
-    jq のエラーを stderr に出さず、空出力のまま exit 0 で終了する。
+    単一の JSON object 以外の入力 (不正 JSON・object 以外の JSON・複数の JSON 値の連結・
+    空入力) では、jq のエラーを stderr に出さず、空出力のまま exit 0 で終了する。
     """
 
     def setUp(self) -> None:
@@ -63,6 +63,11 @@ class StatuslineMainInputValidationTest(unittest.TestCase):
 
     def test_non_object_json_exits_silently(self) -> None:
         for stdin in ("[]", '"text"', "42", "null"):
+            with self.subTest(stdin=stdin):
+                self.assert_silent_exit(stdin)
+
+    def test_multiple_json_values_exit_silently(self) -> None:
+        for stdin in ("[] {}", "{} []", "{} {}"):
             with self.subTest(stdin=stdin):
                 self.assert_silent_exit(stdin)
 
