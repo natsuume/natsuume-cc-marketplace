@@ -82,8 +82,9 @@
 #        (`token_is_unanalyzable`) は構造検査と意味検査の 2 種類に分かれる。 構造検査
 #        (quote が閉じない・quote 外の空白 = 共有 tokenizer の quote 状態 desync で
 #        複数 word が 1 token に merge され危険 option を隠す経路、 quote 外の
-#        `(`/`)` = 関数定義や subshell 等の compound command を作る文法構造) は
-#        全 token に適用する。 意味検査 (quote 外の `$`・brace expansion・pathname expansion・
+#        `(`/`)` = 関数定義や subshell 等の compound command を作る文法構造、
+#        `${`/`$[` = 算術評価される添字や prompt 展開等、 展開の過程で評価を伴い
+#        うる形) は全 token に適用する。 意味検査 (quote 外の `$`・brace expansion・pathname expansion・
 #        tilde expansion 等、 bash が parse 後に展開するため展開結果を静的に決定
 #        できない構文) は、 値を判定に使う token (実 head・timeout の duration・git
 #        subcommand・find / rg / sort / git の option 走査対象) にだけ適用する。 値を
@@ -750,7 +751,7 @@ note_literal_contribution() {
 
 # token_is_unanalyzable <raw_token> <check_kind>
 # <check_kind>:
-#   `structure` = 構造検査のみ (rule (a)/(b)/(b2))。 全 token に適用する
+#   `structure` = 構造検査のみ (rule (a)/(b)/(b2)/(b3))。 全 token に適用する
 #   `head` = 構造検査 + 意味検査の厳格判定 (rule (a)〜(d))。 実 head・timeout の
 #     duration・git subcommand に適用する
 #   `option_scan` = 構造検査 + 意味検査 (rule (c) を 2 点緩和)。 find / rg / sort /
@@ -788,6 +789,12 @@ note_literal_contribution() {
 #   (b2) quote 外の `(` / `)` が現れる (値の展開ではなく、 関数定義
 #       `f () ( <cmd> )` や subshell 等の compound command を作る文法構造。
 #       head 以外の位置に現れても segment が実行面を持ちうる)
+#   (b3) quote 外または double quote 内に `${` / `$[` が現れる (展開の過程で
+#       評価を伴いうる形。 indexed array の添字は算術評価され
+#       `${a['$(<cmd>)']}` の single quote 内のコマンド置換も実行される。
+#       `${x@P}` は値を prompt 文字列として展開しコマンド置換を実行する。
+#       `$[...]` は旧算術展開。 値を使わない位置でも実行面を持つ。 中括弧の
+#       無い単純な変数展開 `$VAR` は評価を伴わないため対象外)
 # 意味検査 (<check_kind> が `head` / `option_scan`):
 #   (c) quote 外に展開・置換・word 生成を導入する文字が現れる: `$` (変数展開・
 #       `${...}`・コマンド置換 `$(...)`・ANSI-C quoting `$'...'`・locale 翻訳
@@ -808,7 +815,7 @@ note_literal_contribution() {
 # **厳格判定と option 走査緩和の非対称**: option 走査対象 token は、 危険 option
 # (列挙済みの `-` 始まりの値) と一致するかどうかだけに値を使う。 そのため
 # <check_kind> = `option_scan` の場合に限り rule (c) を次の 2 点だけ緩和する
-# (rule (a)/(b)/(b2)/(d) は不変)。 `rg -n marker plugins/*/<wrapper>` や
+# (rule (a)/(b)/(b2)/(b3)/(d) は不変)。 `rg -n marker plugins/*/<wrapper>` や
 # `rg -n marker ~/.claude/plugins/cache/.../<wrapper>` (installed wrapper を参照
 # する正規の書き方) のような path operand を、 option 走査の途中でも mention
 # 候補として扱うためである:
@@ -896,7 +903,7 @@ token_is_unanalyzable() {
 
   case "$_tw_pos" in
     structure)
-      # 構造検査のみ (rule (a)/(b)/(b2))。 意味検査 (rule (c)/(d)) は行わない。
+      # 構造検査のみ (rule (a)/(b)/(b2)/(b3))。 意味検査 (rule (c)/(d)) は行わない。
       _tw_semantic=0
       ;;
     option_scan)
@@ -945,6 +952,15 @@ token_is_unanalyzable() {
         _tw_i=$((_tw_i+1))
         continue
       fi
+      if [ "$_tw_c" = '$' ]; then
+        case "${_tw_tok:$((_tw_i+1)):1}" in
+          '{'|'[')
+            # rule (b3): `${...}` / `$[...]` は構造検査でも解析不能 (関数
+            # コメント参照)。 全 <check_kind> に適用する。
+            return 0
+            ;;
+        esac
+      fi
       if [ "$_tw_semantic" -eq 1 ] && [ "$_tw_c" = '`' ]; then
         # rule (d): escape されていないバッククォート。
         return 0
@@ -986,8 +1002,9 @@ token_is_unanalyzable() {
     fi
 
     if [ "$_tw_semantic" -eq 0 ]; then
-      # 構造検査のみ: quote の開始を追跡し、 rule (b2) の `(` / `)` を検出する。
-      # それ以外の unquoted 文字は rule (c) の対象にせず読み飛ばす。
+      # 構造検査のみ: quote の開始を追跡し、 rule (b2) の `(` / `)` と rule (b3)
+      # の `${` / `$[` を検出する。 それ以外の unquoted 文字は rule (c) の対象に
+      # せず読み飛ばす。
       case "$_tw_c" in
         "'") _tw_in_squote=1 ;;
         '"') _tw_in_dquote=1 ;;
@@ -997,6 +1014,17 @@ token_is_unanalyzable() {
           # 構造である。 head 以外の位置に現れても segment が実行面を持ちうる
           # ため、 値の用途に依らず解析不能とする。
           return 0
+          ;;
+        '$')
+          case "${_tw_tok:$((_tw_i+1)):1}" in
+            '{'|'[')
+              # rule (b3): `${...}` / `$[...]` は展開の過程で評価を伴いうる
+              # (算術評価される配列添字 `${a['$(<cmd>)']}`、 prompt 展開
+              # `${x@P}`、 旧算術展開 `$[...]`)。 値を使わない位置でもコマンド
+              # 置換が実行されるため、 値の用途に依らず解析不能とする。
+              return 0
+              ;;
+          esac
           ;;
       esac
       _tw_i=$((_tw_i+1))
@@ -1156,7 +1184,8 @@ is_option_scan_barrier() {
 #           tokenizer の quote 状態 desync により複数 shell word が 1 token に
 #           merge され、 内側に危険 option (`--pre` 等) を隠して
 #           canonicalize_token の exact / prefix 一致を逃れる経路と、 quote 外の
-#           `(`/`)` による関数定義 (`f () ( <cmd> )`) 等の compound command が
+#           `(`/`)` による関数定義 (`f () ( <cmd> )`) 等の compound command や、
+#           `${`/`$[` による評価を伴う展開 (`${a['$(<cmd>)']}` / `${x@P}`) が
 #           head 以外の位置から実行面を作る経路を塞ぐ。
 #      (ii) 意味検査: bash は quote 外の `$` (各種 quoting 含む)・brace
 #           expansion・pathname expansion (glob)・tilde expansion を parse 後に
@@ -1626,7 +1655,7 @@ if [ "$AGENT_TYPE" != "pre-push-codex-review:codex-reviewer" ]; then
 
 wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
 
-Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せずに使ってください。 `cat` / `wc` 等の引数は、 `$VAR` 等の動的展開・brace expansion (`{a,b}`)・`~user` 形・glob を含んでいても deny されません。 一方、 次の形は read-only コマンドでも deny されます: コマンド置換 (`$(...)` / バッククォート) を含む / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します) / `find` / `rg` / `sort` / `git` の引数に、 `$VAR` 等の動的展開・brace expansion・`~user` 形、 または glob メタ文字で始まる path (`*/run-pre-push-codex-review.sh` 等) を置いている (option として解釈されうる位置では展開結果を静的に決定できないため)。 最後の形は、 `./*/run-pre-push-codex-review.sh` のように `./` を前置するか、 `git diff -- <path>` のように `--` の後ろに置けば allow されます (`--` の直前が `-` 始まりの option の場合、 `--` より前の引数に redirection・glob・展開を含む場合、 コマンドに `2>&1` / `>>` / `<<` 等の redirection を含む場合は、 `--` が option の値として扱われうるため対象外です)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
+Bash で確認する場合は、 `cat` / `git diff` / `grep` 等の read-only コマンドを、 環境変数代入を前置せずに使ってください。 `cat` / `wc` 等の引数は、 中括弧の無い単純な変数展開 (`$VAR`)・brace expansion (`{a,b}`)・`~user` 形・glob を含んでいても deny されません。 一方、 次の形は read-only コマンドでも deny されます: コマンド置換 (`$(...)` / バッククォート) や、 評価を伴いうる `${...}` / `$[...]` 形の展開を含む / `NAME=VALUE cmd ...` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します) / `find` / `rg` / `sort` / `git` の引数に、 `$VAR` 等の動的展開・brace expansion・`~user` 形、 または glob メタ文字で始まる path (`*/run-pre-push-codex-review.sh` 等) を置いている (option として解釈されうる位置では展開結果を静的に決定できないため)。 最後の形は、 `./*/run-pre-push-codex-review.sh` のように `./` を前置するか、 `git diff -- <path>` のように `--` の後ろに置けば allow されます (`--` の直前が `-` 始まりの option の場合、 `--` より前の引数に redirection・glob・展開を含む場合、 コマンドに `2>&1` / `>>` / `<<` 等の redirection を含む場合は、 `--` が option の値として扱われうるため対象外です)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
 
 対応:
   - `/pre-push-codex-review:review` で push 前レビューを並列起動してください (推奨)
@@ -1642,7 +1671,7 @@ EOF
 
 wrapper を実行せずファイル内容を確認したいだけなら、 **Read / Grep tool を使ってください** (本 hook は Bash tool のみを対象とするため、 形によらず deny されません)。
 
-Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せずに使ってください。 \`cat\` / \`wc\` 等の引数は、 \`\$VAR\` 等の動的展開・brace expansion (\`{a,b}\`)・\`~user\` 形・glob を含んでいても deny されません。 一方、 次の形は read-only コマンドでも deny されます: コマンド置換 (\`\$(...)\` / バッククォート) を含む / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します) / \`find\` / \`rg\` / \`sort\` / \`git\` の引数に、 \`\$VAR\` 等の動的展開・brace expansion・\`~user\` 形、 または glob メタ文字で始まる path (\`*/run-pre-push-codex-review.sh\` 等) を置いている (option として解釈されうる位置では展開結果を静的に決定できないため)。 最後の形は、 \`./*/run-pre-push-codex-review.sh\` のように \`./\` を前置するか、 \`git diff -- <path>\` のように \`--\` の後ろに置けば allow されます (\`--\` の直前が \`-\` 始まりの option の場合、 \`--\` より前の引数に redirection・glob・展開を含む場合、 コマンドに \`2>&1\` / \`>>\` / \`<<\` 等の redirection を含む場合は、 \`--\` が option の値として扱われうるため対象外です)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
+Bash で確認する場合は、 \`cat\` / \`git diff\` / \`grep\` 等の read-only コマンドを、 環境変数代入を前置せずに使ってください。 \`cat\` / \`wc\` 等の引数は、 中括弧の無い単純な変数展開 (\`\$VAR\`)・brace expansion (\`{a,b}\`)・\`~user\` 形・glob を含んでいても deny されません。 一方、 次の形は read-only コマンドでも deny されます: コマンド置換 (\`\$(...)\` / バッククォート) や、 評価を伴いうる \`\${...}\` / \`\$[...]\` 形の展開を含む / \`NAME=VALUE cmd ...\` のように代入を前置している (代入値が head の間接実行面を有効化しうるため、 値によらず deny します) / \`find\` / \`rg\` / \`sort\` / \`git\` の引数に、 \`\$VAR\` 等の動的展開・brace expansion・\`~user\` 形、 または glob メタ文字で始まる path (\`*/run-pre-push-codex-review.sh\` 等) を置いている (option として解釈されうる位置では展開結果を静的に決定できないため)。 最後の形は、 \`./*/run-pre-push-codex-review.sh\` のように \`./\` を前置するか、 \`git diff -- <path>\` のように \`--\` の後ろに置けば allow されます (\`--\` の直前が \`-\` 始まりの option の場合、 \`--\` より前の引数に redirection・glob・展開を含む場合、 コマンドに \`2>&1\` / \`>>\` / \`<<\` 等の redirection を含む場合は、 \`--\` が option の値として扱われうるため対象外です)。 これら以外にも、 静的に解析できない形は保守的に deny されます。
 
 対応:
   - \`/pre-push-codex-review:review\` で push 前レビューを並列起動してください (推奨)

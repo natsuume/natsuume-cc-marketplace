@@ -578,6 +578,12 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
        - (b2) quote 外に `(` / `)` が現れる (値の展開ではなく、関数定義
          `f () ( <cmd> )` や subshell 等の compound command を作る文法
          構造であり、head 以外の位置に現れても segment が実行面を持ちうる)
+       - (b3) quote 外または double quote 内に `${` / `$[` が現れる (展開
+         の過程で評価を伴いうる形。indexed array の添字は算術評価され
+         `${a['$(<cmd>)']}` の single quote 内のコマンド置換も実行される。
+         `${x@P}` は値を prompt 文字列として展開しコマンド置換を実行する。
+         `$[...]` は旧算術展開。値を使わない位置でも実行面を持つ。中括弧
+         の無い単純な変数展開 `$VAR` は評価を伴わないため対象外)
 
        **意味検査 (値を判定に使う token のみ)**: 次のいずれかに該当する
        token は、展開結果を静的に決定できないため値を判定に使えない。
@@ -2603,8 +2609,8 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
       厳格判定を通過しないもの (redirection / glob 等) がある `--`、
       分類前の redirection 正規化で除去が起きたコマンドの `--` は barrier
       とみなさない
-    - quote 外の `(` / `)` は構造検査の対象であり、値を消費しない head の
-      operand でも実行形とする
+    - quote 外の `(` / `)` と、quote 外または double quote 内の `${` / `$[`
+      は構造検査の対象であり、値を消費しない head の operand でも実行形とする
 
     payload は agent_type を持たないため、実行形と分類された segment は
     deny、mention 候補は allow になる。
@@ -2652,6 +2658,13 @@ class BlockBgCodexWrapperSemanticCheckScopeTest(unittest.TestCase):
         # quote 外の `(` / `)` は値を消費しない head の operand でも構造検査で捕捉する。
         f"f () ( bash {WRAPPER_NAME} )",
         f"cat x ( {WRAPPER_NAME} )",
+        # `${...}` / `$[...]` は評価を伴いうるため、値を消費しない head の operand
+        # でも構造検査で捕捉する。
+        f"cat ${{a['$(bash {WRAPPER_NAME})']}}",
+        f"cat \"${{a['$(bash {WRAPPER_NAME})']}}\"",
+        f"cat ${{x@P}} {WRAPPER_NAME}",
+        f"cat \"${{HOME}}/{WRAPPER_NAME}\"",
+        f"cat $[a['$(bash {WRAPPER_NAME})']]",
         # find は option 終端が無いため全 tail を意味検査する。
         f"find plugins -name *{WRAPPER_NAME}",
         # barrier より前の option 走査対象は意味検査の対象。
