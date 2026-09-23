@@ -326,7 +326,6 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
             "cat <<'EOF' | tee out.txt\nfoo (git commit)\nEOF",
             "cat <<'EOF' || true\nfoo (git commit)\nEOF",
             "/bin/cat <<'EOF'\nfoo (git commit)\nEOF",
-            "X=1 cat <<'EOF'\nfoo (git commit)\nEOF",
         ):
             with self.subTest(command=command):
                 self.assertEqual(self.classify(command), 4)
@@ -466,6 +465,24 @@ class AutoLintCommitParserHeredocBodyTest(unittest.TestCase):
         self.assertEqual(
             self.classify('echo "${x:-"a <<B"}"\ngit commit -m x'),
             5,
+        )
+
+    def test_editor_or_env_prefix_forms_keep_body(self) -> None:
+        for command, expected in (
+            ("git tag -a v1 <<'EOF'\ngit commit -am x\nEOF", 0),
+            ("git notes add <<'EOF'\ngit commit -am x\nEOF", 0),
+            ("git commit -F - -e <<'EOF'\ngit commit -am x\nEOF", 0),
+            ("GIT_EDITOR=x git tag -a v1 -F - <<'EOF'\ngit commit -am x\nEOF", 0),
+            ("X=1 cat <<'EOF'\nfoo (git commit)\nEOF", 0),
+            ("gh pr create <<'EOF'\ngit commit -am x\nEOF", 0),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(self.classify(command), expected)
+
+    def test_extglob_pattern_keeps_body(self) -> None:
+        self.assertEqual(
+            self.classify("cat @(x<<EOF) f\ngit commit -am x\nEOF"),
+            0,
         )
 
     def test_wrapper_with_positional_argument_keeps_body(self) -> None:

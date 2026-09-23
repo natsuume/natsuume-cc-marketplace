@@ -443,14 +443,31 @@ HEREDOC_DATA_ONLY_COMMANDS: frozenset[str] = frozenset(
     {"cd", "cat", "tee", "git", "gh", "echo", "printf", "mkdir", "true"}
 )
 
-# ``git`` / ``gh`` は subcommand によって stdin をシェルへ渡しうる
-# (``git submodule foreach``、``!`` で始まる alias、``gh`` の shell alias 等)。
-# そのため、command name の直後の語 (subcommand) がこの集合に含まれ、かつ
-# subcommand より前にオプションが無い場合に限り、データ専用とみなす。
-HEREDOC_DATA_ONLY_SUBCOMMANDS: dict[str, frozenset[str]] = {
-    "git": frozenset({"commit", "tag", "notes", "hash-object", "apply"}),
-    "gh": frozenset({"pr", "issue", "api", "release"}),
+# ``git`` / ``gh`` は subcommand や起動するエディタによって stdin をシェルへ
+# 渡しうる (``git submodule foreach``、``!`` で始まる alias、``gh`` の shell
+# alias、stdin を読むよう設定したエディタ等)。そのため、command name の直後
+# の語 (subcommand) がこの集合に含まれ、かつ subcommand より前にオプションが
+# 無い場合に限り、データ専用とみなす。値が空集合でない subcommand は、stdin
+# をメッセージ・入力として読むフラグ (値) のいずれかを伴い、エディタを起動
+# するフラグ (``HEREDOC_EDITOR_FLAGS``) を伴わない場合に限る。
+HEREDOC_DATA_ONLY_SUBCOMMANDS: dict[str, dict[str, frozenset[str]]] = {
+    "git": {
+        "commit": frozenset({"-F -", "-F-", "--file=-", "--file -"}),
+        "tag": frozenset({"-F -", "-F-", "--file=-", "--file -"}),
+        "notes": frozenset({"-F -", "-F-", "--file=-", "--file -"}),
+        "hash-object": frozenset(),
+        "apply": frozenset(),
+    },
+    "gh": {
+        "pr": frozenset({"--body-file -", "--body-file=-", "-F -"}),
+        "issue": frozenset({"--body-file -", "--body-file=-", "-F -"}),
+        "release": frozenset({"--notes-file -", "--notes-file=-", "-F -"}),
+        "api": frozenset({"--input -", "--input=-"}),
+    },
 }
+
+# エディタを起動するフラグ。
+HEREDOC_EDITOR_FLAGS: frozenset[str] = frozenset({"-e", "--edit"})
 
 # 走査が bash と同じ quote 解釈をしない quoting の開始記号 (ANSI-C quoting
 # ``$'...'`` と locale 翻訳 quoting ``$"..."``)。command に含まれる場合は
@@ -468,6 +485,13 @@ _UNMODELED_OUTSIDE_BODY_MARKERS: tuple[str, ...] = (
     "${",
     "<<<",
     "\\\n",
+    # extglob のパターン (``shopt -s extglob`` 時は内側の ``<<`` が
+    # heredoc 演算子にならない)
+    "?(",
+    "*(",
+    "+(",
+    "@(",
+    "!(",
 )
 
 # 本文除去の対象にする heredoc delimiter (引用符を外した WORD) の形。
@@ -571,8 +595,12 @@ def _is_data_only_segment(segment: str) -> bool:
     ``HEREDOC_DATA_ONLY_COMMANDS`` に無い場合は False。絶対パス
     (``/bin/cat``) は basename で判定する。basename が
     ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` のキーの場合は、command name の直後の語
-    が許可された subcommand であることも要求する (subcommand より前に
-    オプションがある場合も False)。"""
+    が許可された subcommand であり、その subcommand が要求する stdin 読み込み
+    フラグを伴い、エディタ起動フラグを伴わないことも要求する (subcommand
+    より前にオプションがある場合も False)。環境変数の代入を前置した simple
+    command (``GIT_EDITOR=... git ...`` 等) も False。"""
+    if _has_env_assignment_prefix(segment):
+        return False
     words = _simple_command_words(segment)
     if words is None:
         return False
@@ -587,7 +615,34 @@ def _is_data_only_segment(segment: str) -> bool:
     allowed_subcommands = HEREDOC_DATA_ONLY_SUBCOMMANDS.get(basename)
     if allowed_subcommands is None:
         return True
-    return len(words) > 1 and words[1] in allowed_subcommands
+    if len(words) < 2 or words[1] not in allowed_subcommands:
+        return False
+    stdin_flags = allowed_subcommands[words[1]]
+    args = words[2:]
+    if any(arg in HEREDOC_EDITOR_FLAGS for arg in args):
+        return False
+    if not stdin_flags:
+        return True
+    joined_args = " ".join(args)
+    return any(
+        flag in args or f" {flag} " in f" {joined_args} " for flag in stdin_flags
+    )
+
+
+def _has_env_assignment_prefix(segment: str) -> bool:
+    """simple command が command name の前に環境変数の代入 (``X=y``) を持つか
+    判定する。トークン化できない場合は True (保守側)。"""
+    try:
+        words = shlex.split(segment, comments=False, posix=True)
+    except ValueError:
+        return True
+    for word in words:
+        if _is_env_assignment(word):
+            return True
+        if _is_redirection_token(word) or word in SHELL_KEYWORDS:
+            continue
+        return False
+    return False
 
 
 def _is_single_trailing_heredoc(
@@ -644,7 +699,9 @@ def _strip_heredoc_bodies(command: str) -> str:
         不成立になる。相対パス (``./x``) の command name も不成立とし、
         絶対パス (``/bin/cat``) は basename で判定する。basename が ``git`` /
         ``gh`` の場合は、直後の語が ``HEREDOC_DATA_ONLY_SUBCOMMANDS`` の
-        subcommand であることも要求する (subcommand より前のオプションは不可)
+        subcommand であり、stdin を読むフラグを伴いエディタ起動フラグを伴わ
+        ないことも要求する (subcommand より前のオプションは不可)。環境変数の
+        代入を前置した simple command は不成立
       - プロセス置換 (``<(`` / ``>(``) を含まない
       - 除去する本文以外の部分に、コマンド置換 (``$(`` / backtick)、
         parameter expansion (``${``)、here-string (``<<<``)、行継続
