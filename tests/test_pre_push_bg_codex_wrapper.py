@@ -530,19 +530,18 @@ class BlockBgCodexWrapperExecPositionClassificationTest(unittest.TestCase):
     escape し、double quote 内では `$` / バッククォート / `"` / `\` の前で
     のみ escape として消費し、それ以外では literal に保持する。escaped
     backslash `\\` は 1 つの `\` に collapse し、その直後に現れる `$` は
-    escape されていない動的展開として canonical 化失敗と判定する。quote
-    外の `$` を含む token は step 3 で既に実行形へ落ちているため、
-    canonicalize_token が扱う `$` は double quote 内の残余ケースのみで
-    ある。double quote 内の `$` は、直後が展開開始として有効な文字
-    (英数字 / `_` / `{` / `(` / `[` / `@` / `*` / `#` / `?` / `!` /
-    `-` / `$`。`[` は bash が今も解釈する旧算術展開 `$[...]` を覆う
-    — `"marker$[1]"` は `marker1` へ展開されるため literal ではない)
-    の場合のみ canonical 化失敗とし、それ以外 (行末アンカー等) は
-    literal 文字として扱う。この 11 文字の表は実装側の単一 helper
-    (`dollar_starts_expansion`) に集約され、canonicalize_token と
-    step 3 の rule (d) が同じ表だけを参照する) に対して行い、
-    head token のみさらに basename 正規化する。canonical 化は本 hook 内の
-    専用 helper に閉じ、共有 parser (cmd-parser.sh) や push gate
+    escape されていない動的展開として扱う。quote 外の `$` を含む token は
+    step 3 の意味検査で実行形へ落ちる。double quote 内の `$` は、直後が
+    展開開始として有効な文字 (英数字 / `_` / `{` / `(` / `[` / `@` / `*` /
+    `#` / `?` / `!` / `-` / `$`。`[` は bash が今も解釈する旧算術展開
+    `$[...]` を覆う — `"marker$[1]"` は `marker1` へ展開されるため literal
+    ではない) の場合のみ動的展開として step 3 の rule (d) で実行形へ落とし、
+    それ以外 (行末アンカー等) は literal 文字として扱う。この 11 文字の表は
+    実装側の単一 helper (`dollar_starts_expansion`) に集約されている) に
+    対して行い、head token のみさらに basename 正規化する。step 3 の token
+    検査と canonical 値の生成は、実装側の単一 helper (`analyze_shell_word`)
+    が 1 回の走査で同じ quote / escape 意味論を共有して行う。canonical 化は
+    本 hook 内の専用 helper に閉じ、共有 parser (cmd-parser.sh) や push gate
     (block-pre-push.sh) の token 判定は変更しない。
 
     分類は次の順序付き決定表で行う。各 step は上から順に評価し、最初に
