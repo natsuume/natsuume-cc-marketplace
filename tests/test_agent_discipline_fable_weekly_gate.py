@@ -64,6 +64,9 @@ NAMES_PRODUCER = r"natsuume-statusline"
 UNSET = object()
 OMIT = object()
 
+# cache fixture が fetched_at の代わりに持つ「現在時刻から何秒前か」の key (hook には渡さない)。
+AGE_SECONDS_KEY = "__age_seconds__"
+
 
 def fable_entry(percent: object, *, display_name: str = "Fable") -> dict[str, object]:
     """weekly_scoped[] の 1 entry (natsuume-statusline が書く形)。"""
@@ -83,7 +86,9 @@ def cache(
     """
     body: dict[str, object] = {"consecutive_failures": 0, "next_attempt_at": 0}
     if fetched_at is UNSET:
-        body["fetched_at"] = int(time.time()) - age_seconds
+        # 判定表はモジュール読み込み時に組み立てるため、現在時刻からの相対値だけを持ち、
+        # fetched_at は各ケースの実行直前に resolve_fetched_at で解決する。
+        body[AGE_SECONDS_KEY] = age_seconds
     elif fetched_at is not OMIT:
         body["fetched_at"] = fetched_at
     if entries is UNSET:
@@ -91,6 +96,15 @@ def cache(
     elif entries is not OMIT:
         body["weekly_scoped"] = entries
     return body
+
+
+def resolve_fetched_at(body: object) -> object:
+    """``cache`` が相対値で持つ fetched_at を、呼び出し時点の現在時刻から解決した dict を返す。"""
+    if not isinstance(body, dict) or AGE_SECONDS_KEY not in body:
+        return body
+    resolved = {key: value for key, value in body.items() if key != AGE_SECONDS_KEY}
+    resolved["fetched_at"] = int(time.time()) - int(body[AGE_SECONDS_KEY])
+    return resolved
 
 
 def row(
@@ -289,7 +303,7 @@ DECISION_TABLE = (
     row("unknown/empty-file", cache_raw="", expect="deny", keywords=UNKNOWN_DENY),
     row(
         "unknown/two-json-documents",
-        cache_raw=json.dumps(cache()) + "\n" + json.dumps(cache()),
+        cache_raw=json.dumps(cache(fetched_at=1)) + "\n" + json.dumps(cache(fetched_at=1)),
         expect="deny",
         keywords=UNKNOWN_DENY,
     ),
@@ -419,7 +433,7 @@ class FableWeeklyGateDecisionTableTest(unittest.TestCase):
         cache_path = Path(env["XDG_CACHE_HOME"]) / CACHE_RELATIVE
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         kind = case["cache_kind"]
-        body = cache() if case["cache_body"] is UNSET else case["cache_body"]
+        body = resolve_fetched_at(cache() if case["cache_body"] is UNSET else case["cache_body"])
         text = case["cache_raw"] if case["cache_raw"] is not None else json.dumps(body)
         if kind == "file":
             cache_path.write_text(str(text), encoding="utf-8")
