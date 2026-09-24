@@ -115,7 +115,7 @@ EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] 
     "natsuume-writing": (
         ("SessionStart", script_path("inject-core.sh"), ()),
     ),
-    "pre-merge-codex-review": (
+    "pre-merge-cross-review": (
         ("SessionStart", script_path("inject-merge-order-rules.sh"), ()),
         ("PreToolUse", script_path("block-pre-merge.sh"), ()),
         ("PreToolUse", script_path("block-bg-codex-wrapper.sh"), ()),
@@ -199,13 +199,13 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
         194,
         "63c76f4494d06962cec7372e968340b865078f1e6c5e780543651fb169b0bbf2",
     ),
-    "pre-merge-codex-review": (
+    "pre-merge-cross-review": (
         735,
         "380cba665caf3ad3af0b04186276cb02707333e4b357e45ff19a0cd2c98ff62d",
     ),
     "pre-push-codex-review": (
         1301,
-        "fee80b4438a07c93680ccc26ae4e4f0b83082e13d1a94c7d6efea08d465994e0",
+        "c0403b715b459de50c507531408e401173a6ff8f936ddcf137c15ba9a38796dc",
     ),
     "pre-push-review": (
         326,
@@ -229,7 +229,7 @@ CONSTRAINT_HEADING = "## 既知の制約"
 GATE_PLUGIN_NAMES = (
     "pre-push-review",
     "pre-push-codex-review",
-    "pre-merge-codex-review",
+    "pre-merge-cross-review",
     "cross-model-advisor",
 )
 UNOBSERVED_TOOL_KEYWORDS = (
@@ -252,14 +252,14 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "enforce-draft-pr": "0.5.7",
     "auto-lint-check": "0.8.4",
     "pre-push-review": "7.0.0",
-    "pre-push-codex-review": "3.0.2",
-    "pre-merge-codex-review": "2.2.4",
+    "pre-push-codex-review": "4.0.0",
+    "pre-merge-cross-review": "3.0.0",
     "update-default-branch": "0.4.6",
     "natsuume-statusline": "0.11.4",
     "agent-discipline": "1.0.2",
     "ui-discipline": "0.4.6",
     "natsuume-writing": "0.8.2",
-    "cross-model-advisor": "5.0.4",
+    "cross-model-advisor": "5.0.5",
     "rate-limit": "0.5.4",
     "session-handoff": "0.5.2",
     "repo-analytics": "0.2.8",

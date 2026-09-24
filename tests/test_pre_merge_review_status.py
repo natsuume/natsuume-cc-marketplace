@@ -1,6 +1,6 @@
-"""pre-merge-codex-review の findings 判定契約テスト。
+"""pre-merge-cross-review の findings 判定契約テスト。
 
-判定ロジックは `plugins/pre-merge-codex-review/hooks/scripts/lib/review-status.sh` の
+判定ロジックは `plugins/pre-merge-cross-review/hooks/scripts/lib/review-status.sh` の
 `detect_review_status` が担う。
 
 固定する契約:
@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LIB = (
     ROOT
     / "plugins"
-    / "pre-merge-codex-review"
+    / "pre-merge-cross-review"
     / "hooks"
     / "scripts"
     / "lib"
@@ -96,7 +96,7 @@ class DetectReviewStatusContractTest(unittest.TestCase):
             "## Summary\n"
             "\n"
             "This PR bumps the plugin manifest version and updates the hook "
-            "scripts for pre-merge-codex-review.\n"
+            "scripts for pre-merge-cross-review.\n"
             "\n"
             "## Analysis\n"
             "\n"

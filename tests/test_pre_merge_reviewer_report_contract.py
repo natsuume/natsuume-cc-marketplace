@@ -1,4 +1,4 @@
-"""pre-merge-codex-review の codex-reviewer parent-safe report 契約テスト。
+"""pre-merge-cross-review の codex-reviewer parent-safe report 契約テスト。
 
 wrapper が PR レビューコメントの header に付ける `status=pass|findings` は
 `lib/review-status.sh` の heuristic 判定であり、Codex の report 本文の結論と
@@ -21,7 +21,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / "plugins" / "pre-merge-codex-review"
+PLUGIN = ROOT / "plugins" / "pre-merge-cross-review"
 AGENT = PLUGIN / "agents" / "codex-reviewer.md"
 PLUGIN_README = PLUGIN / "README.md"
 
@@ -51,7 +51,7 @@ FORBIDDEN_TERMINAL_CONCEPT = _shared_contract.FORBIDDEN_TERMINAL_CONCEPT
 # wrapper が書く terminal sentinel の固定 prefix (plugin ごとに異なる)。案内行に
 # path が全く無い場合の fallback としてだけ使う (path があって形状検証に落ちる状態は
 # run 同定不能境界)。合成に使う git directory は cwd に依存しない絶対形にする。
-SENTINEL_NAME_PREFIX = "pre-merge-codex-review-terminal"
+SENTINEL_NAME_PREFIX = "pre-merge-cross-review-terminal"
 SENTINEL_PATH_SENTENCE = (
     "Only when the announcement line carries a run id but no path at all, "
     "compose the sentinel path from the absolute git directory that "

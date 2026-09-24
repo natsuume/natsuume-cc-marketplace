@@ -1,6 +1,6 @@
-"""pre-merge-codex-review の軽量 merge gate 契約テスト (Phase A: spec-first, red)。
+"""pre-merge-cross-review の軽量 merge gate 契約テスト (Phase A: spec-first, red)。
 
-gate (`plugins/pre-merge-codex-review/hooks/scripts/block-pre-merge.sh`) は
+gate (`plugins/pre-merge-cross-review/hooks/scripts/block-pre-merge.sh`) は
 Phase A 時点でまだ存在しない。全テストは gate が実装されるまで意図した失敗で
 red になる。
 
@@ -19,7 +19,7 @@ red になる。
   を持ち、head SHA が現在の head と完全一致するものが存在するかを確認する:
   - 存在すれば無出力で終了する (gate は decision を出さず、既定の許可フロー
     に委ねる)
-  - 存在しなければ deny し、`pre-merge-codex-review:codex-reviewer` subagent
+  - 存在しなければ deny し、`pre-merge-cross-review:codex-reviewer` subagent
     の実行を案内する
 - status は pass / findings のどちらでも「レビュー済み」として成立する
   (merge の approve や findings 0 件の証明ではない)。
@@ -48,11 +48,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR = ROOT / "plugins" / "pre-merge-codex-review" / "hooks" / "scripts"
+SCRIPTS_DIR = ROOT / "plugins" / "pre-merge-cross-review" / "hooks" / "scripts"
 GATE = SCRIPTS_DIR / "block-pre-merge.sh"
 WRAPPER_GUARD = SCRIPTS_DIR / "block-bg-codex-wrapper.sh"
 
-CODEX_SUBAGENT_NAME = "pre-merge-codex-review:codex-reviewer"
+CODEX_SUBAGENT_NAME = "pre-merge-cross-review:codex-reviewer"
 
 PR_NUMBER = 123
 HEAD_SHA = "1234567890abcdef1234567890abcdef12345678"

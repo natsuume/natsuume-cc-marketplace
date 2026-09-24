@@ -1,15 +1,15 @@
-"""pre-merge-codex-review auto-mark の subagent lifecycle 契約テスト。
+"""pre-merge-cross-review auto-mark の subagent lifecycle 契約テスト。
 
-pre-merge-codex-review plugin では、PR へのレビューコメント投稿を merge gate
+pre-merge-cross-review plugin では、PR へのレビューコメント投稿を merge gate
 (`block-pre-merge.sh`) が行う。codex review wrapper
 (`run-pre-merge-codex-review.sh`) は投稿せず、投稿用の本文ファイルと pending
-attestation を git-dir 直下に書くだけで終わり、`pre-merge-codex-review:codex-reviewer`
+attestation を git-dir 直下に書くだけで終わり、`pre-merge-cross-review:codex-reviewer`
 subagent の lifecycle hook (SubagentStart / SubagentStop) が正規 report と head SHA
 一致を確認して final attestation へ昇格させる。
 
 契約 (auto-mark.sh):
 
-- SubagentStart (agent_type が `pre-merge-codex-review:codex-reviewer` の完全一致):
+- SubagentStart (agent_type が `pre-merge-cross-review:codex-reviewer` の完全一致):
   - レビュー開始時のローカル HEAD (full SHA) を launch attestation
     (git-dir/.claude-pre-merge-launch-<agent_id>) に書く (one-shot 記録)
   - 既存 tombstone / 既存 launch attestation があれば書かない
@@ -55,7 +55,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_DIR = ROOT / "plugins" / "pre-merge-codex-review"
+PLUGIN_DIR = ROOT / "plugins" / "pre-merge-cross-review"
 AUTO_MARK = PLUGIN_DIR / "hooks" / "scripts" / "auto-mark.sh"
 MARKERS_LIB = PLUGIN_DIR / "hooks" / "scripts" / "lib" / "markers.sh"
 RUN_CODEX_REVIEW = (
@@ -63,9 +63,11 @@ RUN_CODEX_REVIEW = (
 )
 HOOKS_CONFIG = PLUGIN_DIR / "hooks" / "hooks.json"
 
-CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
+CODEX_REVIEWER = "pre-merge-cross-review:codex-reviewer"
 PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
-CODEX_REVIEWER_MATCHER = "^pre-merge-codex-review:codex-reviewer$"
+# SubagentStart / SubagentStop の matcher は codex-reviewer と fable-reviewer の両方に一致する。
+REVIEWER_LIFECYCLE_MATCHER = "^pre-merge-cross-review:(codex|fable)-reviewer$"
+FABLE_REVIEWER = "pre-merge-cross-review:fable-reviewer"
 
 FINAL_MARKER = ".claude-pre-merge-codex-reviewed"
 PENDING_MARKER = ".claude-pre-merge-codex-reviewed.pending"
@@ -798,7 +800,7 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
         start_groups = [
             group
             for group in hooks.get("SubagentStart", [])
-            if group.get("matcher") == CODEX_REVIEWER_MATCHER
+            if group.get("matcher") == REVIEWER_LIFECYCLE_MATCHER
         ]
         self.assertEqual(len(start_groups), 1)
         self.assertIn("auto-mark.sh", start_groups[0]["hooks"][0]["command"])
@@ -806,10 +808,25 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
         stop_groups = [
             group
             for group in hooks.get("SubagentStop", [])
-            if group.get("matcher") == CODEX_REVIEWER_MATCHER
+            if group.get("matcher") == REVIEWER_LIFECYCLE_MATCHER
         ]
         self.assertEqual(len(stop_groups), 1)
         self.assertIn("auto-mark.sh", stop_groups[0]["hooks"][0]["command"])
+
+        # matcher は 2 reviewer にだけ完全一致し、pre-push 側や類似 namespace には
+        # 一致しない。
+        for agent_type in (CODEX_REVIEWER, FABLE_REVIEWER):
+            self.assertIsNotNone(
+                re.fullmatch(REVIEWER_LIFECYCLE_MATCHER, agent_type), agent_type
+            )
+        for agent_type in (
+            PUSH_CODEX_REVIEWER,
+            "pre-merge-cross-review:code-reviewer",
+            f"{CODEX_REVIEWER}-extra",
+        ):
+            self.assertIsNone(
+                re.fullmatch(REVIEWER_LIFECYCLE_MATCHER, agent_type), agent_type
+            )
 
         # PostToolUse は SubagentHandback (auto mode の hand-back された report) の
         # matcher だけに配線する。

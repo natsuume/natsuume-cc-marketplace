@@ -1,6 +1,6 @@
 """reviewer / runner の起動案内が、agent-discipline の内部挙動を理由に引用せずに model の明示を求めることを検査する。
 
-pre-push-review / pre-push-codex-review / pre-merge-codex-review / cross-model-advisor の起動案内は、
+pre-push-review / pre-push-codex-review / pre-merge-cross-review / cross-model-advisor の起動案内は、
 「この model で起動する」という自 plugin の契約として model の明示を求める。model 未指定の
 起動が Fable セッションで agent-discipline の hook に deny されることを理由として書かない。
 """
@@ -22,7 +22,7 @@ MODEL_INSTRUCTIONS = {
     PLUGINS / "pre-push-codex-review" / "hooks" / "scripts" / "block-pre-push-codex.sh": (
         "上記の model を常に明示してください。"
     ),
-    PLUGINS / "pre-merge-codex-review" / "hooks" / "scripts" / "block-pre-merge.sh": (
+    PLUGINS / "pre-merge-cross-review" / "hooks" / "scripts" / "block-pre-merge.sh": (
         "上記の model を常に明示してください。"
     ),
     PLUGINS / "cross-model-advisor" / "hooks" / "prompts" / "advisor-rules.md": (
@@ -57,7 +57,7 @@ class ModelInstructionWithoutAgentDisciplineRationaleTest(unittest.TestCase):
             for plugin in (
                 "pre-push-review",
                 "pre-push-codex-review",
-                "pre-merge-codex-review",
+                "pre-merge-cross-review",
                 "cross-model-advisor",
             )
             for path in (PLUGINS / plugin).rglob("*")

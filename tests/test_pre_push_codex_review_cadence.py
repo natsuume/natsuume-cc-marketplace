@@ -56,7 +56,10 @@ agent_launch_mode_hits = _shared_contract.agent_launch_mode_hits
 FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 
 PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
-PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
+PRE_MERGE_CODEX_REVIEWER = "pre-merge-cross-review:codex-reviewer"
+# merge 前 cross review の Fable 側 reviewer。codex review ではないため review cadence の
+# 計数対象にしない。
+PRE_MERGE_FABLE_REVIEWER = "pre-merge-cross-review:fable-reviewer"
 # codex gate 分離前の旧 namespace。cadence script のサポート対象外であり、計数
 # されないことを固定する。
 PRE_PUSH_CODEX_REVIEWER_LEGACY = "pre-push-review:codex-reviewer"
@@ -620,6 +623,63 @@ class MixedReviewerCadenceTest(HookHarness):
         self.review_runner_stop(session_id=session_id, status="retryable-failure")
         state = self.state_for(session_id)
         self.assertTrue(state is None or state["completedReviews"] == 0)
+
+
+class FableReviewerCadenceTest(HookHarness):
+    """`pre-merge-cross-review:fable-reviewer` の report は review cadence に計数しない。"""
+
+    FABLE_PASS_REPORT = "# Fable Review\n\nStatus: pass\nFindings: 0"
+
+    def complete_fable_review(self, *, session_id: str, agent_id: str) -> None:
+        self.status_line_start(
+            PRE_MERGE_FABLE_REVIEWER, session_id=session_id, agent_id=agent_id
+        )
+        self.handback(
+            PRE_MERGE_FABLE_REVIEWER,
+            self.FABLE_PASS_REPORT,
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+        self.status_line_stop(
+            PRE_MERGE_FABLE_REVIEWER, "pass", session_id=session_id, agent_id=agent_id
+        )
+
+    def test_fable_reviewer_pass_is_never_counted(self) -> None:
+        session_id = "session-fable-only"
+        for cycle in range(1, REVIEW_CADENCE_LIMIT + 1):
+            self.complete_fable_review(
+                session_id=session_id, agent_id=f"fable-{cycle}"
+            )
+        self.assertIsNone(self.main_stop(session_id))
+        state = self.state_for(session_id)
+        self.assertTrue(state is None or state["completedReviews"] == 0)
+
+    def test_pre_merge_codex_reviewer_is_counted_but_fable_reviewer_is_not(
+        self,
+    ) -> None:
+        session_id = "session-cross-review"
+        for cycle in range(1, REVIEW_CADENCE_LIMIT):
+            self.complete_status_line_review(
+                PRE_MERGE_CODEX_REVIEWER,
+                session_id=session_id,
+                agent_id=f"pre-merge-codex-{cycle}",
+                status="pass",
+            )
+            self.complete_fable_review(
+                session_id=session_id, agent_id=f"pre-merge-fable-{cycle}"
+            )
+        self.assertIsNone(self.main_stop(session_id))
+        state = self.state_for(session_id)
+        assert state is not None
+        self.assertEqual(REVIEW_CADENCE_LIMIT - 1, state["completedReviews"])
+
+        self.complete_status_line_review(
+            PRE_MERGE_CODEX_REVIEWER,
+            session_id=session_id,
+            agent_id="pre-merge-codex-last",
+            status="pass",
+        )
+        self.assert_stop_blocked(self.main_stop(session_id))
 
 
 class LegacyWrapperClassificationTest(HookHarness):
