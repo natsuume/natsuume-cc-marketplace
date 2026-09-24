@@ -77,6 +77,18 @@ auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 
 
 classifier は project settings (`.claude/settings.json` / `.claude/settings.local.json`) の `autoMode` を読まないため、ユーザ設定 (`~/.claude/settings.json`) に書く必要があります。classifier は CLAUDE.md も読むため、プロジェクトの CLAUDE.md に同趣旨の 1 文を書く方法でも代替できます。設定なしで拒否された場合は、ユーザが `AskUserQuestion` の確認で許可すれば次の起動は通ります (classifier は明示的なユーザ意図で soft block を解除します)。
 
+## codex-advisor からの移行
+
+marketplace の `renames` により、旧名 `codex-advisor` は Claude Code 2.1.193 以降で起動時に `cross-model-advisor` として読み込まれ、`enabledPlugins` / `pluginConfigs` の旧名キーも新名へ自動で書き換わります。2.1.192 以前は `renames` を解釈せず旧名を `plugin-not-found` として報告するため、`claude plugin install cross-model-advisor@natsuume-plugins` で入れ直してください。managed settings で旧名を有効化している場合は自動で書き換わらないため、管理者が新名へ更新する必要があります。
+
+runner の agent 名 (`cross-model-advisor:codex-*-runner`) と review cadence が識別する agent 名は、新旧の版で一致しません。旧版と新版の hook が同じセッションに混在すると、正規の runner 起動が gate に拒否されたり、checkpoint の充足が cadence に数えられず Stop の block が解けなかったりします。次の順で切り替えてください:
+
+1. 稼働中の runner (rescue / review / advisor) の完了を待ち、旧版のセッションを終了する
+2. cross-model-advisor と pre-push-codex-review (3.0.0 以降) を同時に更新する。片方だけを更新しない
+3. 新しいセッションを起動し、`/cross-model-advisor:consult` と runner が新名で起動することを確認する
+
+切り替え前のセッションで残った runner state が Stop を block し続ける場合は、稼働中の Codex job が無いことを `/codex:status` で確認したうえで、そのセッションの state だけを削除してください。runner state は OS の一時ディレクトリ配下の `cross-model-advisor-<uid>/runner-state/` (旧版は `codex-advisor-<uid>/runner-state/`) に置かれ、review cadence の state は [pre-push-codex-review の README](../pre-push-codex-review/README.md#state) の手順で解除します。
+
 ## 依存
 
 - [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) — Claude Code host の companion script 提供元。Codex host の direct 経路には不要

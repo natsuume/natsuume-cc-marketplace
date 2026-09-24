@@ -63,6 +63,9 @@ USAGE_COMMAND_NAME = "cross-model-advisor-fable-usage"
 ALLOWED_CODEX_ADVISOR_TOKENS = ("codex-advisor-runner", "run-codex-advisor")
 # grep の対象外 (本テスト自身)。
 GREP_EXCLUDED_FILES = ("tests/test_cross_model_advisor_fable.py",)
+# 旧名を利用者向けの移行手順として書く README の節 (見出しから次の `## ` 見出しの直前まで)。
+MIGRATION_SECTION_FILE = "plugins/cross-model-advisor/README.md"
+MIGRATION_SECTION_HEADING = "## codex-advisor からの移行"
 
 CACHE_RELATIVE = Path("natsuume-statusline") / "weekly-scoped.json"
 AGE_SECONDS_KEY = "__age_seconds__"
@@ -178,6 +181,17 @@ class RenameTest(unittest.TestCase):
         self.assertEqual("./plugins/cross-model-advisor", entry["source"])
         self.assertEqual("cross-model-advisor", marketplace.get("renames", {}).get("codex-advisor"))
 
+    def test_readme_describes_migration_from_old_name(self) -> None:
+        text = read(ROOT / MIGRATION_SECTION_FILE)
+        self.assertIn(MIGRATION_SECTION_HEADING, text.splitlines())
+        section = text.split(MIGRATION_SECTION_HEADING, 1)[1].split("\n## ", 1)[0]
+        missing = [
+            phrase
+            for phrase in ("renames", "2.1.193", "pre-push-codex-review", "同時に更新", "新しいセッション")
+            if phrase not in section
+        ]
+        self.assertEqual([], missing, f"移行節に無い記述: {missing}")
+
     def test_no_leftover_codex_advisor_references(self) -> None:
         tracked = subprocess.run(
             ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
@@ -193,7 +207,12 @@ class RenameTest(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 continue
+            in_migration_section = False
             for number, line in enumerate(text.splitlines(), start=1):
+                if relative == MIGRATION_SECTION_FILE and line.startswith("## "):
+                    in_migration_section = line == MIGRATION_SECTION_HEADING
+                if in_migration_section:
+                    continue
                 stripped = line
                 for token in ALLOWED_CODEX_ADVISOR_TOKENS:
                     stripped = stripped.replace(token, "")
