@@ -277,7 +277,7 @@ fork サブエージェントを止める主防御は、利用者の settings (`
 **動作**:
 
 - Claude Code のモデル解決順序は 明示 `model` > agent 定義の frontmatter > `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 で、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (`1` / `true`) が設定されている場合のみ env (未設定ならメインセッションのモデル) が全てを上書きする。`subagent_type` が `fork` のサブエージェントは model 指定にも env にも依らずメインセッションのモデルを継承する。本 hook はこの順序に沿って上から判定し、すべて deterministic な文字列判定で行う (LLM 評価は使わない)
-  1. `fork` → メインセッションのモデルで判定する (継承経路と同じ扱い)
+  1. `fork` → サブエージェント内 (入力に `agent_id` がある) からの起動なら deny (nested guard、下記)。メインセッションからの起動ならメインセッションのモデルで判定する (継承経路と同じ扱い)
   2. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が有効 → 実効モデルは env (非空ならその値、空ならメインセッションのモデル)。fable なら model の明示に依らず deny し、model の明示では直せないことを deny 理由に書く。非 fable なら model が fable でも allow
   3. `tool_input.model` に fable が明示指定されている (alias `fable` / full ID `claude-fable-5-1` 等、大文字小文字を無視した部分一致):
      - 3a. session model state が fable → deny (Fable メインでは Fable サブエージェントを使わない)
@@ -285,7 +285,8 @@ fork サブエージェントを止める主防御は、利用者の settings (`
      - 3c. session model state が fable 以外 → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める
      - いずれの deny 理由でも、reviewer は `model: "opus"` で再起動し、fable-advisor-runner は再起動せずスキップするよう案内する
   4. `tool_input.model` が非 fable の具体指定 → allow (明示は env より優先されるため)
-  5. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在なら session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`、`inject-always.sh` が SessionStart で記録し `update-model-on-switch.sh` が `/model` 切替で更新する) が fable の場合のみ deny。state file が読めず判定不能な場合は pending マーカー (`${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`) の存在を確認し、**存在すれば deny** (継承先が Fable になりうる判定不能期間のため)、存在しなければ真の情報ゼロとして fail-open (allow)
+  5. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在なら session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`、`inject-always.sh` が SessionStart で記録し `update-model-on-switch.sh` が `/model` 切替で更新する) が fable の場合のみ deny。state file が読めず判定不能な場合は pending マーカー (`${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`) の存在を確認し、**存在すれば deny** (継承先が Fable になりうる判定不能期間のため)、存在しなければ真の情報ゼロとして fail-open (allow)。env 不在でサブエージェント内 (入力に `agent_id` がある) からの起動は deny する (nested guard、下記)
+- **nested guard**: サブエージェント内 (入力に `agent_id` がある) からの model 未指定 (`inherit` を含む)・`fork` の起動は deny し、model の明示を求める。継承先は起動元サブエージェントのモデルで session model state では判定できず、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承しうるため。`CLAUDE_CODE_SUBAGENT_MODEL` が非空なら子の実効モデルは env で決まるため env で判定する
 - **Fable 週次枠の使用率判定** (3c):
   - 入力は natsuume-statusline が書く `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json`。本 hook は読むだけで書き込まず、OAuth usage API も呼ばない
   - 閾値は env `FABLE_WEEKLY_MAX_PERCENT` (前後空白を trim した 0〜100 の 10 進整数)。未設定・空・範囲外・非整数は既定値 `80`

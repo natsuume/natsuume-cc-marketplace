@@ -18,7 +18,9 @@
 #   モデルを継承する。
 #
 # 判定順序 (上から評価し、最初に該当した結果を返す):
-#   1. fork (subagent_type が fork) → メインセッションのモデルで判定する (継承経路と同じ扱い)
+#   1. fork (subagent_type が fork) → サブエージェント内 (入力に agent_id がある) からなら deny
+#      (nested guard)。メインセッションからならメインセッションのモデルで判定する (継承経路と
+#      同じ扱い)
 #   2. CLAUDE_CODE_SUBAGENT_MODEL_FORCE が有効 → 実効モデルは env (非空ならその値、空なら
 #      メインセッションのモデル)。fable なら model の明示に依らず deny し、model の明示では
 #      直せないことを deny 理由に書く。非 fable なら model が fable でも allow
@@ -40,6 +42,9 @@
 #        する。モデル判定不能期間は継承先が Fable でも state から検知できないため。マーカーも
 #        無い真の情報ゼロの場合は fail-open (allow)
 #      - env が fable を指す場合は使用率に依らず deny する (明示指定ではないため)
+#      - env 不在でサブエージェント内 (入力に agent_id がある) からの起動は deny する (nested
+#        guard)。継承先は起動元サブエージェントのモデルで session model state では判定できず、
+#        週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承しうるため
 #
 # Fable 週次枠の使用率判定 (3c):
 #   - 入力: ${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json (producer は
@@ -74,12 +79,13 @@ INPUT=$(cat)
 
 # 各フィールドは 1 行 1 値で読むため、値に含まれる改行 (CR / LF) は空白に置き換えて欄ずれを防ぐ
 # (subagent_type に改行を含めても、後続の session_id 等が別の欄に読み込まれない)。
-{ read -r HOOK_EVENT; read -r TOOL_MODEL; read -r SUBAGENT_TYPE; read -r SESSION_ID; } < <(
+{ read -r HOOK_EVENT; read -r TOOL_MODEL; read -r SUBAGENT_TYPE; read -r SESSION_ID; read -r AGENT_ID; } < <(
   printf '%s' "$INPUT" | jq -r '
     [ (.hook_event_name // ""),
       (.tool_input.model // ""),
       (.tool_input.subagent_type // ""),
-      (.session_id // "") ]
+      (.session_id // ""),
+      (.agent_id // "") ]
     | map(tostring | gsub("[\r\n]"; " "))
     | .[]
   ' 2>/dev/null
@@ -113,6 +119,7 @@ is_fable() {
 
 TOOL_MODEL=$(trim "$TOOL_MODEL")
 SUBAGENT_TYPE=$(trim "$SUBAGENT_TYPE")
+AGENT_ID=$(trim "$AGENT_ID")
 ENV_SUB=$(trim "${CLAUDE_CODE_SUBAGENT_MODEL:-}")
 FORCE_RAW=$(trim "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE:-}")
 
@@ -290,8 +297,16 @@ GATE_EOF
   esac
 }
 
-# 1. fork は model 指定も env も無視してメインセッションのモデルを継承する
+# サブエージェント内 (agent_id あり) からの継承・fork は、継承先が起動元サブエージェントの
+# モデルになり session model state (メインセッションのモデル) では判定できない。週次枠判定を
+# 通った Fable サブエージェントの子が判定なしで Fable を継承しうるため deny する。
+NESTED_DENY_REASON="agent-discipline: サブエージェント内からの model 未指定 (継承) / fork のサブエージェント起動を deny しました。継承先は起動元サブエージェントのモデルになり、Fable サブエージェントからの起動では Fable 週次枠の使用率判定を通らずに Fable で実行されえます。fork をやめ、model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
+
+# 1. fork は model 指定も env も無視して起動元のモデルを継承する
 if [ "$SUBAGENT_TYPE" = "fork" ]; then
+  if [ -n "$AGENT_ID" ]; then
+    deny "$NESTED_DENY_REASON"
+  fi
   decide_by_session_model "agent-discipline: fork のサブエージェントは model 指定にも env にも依らずメインセッション (Fable) のモデルを継承します。fork をやめ、必要な文脈を指示文に埋め込んだ新規起動で model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
 fi
 
@@ -329,6 +344,10 @@ if [ -n "$ENV_SUB" ]; then
     deny "agent-discipline: model 未指定のサブエージェントは CLAUDE_CODE_SUBAGENT_MODEL の値 (fable) で実行されます。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。env 自体を sonnet / opus へ直す場合は、セッションを超える設定のため独断で書き換えず、ユーザに依頼してください。"
   fi
   exit 0
+fi
+
+if [ -n "$AGENT_ID" ]; then
+  deny "$NESTED_DENY_REASON"
 fi
 
 decide_by_session_model "agent-discipline: model 未指定のサブエージェントはメインセッション (Fable) のモデルを継承します。model に sonnet / opus (機械的作業なら haiku) を明示して再実行してください。"
