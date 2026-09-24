@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.29.1
+v0.30.0
 
 ## 概要
 
@@ -179,6 +179,7 @@ claude plugin install agent-discipline@natsuume-plugins
 
 - 変更が一段落したら commit → push → PR 作成まで自走、 マージは 4 条件 hard gate を満たした場合のみ独断マージ
   - 4 条件: draft 解除済み / 必須 CI checks 全成功 / 必要な承認あり / `mergeable == MERGEABLE && mergeStateStatus == CLEAN`
+- 作業が残っている間の止まり方の禁止 (次の手順の宣言だけで turn を終える / 続行の可否を尋ねる / 残作業を妨げない判断事項の列挙 / 区切りや turn の長さを理由にした報告)。進捗報告・推奨は次のツール呼び出しと同じメッセージに含める。止まってよいのは、ユーザの入力なしに進められる作業が無い場合と、進行を妨げているものが意図的に保護されたものである場合に限る。この規定は禁止 / 要確認事項やマージ前提条件の確認を不要にしない
 - 禁止 / 要確認: master への直接 push / 破壊的操作 / 秘匿情報コミット / 4 条件未充足の独断マージ
 
 #### PreToolUse type:agent hook (v0.4.0 新設)
