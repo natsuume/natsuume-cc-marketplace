@@ -148,7 +148,7 @@ class DisciplineOpusStaticContractTests(unittest.TestCase):
         missing = [phrase for phrase in (
             "verifier 委任の基準 (限定式)",
             "委任は真に独立した相応の規模の作業に限る",
-            "Opus 5 への委任では汎用的な再確認指示を加えない",
+            "Opus 5 / Opus 5.5 への委任では汎用的な再確認指示を加えない",
         ) if phrase not in text]
         self.assertEqual([], missing, f"discipline-opus.md に含まれない必須文言: {missing}")
 

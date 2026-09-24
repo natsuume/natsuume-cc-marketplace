@@ -22,6 +22,7 @@ Phase A で先行 commit され red になり、Phase B のプロンプト修正
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -88,11 +89,18 @@ class AgentDisciplineThreeWayParityTest(unittest.TestCase):
 
         環境設定の変更でプロンプトが陳腐化し、opus 版の条件形記述と矛盾して
         読めるため (公式ガイドの「矛盾する指示の併存は性能を下げる」)。
-        表現の言い換えで値だけ残る経路を塞ぐため、文単位ではなく値トークン
-        そのものの不在を検査する (3 ファイルに xhigh の正当な用例は無い)。
+        opus 版は委任先に選べる effort 値として xhigh を挙げる (「`xhigh` / `max`
+        は品質向上を確認できた作業に限る」) ため、値トークンの不在ではなく、
+        「セッション既定」「セッションの既定」と xhigh を同じ文に置く記述
+        (セッション既定の値としての言及) の不在を検査する。
         """
+        default_with_xhigh = re.compile(
+            r"セッションの?既定[^。\n]*xhigh|xhigh[^。\n]*セッションの?既定"
+        )
         offenders = [
-            name for name, path in THREE_WAY.items() if "xhigh" in read(path)
+            name
+            for name, path in THREE_WAY.items()
+            if default_with_xhigh.search(read(path))
         ]
         self.assertEqual([], offenders, f"環境値ハードコードが残るファイル: {offenders}")
 
