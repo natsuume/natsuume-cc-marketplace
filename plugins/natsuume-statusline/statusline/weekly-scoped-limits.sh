@@ -280,6 +280,28 @@ weekly_scoped_record_success() {
 # stdin の model_scoped[] から変換した entry を cache へ書き出す (契約はファイル冒頭の
 # 「提供する関数」節を参照)。
 write_weekly_scoped_from_stdin() {
+  local weekly_scoped_json="$1"
+  local now fetched_at
+
+  command -v jq >/dev/null 2>&1 || return 0
+  printf '%s' "$weekly_scoped_json" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1 || return 0
+
+  now=$(date +%s 2>/dev/null) || return 0
+  [[ "$now" =~ ^[0-9]+$ ]] || return 0
+
+  # 同一内容を TTL 内に書き直さない (statusline は描画ごとに呼ばれるため書き込み回数を抑える)。
+  # jq の == は JSON 値として比較するため、キー順・空白の差では書き出さない。
+  if [ -f "$WEEKLY_SCOPED_CACHE_FILE" ]; then
+    fetched_at=$(jq -r '.fetched_at // empty' "$WEEKLY_SCOPED_CACHE_FILE" 2>/dev/null)
+    if [[ "$fetched_at" =~ ^[0-9]+$ ]] \
+      && [ $((now - fetched_at)) -le "$WEEKLY_SCOPED_TTL" ] \
+      && jq -e --argjson new "$weekly_scoped_json" '.weekly_scoped == $new' \
+        "$WEEKLY_SCOPED_CACHE_FILE" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  weekly_scoped_record_success "$now" "$weekly_scoped_json"
   return 0
 }
 
