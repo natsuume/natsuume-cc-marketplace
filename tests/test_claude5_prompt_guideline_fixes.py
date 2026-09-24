@@ -11,7 +11,7 @@
   変数連結の一括スクリプト例) の除去と、origin/HEAD stale 対策の追加。
 - pre-push-review: Opus 5 が消費する reviewer report への長さ較正 (公式ガイドの
   「Opus 5 の書く文書は長くなりがちで明示較正が必要」への対応)。
-- codex-advisor: 8,000 文字注入予算の advisor-rules.md と consult/SKILL.md 間の
+- cross-model-advisor: 8,000 文字注入予算の advisor-rules.md と consult/SKILL.md 間の
   逐語重複の参照化 (checkpoint 4 項目・async_launched 回収手順)。
 - ui-discipline: 完了前チェックリストの位置づけ緩和 (Opus 5 の過剰検証誘発対策と
   Sonnet 系の見落とし防止の両立)。
@@ -37,8 +37,8 @@ SUBAGENT_RULES = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "subagent-
 REBASE_SKILL = PLUGINS / "git-guardrails" / "skills" / "rebase-workflow" / "SKILL.md"
 CODE_REVIEWER = PLUGINS / "pre-push-review" / "agents" / "code-reviewer.md"
 SECURITY_REVIEWER = PLUGINS / "pre-push-review" / "agents" / "security-reviewer.md"
-ADVISOR_RULES = PLUGINS / "codex-advisor" / "hooks" / "prompts" / "advisor-rules.md"
-CONSULT_SKILL = PLUGINS / "codex-advisor" / "skills" / "consult" / "SKILL.md"
+ADVISOR_RULES = PLUGINS / "cross-model-advisor" / "hooks" / "prompts" / "advisor-rules.md"
+CONSULT_SKILL = PLUGINS / "cross-model-advisor" / "skills" / "consult" / "SKILL.md"
 REVIEW_CADENCE_RULES = (
     PLUGINS / "pre-push-codex-review" / "hooks" / "prompts" / "review-cadence-rules.md"
 )
@@ -229,15 +229,15 @@ class CodexAdvisorDeduplicationTest(unittest.TestCase):
         self.assertIn("terminal report が返るまで", text)
 
     def test_review_cadence_rules_points_to_consult_definition(self) -> None:
-        """checkpoint 4 項目の詳細定義は `/codex-advisor:consult`
+        """checkpoint 4 項目の詳細定義は `/cross-model-advisor:consult`
         (skills/consult/SKILL.md の `<review_cycle_checkpoint>` template) を
         正本とする。review cadence の enforcement 主体である
         pre-push-codex-review plugin の review-cadence-rules.md は、checkpoint
-        起動時に正本の識別子 (`/codex-advisor:consult`) を名指しして委ね、
+        起動時に正本の識別子 (`/cross-model-advisor:consult`) を名指しして委ね、
         consult 側の詳細な項目説明文 (bullet 本文) を逐語複製しない。
         """
         text = read(REVIEW_CADENCE_RULES)
-        self.assertIn("`/codex-advisor:consult`", text)
+        self.assertIn("`/cross-model-advisor:consult`", text)
         self.assertIn("省略せず含める", text)
         leftovers = [
             bullet

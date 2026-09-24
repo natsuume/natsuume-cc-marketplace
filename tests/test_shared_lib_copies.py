@@ -1,4 +1,4 @@
-"""pre-push-review / pre-push-codex-review / codex-advisor 間の共有 lib 同一性契約
+"""pre-push-review / pre-push-codex-review / cross-model-advisor 間の共有 lib 同一性契約
 (issue #378 Phase A)。
 
 pre-push-review core と pre-push-codex-review は、それぞれ単独 install でも自立
@@ -7,7 +7,7 @@ pre-push-review core と pre-push-codex-review は、それぞれ単独 install 
 pre-push-codex-review 側は byte-identical なコピーを保つ契約とする。
 
 `codex-companion-resolver.sh` は逆方向で、pre-push-codex-review 側が正本、
-codex-advisor 側がそのコピーを保つ。
+cross-model-advisor 側がそのコピーを保つ。
 
 `isolated-commit-template.sh` (隔離ルート免除の判定器) は git-guardrails 側が正本、
 auto-lint-check 側がそのコピーを保つ。
@@ -33,7 +33,7 @@ SPLIT_LIB = (
     ROOT / "plugins" / "pre-push-codex-review" / "hooks" / "scripts" / "lib"
 )
 CODEX_ADVISOR_RESOLVER = (
-    ROOT / "plugins" / "codex-advisor" / "scripts" / "lib"
+    ROOT / "plugins" / "cross-model-advisor" / "scripts" / "lib"
     / "codex-companion-resolver.sh"
 )
 # 隔離ルート免除の判定器。git-guardrails 側が正本で、auto-lint-check 側が

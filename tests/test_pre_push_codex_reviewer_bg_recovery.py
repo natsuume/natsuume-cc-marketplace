@@ -57,7 +57,7 @@ AGENT_LAUNCH_FOREGROUND_PHRASES = ("foreground 起動", "foreground で起動")
 AGENT_LAUNCH_MODE_DISTANCE = 80
 AGENT_LAUNCH_MARKERS = (
     "codex-reviewer",
-    "advisor-runner",
+    "codex-advisor-runner",
     "ADVISOR_CHECKPOINT_RUNNER",
     "subagent_type",
     "Agent tool",

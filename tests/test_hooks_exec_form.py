@@ -93,7 +93,7 @@ EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] 
         ("PostToolUse", script_path("post-commit-lint.sh"), ()),
         ("PostToolUseFailure", script_path("post-commit-lint.sh"), ()),
     ),
-    "codex-advisor": (
+    "cross-model-advisor": (
         ("SessionStart", script_path("inject-advisor-rules.sh"), ()),
         ("SessionStart", NODE_COMMAND, (CODEX_RUNNERS_SCRIPT,)),
         ("SessionEnd", NODE_COMMAND, (CODEX_RUNNERS_SCRIPT,)),
@@ -194,7 +194,7 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
         122,
         "d5f67fa6168994de85a34b28699d61a42a03c318c77668f839c9ac58d2fd37cb",
     ),
-    "codex-advisor": (
+    "cross-model-advisor": (
         708,
         "17610e3281ce8c5ae52a6940a6f478991cd0bdca64fdd32be02b16890d395960",
     ),
@@ -241,7 +241,7 @@ GATE_PLUGIN_NAMES = (
     "pre-push-review",
     "pre-push-codex-review",
     "pre-merge-codex-review",
-    "codex-advisor",
+    "cross-model-advisor",
 )
 UNOBSERVED_TOOL_KEYWORDS = (
     "CLAUDE_CODE_USE_POWERSHELL_TOOL=1",
@@ -271,7 +271,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "experimental-agent-discipline": "0.6.0",
     "ui-discipline": "0.4.4",
     "natsuume-writing": "0.8.0",
-    "codex-advisor": "4.0.1",
+    "cross-model-advisor": "4.0.1",
     "rate-limit": "0.5.2",
     "session-handoff": "0.5.0",
     "repo-analytics": "0.2.6",

@@ -1,4 +1,4 @@
-"""codex-advisor の Codex runner 強制・復旧契約テスト (issue #291)。
+"""cross-model-advisor の Codex runner 強制・復旧契約テスト (issue #291)。
 
 Phase A では次の public seam を固定する。
 
@@ -22,7 +22,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / "plugins" / "codex-advisor"
+PLUGIN = ROOT / "plugins" / "cross-model-advisor"
 HOOK = PLUGIN / "hooks" / "scripts" / "manage-codex-runners.mjs"
 HOOKS_JSON = PLUGIN / "hooks" / "hooks.json"
 RULES = PLUGIN / "hooks" / "prompts" / "advisor-rules.md"
@@ -30,17 +30,17 @@ CONSULT = PLUGIN / "skills" / "consult" / "SKILL.md"
 JOB_HELPER = PLUGIN / "scripts" / "run-codex-job.sh"
 
 RUNNERS = {
-    "rescue": "codex-advisor:rescue-runner",
-    "review": "codex-advisor:review-runner",
-    "advisor": "codex-advisor:advisor-runner",
+    "rescue": "cross-model-advisor:codex-rescue-runner",
+    "review": "cross-model-advisor:codex-review-runner",
+    "advisor": "cross-model-advisor:codex-advisor-runner",
 }
 # レビュー系 subagent の namespace。review の起動・計数は pre-push-codex-review /
-# pre-merge-codex-review plugin の責務であり、codex-advisor の SubagentStart /
+# pre-merge-codex-review plugin の責務であり、cross-model-advisor の SubagentStart /
 # SubagentStop matcher・hooks.json はこれらに関知しない (マッチしない)。
 PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
 PRE_PUSH_CODEX_REVIEWER_LEGACY = "pre-push-review:codex-reviewer"
 PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
-# codex-advisor 自身の PreToolUse gate (classifyModelLaunch) が分類しないコマンド例
+# cross-model-advisor 自身の PreToolUse gate (classifyModelLaunch) が分類しないコマンド例
 # として使う、pre-push-codex-review plugin が所有する codex review wrapper。
 PRE_PUSH_CODEX_WRAPPER = (
     "/opt/pre-push-codex-review/hooks/scripts/run-pre-push-codex-review.sh"
@@ -61,7 +61,7 @@ COMMANDS = {
         "adversarial-review --wait --scope branch"
     ),
     "advisor": (
-        'bash "/opt/claude/plugins/codex-advisor/scripts/'
+        'bash "/opt/claude/plugins/cross-model-advisor/scripts/'
         'run-codex-advisor.sh" < "/tmp/prompt.md"'
     ),
 }
@@ -381,8 +381,8 @@ class CodexRunnerDirectExecutionGateTest(HookHarness):
     def test_read_only_mentions_do_not_trigger_the_gate(self) -> None:
         commands = [
             "rg -n 'codex-companion.mjs task' plugins tests",
-            "git diff -- plugins/codex-advisor/scripts/run-codex-advisor.sh",
-            "cat plugins/codex-advisor/scripts/run-codex-advisor.sh",
+            "git diff -- plugins/cross-model-advisor/scripts/run-codex-advisor.sh",
+            "cat plugins/cross-model-advisor/scripts/run-codex-advisor.sh",
             "grep -n review /opt/codex-companion.mjs | head -5",
             "echo 'node /opt/codex-companion.mjs task --background'",
         ]
@@ -933,7 +933,7 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
                 self.assertNotIn("<<'EOF'", contents)
 
     def test_review_runner_defines_job_set_recovery_without_guessing(self) -> None:
-        contents = (PLUGIN / "agents" / "review-runner.md").read_text(
+        contents = (PLUGIN / "agents" / "codex-review-runner.md").read_text(
             encoding="utf-8"
         )
         self.assertIn("job", contents)
@@ -943,11 +943,11 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
         self.assertIn("推測", contents)
 
     def test_advisor_report_carries_review_cadence_attestation_contract(self) -> None:
-        """advisor-runner の footer は review cadence attestation 予約行を
+        """codex-advisor-runner の footer は review cadence attestation 予約行を
         含む契約を維持する (enforcement 自体は pre-push-codex-review plugin
         の責務)。
         """
-        advisor_runner = (PLUGIN / "agents" / "advisor-runner.md").read_text(
+        advisor_runner = (PLUGIN / "agents" / "codex-advisor-runner.md").read_text(
             encoding="utf-8"
         )
         consult = CONSULT.read_text(encoding="utf-8")
@@ -1003,7 +1003,7 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
         ]
         self.assertEqual(["^SubagentHandback$"], post_tool_use_matchers)
         # review の起動・計数は pre-push-codex-review / pre-merge-codex-review
-        # plugin の責務であり、codex-advisor の hooks.json は reviewer
+        # plugin の責務であり、cross-model-advisor の hooks.json は reviewer
         # namespace に関知しない。
         serialized = json.dumps(hooks, ensure_ascii=False)
         self.assertNotIn(PRE_PUSH_CODEX_REVIEWER, serialized)
@@ -1015,7 +1015,7 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
         # role 固有 runner namespace にのみ fullmatch し、review 系 reviewer
         # namespace (canonical / legacy いずれも) や類似の未承認 namespace には
         # match しないことを固定する (review の計数は pre-push-codex-review /
-        # pre-merge-codex-review plugin の責務であり、codex-advisor は関知
+        # pre-merge-codex-review plugin の責務であり、cross-model-advisor は関知
         # しない)。
         manifest = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
         hooks = manifest["hooks"]

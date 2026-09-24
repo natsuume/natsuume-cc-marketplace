@@ -1,13 +1,13 @@
 """Claude 5 世代モデル対応: subagent の model 固定と起動仕様の model 明示の契約テスト。
 
-pre-push-review / codex-advisor の各 subagent は現在 `model: inherit` で起動されており、
+pre-push-review / cross-model-advisor の各 subagent は現在 `model: inherit` で起動されており、
 親セッションのモデルをそのまま継承する。Claude 5 世代対応として、レビュー品質が重要な
 code-reviewer / security-reviewer は `model: opus` に固定し (effort は Claude Opus 5
 System Card 準拠の撤廃により pin せずセッション既定を継承する)、
-wrapper 起動や job tracking が主目的の codex-reviewer / codex-advisor の 3 runner は
+wrapper 起動や job tracking が主目的の codex-reviewer / cross-model-advisor の 3 runner は
 `model: sonnet` に固定する。あわせて、起動仕様 (両 plugin の review.md の Agent 起動、
 block-pre-push.sh / block-pre-push-codex.sh / block-bg-codex-wrapper.sh の deny メッセージ、
-manage-codex-runners.mjs の deny メッセージ、codex-advisor のドキュメント群) にも
+manage-codex-runners.mjs の deny メッセージ、cross-model-advisor のドキュメント群) にも
 正準文字列 `model: "opus"` / `model: "sonnet"` を明示し、親セッションや利用者が
 起動時に期待すべきモデルを迷わず判断できるようにする。
 
@@ -30,7 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PRE_PUSH = ROOT / "plugins" / "pre-push-review"
 PRE_PUSH_CODEX = ROOT / "plugins" / "pre-push-codex-review"
-CODEX_ADVISOR = ROOT / "plugins" / "codex-advisor"
+CODEX_ADVISOR = ROOT / "plugins" / "cross-model-advisor"
 
 CODE_REVIEWER = PRE_PUSH / "agents" / "code-reviewer.md"
 SECURITY_REVIEWER = PRE_PUSH / "agents" / "security-reviewer.md"
@@ -43,9 +43,9 @@ BLOCK_BG_CODEX_WRAPPER = (
     PRE_PUSH_CODEX / "hooks" / "scripts" / "block-bg-codex-wrapper.sh"
 )
 
-ADVISOR_RUNNER = CODEX_ADVISOR / "agents" / "advisor-runner.md"
-RESCUE_RUNNER = CODEX_ADVISOR / "agents" / "rescue-runner.md"
-REVIEW_RUNNER = CODEX_ADVISOR / "agents" / "review-runner.md"
+ADVISOR_RUNNER = CODEX_ADVISOR / "agents" / "codex-advisor-runner.md"
+RESCUE_RUNNER = CODEX_ADVISOR / "agents" / "codex-rescue-runner.md"
+REVIEW_RUNNER = CODEX_ADVISOR / "agents" / "codex-review-runner.md"
 MANAGE_CODEX_RUNNERS = CODEX_ADVISOR / "hooks" / "scripts" / "manage-codex-runners.mjs"
 CONSULT_SKILL = CODEX_ADVISOR / "skills" / "consult" / "SKILL.md"
 ADVISOR_RULES = CODEX_ADVISOR / "hooks" / "prompts" / "advisor-rules.md"
@@ -58,9 +58,9 @@ OPUS_AGENTS = {
 }
 SONNET_AGENTS = {
     "codex-reviewer": CODEX_REVIEWER,
-    "advisor-runner": ADVISOR_RUNNER,
-    "rescue-runner": RESCUE_RUNNER,
-    "review-runner": REVIEW_RUNNER,
+    "codex-advisor-runner": ADVISOR_RUNNER,
+    "codex-rescue-runner": RESCUE_RUNNER,
+    "codex-review-runner": REVIEW_RUNNER,
 }
 ALL_PINNED_AGENTS = {**OPUS_AGENTS, **SONNET_AGENTS}
 
@@ -310,7 +310,7 @@ class ManageCodexRunnersModelAnnotationTest(unittest.TestCase):
 
 
 class CodexAdvisorDocsModelAnnotationTest(unittest.TestCase):
-    """変更仕様 2: codex-advisor のドキュメント群と 3 runner 本文が sonnet model を明示する。"""
+    """変更仕様 2: cross-model-advisor のドキュメント群と 3 runner 本文が sonnet model を明示する。"""
 
     def test_consult_skill_declares_sonnet_model_bullet(self) -> None:
         body = read(CONSULT_SKILL)
@@ -328,9 +328,9 @@ class CodexAdvisorDocsModelAnnotationTest(unittest.TestCase):
         self,
     ) -> None:
         for name, path in (
-            ("advisor-runner", ADVISOR_RUNNER),
-            ("rescue-runner", RESCUE_RUNNER),
-            ("review-runner", REVIEW_RUNNER),
+            ("codex-advisor-runner", ADVISOR_RUNNER),
+            ("codex-rescue-runner", RESCUE_RUNNER),
+            ("codex-review-runner", REVIEW_RUNNER),
         ):
             with self.subTest(runner=name):
                 body = body_after_frontmatter(read(path))

@@ -7,7 +7,7 @@ event 登録と plugin README の該当節の記述を固定する。state 隔�
 `PRE_PUSH_CODEX_REVIEW_CADENCE_STATE_ROOT` を各テストの一時ディレクトリへ向ける
 ことで行う。
 
-checkpoint 相談 (`codex-advisor:advisor-runner` を `<review_cycle_checkpoint>` を
+checkpoint 相談 (`cross-model-advisor:codex-advisor-runner` を `<review_cycle_checkpoint>` を
 含む request で起動する) が成立しない経路は 2 つある。起動後の失敗は
 `PostToolUseFailure` に配信され、1 回で fail-open reset の契機になる。auto mode
 classifier による起動拒否は `PermissionDenied` に配信され、1 回目は retry を要求して
@@ -60,8 +60,8 @@ PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
 # codex gate 分離前の旧 namespace。cadence script のサポート対象外であり、計数
 # されないことを固定する。
 PRE_PUSH_CODEX_REVIEWER_LEGACY = "pre-push-review:codex-reviewer"
-FOOTER_COUNTED_REVIEWER = "codex-advisor:review-runner"
-ADVISOR_CHECKPOINT_RUNNER = "codex-advisor:advisor-runner"
+FOOTER_COUNTED_REVIEWER = "cross-model-advisor:codex-review-runner"
+ADVISOR_CHECKPOINT_RUNNER = "cross-model-advisor:codex-advisor-runner"
 
 REVIEW_CADENCE_LIMIT = 5
 
@@ -77,8 +77,8 @@ ORDINARY_REQUEST_PROMPT = "<task>ordinary advisor consult, no checkpoint marker<
 PERMISSION_DENIED_REASON = "auto mode classifier rejected this subagent launch"
 
 # Stop の block 文言が checkpoint からの脱出手順として含む語。state file の絶対パスと
-# あわせて、codex-advisor 未 install 時に state を削除して脱出できることを示す。
-STOP_ESCAPE_KEYWORDS = ("codex-advisor", "install", "削除")
+# あわせて、cross-model-advisor 未 install 時に state を削除して脱出できることを示す。
+STOP_ESCAPE_KEYWORDS = ("cross-model-advisor", "install", "削除")
 
 # 計数対象の 4 つの review 起動形。
 REVIEW_LAUNCH_COMMANDS = {
@@ -301,7 +301,7 @@ class HookHarness(unittest.TestCase):
         self,
         *,
         session_id: str = "session-a",
-        agent_id: str = "review-runner-a",
+        agent_id: str = "codex-review-runner-a",
         status: str = "success",
         job_id: str = "review-job",
         fence: bool = False,
@@ -323,7 +323,7 @@ class HookHarness(unittest.TestCase):
         self,
         *,
         session_id: str = "session-a",
-        agent_id: str = "advisor-runner-a",
+        agent_id: str = "codex-advisor-runner-a",
         status: str = "success",
         attestation: str | None = "satisfied",
         job_id: str = "advisor-job",
@@ -578,7 +578,7 @@ class StatusLineReviewCadenceTest(HookHarness):
 
 
 class MixedReviewerCadenceTest(HookHarness):
-    """canonical reviewer と `codex-advisor:review-runner` は同一カウンターに合算する。"""
+    """canonical reviewer と `cross-model-advisor:codex-review-runner` は同一カウンターに合算する。"""
 
     def test_pre_push_pre_merge_and_review_runner_share_the_counter(self) -> None:
         session_id = "session-mixed"
@@ -605,12 +605,12 @@ class MixedReviewerCadenceTest(HookHarness):
         self.assertIsNone(self.main_stop(session_id))
 
         self.review_runner_stop(
-            session_id=session_id, agent_id="review-runner-1", job_id="job-1"
+            session_id=session_id, agent_id="codex-review-runner-1", job_id="job-1"
         )
         self.assertIsNone(self.main_stop(session_id))
 
         self.review_runner_stop(
-            session_id=session_id, agent_id="review-runner-2", job_id="job-2"
+            session_id=session_id, agent_id="codex-review-runner-2", job_id="job-2"
         )
         self.assert_stop_blocked(self.main_stop(session_id))
 
@@ -870,7 +870,7 @@ class PermissionDeniedFailOpenTest(HookHarness):
     auto mode classifier は subagent の起動そのものを拒否するため、この経路では
     PostToolUseFailure は発火しない。「checkpoint 相談の拒否」とみなす条件は
     PostToolUseFailure の fail-open reset と同じ (`tool_name` が `Agent` / `Task`、
-    `tool_input.subagent_type` が `codex-advisor:advisor-runner`、`tool_input.prompt`
+    `tool_input.subagent_type` が `cross-model-advisor:codex-advisor-runner`、`tool_input.prompt`
     が文字列で `<review_cycle_checkpoint>` を含む、checkpoint 要求中)。
 
     1 回目の拒否では state を残したまま retry 応答を返し、ユーザ確認後の再起動を促す。
@@ -1015,7 +1015,7 @@ class PermissionDeniedFailOpenTest(HookHarness):
 class StopBlockEscapeInstructionTest(HookHarness):
     """Stop の block 文言が、自動 reset が届かない場合の脱出手順を自己完結で示す。
 
-    checkpoint 相談の起動が hook に到達しない形で失敗する環境 (codex-advisor 未 install
+    checkpoint 相談の起動が hook に到達しない形で失敗する環境 (cross-model-advisor 未 install
     による subagent_type の解決失敗等) では自動 reset が発火しないため、block 文言は
     その session の state file の絶対パスと、それを削除して脱出できることを含める。
     """
@@ -1056,7 +1056,7 @@ class SubagentStartGuardTest(HookHarness):
             FOOTER_COUNTED_REVIEWER,
             ADVISOR_CHECKPOINT_RUNNER,
             PRE_PUSH_CODEX_REVIEWER_LEGACY,
-            "codex-advisor:rescue-runner",
+            "cross-model-advisor:codex-rescue-runner",
         ):
             with self.subTest(agent_type=agent_type):
                 self.status_line_start(
@@ -1111,7 +1111,7 @@ class HooksManifestContractTest(unittest.TestCase):
             PRE_PUSH_CODEX_REVIEWER_LEGACY,
             FOOTER_COUNTED_REVIEWER,
             ADVISOR_CHECKPOINT_RUNNER,
-            "codex-advisor:rescue-runner",
+            "cross-model-advisor:codex-rescue-runner",
             "pre-push-codex-review:code-reviewer",
         )
         for agent_type in accepted:
@@ -1135,7 +1135,7 @@ class HooksManifestContractTest(unittest.TestCase):
         )
         rejected = (
             PRE_PUSH_CODEX_REVIEWER_LEGACY,
-            "codex-advisor:rescue-runner",
+            "cross-model-advisor:codex-rescue-runner",
             "pre-push-codex-review:code-reviewer",
         )
         for agent_type in accepted:
@@ -1307,12 +1307,12 @@ class SubagentHandbackReportTest(HookHarness):
             FOOTER_COUNTED_REVIEWER,
             message,
             session_id=session_id,
-            agent_id="review-runner-a",
+            agent_id="codex-review-runner-a",
         )
         self.closing_stop(
             FOOTER_COUNTED_REVIEWER,
             session_id=session_id,
-            agent_id="review-runner-a",
+            agent_id="codex-review-runner-a",
         )
         state = self.state_for(session_id)
         assert state is not None
@@ -1328,21 +1328,21 @@ class SubagentHandbackReportTest(HookHarness):
             FOOTER_COUNTED_REVIEWER,
             message,
             session_id=session_id,
-            agent_id="review-runner-a",
+            agent_id="codex-review-runner-a",
         )
         self.closing_stop(
             FOOTER_COUNTED_REVIEWER,
             session_id=session_id,
-            agent_id="review-runner-a",
+            agent_id="codex-review-runner-a",
         )
         # resume 再 stop で footer 付き plain text が来ても同じ agent_id は加算しない。
-        self.review_runner_stop(session_id=session_id, agent_id="review-runner-a")
+        self.review_runner_stop(session_id=session_id, agent_id="codex-review-runner-a")
         state = self.state_for(session_id)
         assert state is not None
         self.assertEqual(1, state["completedReviews"])
-        self.assertEqual(["review-runner-a"], state["countedRunnerAgentIds"])
+        self.assertEqual(["codex-review-runner-a"], state["countedRunnerAgentIds"])
         # 別 agent_id の runner は計数される。
-        self.review_runner_stop(session_id=session_id, agent_id="review-runner-b")
+        self.review_runner_stop(session_id=session_id, agent_id="codex-review-runner-b")
         state = self.state_for(session_id)
         assert state is not None
         self.assertEqual(2, state["completedReviews"])
@@ -1367,12 +1367,12 @@ class SubagentHandbackReportTest(HookHarness):
             ADVISOR_CHECKPOINT_RUNNER,
             message,
             session_id=session_id,
-            agent_id="advisor-runner-a",
+            agent_id="codex-advisor-runner-a",
         )
         self.closing_stop(
             ADVISOR_CHECKPOINT_RUNNER,
             session_id=session_id,
-            agent_id="advisor-runner-a",
+            agent_id="codex-advisor-runner-a",
         )
         self.assertIsNone(self.state_for(session_id))
         self.assertIsNone(self.main_stop(session_id))
@@ -1392,12 +1392,12 @@ class SubagentHandbackReportTest(HookHarness):
             ADVISOR_CHECKPOINT_RUNNER,
             message,
             session_id=session_id,
-            agent_id="advisor-runner-a",
+            agent_id="codex-advisor-runner-a",
         )
         self.closing_stop(
             ADVISOR_CHECKPOINT_RUNNER,
             session_id=session_id,
-            agent_id="advisor-runner-a",
+            agent_id="codex-advisor-runner-a",
         )
         state = self.state_for(session_id)
         assert state is not None
@@ -1471,7 +1471,7 @@ class ReviewCadenceDocumentationTest(unittest.TestCase):
 
     HOOK_LIST_SECTION = ("manage-review-cadence", 4)
     CHECKPOINT_SECTION = ("checkpoint", 3)
-    CODEX_ADVISOR_SECTION = ("codex-advisor 連携", 3)
+    CODEX_ADVISOR_SECTION = ("cross-model-advisor 連携", 3)
 
     def section(self, keyword: str, level: int) -> str:
         body = markdown_section(
