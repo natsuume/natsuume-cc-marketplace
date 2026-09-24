@@ -12,7 +12,9 @@ runtime 概念を含む) のままであり、本ファイルは red で正し�
        (ただし plugins/<name>/.claude-plugin/plugin.json 単独の変更は path として数えない)
     2. plugin.json の version 以外のフィールドが変わった場合は changed
     3. marketplace.json の対応 entry の version 以外が変わった場合は changed
-    4. marketplace.json の plugins 以外の global metadata が変わった場合は全 plugin が changed
+    4. marketplace.json の plugins・renames 以外の global metadata が変わった場合は全 plugin が
+       changed (renames は廃止・改名した plugin の扱いを利用者に伝えるだけで、残る plugin の
+       配布内容を変えないため比較しない)
 - 検査 (checks a-f):
     a. changed な plugin は current version > base version (bump 必須)
     b. 全 plugin で version の後退 (current < base) を禁止
@@ -333,6 +335,24 @@ class ChangedPluginDetectionTest(unittest.TestCase):
             self.assertEqual(
                 changed_names_for_fixture(repository, base_revision), {"sample", "other"}
             )
+
+    def test_marketplace_renames_change_does_not_mark_plugins_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            repository = Path(name)
+            initialize_repository(repository)
+            write_full_consistent_repository(
+                repository, [("sample", "1.0.0"), ("other", "2.0.0")]
+            )
+            base_revision = commit_all(repository, "base")
+
+            write_marketplace(
+                repository,
+                [marketplace_entry("sample", "1.0.0"), marketplace_entry("other", "2.0.0")],
+                extra_metadata={"renames": {"removed-plugin": None}},
+            )
+            commit_all(repository, "add a removed plugin to renames")
+
+            self.assertEqual(changed_names_for_fixture(repository, base_revision), set())
 
     def test_direct_comparison_detects_force_push_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as name:

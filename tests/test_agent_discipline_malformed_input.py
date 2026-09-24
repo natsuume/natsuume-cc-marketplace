@@ -10,7 +10,6 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIRS = (
     ROOT / "plugins" / "agent-discipline",
-    ROOT / "plugins" / "experimental-agent-discipline",
 )
 # stdin の hook 入力 JSON を jq で解析する配送 script。hook の stderr は利用者に
 # 見えるため、解析失敗時は stderr を出さずに無音終了する (fail-open) ことを検査する。

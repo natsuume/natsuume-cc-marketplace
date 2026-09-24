@@ -13,20 +13,18 @@ model 指定にも env にも依らずメインセッションのモデルを継
   固定する。deny メッセージが「env は明示指定より優先される」という誤った説明を持たず、
   自己修復誘導 (`sonnet` の明示) を保つことも固定する。
 - PostModelSwitch 追随 (``PostModelSwitchHookRegistrationTest`` /
-  ``UpdateModelOnSwitchScriptTest``): 両 plugin の hooks.json が
+  ``UpdateModelOnSwitchScriptTest``): agent-discipline の hooks.json が
   `update-model-on-switch.sh` を `PostModelSwitch` に 1 本登録し、スクリプトが
   `to_model` で session model state を上書きし、pending マーカーを消し、fable ⇄ 非 fable の
   切替でだけ `additionalContext` を出すこと。
 - 配送文言 (``DisciplinePromptResolutionOrderTest`` /
-  ``SubagentRulesInjectionPremiseTest``): 両 plugin の分業規律 3 種 (計 6 ファイル) の
+  ``SubagentRulesInjectionPremiseTest``): 分業規律 3 種の
   `rule:delegation-rules` 節が ``MODEL_RESOLUTION_CANONICAL_SENTENCE`` を持ち、旧前提の
   文言 (``FORBIDDEN_PROMPT_PHRASES``) を持たないこと。`inject-subagent-rules.sh` が
   「subagent は Fable になり得ない」前提を持たないこと。
-- 文書 (``AgentDisciplineReadmeDefenseTest`` /
-  ``ExperimentalDependencyStatementTest`` / ``HookCommentCurrencyTest``): 主防御が
+- 文書 (``AgentDisciplineReadmeDefenseTest`` / ``HookCommentCurrencyTest``): 主防御が
   `permissions.deny` の `Agent(model:fable)` / `Agent(fork)` であることと既知制約が
-  agent-discipline README にあること、experimental 側の env 記述が FORCE 基準であること、
-  hook の comment に旧解決順序が残っていないこと。
+  agent-discipline README にあること、hook の comment に旧解決順序が残っていないこと。
 - version (``AgentDisciplineVersionConsistencyTest``): plugin.json / marketplace.json /
   リポジトリ直下 README / plugin README の 4 箇所が ``PLUGIN_VERSION`` で一致すること。
 
@@ -51,7 +49,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_PLUGIN = ROOT / "plugins" / "agent-discipline"
-FORK_PLUGIN = ROOT / "plugins" / "experimental-agent-discipline"
 
 PLUGIN_NAME = "agent-discipline"
 PLUGIN_VERSION = "0.31.0"
@@ -59,7 +56,6 @@ PLUGIN_VERSION = "0.31.0"
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 REPO_README = ROOT / "README.md"
 BASE_README = BASE_PLUGIN / "README.md"
-FORK_README = FORK_PLUGIN / "README.md"
 BASE_PLUGIN_JSON = BASE_PLUGIN / ".claude-plugin" / "plugin.json"
 
 BLOCK_FABLE = BASE_PLUGIN / "hooks" / "scripts" / "block-fable-subagent.sh"
@@ -67,39 +63,24 @@ UPDATE_MODEL_ON_SWITCH = BASE_PLUGIN / "hooks" / "scripts" / "update-model-on-sw
 # hooks.json が登録する command の実体。登録する plugin ごとに実行可能ファイルとして存在する。
 UPDATE_MODEL_ON_SWITCH_SCRIPTS = {
     "agent-discipline": UPDATE_MODEL_ON_SWITCH,
-    "experimental-agent-discipline": (
-        FORK_PLUGIN / "hooks" / "scripts" / "update-model-on-switch.sh"
-    ),
 }
 
-# plugin ごとの対応ファイル (同じ契約を両 plugin に課す検査で使う)。
+# plugin ごとの対応ファイル。
 HOOKS_JSON = {
     "agent-discipline": BASE_PLUGIN / "hooks" / "hooks.json",
-    "experimental-agent-discipline": FORK_PLUGIN / "hooks" / "hooks.json",
 }
 BLOCK_FABLE_SCRIPTS = {
     "agent-discipline": BLOCK_FABLE,
-    "experimental-agent-discipline": (
-        FORK_PLUGIN / "hooks" / "scripts" / "block-fable-subagent.sh"
-    ),
 }
 INJECT_SUBAGENT_RULES_SCRIPTS = {
     "agent-discipline": BASE_PLUGIN / "hooks" / "scripts" / "inject-subagent-rules.sh",
-    "experimental-agent-discipline": (
-        FORK_PLUGIN / "hooks" / "scripts" / "inject-subagent-rules.sh"
-    ),
-}
-FORK_AGENT_DEFINITIONS = {
-    "fable-low-worker": FORK_PLUGIN / "agents" / "fable-low-worker.md",
-    "fable-low-explorer": FORK_PLUGIN / "agents" / "fable-low-explorer.md",
 }
 
-# 分業規律 3 種 × 2 plugin = 6 ファイル。モデル解決順序の記述は全ファイル共通の canonical 文。
+# 分業規律 3 種。モデル解決順序の記述は全ファイル共通の canonical 文。
 DISCIPLINE_PROMPTS = {
     f"{plugin}/{name}": plugin_dir / "hooks" / "prompts" / name
     for plugin, plugin_dir in (
         ("agent-discipline", BASE_PLUGIN),
-        ("experimental-agent-discipline", FORK_PLUGIN),
     )
     for name in ("discipline-fable.md", "discipline-sonnet.md", "discipline-opus.md")
 }
@@ -113,7 +94,7 @@ POST_MODEL_SWITCH_COMMAND = (
 # session model state / pending マーカーの置き場 (両 hook が共有する)。
 STATE_DIR_NAME = "agent-discipline-state"
 
-# 分業規律 6 ファイルの rule:delegation-rules 節に必須の canonical 文 (空白を無視して照合)。
+# 分業規律 3 ファイルの rule:delegation-rules 節に必須の canonical 文 (空白を無視して照合)。
 MODEL_RESOLUTION_CANONICAL_SENTENCE = (
     "サブエージェントのモデルは 明示 model > agent 定義の frontmatter >"
     " `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 の順に解決される。"
@@ -121,7 +102,7 @@ MODEL_RESOLUTION_CANONICAL_SENTENCE = (
     "env (未設定なら main model) が全てを上書きする"
 )
 
-# 分業規律 6 ファイル全文から消えていること (空白を無視して照合)。
+# 分業規律 3 ファイル全文から消えていること (空白を無視して照合)。
 FORBIDDEN_PROMPT_PHRASES = (
     "model の明示指定や agent 定義の frontmatter より優先され",
     "env が `sonnet` の間は opus を指定しても sonnet で走る",
@@ -153,18 +134,7 @@ FORBIDDEN_README_PHRASES = (
     "`CLAUDE_CODE_SUBAGENT_MODEL` env > `tool_input.model` 明示指定",
 )
 
-# experimental 側 (README / 2 agent 定義) から消えていること (空白を無視して照合)。
-FORBIDDEN_EXPERIMENTAL_ENV_PHRASES = (
-    "この env は model の明示指定より優先されるため",
-    "明示した model より env が優先されて",
-    "| `CLAUDE_CODE_SUBAGENT_MODEL` が設定されている |",
-    "0. `CLAUDE_CODE_SUBAGENT_MODEL` が fable を指す",
-)
-REQUIRED_EXPERIMENTAL_DEPENDENCY_PHRASE = (
-    "`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が設定されていないこと"
-)
-
-# block-fable-subagent.sh (両 plugin) の comment から消えていること (空白を無視して照合)。
+# block-fable-subagent.sh の comment から消えていること (空白を無視して照合)。
 # 判定ステップの番号付けにも `Step 0` の表記は使わない。
 FORBIDDEN_HOOK_COMMENT_PHRASES = (
     "CLAUDE_CODE_SUBAGENT_MODEL env > tool_input.model",
@@ -695,7 +665,7 @@ class BlockFableSubagentDecisionTableTest(HookSubprocessTestBase):
 
 
 class PostModelSwitchHookRegistrationTest(unittest.TestCase):
-    """両 plugin の hooks.json が PostModelSwitch hook を 1 本登録する。"""
+    """agent-discipline の hooks.json が PostModelSwitch hook を 1 本登録する。"""
 
     def test_both_plugins_register_the_update_script_once(self) -> None:
         """`PostModelSwitch` に update-model-on-switch.sh の command hook が 1 本ある。"""
@@ -719,7 +689,7 @@ class PostModelSwitchHookRegistrationTest(unittest.TestCase):
                 )
 
     def test_update_script_exists_and_is_executable(self) -> None:
-        """hook を登録する両 plugin で update-model-on-switch.sh が実行可能ファイルとして存在する。"""
+        """hook を登録する plugin で update-model-on-switch.sh が実行可能ファイルとして存在する。"""
         for plugin, path in UPDATE_MODEL_ON_SWITCH_SCRIPTS.items():
             with self.subTest(plugin=plugin):
                 self.assertTrue(path.is_file(), path)
@@ -931,7 +901,7 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
 
 
 class DisciplinePromptResolutionOrderTest(unittest.TestCase):
-    """分業規律 6 ファイルのモデル解決順序の記述を固定する。"""
+    """分業規律 3 ファイルのモデル解決順序の記述を固定する。"""
 
     def test_delegation_rules_state_the_canonical_resolution_order(self) -> None:
         """rule:delegation-rules 節に canonical 文がある (空白を無視して照合)。"""
@@ -1022,33 +992,6 @@ class AgentDisciplineReadmeDefenseTest(unittest.TestCase):
                 self.assertNotIn(squeeze(phrase), body)
 
 
-class ExperimentalDependencyStatementTest(unittest.TestCase):
-    """experimental 側の env 前提が FORCE 基準で書かれている。"""
-
-    def test_readme_dependency_section_requires_force_to_be_unset(self) -> None:
-        """「依存・前提」節が FORCE 未設定を前提として挙げている。"""
-        section = markdown_section(read(FORK_README), "## 依存・前提")
-        self.assertTrue(section, "## 依存・前提 節が無い")
-        self.assertIn(
-            squeeze(REQUIRED_EXPERIMENTAL_DEPENDENCY_PHRASE), squeeze(section)
-        )
-
-    def test_agent_definitions_reference_force(self) -> None:
-        """2 つの agent 定義が FORCE を起動条件として書いている。"""
-        for name, path in FORK_AGENT_DEFINITIONS.items():
-            with self.subTest(agent=name):
-                self.assertIn("CLAUDE_CODE_SUBAGENT_MODEL_FORCE", read(path), path)
-
-    def test_env_priority_claims_are_absent(self) -> None:
-        """env が明示指定より優先されることを理由にした記述が残っていない。"""
-        targets = {"README.md": FORK_README, **FORK_AGENT_DEFINITIONS}
-        for label, path in targets.items():
-            body = squeeze(read(path))
-            for phrase in FORBIDDEN_EXPERIMENTAL_ENV_PHRASES:
-                with self.subTest(target=label, phrase=phrase):
-                    self.assertNotIn(squeeze(phrase), body, label)
-
-
 class HookCommentCurrencyTest(unittest.TestCase):
     """契約対象ファイルの説明文が現在の解決順序だけを書いている。"""
 
@@ -1066,7 +1009,6 @@ class HookCommentCurrencyTest(unittest.TestCase):
             **DISCIPLINE_PROMPTS,
             **{f"block-fable/{k}": v for k, v in BLOCK_FABLE_SCRIPTS.items()},
             **{f"inject-subagent/{k}": v for k, v in INJECT_SUBAGENT_RULES_SCRIPTS.items()},
-            **{f"agents/{k}": v for k, v in FORK_AGENT_DEFINITIONS.items()},
             "update-model-on-switch.sh": UPDATE_MODEL_ON_SWITCH,
         }
         for label, path in targets.items():
