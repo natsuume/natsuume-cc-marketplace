@@ -79,7 +79,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 
 ## codex-advisor からの移行
 
-marketplace の `renames` により、旧名 `codex-advisor` は Claude Code 2.1.193 以降で起動時に `cross-model-advisor` として読み込まれ、`enabledPlugins` / `pluginConfigs` の旧名キーも新名へ自動で書き換わります。2.1.192 以前は `renames` を解釈せず旧名を `plugin-not-found` として報告するため、`claude plugin install cross-model-advisor@natsuume-plugins` で入れ直してください。managed settings で旧名を有効化している場合は自動で書き換わらないため、管理者が新名へ更新する必要があります。
+marketplace の `renames` により、旧名 `codex-advisor` は Claude Code 2.1.193 以降で起動時に `cross-model-advisor` として読み込まれ、`enabledPlugins` / `pluginConfigs` の旧名キーも新名へ自動で書き換わります。2.1.192 までの Claude Code は `renames` を解釈せず旧名を `plugin-not-found` として報告するため、`claude plugin install cross-model-advisor@natsuume-plugins` で入れ直してください。managed settings で旧名を有効化している場合は自動で書き換わらないため、管理者が新名へ更新する必要があります。
 
 runner の agent 名 (`cross-model-advisor:codex-*-runner`) と review cadence が識別する agent 名は、新旧の版で一致しません。旧版と新版の hook が同じセッションに混在すると、正規の runner 起動が gate に拒否されたり、checkpoint の充足が cadence に数えられず Stop の block が解けなかったりします。次の順で切り替えてください:
 
