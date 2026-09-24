@@ -418,6 +418,172 @@ class CodexRunnerDirectExecutionGateTest(HookHarness):
         )
 
 
+class CodexRunnerHeredocGateTest(HookHarness):
+    """heredoc 本文を shell の意味どおりに解析する (#464)。
+
+    区切り語を quote した heredoc の本文は literal なデータで、wrapper 名が文字列として
+    現れても起動ではない。本文を shell が実行する形 (本文を shell の stdin に渡す) と、
+    区切り語を quote しない heredoc 本文のコマンド置換は従来どおり実行形として判定する。
+    heredoc の終端より後ろの行と、heredoc 演算子と同じ行の後続 segment もコマンドである。
+    """
+
+    def assert_allowed_without_state(self, command: str) -> None:
+        self.assertIsNone(self.hook_response(self.bash_payload(command)), command)
+        self.assertEqual([], self.state_records(), command)
+
+    def test_quoted_heredoc_body_is_data(self) -> None:
+        cases = {
+            "backticks-in-python-string": (
+                "python3 - <<'EOF'\n"
+                'print("wrapper は `run-codex-advisor.sh` と書く")\n'
+                "EOF"
+            ),
+            "executable-line-single-quoted-delimiter": (
+                "cat <<'EOF' > notes.md\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF"
+            ),
+            "executable-line-double-quoted-delimiter": (
+                'cat <<"EOF" > notes.md\n'
+                f"{COMMANDS['rescue']}\n"
+                "EOF"
+            ),
+            "substitution-in-quoted-body": (
+                "cat <<'EOF'\n"
+                f"$({COMMANDS['review']})\n"
+                "EOF"
+            ),
+            "tab-stripped-terminator": (
+                "cat <<-'EOF'\n"
+                f"\t{COMMANDS['rescue']}\n"
+                "\tEOF"
+            ),
+            "apostrophe-in-body": (
+                "cat <<'EOF'\n"
+                "don't\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF"
+            ),
+        }
+        for name, command in cases.items():
+            with self.subTest(case=name):
+                self.assert_allowed_without_state(command)
+
+    def test_unquoted_heredoc_plain_body_line_is_data(self) -> None:
+        self.assert_allowed_without_state(
+            "cat <<EOF > notes.md\n"
+            f"{COMMANDS['advisor']}\n"
+            "EOF"
+        )
+
+    def test_heredoc_executed_by_a_shell_is_classified(self) -> None:
+        cases = {
+            "bash-quoted": (
+                "bash <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+            "sh-s-unquoted": (
+                "sh -s <<EOF\n"
+                f"{COMMANDS['review']}\n"
+                "EOF",
+                "review",
+            ),
+            "wrapped-bash": (
+                "sudo bash <<'EOF'\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF",
+                "advisor",
+            ),
+        }
+        for name, (command, operation) in cases.items():
+            with self.subTest(case=name):
+                self.assert_denied(
+                    self.hook_response(self.bash_payload(command)),
+                    RUNNERS[operation],
+                )
+
+    def test_unresolvable_heredoc_consumer_is_denied(self) -> None:
+        response = self.hook_response(
+            self.bash_payload(
+                "$SHELL <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF"
+            )
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        hook_output = response["hookSpecificOutput"]
+        assert isinstance(hook_output, dict)
+        self.assertEqual("deny", hook_output["permissionDecision"])
+
+    def test_substitution_in_unquoted_heredoc_body_is_classified(self) -> None:
+        cases = {
+            "dollar-paren": (
+                "cat <<EOF\n"
+                f"$({COMMANDS['rescue']})\n"
+                "EOF",
+                "rescue",
+            ),
+            "backticks": (
+                "cat <<EOF\n"
+                f"`{COMMANDS['review']}`\n"
+                "EOF",
+                "review",
+            ),
+        }
+        for name, (command, operation) in cases.items():
+            with self.subTest(case=name):
+                self.assert_denied(
+                    self.hook_response(self.bash_payload(command)),
+                    RUNNERS[operation],
+                )
+
+    def test_commands_around_a_heredoc_are_classified(self) -> None:
+        cases = {
+            "after-terminator": (
+                "cat <<'EOF'\n"
+                "note\n"
+                "EOF\n"
+                f"{COMMANDS['rescue']}",
+                "rescue",
+            ),
+            "after-terminator-with-apostrophe-in-body": (
+                "cat <<'EOF'\n"
+                "don't\n"
+                "EOF\n"
+                f"{COMMANDS['review']}",
+                "review",
+            ),
+            "same-line-segment": (
+                f"cat <<'EOF'; {COMMANDS['advisor']}\n"
+                "note\n"
+                "EOF",
+                "advisor",
+            ),
+            "second-heredoc-on-the-line-feeds-a-shell": (
+                "cat <<'A'; bash <<'B'\n"
+                "note\n"
+                "A\n"
+                f"{COMMANDS['rescue']}\n"
+                "B",
+                "rescue",
+            ),
+            "here-string-is-not-a-heredoc": (
+                "cat <<< 'note'\n"
+                f"{COMMANDS['review']}",
+                "review",
+            ),
+        }
+        for name, (command, operation) in cases.items():
+            with self.subTest(case=name):
+                self.assert_denied(
+                    self.hook_response(self.bash_payload(command)),
+                    RUNNERS[operation],
+                )
+
+
 class CodexRunnerLifecycleTest(HookHarness):
     def test_active_runner_blocks_main_stop_until_success_consumes_state(self) -> None:
         self.subagent_start("rescue")
