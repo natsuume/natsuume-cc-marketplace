@@ -770,7 +770,7 @@ def run_hook(
 
 def delivery_part1_confirmed_model(tmp_dir: str, locale: str | None = UTF8_LOCALE) -> str:
     """SessionStart (inject-always.sh) がモデル確定時に配送する additionalContext
-    (delivery-note + always-sonnet-1.md)。モデルには Fable を与え、Fable メインでも
+    (delivery-note + always-sonnet-1.md)。モデルにはメインセッションの Opus 5.5 を与え、
     確定モデル向けの part 1 が配送される経路を測る。
 
     locale は run_hook へそのまま渡す (既定は定義時点で束縛された検出済み
@@ -780,7 +780,7 @@ def delivery_part1_confirmed_model(tmp_dir: str, locale: str | None = UTF8_LOCAL
     payload = {
         "session_id": "size-budget-confirmed-model",
         "hook_event_name": "SessionStart",
-        "model": "claude-fable-5",
+        "model": "claude-opus-5-5",
     }
     return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
 
@@ -862,7 +862,7 @@ def pre_degradation_missing_elements(context: str, note_payload: str) -> list[st
 # 段階的縮退ガードを持つ 2 経路 (inject-always.sh 系のみ。inject-rules-part.sh /
 # inject-subagent-rules.sh は縮退ガードを持たない)。
 PRE_DEGRADATION_DELIVERY_BUILDERS = {
-    "モデル確定時の part 1 配送 (inject-always.sh, model=fable)": delivery_part1_confirmed_model,
+    "モデル確定時の part 1 配送 (inject-always.sh, model=opus)": delivery_part1_confirmed_model,
     "sonnet part 1 配送 (inject-always.sh, self-gate)": delivery_sonnet_part1_self_gate,
 }
 
@@ -996,7 +996,7 @@ class SizeBudgetTests(unittest.TestCase):
     """
 
     DELIVERY_BUILDERS = {
-        "モデル確定時の part 1 配送 (inject-always.sh, model=fable)": delivery_part1_confirmed_model,
+        "モデル確定時の part 1 配送 (inject-always.sh, model=opus)": delivery_part1_confirmed_model,
         "sonnet part 1 配送 (inject-always.sh, self-gate)": delivery_sonnet_part1_self_gate,
         "sonnet part 2 配送 (inject-rules-part.sh 2, self-gate)": (
             lambda tmp_dir: delivery_sonnet_part_self_gate("2", tmp_dir)
@@ -1010,7 +1010,7 @@ class SizeBudgetTests(unittest.TestCase):
     # DELIVERY_BUILDERS と同一のラベルキーで、各経路が実際に配送する md
     # ファイルを対応付ける (payload の内容検査用)。
     DELIVERY_PATH_SOURCE_FILES = {
-        "モデル確定時の part 1 配送 (inject-always.sh, model=fable)": SONNET_MD["always-sonnet-1.md"],
+        "モデル確定時の part 1 配送 (inject-always.sh, model=opus)": SONNET_MD["always-sonnet-1.md"],
         "sonnet part 1 配送 (inject-always.sh, self-gate)": SONNET_MD["always-sonnet-1.md"],
         "sonnet part 2 配送 (inject-rules-part.sh 2, self-gate)": SONNET_MD[
             "always-sonnet-2.md"

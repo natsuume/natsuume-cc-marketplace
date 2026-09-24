@@ -9,9 +9,10 @@ model 指定にも env にも依らずメインセッションのモデルを継
 
 - hook 判定表 (``BlockFableSubagentDecisionTableTest``): agent-discipline の
   `block-fable-subagent.sh` を隔離環境の subprocess で実行し、FORCE の有無 × 明示 model ×
-  env × session model state × fork の組み合わせごとの deny / allow を ``DECISION_TABLE`` で
-  固定する。deny メッセージが「env は明示指定より優先される」という誤った説明を持たず、
-  自己修復誘導 (`sonnet` の明示) を保つことも固定する。
+  env × fork の組み合わせごとの deny / allow を ``DECISION_TABLE`` で固定する。session model
+  state (Fable を含む) と pending マーカーは判定に使わないことも同じ表で固定する。deny
+  メッセージが「env は明示指定より優先される」という誤った説明を持たず、自己修復誘導
+  (`model: "opus"` の明示) を保ち、Sonnet / Haiku の明示を案内しないことも固定する。
 - PostModelSwitch 追随 (``PostModelSwitchHookRegistrationTest`` /
   ``UpdateModelOnSwitchScriptTest``): agent-discipline の hooks.json が
   `update-model-on-switch.sh` を `PostModelSwitch` に 1 本登録し、スクリプトが
@@ -114,7 +115,7 @@ FORBIDDEN_SUBAGENT_RULES_PHRASE = "subagent は Fable になり得ず"
 REQUIRED_SUBAGENT_RULES_PHRASE = "fork / frontmatter 経路では Fable になりうる"
 
 # 利用者が user settings に置く主防御の permission rule。`Agent(model:fable)` は
-# 非 Fable メインでの週次枠判定付きの fable 明示許可 (hook の判定) も止めるため推奨しない
+# 週次枠判定付きの fable 明示許可 (hook の判定) も止めるため推奨しない
 # (README の設定例に載らないことは tests/test_agent_discipline_fable_weekly_gate.py が検査する)。
 PERMISSION_DENY_RULES = ("Agent(fork)",)
 
@@ -148,6 +149,9 @@ FORBIDDEN_HISTORY_PHRASES = ("以前は", "かつては", "旧順序", "2.1.251 
 
 # deny メッセージに書かない旧解決順序の説明 (FORCE 無効時の deny を対象に照合)。
 FORBIDDEN_DENY_PHRASES = ("model の明示指定より優先されて", "env 値に上書きされ")
+
+# deny メッセージに書かない、ワーカーを Sonnet / Haiku へ下げる案内 (全 deny を対象に照合)。
+FORBIDDEN_DOWNGRADE_PHRASES = ("model に sonnet / opus", "機械的作業なら haiku")
 
 # UNSET: 引数を「与えなかった」(env 未設定 / key 自体を書かない) ことを表す番兵。
 UNSET = object()
@@ -253,20 +257,22 @@ def row(
     }
 
 
-# deny 理由に求めるキーワード (正規表現)。SELF_REPAIR は「model に sonnet を明示して起動し
-# 直す」自己修復誘導 (FORCE 無効時と fork の代替手段として有効な誘導)、NAMES_ENV / NAMES_FORCE
+# deny 理由に求めるキーワード (正規表現)。SELF_REPAIR は「model に opus を明示して起動し
+# 直す」自己修復誘導 (FORCE 無効時の代替手段として有効な誘導)、NAMES_ENV / NAMES_FORCE
 # は実効モデルを決めている env を名指しすること (FORCE 有効時は model の明示では直らないため)。
 # NAMES_ENV は `_FORCE` が続かない出現を要求する (FORCE 変数名の接頭辞として現れただけでは
 # env を名指ししたことにならない)。
-SELF_REPAIR = (r"sonnet",)
+SELF_REPAIR = (r'model: "opus"',)
 NAMES_ENV = (r"CLAUDE_CODE_SUBAGENT_MODEL(?!_FORCE)",)
 NAMES_FORCE = (r"CLAUDE_CODE_SUBAGENT_MODEL_FORCE",)
 
 # 判定表。FORCE 有効 (Claude Code の boolean env と同じ `1` / `true` / `yes` / `on`、大文字
-# 小文字を区別しない) では実効モデルを
-# env (非空ならその値、空なら session model state) とみなし、FORCE 無効 (`0` / `false` /
-# 空 / 未設定) では 明示 model > env > 継承 の順に判定する。`fork` は model / env に依らず
-# メインセッションのモデルを継承する経路として扱う。
+# 小文字を区別しない) では実効モデルを env とみなし、env が fable なら deny、それ以外 (env 空を
+# 含む) は allow する。FORCE 無効 (`0` / `false` / 空 / 未設定) では 明示 model > env > 継承 の
+# 順に判定する。明示 fable は Fable 週次枠の使用率だけで決まる (この表の隔離環境には使用率
+# cache が無いため使用率不明で deny)。メインセッションからの `fork` と、env 不在の model 未指定
+# (継承) は allow する。session model state (Fable を含む) と pending マーカーはどの経路の判定にも
+# 使わない。
 DECISION_TABLE = (
     # --- FORCE 有効: 実効モデルは env (非空) で決まり、明示 model は無視される ---
     row(
@@ -319,22 +325,20 @@ DECISION_TABLE = (
         session_state="claude-fable-5-1",
         expect="allow",
     ),
-    # --- FORCE 有効 + env 空: 実効モデルは session model state (= main model) ---
+    # --- FORCE 有効 + env 空: 実効モデルはメインセッションのモデルで、state に依らず allow ---
     row(
         "force-on/env-absent/fable-session/model-sonnet-explicit",
         force="1",
         model="sonnet",
         session_state="claude-fable-5-1",
-        expect="deny",
-        keywords=NAMES_FORCE,
+        expect="allow",
     ),
     row(
         "force-on/env-empty/fable-session/model-unspecified",
         force="1",
         env="",
         session_state="claude-fable-5-1",
-        expect="deny",
-        keywords=NAMES_FORCE,
+        expect="allow",
     ),
     row(
         "force-on/env-absent/sonnet-session/model-fable-explicit",
@@ -343,7 +347,7 @@ DECISION_TABLE = (
         session_state="claude-sonnet-5",
         expect="allow",
     ),
-    # --- FORCE 無効: 明示 fable は deny ---
+    # --- FORCE 無効: 明示 fable は週次枠判定 (cache 無し = 使用率不明) で deny ---
     row(
         "force-absent/model-fable-alias",
         model="fable",
@@ -429,8 +433,7 @@ DECISION_TABLE = (
     row(
         "force-absent/env-absent/fable-session/model-unspecified",
         session_state="claude-fable-5-1",
-        expect="deny",
-        keywords=SELF_REPAIR,
+        expect="allow",
     ),
     row(
         "force-absent/env-absent/sonnet-session/model-unspecified",
@@ -440,8 +443,7 @@ DECISION_TABLE = (
     row(
         "force-absent/env-absent/state-unknown/pending-marker",
         pending=True,
-        expect="deny",
-        keywords=SELF_REPAIR,
+        expect="allow",
     ),
     row(
         "force-absent/env-absent/state-unknown/no-pending-marker",
@@ -464,48 +466,47 @@ DECISION_TABLE = (
         model="fable",
         expect="allow",
     ),
-    # FORCE 有効 + env 空 + state 不明 (pending): 継承先が Fable かどうかを検知できないため
-    # deny する。model の明示では直らないため、理由は継承経路の文言ではなく FORCE を名指しして
-    # 有効な対処 (one-shot 補正を待つ / env の設定をユーザに依頼) を案内する。
+    # FORCE 有効 + env 空 + pending: pending マーカーは判定に使わないため allow する。
     row(
         "force-on/env-absent/state-unknown/pending-marker/model-sonnet-explicit",
         force="1",
         model="sonnet",
         pending=True,
-        expect="deny",
-        keywords=NAMES_FORCE,
+        expect="allow",
     ),
-    # session_id が空に正規化される経路は state / pending を参照できないため allow
-    # (fail-open)。sanitization の有無で結果が反転する入力は隔離 TMPDIR 内では構成できず、
-    # この行は結果の契約だけを固定する。
+    # session_id が空に正規化される経路も、model 未指定 + env 不在のメインセッションからの
+    # 起動として allow する。
     row(
         "force-absent/unusable-session-id",
         session_id="///",
         expect="allow",
     ),
-    # --- fork: model / env を無視してメインセッションのモデルを継承する ---
+    # --- fork: メインセッションからの起動は state に依らず allow する ---
     row(
         "fork/fable-session/model-unspecified",
         subagent_type="fork",
         session_state="claude-fable-5-1",
-        expect="deny",
-        keywords=SELF_REPAIR,
+        expect="allow",
     ),
     row(
         "fork/fable-session/model-sonnet-explicit",
         subagent_type="fork",
         model="sonnet",
         session_state="claude-fable-5-1",
-        expect="deny",
-        keywords=SELF_REPAIR,
+        expect="allow",
     ),
     row(
         "fork/env-sonnet/fable-session/model-unspecified",
         subagent_type="fork",
         env="sonnet",
         session_state="claude-fable-5-1",
-        expect="deny",
-        keywords=SELF_REPAIR,
+        expect="allow",
+    ),
+    row(
+        "fork/pending-marker/model-unspecified",
+        subagent_type="fork",
+        pending=True,
+        expect="allow",
     ),
     row(
         "fork/sonnet-session/model-unspecified",
@@ -560,7 +561,10 @@ class HookSubprocessTestBase(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class BlockFableSubagentDecisionTableTest(HookSubprocessTestBase):
-    """block-fable-subagent.sh の deny / allow を FORCE × 明示 × env × 継承 × fork で固定する。"""
+    """block-fable-subagent.sh の deny / allow を FORCE × 明示 × env × 継承 × fork で固定する。
+
+    session model state / pending マーカーを置いた行は、それらが判定に影響しないことを固定する。
+    """
 
     def run_gate(self, case: dict[str, object]) -> subprocess.CompletedProcess[str]:
         """判定表の 1 行を隔離環境で実行して CompletedProcess を返す。"""
@@ -636,6 +640,17 @@ class BlockFableSubagentDecisionTableTest(HookSubprocessTestBase):
             with self.subTest(case=label):
                 reason = self.deny_reason(self.run_gate(case), label)
                 for phrase in FORBIDDEN_DENY_PHRASES:
+                    self.assertNotIn(phrase, reason, f"{label}: {phrase}")
+
+    def test_deny_reasons_do_not_guide_downgrade_to_sonnet_or_haiku(self) -> None:
+        """deny 理由が model に sonnet / haiku を明示する案内を含まない。"""
+        for case in DECISION_TABLE:
+            if case["expect"] != "deny":
+                continue
+            label = str(case["label"])
+            with self.subTest(case=label):
+                reason = self.deny_reason(self.run_gate(case), label)
+                for phrase in FORBIDDEN_DOWNGRADE_PHRASES:
                     self.assertNotIn(phrase, reason, f"{label}: {phrase}")
 
     def test_non_pretooluse_event_produces_no_output(self) -> None:

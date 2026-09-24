@@ -1,30 +1,29 @@
-"""agent-discipline: 非 Fable メインでの `model: "fable"` 明示を週次枠判定付きで許可する契約テスト。
+"""agent-discipline: `model: "fable"` 明示を週次枠判定だけで許可する契約テスト。
 
 背景 (spec-first Phase A):
-- Opus 5.5 メイン + Fable Advisor パターンでは、cross-model-advisor の fable-advisor-runner
-  を `model: "fable"` の明示で起動する。
-  block-fable-subagent.sh は許可 agent の一覧を持たず、「メインセッションのモデル」と
-  「Fable 週次枠の使用率」だけで fable 明示を判定する (用途は規律 = prompt で縛る)。
-- 判定表 (fable 明示の行):
-  3a. session model state が Fable → deny (Fable メインでは Fable サブエージェントを使わない)
-  3b. pending マーカーがある (state の有無を問わない)、または session model state が無い → deny
-      (fail-closed)
-  3c. session model state が Fable 以外 → 使用率判定で利用可なら allow、利用不可なら deny
+- メインセッションは Opus 5.5 で、Fable は cross-model-advisor の fable-advisor-runner と
+  pre-merge-cross-review の fable-reviewer を `model: "fable"` の明示で起動するときだけ使う。
+  Fable をメインセッションで使う運用は無い。
+  block-fable-subagent.sh は許可 agent の一覧を持たず、「Fable 週次枠の使用率」だけで fable
+  明示を判定する (用途は規律 = prompt で縛る)。session model state と pending マーカーは
+  判定に使わない。
+- 判定表 (fable 明示の行): session model state (fable を含む) / pending マーカーの有無に
+  依らず、使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny
 - 使用率判定: ``${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json``
   の Fable entry (display_name が大文字小文字を無視して fable を含み percent が数値) の
   最大 percent を閾値 (env ``FABLE_WEEKLY_MAX_PERCENT``、0〜100 の整数、既定 80) と比べ、
   ``percent <= 閾値`` で利用可。cache が読めない・壊れている・古い (1800 秒超) 等は
   すべて利用不可 (使用率不明)。``fetched_at`` が未来時刻でも stale とみなさない。
-- deny 理由では、fable-advisor-runner は再起動せずスキップし、それ以外の委任では
-  非 Fable の model を明示するよう案内する。pre-push-review の reviewer は常に Opus で
-  起動するため、deny 理由で reviewer の再起動を案内しない。
+- deny 理由では、fable-advisor-runner / fable-reviewer は再起動せずスキップし、それ以外の
+  委任では非 Fable の model (`model: "opus"`) を明示するよう案内する。Sonnet / Haiku の明示は
+  案内しない。pre-push-review の reviewer は常に Opus で起動するため、deny 理由で reviewer の
+  再起動を案内しない。
 - サブエージェント内 (入力に agent_id がある) からの model 未指定 (inherit を含む)・fork の
   起動は deny し、model の明示を求める (nested guard)。継承先が起動元サブエージェントの
   モデルになり、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承
   しうるため。CLAUDE_CODE_SUBAGENT_MODEL が非空なら子の実効モデルは env で決まるため
-  従来どおり env で判定する。
-- hook は cache を書き込まない。メインセッションからの model 未指定 (継承経路) と FORCE
-  有効時の判定は変えない。
+  env で判定する。
+- hook は cache を書き込まない。
 
 hook を実行するテストは ``TMPDIR`` / ``HOME`` / ``XDG_CACHE_HOME`` を一時ディレクトリへ
 向け、親プロセスの env を継承しない (tests/test_agent_discipline_model_resolution.py の
@@ -63,13 +62,14 @@ SONNET_SESSION = "claude-sonnet-5"
 RESETS_AT = "2026-09-28T00:00:00Z"
 
 # deny 理由に求めるキーワード (正規表現)。
-EXPLICIT_NON_FABLE_MODEL = r"model に sonnet / opus"
-SKIP_ADVISOR = r"fable-advisor-runner[^。]*スキップ"
-WAIT_ONE_TURN = r"1 turn"
+EXPLICIT_NON_FABLE_MODEL = r'model: "opus"'
+SKIP_ADVISOR = r"fable-advisor-runner[^。]*fable-reviewer[^。]*スキップ"
 NAMES_PRODUCER = r"natsuume-statusline"
-NESTED_EXPLICIT_MODEL = r"model に sonnet / opus"
+NESTED_EXPLICIT_MODEL = r'model: "opus"'
 # deny 理由に含めない記述 (pre-push-review の reviewer は Fable で起動しない)。
 REVIEWER_RELAUNCH_GUIDE = "pre-push-review"
+# deny 理由に含めない、ワーカーを Sonnet / Haiku へ下げる案内。
+DOWNGRADE_GUIDES = ("model に sonnet / opus", "機械的作業なら haiku")
 
 # UNSET: 引数を「与えなかった」ことを表す番兵 / OMIT: cache の key 自体を書かない番兵。
 UNSET = object()
@@ -169,58 +169,66 @@ USAGE_DENY = (EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR)
 UNKNOWN_DENY = (EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR, NAMES_PRODUCER)
 
 DECISION_TABLE = (
-    # --- 3a. Fable メイン: 使用率に依らず deny ---
+    # --- session model state / pending は判定に使わない: 使用率だけで決まる ---
     row(
-        "3a/fable-session/usage-ok",
+        "state-independent/fable-session/usage-ok",
         session_state=FABLE_SESSION,
-        expect="deny",
-        keywords=USAGE_DENY,
+        expect="allow",
     ),
     row(
-        "3a/fable-session/full-id",
+        "state-independent/fable-session/full-id/usage-ok",
         model="claude-fable-5-1",
         session_state=FABLE_SESSION,
+        expect="allow",
+    ),
+    row(
+        "state-independent/fable-session/over-threshold",
+        session_state=FABLE_SESSION,
+        cache_body=cache([fable_entry(81)]),
         expect="deny",
         keywords=USAGE_DENY,
     ),
-    # --- 3b. メインモデル不明: fail-closed で deny ---
     row(
-        "3b/pending",
+        "state-independent/pending/usage-ok",
         session_state=None,
         pending=True,
-        expect="deny",
-        keywords=(WAIT_ONE_TURN, EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR),
+        expect="allow",
     ),
     row(
-        "3b/pending-with-stale-state",
+        "state-independent/pending-with-stale-state/usage-ok",
         pending=True,
-        expect="deny",
-        keywords=(WAIT_ONE_TURN, EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR),
+        expect="allow",
     ),
     row(
-        "3b/no-information",
+        "state-independent/no-information/usage-ok",
         session_state=None,
-        expect="deny",
-        keywords=(WAIT_ONE_TURN, EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR),
+        expect="allow",
     ),
-    # --- 3c. 非 Fable メイン + 使用率に余裕 → allow ---
-    row("3c/opus-session/usage-ok", expect="allow"),
-    row("3c/sonnet-session/usage-ok", session_state=SONNET_SESSION, expect="allow"),
-    row("3c/full-fable-id", model="claude-fable-5-1", expect="allow"),
-    row("3c/uppercase-and-padded-model", model="  FABLE  ", expect="allow"),
-    row("3c/exactly-at-threshold", cache_body=cache([fable_entry(80)]), expect="allow"),
     row(
-        "3c/decimal-below-threshold",
+        "state-independent/no-information/cache-missing",
+        session_state=None,
+        cache_kind="missing",
+        expect="deny",
+        keywords=UNKNOWN_DENY,
+    ),
+    # --- 使用率に余裕 → allow ---
+    row("usage/opus-session/usage-ok", expect="allow"),
+    row("usage/sonnet-session/usage-ok", session_state=SONNET_SESSION, expect="allow"),
+    row("usage/full-fable-id", model="claude-fable-5-1", expect="allow"),
+    row("usage/uppercase-and-padded-model", model="  FABLE  ", expect="allow"),
+    row("usage/exactly-at-threshold", cache_body=cache([fable_entry(80)]), expect="allow"),
+    row(
+        "usage/decimal-below-threshold",
         cache_body=cache([fable_entry(79.9)]),
         expect="allow",
     ),
     row(
-        "3c/display-name-case-insensitive",
+        "usage/display-name-case-insensitive",
         cache_body=cache([fable_entry(10, display_name="Weekly FABLE usage")]),
         expect="allow",
     ),
     row(
-        "3c/non-fable-entries-ignored",
+        "usage/non-fable-entries-ignored",
         cache_body=cache(
             [
                 {"display_name": "Opus", "percent": 99, "resets_at": RESETS_AT},
@@ -230,26 +238,26 @@ DECISION_TABLE = (
         expect="allow",
     ),
     row(
-        "3c/future-fetched-at-is-not-stale",
+        "usage/future-fetched-at-is-not-stale",
         cache_body=cache(age_seconds=-600),
         expect="allow",
     ),
-    row("3c/fetched-at-just-fresh", cache_body=cache(age_seconds=1790), expect="allow"),
-    # --- 3c. 使用率超過 → deny (使用率・閾値・reset 時刻を理由に含める) ---
+    row("usage/fetched-at-just-fresh", cache_body=cache(age_seconds=1790), expect="allow"),
+    # --- 使用率超過 → deny (使用率・閾値・reset 時刻を理由に含める) ---
     row(
-        "3c/over-threshold",
+        "usage/over-threshold",
         cache_body=cache([fable_entry(81)]),
         expect="deny",
         keywords=(r"81", r"80", RESETS_AT, *USAGE_DENY),
     ),
     row(
-        "3c/decimal-over-threshold",
+        "usage/decimal-over-threshold",
         cache_body=cache([fable_entry(80.5)]),
         expect="deny",
         keywords=(r"80\.5", *USAGE_DENY),
     ),
     row(
-        "3c/max-of-multiple-fable-entries",
+        "usage/max-of-multiple-fable-entries",
         cache_body=cache([fable_entry(10), fable_entry(90)]),
         expect="deny",
         keywords=(r"90", *USAGE_DENY),
@@ -312,7 +320,7 @@ DECISION_TABLE = (
         )
         for name, value in (("101", "101"), ("negative", "-1"), ("word", "abc"))
     ),
-    # --- 3c. 使用率不明 → deny (fail-closed) ---
+    # --- 使用率不明 → deny (fail-closed) ---
     row("unknown/cache-missing", cache_kind="missing", expect="deny", keywords=UNKNOWN_DENY),
     row("unknown/cache-symlink", cache_kind="symlink", expect="deny", keywords=UNKNOWN_DENY),
     row(
@@ -459,34 +467,35 @@ DECISION_TABLE = (
         subagent_type="general-purpose",
         expect="allow",
     ),
-    # --- 変えない経路: 継承経路の env fable、FORCE 有効時、非 fable 明示 ---
+    # --- fable 明示以外の経路: 継承経路の env fable、FORCE 有効時、非 fable 明示 ---
     row(
-        "unchanged/model-unspecified/env-fable/usage-ok",
+        "other-path/model-unspecified/env-fable/usage-ok",
         model=UNSET,
         env="fable",
         expect="deny",
+        keywords=(EXPLICIT_NON_FABLE_MODEL,),
     ),
     row(
-        "unchanged/model-unspecified/opus-session",
+        "other-path/model-unspecified/opus-session",
         model=UNSET,
         cache_kind="missing",
         expect="allow",
     ),
     row(
-        "unchanged/force-on/env-sonnet/model-fable/cache-missing",
+        "other-path/force-on/env-sonnet/model-fable/cache-missing",
         force="1",
         env="sonnet",
         cache_kind="missing",
         expect="allow",
     ),
     row(
-        "unchanged/force-on/env-fable/model-fable/usage-ok",
+        "other-path/force-on/env-fable/model-fable/usage-ok",
         force="1",
         env="fable",
         expect="deny",
     ),
     row(
-        "unchanged/model-sonnet/cache-missing",
+        "other-path/model-sonnet/cache-missing",
         model="sonnet",
         cache_kind="missing",
         expect="allow",
@@ -496,7 +505,7 @@ DECISION_TABLE = (
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class FableWeeklyGateDecisionTableTest(unittest.TestCase):
-    """block-fable-subagent.sh の fable 明示の判定を、メインモデル × 使用率 cache で固定する。"""
+    """block-fable-subagent.sh の fable 明示の判定を使用率 cache で固定する (メインモデルに依らない)。"""
 
     def isolated_env(self, temp: Path) -> dict[str, str]:
         home = temp / "home"
@@ -620,6 +629,9 @@ class FableWeeklyGateDecisionTableTest(unittest.TestCase):
                 problems.append(f"{label}: deny 理由に {keyword!r} が無い ({reason})")
         if REVIEWER_RELAUNCH_GUIDE in reason:
             problems.append(f"{label}: deny 理由が pre-push-review の reviewer に言及する ({reason})")
+        for guide in DOWNGRADE_GUIDES:
+            if guide in reason:
+                problems.append(f"{label}: deny 理由に Sonnet / Haiku への案内 {guide!r} が残る ({reason})")
         return problems
 
     def test_decision_table(self) -> None:
