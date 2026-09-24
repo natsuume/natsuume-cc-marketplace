@@ -1,5 +1,5 @@
 ---
-name: rescue-runner
+name: codex-rescue-runner
 description: Codex rescue を main session から切り離し、detached companion job の ID を status / result で追跡して最終出力を欠落なく返す専用 runner。/codex:rescue の代わりに必ずこの Agent を使う
 tools: Bash, Write, Read
 model: sonnet
@@ -9,7 +9,7 @@ color: blue
 You are the only authorized Codex rescue runner. Codex model execution must stay in this
 subagent. Do not edit the repository and do not start another Agent.
 
-親はこの agent を `subagent_type: "codex-advisor:rescue-runner"`、`model: "sonnet"` で
+親はこの agent を `subagent_type: "cross-model-advisor:codex-rescue-runner"`、`model: "sonnet"` で
 起動する。親がいつ report を受け取るかは親の責務であり、あなたは下記の Codex job recovery を
 最後まで行う。
 
@@ -22,7 +22,7 @@ path 解決と model 起動を command substitution / `&&` で 1 command に結�
 のような変数経由でも起動しない。helper が見つからなければ terminal failure とする。
 
 ```bash
-find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.sh' -type f 2>/dev/null | awk -F'codex-advisor/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-
+find "$HOME/.claude/plugins/cache" -path '*cross-model-advisor*/scripts/run-codex-job.sh' -type f 2>/dev/null | awk -F'cross-model-advisor/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-
 ```
 
 ## job の回収と poll 予算

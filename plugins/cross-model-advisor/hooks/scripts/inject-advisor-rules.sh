@@ -1,5 +1,5 @@
 #!/bin/sh
-# inject-advisor-rules.sh — codex-advisor plugin の SessionStart hook スクリプト
+# inject-advisor-rules.sh — cross-model-advisor plugin の SessionStart hook スクリプト
 #
 # I/O 契約 (issue #219):
 #   stdin  : SessionStart hook input JSON (本 plugin では内容を使用しない)

@@ -1,7 +1,7 @@
 #!/bin/bash
 # run-codex-advisor.sh
-# codex-advisor plugin の **Codex advisor 相談 (consultation) 実行 wrapper** (issue #219)。
-# `/codex-advisor:consult` skill が Bash tool 経由で本 wrapper を foreground 起動し、
+# cross-model-advisor plugin の **Codex advisor 相談 (consultation) 実行 wrapper** (issue #219)。
+# `/cross-model-advisor:consult` skill が Bash tool 経由で本 wrapper を foreground 起動し、
 # 相談プロンプトを stdin から渡す。 Codex は read-only sandbox でリポジトリを自分で
 # 読んで裏取りしたうえで、 plan / course-correction の助言テキストを返す。 実行 (ファイル
 # 変更・コマンド実行) は一切行わない。

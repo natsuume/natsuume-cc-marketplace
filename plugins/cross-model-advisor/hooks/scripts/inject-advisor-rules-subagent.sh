@@ -1,5 +1,5 @@
 #!/bin/sh
-# inject-advisor-rules-subagent.sh — codex-advisor plugin の SubagentStart hook スクリプト
+# inject-advisor-rules-subagent.sh — cross-model-advisor plugin の SubagentStart hook スクリプト
 #
 # I/O 契約 (issue #219):
 #   stdin  : SubagentStart hook input JSON (本 plugin では内容を使用しない)

@@ -12,10 +12,10 @@
 #   - 本体ルールは SessionStart (inject-ui-rules.sh) と同一の hooks/prompts/ui-rules.md を
 #     単一ソースとして共有し、subagent 向けの差分は前置き注記
 #     (hooks/prompts/ui-rules-subagent-preamble.md) のみとする (2 ファイル間の drift を構造的に排除)
-#   - agent_type による条件分岐を持たない (codex-advisor の SubagentStart 注入と同方針)
+#   - agent_type による条件分岐を持たない (cross-model-advisor の SubagentStart 注入と同方針)
 #   - 前置き注記中の {{UI_PATTERNS_SKILL_PATH}} は skills/ui-patterns/SKILL.md の絶対パスへ
 #     jq の gsub で置換する。--arg で渡した値は置換値として literal に扱われるため、パス中の
-#     メタ文字で置換が壊れない (sed を使わないのは codex-advisor の
+#     メタ文字で置換が壊れない (sed を使わないのは cross-model-advisor の
 #     inject-advisor-rules-subagent.sh と同じ理由)
 #   - 前置き注記・本体・SKILL.md のいずれかが欠けた場合は全体を注入しない (読み替え規則を
 #     欠いたまま rule:visual-direction を subagent に配送しないための部分注入の禁止)

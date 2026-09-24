@@ -12,8 +12,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WRAPPER = ROOT / "plugins" / "codex-advisor" / "scripts" / "run-codex-advisor.sh"
-SKILL = ROOT / "plugins" / "codex-advisor" / "skills" / "consult" / "SKILL.md"
+WRAPPER = ROOT / "plugins" / "cross-model-advisor" / "scripts" / "run-codex-advisor.sh"
+SKILL = ROOT / "plugins" / "cross-model-advisor" / "skills" / "consult" / "SKILL.md"
 
 DIRECT_CODEX_ARGS = [
     "exec",

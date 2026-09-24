@@ -1,8 +1,8 @@
-"""codex-advisor の runner 規律 (background 実行前提) の契約テスト。
+"""cross-model-advisor の runner 規律 (background 実行前提) の契約テスト。
 
 対話セッションの subagent は background で実行され、Agent tool には起動 mode を選ぶ
 parameter が無い。runner の terminal report は completion notification として後続 turn
-に届き、`TaskOutput` tool は存在しない。本ファイルは、この前提の下で codex-advisor が
+に届き、`TaskOutput` tool は存在しない。本ファイルは、この前提の下で cross-model-advisor が
 満たすべき契約を 4 層で固定する。
 
 1. 文言契約: 3 runner / 配送 prompt / consult skill / README / lifecycle hook が起動
@@ -31,11 +31,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / "plugins" / "codex-advisor"
+PLUGIN = ROOT / "plugins" / "cross-model-advisor"
 
-ADVISOR_RUNNER = PLUGIN / "agents" / "advisor-runner.md"
-RESCUE_RUNNER = PLUGIN / "agents" / "rescue-runner.md"
-REVIEW_RUNNER = PLUGIN / "agents" / "review-runner.md"
+ADVISOR_RUNNER = PLUGIN / "agents" / "codex-advisor-runner.md"
+RESCUE_RUNNER = PLUGIN / "agents" / "codex-rescue-runner.md"
+REVIEW_RUNNER = PLUGIN / "agents" / "codex-review-runner.md"
 HOOKS_JSON = PLUGIN / "hooks" / "hooks.json"
 MANAGE_RUNNERS = PLUGIN / "hooks" / "scripts" / "manage-codex-runners.mjs"
 ADVISOR_RULES = PLUGIN / "hooks" / "prompts" / "advisor-rules.md"
@@ -65,7 +65,7 @@ def _load_test_module(name: str):
     return importlib.import_module(name)
 
 
-_runner_contract = _load_test_module("test_codex_advisor_subagent_runner")
+_runner_contract = _load_test_module("test_cross_model_advisor_subagent_runner")
 
 HookHarness = _runner_contract.HookHarness
 RUNNERS = _runner_contract.RUNNERS
@@ -89,9 +89,9 @@ AGENT_LAUNCH_MODE_PARAMETER = "run_in_background: false"
 AGENT_LAUNCH_FOREGROUND_PHRASES = ("foreground 起動", "foreground で起動")
 AGENT_LAUNCH_MODE_DISTANCE = 80
 AGENT_LAUNCH_MARKERS = (
-    "rescue-runner",
-    "review-runner",
-    "advisor-runner",
+    "codex-rescue-runner",
+    "codex-review-runner",
+    "codex-advisor-runner",
     "subagent_type",
     "Agent tool",
     "Agent call",
@@ -202,8 +202,8 @@ AUTO_MODE_REQUIRED_LITERALS = (
     *RUNNERS.values(),
 )
 
-# 根本 README の plugin 一覧・codex-advisor 節。
-ROOT_README_SECTION_HEADING = "## codex-advisor"
+# 根本 README の plugin 一覧・cross-model-advisor 節。
+ROOT_README_SECTION_HEADING = "## cross-model-advisor"
 
 # ---------------------------------------------------------------------------
 # hooks.json / hook I/O の定数
@@ -228,9 +228,9 @@ LIFECYCLE_EVENTS = (
 
 # PreToolUse gate の command 解析に使うパス。
 COMPANION_PATH = "/opt/claude/plugins/openai-codex/scripts/codex-companion.mjs"
-JOB_HELPER_PATH = "/opt/claude/plugins/codex-advisor/scripts/run-codex-job.sh"
+JOB_HELPER_PATH = "/opt/claude/plugins/cross-model-advisor/scripts/run-codex-job.sh"
 ADVISOR_WRAPPER_PATH = (
-    "/opt/claude/plugins/codex-advisor/scripts/run-codex-advisor.sh"
+    "/opt/claude/plugins/cross-model-advisor/scripts/run-codex-advisor.sh"
 )
 
 # ---------------------------------------------------------------------------
@@ -483,7 +483,7 @@ class ObsoleteLaunchVocabularyTest(ContractTestCase):
                 MANAGE_RUNNERS,
             )
         }
-        documents["README.md (codex-advisor 節)"] = markdown_section(
+        documents["README.md (cross-model-advisor 節)"] = markdown_section(
             read(ROOT_README), ROOT_README_SECTION_HEADING
         )
         return documents
@@ -1274,14 +1274,14 @@ class AgentLaunchModeHelperTest(unittest.TestCase):
 
     def test_launch_instruction_with_the_parameter_is_detected(self) -> None:
         text = (
-            '`codex-advisor:rescue-runner` を Agent tool で `model: "sonnet"`、'
+            '`cross-model-advisor:codex-rescue-runner` を Agent tool で `model: "sonnet"`、'
             "`run_in_background: false` で起動する\n"
         )
         self.assertEqual(1, len(agent_launch_mode_hits(text)))
 
     def test_launch_instruction_split_across_lines_is_detected(self) -> None:
         text = (
-            '親はこの agent を `subagent_type: "codex-advisor:advisor-runner"`、\n'
+            '親はこの agent を `subagent_type: "cross-model-advisor:codex-advisor-runner"`、\n'
             '`model: "sonnet"`、`run_in_background: false` で\n'
             "起動する。\n"
         )
@@ -1289,7 +1289,7 @@ class AgentLaunchModeHelperTest(unittest.TestCase):
 
     def test_natural_language_foreground_demand_is_detected(self) -> None:
         text = (
-            "`codex-advisor:review-runner` を Agent tool で foreground 起動する。\n"
+            "`cross-model-advisor:codex-review-runner` を Agent tool で foreground 起動する。\n"
         )
         self.assertEqual(1, len(agent_launch_mode_hits(text)))
 
@@ -1302,7 +1302,7 @@ class AgentLaunchModeHelperTest(unittest.TestCase):
 
     def test_launch_instruction_without_a_mode_is_not_detected(self) -> None:
         text = (
-            '`codex-advisor:advisor-runner` を Agent tool で `model: "sonnet"` を'
+            '`cross-model-advisor:codex-advisor-runner` を Agent tool で `model: "sonnet"` を'
             "指定して起動する\n"
         )
         self.assertEqual([], agent_launch_mode_hits(text))

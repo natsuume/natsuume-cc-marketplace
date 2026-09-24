@@ -1,0 +1,6 @@
+{
+  "name": "cross-model-advisor",
+  "version": "5.0.0",
+  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
+  "description": "Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧するプラグイン。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI)。"
+}

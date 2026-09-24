@@ -1,0 +1,38 @@
+#!/bin/bash
+# cross-model-advisor-fable-usage
+# 相談ごとに fable-advisor-runner を起動するかを、Fable 週次枠の使用率から判定して出力する判定
+# コマンド。plugin の bin/ に置くため、plugin が有効な間は Bash の PATH に載り、相談の前に
+# main session が 1 回実行する。
+#
+# 出力 (stdout、常に 2 行、exit 0):
+#   1 行目: available (fable-advisor-runner を起動する) / over / unknown (どちらも Fable をスキップ)
+#   2 行目: 判定理由 (over は使用率と閾値、unknown は使用率を確認できない旨)
+#
+# 判定仕様は scripts/lib/fable-weekly-usage.sh を参照。lib を読み込めない場合も unknown を出力
+# する (fail-closed)。
+
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/scripts/lib/fable-weekly-usage.sh"
+
+# shellcheck source=../scripts/lib/fable-weekly-usage.sh
+if ! source "$LIB" 2>/dev/null; then
+  printf 'unknown\n'
+  printf 'Fable 週次枠の使用率を確認できないため Fable をスキップします (判定処理 %s を読み込めません)。\n' "$LIB"
+  exit 0
+fi
+
+fable_weekly_usage
+case "$FABLE_USAGE_STATUS" in
+  available)
+    printf 'available\n'
+    printf 'Fable 週次枠の使用率 %s%% が閾値 %s%% 以下のため fable-advisor-runner を起動します。\n' "$FABLE_USAGE_PERCENT" "$FABLE_USAGE_THRESHOLD"
+    ;;
+  over)
+    printf 'over\n'
+    printf 'Fable 週次枠の使用率 %s%% が閾値 %s%% を超えているため Fable をスキップします。\n' "$FABLE_USAGE_PERCENT" "$FABLE_USAGE_THRESHOLD"
+    ;;
+  *)
+    printf 'unknown\n'
+    printf 'Fable 週次枠の使用率を確認できないため Fable をスキップします (%s 使用率 cache の producer は natsuume-statusline です)。\n' "$FABLE_USAGE_DETAIL"
+    ;;
+esac
+exit 0

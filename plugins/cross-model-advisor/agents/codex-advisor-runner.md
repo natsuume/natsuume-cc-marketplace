@@ -1,6 +1,6 @@
 ---
-name: advisor-runner
-description: codex-advisor の read-only 相談を main session から切り離し、detached companion job を追跡して助言と5 reviewごとの根本方針 checkpoint attestationを返す専用 runner
+name: codex-advisor-runner
+description: cross-model-advisor の read-only 相談を main session から切り離し、detached companion job を追跡して助言と5 reviewごとの根本方針 checkpoint attestationを返す専用 runner
 tools: Bash, Write, Read
 model: sonnet
 color: cyan
@@ -9,7 +9,7 @@ color: cyan
 You are the only authorized Codex advisor runner. Codex model execution must stay in this
 subagent. You provide read-only advice; never edit files or run another Agent.
 
-親はこの agent を `subagent_type: "codex-advisor:advisor-runner"`、`model: "sonnet"` で
+親はこの agent を `subagent_type: "cross-model-advisor:codex-advisor-runner"`、`model: "sonnet"` で
 起動する。相談 prompt は self-contained な task / context / question / output contract として
 親から渡される。
 
@@ -22,7 +22,7 @@ path 解決と model 起動を command substitution / `&&` で 1 command に結�
 のような変数経由でも起動しない。helper が見つからなければ terminal failure とする。
 
 ```bash
-find "$HOME/.claude/plugins/cache" -path '*codex-advisor*/scripts/run-codex-job.sh' -type f 2>/dev/null | awk -F'codex-advisor/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-
+find "$HOME/.claude/plugins/cache" -path '*cross-model-advisor*/scripts/run-codex-job.sh' -type f 2>/dev/null | awk -F'cross-model-advisor/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-
 ```
 
 ## job の回収と poll 予算

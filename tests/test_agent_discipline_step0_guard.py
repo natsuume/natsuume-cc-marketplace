@@ -47,7 +47,7 @@ PLUGIN_NAMES = (AGENT_DISCIPLINE,)
 AGENT_DISCIPLINE_README = ROOT / "plugins" / AGENT_DISCIPLINE / "README.md"
 
 EXPECTED_VERSIONS: dict[str, str] = {
-    AGENT_DISCIPLINE: "0.31.0",
+    AGENT_DISCIPLINE: "0.31.1",
 }
 
 # 検知層の 4 entry の `if` filter。

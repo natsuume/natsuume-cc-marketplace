@@ -1,5 +1,5 @@
 {
-  "description": "codex-advisor の配送・runner 強制経路: SessionStart / SubagentStart で利用規律を additionalContext として注入する。PreToolUse は rescue / review / advisor の Codex model 起動を role 固有 runner だけに限定し、SubagentStart / SubagentStop が runner の active / retry / terminal 遷移を記録し、PostToolUse (SubagentHandback) が hand-back された report の footer / attestation 解析値を runner state に記録する (advisor-runner の SubagentStop は review cadence attestation footer 行の欠落も retry 対象にする)。PermissionDenied は classifier に拒否された runner 起動を記録へ反映し、Stop の block ループを残さない。Stop は background_tasks と runner state を突き合わせ、稼働中の runner には待機を通知し、追跡を失った runner がある間だけ main session の終了を block する。runner state の掃除は SessionEnd と、新しい context で始まる SessionStart (startup / clear) だけが行う。",
+  "description": "cross-model-advisor の配送・runner 強制経路: SessionStart / SubagentStart で利用規律を additionalContext として注入する。PreToolUse は rescue / review / advisor の Codex model 起動を role 固有 runner だけに限定し、SubagentStart / SubagentStop が runner の active / retry / terminal 遷移を記録し、PostToolUse (SubagentHandback) が hand-back された report の footer / attestation 解析値を runner state に記録する (codex-advisor-runner の SubagentStop は review cadence attestation footer 行の欠落も retry 対象にする)。PermissionDenied は classifier に拒否された runner 起動を記録へ反映し、Stop の block ループを残さない。Stop は background_tasks と runner state を突き合わせ、稼働中の runner には待機を通知し、追跡を失った runner がある間だけ main session の終了を block する。runner state の掃除は SessionEnd と、新しい context で始まる SessionStart (startup / clear) だけが行う。",
   "hooks": {
     "SessionStart": [
       {
@@ -76,7 +76,7 @@
         ]
       },
       {
-        "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue)$",
+        "matcher": "^(cross-model-advisor:codex-(rescue|review|advisor)-runner|codex:codex-rescue)$",
         "hooks": [
           {
             "type": "command",
@@ -104,7 +104,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "^(codex-advisor:(rescue|review|advisor)-runner|codex:codex-rescue)$",
+        "matcher": "^(cross-model-advisor:codex-(rescue|review|advisor)-runner|codex:codex-rescue)$",
         "hooks": [
           {
             "type": "command",

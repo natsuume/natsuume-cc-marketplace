@@ -92,7 +92,7 @@ EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] 
         ("PostToolUse", script_path("post-commit-lint.sh"), ()),
         ("PostToolUseFailure", script_path("post-commit-lint.sh"), ()),
     ),
-    "codex-advisor": (
+    "cross-model-advisor": (
         ("SessionStart", script_path("inject-advisor-rules.sh"), ()),
         ("SessionStart", NODE_COMMAND, (CODEX_RUNNERS_SCRIPT,)),
         ("SessionEnd", NODE_COMMAND, (CODEX_RUNNERS_SCRIPT,)),
@@ -187,9 +187,9 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
         122,
         "d5f67fa6168994de85a34b28699d61a42a03c318c77668f839c9ac58d2fd37cb",
     ),
-    "codex-advisor": (
-        708,
-        "17610e3281ce8c5ae52a6940a6f478991cd0bdca64fdd32be02b16890d395960",
+    "cross-model-advisor": (
+        720,
+        "9cdf1a8278188e276e4475ce7b5fd6b99a31bd0174279ebcc533da9b15051eae",
     ),
     "git-guardrails": (
         114,
@@ -204,8 +204,8 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
         "380cba665caf3ad3af0b04186276cb02707333e4b357e45ff19a0cd2c98ff62d",
     ),
     "pre-push-codex-review": (
-        1277,
-        "20d547778da5f636c5d0e519fb64773be4a602cb2d35777f928a95c91a37c08b",
+        1301,
+        "fee80b4438a07c93680ccc26ae4e4f0b83082e13d1a94c7d6efea08d465994e0",
     ),
     "pre-push-review": (
         326,
@@ -230,7 +230,7 @@ GATE_PLUGIN_NAMES = (
     "pre-push-review",
     "pre-push-codex-review",
     "pre-merge-codex-review",
-    "codex-advisor",
+    "cross-model-advisor",
 )
 UNOBSERVED_TOOL_KEYWORDS = (
     "CLAUDE_CODE_USE_POWERSHELL_TOOL=1",
@@ -248,21 +248,21 @@ AUTO_REMOVAL_NOTICE_WORDS = ("2.1.193", "自動")
 # 4 箇所 (plugin.json / marketplace.json / 直下 README の一覧テーブル /
 # plugin README の `## バージョン` 節) で一致させる version。
 EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
-    "git-guardrails": "0.7.1",
-    "enforce-draft-pr": "0.5.5",
-    "auto-lint-check": "0.8.2",
-    "pre-push-review": "6.2.0",
-    "pre-push-codex-review": "2.2.3",
-    "pre-merge-codex-review": "2.2.1",
-    "update-default-branch": "0.4.4",
-    "natsuume-statusline": "0.11.0",
-    "agent-discipline": "0.31.0",
-    "ui-discipline": "0.4.4",
-    "natsuume-writing": "0.8.0",
-    "codex-advisor": "4.0.1",
-    "rate-limit": "0.5.2",
-    "session-handoff": "0.5.0",
-    "repo-analytics": "0.2.6",
+    "git-guardrails": "0.7.2",
+    "enforce-draft-pr": "0.5.6",
+    "auto-lint-check": "0.8.3",
+    "pre-push-review": "6.2.1",
+    "pre-push-codex-review": "3.0.0",
+    "pre-merge-codex-review": "2.2.2",
+    "update-default-branch": "0.4.5",
+    "natsuume-statusline": "0.11.1",
+    "agent-discipline": "0.31.1",
+    "ui-discipline": "0.4.5",
+    "natsuume-writing": "0.8.1",
+    "cross-model-advisor": "5.0.0",
+    "rate-limit": "0.5.3",
+    "session-handoff": "0.5.1",
+    "repo-analytics": "0.2.7",
 }
 
 

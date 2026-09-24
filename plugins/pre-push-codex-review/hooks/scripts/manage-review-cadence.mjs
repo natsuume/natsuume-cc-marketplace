@@ -5,14 +5,14 @@
  *
  * 責務: Codex review 成功 5 回ごとに根本方針 advisor checkpoint を要求する review
  * cadence を、本 plugin (pre-push-codex-review) が session 単位の state で担う。
- * checkpoint の実行主体 (`codex-advisor:advisor-runner` の起動・attestation の発行) は
- * codex-advisor plugin が担い、本 script は「いつ checkpoint を要求し、いつ解除するか」
+ * checkpoint の実行主体 (`cross-model-advisor:codex-advisor-runner` の起動・attestation の発行) は
+ * cross-model-advisor plugin が担い、本 script は「いつ checkpoint を要求し、いつ解除するか」
  * の enforcement のみを担う。
  *
  * 計数対象 (1 サイクル = 成功 review 1 回。session ごとに合算する):
  *   - `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer`
  *     の SubagentStop で、report に `Status: pass|findings` 行がちょうど 1 行ある場合
- *   - `codex-advisor:review-runner` の SubagentStop で、report の実質末尾 3 行の footer
+ *   - `cross-model-advisor:codex-review-runner` の SubagentStop で、report の実質末尾 3 行の footer
  *     (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` /
  *     `Codex-Runner-Job-ID: <id>`) が揃っている場合。同一 agent_id は 1 回だけ計数する
  *     (計数済み agent_id を `countedRunnerAgentIds` に記録し、resume 再 stop で footer 付きの
@@ -37,15 +37,15 @@
  *   v6.0.0 以降であり、旧 namespace の review 経路はサポート対象外のため。
  *
  * カウンター reset (checkpoint 充足) の契約:
- *   - `codex-advisor:advisor-runner` の SubagentStop で、report (所在は上記と同じ) の footer が
+ *   - `cross-model-advisor:codex-advisor-runner` の SubagentStop で、report (所在は上記と同じ) の footer が
  *     `Codex-Runner-Status: success` かつ footer 直前の実質行が
  *     `Codex-Advisor-Review-Cadence: satisfied` である場合、または footer が
  *     `Codex-Runner-Status: terminal-failure` かつ同行が `unavailable` である場合
  *   - fail-open: checkpoint 相談 (`tool_name` が `Agent` または `Task`、
- *     `tool_input.subagent_type` が `codex-advisor:advisor-runner`、かつ
+ *     `tool_input.subagent_type` が `cross-model-advisor:codex-advisor-runner`、かつ
  *     `tool_input.prompt` が文字列で `<review_cycle_checkpoint>` を含む) が checkpoint
  *     要求中に成立しなかった場合、`unavailable` 相当としてカウンターを reset する
- *     (codex-advisor 未 install 環境で checkpoint が解除不能な block にならないため)。
+ *     (cross-model-advisor 未 install 環境で checkpoint が解除不能な block にならないため)。
  *     成立しない経路は 2 つあり、reset までの回数が異なる:
  *       - PostToolUseFailure (起動後の失敗): 1 回で reset する。ただし `is_interrupt` が
  *         true (ユーザの Esc/Ctrl+C による abort) の場合は reset しない (cancel はカウンターを
@@ -56,7 +56,7 @@
  *         state と一緒に消えるため、reset 後の新しい checkpoint 要求では再び 1 回目から数える
  *     通常の advisor 相談 (request に `<review_cycle_checkpoint>` を含まない) の失敗・拒否は
  *     どちらの経路でも reset せず、拒否回数にも数えない。どちらの event も届かない失敗形・
- *     環境 (codex-advisor 未 install で subagent_type 自体が解決できない等) では自動 reset が
+ *     環境 (cross-model-advisor 未 install で subagent_type 自体が解決できない等) では自動 reset が
  *     発火しないため、その場合は state の手動 reset (state ファイル削除) が解除手段になる
  *
  * enforcement:
@@ -64,7 +64,7 @@
  *     review 起動形 (`node .../codex-companion.mjs review|adversarial-review`、
  *     `run-pre-push-codex-review.sh`、`run-codex-job.sh review`) を deny する
  *   - Stop: checkpoint 要求中は main session の停止を block し、
- *     `codex-advisor:advisor-runner` を `model: "sonnet"` で起動することと、相談
+ *     `cross-model-advisor:codex-advisor-runner` を `model: "sonnet"` で起動することと、相談
  *     request に含める `<review_cycle_checkpoint>`
  *     4 項目 (Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と
  *     不確実性 / course-correction の問い) を案内する
@@ -96,8 +96,8 @@ const STATUS_LINE_COUNTED_REVIEWERS = new Set([
   "pre-push-codex-review:codex-reviewer",
   "pre-merge-codex-review:codex-reviewer",
 ]);
-const FOOTER_COUNTED_REVIEWER = "codex-advisor:review-runner";
-const ADVISOR_CHECKPOINT_RUNNER = "codex-advisor:advisor-runner";
+const FOOTER_COUNTED_REVIEWER = "cross-model-advisor:codex-review-runner";
+const ADVISOR_CHECKPOINT_RUNNER = "cross-model-advisor:codex-advisor-runner";
 const REVIEW_CADENCE_LIMIT = 5;
 const REVIEW_CADENCE_ATTESTATIONS = new Set([
   "satisfied",
@@ -106,7 +106,7 @@ const REVIEW_CADENCE_ATTESTATIONS = new Set([
 ]);
 const AGENT_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 // PostToolUse (SubagentHandback) で report を記録する agent_type (計数対象 2 reviewer +
-// footer 計数の review-runner + reset 判定の advisor-runner)。
+// footer 計数の codex-review-runner + reset 判定の codex-advisor-runner)。
 const HANDBACK_TRACKED_AGENT_TYPES = new Set([
   ...STATUS_LINE_COUNTED_REVIEWERS,
   FOOTER_COUNTED_REVIEWER,
@@ -850,7 +850,7 @@ function handleStop(input) {
   if (!state?.checkpointRequired) return null;
   return {
     decision: "block",
-    reason: `Codex review が前回の根本方針 checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。まず必ず ${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet" で起動してください。起動 mode は Claude Code が決めるため指定せず、助言は completion notification 経由で届きます。相談 request の <review_cycle_checkpoint> には次の 4 項目を省略せず含めます: Goal と受入基準・制約 / 直近 ${REVIEW_CADENCE_LIMIT} サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。通常の advisor 相談では解除されません。起動後に失敗した場合はその 1 回で checkpoint が fail-open reset されます。classifier に起動を拒否された場合は 1 回目に retry が要求されるので、ユーザに可否を確認したうえで同じ相談をもう一度起動してください (2 回目の拒否で fail-open reset されます)。codex-advisor plugin が install されていない環境では起動失敗も拒否も hook に届かず自動 reset が発火しないため、起動を試みても block が解除されない場合は、この session の state file ${statePath(input.session_id)} を削除して脱出し、codex-advisor plugin の install が必要であることをユーザに報告してください。`,
+    reason: `Codex review が前回の根本方針 checkpoint から ${REVIEW_CADENCE_LIMIT} 回完了しました。まず必ず ${ADVISOR_CHECKPOINT_RUNNER} を model: "sonnet" で起動してください。起動 mode は Claude Code が決めるため指定せず、助言は completion notification 経由で届きます。相談 request の <review_cycle_checkpoint> には次の 4 項目を省略せず含めます: Goal と受入基準・制約 / 直近 ${REVIEW_CADENCE_LIMIT} サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い。通常の advisor 相談では解除されません。起動後に失敗した場合はその 1 回で checkpoint が fail-open reset されます。classifier に起動を拒否された場合は 1 回目に retry が要求されるので、ユーザに可否を確認したうえで同じ相談をもう一度起動してください (2 回目の拒否で fail-open reset されます)。cross-model-advisor plugin が install されていない環境では起動失敗も拒否も hook に届かず自動 reset が発火しないため、起動を試みても block が解除されない場合は、この session の state file ${statePath(input.session_id)} を削除して脱出し、cross-model-advisor plugin の install が必要であることをユーザに報告してください。`,
   };
 }
 

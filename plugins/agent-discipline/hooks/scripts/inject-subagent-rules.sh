@@ -6,7 +6,7 @@
 #   stdout : {"hookSpecificOutput": {"hookEventName": "SubagentStart",
 #             "additionalContext": "<subagent-rules.md 全文>"}}
 #   exit   : 常に 0 (jq 欠落・prompt ファイル欠落・空ファイル時は注入をスキップして exit 0。
-#            fail-open でセッションを壊さない。inject-always.sh / codex-advisor の
+#            fail-open でセッションを壊さない。inject-always.sh / cross-model-advisor の
 #            inject-advisor-rules-subagent.sh と同方針)
 #
 # 設計:
@@ -14,7 +14,7 @@
 #     fork / frontmatter 経路では Fable になりうる (block-fable-subagent.sh が捕捉できる
 #     のは明示 model・env・継承の各経路に限る)。加えて SubagentStart hook input のモデル
 #     情報にも保証がないため、どのモデルで実行されても成り立つ単一テンプレートを常に注入する
-#   - agent_type による条件分岐も持たない (codex-advisor / ui-discipline の SubagentStart
+#   - agent_type による条件分岐も持たない (cross-model-advisor / ui-discipline の SubagentStart
 #     注入と同方針)
 #   - プレースホルダ置換なし (静的全文注入)。パス解決は script 自身の位置基準
 #     (hooks/scripts/ から見て ../prompts/subagent-rules.md)
