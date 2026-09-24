@@ -425,6 +425,7 @@ class CodexRunnerHeredocGateTest(HookHarness):
     現れても起動ではない。本文を shell が実行する形 (本文を shell の stdin に渡す) と、
     区切り語を quote しない heredoc 本文のコマンド置換は従来どおり実行形として判定する。
     heredoc の終端より後ろの行と、heredoc 演算子と同じ行の後続 segment もコマンドである。
+    終端行が見つからない `<<` は heredoc として扱わず、後続行をコマンドとして解析する。
     """
 
     def assert_allowed_without_state(self, command: str) -> None:
@@ -574,6 +575,18 @@ class CodexRunnerHeredocGateTest(HookHarness):
                 "cat <<< 'note'\n"
                 f"{COMMANDS['review']}",
                 "review",
+            ),
+            # 終端行が無い heredoc は heredoc として扱わず、後続行をコマンドとして解析する。
+            "arithmetic-shift-is-not-a-heredoc": (
+                "echo $(( 1 << 2 ))\n"
+                f"{COMMANDS['rescue']}",
+                "rescue",
+            ),
+            "unterminated-heredoc": (
+                "cat <<'EOF'\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF ",
+                "advisor",
             ),
         }
         for name, (command, operation) in cases.items():

@@ -259,7 +259,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "agent-discipline": "0.31.1",
     "ui-discipline": "0.4.5",
     "natsuume-writing": "0.8.1",
-    "cross-model-advisor": "5.0.1",
+    "cross-model-advisor": "5.0.2",
     "rate-limit": "0.5.3",
     "session-handoff": "0.5.1",
     "repo-analytics": "0.2.7",
