@@ -281,7 +281,7 @@ fork サブエージェントを止める主防御は、利用者の settings (`
   2. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が有効 → 実効モデルは env (非空ならその値、空ならメインセッションのモデル)。fable なら model の明示に依らず deny し、model の明示では直せないことを deny 理由に書く。非 fable なら model が fable でも allow
   3. `tool_input.model` に fable が明示指定されている (alias `fable` / full ID `claude-fable-5-1` 等、大文字小文字を無視した部分一致):
      - 3a. session model state が fable → deny (Fable メインでは Fable サブエージェントを使わない)
-     - 3b. session model state が無い・空 (pending マーカーの有無を問わない) → deny (fail-closed)。deny 理由で、会話を 1 turn 進めてモデル確定を待つよう案内する
+     - 3b. pending マーカーがある (state file の有無を問わない。state 書込に失敗した SessionStart は古い state file を残したまま pending マーカーを作るため)、または session model state が無い・空 → deny (fail-closed)。deny 理由で、会話を 1 turn 進めてモデル確定を待つよう案内する
      - 3c. session model state が fable 以外 → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める
      - いずれの deny 理由でも、reviewer は `model: "opus"` で再起動し、fable-advisor-runner は再起動せずスキップするよう案内する
   4. `tool_input.model` が非 fable の具体指定 → allow (明示は env より優先されるため)

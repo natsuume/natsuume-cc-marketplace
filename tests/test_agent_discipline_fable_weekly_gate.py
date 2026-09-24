@@ -7,7 +7,8 @@
   「Fable 週次枠の使用率」だけで fable 明示を判定する (用途は規律 = prompt で縛る)。
 - 判定表 (fable 明示の行):
   3a. session model state が Fable → deny (Fable メインでは Fable サブエージェントを使わない)
-  3b. session model state が無い (pending / 情報ゼロ) → deny (fail-closed)
+  3b. pending マーカーがある (state の有無を問わない)、または session model state が無い → deny
+      (fail-closed)
   3c. session model state が Fable 以外 → 使用率判定で利用可なら allow、利用不可なら deny
 - 使用率判定: ``${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json``
   の Fable entry (display_name が大文字小文字を無視して fable を含み percent が数値) の
@@ -171,6 +172,12 @@ DECISION_TABLE = (
     row(
         "3b/pending",
         session_state=None,
+        pending=True,
+        expect="deny",
+        keywords=(WAIT_ONE_TURN, RELAUNCH_REVIEWER_ON_OPUS, SKIP_ADVISOR),
+    ),
+    row(
+        "3b/pending-with-stale-state",
         pending=True,
         expect="deny",
         keywords=(WAIT_ONE_TURN, RELAUNCH_REVIEWER_ON_OPUS, SKIP_ADVISOR),

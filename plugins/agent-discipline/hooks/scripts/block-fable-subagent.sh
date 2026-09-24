@@ -24,8 +24,9 @@
 #      直せないことを deny 理由に書く。非 fable なら model が fable でも allow
 #   3. tool_input.model に fable が明示指定されている:
 #      3a. session model state が fable → deny (Fable メインでは Fable サブエージェントを使わない)
-#      3b. session model state が無い・空 (pending マーカーの有無を問わない) → deny (fail-closed。
-#          メインが Fable かどうかを確定できないため)
+#      3b. pending マーカーがある (state file の有無を問わない)、または session model state が
+#          無い・空 → deny (fail-closed。メインが Fable かどうかを確定できないため。state 書込に
+#          失敗した SessionStart は古い state file を残したまま pending マーカーを作る)
 #      3c. session model state が fable 以外 → Fable 週次枠の使用率判定で利用可なら allow、
 #          利用不可 (閾値超過・使用率不明) なら deny
 #   4. tool_input.model が非 fable の具体指定 → allow (明示は env より優先されるため)
@@ -136,12 +137,18 @@ STATE_DIR="${TMPDIR:-/tmp}/agent-discipline-state"
 SESSION_MODEL=""
 SESSION_MODEL_KNOWN=0
 PENDING_MODEL=0
+# pending マーカーの存在 (state file の有無を問わない)。state 書込に失敗した SessionStart は
+# 古い state file を残したまま pending マーカーを作るため、fable 明示の判定ではこちらも見る。
+PENDING_MARKER_PRESENT=0
 if [ -n "$SAFE_SESSION_ID" ]; then
   STATE_FILE="$STATE_DIR/model-$SAFE_SESSION_ID"
+  if [ -e "$STATE_DIR/pending-model-$SAFE_SESSION_ID" ]; then
+    PENDING_MARKER_PRESENT=1
+  fi
   if [ -r "$STATE_FILE" ]; then
     SESSION_MODEL=$(cat "$STATE_FILE" 2>/dev/null)
     SESSION_MODEL_KNOWN=1
-  elif [ -e "$STATE_DIR/pending-model-$SAFE_SESSION_ID" ]; then
+  elif [ "$PENDING_MARKER_PRESENT" -eq 1 ]; then
     PENDING_MODEL=1
   fi
 fi
@@ -301,7 +308,7 @@ fi
 
 # 3. fable の明示指定はメインセッションが非 Fable と確定し、週次枠に余裕がある場合だけ allow
 if is_fable "$TOOL_MODEL"; then
-  if [ "$SESSION_MODEL_KNOWN" -ne 1 ] || [ -z "$(trim "$SESSION_MODEL")" ]; then
+  if [ "$PENDING_MARKER_PRESENT" -eq 1 ] || [ "$SESSION_MODEL_KNOWN" -ne 1 ] || [ -z "$(trim "$SESSION_MODEL")" ]; then
     deny "agent-discipline: メインセッションのモデルを確定できないため (モデル判定不能期間、または session model state が無い)、Fable の明示指定を deny しました。Fable メインのセッションでは Fable サブエージェントを使わないため、メインが Fable 以外と確定するまで許可しません。会話を 1 turn 進めてモデルが確定するのを待ってから再実行するか、${FABLE_FALLBACK_GUIDE}"
   fi
   if is_fable "$SESSION_MODEL"; then
