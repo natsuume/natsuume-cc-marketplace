@@ -268,6 +268,30 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
             [{"display_name": "Fable", "percent": 41.7, "resets_at": "r1"}],
         )
 
+    def test_no_write_while_another_writer_holds_the_lock(self) -> None:
+        lock_dir = self.cache_dir / ".stdin-write.lock"
+        lock_dir.mkdir(parents=True)
+
+        self.run_main_ok(self.payload([{"display_name": "Fable", "utilization": 5}]))
+
+        self.assertFalse(self.cache_file.exists())
+        # 他の書き手の lock は解放しない。
+        self.assertTrue(lock_dir.is_dir())
+
+    def test_stale_lock_is_taken_over(self) -> None:
+        lock_dir = self.cache_dir / ".stdin-write.lock"
+        lock_dir.mkdir(parents=True)
+        old = time.time() - 121 - CLOCK_SLACK_SEC
+        os.utime(lock_dir, (old, old))
+
+        self.run_main_ok(self.payload([{"display_name": "Fable", "utilization": 5}]))
+
+        self.assertEqual(
+            self.read_cache()["weekly_scoped"],
+            [{"display_name": "Fable", "percent": 5, "resets_at": ""}],
+        )
+        self.assertFalse(lock_dir.exists())
+
     def test_unparseable_cache_is_rewritten(self) -> None:
         self.cache_dir.mkdir(parents=True)
         self.cache_file.write_text("{not json")

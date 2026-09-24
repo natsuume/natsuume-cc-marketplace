@@ -70,7 +70,9 @@
 #       (単調性ガード: 同じ週次枠の使用率は reset まで減らないため、複数セッションのうち
 #       古いスナップショットを持つセッションが新しい値を上書きするのを防ぐ。TTL 超の
 #       cache に適用しないのは、値の丸めの違い等で書き出しが止まり続けないようにするため)
-#   書き出しは weekly_scoped_atomic_write (mktemp + mv、umask 077) で行う。
+#     - stdin 書き出し用 lock (下記「lock」節) を取得できない
+#   判定と書き出しは lock 保持下で行い、書き出しは weekly_scoped_atomic_write
+#   (mktemp + mv、umask 077) で行う。
 #   fail-open: いかなる失敗でも stdout / stderr に出力せず 0 を返す。
 #
 # ■ fetch worker (直接実行モード: `bash weekly-scoped-limits.sh --fetch-worker`。
@@ -99,6 +101,8 @@
 #   パス: <cache_dir>/.fetch.lock (mkdir による排他)。
 #   stale 判定: lock dir の mtime が 120 秒より古ければ奪取してよい
 #   (curl の 10 秒 timeout に対して十分長い)。
+#   stdin 経路の書き出しは別の lock <cache_dir>/.stdin-write.lock を使う (mkdir による排他、
+#   取得できなければ書き出しを省略し待たない。stale 判定は同じ 120 秒)。
 #
 # ■ 依存と縮退
 #   jq: 必須 (プラグイン全体の必須依存)。curl: optional — 無ければ fetch せず
@@ -113,6 +117,7 @@ WEEKLY_SCOPED_SELF_PATH="${BASH_SOURCE[0]}"
 WEEKLY_SCOPED_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline"
 WEEKLY_SCOPED_CACHE_FILE="$WEEKLY_SCOPED_CACHE_DIR/weekly-scoped.json"
 WEEKLY_SCOPED_LOCK_DIR="$WEEKLY_SCOPED_CACHE_DIR/.fetch.lock"
+WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR="$WEEKLY_SCOPED_CACHE_DIR/.stdin-write.lock"
 WEEKLY_SCOPED_TTL=300
 WEEKLY_SCOPED_LOCK_STALE_SEC=120
 WEEKLY_SCOPED_MAX_BACKOFF=1800
@@ -286,13 +291,42 @@ weekly_scoped_record_success() {
 # 「提供する関数」節を参照)。
 write_weekly_scoped_from_stdin() {
   local weekly_scoped_json="$1"
-  local now fetched_at
+  local now
 
   command -v jq >/dev/null 2>&1 || return 0
   printf '%s' "$weekly_scoped_json" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1 || return 0
 
   now=$(date +%s 2>/dev/null) || return 0
   [[ "$now" =~ ^[0-9]+$ ]] || return 0
+
+  weekly_scoped_acquire_stdin_write_lock "$now" || return 0
+  weekly_scoped_write_stdin_entries_locked "$now" "$weekly_scoped_json"
+  rmdir "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null
+  return 0
+}
+
+# stdin 経路の書き出し用 lock を mkdir で取得する (取得できれば 0)。複数セッションの
+# statusline が同時に描画しても、ガード判定と書き出しの間に他の書き込みが割り込まない
+# ようにする。取得できなければ他セッションが書き出し中なので呼び出し側は書き出しを省略する。
+# statusline が lock 保持中に強制終了された場合に備え、mtime が
+# WEEKLY_SCOPED_LOCK_STALE_SEC 秒より古い lock は奪取して 1 回だけ取り直す。
+weekly_scoped_acquire_stdin_write_lock() {
+  local now="$1" lock_mtime
+
+  (umask 077; mkdir -p "$WEEKLY_SCOPED_CACHE_DIR") 2>/dev/null || return 1
+  mkdir "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null && return 0
+
+  lock_mtime=$(stat -c %Y "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null || stat -f %m "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null)
+  [[ "$lock_mtime" =~ ^[0-9]+$ ]] || return 1
+  [ $((now - lock_mtime)) -gt "$WEEKLY_SCOPED_LOCK_STALE_SEC" ] || return 1
+  rm -rf "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null
+  mkdir "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null
+}
+
+# stdin 経路の lock 保持下で、書き出し条件を判定して cache を書き出す。
+# 引数: $1=now, $2=weekly_scoped (JSON 配列)
+weekly_scoped_write_stdin_entries_locked() {
+  local now="$1" weekly_scoped_json="$2" fetched_at
 
   # TTL 内の cache に対しては次のどちらかなら書き出さない:
   #   - 同一内容 (statusline は描画ごとに呼ばれるため書き込み回数を抑える。jq の == は
@@ -318,7 +352,6 @@ write_weekly_scoped_from_stdin() {
   fi
 
   weekly_scoped_record_success "$now" "$weekly_scoped_json"
-  return 0
 }
 
 # 失敗時の cache 更新: fetched_at と weekly_scoped は前回値を保持し、
