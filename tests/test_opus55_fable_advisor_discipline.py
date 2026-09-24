@@ -51,7 +51,7 @@ FABLE_USAGE_PHRASES = (
     # 用途を fable-advisor-runner の起動に限る
     "**Fable は advisor の起動に限る**",
     "`cross-model-advisor:fable-advisor-runner`",
-    "ワーカー (実装・調査・一括修正等) には使わない",
+    "ワーカー (実装・調査・一括修正等) や reviewer には使わない",
     # hook (PreToolUse の Agent|Task) が捕捉しない Workflow の agent() では使わない
     "Workflow の `agent()` では Fable を使わない",
     # model の明示 (未指定・frontmatter 経由の Fable 実行は使わない)

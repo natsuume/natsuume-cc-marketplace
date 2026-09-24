@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v1.0.1
+v1.0.2
 
 ## 概要
 
@@ -268,7 +268,7 @@ v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh 
 **イベント**: `PreToolUse`
 **matcher**: `Agent|Task`
 
-Fable サブエージェントは、Fable 以外がメインのセッションで `model: "fable"` を明示し、かつ Fable 週次枠の使用率が閾値以下の場合に限り許可します (pre-push-review の reviewer と cross-model-advisor の fable-advisor-runner を Fable で起動するため)。用途を reviewer / advisor に限る規律は分業規律 (discipline-\*.md) が担い、本 hook は許可 agent の一覧を持ちません。
+Fable サブエージェントは、Fable 以外がメインのセッションで `model: "fable"` を明示し、かつ Fable 週次枠の使用率が閾値以下の場合に限り許可します (cross-model-advisor の fable-advisor-runner を Fable で起動するため)。用途を advisor に限る規律は分業規律 (discipline-\*.md) が担い、本 hook は許可 agent の一覧を持ちません。
 
 fork サブエージェントを止める主防御は、利用者の settings (`~/.claude/settings.json` 等) に置く `permissions.deny` の rule です。本 hook はそれを補う二重防御で、permission rule が捕捉しない経路 (メインセッション継承・env による上書き) の検知と、deny メッセージによる自己修正誘導を担います。
 
@@ -291,7 +291,7 @@ fork サブエージェントを止める主防御は、利用者の settings (`
      - 3a. session model state が fable → deny (Fable メインでは Fable サブエージェントを使わない)
      - 3b. pending マーカーがある (state file の有無を問わない。state 書込に失敗した SessionStart は古い state file を残したまま pending マーカーを作るため)、または session model state が無い・空 → deny (fail-closed)。deny 理由で、会話を 1 turn 進めてモデル確定を待つよう案内する
      - 3c. session model state が fable 以外 → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める
-     - いずれの deny 理由でも、reviewer は `model: "opus"` で再起動し、fable-advisor-runner は再起動せずスキップするよう案内する
+     - いずれの deny 理由でも、fable-advisor-runner は再起動せずスキップし、それ以外の委任では非 Fable の model を明示するよう案内する
   4. `tool_input.model` が非 fable の具体指定 → allow (明示は env より優先されるため)
   5. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在なら session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`、`inject-always.sh` が SessionStart で記録し `update-model-on-switch.sh` が `/model` 切替で更新する) が fable の場合のみ deny。state file が読めず判定不能な場合は pending マーカー (`${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`) の存在を確認し、**存在すれば deny** (継承先が Fable になりうる判定不能期間のため)、存在しなければ真の情報ゼロとして fail-open (allow)。env 不在でサブエージェント内 (入力に `agent_id` がある) からの起動は deny する (nested guard、下記)
 - **nested guard**: サブエージェント内 (入力に `agent_id` がある) からの model 未指定 (`inherit` を含む)・`fork` の起動は deny し、model の明示を求める。継承先は起動元サブエージェントのモデルで session model state では判定できず、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承しうるため。`CLAUDE_CODE_SUBAGENT_MODEL` が非空なら子の実効モデルは env で決まるため env で判定する

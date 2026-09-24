@@ -34,7 +34,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v6.2.3
+v7.0.0
 
 ## インストール
 
@@ -57,7 +57,7 @@ claude plugin install pre-push-review@natsuume-plugins
 
 **ファイル**: `commands/review.md`
 
-push 前 2 レビューを **同じアシスタントメッセージで並列に** 2 subagent として起動する確定的フローです。 deny メッセージから案内されたら、 Claude はこのコマンドを実行し、 2 subagent (`pre-push-review:code-reviewer` + `pre-push-review:security-reviewer`) を 1 つの assistant message 内で並列 `Agent` / `Task` tool call として発出します。 発出の前に判定コマンド `pre-push-review-reviewer-model` を 1 回実行し、出力 1 行目の model (`fable` / `opus`、下記「起動 model の判定」参照) で 2 subagent を起動します。 順序や引数の自律判断は構造的に排除されています。
+push 前 2 レビューを **同じアシスタントメッセージで並列に** 2 subagent として起動する確定的フローです。 deny メッセージから案内されたら、 Claude はこのコマンドを実行し、 2 subagent (`pre-push-review:code-reviewer` + `pre-push-review:security-reviewer`) を 1 つの assistant message 内で並列 `Agent` / `Task` tool call として発出します。 2 subagent はどちらも `model: "opus"` を明示して起動します。 順序や引数の自律判断は構造的に排除されています。
 
 並列発出が技術的に成立しない / 一部のレビューが失敗した場合は、 2 subagent を順次起動しても push gate の構造的保証は同じ (2 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。
 
@@ -173,7 +173,7 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 - subagent body には logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリと exclusion ルール (style / docs / perf / refactor / security / pre-existing bug 等) が prompt として含まれており、 単一 turn で review を完遂する
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して code-reviewed マーカーを更新する
-- agent 定義 frontmatter の model は `opus`。起動時は下記「起動 model の判定」に従って `model: "fable"` / `model: "opus"` を明示する。effort は指定せずセッション既定を継承
+- model は `opus` (agent 定義 frontmatter と起動時の明示 `model: "opus"` の両方)、effort は指定せずセッション既定を継承
 
 #### `pre-push-review:security-reviewer` (subagent)
 
@@ -188,7 +188,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 - net diff に加えて `origin/HEAD..HEAD` の per-commit patch (`git log -p --cc`。merge commit で加えられた変更も含む) を読み、 後続 commit で削除・revert されて net diff に残らない中間 commit の秘匿情報・危険コードも検査する。 push すると branch の全 commit が remote 履歴に載るためである。 中間 commit の秘匿情報は、 削除 commit を積むのではなく履歴から除去し、 露出の可能性があればローテーションする修正方針で報告する。 code-reviewer は net diff のみを対象とする
 - 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して security マーカーを更新する (`execution-failed` / 欠落 / 重複 / 未知値では書かず、silent-pass を防ぐ)
-- agent 定義 frontmatter の model は `opus`。起動時は下記「起動 model の判定」に従って `model: "fable"` / `model: "opus"` を明示する。effort は指定せずセッション既定を継承
+- model は `opus` (agent 定義 frontmatter と起動時の明示 `model: "opus"` の両方)、effort は指定せずセッション既定を継承
 
 #### code-reviewer / security-reviewer subagent が標準 skill を invoke しない理由 (共通)
 
@@ -198,18 +198,6 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
 
 **呼び出しタイミング (2 subagent 共通)**: `/pre-push-review:review` slash command の指示で 2 並列 `Agent` / `Task` tool calls として起動する (完了は SubagentStop で検知されるため起動 mode は問わない)。 deny メッセージにも個別起動のフォールバック手順を案内している。
-
-#### 起動 model の判定 (2 subagent 共通)
-
-reviewer は Fable 週次枠の使用率に余裕がある間は Fable で、そうでない場合は Opus で起動する。判定は plugin 同梱のコマンド `bin/pre-push-review-reviewer-model` (plugin が有効な間は Bash の PATH に載る) と deny 文が、共通の `hooks/scripts/lib/fable-weekly-usage.sh` で行う。`/pre-push-review:review` は起動前にこのコマンドを 1 回実行し、出力 1 行目の model で 2 reviewer を起動する。
-
-- 入力は natsuume-statusline が書く `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json`。読むだけで書き込まず、OAuth usage API も呼ばない
-- 閾値は env `FABLE_WEEKLY_MAX_PERCENT` (前後空白を trim した 0〜100 の 10 進整数)。未設定・空・範囲外・非整数は既定値 `80`
-- `weekly_scoped[]` のうち `display_name` が大文字小文字を無視して `fable` を含み `percent` が数値の entry の最大 `percent` が閾値以下 (ちょうど閾値を含む) なら `fable`、超過なら `opus` (理由に使用率と閾値を併記)
-- cache が symlink / 通常ファイルでない / 存在しない / 読めない / JSON document が 1 つでない / `fetched_at` が欠落・非数値 / `now - fetched_at > 1800` (stale) / `weekly_scoped` が欠落・非配列・空 / Fable entry が無い / 現在時刻を取得できない / jq が無い場合は使用率不明として `opus` (理由に使用率を確認できない旨を併記)。`fetched_at` が未来時刻でも stale とはみなさない
-- コマンドの出力は常に 2 行 (1 行目 = `fable` / `opus`、2 行目 = 判定理由) で exit 0。コマンドが見つからない・実行できない場合、`/pre-push-review:review` は `opus` で起動する
-- agent 定義 frontmatter の model は `opus` のまま据え置く。frontmatter は agent-discipline の hook から見えず、frontmatter を fable にすると model 未指定の起動が使用率判定を経ずに Fable で走るため
-- `model: "fable"` の起動が agent-discipline の hook に deny された場合 (Fable メインのセッション、判定後に使用率が閾値を超えた等) は、同じ reviewer を `model: "opus"` で再起動する (deny 文と `/pre-push-review:review` が案内する)。marker は subagent の agent_type に対して発行されるため、どちらの model で走っても同じく機能する
 
 ## 既知の制約
 

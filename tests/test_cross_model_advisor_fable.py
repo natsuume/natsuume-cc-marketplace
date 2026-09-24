@@ -11,7 +11,7 @@
   (`model: "fable"`) を同一メッセージで並列に起動する。相談前に plugin 同梱の判定コマンド
   `bin/cross-model-advisor-fable-usage` (1 行目 = available / over / unknown、2 行目 = 理由) を
   実行し、available でなければ Fable をスキップする。deny された場合も再起動せずスキップする。
-- 使用率判定は agent-discipline / pre-push-review と同じ仕様 (cache は
+- 使用率判定は agent-discipline と同じ仕様 (cache は
   `natsuume-statusline/weekly-scoped.json`、閾値 env `FABLE_WEEKLY_MAX_PERCENT` 既定 80、
   `percent <= 閾値` で available)。cache は書き込まない。
 - review cadence checkpoint も並列に相談し、gate が検証する attestation は従来どおり
@@ -158,7 +158,7 @@ class RenameTest(unittest.TestCase):
     def test_plugin_json_name_and_major_version(self) -> None:
         manifest = json.loads(read(PLUGIN_JSON))
         self.assertEqual("cross-model-advisor", manifest["name"])
-        self.assertEqual("5.0.3", manifest["version"])
+        self.assertEqual("5.0.4", manifest["version"])
 
     def test_agent_files_are_renamed(self) -> None:
         names = {path.name for path in AGENTS_DIR.glob("*.md")}

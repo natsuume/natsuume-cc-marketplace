@@ -37,7 +37,7 @@
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "push 前に code / security レビューを強制する",
-      "version": "6.2.3",
+      "version": "7.0.0",
       "keywords": ["push", "review", "quality", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
@@ -72,7 +72,7 @@
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "作業規律を注入し issue / PR 本文の独断を検知する",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
@@ -93,7 +93,7 @@
       "name": "cross-model-advisor",
       "source": "./plugins/cross-model-advisor",
       "description": "Codex と Fable へ並列相談し runner を管理する",
-      "version": "5.0.3",
+      "version": "5.0.4",
       "keywords": ["codex", "fable", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {

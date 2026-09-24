@@ -5,7 +5,7 @@
 #
 # ## 判定仕様
 #
-# agent-discipline の block-fable-subagent.sh / pre-push-review の fable-weekly-usage.sh と同じ
+# agent-discipline の block-fable-subagent.sh と同じ
 # 判定を自前で実装する (plugin 間で実行時にコードを参照しない)。
 #   - 入力: ${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json (producer は
 #     natsuume-statusline。本 lib は読むだけで書き込まず、OAuth usage API も呼ばない)
