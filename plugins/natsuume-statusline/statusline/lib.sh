@@ -297,6 +297,21 @@ terminal_width() {
   printf '80'
 }
 
+# Claude Code が statusline の出力を描画するフッター領域は、ターミナル幅より狭い。
+# フッターは左右に paddingX 2 (計 4 桁) を取り、statusline 列と右隣の通知領域の間に
+# columnGap 1 を置く (Claude Code 2.1.281 のバイナリで確認, 2026-09-24)。COLUMNS は
+# ターミナル全幅のため、この 5 桁を差し引かないと出力の右端が Claude Code 側で `…` に
+# 切り詰められる。通知領域自体の幅は statusline からは取得できないため含めない。
+STATUSLINE_FOOTER_RESERVED_COLUMNS=5
+
+# statusline の各行が使える可視幅を返す (ターミナル幅 - フッターの予約幅、最小 1)。
+statusline_width() {
+  local width
+  width=$(( $(terminal_width) - STATUSLINE_FOOTER_RESERVED_COLUMNS ))
+  [ "$width" -lt 1 ] && width=1
+  printf '%s' "$width"
+}
+
 # Bash の文字列演算が byte 単位になる C/POSIX locale でも UTF-8 path を壊さないよう、
 # 幅計算にだけ使える UTF-8 locale を一度検出する。Linux と macOS で一般的な候補を
 # Bash 自身が `日` を1文字と数えるかで確認し、process 全体の locale は変更しない。

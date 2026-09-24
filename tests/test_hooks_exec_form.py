@@ -255,7 +255,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "pre-push-codex-review": "3.0.2",
     "pre-merge-codex-review": "2.2.4",
     "update-default-branch": "0.4.6",
-    "natsuume-statusline": "0.11.2",
+    "natsuume-statusline": "0.11.3",
     "agent-discipline": "1.0.1",
     "ui-discipline": "0.4.6",
     "natsuume-writing": "0.8.2",

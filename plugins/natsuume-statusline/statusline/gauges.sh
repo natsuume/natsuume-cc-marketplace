@@ -38,6 +38,7 @@
 #   段階1: ctx の "(P%)" を削除 (used/max が残る。ctx 無しの行ではスキップ)
 #   段階2: ゲージのバー長を短縮 (GAUGE_MAX_BAR_WIDTH → GAUGE_MIN_BAR_WIDTH)
 #   段階3: バーを削除
+#   段階4: ctx を使用率 "(P%)" のみにする (used/max を削除。ctx 無しの行ではスキップ)
 #   先頭固定セグメントは縮小対象にせず、幅計算にはその可視幅 + separator 幅を含める
 #   (最終手段の fit_segments の … 切り詰めのみ縮小されうる)。
 #
@@ -127,6 +128,7 @@ build_ratelimit_segment() {
 #   段階1: ctx の使用率表示 "(P%)" を削除（used/max が残るので情報は保たれる）
 #   段階2: レートリミットのバー長を短縮（GAUGE_MAX→GAUGE_MIN）
 #   段階3: バーを削除（"label: P% (reset)" のみ）
+#   段階4: ctx を使用率のみ "(P%)" にする（used/max を削除）
 # それでも収まらない極端な狭幅は最後に fit_segments が … で切り詰める。
 # 先頭固定セグメントはどの段階でも縮小対象にしない。
 render_gauge_line() {
@@ -202,6 +204,13 @@ render_gauge_line() {
     bar_width=$(( available / rate_count ))
     [ "$bar_width" -gt "$GAUGE_MAX_BAR_WIDTH" ] && bar_width="$GAUGE_MAX_BAR_WIDTH"
     [ "$bar_width" -lt "$GAUGE_MIN_BAR_WIDTH" ] && bar_width=0
+  fi
+
+  # 段階4: バーを描かなくても収まらなければ、ctx を使用率のみ "(P%)" にする
+  # (used/max を渡さないと build_context_segment は % だけを出力する)。
+  if [ "$bar_width" -eq 0 ] && [ -n "$ctx_seg" ] \
+    && [ $(( leading_w + ctx_w + rate_core_total + sep_total )) -gt "$term_width" ]; then
+    ctx_seg=$(build_context_segment "$ctx_pct" "" "" 1 "$round")
   fi
 
   # 最終セグメントを組み立てる（先頭固定 → context → レートリミットの順）。round を反映する。
