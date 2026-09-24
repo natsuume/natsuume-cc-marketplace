@@ -16,11 +16,11 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # prompt ファイルは hooks/scripts/../prompts/ に配置されている
-# (codex-advisor/hooks/scripts/inject-advisor-rules.sh と同じパス解決方式)。
+# (cross-model-advisor/hooks/scripts/inject-advisor-rules.sh と同じパス解決方式)。
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
 
 # 注入本文を読み込む。読めない場合は fail-open で無音終了する
-# (codex-advisor/inject-advisor-rules.sh と同じ方針。壊れた・欠けた注入で誤誘導するより
+# (cross-model-advisor/inject-advisor-rules.sh と同じ方針。壊れた・欠けた注入で誤誘導するより
 # 注入しない方が安全)。
 CONTEXT=$(cat "$PROMPTS_DIR/review-cadence-rules.md" 2>/dev/null)
 

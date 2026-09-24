@@ -1,6 +1,0 @@
-{
-  "name": "codex-advisor",
-  "version": "4.0.1",
-  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
-  "description": "Codex rescue / review / advisor を role 固有 runner subagent に閉じ込め、追跡喪失から復旧するプラグイン。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI)。"
-}

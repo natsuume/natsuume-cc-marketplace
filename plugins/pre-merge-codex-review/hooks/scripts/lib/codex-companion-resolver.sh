@@ -11,8 +11,8 @@
 #
 # ## canonical とコピーの関係
 #
-# 本ファイルは pre-push-codex-review plugin が canonical で、 codex-advisor plugin
-# (`plugins/codex-advisor/scripts/lib/codex-companion-resolver.sh`) が byte-identical な
+# 本ファイルは pre-push-codex-review plugin が canonical で、 cross-model-advisor plugin
+# (`plugins/cross-model-advisor/scripts/lib/codex-companion-resolver.sh`) が byte-identical な
 # コピーを保持して追従する。 Claude Code plugin は他 plugin のファイルを
 # ${CLAUDE_PLUGIN_ROOT} 越しに参照できない (plugin 間でファイルを共有する仕組みがない)
 # ため、 companion 解決ロジックを必要とする各 plugin が同一内容を自前で持つ。 canonical

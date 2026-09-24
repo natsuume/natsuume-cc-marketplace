@@ -12,7 +12,7 @@
 >
 > 移行手順 (この順序で行うと、 review cadence の欠落と codex gate の空白のどちらも生じません):
 >
-> 1. review cadence (Codex review 一定回数ごとの advisor checkpoint 強制) を維持したい場合: 旧 reviewer 識別子の cadence 互換受理は codex-advisor v2.1.0〜v2.x のみが持っていました。v3.0.0 以降は review cadence 自体が pre-push-codex-review (v2.0.0 以降) へ移設されているため、cadence を維持するには pre-push-codex-review v2.0.0 以降を install してください (次の手順 2 と同じ install で満たされます)
+> 1. review cadence (Codex review 一定回数ごとの advisor checkpoint 強制) を維持したい場合: 旧 reviewer 識別子の cadence 互換受理は cross-model-advisor v2.1.0〜v2.x のみが持っていました。v3.0.0 以降は review cadence 自体が pre-push-codex-review (v2.0.0 以降) へ移設されているため、cadence を維持するには pre-push-codex-review v2.0.0 以降を install してください (次の手順 2 と同じ install で満たされます)
 > 2. push 時の codex review gate を維持する場合、 `claude plugin install pre-push-codex-review@natsuume-plugins` を実行する
 > 3. `claude plugin update pre-push-review` で v6.0.0 へ更新する
 > 4. `.claude-pre-push-code-reviewed` / `.claude-pre-push-security-reviewed` マーカーの名前と hash 計算式は変わらないため、 既存マーカーは hash が一致する限りそのまま有効です。 `.claude-pre-push-codex-reviewed` は本プラグインからは参照されなくなります (マーカーの名前・格納先は不変のため移行操作は不要です)
@@ -34,7 +34,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v6.2.0
+v6.2.1
 
 ## インストール
 

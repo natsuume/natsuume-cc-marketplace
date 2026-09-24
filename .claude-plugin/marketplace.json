@@ -7,7 +7,8 @@
     "description": "natsuume's personal Claude Code plugins"
   },
   "renames": {
-    "fable-risk-labeler": null
+    "fable-risk-labeler": null,
+    "codex-advisor": "cross-model-advisor"
   },
   "plugins": [
     {
@@ -35,21 +36,21 @@
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "git push 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする。",
-      "version": "6.2.0",
+      "version": "6.2.1",
       "keywords": ["push", "review", "quality", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
       "name": "pre-push-codex-review",
       "source": "./plugins/pre-push-codex-review",
       "description": "git push 前に codex review (OpenAI クロスモデルレビュー) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、codex review を経ていない commit が remote に到達するのを構造的にブロックする。pre-push-review core (code + security の 2 レビュー gate) との併用で 3 レビュー構成になる。",
-      "version": "2.2.3",
+      "version": "3.0.0",
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
       "name": "pre-merge-codex-review",
       "source": "./plugins/pre-merge-codex-review",
       "description": "gh pr merge 前に codex review (OpenAI クロスモデルレビュー) の完了を確認する軽量 merge gate プラグイン。レビュー結果は head SHA 記録付きの PR レビューコメントとして投稿され、gate は現在の head と一致するコメントの有無だけを検査する。個人環境向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させる。",
-      "version": "2.2.1",
+      "version": "2.2.2",
       "keywords": ["merge", "review", "quality", "codex", "openai", "subagent", "pr-diff", "gate"]
     },
     {
@@ -70,7 +71,7 @@
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "Claude Code の作業規律 (Bash コマンド分解、設計判断の事前確認、issue 駆動の詳細化、排他制御、分業規律など) を SessionStart / SubagentStart hook で注入するプラグイン。auto mode では commit→push→PR→merge の自走方針を配送し、gh issue/pr body の未承認推奨表現も PreToolUse で検知して block する。",
-      "version": "0.31.0",
+      "version": "0.31.1",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
@@ -84,7 +85,7 @@
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
       "description": "UI (フロントエンド) 実装の 10 規律 (component 共通化基準、レイアウト安定、アクセシビリティ等) を SessionStart / SubagentStart で常時注入するプラグイン。対応するコード例・チェックリストは ui-patterns skill が提供し、UI を持つプロジェクトでのみ enable して使う。",
-      "version": "0.4.4",
+      "version": "0.4.5",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     },
     {
@@ -95,10 +96,10 @@
       "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook", "skill"]
     },
     {
-      "name": "codex-advisor",
-      "source": "./plugins/codex-advisor",
-      "description": "Codex rescue / review / advisor を role 固有 runner subagent に閉じ込め、追跡喪失から復旧するプラグイン。advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI)。",
-      "version": "4.0.1",
+      "name": "cross-model-advisor",
+      "source": "./plugins/cross-model-advisor",
+      "description": "Codex rescue / review / advisor を role 固有 runner subagent に閉じ込め、追跡喪失から復旧するプラグイン。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI)。",
+      "version": "5.0.0",
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {

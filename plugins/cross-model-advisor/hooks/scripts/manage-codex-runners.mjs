@@ -12,7 +12,7 @@
  * - SubagentStart / SubagentStop: runner の active / retry / terminal 遷移を記録する
  * - PostToolUse (SubagentHandback): hand-back された report の footer / attestation
  *   解析値を runner state に記録する (SubagentStop が one-shot で消費する)
- * - SubagentStop: advisor-runner の report が review cadence attestation footer 行
+ * - SubagentStop: codex-advisor-runner の report が review cadence attestation footer 行
  *   (`Codex-Advisor-Review-Cadence`) を欠く場合、report 契約違反として retry させる
  *
  * report の所在: Claude Code v2.1.271 以降の auto mode では、runner の最終 report は
@@ -30,7 +30,7 @@
  *   追跡を失った runner がある間だけ main session の終了を block する
  * - SessionStart / SessionEnd: stale runner state を掃除する
  *
- * advisor-runner の attestation footer は外部 plugin (pre-push-codex-review) の review
+ * codex-advisor-runner の attestation footer は外部 plugin (pre-push-codex-review) の review
  * cadence enforcement が消費する。
  *
  * state に prompt や Codex 出力は保存しない (hand-back された report も解析値だけを
@@ -45,9 +45,9 @@ import os from "node:os";
 import path from "node:path";
 
 const RUNNERS = Object.freeze({
-  rescue: "codex-advisor:rescue-runner",
-  review: "codex-advisor:review-runner",
-  advisor: "codex-advisor:advisor-runner",
+  rescue: "cross-model-advisor:codex-rescue-runner",
+  review: "cross-model-advisor:codex-review-runner",
+  advisor: "cross-model-advisor:codex-advisor-runner",
 });
 const LEGACY_RESCUE = "codex:codex-rescue";
 const RETRY_LIMIT = 1;
@@ -70,7 +70,7 @@ function stateRoot() {
   const overridden = process.env.CODEX_ADVISOR_STATE_ROOT;
   if (overridden) return overridden;
   const uid = typeof process.getuid === "function" ? process.getuid() : "unknown";
-  return path.join(os.tmpdir(), `codex-advisor-${uid}`, "runner-state");
+  return path.join(os.tmpdir(), `cross-model-advisor-${uid}`, "runner-state");
 }
 
 function keyFor(sessionId, operation) {
@@ -603,7 +603,7 @@ function handlePreToolUse(input) {
     const fragment = unresolvableCodexEntrypoint(command);
     if (!fragment) return null;
     return denyResponse(
-      `codex-advisor: command 名が変数のままで解決できない segment に ${fragment} の path があります。Codex 起動かどうかを判定できないため拒否しました。Codex を起動する場合は Agent tool で subagent_type=\"${RUNNERS.rescue}\" / \"${RUNNERS.review}\" / \"${RUNNERS.advisor}\" のいずれかを model=\"sonnet\" で起動してください。読み取り・管理操作の場合は command 名を literal で書き直してください。`,
+      `cross-model-advisor: command 名が変数のままで解決できない segment に ${fragment} の path があります。Codex 起動かどうかを判定できないため拒否しました。Codex を起動する場合は Agent tool で subagent_type=\"${RUNNERS.rescue}\" / \"${RUNNERS.review}\" / \"${RUNNERS.advisor}\" のいずれかを model=\"sonnet\" で起動してください。読み取り・管理操作の場合は command 名を literal で書き直してください。`,
     );
   }
 
@@ -637,7 +637,7 @@ function handlePreToolUse(input) {
     mismatch = "background / pipeline を含む起動";
   }
   return denyResponse(
-    `codex-advisor: ${launch.entrypoint} は ${expectedRunner} だけが実行できます。${mismatch} からの直接実行を拒否しました。main session は Agent tool で subagent_type=\"${expectedRunner}\", model=\"sonnet\" を指定して起動してください。起動 mode は Claude Code が決めるため指定せず、runner の report は completion notification で後続 turn に届きます。${stateFailure}`,
+    `cross-model-advisor: ${launch.entrypoint} は ${expectedRunner} だけが実行できます。${mismatch} からの直接実行を拒否しました。main session は Agent tool で subagent_type=\"${expectedRunner}\", model=\"sonnet\" を指定して起動してください。起動 mode は Claude Code が決めるため指定せず、runner の report は completion notification で後続 turn に届きます。${stateFailure}`,
   );
 }
 
@@ -949,7 +949,7 @@ function handleStop(input) {
     });
     return {
       decision: "block",
-      reason: `codex-advisor の未完了 runner があるため main session の停止を拒否します。${instructions.join(" ")}`,
+      reason: `cross-model-advisor の未完了 runner があるため main session の停止を拒否します。${instructions.join(" ")}`,
     };
   }
 
@@ -961,7 +961,7 @@ function handleStop(input) {
     return {
       hookSpecificOutput: {
         hookEventName: "Stop",
-        additionalContext: `codex-advisor: ${notices.join(" ")}`,
+        additionalContext: `cross-model-advisor: ${notices.join(" ")}`,
       },
     };
   }
@@ -1008,6 +1008,6 @@ try {
   // PreToolUse gate の state failure は handlePreToolUse 内で deny に変換する。それ以外の
   // lifecycle storage failure は hook 自体を壊さず stderr へ明示し、次の event で復旧する。
   process.stderr.write(
-    `[codex-advisor] runner state update failed: ${error?.message ?? "unknown error"}\n`,
+    `[cross-model-advisor] runner state update failed: ${error?.message ?? "unknown error"}\n`,
   );
 }

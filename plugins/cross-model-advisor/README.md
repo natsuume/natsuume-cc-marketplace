@@ -1,4 +1,4 @@
-# codex-advisor
+# cross-model-advisor
 
 Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) パターンを Claude Code に移植し、OpenAI Codex を助言役 (advisor) として利用するプラグインです。
 
@@ -6,7 +6,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v4.0.1
+v5.0.0
 
 ## 機構
 
@@ -14,9 +14,9 @@ v4.0.1
 |---|---|
 | SessionStart hook (`inject-advisor-rules`) | メインセッション向けの利用規律 5 ルール (下記) を `additionalContext` として常時注入する |
 | SubagentStart hook (`inject-advisor-rules-subagent`) | 通常 subagent に advisor の許可境界を注入する。通常 subagent は wrapper を直接起動せず、self-contained な相談 request を親へ返す |
-| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、PermissionDenied による拒否済み起動要求の解消、SubagentStart / SubagentStop の active・bounded retry (advisor-runner の attestation footer 契約検証を含む)、Stop の reroute / 待機通知を管理する。auto mode では runner の最終 report が `SubagentHandback` tool 経由で届き SubagentStop の `last_assistant_message` には締めの文しか入らないため、PostToolUse (`SubagentHandback`) で report の footer / attestation を解析して state に記録し、SubagentStop がそれを採用する。runner state は UID + session ID で分離し、prompt / Codex 出力 (hand-back report の本文を含む) を保存しない |
+| runner lifecycle hook (`manage-codex-runners.mjs`) | PreToolUse gate、PermissionDenied による拒否済み起動要求の解消、SubagentStart / SubagentStop の active・bounded retry (codex-advisor-runner の attestation footer 契約検証を含む)、Stop の reroute / 待機通知を管理する。auto mode では runner の最終 report が `SubagentHandback` tool 経由で届き SubagentStop の `last_assistant_message` には締めの文しか入らないため、PostToolUse (`SubagentHandback`) で report の footer / attestation を解析して state に記録し、SubagentStop がそれを採用する。runner state は UID + session ID で分離し、prompt / Codex 出力 (hand-back report の本文を含む) を保存しない |
 | role 固有 runner agents | rescue / review / advisor の model 起動・job tracking・terminal output を subagent context に閉じ込める。起動 mode は Claude Code が決め、report は completion notification 経由で親へ届く |
-| `/codex-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では `codex-advisor:advisor-runner` を起動する。Codex host の source 契約は PTY stdin wrapper を維持する |
+| `/cross-model-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では `cross-model-advisor:codex-advisor-runner` を起動する。Codex host の source 契約は PTY stdin wrapper を維持する |
 | `scripts/run-codex-job.sh` | official companion v1.0.6 の task / review / status / result / cancel を runner 向けの path-only command に限定して公開する。status wait は単発 status の短い poll で構成する |
 | `scripts/run-codex-advisor.sh` | v0.3.0 の adapter 契約と Codex host source を維持する wrapper。Claude Code の通常 Skill は直接呼ばず advisor runner を使う。Codex host では PTY stdin から direct read-only / ephemeral `codex exec` を foreground 起動し、既定 10 分の watchdog で process group を回収する |
 
@@ -34,11 +34,11 @@ v4.0.1
 
 ### subagent からの利用
 
-通常 subagent が相談を必要とする場合も、wrapper / companion を直接実行しません。相談は課金を伴う外部サービス呼び出しなので、委任指示が codex-advisor の使用を明示的に許可している場合だけ self-contained な相談 request を親へ返します。親は `codex-advisor:advisor-runner` を Agent tool で起動します。subagent には AskUserQuestion が無いため、助言と証拠の衝突が自力で解消できない場合は両論併記で親へエスカレーションします。
+通常 subagent が相談を必要とする場合も、wrapper / companion を直接実行しません。相談は課金を伴う外部サービス呼び出しなので、委任指示が cross-model-advisor の使用を明示的に許可している場合だけ self-contained な相談 request を親へ返します。親は `cross-model-advisor:codex-advisor-runner` を Agent tool で起動します。subagent には AskUserQuestion が無いため、助言と証拠の衝突が自力で解消できない場合は両論併記で親へエスカレーションします。
 
 委任指示に含める許可の定型文の例:
 
-> 方針にコミットする前または行き詰まったときは、codex-advisor 用の self-contained な相談 request を親へ返してよい。親が advisor runner で取得した助言の採否と理由を最終報告に含めること。
+> 方針にコミットする前または行き詰まったときは、cross-model-advisor 用の self-contained な相談 request を親へ返してよい。親が advisor runner で取得した助言の採否と理由を最終報告に含めること。
 
 ### 本家 API 版との意図的な差分
 
@@ -64,7 +64,7 @@ auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 
   "autoMode": {
     "allow": [
       "$defaults",
-      "Launching the codex-advisor:rescue-runner, codex-advisor:review-runner or codex-advisor:advisor-runner subagent is allowed, including immediately after the codex-advisor PreToolUse gate denied a direct companion call: the runner only starts an OpenAI Codex job through the plugin's own helper and returns its output. It does not push, merge, post to GitHub, or delete anything."
+      "Launching the cross-model-advisor:codex-rescue-runner, cross-model-advisor:codex-review-runner or cross-model-advisor:codex-advisor-runner subagent is allowed, including immediately after the cross-model-advisor PreToolUse gate denied a direct companion call: the runner only starts an OpenAI Codex job through the plugin's own helper and returns its output. It does not push, merge, post to GitHub, or delete anything."
     ]
   }
 }
@@ -93,11 +93,11 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 
 ## Codex 代替の保証差と検証テスト
 
-Codex host の `$codex-advisor:consult` は、別 context・read-only sandbox・ephemeral・hooks 無効の独立 process と foreground 観察を維持します。一方、実行役と advisor が同じ model family / provider になる可能性があるため、Claude Code から Codex を呼ぶ場合と同じ異種 model の独立性は保証しません。Claude Code の scratchpad file transport は、Codex では PTY session の stdin transport に置き換わります。
+Codex host の `$cross-model-advisor:consult` は、別 context・read-only sandbox・ephemeral・hooks 無効の独立 process と foreground 観察を維持します。一方、実行役と advisor が同じ model family / provider になる可能性があるため、Claude Code から Codex を呼ぶ場合と同じ異種 model の独立性は保証しません。Claude Code の scratchpad file transport は、Codex では PTY session の stdin transport に置き換わります。
 
 Codex transport は受信中の PTY を echo 無効・raw/noncanonical mode にし、連続する 2 byte の EOT (`0x04 0x04`) を EOF 操作ではなく明示 frame terminator として扱います。2 byte により正常な delimiter と delimiter 前の切断を区別します。このため canonical PTY の行長上限と CR 変換を避けられますが、prompt 本文自体に `0x04` は含められません。direct process は `--sandbox read-only --ephemeral --disable hooks --skip-git-repo-check --color never -c 'model_reasoning_effort="xhigh"' -` で固定し、git repository 外でも相談できます。既定 600 秒を超えた独立 process group は TERM、grace period 後の KILL、leader の `wait` の順で descendant ごと終了・回収します。descendant が stdout / stderr の pipe FD を保持して foreground session を残す経路も同じ group signal で閉じます。
 
-`tests/test_codex_advisor_subagent_runner.py` は direct gate の agent type matrix、実行形 / audit 言及の分類、session state、retry 上限、advisor-runner の review cadence attestation footer 契約検証、stale cleanup、3 runner / Skill / hook artifact を検証します。`tests/test_codex_advisor_adapter.py` は v0.3.0 から維持する PTY / file-stdin adapter と process-group cleanup を検証します。いずれも外部 service・認証・rate limit の可用性や Codex 出力品質までは保証しません。
+`tests/test_cross_model_advisor_subagent_runner.py` は direct gate の agent type matrix、実行形 / audit 言及の分類、session state、retry 上限、codex-advisor-runner の review cadence attestation footer 契約検証、stale cleanup、3 runner / Skill / hook artifact を検証します。`tests/test_cross_model_advisor_adapter.py` は v0.3.0 から維持する PTY / file-stdin adapter と process-group cleanup を検証します。いずれも外部 service・認証・rate limit の可用性や Codex 出力品質までは保証しません。
 
 ## トラブルシュート
 

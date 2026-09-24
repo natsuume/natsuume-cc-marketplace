@@ -54,7 +54,7 @@ BASE_PLUGIN = ROOT / "plugins" / "agent-discipline"
 FORK_PLUGIN = ROOT / "plugins" / "experimental-agent-discipline"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "0.31.0"
+PLUGIN_VERSION = "0.31.1"
 
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 REPO_README = ROOT / "README.md"
@@ -1103,7 +1103,7 @@ class AgentDisciplineVersionConsistencyTest(unittest.TestCase):
         )
 
     def test_plugin_readme_version_heading_declares_the_version(self) -> None:
-        """plugin README の `## バージョン` 直下の行が v0.31.0 である。"""
+        """plugin README の `## バージョン` 直下の行が v0.31.1 である。"""
         lines = read(BASE_README).splitlines()
         self.assertIn("## バージョン", lines)
         index = lines.index("## バージョン")

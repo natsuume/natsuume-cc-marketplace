@@ -909,10 +909,10 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
     def test_three_role_specific_runner_agents_are_declared(self) -> None:
         for operation, scoped_name in RUNNERS.items():
             with self.subTest(operation=operation):
-                path = PLUGIN / "agents" / f"{operation}-runner.md"
+                path = PLUGIN / "agents" / f"codex-{operation}-runner.md"
                 self.assertTrue(path.is_file(), path)
                 contents = path.read_text(encoding="utf-8")
-                self.assertIn(f"name: {operation}-runner", contents)
+                self.assertIn(f"name: codex-{operation}-runner", contents)
                 self.assertIn("status", contents)
                 self.assertIn("result", contents)
                 self.assertIn("plugin cache", contents)
@@ -925,7 +925,7 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
     def test_rescue_and_advisor_require_prompt_file_transport(self) -> None:
         for operation in ("rescue", "advisor"):
             contents = (
-                PLUGIN / "agents" / f"{operation}-runner.md"
+                PLUGIN / "agents" / f"codex-{operation}-runner.md"
             ).read_text(encoding="utf-8")
             with self.subTest(operation=operation):
                 self.assertIn("prompt file", contents)
