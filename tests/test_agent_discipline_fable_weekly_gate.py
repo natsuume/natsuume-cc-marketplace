@@ -1,8 +1,8 @@
 """agent-discipline: 非 Fable メインでの `model: "fable"` 明示を週次枠判定付きで許可する契約テスト。
 
 背景 (spec-first Phase A):
-- Opus 5.5 メイン + Fable Advisor パターンでは、pre-push-review の reviewer と
-  cross-model-advisor の fable-advisor-runner を `model: "fable"` の明示で起動する。
+- Opus 5.5 メイン + Fable Advisor パターンでは、cross-model-advisor の fable-advisor-runner
+  を `model: "fable"` の明示で起動する。
   block-fable-subagent.sh は許可 agent の一覧を持たず、「メインセッションのモデル」と
   「Fable 週次枠の使用率」だけで fable 明示を判定する (用途は規律 = prompt で縛る)。
 - 判定表 (fable 明示の行):
@@ -15,8 +15,9 @@
   最大 percent を閾値 (env ``FABLE_WEEKLY_MAX_PERCENT``、0〜100 の整数、既定 80) と比べ、
   ``percent <= 閾値`` で利用可。cache が読めない・壊れている・古い (1800 秒超) 等は
   すべて利用不可 (使用率不明)。``fetched_at`` が未来時刻でも stale とみなさない。
-- deny 理由では、reviewer は ``model: "opus"`` で再起動し、fable-advisor-runner は
-  再起動せずスキップするよう案内する。
+- deny 理由では、fable-advisor-runner は再起動せずスキップし、それ以外の委任では
+  非 Fable の model を明示するよう案内する。pre-push-review の reviewer は常に Opus で
+  起動するため、deny 理由で reviewer の再起動を案内しない。
 - サブエージェント内 (入力に agent_id がある) からの model 未指定 (inherit を含む)・fork の
   起動は deny し、model の明示を求める (nested guard)。継承先が起動元サブエージェントの
   モデルになり、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承
@@ -62,11 +63,13 @@ SONNET_SESSION = "claude-sonnet-5"
 RESETS_AT = "2026-09-28T00:00:00Z"
 
 # deny 理由に求めるキーワード (正規表現)。
-RELAUNCH_REVIEWER_ON_OPUS = r'model: "opus"'
+EXPLICIT_NON_FABLE_MODEL = r"model に sonnet / opus"
 SKIP_ADVISOR = r"fable-advisor-runner[^。]*スキップ"
 WAIT_ONE_TURN = r"1 turn"
 NAMES_PRODUCER = r"natsuume-statusline"
 NESTED_EXPLICIT_MODEL = r"model に sonnet / opus"
+# deny 理由に含めない記述 (pre-push-review の reviewer は Fable で起動しない)。
+REVIEWER_RELAUNCH_GUIDE = "pre-push-review"
 
 # UNSET: 引数を「与えなかった」ことを表す番兵 / OMIT: cache の key 自体を書かない番兵。
 UNSET = object()
@@ -130,7 +133,7 @@ def row(
     force: object = UNSET,
     broken_date: bool = False,
     agent_id: object = UNSET,
-    subagent_type: str = "pre-push-review:code-reviewer",
+    subagent_type: str = "cross-model-advisor:fable-advisor-runner",
     keywords: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """判定表の 1 行。``expect`` は ``"deny"`` / ``"allow"``。
@@ -162,8 +165,8 @@ def row(
     }
 
 
-USAGE_DENY = (RELAUNCH_REVIEWER_ON_OPUS, SKIP_ADVISOR)
-UNKNOWN_DENY = (RELAUNCH_REVIEWER_ON_OPUS, SKIP_ADVISOR, NAMES_PRODUCER)
+USAGE_DENY = (EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR)
+UNKNOWN_DENY = (EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR, NAMES_PRODUCER)
 
 DECISION_TABLE = (
     # --- 3a. Fable メイン: 使用率に依らず deny ---
@@ -186,19 +189,19 @@ DECISION_TABLE = (
         session_state=None,
         pending=True,
         expect="deny",
-        keywords=(WAIT_ONE_TURN, RELAUNCH_REVIEWER_ON_OPUS, SKIP_ADVISOR),
+        keywords=(WAIT_ONE_TURN, EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR),
     ),
     row(
         "3b/pending-with-stale-state",
         pending=True,
         expect="deny",
-        keywords=(WAIT_ONE_TURN, RELAUNCH_REVIEWER_ON_OPUS, SKIP_ADVISOR),
+        keywords=(WAIT_ONE_TURN, EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR),
     ),
     row(
         "3b/no-information",
         session_state=None,
         expect="deny",
-        keywords=(WAIT_ONE_TURN, RELAUNCH_REVIEWER_ON_OPUS, SKIP_ADVISOR),
+        keywords=(WAIT_ONE_TURN, EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR),
     ),
     # --- 3c. 非 Fable メイン + 使用率に余裕 → allow ---
     row("3c/opus-session/usage-ok", expect="allow"),
@@ -615,6 +618,8 @@ class FableWeeklyGateDecisionTableTest(unittest.TestCase):
         for keyword in case["keywords"]:  # type: ignore[union-attr]
             if not re.search(str(keyword), reason):
                 problems.append(f"{label}: deny 理由に {keyword!r} が無い ({reason})")
+        if REVIEWER_RELAUNCH_GUIDE in reason:
+            problems.append(f"{label}: deny 理由が pre-push-review の reviewer に言及する ({reason})")
         return problems
 
     def test_decision_table(self) -> None:
@@ -651,6 +656,15 @@ class ReadmePermissionRuleTest(unittest.TestCase):
             any("Agent(fork)" in deny for deny in denies),
             f"Agent(fork) の設定例が無い: {denies}",
         )
+
+    def test_readme_does_not_list_reviewers_as_fable_usage(self) -> None:
+        text = README.read_text(encoding="utf-8")
+        present = [
+            phrase
+            for phrase in ("pre-push-review の reviewer", 'reviewer は `model: "opus"` で再起動')
+            if phrase in text
+        ]
+        self.assertEqual([], present, f"reviewer を Fable の用途とする記述が残っている: {present}")
 
     def test_readme_asks_existing_users_to_remove_the_fable_rule(self) -> None:
         self.assertIn(

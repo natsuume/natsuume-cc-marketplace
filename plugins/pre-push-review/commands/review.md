@@ -18,22 +18,16 @@ description: pre-push gate を通すための 2 レビューを同じアシス�
 
 Phase 文脈は code-reviewer と security-reviewer の両方に渡します。
 
-### 起動 model の決定
+次のアシスタントメッセージ (= このコマンドへの最初の応答) で、 **以下 2 つの Agent / Task tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
 
-このコマンドへの最初の応答で、Bash tool で `pre-push-review-reviewer-model` を 1 回実行してください (pre-push-review plugin の `bin/` にある判定コマンドで、plugin が有効な間は PATH に載ります)。出力は 2 行で、1 行目が起動 model (`fable` / `opus`)、2 行目が判定理由です。Fable 週次枠の使用率が閾値 (env `FABLE_WEEKLY_MAX_PERCENT`、既定 80%) 以下なら `fable`、超過または使用率を確認できない場合は `opus` を出力します。1 行目の値で `{{REVIEWER_MODEL}}` を置換し、2 reviewer の両方に同じ値を使います。コマンドが見つからない・実行できない場合は `{{REVIEWER_MODEL}}` を `opus` に置換してください。
-
-`model: "fable"` で起動した reviewer が agent-discipline の hook に deny された場合 (Fable メインのセッション、判定後に使用率が閾値を超えた等) は、その reviewer だけを `model: "opus"` で再起動してください。
-
-判定コマンドの実行結果を受け取った次のアシスタントメッセージで、 **以下 2 つの Agent / Task tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
-
-1. **Agent / Task tool**: `subagent_type: "pre-push-review:code-reviewer"`、`model: "{{REVIEWER_MODEL}}"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review"
-2. **Agent / Task tool**: `subagent_type: "pre-push-review:security-reviewer"`、`model: "{{REVIEWER_MODEL}}"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review"
+1. **Agent / Task tool**: `subagent_type: "pre-push-review:code-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review"
+2. **Agent / Task tool**: `subagent_type: "pre-push-review:security-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review"
 
 ## 確定的フローの理由
 
 - **順次起動ではなく並列起動**: wall-clock が最遅レビュー 1 本の時間で完了します (順次より大幅に高速)。 2 レビューは互いに独立しているため並列化に乗ります。
 - **Skill ではなく subagent**: 2 レビューを subagent 呼び出しに統一することで、 (1) raw output・具体的な再現手順・実行可能な詳細は subagent context に閉じ込められ、 (2) 親 session に返るのは severity / location / impact / fix direction 等を保った parent-safe report だけになり、 (3) lifecycle 検知 (SubagentStart が発行する launch attestation + SubagentStop での report 検証) が subagent の完了を捕捉するため、 background 起動でも launch をレビュー完了と誤認せず final report の `Status` を親と hook が確認できます。
-- **Claude による自律判断ではなく確定的実行**: Claude が判断するのは上記の Phase 分類だけで、「どのレビューを走らせるか / どの順番で / 引数は何か」は判断しません。起動 model も判定コマンドの出力に従います。 Phase 文脈と起動 model を置換した上記 2 つを **そのまま** 並列発出するだけです。 これによりレビューの抜けや順序揺れによる無駄ループが構造的に排除されます。
+- **Claude による自律判断ではなく確定的実行**: Claude が判断するのは上記の Phase 分類だけで、「どのレビューを走らせるか / どの順番で / 引数は何か」は判断しません。 Phase 文脈を置換した上記 2 つを **そのまま** 並列発出するだけです。 これによりレビューの抜けや順序揺れによる無駄ループが構造的に排除されます。
 - **`/code-review` / `/security-review` 標準 skill を直接呼ばない理由**: `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` の 2 subagent はそれぞれ同等のレビュー内容を self-contained に持ち、 (1) confidence / severity 付きの parent-safe report 契約を reviewer 側に固定し、 (2) SubagentStart / SubagentStop / SubagentHandback の lifecycle hook で reviewer の実行を marker として検知でき、 (3) `tools` から `Agent` を除外して reviewer を read-only に保ちます (nested subagent は既定で起動できるが本 reviewer は使わない)。 2 subagent は親 session の turn を止めずに report を返します。
 
 ## 並列発出が技術的に成立しない / 一部のレビューが失敗した場合

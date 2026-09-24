@@ -2,7 +2,7 @@
 # block-fable-subagent.sh
 # PreToolUse (matcher: Agent|Task) で、サブエージェントが Fable で実行される経路を判定する hook。
 # Fable サブエージェントは、Fable 以外がメインのセッションで `model: "fable"` を明示し、かつ
-# Fable 週次枠の使用率が閾値以下の場合に限り許可する (用途 = reviewer / advisor への限定は
+# Fable 週次枠の使用率が閾値以下の場合に限り許可する (用途 = advisor への限定は
 # 分業規律の prompt が担い、本 hook は許可 agent の一覧を持たない)。fork の主防御は利用者の
 # settings に置く permission rule (`permissions.deny` の `Agent(fork)`) で、本 hook は permission
 # rule が捕捉しない経路 (メインセッション継承、env による上書き) の検知と、deny メッセージに
@@ -182,8 +182,8 @@ decide_by_session_model() {
   exit 0
 }
 
-# fable 明示を deny したときの代替手段 (reviewer は Opus で再起動、advisor はスキップ)。
-FABLE_FALLBACK_GUIDE="reviewer (pre-push-review:code-reviewer / pre-push-review:security-reviewer) は model: \"opus\" で再起動し、fable-advisor-runner は再起動せずスキップしてください。それ以外の委任では Fable を使わず、model に sonnet / opus (機械的作業なら haiku) を明示してください。"
+# fable 明示を deny したときの代替手段 (advisor はスキップ、それ以外は非 Fable を明示)。
+FABLE_FALLBACK_GUIDE="fable-advisor-runner は再起動せずスキップしてください。それ以外の委任では Fable を使わず、model に sonnet / opus (機械的作業なら haiku) を明示してください。"
 
 # 閾値: 前後空白を trim した 0〜100 の 10 進整数のみ受け付け、それ以外は既定値へ fallback する。
 DEFAULT_MAX_PERCENT=80

@@ -6,7 +6,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v5.0.3
+v5.0.4
 
 ## 機構
 
@@ -18,7 +18,7 @@ v5.0.3
 | Codex runner agents (`codex-rescue-runner` / `codex-review-runner` / `codex-advisor-runner`) | rescue / review / advisor の Codex 起動・job tracking・terminal output を subagent context に閉じ込める。起動 mode は Claude Code が決め、report は completion notification 経由で親へ届く |
 | `fable-advisor-runner` agent | Fable 側の advisor。tools は Bash / Read / Glob / Grep で、リポジトリを読んで裏取りした助言を Codex 側と同じ形式 (推奨方針・理由・リスク・次の一手) で返す read-only runner。親が `model: "fable"` を明示して起動する。frontmatter の model は opus で、model 未指定の起動が使用率判定を経ずに Fable で走ることはない。lifecycle footer と review cadence の attestation は発行しない |
 | `bin/cross-model-advisor-fable-usage` | 相談の前に main session が 1 回実行する Fable 週次枠の判定コマンド。plugin が有効な間は Bash の PATH に載る。stdout に常に 2 行 (1 行目 `available` / `over` / `unknown`、2 行目 判定理由) を出力し exit 0 で終わる。判定は `scripts/lib/fable-weekly-usage.sh` が行う |
-| `scripts/lib/fable-weekly-usage.sh` | natsuume-statusline が書き出す週次枠 cache (`${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json`) を読み、Fable の使用率が閾値 (env `FABLE_WEEKLY_MAX_PERCENT`、既定 80、0〜100 の整数以外は既定値) 以下なら `available` とする。cache が無い・symlink・JSON でない・古い (30 分超)・Fable の entry や数値の percent が無い場合は `unknown`。cache は書き込まない。agent-discipline / pre-push-review と同じ判定仕様を plugin 内に自前で持つ |
+| `scripts/lib/fable-weekly-usage.sh` | natsuume-statusline が書き出す週次枠 cache (`${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json`) を読み、Fable の使用率が閾値 (env `FABLE_WEEKLY_MAX_PERCENT`、既定 80、0〜100 の整数以外は既定値) 以下なら `available` とする。cache が無い・symlink・JSON でない・古い (30 分超)・Fable の entry や数値の percent が無い場合は `unknown`。cache は書き込まない。agent-discipline と同じ判定仕様を plugin 内に自前で持つ |
 | `/cross-model-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では判定コマンドの結果に応じて `cross-model-advisor:codex-advisor-runner` (`model: "sonnet"`) と `cross-model-advisor:fable-advisor-runner` (`model: "fable"`) を同一メッセージで並列に起動する。Codex host の source 契約は PTY stdin wrapper を維持する |
 | `scripts/run-codex-job.sh` | official companion v1.0.6 の task / review / status / result / cancel を runner 向けの path-only command に限定して公開する。status wait は単発 status の短い poll で構成する |
 | `scripts/run-codex-advisor.sh` | v0.3.0 の adapter 契約と Codex host source を維持する wrapper。Claude Code の通常 Skill は直接呼ばず advisor runner を使う。Codex host では PTY stdin から direct read-only / ephemeral `codex exec` を foreground 起動し、既定 10 分の watchdog で process group を回収する |
