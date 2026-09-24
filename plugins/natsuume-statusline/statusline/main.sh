@@ -39,11 +39,14 @@ eval "$(printf '%s' "$input" | jq -r '
   @sh "rate_7d_reset=\(.rate_limits.seven_day.resets_at // "")"
 ')"
 
-# rate_limits.model_scoped[]（モデル別週次枠。Claude Code バイナリに schema は存在するが
-# issue #231 時点の実 stdin には未出現の公式経路）を TSV で別途抽出する。
+# rate_limits.model_scoped[]（モデル別週次枠）を TSV で別途抽出する。
 # 複数行になりうるため上の eval ブロック（1 スカラー値ずつの @sh）とは別呼び出しにする。
-# utilization は 0-100 スケールと推定する (five_hour.used_percentage と同スケールという
-# 想定。公式ドキュメント未確認・バイナリの文字列解析からの推定である点に注意)。
+# Claude Code 2.1.281 のバイナリで確認した内容 (2026-09-24):
+#   - model_scoped は usage 情報の payload (OAuth usage API の limits[] から組み立てる) にあり、
+#     statusline の stdin の rate_limits (five_hour / seven_day / spend_limit) には含まれない。
+#     stdin に含まれるようになった場合に備えて読む (含まれない間は cache 経路が使われる)
+#   - utilization は 0-100 のパーセント値 (同 payload の表示処理が five_hour と同じく
+#     `Math.floor(utilization)% used` と整形している)。resets_at は ISO 8601 文字列
 model_scoped_tsv=$(printf '%s' "$input" | jq -r '
   .rate_limits.model_scoped // [] | .[]
   | select((.display_name|type=="string") and (.display_name|length>0) and (.utilization|type=="number"))

@@ -9,8 +9,10 @@
 # 取得し、3 行目のレンダラへ表示データを供給する。
 #
 # ■ データ優先順位 (main.sh 側の配線契約)
-#   1. stdin の rate_limits.model_scoped[] — Claude Code バイナリに schema が存在する
-#      公式経路。stdin に含まれていればこちらを優先し、
+#   1. stdin の rate_limits.model_scoped[] — Claude Code の usage 情報に存在するモデル別
+#      週次枠 (Claude Code 2.1.281 では statusline の stdin に含まれないことを確認済み。
+#      含まれる場合の形式と utilization のスケールは main.sh の抽出箇所を参照)。
+#      stdin に含まれていればこちらを優先し、
 #      本ファイルの cache 経路は読まず background fetch も起動しない。代わりに
 #      write_weekly_scoped_from_stdin で stdin の値を cache へ書き出す (cache を読む
 #      他 plugin の週次枠ガードが、公式経路の利用中も最新の使用率を参照できるようにするため)。
