@@ -34,7 +34,7 @@ Claude Code が statusline の stdin に渡す `rate_limits` には `five_hour` 
 - **cache パス**: `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json` (ディレクトリ・ファイルとも所有者のみ権限、同一ディレクトリの mktemp + mv による atomic write)
 - **schema**: `fetched_at` (最後に成功した取得 (fetch または公式経路からの書き出し) の epoch 秒)、`consecutive_failures` (連続失敗回数)、`next_attempt_at` (この epoch 秒より前は再 fetch しない)、`weekly_scoped` (`{display_name, percent, resets_at}` の配列)
 - **TTL / backoff**: 成功時は 300 秒後に再 fetch 可能になります。失敗時 (token 取得不能・curl 失敗・非 200・JSON 不能) は `consecutive_failures` を増やし、`60 * 2^(failures-1)` 秒 (上限 1800 秒) の指数バックオフで再試行間隔を広げます。失敗時も前回成功した `weekly_scoped` は保持されるため、一時的な取得失敗で表示が消えることはありません
-- **lock**: `<cache_dir>/.fetch.lock` を mkdir で排他制御し、background worker の多重起動を防ぎます (mtime が 120 秒より古い lock は前回異常終了とみなして奪取)。公式経路の値の書き出しは別の lock (`<cache_dir>/.stdin-write.lock`) の中で書き出し条件の判定と書き込みを行い、複数セッションの同時描画で判定と書き込みの間に別の書き込みが割り込むのを防ぎます (取得できなければその描画では書き出さず、stale 判定は同じ 120 秒)
+- **lock**: `<cache_dir>/.fetch.lock` を mkdir で排他制御し、background worker の多重起動を防ぎます (mtime が 120 秒より古い lock は前回異常終了とみなして奪取)。公式経路の値の書き出しは別の lock (`<cache_dir>/.stdin-write.lock`) の中で書き出し条件の判定と書き込みを行い、複数セッションの同時描画で判定と書き込みの間に別の書き込みが割り込むのを防ぎます (取得できなければその描画では書き出しません)。lock には所有者トークンを置き、解放は自分のトークンのときだけ行います。120 秒より古い lock の奪取は奪取用 lock (`<cache_dir>/.stdin-write.lock.takeover`) の中で古いことを確認し直してから行うため、複数の描画が同時に奪取して lock を二重に保持することはありません
 - **token の取り扱い**: `~/.claude/.credentials.json` の `claudeAiOauth.accessToken` (macOS では Keychain もフォールバック先) を読み、`curl --config -` で stdin 経由にのみ渡します。argv・ログ・stderr・一時ファイルに token を書き出すことはありません
 - **fail-open**: `curl` が無い環境、非サブスクリプション環境 (API が `weekly_scoped` を返さない) では 3 行目に 7d のみ、あるいは 3 行目自体が表示されません。表示処理・statusline のレンダリングを background fetch がブロックすることもありません
 

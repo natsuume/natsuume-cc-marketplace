@@ -102,7 +102,9 @@
 #   stale 判定: lock dir の mtime が 120 秒より古ければ奪取してよい
 #   (curl の 10 秒 timeout に対して十分長い)。
 #   stdin 経路の書き出しは別の lock <cache_dir>/.stdin-write.lock を使う (mkdir による排他、
-#   取得できなければ書き出しを省略し待たない。stale 判定は同じ 120 秒)。
+#   取得できなければ書き出しを省略し待たない。stale 判定は同じ 120 秒)。lock dir には
+#   所有者トークン (owner ファイル) を置き、解放はトークンが一致するときだけ行う。stale な
+#   lock の奪取は奪取用 lock <cache_dir>/.stdin-write.lock.takeover の保持下でのみ行う。
 #
 # ■ 依存と縮退
 #   jq: 必須 (プラグイン全体の必須依存)。curl: optional — 無ければ fetch せず
@@ -118,6 +120,8 @@ WEEKLY_SCOPED_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline"
 WEEKLY_SCOPED_CACHE_FILE="$WEEKLY_SCOPED_CACHE_DIR/weekly-scoped.json"
 WEEKLY_SCOPED_LOCK_DIR="$WEEKLY_SCOPED_CACHE_DIR/.fetch.lock"
 WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR="$WEEKLY_SCOPED_CACHE_DIR/.stdin-write.lock"
+WEEKLY_SCOPED_STDIN_WRITE_TAKEOVER_DIR="$WEEKLY_SCOPED_CACHE_DIR/.stdin-write.lock.takeover"
+WEEKLY_SCOPED_STDIN_WRITE_LOCK_TOKEN=""
 WEEKLY_SCOPED_TTL=300
 WEEKLY_SCOPED_LOCK_STALE_SEC=120
 WEEKLY_SCOPED_MAX_BACKOFF=1800
@@ -301,26 +305,75 @@ write_weekly_scoped_from_stdin() {
 
   weekly_scoped_acquire_stdin_write_lock "$now" || return 0
   weekly_scoped_write_stdin_entries_locked "$now" "$weekly_scoped_json"
-  rmdir "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null
+  weekly_scoped_release_stdin_write_lock
   return 0
 }
 
-# stdin 経路の書き出し用 lock を mkdir で取得する (取得できれば 0)。複数セッションの
-# statusline が同時に描画しても、ガード判定と書き出しの間に他の書き込みが割り込まない
-# ようにする。取得できなければ他セッションが書き出し中なので呼び出し側は書き出しを省略する。
+# path の mtime (epoch 秒) を stdout に返す。GNU (Linux) と BSD (macOS) の stat の両方に対応する。
+weekly_scoped_mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+# path が存在し、mtime が WEEKLY_SCOPED_LOCK_STALE_SEC 秒より古ければ 0 を返す。
+# 引数: $1=path, $2=now
+weekly_scoped_lock_is_stale() {
+  local mtime
+  mtime=$(weekly_scoped_mtime "$1")
+  [[ "$mtime" =~ ^[0-9]+$ ]] || return 1
+  [ $(($2 - mtime)) -gt "$WEEKLY_SCOPED_LOCK_STALE_SEC" ]
+}
+
+# lock dir を mkdir で作成し、所有者トークンを書き込む (作成できれば 0)。
+weekly_scoped_create_stdin_write_lock() {
+  (umask 077; mkdir "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR") 2>/dev/null || return 1
+  (umask 077; printf '%s' "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_TOKEN" > "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR/owner") 2>/dev/null
+  return 0
+}
+
+# stdin 経路の書き出し用 lock を取得する (取得できれば 0)。複数セッションの statusline が
+# 同時に描画しても、ガード判定と書き出しの間に他の書き込みが割り込まないようにする。
+# 取得できなければ他セッションが書き出し中なので、呼び出し側は書き出しを省略する。
+#
 # statusline が lock 保持中に強制終了された場合に備え、mtime が
-# WEEKLY_SCOPED_LOCK_STALE_SEC 秒より古い lock は奪取して 1 回だけ取り直す。
+# WEEKLY_SCOPED_LOCK_STALE_SEC 秒より古い lock は奪取する。奪取は奪取用 lock
+# (WEEKLY_SCOPED_STDIN_WRITE_TAKEOVER_DIR) の保持下でのみ行い、その中で lock がまだ古いことを
+# 確認し直してから削除・再作成する (複数の描画が同じ古い lock を見ても、奪取するのは 1 つだけ)。
+# 奪取用 lock を取得できなければ奪取しない。奪取用 lock 自体が古ければ削除だけ行い、
+# その描画では取得を諦める (次の描画で取り直す)。
 weekly_scoped_acquire_stdin_write_lock() {
-  local now="$1" lock_mtime
+  local now="$1"
 
+  WEEKLY_SCOPED_STDIN_WRITE_LOCK_TOKEN="$$.$RANDOM.$now"
   (umask 077; mkdir -p "$WEEKLY_SCOPED_CACHE_DIR") 2>/dev/null || return 1
-  mkdir "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null && return 0
+  weekly_scoped_create_stdin_write_lock && return 0
 
-  lock_mtime=$(stat -c %Y "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null || stat -f %m "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null)
-  [[ "$lock_mtime" =~ ^[0-9]+$ ]] || return 1
-  [ $((now - lock_mtime)) -gt "$WEEKLY_SCOPED_LOCK_STALE_SEC" ] || return 1
-  rm -rf "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null
-  mkdir "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null
+  weekly_scoped_lock_is_stale "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" "$now" || return 1
+
+  if ! mkdir "$WEEKLY_SCOPED_STDIN_WRITE_TAKEOVER_DIR" 2>/dev/null; then
+    if weekly_scoped_lock_is_stale "$WEEKLY_SCOPED_STDIN_WRITE_TAKEOVER_DIR" "$now"; then
+      rm -rf "$WEEKLY_SCOPED_STDIN_WRITE_TAKEOVER_DIR" 2>/dev/null
+    fi
+    return 1
+  fi
+
+  local acquired=1
+  if weekly_scoped_lock_is_stale "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" "$now"; then
+    rm -rf "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null
+    weekly_scoped_create_stdin_write_lock && acquired=0
+  fi
+  rmdir "$WEEKLY_SCOPED_STDIN_WRITE_TAKEOVER_DIR" 2>/dev/null
+  return "$acquired"
+}
+
+# 所有者トークンが自分のものである場合に限り、stdin 経路の書き出し用 lock を解放する
+# (奪取された後に他の書き手の lock を消さないため)。
+weekly_scoped_release_stdin_write_lock() {
+  local owner
+  owner=$(cat "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR/owner" 2>/dev/null)
+  if [ -n "$owner" ] && [ "$owner" = "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_TOKEN" ]; then
+    rm -rf "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR" 2>/dev/null
+  fi
+  return 0
 }
 
 # stdin 経路の lock 保持下で、書き出し条件を判定して cache を書き出す。

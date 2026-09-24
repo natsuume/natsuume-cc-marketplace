@@ -268,21 +268,27 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
             [{"display_name": "Fable", "percent": 41.7, "resets_at": "r1"}],
         )
 
-    def test_no_write_while_another_writer_holds_the_lock(self) -> None:
-        lock_dir = self.cache_dir / ".stdin-write.lock"
+    def make_lock(self, name: str, stale: bool, owner: str | None = None) -> Path:
+        lock_dir = self.cache_dir / name
         lock_dir.mkdir(parents=True)
+        if owner is not None:
+            (lock_dir / "owner").write_text(owner)
+        if stale:
+            old = time.time() - 121 - CLOCK_SLACK_SEC
+            os.utime(lock_dir, (old, old))
+        return lock_dir
+
+    def test_no_write_while_another_writer_holds_the_lock(self) -> None:
+        lock_dir = self.make_lock(".stdin-write.lock", stale=False, owner="other")
 
         self.run_main_ok(self.payload([{"display_name": "Fable", "utilization": 5}]))
 
         self.assertFalse(self.cache_file.exists())
         # 他の書き手の lock は解放しない。
-        self.assertTrue(lock_dir.is_dir())
+        self.assertEqual((lock_dir / "owner").read_text(), "other")
 
     def test_stale_lock_is_taken_over(self) -> None:
-        lock_dir = self.cache_dir / ".stdin-write.lock"
-        lock_dir.mkdir(parents=True)
-        old = time.time() - 121 - CLOCK_SLACK_SEC
-        os.utime(lock_dir, (old, old))
+        lock_dir = self.make_lock(".stdin-write.lock", stale=True, owner="crashed")
 
         self.run_main_ok(self.payload([{"display_name": "Fable", "utilization": 5}]))
 
@@ -291,6 +297,53 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
             [{"display_name": "Fable", "percent": 5, "resets_at": ""}],
         )
         self.assertFalse(lock_dir.exists())
+        self.assertFalse((self.cache_dir / ".stdin-write.lock.takeover").exists())
+
+    def test_stale_lock_is_not_taken_over_while_takeover_lock_is_held(self) -> None:
+        lock_dir = self.make_lock(".stdin-write.lock", stale=True, owner="crashed")
+        takeover_dir = self.make_lock(".stdin-write.lock.takeover", stale=False)
+
+        self.run_main_ok(self.payload([{"display_name": "Fable", "utilization": 5}]))
+
+        self.assertFalse(self.cache_file.exists())
+        self.assertEqual((lock_dir / "owner").read_text(), "crashed")
+        self.assertTrue(takeover_dir.is_dir())
+
+    def test_stale_takeover_lock_is_cleared_and_retaken_on_next_render(self) -> None:
+        self.make_lock(".stdin-write.lock", stale=True, owner="crashed")
+        takeover_dir = self.make_lock(".stdin-write.lock.takeover", stale=True)
+        stdin = self.payload([{"display_name": "Fable", "utilization": 5}])
+
+        self.run_main_ok(stdin)
+        self.assertFalse(self.cache_file.exists())
+        self.assertFalse(takeover_dir.exists())
+
+        self.run_main_ok(stdin)
+        self.assertEqual(
+            self.read_cache()["weekly_scoped"],
+            [{"display_name": "Fable", "percent": 5, "resets_at": ""}],
+        )
+
+    def test_release_keeps_lock_owned_by_another_writer(self) -> None:
+        # lock 保持中に奪取され、所有者トークンが他の書き手のものに変わった場合を再現する。
+        script = (
+            'source "$1"\n'
+            'weekly_scoped_acquire_stdin_write_lock "$(date +%s)" || exit 1\n'
+            'printf other > "$WEEKLY_SCOPED_STDIN_WRITE_LOCK_DIR/owner"\n'
+            "weekly_scoped_release_stdin_write_lock\n"
+        )
+        result = subprocess.run(
+            ["bash", "-c", script, "test", str(STATUSLINE_MAIN.parent / "weekly-scoped-limits.sh")],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.env,
+            check=False,
+            timeout=30,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        lock_dir = self.cache_dir / ".stdin-write.lock"
+        self.assertEqual((lock_dir / "owner").read_text(), "other")
 
     def test_unparseable_cache_is_rewritten(self) -> None:
         self.cache_dir.mkdir(parents=True)
