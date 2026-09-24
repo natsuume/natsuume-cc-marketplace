@@ -1,8 +1,9 @@
 <!--
   agent-discipline: 常時適用ルール (SONNET 版、part 1/3)
   3 part 構成 (このファイル / always-sonnet-2.md / always-sonnet-3.md) の 1 番目。3 part が
-  揃って 1 つのルールセットを構成する。ルール ID セットは always-fable.md と完全一致させること
-  (受入基準、3 part の和集合で判定。lint-prompt-sync.sh チェック 1 が検証する)。
+  揃って 1 つのルールセットを構成する。part 間で rule ID を重複させず、3 part の和集合を
+  lint-prompt-sync.sh の EXPECTED_ALWAYS_RULE_IDS (期待 rule ID 集合) と完全一致させること
+  (同スクリプトのチェック 1 が検証する)。
 -->
 
 # agent-discipline: 常時適用ルール (Sonnet) — part 1/3

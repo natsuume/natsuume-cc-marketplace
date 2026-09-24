@@ -3,8 +3,8 @@
 背景:
 - Anthropic 公式ガイド (claude-prompting-best-practices / prompting-claude-fable-5 /
   prompting-claude-opus-5 / prompting-claude-sonnet-5 / context engineering blog) に
-  照らした監査で確定した是正内容を、実行可能仕様 (spec-first Phase A) として固定する。
-- agent-discipline: 3-way 分業規律 (fable / opus / sonnet) 間の意味的 drift の修復。
+  照らした監査で確定した是正内容を、実行可能仕様として固定する。
+- agent-discipline: 分業規律 (opus / sonnet) 間の意味的 drift の修復。
   lint-prompt-sync.sh は rule ID 集合の一致のみを検査し本文の表現差分を見ないため
   (同スクリプトのスコープ注記参照)、共有 canonical 文の存在を本テストで固定する。
 - git-guardrails: rebase-workflow skill に残る bash-decompose 規律違反 (コマンド置換 +
@@ -16,8 +16,6 @@
 - ui-discipline: 完了前チェックリストの位置づけ緩和 (Opus 5 の過剰検証誘発対策と
   Sonnet 系の見落とし防止の両立)。
 - natsuume-writing: draft skill 一括生成の分量較正。
-
-Phase A で先行 commit され red になり、Phase B のプロンプト修正で green になる。
 """
 
 from __future__ import annotations
@@ -29,10 +27,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGINS = REPO_ROOT / "plugins"
 
-DISCIPLINE_FABLE = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline-fable.md"
 DISCIPLINE_OPUS = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline-opus.md"
 DISCIPLINE_SONNET = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline-sonnet.md"
-ALWAYS_FABLE = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "always-fable.md"
+ALWAYS_SONNET_3 = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "always-sonnet-3.md"
 SUBAGENT_RULES = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "subagent-rules.md"
 REBASE_SKILL = PLUGINS / "git-guardrails" / "skills" / "rebase-workflow" / "SKILL.md"
 CODE_REVIEWER = PLUGINS / "pre-push-review" / "agents" / "code-reviewer.md"
@@ -45,25 +42,24 @@ REVIEW_CADENCE_RULES = (
 UI_PATTERNS_SKILL = PLUGINS / "ui-discipline" / "skills" / "ui-patterns" / "SKILL.md"
 DRAFT_SKILL = PLUGINS / "natsuume-writing" / "skills" / "draft" / "SKILL.md"
 
-THREE_WAY = {
-    "discipline-fable.md": DISCIPLINE_FABLE,
+DISCIPLINE_VARIANTS = {
     "discipline-opus.md": DISCIPLINE_OPUS,
     "discipline-sonnet.md": DISCIPLINE_SONNET,
 }
 
-# 3 ファイルすべてに存在すべき共有 canonical 文 (モデル固有差分ではない委任規律の本体)。
+# 分業規律の全ファイルに存在すべき共有 canonical 文 (モデル固有差分ではない委任規律の本体)。
 SHARED_CANONICAL_PHRASES = (
-    # 並列委任は単一メッセージ内の複数 Agent 呼び出しでのみ成立する (fable 版で欠落していた)
+    # 並列委任は単一メッセージ内の複数 Agent 呼び出しでのみ成立する
     "同一メッセージで並列に委任し",
-    # 全件報告要求の対象カテゴリ (fable 版は「検証」が欠落していた)
+    # 全件報告要求の対象カテゴリ
     "調査・レビュー・検証系",
-    # fork 禁止の正の代替 (fable 版で欠落していた)
+    # fork 禁止の正の代替
     "代わりに、必要な文脈を指示文に埋め込んだ新規起動 (セクション 2 の self-contained 要件) を使う",
-    # 特定ツール使用意図の明示の具体例 (opus 版で欠落していた)
+    # 特定ツール使用意図の明示の具体例
     "(例: 必ず WebSearch で最新情報を確認させる)",
-    # 目的・背景を渡す意図の限定 (opus 版で欠落していた)
+    # 目的・背景を渡す意図の限定
     "目的・背景は判断を委ねる根拠ではなく",
-    # 副作用手順固定の例示 (fable 版で欠落していた)
+    # 副作用手順固定の例示
     "state を書くテストは隔離した TMPDIR を env 指定",
 )
 
@@ -72,13 +68,13 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-class AgentDisciplineThreeWayParityTest(unittest.TestCase):
-    """3-way 分業規律間で共有 canonical 文の存在と環境値ハードコードの不在を固定する。"""
+class AgentDisciplineParityTest(unittest.TestCase):
+    """分業規律の各版で共有 canonical 文の存在と環境値ハードコードの不在を固定する。"""
 
-    def test_shared_canonical_phrases_exist_in_all_three_files(self) -> None:
+    def test_shared_canonical_phrases_exist_in_all_discipline_files(self) -> None:
         for phrase in SHARED_CANONICAL_PHRASES:
             missing = [
-                name for name, path in THREE_WAY.items() if phrase not in read(path)
+                name for name, path in DISCIPLINE_VARIANTS.items() if phrase not in read(path)
             ]
             self.assertEqual(
                 [], missing, f"共有 canonical 文 {phrase!r} を含まないファイル: {missing}"
@@ -99,21 +95,20 @@ class AgentDisciplineThreeWayParityTest(unittest.TestCase):
         )
         offenders = [
             name
-            for name, path in THREE_WAY.items()
+            for name, path in DISCIPLINE_VARIANTS.items()
             if default_with_xhigh.search(read(path))
         ]
         self.assertEqual([], offenders, f"環境値ハードコードが残るファイル: {offenders}")
 
 
-class AlwaysFableAskUserQuestionScopeTest(unittest.TestCase):
-    """always-fable.md の AskUserQuestion 必須化ルールに scope 限定 caveat があること。
+class AlwaysAskUserQuestionScopeTest(unittest.TestCase):
+    """常時適用ルールの AskUserQuestion 必須化ルールに scope 限定 caveat があること。
 
-    always-sonnet-3.md には「質問を作り出さない」caveat があるが fable 版で欠落しており、
-    質問過多方向の overtrigger 源になっていた (公式ガイドの強調語 overtrigger 対応)。
+    caveat が無いと質問過多方向の overtrigger 源になる (公式ガイドの強調語 overtrigger 対応)。
     """
 
-    def test_always_fable_contains_question_scope_caveat(self) -> None:
-        text = read(ALWAYS_FABLE)
+    def test_always_rules_contain_question_scope_caveat(self) -> None:
+        text = read(ALWAYS_SONNET_3)
         self.assertIn("質問を作り出さない", text)
         self.assertIn("質問するかどうか」の判断そのものを変えない", text)
 

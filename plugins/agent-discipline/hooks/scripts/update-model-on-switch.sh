@@ -1,12 +1,12 @@
 #!/bin/bash
 # update-model-on-switch.sh
 # PostModelSwitch hook。`/model` によるセッション途中のモデル切替を session model state に
-# 反映し、block-fable-subagent.sh の継承判定と、配送済みの常時適用ルール・分業規律の版を
-# 切替後のモデルに追随させる。
+# 反映し、block-fable-subagent.sh の継承判定を切替後のモデルに追随させる。
 #
 # I/O 契約:
 #   stdin  : PostModelSwitch hook input JSON
-#            {hook_event_name, session_id, from_model, to_model}
+#            {hook_event_name, session_id, from_model, to_model} のうち from_model は読まない
+#            (通知の要否と案内する版は切替後のモデルと pending の有無だけで決まるため)
 #   stdout : 通知する場合のみ
 #            {"hookSpecificOutput": {"hookEventName": "PostModelSwitch", "additionalContext": "..."}}
 #   env    : TMPDIR (state の置き場)、CLAUDE_PLUGIN_ROOT (prompts ディレクトリの解決)
@@ -22,15 +22,13 @@
 #     `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を削除する。書込に
 #     失敗した場合は pending を残し、通知も出さずに無音で exit 0 する (pending 優先・state 次点
 #     という優先規則を守るため。state 無し + pending 無しの状態を作らない)
-#   - 通知は次のいずれかに該当するときに出す:
-#     - from_model と to_model の Fable 判定が異なる (分業規律の版が切り替わる)
-#     - pending マーカーが存在した。pending は UserPromptSubmit の one-shot 補正
-#       (resolve-model-on-prompt.sh) の発火条件であり、削除すると常時適用ルールと分業規律の
-#       確定版が配送されないため、確定版の所在を案内して自己修復させる
+#   - 通知は pending マーカーが存在したときにだけ出す。pending が存在した session は
+#     判定不能のまま自己ゲート付きの暫定版を配送されているため、切替後のモデルに対応する
+#     確定版の所在を案内して自己修復させる
 #   - 通知本文には prompts ディレクトリの絶対パスと、切替後のモデルに対応する常時適用ルール /
 #     分業規律のファイル名を書く。版の対応は inject-always.sh / inject-discipline.sh と同じで、
-#     fable は always-fable.md / discipline-fable.md、opus 系は always-sonnet-{1,2,3}.md /
-#     discipline-opus.md、それ以外は always-sonnet-{1,2,3}.md / discipline-sonnet.md
+#     常時適用ルールはモデルに依らず always-sonnet-{1,2,3}.md、分業規律は opus 系・fable が
+#     discipline-opus.md、それ以外が discipline-sonnet.md
 #
 # 制約:
 #   - Linux (WSL2) / macOS の両方で動作すること
@@ -43,11 +41,10 @@ fi
 INPUT=$(cat)
 
 # 各フィールドは 1 行 1 値で読むため、値に含まれる改行 (CR / LF) は空白に置き換えて欄ずれを防ぐ。
-{ read -r HOOK_EVENT; read -r SESSION_ID; read -r FROM_MODEL; read -r TO_MODEL; } < <(
+{ read -r HOOK_EVENT; read -r SESSION_ID; read -r TO_MODEL; } < <(
   printf '%s' "$INPUT" | jq -r '
     [ (.hook_event_name // ""),
       (.session_id // ""),
-      (.from_model // ""),
       (.to_model // "") ]
     | map(tostring | gsub("[\r\n]"; " "))
     | .[]
@@ -62,12 +59,6 @@ trim() {
   printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
-# モデル名が Fable を指すか (alias `fable` / full ID `claude-fable-5-1` の双方を含む部分一致)。
-is_fable() {
-  [ -n "$1" ] && printf '%s' "$1" | grep -qi 'fable'
-}
-
-FROM_MODEL=$(trim "$FROM_MODEL")
 TO_MODEL=$(trim "$TO_MODEL")
 
 # 切替後のモデルが分からなければ state を更新できない (旧 state と pending をそのまま残す)。
@@ -89,25 +80,14 @@ if [ -e "$PENDING_FILE" ]; then
   PENDING_EXISTED=1
 fi
 
-FROM_IS_FABLE=0
-if is_fable "$FROM_MODEL"; then
-  FROM_IS_FABLE=1
-fi
-TO_IS_FABLE=0
-if is_fable "$TO_MODEL"; then
-  TO_IS_FABLE=1
-fi
-
-# 通知が必要なのは、Fable 境界をまたぐ切替か、pending マーカーを消す (= one-shot 補正の
-# 発火条件を消す) 場合。それ以外は配送済みの版が切替後もそのまま有効なので通知しない。
-NEED_NOTICE=0
-if [ "$FROM_IS_FABLE" -ne "$TO_IS_FABLE" ] || [ "$PENDING_EXISTED" -eq 1 ]; then
-  NEED_NOTICE=1
-fi
+# 通知が必要なのは、pending マーカーを消す (= 判定不能の暫定配送を切替後のモデルで確定させる)
+# 場合に限る。それ以外は配送済みの版をそのまま使う。
+NEED_NOTICE="$PENDING_EXISTED"
 
 # 通知本文は state を書く前に組み立てる。pending の削除は通知と対で行う必要があり、
 # 通知を作れない (prompts ディレクトリを解決できない / JSON を組めない) 場合は state も
-# pending も触らずに終了する (pending が残れば one-shot 補正が確定版を配送する)。
+# pending も触らずに終了する (pending が残れば resolve-model-on-prompt.sh がモデルを確定し、
+# inject-discipline.sh の one-shot 補正が分業規律の確定版を配送する)。
 NOTICE=""
 if [ "$NEED_NOTICE" -eq 1 ]; then
   if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
@@ -119,15 +99,10 @@ if [ "$NEED_NOTICE" -eq 1 ]; then
     exit 0
   fi
 
-  SONNET_ALWAYS_FILES="always-sonnet-1.md / always-sonnet-2.md / always-sonnet-3.md"
-  if [ "$TO_IS_FABLE" -eq 1 ]; then
-    ALWAYS_FILES="always-fable.md"
-    DISCIPLINE_FILE="discipline-fable.md"
-  elif printf '%s' "$TO_MODEL" | grep -qi 'opus'; then
-    ALWAYS_FILES="$SONNET_ALWAYS_FILES"
+  ALWAYS_FILES="always-sonnet-1.md / always-sonnet-2.md / always-sonnet-3.md"
+  if printf '%s' "$TO_MODEL" | grep -qi -e 'opus' -e 'fable'; then
     DISCIPLINE_FILE="discipline-opus.md"
   else
-    ALWAYS_FILES="$SONNET_ALWAYS_FILES"
     DISCIPLINE_FILE="discipline-sonnet.md"
   fi
 

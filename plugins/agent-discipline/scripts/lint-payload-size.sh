@@ -141,8 +141,9 @@ TEMPORARY_PROMPTS_DIR="plugins/agent-discipline/hooks/prompts/temporary"
 # 全ケース共通の session_id (各スクリプトの sanitize で変化しない文字のみで構成する)。
 LINT_SESSION_ID="lint-payload-size"
 
-# モデル分岐の代表値。対象スクリプトはモデル ID を大文字小文字無視の部分一致
-# ('fable' / 'opus') で分類し、それ以外 (sonnet を含む・その他) は同じ非 fable 扱いになる。
+# モデル分岐の代表値。分業規律の版を選ぶスクリプトはモデル ID を大文字小文字無視の部分一致
+# ('opus' / 'fable') で Opus 版の対象に分類し、それ以外 (sonnet を含む・その他) は Sonnet 版の
+# 対象になる。常時適用ルールの配送はモデルに依らない。
 MODEL_FABLE="claude-fable-5-1"
 MODEL_SONNET="claude-sonnet-5"
 MODEL_OPUS="claude-opus-5-5"
@@ -155,7 +156,10 @@ MODEL_OTHER="claude-haiku-4-5"
 # hooks.json に type: command で登録されているが additionalContext を出力しないスクリプト。
 # 1 行 1 スクリプト (basename)。整合検査 8・9 で使う。
 #   - block-fable-subagent.sh: PreToolUse (Agent|Task) で permissionDecision (deny) のみを返す
-EXCLUDED_SCRIPTS="block-fable-subagent.sh"
+#   - resolve-model-on-prompt.sh: UserPromptSubmit で session model state の書込と pending
+#     マーカーの削除のみを行い、何も出力しない
+EXCLUDED_SCRIPTS="block-fable-subagent.sh
+resolve-model-on-prompt.sh"
 
 # ============================================================================
 # 対象スクリプト × 分岐 × 期待の対応表
@@ -200,21 +204,18 @@ EXCLUDED_SCRIPTS="block-fable-subagent.sh"
 # 出力しない分岐は、対応表とスクリプト挙動の乖離検知を兼ねて代表的なものを none で持つ。
 #
 # 分岐ごとの注入内容 (対応表の読み方の補足):
-#   inject-always.sh           SessionStart。fable → always-fable.md、sonnet / opus / その他 →
+#   inject-always.sh           SessionStart。モデル確定 (fable / sonnet / opus / その他) →
 #                              always-sonnet-1.md、判定不能 → preamble-self-gate.md +
 #                              always-sonnet-1.md。いずれも自己修復指示 + delivery-note +
 #                              実パス行が先頭に付く
-#   inject-rules-part.sh 2|3   UserPromptSubmit。state が fable → 出力なし、非 fable →
-#                              always-sonnet-<n>.md、pending あり・state も pending も無い →
+#   inject-rules-part.sh 2|3   UserPromptSubmit。state あり → always-sonnet-<n>.md、
+#                              pending あり・state も pending も無い →
 #                              part-self-gate.md + always-sonnet-<n>.md
-#   inject-discipline.sh       UserPromptSubmit。マーカー無しで fable → 分業規律 Fable 版、
-#                              opus → Opus 版、sonnet / その他 → Sonnet 版、pending あり・
-#                              state も pending も無い → 自己ゲート付き Sonnet 版。マーカー
-#                              sonnet-gate で fable / opus に確定 → one-shot 補正前置き + 各版、
-#                              sonnet / その他に確定・pending 残存 → 出力なし
-#   resolve-model-on-prompt.sh UserPromptSubmit。pending あり + transcript が fable → 常時ルール
-#                              one-shot 補正 (自己修復指示 + 補正前置き + always-fable.md)、
-#                              それ以外 → 出力なし
+#   inject-discipline.sh       UserPromptSubmit。マーカー無しで opus / fable → 分業規律 Opus 版、
+#                              sonnet / その他 → Sonnet 版、pending あり・state も pending も
+#                              無い → 自己ゲート付き Sonnet 版。マーカー sonnet-gate で opus /
+#                              fable に確定 → one-shot 補正前置き + Opus 版、sonnet / その他に
+#                              確定・pending 残存 → 出力なし
 #   inject-temporary.sh        SessionStart / UserPromptSubmit (同 session 未配送) で
 #                              temporary/*.md の連結
 #   inject-subagent-rules.sh   SubagentStart。subagent-rules.md (分岐なし)
@@ -224,8 +225,8 @@ EXCLUDED_SCRIPTS="block-fable-subagent.sh"
 #                              UserPromptSubmit。permission_mode == auto かつ cwd が未コミット
 #                              変更のある git work tree → uncommitted-check.md に cwd と
 #                              git status 行を埋めた本文、それ以外 → 出力なし
-#   update-model-on-switch.sh  PostModelSwitch。Fable 境界をまたぐ切替、または pending が
-#                              存在した → 確定版ルールの所在通知、それ以外 → 出力なし
+#   update-model-on-switch.sh  PostModelSwitch。pending が存在した → 確定版ルールの所在通知、
+#                              それ以外 → 出力なし
 
 CASE_TABLE=$(cat <<EOF
 always.fable|inject-always.sh|-|-|output|{"hook_event_name":"SessionStart","session_id":"${LINT_SESSION_ID}","model":"${MODEL_FABLE}"}
@@ -233,13 +234,13 @@ always.sonnet|inject-always.sh|-|-|output|{"hook_event_name":"SessionStart","ses
 always.opus|inject-always.sh|-|-|output|{"hook_event_name":"SessionStart","session_id":"${LINT_SESSION_ID}","model":"${MODEL_OPUS}"}
 always.other|inject-always.sh|-|-|output|{"hook_event_name":"SessionStart","session_id":"${LINT_SESSION_ID}","model":"${MODEL_OTHER}"}
 always.unknown|inject-always.sh|-|-|output|{"hook_event_name":"SessionStart","session_id":"${LINT_SESSION_ID}"}
-part2.fable|inject-rules-part.sh|2|state=${MODEL_FABLE}|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
+part2.fable|inject-rules-part.sh|2|state=${MODEL_FABLE}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 part2.sonnet|inject-rules-part.sh|2|state=${MODEL_SONNET}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 part2.opus|inject-rules-part.sh|2|state=${MODEL_OPUS}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 part2.other|inject-rules-part.sh|2|state=${MODEL_OTHER}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 part2.unknown|inject-rules-part.sh|2|pending|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 part2.no-state|inject-rules-part.sh|2|-|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
-part3.fable|inject-rules-part.sh|3|state=${MODEL_FABLE}|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
+part3.fable|inject-rules-part.sh|3|state=${MODEL_FABLE}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 part3.sonnet|inject-rules-part.sh|3|state=${MODEL_SONNET}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 part3.opus|inject-rules-part.sh|3|state=${MODEL_OPUS}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 part3.other|inject-rules-part.sh|3|state=${MODEL_OTHER}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
@@ -256,12 +257,6 @@ discipline.correct-opus|inject-discipline.sh|-|discipline-marker=sonnet-gate sta
 discipline.correct-sonnet|inject-discipline.sh|-|discipline-marker=sonnet-gate state=${MODEL_SONNET}|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 discipline.correct-other|inject-discipline.sh|-|discipline-marker=sonnet-gate state=${MODEL_OTHER}|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 discipline.correct-pending|inject-discipline.sh|-|discipline-marker=sonnet-gate pending|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
-resolve.fable|resolve-model-on-prompt.sh|-|pending transcript=${MODEL_FABLE}|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","transcript_path":"@TRANSCRIPT@"}
-resolve.sonnet|resolve-model-on-prompt.sh|-|pending transcript=${MODEL_SONNET}|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","transcript_path":"@TRANSCRIPT@"}
-resolve.opus|resolve-model-on-prompt.sh|-|pending transcript=${MODEL_OPUS}|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","transcript_path":"@TRANSCRIPT@"}
-resolve.other|resolve-model-on-prompt.sh|-|pending transcript=${MODEL_OTHER}|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","transcript_path":"@TRANSCRIPT@"}
-resolve.no-assistant|resolve-model-on-prompt.sh|-|pending transcript=none|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","transcript_path":"@TRANSCRIPT@"}
-resolve.no-pending|resolve-model-on-prompt.sh|-|transcript=${MODEL_FABLE}|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","transcript_path":"@TRANSCRIPT@"}
 temporary.session-start|inject-temporary.sh|-|-|output-if-temporary|{"hook_event_name":"SessionStart","session_id":"${LINT_SESSION_ID}"}
 temporary.first-prompt|inject-temporary.sh|-|-|output-if-temporary|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}"}
 subagent.any|inject-subagent-rules.sh|-|-|output|{"hook_event_name":"SubagentStart","session_id":"${LINT_SESSION_ID}","agent_id":"lint-agent","agent_type":"general-purpose"}
@@ -269,11 +264,12 @@ auto.auto|inject-auto.sh|-|-|output|{"hook_event_name":"UserPromptSubmit","sessi
 auto.default|inject-auto.sh|-|-|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","permission_mode":"default"}
 uncommitted.auto-dirty|check-uncommitted-on-session-start.sh|-|git-dirty-repo|output|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","permission_mode":"auto","cwd":"@CWD@"}
 uncommitted.default-dirty|check-uncommitted-on-session-start.sh|-|git-dirty-repo|none|{"hook_event_name":"UserPromptSubmit","session_id":"${LINT_SESSION_ID}","permission_mode":"default","cwd":"@CWD@"}
-switch.to-fable|update-model-on-switch.sh|-|-|output|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_SONNET}","to_model":"${MODEL_FABLE}"}
-switch.to-sonnet|update-model-on-switch.sh|-|-|output|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_FABLE}","to_model":"${MODEL_SONNET}"}
-switch.to-opus|update-model-on-switch.sh|-|-|output|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_FABLE}","to_model":"${MODEL_OPUS}"}
+switch.pending-to-fable|update-model-on-switch.sh|-|pending|output|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_SONNET}","to_model":"${MODEL_FABLE}"}
+switch.pending-to-sonnet|update-model-on-switch.sh|-|pending|output|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_FABLE}","to_model":"${MODEL_SONNET}"}
+switch.pending-to-opus|update-model-on-switch.sh|-|pending|output|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_FABLE}","to_model":"${MODEL_OPUS}"}
 switch.pending|update-model-on-switch.sh|-|pending|output|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_SONNET}","to_model":"${MODEL_OTHER}"}
 switch.no-notice|update-model-on-switch.sh|-|-|none|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_SONNET}","to_model":"${MODEL_OPUS}"}
+switch.to-fable|update-model-on-switch.sh|-|-|none|{"hook_event_name":"PostModelSwitch","session_id":"${LINT_SESSION_ID}","from_model":"${MODEL_OPUS}","to_model":"${MODEL_FABLE}"}
 EOF
 )
 
