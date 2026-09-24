@@ -243,15 +243,17 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
         self.assertEqual(self.cache_file.read_text(), original_text)
 
     def test_higher_percent_in_different_window_does_not_block_write(self) -> None:
-        self.fresh_cache([{"display_name": "Fable", "percent": 90, "resets_at": "old-window"}])
+        old_window = "2026-10-01T00:00:00Z"
+        new_window = "2026-10-08T00:00:00Z"
+        self.fresh_cache([{"display_name": "Fable", "percent": 90, "resets_at": old_window}])
 
         self.run_main_ok(
-            self.payload([{"display_name": "Fable", "utilization": 3, "resets_at": "new-window"}])
+            self.payload([{"display_name": "Fable", "utilization": 3, "resets_at": new_window}])
         )
 
         self.assertEqual(
             self.read_cache()["weekly_scoped"],
-            [{"display_name": "Fable", "percent": 3, "resets_at": "new-window"}],
+            [{"display_name": "Fable", "percent": 3, "resets_at": new_window}],
         )
 
     def test_snapshot_from_earlier_window_does_not_overwrite_newer_window(self) -> None:

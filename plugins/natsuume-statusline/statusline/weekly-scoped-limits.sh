@@ -459,6 +459,7 @@ weekly_scoped_write_stdin_entries_locked() {
   #   - 同一内容 (statusline は描画ごとに呼ばれるため書き込み回数を抑える。jq の == は
   #     JSON 値として比較するため、キー順・空白の差では書き出さない)
   #   - 単調性ガード: 同じ週次枠 (display_name と resets_at が一致) の percent が下がる entry がある
+  #   - reset 前のスナップショット: 同じ display_name で cache の resets_at の方が後の entry がある
   if [ -f "$WEEKLY_SCOPED_CACHE_FILE" ]; then
     fetched_at=$(jq -r '.fetched_at // empty' "$WEEKLY_SCOPED_CACHE_FILE" 2>/dev/null)
     if [[ "$fetched_at" =~ ^[0-9]+$ ]] \
@@ -473,6 +474,14 @@ weekly_scoped_write_stdin_entries_locked() {
                   and .resets_at == $n.resets_at
                   and (.percent | type) == "number"
                   and .percent > $n.percent))
+          or any($new[]; . as $n
+              | any($cached[]?;
+                  type == "object"
+                  and .display_name == $n.display_name
+                  and (((.resets_at | type) == "number" and ($n.resets_at | type) == "number")
+                    or ((.resets_at | type) == "string" and ($n.resets_at | type) == "string"
+                      and (.resets_at | length) > 0 and ($n.resets_at | length) > 0))
+                  and .resets_at > $n.resets_at))
       ' "$WEEKLY_SCOPED_CACHE_FILE" >/dev/null 2>&1; then
       return 0
     fi
