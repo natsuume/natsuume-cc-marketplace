@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v0.30.0
+v0.31.0
 
 ## 概要
 
@@ -261,25 +261,39 @@ v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh 
 **イベント**: `PreToolUse`
 **matcher**: `Agent|Task`
 
-サブエージェントの Fable 実行を止める主防御は、利用者の settings (`~/.claude/settings.json` 等) に置く `permissions.deny` の 2 rule です。本 hook はそれを補う二重防御で、permission rule が捕捉しない経路 (full model ID の明示・メインセッション継承・env による上書き) の検知と、deny メッセージによる自己修正誘導を担います。
+Fable サブエージェントは、Fable 以外がメインのセッションで `model: "fable"` を明示し、かつ Fable 週次枠の使用率が閾値以下の場合に限り許可します (pre-push-review の reviewer と cross-model-advisor の fable-advisor-runner を Fable で起動するため)。用途を reviewer / advisor に限る規律は分業規律 (discipline-\*.md) が担い、本 hook は許可 agent の一覧を持ちません。
+
+fork サブエージェントを止める主防御は、利用者の settings (`~/.claude/settings.json` 等) に置く `permissions.deny` の rule です。本 hook はそれを補う二重防御で、permission rule が捕捉しない経路 (メインセッション継承・env による上書き) の検知と、deny メッセージによる自己修正誘導を担います。
 
 ```json
 {
   "permissions": {
-    "deny": ["Agent(model:fable)", "Agent(fork)"]
+    "deny": ["Agent(fork)"]
   }
 }
 ```
 
+`Agent(model:fable)` は permission rule に置かないでください。置くと `model: "fable"` の明示がすべて止まり、週次枠判定付きの許可経路も使えなくなります。`Agent(model:fable)` を設定済みの場合は削除してください。
+
 **動作**:
 
 - Claude Code のモデル解決順序は 明示 `model` > agent 定義の frontmatter > `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 で、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (`1` / `true`) が設定されている場合のみ env (未設定ならメインセッションのモデル) が全てを上書きする。`subagent_type` が `fork` のサブエージェントは model 指定にも env にも依らずメインセッションのモデルを継承する。本 hook はこの順序に沿って上から判定し、すべて deterministic な文字列判定で行う (LLM 評価は使わない)
-  1. `fork` → メインセッションのモデルで判定する (継承経路と同じ扱い)
+  1. `fork` → サブエージェント内 (入力に `agent_id` がある) からの起動なら deny (nested guard、下記)。メインセッションからの起動ならメインセッションのモデルで判定する (継承経路と同じ扱い)
   2. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が有効 → 実効モデルは env (非空ならその値、空ならメインセッションのモデル)。fable なら model の明示に依らず deny し、model の明示では直せないことを deny 理由に書く。非 fable なら model が fable でも allow
-  3. `tool_input.model` に fable が明示指定されている → deny
+  3. `tool_input.model` に fable が明示指定されている (alias `fable` / full ID `claude-fable-5-1` 等、大文字小文字を無視した部分一致):
+     - 3a. session model state が fable → deny (Fable メインでは Fable サブエージェントを使わない)
+     - 3b. pending マーカーがある (state file の有無を問わない。state 書込に失敗した SessionStart は古い state file を残したまま pending マーカーを作るため)、または session model state が無い・空 → deny (fail-closed)。deny 理由で、会話を 1 turn 進めてモデル確定を待つよう案内する
+     - 3c. session model state が fable 以外 → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める
+     - いずれの deny 理由でも、reviewer は `model: "opus"` で再起動し、fable-advisor-runner は再起動せずスキップするよう案内する
   4. `tool_input.model` が非 fable の具体指定 → allow (明示は env より優先されるため)
-  5. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在なら session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`、`inject-always.sh` が SessionStart で記録し `update-model-on-switch.sh` が `/model` 切替で更新する) が fable の場合のみ deny。state file が読めず判定不能な場合は pending マーカー (`${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`) の存在を確認し、**存在すれば deny** (継承先が Fable になりうる判定不能期間のため)、存在しなければ真の情報ゼロとして fail-open (allow)
-- `"inherit"` (case-insensitive) は「未指定」に正規化する。session_id が特定できない場合や、state file・pending マーカーのいずれも無い場合は fail-open (allow)
+  5. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在なら session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`、`inject-always.sh` が SessionStart で記録し `update-model-on-switch.sh` が `/model` 切替で更新する) が fable の場合のみ deny。state file が読めず判定不能な場合は pending マーカー (`${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`) の存在を確認し、**存在すれば deny** (継承先が Fable になりうる判定不能期間のため)、存在しなければ真の情報ゼロとして fail-open (allow)。env 不在でサブエージェント内 (入力に `agent_id` がある) からの起動は deny する (nested guard、下記)
+- **nested guard**: サブエージェント内 (入力に `agent_id` がある) からの model 未指定 (`inherit` を含む)・`fork` の起動は deny し、model の明示を求める。継承先は起動元サブエージェントのモデルで session model state では判定できず、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承しうるため。`CLAUDE_CODE_SUBAGENT_MODEL` が非空なら子の実効モデルは env で決まるため env で判定する
+- **Fable 週次枠の使用率判定** (3c):
+  - 入力は natsuume-statusline が書く `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json`。本 hook は読むだけで書き込まず、OAuth usage API も呼ばない
+  - 閾値は env `FABLE_WEEKLY_MAX_PERCENT` (前後空白を trim した 0〜100 の 10 進整数)。未設定・空・範囲外・非整数は既定値 `80`
+  - `weekly_scoped[]` のうち `display_name` が大文字小文字を無視して `fable` を含み `percent` が数値の entry の最大 `percent` で判定し、`percent <= 閾値` なら利用可 (ちょうど閾値は利用可)。比較は小数を扱えるよう jq で行う
+  - cache が symlink / 通常ファイルでない / 存在しない / 読めない / JSON document が 1 つでない / `fetched_at` が欠落・非数値 / `now - fetched_at > 1800` (stale) / `weekly_scoped` が欠落・非配列・空 / Fable entry が無い / 現在時刻を取得できない場合は、使用率不明として deny する (fail-closed)。deny 理由では cache の producer (natsuume-statusline) の構成手順を案内する。`fetched_at` が未来時刻でも stale とはみなさない
+- `"inherit"` (case-insensitive) は「未指定」に正規化する。継承経路 (model 未指定) で session_id が特定できない場合や、state file・pending マーカーのいずれも無い場合は fail-open (allow)
 - permission rule と本 hook のどちらでも捕捉できない経路 (agent 定義 frontmatter の `model` / Workflow 内部の `agent()`) は下記「既知の制約」セクション参照
 
 #### update-model-on-switch
@@ -518,9 +532,9 @@ agent-discipline/
 - **セッション途中の `/model` 切替は次の SessionStart まで反映されない** (#157 と同型の制約。v0.8.0 で統合した `block-fable-subagent.sh` も同種の制約を持つ、本セクション内の該当項目を参照): fallback chain の判定は `SessionStart` (startup / resume / clear / compact) でのみ行われるため、`/model` で切替えても注入済みプロンプトは次の SessionStart まで旧モデル向けのまま。次の SessionStart では、`.model` があればその値で、無くても transcript に切替後の main-chain assistant 行があれば transcript 解析 (fallback chain 2 段目) で新モデルが反映される。transcript も空 / 読めない場合に限り state file キャッシュに落ちるため、その経路でのみ旧モデル向け注入が継続しうる
 - **one-shot 補正は判定不能セッションの最初の assistant 応答が生成されるまで暫定適用が続く**: pending マーカーが存在し transcript に main-chain assistant 行が現れて初めて確定するため、それまでの `UserPromptSubmit` では自己ゲート付きの `always-sonnet-1.md` + `always-sonnet-2.md`/`always-sonnet-3.md` (常時ルール、`resolve-model-on-prompt.sh` / `inject-rules-part.sh` が判定) と `discipline-preamble-self-gate.md` + `discipline-sonnet.md` (分業規律、v0.9.0。issue #236 以降は `inject-discipline.sh` が配送) が暫定適用され続ける
 - **state file / pending マーカーは OS の tmp cleanup による自然消去のみ**: `${TMPDIR:-/tmp}/agent-discipline-state/` 配下に明示的なリトジ (retention) 処理は無く、`check-uncommitted-on-session-start.sh` が使う `agent-discipline-markers/` とは別 namespace を使う
-- **permission rule と `block-fable-subagent.sh` の捕捉範囲**: 主防御の `Agent(model:fable)` は Claude が送る `model` の literal 値と比較されるため alias `fable` の明示指定に一致するが、full model ID (`claude-fable-5-1`) には一致しない (この綴りは hook 側が部分一致で捕捉する)。`Agent(fork)` は fork サブエージェントの起動自体を止める (fork は model 指定にも env にも依らずメインセッションのモデルを継承するため、fork を許可する構成では hook が session model state で判定する)。agent 定義 frontmatter の `model` は `tool_input` に現れないため permission rule でも hook でも捕捉できず、frontmatter が fable を指す agent への model 未指定の委任は、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` の併用で実効モデルが env 側に固定される場合を除いて素通りする
+- **permission rule と `block-fable-subagent.sh` の捕捉範囲**: `model: "fable"` の明示 (alias `fable` / full model ID `claude-fable-5-1` とも) は hook が部分一致で捕捉し、メインセッションのモデルと Fable 週次枠の使用率で判定する。permission rule の `Agent(model:fable)` はこの許可経路も止めるため置かない。`Agent(fork)` は fork サブエージェントの起動自体を止める (fork は model 指定にも env にも依らずメインセッションのモデルを継承するため、fork を許可する構成では hook が session model state で判定する)。agent 定義 frontmatter の `model` は `tool_input` に現れないため permission rule でも hook でも捕捉できず、frontmatter が fable を指す agent への model 未指定の委任は、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` の併用で実効モデルが env 側に固定される場合を除いて素通りする
 - **`block-fable-subagent.sh` は Workflow ツール内部の `agent()` 呼び出しを PreToolUse で捕捉できない**: PreToolUse はメインループのツール呼び出しにのみ発火するため、Workflow スクリプト内部のサブエージェントスポーンは本 hook の対象外
-- **`/model` 切替の追随は `PostModelSwitch` hook が届く環境に限る**: `update-model-on-switch.sh` が session model state を切替後のモデルで上書きするため、切替直後から継承経路の判定に新しいモデルが使われる。hook が発火しない環境では state が次の `SessionStart` まで stale になり、fable への切替は素通り (旧 state で allow)、fable からの切替は誤 deny になる (deny メッセージの model 明示誘導で自己修復可能)
+- **`/model` 切替の追随は `PostModelSwitch` hook が届く環境に限る**: `update-model-on-switch.sh` が session model state を切替後のモデルで上書きするため、切替直後から継承経路と `model: "fable"` 明示の判定に新しいモデルが使われる。hook が発火しない環境では state が次の `SessionStart` まで stale になり、fable への切替は素通り (旧 state で allow。`model: "fable"` の明示も、週次枠の使用率が閾値以下なら Fable メインのまま allow される)、fable からの切替は誤 deny になる (deny メッセージの model 明示誘導で自己修復可能)
 - **compact 直後のギャップ** (issue #236、v0.15.0): `SessionStart(source=compact)` 後、次のユーザプロンプトまでは part 1 要素 (delivery-note + `always-fable.md` / `always-sonnet-1.md`) のみが再注入され、残りの要素 (part 2/3・分業規律) は再配送されない (`UserPromptSubmit` はユーザプロンプトでしか発火しないため)。compact 後に agentic loop が自動継続する経路では、この間の推論は part 1 の delivery-note (自己修復指示) と compact summary 内の痕跡に依存する。従来設計でも同経路では persisted-output (2KB プレビュー) しか届いていなかったため、劣化ではない
 - **判定不能 → Fable / Opus 確定の補正遅延** (issue #236、v0.15.0。v0.21.0 で Opus 系にも拡張): 分業規律の Fable / Opus 補正は `resolve-model-on-prompt.sh` の state 書込と `inject-discipline.sh` の読み取りが同一 event 内で並列競合した場合、最大 1 プロンプト遅れて配送される (誤配送はしない)
 - **exactly-once は保証しない** (issue #236、v0.15.0): hook 出力に配送 ACK が無いため、マーカー書込後に配送が失われた場合の再送はできない (SessionStart での全マーカーリセットが回復手段)。逆に TMPDIR 掃除等でマーカーが消えた場合は再配送される (重複は無害)
