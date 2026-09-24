@@ -291,6 +291,30 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
             [{"display_name": "Fable", "percent": 3, "resets_at": "2026-10-08T00:00:00Z"}],
         )
 
+    def test_utc_iso_formats_are_compared_as_same_time(self) -> None:
+        # OAuth usage API (+00:00、小数秒付き) と stdin (toISOString の .000Z) の表記の違い。
+        cases = (
+            # 同じ週次枠で percent が下がる → 単調性ガードで書き出さない
+            # (文字列のままでは "+" < "." のため別の週次枠・前後関係なしと判定される組み合わせ)
+            ("2026-10-08T00:00:00+00:00", 40, "2026-10-08T00:00:00.000Z", 35),
+            # cache の方が後の週次枠 → reset 前のスナップショットとして書き出さない
+            ("2026-10-08T00:00:00+00:00", 3, "2026-10-01T00:00:00.000Z", 95),
+        )
+        for cached_reset, cached_percent, new_reset, new_percent in cases:
+            with self.subTest(cached_reset=cached_reset, new_reset=new_reset):
+                original_text = self.fresh_cache(
+                    [{"display_name": "Fable", "percent": cached_percent, "resets_at": cached_reset}]
+                )
+
+                self.run_main_ok(
+                    self.payload(
+                        [{"display_name": "Fable", "utilization": new_percent, "resets_at": new_reset}]
+                    )
+                )
+
+                self.assertEqual(self.cache_file.read_text(), original_text)
+                self.cache_file.unlink()
+
     def test_resets_at_of_different_types_or_empty_is_not_compared(self) -> None:
         for cached_reset, new_reset in (
             ("2026-10-08T00:00:00Z", 1790812800),

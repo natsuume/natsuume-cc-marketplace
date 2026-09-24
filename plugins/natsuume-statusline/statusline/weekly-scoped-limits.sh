@@ -77,6 +77,9 @@
 #       スナップショットが新しい週次枠の値を上書きするのを防ぐ。resets_at は両方が数値なら
 #       数値として、両方が空でない文字列なら文字列 (ISO 8601) として比較し、それ以外の
 #       組み合わせは比較しない)
+#   上の 2 つのガードでは、UTC の ISO 8601 文字列 (末尾 Z / +00:00、小数秒は任意) の
+#   resets_at を秒までの 19 文字に揃えてから一致・前後を判定する (OAuth usage API と
+#   stdin で同じ時刻の表記が異なるため)。
 #     - cache 書き込み lock (下記「lock」節) を取得できない (待たずに省略する)
 #   判定と書き出しは cache 書き込み lock 保持下で行い、書き出しは weekly_scoped_atomic_write
 #   (mktemp + mv、umask 077) で行う。
@@ -467,13 +470,19 @@ weekly_scoped_write_stdin_entries_locked() {
     if [[ "$fetched_at" =~ ^[0-9]+$ ]] \
       && [ $((now - fetched_at)) -le "$WEEKLY_SCOPED_TTL" ] \
       && jq -e --argjson new "$weekly_scoped_json" '
+        # UTC の ISO 8601 文字列 (Z / +00:00、小数秒は任意) を秒までの 19 文字に揃える。
+        # OAuth usage API (+00:00) と stdin (toISOString の .000Z) で同じ時刻の表記が異なるため。
+        def reset_key:
+          if type == "string"
+            and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$")
+          then .[0:19] else . end;
         (.weekly_scoped // []) as $cached
         | ($cached == $new)
           or any($new[]; . as $n
               | any($cached[]?;
                   type == "object"
                   and .display_name == $n.display_name
-                  and .resets_at == $n.resets_at
+                  and (.resets_at | reset_key) == ($n.resets_at | reset_key)
                   and (.percent | type) == "number"
                   and .percent > $n.percent))
           or any($new[]; . as $n
@@ -483,7 +492,7 @@ weekly_scoped_write_stdin_entries_locked() {
                   and (((.resets_at | type) == "number" and ($n.resets_at | type) == "number")
                     or ((.resets_at | type) == "string" and ($n.resets_at | type) == "string"
                       and (.resets_at | length) > 0 and ($n.resets_at | length) > 0))
-                  and .resets_at > $n.resets_at))
+                  and (.resets_at | reset_key) > ($n.resets_at | reset_key)))
       ' "$WEEKLY_SCOPED_CACHE_FILE" >/dev/null 2>&1; then
       return 0
     fi
