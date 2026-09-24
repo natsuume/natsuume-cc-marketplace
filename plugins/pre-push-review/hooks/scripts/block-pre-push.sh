@@ -800,7 +800,7 @@ linked worktree では marker / launch attestation は main \`.git\` 直下で�
 
 起動 model: ${REVIEWER_MODEL_REASON}${FABLE_DENY_FALLBACK}
 
-model 未指定の Agent 起動は Fable セッションでは agent-discipline の hook に deny されるため、上記の model を常に明示してください。
+上記の model を常に明示してください。
 
 修正後に branch 差分が変わるとマーカーは自動失効します。同じ正規フローで再走させ、
 全マーカーが ✓ になったら \`git push\` を再試行してください。

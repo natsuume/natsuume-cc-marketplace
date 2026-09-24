@@ -787,7 +787,7 @@ linked worktree では marker / launch attestation は main \`.git\` 直下で�
 
 codex review だけを単独で再走させる場合は、 Agent / Task tool で subagent_type="pre-push-codex-review:codex-reviewer", model="sonnet" を起動してください。
 
-model 未指定の Agent 起動は Fable セッションでは agent-discipline の hook に deny されるため、上記の model を常に明示してください。
+上記の model を常に明示してください。
 
 codex review を \`run-pre-push-codex-review.sh\` wrapper の直接実行で代行することはできません (block-bg-codex-wrapper.sh の agent_type 検証 gate が \`pre-push-codex-review:codex-reviewer\` subagent 以外からの起動を deny します)。
 

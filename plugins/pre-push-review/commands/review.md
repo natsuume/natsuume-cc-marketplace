@@ -40,7 +40,7 @@ Phase 文脈は code-reviewer と security-reviewer の両方に渡します。
 
 - subagent (`pre-push-review:code-reviewer` / `pre-push-review:security-reviewer`) が見つからない → プラグインの install を確認してください (`claude plugin install pre-push-review@natsuume-plugins`)
 - 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ 2 subagent を順次起動しても push gate の構造的保証は同じ (= 2 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。
-- 一部の marker のみ失効している場合は、 2 subagent 全部を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします)。 単独再起動時も上記 2 起動仕様と同じ model 指定を必ず添えてください (model 未指定の起動は Fable セッションでは agent-discipline の hook に deny されます)。 2 subagent 並列発出が既定であることは変わりません (= 初回実行や両 marker が失効した場合は引き続き並列 2 起動を使う)。
+- 一部の marker のみ失効している場合は、 2 subagent 全部を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします)。 単独再起動時も上記 2 起動仕様と同じ model 指定を必ず添えてください。 2 subagent 並列発出が既定であることは変わりません (= 初回実行や両 marker が失効した場合は引き続き並列 2 起動を使う)。
 - code-reviewer / security-reviewer の起動が model 利用不可 (Opus 5 を提供しないプラン等) で失敗する場合は `model: "sonnet"` の明示で該当 reviewer を単独再起動してよい (呼び出し側の model 指定は frontmatter より優先され、marker は subagent の agent_type に対して発行されるため fallback でも機能する)。fallback 使用時はレビューの実効モデルが既定と異なる
 
 ## レビュー指摘の修正フロー (2 subagent 完了後)
