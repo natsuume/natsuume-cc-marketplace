@@ -39,20 +39,6 @@ on:
       - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
       - "plugins/agent-discipline/scripts/lint-payload-size.sh"
       - ".github/workflows/agent-discipline-prompt-lint.yml"
-      # experimental-agent-discipline (fork) 側の同じ検査対象一式
-      - "plugins/experimental-agent-discipline/hooks/prompts/always-fable.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-1.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-2.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-3.md"
-      - "plugins/experimental-agent-discipline/hooks/hooks.json"
-      - "plugins/experimental-agent-discipline/hooks/prompts/discipline-fable.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/discipline-sonnet.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/discipline-opus.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/subagent-rules.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/**/*.md"
-      - "plugins/experimental-agent-discipline/hooks/scripts/**"
-      - "plugins/experimental-agent-discipline/scripts/lint-prompt-sync.sh"
-      - "plugins/experimental-agent-discipline/scripts/lint-payload-size.sh"
   push:
     branches: [master]
     paths:
@@ -70,19 +56,6 @@ on:
       - "plugins/agent-discipline/scripts/lint-prompt-sync.sh"
       - "plugins/agent-discipline/scripts/lint-payload-size.sh"
       - ".github/workflows/agent-discipline-prompt-lint.yml"
-      - "plugins/experimental-agent-discipline/hooks/prompts/always-fable.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-1.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-2.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/always-sonnet-3.md"
-      - "plugins/experimental-agent-discipline/hooks/hooks.json"
-      - "plugins/experimental-agent-discipline/hooks/prompts/discipline-fable.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/discipline-sonnet.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/discipline-opus.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/subagent-rules.md"
-      - "plugins/experimental-agent-discipline/hooks/prompts/**/*.md"
-      - "plugins/experimental-agent-discipline/hooks/scripts/**"
-      - "plugins/experimental-agent-discipline/scripts/lint-prompt-sync.sh"
-      - "plugins/experimental-agent-discipline/scripts/lint-payload-size.sh"
 
 permissions:
   contents: read
@@ -107,11 +80,3 @@ jobs:
       # WARN (7,800 字超) は exit code に影響せず、 FAIL (8,000 字超・fail-closed 規則違反) で失敗する。
       - name: Run lint-payload-size.sh (additionalContext element size check)
         run: ./plugins/agent-discipline/scripts/lint-payload-size.sh
-
-      # fork 側 (experimental-agent-discipline) は plugins/experimental-agent-discipline/ 配下を
-      # 参照する同内容の lint スクリプトを持つため、同じ job 内で続けて実行する。
-      - name: Run lint-prompt-sync.sh for experimental-agent-discipline (fork)
-        run: ./plugins/experimental-agent-discipline/scripts/lint-prompt-sync.sh
-
-      - name: Run lint-payload-size.sh for experimental-agent-discipline (fork)
-        run: ./plugins/experimental-agent-discipline/scripts/lint-payload-size.sh

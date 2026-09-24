@@ -21,8 +21,8 @@ Checks enforced (see README / issue history for the full rationale):
      "version"
   3. the plugin's marketplace.json entry changed in a field other than
      "version"
-  4. marketplace.json's global metadata (everything other than "plugins")
-     changed, which marks every plugin as changed
+  4. marketplace.json's global metadata (everything other than "plugins" and
+     "renames") changed, which marks every plugin as changed
 """
 
 from __future__ import annotations
@@ -120,6 +120,9 @@ def _without_version(value: dict[str, Any] | None) -> dict[str, Any] | None:
 def _marketplace_global_metadata(payload: dict[str, Any] | None) -> dict[str, Any]:
     normalized = dict(payload or {})
     normalized.pop("plugins", None)
+    # renames only tells clients how to treat removed or renamed plugins; it does
+    # not change what the remaining plugins distribute, so it needs no bump.
+    normalized.pop("renames", None)
     return normalized
 
 
@@ -222,7 +225,7 @@ def changed_plugin_names(base_revision: str, *, direct: bool = False) -> set[str
         ):
             changed.add(name)
 
-    # check 4: marketplace.json global metadata (everything but "plugins")
+    # check 4: marketplace.json global metadata (everything but "plugins" and "renames")
     # changed, which marks every known plugin as changed.
     if _marketplace_global_metadata(current_marketplace_payload) != _marketplace_global_metadata(
         base_marketplace_payload

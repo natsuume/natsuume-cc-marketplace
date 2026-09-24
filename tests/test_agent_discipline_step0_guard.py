@@ -7,7 +7,7 @@ best-effort であり、compound command の各 subcommand と env-prefix を剥
 しうる。そのため prompt の Step 0 は command 全体の先頭ではなく subcommand 単位で検証
 対象を決め、静的に判定できない形は `ok: false` に倒す。
 
-本ファイルが検査するのは次の点 (agent-discipline / experimental-agent-discipline の両方):
+本ファイルが agent-discipline について検査するのは次の点:
 
 - (A) 各 entry の Step 0 節が正典文 (`STEP0_CANONICAL_TEMPLATE`) と空白除去後に完全一致する
 - (B) 各 entry の Step 1 節が、hook 時点で存在しない `--body-file` を `ok: false` とする
@@ -16,14 +16,13 @@ best-effort であり、compound command の各 subcommand と env-prefix を剥
 - (C) 各 entry の prompt が、command 全体の先頭 literal だけで判定する Step 0 の語と、
   `if` filter を fail-permissive と説明する冒頭段落の語を含まず、冒頭段落が
   `best-effort` を述べる
-- (D) 両 plugin の agent prompt が `if` ごとに byte-identical で、model / timeout が固定値
-- (E) 両 plugin の `scripts/lint-prompt-sync.sh` が exit 0 で終わる
+- (D) agent prompt の model / timeout が固定値
+- (E) `scripts/lint-prompt-sync.sh` が exit 0 で終わる
 - (F) agent-discipline README が、非対象 Bash では agent が起動しないという説明語を含まない
 - (G) agent-discipline README の動作説明・既知の制約・SPOF 緩和の設計が、best-effort な
   `if` filter と Step 0 の subcommand 判定・静的判定不能の扱いを述べる
-- (H) 両 plugin の version が 4 箇所 (plugin.json / marketplace.json / 直下 README の一覧
+- (H) version が 4 箇所 (plugin.json / marketplace.json / 直下 README の一覧
   テーブル / plugin README の `## バージョン`) で期待値に一致する
-- (I) experimental-agent-discipline README の `## バージョン` 直下が期待値である
 
 照合は needle と本文の両方から空白 (改行を含む) を全除去した文字列で行う。折り返しや
 空白の入れ方の違いでは契約を回避できない。
@@ -43,15 +42,12 @@ MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 ROOT_README = ROOT / "README.md"
 
 AGENT_DISCIPLINE = "agent-discipline"
-EXPERIMENTAL_AGENT_DISCIPLINE = "experimental-agent-discipline"
-PLUGIN_NAMES = (AGENT_DISCIPLINE, EXPERIMENTAL_AGENT_DISCIPLINE)
+PLUGIN_NAMES = (AGENT_DISCIPLINE,)
 
 AGENT_DISCIPLINE_README = ROOT / "plugins" / AGENT_DISCIPLINE / "README.md"
-EXPERIMENTAL_README = ROOT / "plugins" / EXPERIMENTAL_AGENT_DISCIPLINE / "README.md"
 
 EXPECTED_VERSIONS: dict[str, str] = {
     AGENT_DISCIPLINE: "0.31.0",
-    EXPERIMENTAL_AGENT_DISCIPLINE: "0.6.0",
 }
 
 # 検知層の 4 entry の `if` filter。
@@ -537,21 +533,7 @@ class PromptHeadOnlyGuardAbsenceTest(ContractTestCase):
 
 
 class AgentPromptSyncTest(ContractTestCase):
-    """(D) 両 plugin の agent prompt と model / timeout が一致する。"""
-
-    def test_agent_prompts_are_identical_across_plugins(self) -> None:
-        base = self.entries_or_fail(AGENT_DISCIPLINE)
-        fork = self.entries_or_fail(EXPERIMENTAL_AGENT_DISCIPLINE)
-        for if_filter in EXPECTED_IF_FILTERS:
-            with self.subTest(entry=if_filter):
-                self.assertEqual(
-                    base[if_filter]["prompt"],
-                    fork[if_filter]["prompt"],
-                    f"`{if_filter}` entry の prompt が "
-                    f"{repo_relative(hooks_path(AGENT_DISCIPLINE))} と "
-                    f"{repo_relative(hooks_path(EXPERIMENTAL_AGENT_DISCIPLINE))} "
-                    "で一致しない",
-                )
+    """(D) agent prompt の model / timeout が固定値である。"""
 
     def test_agent_model_and_timeout_are_pinned(self) -> None:
         for plugin in PLUGIN_NAMES:
@@ -568,7 +550,7 @@ class AgentPromptSyncTest(ContractTestCase):
 
 
 class LintPromptSyncTest(ContractTestCase):
-    """(E) 両 plugin の lint-prompt-sync.sh が通る。"""
+    """(E) lint-prompt-sync.sh が通る。"""
 
     def test_lint_prompt_sync_passes(self) -> None:
         for plugin in PLUGIN_NAMES:
@@ -702,7 +684,7 @@ def readme_version_line(path: Path) -> str:
 
 
 class VersionSyncTest(ContractTestCase):
-    """(H) 両 plugin の version が 4 箇所で期待値に一致する。"""
+    """(H) version が 4 箇所で期待値に一致する。"""
 
     def test_versions_match_expected_in_all_four_places(self) -> None:
         marketplace = json.loads(read(MARKETPLACE_JSON))
@@ -739,17 +721,6 @@ class VersionSyncTest(ContractTestCase):
                     readme_version_line(plugin_readme),
                     f"{repo_relative(plugin_readme)} の `## バージョン` 直下",
                 )
-
-
-class ExperimentalReadmeVersionTest(ContractTestCase):
-    """(I) experimental-agent-discipline README の `## バージョン` 直下。"""
-
-    def test_experimental_readme_version_line(self) -> None:
-        self.assertEqual(
-            f"v{EXPECTED_VERSIONS[EXPERIMENTAL_AGENT_DISCIPLINE]}",
-            readme_version_line(EXPERIMENTAL_README),
-            f"{repo_relative(EXPERIMENTAL_README)} の `## バージョン` 直下",
-        )
 
 
 if __name__ == "__main__":
