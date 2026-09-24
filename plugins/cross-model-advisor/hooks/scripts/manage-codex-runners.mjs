@@ -584,6 +584,63 @@ function unresolvableCodexEntrypoint(command) {
   return null;
 }
 
+// heredoc 本文をデータとして読む (shell として実行しない) と構文上確定できる command。
+// shell 以外の言語の interpreter は本文をその言語で実行するが、`python3 -c` 等と同じく
+// shell の実行形ではないため gate の分類対象外である。
+const HEREDOC_DATA_COMMANDS = new Set(["cat", "tee", "python", "python3", "node"]);
+// heredoc の command 行の引数として許す token (展開・リダイレクト・制御演算子を含まない語)。
+const HEREDOC_DATA_ARGUMENT = /^(?:[A-Za-z0-9_./:=,@%+-]+|'[^']*'|"[^"$`\\]*")$/;
+// 区切り語を quote した heredoc 演算子 (本文は展開されない)。
+const HEREDOC_DATA_OPERATOR = /^<<(-?)(?:'([A-Za-z0-9_]+)'|"([A-Za-z0-9_]+)")$/;
+
+/**
+ * command 全体が「HEREDOC_DATA_COMMANDS の command 1 つ + 区切り語を quote した heredoc
+ * 1 つ」だけで構成される場合、heredoc の本文を除いた 1 行目を返す。それ以外は null。
+ *
+ * 1 行目は HEREDOC_DATA_COMMANDS の command と、展開・制御演算子を含まない引数、heredoc
+ * 演算子 1 つ、ファイルへのリダイレクト (`>` / `>>`) 1 つまで。2 行目以降は本文で、最終行
+ * (末尾の改行 1 つは除く) が終端行であり、それより前に終端行が無いこと。この形の本文は
+ * literal なデータで、shell も他の command も実行しないため gate の判定対象から外す。
+ * 1 行目自体は通常どおり判定する (`node` の引数で Codex を起動する形等を見逃さない)。
+ * 少しでも外れる command は本文を含めて通常どおり判定する (fail-closed)。
+ */
+function quotedHeredocDataCommandLine(command) {
+  const newline = command.indexOf("\n");
+  if (newline === -1) return null;
+  const firstLine = command.slice(0, newline);
+  // shell の blank (空白と tab) だけで分割する。`\r` 等を除去すると、bash が区切り語の一部と
+  // して扱う文字を gate だけが無視し、終端行の位置が bash とずれる。
+  const tokens = firstLine.replace(/^[ \t]+|[ \t]+$/g, "").split(/[ \t]+/);
+  if (!HEREDOC_DATA_COMMANDS.has(tokens[0])) return null;
+  let heredoc = null;
+  let redirected = false;
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const operator = HEREDOC_DATA_OPERATOR.exec(token);
+    if (operator) {
+      if (heredoc) return null;
+      heredoc = { stripTabs: operator[1] === "-", delimiter: operator[2] ?? operator[3] };
+      continue;
+    }
+    if (token === ">" || token === ">>") {
+      const target = tokens[index + 1];
+      if (redirected || !target || !HEREDOC_DATA_ARGUMENT.test(target)) return null;
+      redirected = true;
+      index += 1;
+      continue;
+    }
+    if (!HEREDOC_DATA_ARGUMENT.test(token)) return null;
+  }
+  if (!heredoc) return null;
+  const lines = command.slice(newline + 1).split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const isTerminator = (line) =>
+    (heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter;
+  if (!isTerminator(lines[lines.length - 1])) return null;
+  if (lines.slice(0, -1).some((line) => isTerminator(line))) return null;
+  return firstLine;
+}
+
 function denyResponse(reason) {
   return {
     hookSpecificOutput: {
@@ -596,8 +653,10 @@ function denyResponse(reason) {
 
 function handlePreToolUse(input) {
   if (input.tool_name !== "Bash") return null;
-  const command = input.tool_input?.command;
-  if (typeof command !== "string") return null;
+  const fullCommand = input.tool_input?.command;
+  if (typeof fullCommand !== "string") return null;
+  // データとして読む heredoc の本文は判定しない (1 行目だけを判定する)。
+  const command = quotedHeredocDataCommandLine(fullCommand) ?? fullCommand;
   const launch = classifyModelLaunch(command);
   if (!launch) {
     const fragment = unresolvableCodexEntrypoint(command);

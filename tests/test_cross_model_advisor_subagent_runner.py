@@ -418,6 +418,300 @@ class CodexRunnerDirectExecutionGateTest(HookHarness):
         )
 
 
+class CodexRunnerHeredocGateTest(HookHarness):
+    """heredoc を含む command の gate 判定 (#464)。
+
+    command 全体が「本文をデータとして読む command (cat / tee / python / python3 / node) 1 つ
+    + 区切り語を quote した heredoc 1 つ (+ ファイルへのリダイレクト 1 つまで)」だけで構成
+    される場合、本文に wrapper 名が文字列として現れても起動ではない。この形から少しでも外れる
+    command (shell や未知の command への heredoc、pipeline・process substitution・コマンド
+    置換・compound command を伴う形、quote しない区切り語、終端行の後ろに続く行等) は免除せず、
+    heredoc の本文も含めてコマンドとして判定する。免除する形でも 1 行目は通常どおり判定する。
+    """
+
+    def assert_allowed_without_state(self, command: str) -> None:
+        self.assertIsNone(self.hook_response(self.bash_payload(command)), command)
+        self.assertEqual([], self.state_records(), command)
+
+    def test_quoted_heredoc_body_is_data(self) -> None:
+        cases = {
+            "backticks-in-python-string": (
+                "python3 - <<'EOF'\n"
+                'print("wrapper は `run-codex-advisor.sh` と書く")\n'
+                "EOF"
+            ),
+            "executable-line-single-quoted-delimiter": (
+                "cat <<'EOF' > notes.md\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF"
+            ),
+            "executable-line-double-quoted-delimiter": (
+                'cat <<"EOF" > notes.md\n'
+                f"{COMMANDS['rescue']}\n"
+                "EOF"
+            ),
+            "substitution-in-quoted-body": (
+                "cat <<'EOF'\n"
+                f"$({COMMANDS['review']})\n"
+                "EOF"
+            ),
+            "tab-stripped-terminator": (
+                "cat <<-'EOF'\n"
+                f"\t{COMMANDS['rescue']}\n"
+                "\tEOF"
+            ),
+            "apostrophe-in-body": (
+                "cat <<'EOF'\n"
+                "don't\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF"
+            ),
+            "trailing-newline-after-terminator": (
+                "tee notes.md <<'EOF'\n"
+                f"{COMMANDS['review']}\n"
+                "EOF\n"
+            ),
+        }
+        for name, command in cases.items():
+            with self.subTest(case=name):
+                self.assert_allowed_without_state(command)
+
+    def test_first_line_of_an_exempt_heredoc_is_still_classified(self) -> None:
+        """本文を免除する形でも、1 行目の command 自体が起動なら判定する。"""
+        response = self.hook_response(
+            self.bash_payload(
+                f"{COMMANDS['rescue']} <<'EOF'\n"
+                "相談内容\n"
+                "EOF"
+            )
+        )
+        self.assert_denied(response, RUNNERS["rescue"])
+
+    def test_heredoc_outside_the_exempt_form_is_classified(self) -> None:
+        """免除する形から外れる heredoc は、本文も含めて従来どおり判定する。"""
+        cases = {
+            "unquoted-delimiter": (
+                "cat <<EOF > notes.md\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF",
+                "advisor",
+            ),
+            # git / gh は同じ command の中で shell を起動できる (alias 等) ため免除しない。
+            "git-commit-message": (
+                "git commit -F - <<'EOF'\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF",
+                "advisor",
+            ),
+            "gh-body-file-stdin": (
+                "gh issue create --title t --body-file - <<'EOF'\n"
+                f"{COMMANDS['review']}\n"
+                "EOF",
+                "review",
+            ),
+            "redirect-ampersand-then-pipe": (
+                "cat <<'EOF' 2>&1 | bash\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+            "brace-group-piped": (
+                "{ cat <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF\n"
+                "} | bash",
+                "rescue",
+            ),
+            "input-process-substitution": (
+                "bash <(cat <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF\n"
+                ")",
+                "rescue",
+            ),
+            "output-process-substitution": (
+                "cat <<'EOF' > >(bash)\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+            "command-substitution": (
+                "$(cat <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF\n"
+                ")",
+                "rescue",
+            ),
+            # bash は 1 行目末尾の CR を区切り語の一部 (EOF\r) として扱い、本文は "EOF\r" の行で
+            # 終わる。後続の起動行は実行されるため免除しない。
+            "carriage-return-in-first-line": (
+                "cat <<'EOF'\r\n"
+                "EOF\r\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+            "parameter-expansion-before-heredoc": (
+                "cat ${x<<X} <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+        }
+        for name, (command, operation) in cases.items():
+            with self.subTest(case=name):
+                self.assert_denied(
+                    self.hook_response(self.bash_payload(command)),
+                    RUNNERS[operation],
+                )
+
+    def test_heredoc_executed_by_a_shell_is_classified(self) -> None:
+        cases = {
+            "bash-quoted": (
+                "bash <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+            "sh-s-unquoted": (
+                "sh -s <<EOF\n"
+                f"{COMMANDS['review']}\n"
+                "EOF",
+                "review",
+            ),
+            "wrapped-bash": (
+                "sudo bash <<'EOF'\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF",
+                "advisor",
+            ),
+        }
+        # 本文をデータとして読むと確認できない consumer は、shell が本文を実行しうるものとして
+        # 扱う (fail-closed)。
+        consumers = {
+            "pipe-to-bash": "cat <<'EOF' | bash",
+            "tee-pipe-to-sh": "tee log.txt <<'EOF' | sh",
+            "exec": "exec bash <<'EOF'",
+            "time": "time bash <<'EOF'",
+            "nice": "nice bash <<'EOF'",
+            "ssh": "ssh host <<'EOF'",
+            "fish": "fish <<'EOF'",
+            "unknown-command": "some-tool <<'EOF'",
+            "brace-group": "{ bash; } <<'EOF'",
+            "redirect-first": "<<'EOF' bash",
+        }
+        for name, head in consumers.items():
+            cases[name] = (f"{head}\n{COMMANDS['rescue']}\nEOF", "rescue")
+        cases["subshell"] = (
+            f"( bash <<'EOF'\n{COMMANDS['rescue']}\nEOF\n)",
+            "rescue",
+        )
+        for name, (command, operation) in cases.items():
+            with self.subTest(case=name):
+                self.assert_denied(
+                    self.hook_response(self.bash_payload(command)),
+                    RUNNERS[operation],
+                )
+
+    def test_unresolvable_heredoc_consumer_is_denied(self) -> None:
+        response = self.hook_response(
+            self.bash_payload(
+                "$SHELL <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF"
+            )
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        hook_output = response["hookSpecificOutput"]
+        assert isinstance(hook_output, dict)
+        self.assertEqual("deny", hook_output["permissionDecision"])
+
+    def test_substitution_in_unquoted_heredoc_body_is_classified(self) -> None:
+        cases = {
+            "dollar-paren": (
+                "cat <<EOF\n"
+                f"$({COMMANDS['rescue']})\n"
+                "EOF",
+                "rescue",
+            ),
+            "backticks": (
+                "cat <<EOF\n"
+                f"`{COMMANDS['review']}`\n"
+                "EOF",
+                "review",
+            ),
+        }
+        for name, (command, operation) in cases.items():
+            with self.subTest(case=name):
+                self.assert_denied(
+                    self.hook_response(self.bash_payload(command)),
+                    RUNNERS[operation],
+                )
+
+    def test_commands_around_a_heredoc_are_classified(self) -> None:
+        cases = {
+            "after-terminator": (
+                "cat <<'EOF'\n"
+                "note\n"
+                "EOF\n"
+                f"{COMMANDS['rescue']}",
+                "rescue",
+            ),
+            "same-line-segment": (
+                f"cat <<'EOF'; {COMMANDS['advisor']}\n"
+                "note\n"
+                "EOF",
+                "advisor",
+            ),
+            "second-heredoc-on-the-line-feeds-a-shell": (
+                "cat <<'A'; bash <<'B'\n"
+                "note\n"
+                "A\n"
+                f"{COMMANDS['rescue']}\n"
+                "B",
+                "rescue",
+            ),
+            "here-string-is-not-a-heredoc": (
+                "cat <<< 'note'\n"
+                f"{COMMANDS['review']}",
+                "review",
+            ),
+            # 終端行が無い heredoc は heredoc として扱わず、後続行をコマンドとして解析する。
+            "arithmetic-shift-is-not-a-heredoc": (
+                "echo $(( 1 << 2 ))\n"
+                f"{COMMANDS['rescue']}",
+                "rescue",
+            ),
+            "unterminated-heredoc": (
+                "cat <<'EOF'\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF ",
+                "advisor",
+            ),
+            "heredoc-operator-in-comment": (
+                "echo ok # cat <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+            "escaped-space-before-hash": (
+                f"echo a\\ #; {COMMANDS['rescue']}",
+                "rescue",
+            ),
+            "line-continuation-before-hash": (
+                f"echo a\\\n#; {COMMANDS['rescue']}",
+                "rescue",
+            ),
+        }
+        for name, (command, operation) in cases.items():
+            with self.subTest(case=name):
+                self.assert_denied(
+                    self.hook_response(self.bash_payload(command)),
+                    RUNNERS[operation],
+                )
+
+
 class CodexRunnerLifecycleTest(HookHarness):
     def test_active_runner_blocks_main_stop_until_success_consumes_state(self) -> None:
         self.subagent_start("rescue")
