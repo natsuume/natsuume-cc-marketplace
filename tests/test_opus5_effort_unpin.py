@@ -53,10 +53,25 @@ REMOVED_PHRASES = (
     "難度による引き上げ・引き下げをしない",
 )
 
-# 置換後の新 canonical 文 (部分文字列)。
-EFFORT_GUIDANCE_PHRASE = "Opus 5 を使う委任では effort を固定しない"
-SCOPE_INSTRUCTION_PHRASE = "Opus 5 への委任指示にはスコープ制限の 1 文を必ず含める"
-RECHECK_BAN_PHRASE = "Opus 5 への委任では汎用的な再確認指示を加えない"
+# 置換後の新 canonical 文 (部分文字列)。discipline-opus.md は Opus 5.5 メインを対象に
+# effort 規律を Opus 5.5 基準で書き、Opus 5 向けの 2 規律を Opus 5 / Opus 5.5 の両方に
+# 適用する記述にするため、ファイルごとに文言が異なる
+# (Opus 5.5 基準の契約は tests/test_opus55_fable_advisor_discipline.py が検査する)。
+EFFORT_GUIDANCE_PHRASE = {
+    "discipline-fable.md": "Opus 5 を使う委任では effort を固定しない",
+    "discipline-opus.md": "Opus 5.5 への委任では effort の既定 `medium` を基準にする",
+    "discipline-sonnet.md": "Opus 5 を使う委任では effort を固定しない",
+}
+SCOPE_INSTRUCTION_PHRASE = {
+    "discipline-fable.md": "Opus 5 への委任指示にはスコープ制限の 1 文を必ず含める",
+    "discipline-opus.md": "Opus 5 / Opus 5.5 への委任指示にはスコープ制限の 1 文を必ず含める",
+    "discipline-sonnet.md": "Opus 5 への委任指示にはスコープ制限の 1 文を必ず含める",
+}
+RECHECK_BAN_PHRASE = {
+    "discipline-fable.md": "Opus 5 への委任では汎用的な再確認指示を加えない",
+    "discipline-opus.md": "Opus 5 / Opus 5.5 への委任では汎用的な再確認指示を加えない",
+    "discipline-sonnet.md": "Opus 5 への委任では汎用的な再確認指示を加えない",
+}
 
 # 撤廃断片 (medium 指定のみ) を含む既存 bullet のうち、存続させるべき規範文。
 # Phase B の書換えが bullet 全体を誤って削除しないことを固定する保全ガード。
@@ -120,7 +135,7 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
             start = text.find(DELEGATION_RULES_MARKER)
             end = text.find(DELEGATION_INSTRUCTION_MARKER, max(start, 0))
             section = text[start:end] if 0 <= start < end else ""
-            if EFFORT_GUIDANCE_PHRASE not in section:
+            if EFFORT_GUIDANCE_PHRASE[name] not in section:
                 missing.append(name)
         self.assertEqual([], missing, f"effort 選択指針が無いファイル: {missing}")
 
@@ -128,7 +143,7 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
         missing = [
             name
             for name, path in THREE_WAY.items()
-            if SCOPE_INSTRUCTION_PHRASE not in read(path)
+            if SCOPE_INSTRUCTION_PHRASE[name] not in read(path)
         ]
         self.assertEqual(
             [], missing, f"スコープ制限指示の必須化が無いファイル: {missing}"
@@ -153,10 +168,10 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
             section = text[start:end] if end >= 0 else text[start:]
             paragraphs = section.split("\n\n")
             scope_idxs = [
-                i for i, p in enumerate(paragraphs) if SCOPE_INSTRUCTION_PHRASE in p
+                i for i, p in enumerate(paragraphs) if SCOPE_INSTRUCTION_PHRASE[name] in p
             ]
             recheck_idxs = [
-                i for i, p in enumerate(paragraphs) if RECHECK_BAN_PHRASE in p
+                i for i, p in enumerate(paragraphs) if RECHECK_BAN_PHRASE[name] in p
             ]
             if len(scope_idxs) != 1 or len(recheck_idxs) != 1:
                 violations.append(
