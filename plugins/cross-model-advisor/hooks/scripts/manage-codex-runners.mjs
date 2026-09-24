@@ -297,18 +297,11 @@ const SUBSTITUTION_PLACEHOLDER = "$SUBSTITUTION";
  * 独立した segment として再帰的に取り出す。substitution の中身は外側の segment から
  * 取り除いて placeholder に置き換えるため、置換結果を実行形として誤読せず、置換で
  * 作られた command 名を解決済みとも扱わない。
- *
- * heredoc (`<<` / `<<-`) の本文は行末の改行の後から終端行までを切り出し、独立した
- * コマンド列として解析する。本文を shell が実行するかどうかはここでは判定しない (本文を
- * データとして読むと構文上確定できる command は isQuotedHeredocDataCommand が別に扱う)。
- * 本文を切り出すことで、本文中の quote が終端行より後ろの行の解析に及ばない。
  */
 function collectShellSegments(command, segments, depth) {
   let current = "";
   let quote = null;
   let escaped = false;
-  // 現在の行で開いた heredoc。本文は行末の改行の直後から始まる。
-  let lineHeredocs = [];
   const flush = () => {
     if (current.trim()) segments.push(current.trim());
     current = "";
@@ -360,168 +353,13 @@ function collectShellSegments(command, segments, depth) {
       quote = character;
       continue;
     }
-    if (character === "<" && command[index + 1] === "<") {
-      // here-string (`<<<`) は heredoc ではない。
-      if (command[index + 2] === "<") {
-        current += "<<<";
-        index += 2;
-        continue;
-      }
-      const heredoc =
-        depth < SUBSTITUTION_DEPTH_LIMIT ? parseHeredocOperator(command, index) : null;
-      if (heredoc) {
-        current += command.slice(index, heredoc.end);
-        index = heredoc.end - 1;
-        lineHeredocs.push(heredoc);
-        continue;
-      }
-    }
-    if (character === "\n") {
-      flush();
-      if (lineHeredocs.length > 0) {
-        index = consumeHeredocBodies(command, index + 1, lineHeredocs, segments, depth) - 1;
-        lineHeredocs = [];
-      }
-      continue;
-    }
-    if (character === ";" || character === "|" || character === "&") {
+    if (character === ";" || character === "\n" || character === "|" || character === "&") {
       flush();
       continue;
     }
     current += character;
   }
   flush();
-}
-
-// 区切り語の終わりを示す文字 (空白以外)。
-const HEREDOC_DELIMITER_TERMINATORS = ";|&<>()";
-
-/**
- * `<<` / `<<-` の直後から区切り語 (quote と backslash を除いた文字列) を読む。区切り語を
- * 読めなければ null を返す。
- */
-function parseHeredocOperator(command, operatorIndex) {
-  let cursor = operatorIndex + 2;
-  let stripTabs = false;
-  if (command[cursor] === "-") {
-    stripTabs = true;
-    cursor += 1;
-  }
-  while (command[cursor] === " " || command[cursor] === "\t") cursor += 1;
-  let delimiter = "";
-  let quote = null;
-  for (; cursor < command.length; cursor += 1) {
-    const character = command[cursor];
-    if (quote) {
-      if (character === quote) quote = null;
-      else delimiter += character;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-    if (character === "\\") {
-      cursor += 1;
-      if (cursor < command.length) delimiter += command[cursor];
-      continue;
-    }
-    if (/\s/.test(character) || HEREDOC_DELIMITER_TERMINATORS.includes(character)) break;
-    delimiter += character;
-  }
-  if (quote || delimiter === "") return null;
-  return { delimiter, stripTabs, end: cursor };
-}
-
-/**
- * `start` から heredoc の本文を読み、本文と終端行の次の位置を返す。終端行が無ければ null。
- */
-function readHeredocBody(command, start, heredoc) {
-  let lineStart = start;
-  for (;;) {
-    const newline = command.indexOf("\n", lineStart);
-    const lineEnd = newline === -1 ? command.length : newline;
-    let line = command.slice(lineStart, lineEnd);
-    if (heredoc.stripTabs) line = line.replace(/^\t+/, "");
-    if (line === heredoc.delimiter) {
-      return {
-        body: command.slice(start, lineStart),
-        next: newline === -1 ? command.length : newline + 1,
-      };
-    }
-    if (newline === -1) return null;
-    lineStart = newline + 1;
-  }
-}
-
-/**
- * 改行の直後 (`start`) から、その行で開いた heredoc の本文を順に切り出してコマンド列として
- * 解析し、読み終えた位置を返す。どれか 1 つでも終端行が見つからなければ heredoc として扱わず
- * `start` を返し、以降の行をそのまま解析させる (算術式の `<<` を誤認した場合もここで戻る)。
- */
-function consumeHeredocBodies(command, start, heredocs, segments, depth) {
-  const bodies = [];
-  let position = start;
-  for (const heredoc of heredocs) {
-    const read = readHeredocBody(command, position, heredoc);
-    if (!read) return start;
-    bodies.push(read.body);
-    position = read.next;
-  }
-  for (const body of bodies) collectShellSegments(body, segments, depth + 1);
-  return position;
-}
-
-// heredoc 本文をデータとして読む (shell として実行しない) と構文上確定できる command。
-// shell 以外の言語の interpreter は本文をその言語で実行するが、`python3 -c` 等と同じく
-// shell の実行形ではないため gate の分類対象外である。
-const HEREDOC_DATA_COMMANDS = new Set(["cat", "tee", "python", "python3", "node"]);
-// 免除する command 行の引数として許す token (展開・リダイレクト・制御演算子を含まない語)。
-const HEREDOC_DATA_ARGUMENT = /^(?:[A-Za-z0-9_./:=,@%+-]+|'[^']*'|"[^"$`\\]*")$/;
-// 免除する heredoc 演算子 (区切り語を quote した形のみ)。
-const HEREDOC_DATA_OPERATOR = /^<<(-?)(?:'([A-Za-z0-9_]+)'|"([A-Za-z0-9_]+)")$/;
-
-/**
- * command 全体が「本文をデータとして読む command 1 つ + 区切り語を quote した heredoc 1 つ」
- * だけで構成されるかを判定する。1 行目は HEREDOC_DATA_COMMANDS の command と、展開・制御
- * 演算子を含まない引数、heredoc 演算子 1 つ、ファイルへのリダイレクト (`>` / `>>`) 1 つまで。
- * 2 行目以降は本文で、最終行 (末尾の改行 1 つは除く) が終端行であり、それより前に終端行が
- * 無いこと。この形の本文は literal なデータで、shell も他の command も実行しない。少しでも
- * 外れる command は免除せず、本文を含めて通常どおり分類する (fail-closed)。
- */
-function isQuotedHeredocDataCommand(command) {
-  const newline = command.indexOf("\n");
-  if (newline === -1) return false;
-  const tokens = command.slice(0, newline).trim().split(/[ \t]+/);
-  if (!HEREDOC_DATA_COMMANDS.has(tokens[0])) return false;
-  let heredoc = null;
-  let redirected = false;
-  for (let index = 1; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    const operator = HEREDOC_DATA_OPERATOR.exec(token);
-    if (operator) {
-      if (heredoc) return false;
-      heredoc = { stripTabs: operator[1] === "-", delimiter: operator[2] ?? operator[3] };
-      continue;
-    }
-    if (token === ">" || token === ">>") {
-      const target = tokens[index + 1];
-      if (redirected || !target || !HEREDOC_DATA_ARGUMENT.test(target)) return false;
-      redirected = true;
-      index += 1;
-      continue;
-    }
-    if (!HEREDOC_DATA_ARGUMENT.test(token)) return false;
-  }
-  if (!heredoc) return false;
-  const lines = command.slice(newline + 1).split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-  const isTerminator = (line) =>
-    (heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter;
-  return (
-    isTerminator(lines[lines.length - 1]) &&
-    !lines.slice(0, -1).some((line) => isTerminator(line))
-  );
 }
 
 function shellSegments(command) {
@@ -746,6 +584,61 @@ function unresolvableCodexEntrypoint(command) {
   return null;
 }
 
+// heredoc 本文をデータとして読む (shell として実行しない) と構文上確定できる command。
+// shell 以外の言語の interpreter は本文をその言語で実行するが、`python3 -c` 等と同じく
+// shell の実行形ではないため gate の分類対象外である。
+const HEREDOC_DATA_COMMANDS = new Set(["cat", "tee", "python", "python3", "node"]);
+// heredoc の command 行の引数として許す token (展開・リダイレクト・制御演算子を含まない語)。
+const HEREDOC_DATA_ARGUMENT = /^(?:[A-Za-z0-9_./:=,@%+-]+|'[^']*'|"[^"$`\\]*")$/;
+// 区切り語を quote した heredoc 演算子 (本文は展開されない)。
+const HEREDOC_DATA_OPERATOR = /^<<(-?)(?:'([A-Za-z0-9_]+)'|"([A-Za-z0-9_]+)")$/;
+
+/**
+ * command 全体が「HEREDOC_DATA_COMMANDS の command 1 つ + 区切り語を quote した heredoc
+ * 1 つ」だけで構成される場合、heredoc の本文を除いた 1 行目を返す。それ以外は null。
+ *
+ * 1 行目は HEREDOC_DATA_COMMANDS の command と、展開・制御演算子を含まない引数、heredoc
+ * 演算子 1 つ、ファイルへのリダイレクト (`>` / `>>`) 1 つまで。2 行目以降は本文で、最終行
+ * (末尾の改行 1 つは除く) が終端行であり、それより前に終端行が無いこと。この形の本文は
+ * literal なデータで、shell も他の command も実行しないため gate の判定対象から外す。
+ * 1 行目自体は通常どおり判定する (`node` の引数で Codex を起動する形等を見逃さない)。
+ * 少しでも外れる command は本文を含めて通常どおり判定する (fail-closed)。
+ */
+function quotedHeredocDataCommandLine(command) {
+  const newline = command.indexOf("\n");
+  if (newline === -1) return null;
+  const firstLine = command.slice(0, newline);
+  const tokens = firstLine.trim().split(/[ \t]+/);
+  if (!HEREDOC_DATA_COMMANDS.has(tokens[0])) return null;
+  let heredoc = null;
+  let redirected = false;
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const operator = HEREDOC_DATA_OPERATOR.exec(token);
+    if (operator) {
+      if (heredoc) return null;
+      heredoc = { stripTabs: operator[1] === "-", delimiter: operator[2] ?? operator[3] };
+      continue;
+    }
+    if (token === ">" || token === ">>") {
+      const target = tokens[index + 1];
+      if (redirected || !target || !HEREDOC_DATA_ARGUMENT.test(target)) return null;
+      redirected = true;
+      index += 1;
+      continue;
+    }
+    if (!HEREDOC_DATA_ARGUMENT.test(token)) return null;
+  }
+  if (!heredoc) return null;
+  const lines = command.slice(newline + 1).split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const isTerminator = (line) =>
+    (heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter;
+  if (!isTerminator(lines[lines.length - 1])) return null;
+  if (lines.slice(0, -1).some((line) => isTerminator(line))) return null;
+  return firstLine;
+}
+
 function denyResponse(reason) {
   return {
     hookSpecificOutput: {
@@ -758,9 +651,10 @@ function denyResponse(reason) {
 
 function handlePreToolUse(input) {
   if (input.tool_name !== "Bash") return null;
-  const command = input.tool_input?.command;
-  if (typeof command !== "string") return null;
-  if (isQuotedHeredocDataCommand(command)) return null;
+  const fullCommand = input.tool_input?.command;
+  if (typeof fullCommand !== "string") return null;
+  // データとして読む heredoc の本文は判定しない (1 行目だけを判定する)。
+  const command = quotedHeredocDataCommandLine(fullCommand) ?? fullCommand;
   const launch = classifyModelLaunch(command);
   if (!launch) {
     const fragment = unresolvableCodexEntrypoint(command);

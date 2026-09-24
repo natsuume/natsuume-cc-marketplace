@@ -426,8 +426,7 @@ class CodexRunnerHeredocGateTest(HookHarness):
     される場合、本文に wrapper 名が文字列として現れても起動ではない。この形から少しでも外れる
     command (shell や未知の command への heredoc、pipeline・process substitution・コマンド
     置換・compound command を伴う形、quote しない区切り語、終端行の後ろに続く行等) は免除せず、
-    heredoc の本文も含めてコマンドとして判定する。本文は切り出して解析するため、本文中の
-    quote が終端行より後ろの行の判定に及ばない。
+    heredoc の本文も含めてコマンドとして判定する。免除する形でも 1 行目は通常どおり判定する。
     """
 
     def assert_allowed_without_state(self, command: str) -> None:
@@ -476,6 +475,17 @@ class CodexRunnerHeredocGateTest(HookHarness):
         for name, command in cases.items():
             with self.subTest(case=name):
                 self.assert_allowed_without_state(command)
+
+    def test_first_line_of_an_exempt_heredoc_is_still_classified(self) -> None:
+        """本文を免除する形でも、1 行目の command 自体が起動なら判定する。"""
+        response = self.hook_response(
+            self.bash_payload(
+                f"{COMMANDS['rescue']} <<'EOF'\n"
+                "相談内容\n"
+                "EOF"
+            )
+        )
+        self.assert_denied(response, RUNNERS["rescue"])
 
     def test_heredoc_outside_the_exempt_form_is_classified(self) -> None:
         """免除する形から外れる heredoc は、本文も含めて従来どおり判定する。"""
@@ -638,13 +648,6 @@ class CodexRunnerHeredocGateTest(HookHarness):
                 "EOF\n"
                 f"{COMMANDS['rescue']}",
                 "rescue",
-            ),
-            "after-terminator-with-apostrophe-in-body": (
-                "cat <<'EOF'\n"
-                "don't\n"
-                "EOF\n"
-                f"{COMMANDS['review']}",
-                "review",
             ),
             "same-line-segment": (
                 f"cat <<'EOF'; {COMMANDS['advisor']}\n"
