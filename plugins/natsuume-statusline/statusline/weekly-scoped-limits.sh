@@ -294,14 +294,25 @@ write_weekly_scoped_from_stdin() {
   now=$(date +%s 2>/dev/null) || return 0
   [[ "$now" =~ ^[0-9]+$ ]] || return 0
 
-  # 同一内容を TTL 内に書き直さない (statusline は描画ごとに呼ばれるため書き込み回数を抑える)。
-  # jq の == は JSON 値として比較するため、キー順・空白の差では書き出さない。
+  # TTL 内の cache に対しては次のどちらかなら書き出さない:
+  #   - 同一内容 (statusline は描画ごとに呼ばれるため書き込み回数を抑える。jq の == は
+  #     JSON 値として比較するため、キー順・空白の差では書き出さない)
+  #   - 単調性ガード: 同じ週次枠 (display_name と resets_at が一致) の percent が下がる entry がある
   if [ -f "$WEEKLY_SCOPED_CACHE_FILE" ]; then
     fetched_at=$(jq -r '.fetched_at // empty' "$WEEKLY_SCOPED_CACHE_FILE" 2>/dev/null)
     if [[ "$fetched_at" =~ ^[0-9]+$ ]] \
       && [ $((now - fetched_at)) -le "$WEEKLY_SCOPED_TTL" ] \
-      && jq -e --argjson new "$weekly_scoped_json" '.weekly_scoped == $new' \
-        "$WEEKLY_SCOPED_CACHE_FILE" >/dev/null 2>&1; then
+      && jq -e --argjson new "$weekly_scoped_json" '
+        (.weekly_scoped // []) as $cached
+        | ($cached == $new)
+          or any($new[]; . as $n
+              | any($cached[]?;
+                  type == "object"
+                  and .display_name == $n.display_name
+                  and .resets_at == $n.resets_at
+                  and (.percent | type) == "number"
+                  and .percent > $n.percent))
+      ' "$WEEKLY_SCOPED_CACHE_FILE" >/dev/null 2>&1; then
       return 0
     fi
   fi
