@@ -23,6 +23,8 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
     - 抽出条件 (display_name が非空文字列、utilization が数値) を満たす entry が 1 件以上あれば、
       weekly-scoped-limits.sh の cache schema で weekly-scoped.json を書き出す
     - 既存 cache が 300 秒以内かつ weekly_scoped が同一なら書き出さない
+    - 既存 cache が 300 秒以内で、display_name と resets_at が一致する entry の percent が
+      今回より大きいものがあれば書き出さない (単調性ガード)
     - 抽出 entry が 0 件なら書き出さない (cache 経路の kick のみ)
     - 書き出し失敗は表示・exit code・stderr に影響させない
     """
@@ -196,6 +198,75 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
         cache = self.read_cache()
         self.assertGreater(cache["fetched_at"], fetched_at)
         self.assertEqual(cache["consecutive_failures"], 0)
+
+    def fresh_cache(self, weekly_scoped: list[dict], age_sec: int = 10) -> str:
+        fetched_at = int(time.time()) - age_sec
+        self.write_cache(
+            {
+                "fetched_at": fetched_at,
+                "consecutive_failures": 0,
+                "next_attempt_at": fetched_at + 300,
+                "weekly_scoped": weekly_scoped,
+            }
+        )
+        return self.cache_file.read_text()
+
+    def test_fresh_cache_with_higher_percent_in_same_window_is_not_overwritten(self) -> None:
+        original_text = self.fresh_cache(
+            [{"display_name": "Fable", "percent": 40, "resets_at": "r1"}]
+        )
+
+        self.run_main_ok(
+            self.payload([{"display_name": "Fable", "utilization": 35, "resets_at": "r1"}])
+        )
+
+        self.assertEqual(self.cache_file.read_text(), original_text)
+
+    def test_monotonic_guard_blocks_whole_write_if_any_entry_decreases(self) -> None:
+        original_text = self.fresh_cache(
+            [
+                {"display_name": "Fable", "percent": 40, "resets_at": "r1"},
+                {"display_name": "Opus", "percent": 10, "resets_at": "r2"},
+            ]
+        )
+
+        self.run_main_ok(
+            self.payload(
+                [
+                    {"display_name": "Fable", "utilization": 35, "resets_at": "r1"},
+                    {"display_name": "Opus", "utilization": 20, "resets_at": "r2"},
+                ]
+            )
+        )
+
+        self.assertEqual(self.cache_file.read_text(), original_text)
+
+    def test_higher_percent_in_different_window_does_not_block_write(self) -> None:
+        self.fresh_cache([{"display_name": "Fable", "percent": 90, "resets_at": "old-window"}])
+
+        self.run_main_ok(
+            self.payload([{"display_name": "Fable", "utilization": 3, "resets_at": "new-window"}])
+        )
+
+        self.assertEqual(
+            self.read_cache()["weekly_scoped"],
+            [{"display_name": "Fable", "percent": 3, "resets_at": "new-window"}],
+        )
+
+    def test_monotonic_guard_does_not_apply_to_stale_cache(self) -> None:
+        self.fresh_cache(
+            [{"display_name": "Fable", "percent": 42, "resets_at": "r1"}],
+            age_sec=301 + CLOCK_SLACK_SEC,
+        )
+
+        self.run_main_ok(
+            self.payload([{"display_name": "Fable", "utilization": 41.7, "resets_at": "r1"}])
+        )
+
+        self.assertEqual(
+            self.read_cache()["weekly_scoped"],
+            [{"display_name": "Fable", "percent": 41.7, "resets_at": "r1"}],
+        )
 
     def test_unparseable_cache_is_rewritten(self) -> None:
         self.cache_dir.mkdir(parents=True)

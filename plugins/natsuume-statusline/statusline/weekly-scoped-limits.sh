@@ -65,6 +65,11 @@
 #   書き出さない条件:
 #     - 引数が JSON 配列でない、または空配列
 #     - 既存 cache が parse でき、now - fetched_at <= TTL かつ weekly_scoped が引数と同一
+#     - 既存 cache が parse でき、now - fetched_at <= TTL で、引数のいずれかの entry に
+#       display_name と resets_at が一致し percent が引数より大きい cache の entry がある
+#       (単調性ガード: 同じ週次枠の使用率は reset まで減らないため、複数セッションのうち
+#       古いスナップショットを持つセッションが新しい値を上書きするのを防ぐ。TTL 超の
+#       cache に適用しないのは、値の丸めの違い等で書き出しが止まり続けないようにするため)
 #   書き出しは weekly_scoped_atomic_write (mktemp + mv、umask 077) で行う。
 #   fail-open: いかなる失敗でも stdout / stderr に出力せず 0 を返す。
 #
