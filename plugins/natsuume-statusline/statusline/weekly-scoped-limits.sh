@@ -10,15 +10,17 @@
 #
 # ■ データ優先順位 (main.sh 側の配線契約)
 #   1. stdin の rate_limits.model_scoped[] — Claude Code バイナリに schema が存在する
-#      公式経路 (issue #231 時点では実 stdin 未出現)。emit され始めたらこちらを優先し、
-#      本ファイルの cache 経路は読まず background fetch も起動しない。
+#      公式経路。stdin に含まれていればこちらを優先し、
+#      本ファイルの cache 経路は読まず background fetch も起動しない。代わりに
+#      write_weekly_scoped_from_stdin で stdin の値を cache へ書き出す (cache を読む
+#      他 plugin の週次枠ガードが、公式経路の利用中も最新の使用率を参照できるようにするため)。
 #   2. 本ファイルの cache (OAuth usage API 由来)。
 #
 # ■ cache ファイル
 #   パス: ${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json
 #   権限: ディレクトリ・ファイルとも所有者のみ (umask 077)。
 #   書き込み: 同一ディレクトリの mktemp + mv による atomic write のみ。
-#   schema (書き手 = 本ファイルの fetch worker):
+#   schema (書き手 = 本ファイルの fetch worker と write_weekly_scoped_from_stdin):
 #     {
 #       "fetched_at": <最後に成功した fetch の epoch 秒。成功前は 0>,
 #       "consecutive_failures": <連続失敗回数。成功で 0 にリセット>,
@@ -52,6 +54,19 @@
 #   kick 側で取得した lock は worker が引き継いで解放する (worker の trap が担う)。
 #   `&` 起動の失敗は同期検知できないため、万一 worker が起動せず lock が残った
 #   場合は stale 判定 (120 秒) による奪取で回収する。
+#
+# write_weekly_scoped_from_stdin <weekly_scoped_json>
+#   stdin の model_scoped[] (公式経路) から変換した entry を cache へ書き出す。
+#   全表示出力の後に main.sh が呼ぶ (kick_weekly_scoped_refresh と同じ配置契約)。
+#   引数: cache schema の weekly_scoped と同形の JSON 配列
+#         ([{"display_name", "percent" (= utilization), "resets_at" (欠落時は "")}])。
+#   書き出す内容: fetched_at = now、consecutive_failures = 0、
+#                 next_attempt_at = now + TTL (300 秒)、weekly_scoped = 引数。
+#   書き出さない条件:
+#     - 引数が JSON 配列でない、または空配列
+#     - 既存 cache が parse でき、now - fetched_at <= TTL かつ weekly_scoped が引数と同一
+#   書き出しは weekly_scoped_atomic_write (mktemp + mv、umask 077) で行う。
+#   fail-open: いかなる失敗でも stdout / stderr に出力せず 0 を返す。
 #
 # ■ fetch worker (直接実行モード: `bash weekly-scoped-limits.sh --fetch-worker`。
 #   source されたときはこの節の関数定義のみが行われ、実行はされない)
@@ -260,6 +275,12 @@ weekly_scoped_record_success() {
   local now="$1" weekly_scoped_json="$2"
   local next_attempt_at=$((now + WEEKLY_SCOPED_TTL))
   weekly_scoped_atomic_write "$now" 0 "$next_attempt_at" "$weekly_scoped_json"
+}
+
+# stdin の model_scoped[] から変換した entry を cache へ書き出す (契約はファイル冒頭の
+# 「提供する関数」節を参照)。
+write_weekly_scoped_from_stdin() {
+  return 0
 }
 
 # 失敗時の cache 更新: fetched_at と weekly_scoped は前回値を保持し、
