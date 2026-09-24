@@ -51,7 +51,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE_PLUGIN = ROOT / "plugins" / "agent-discipline"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 REPO_README = ROOT / "README.md"
