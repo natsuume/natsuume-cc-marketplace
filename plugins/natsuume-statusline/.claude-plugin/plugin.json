@@ -1,6 +1,6 @@
 {
   "name": "natsuume-statusline",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "git 状態と使用量を表示する statusLine"
 }

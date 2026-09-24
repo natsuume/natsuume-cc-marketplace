@@ -51,8 +51,41 @@ class StatuslineWidthTest(unittest.TestCase):
         self.assertEqual(self.width_for("3"), "1")
 
 
-class GaugeLineContextPercentOnlyTest(unittest.TestCase):
-    """バーを削除しても収まらない場合に ctx を使用率のみにする段階 (段階4) を検証する。"""
+class ShortenModelNameTest(unittest.TestCase):
+    """shorten_model_name がモデル名末尾の括弧書きをすべて削る契約を検証する。"""
+
+    def shorten(self, name: str) -> str:
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'd="$1"; shift; source "$d/lib.sh"; source "$d/line2.sh"; shorten_model_name "$1"',
+                "statusline-shorten-test",
+                str(STATUSLINE_DIR),
+                name,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        return result.stdout.decode()
+
+    def test_removes_trailing_parenthesized_suffixes(self) -> None:
+        self.assertEqual(self.shorten("Opus 5.5 (1M context)"), "Opus 5.5")
+        self.assertEqual(self.shorten("Model (a) (b)"), "Model")
+
+    def test_keeps_names_without_trailing_suffix(self) -> None:
+        self.assertEqual(self.shorten("Sonnet 5"), "Sonnet 5")
+        self.assertEqual(self.shorten("Model (beta) X"), "Model (beta) X")
+
+    def test_keeps_original_when_result_would_be_empty(self) -> None:
+        self.assertEqual(self.shorten("(1M context)"), "(1M context)")
+        self.assertEqual(self.shorten(""), "")
+
+
+class GaugeLineShrinkLadderTest(unittest.TestCase):
+    """2 行目の段階的縮小 (段階1 のモデル名短縮・段階4 の ctx 使用率のみ表示) を検証する。"""
 
     def render_line2(self, width: int) -> str:
         reset = str(int(time.time()) + 3500)
@@ -80,17 +113,29 @@ class GaugeLineContextPercentOnlyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         return plain(result.stdout.decode())
 
-    def test_tokens_kept_while_bar_removal_suffices(self) -> None:
-        line = self.render_line2(65)
-        self.assertIn("ctx: 452.3k/1M", line)
+    def test_full_model_name_kept_when_it_fits(self) -> None:
+        line = self.render_line2(90)
+        self.assertIn(f"{LONG_MODEL_NAME} (xhigh)", line)
+        self.assertIn("ctx: (45.2%) 452.3k/1M", line)
+
+    def test_model_name_suffix_removed_before_context_percent(self) -> None:
+        line = self.render_line2(80)
+        self.assertTrue(line.startswith("Opus 5.5 (xhigh) | "), line)
+        self.assertNotIn("(1M context)", line)
+        self.assertIn("ctx: (45%) 452.3k/1M", line)
         self.assertNotIn("…", line)
 
     def test_context_shows_percent_only_before_truncation(self) -> None:
-        line = self.render_line2(60)
+        line = self.render_line2(50)
         self.assertIn("ctx: (45%)", line)
         self.assertNotIn("452.3k", line)
         self.assertNotIn("…", line)
-        self.assertLessEqual(len(line), 60)
+        self.assertLessEqual(len(line), 50)
+
+    def test_context_percent_is_never_dropped(self) -> None:
+        for width in range(45, 111):
+            with self.subTest(width=width):
+                self.assertRegex(self.render_line2(width), r"ctx: \(45(\.2)?%\)")
 
 
 class StatuslineMainFitsFooterTest(unittest.TestCase):
@@ -152,7 +197,7 @@ class StatuslineMainFitsFooterTest(unittest.TestCase):
         for columns in range(50, 101):
             with self.subTest(columns=columns):
                 output = self.run_main(columns)
-                self.assertIn(LONG_MODEL_NAME, output)
+                self.assertIn("Opus 5.5", output)
                 for line in output.split("\n"):
                     self.assertLessEqual(len(line), columns - FOOTER_RESERVED_COLUMNS, line)
 
