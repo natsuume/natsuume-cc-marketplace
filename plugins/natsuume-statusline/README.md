@@ -4,7 +4,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.10.6
+v0.11.0
 
 ## 表示内容
 
@@ -29,11 +29,12 @@ v0.10.6
 
 Claude Code が statusline の stdin に渡す `rate_limits` には `five_hour` / `seven_day` しか無く、Fable 等サブスクリプション固有のモデル別週次枠は含まれません。この情報は OAuth usage API (`https://api.anthropic.com/api/oauth/usage`) から取得し、TTL 付き file cache + background fetch で 3 行目に供給します。
 
-- **データ優先順位**: (1) stdin の `rate_limits.model_scoped[]` (Claude Code バイナリに schema は存在するが本 README 執筆時点の実 stdin には未出現の公式経路。emit され始めたら自動的にこちらが優先され、下記の cache 経路・background fetch は動作しなくなります) → (2) 本プラグインの cache (OAuth usage API 由来)
+- **データ優先順位**: (1) stdin の `rate_limits.model_scoped[]` (Claude Code の usage 情報に存在するモデル別週次枠。Claude Code 2.1.281 で確認した限り statusline の stdin には含まれていませんが、含まれるようになれば自動的にこちらが優先され、下記の OAuth usage API の background fetch は動作しなくなります。`utilization` は 0-100 のパーセント値です) → (2) 本プラグインの cache (OAuth usage API 由来)
+- **公式経路の値の cache 書き出し**: stdin の `model_scoped[]` に表示可能な entry (`display_name` が非空文字列、`utilization` が数値) が 1 件以上あるときは、その値を下記 cache へ同じ schema で書き出します (`utilization` を `percent` に入れ、`consecutive_failures` は 0、`next_attempt_at` は書き出し時刻 + 300 秒)。cache を読む他 plugin (週次枠の使用率で Fable の利用可否を判定するもの) が、公式経路の利用中も最新の使用率を参照できるようにするためです。既存 cache が 300 秒以内の場合、内容が同一なとき、同じ週次枠 (`display_name` と `resets_at` が一致) の `percent` が cache より小さくなる entry があるとき、または同じ `display_name` で cache の `resets_at` の方が後 (reset 後の新しい週次枠) の entry があるときは書き出しを省略します (後の 2 つは、複数セッションのうち古いスナップショットを持つセッションが新しい値を上書きするのを防ぐためです。同じ週次枠の使用率は reset まで減りません。`resets_at` は両方が数値なら数値として、両方が空でない文字列なら文字列として比較します。UTC の ISO 8601 文字列は、`Z` / `+00:00` や小数秒の表記の違いを揃えるため、秒までに正規化してから比較します)。書き出しは全表示出力の後に行い、失敗しても表示と exit code に影響しません
 - **cache パス**: `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json` (ディレクトリ・ファイルとも所有者のみ権限、同一ディレクトリの mktemp + mv による atomic write)
-- **schema**: `fetched_at` (最後に成功した fetch の epoch 秒)、`consecutive_failures` (連続失敗回数)、`next_attempt_at` (この epoch 秒より前は再 fetch しない)、`weekly_scoped` (`{display_name, percent, resets_at}` の配列)
+- **schema**: `fetched_at` (最後に成功した取得 (fetch または公式経路からの書き出し) の epoch 秒)、`consecutive_failures` (連続失敗回数)、`next_attempt_at` (この epoch 秒より前は再 fetch しない)、`weekly_scoped` (`{display_name, percent, resets_at}` の配列)
 - **TTL / backoff**: 成功時は 300 秒後に再 fetch 可能になります。失敗時 (token 取得不能・curl 失敗・非 200・JSON 不能) は `consecutive_failures` を増やし、`60 * 2^(failures-1)` 秒 (上限 1800 秒) の指数バックオフで再試行間隔を広げます。失敗時も前回成功した `weekly_scoped` は保持されるため、一時的な取得失敗で表示が消えることはありません
-- **lock**: `<cache_dir>/.fetch.lock` を mkdir で排他制御し、background worker の多重起動を防ぎます (mtime が 120 秒より古い lock は前回異常終了とみなして奪取)
+- **lock**: `<cache_dir>/.fetch.lock` を mkdir で排他制御し、background worker の多重起動を防ぎます (mtime が 120 秒より古い lock は前回異常終了とみなして奪取)。cache への書き込みは、公式経路の値の書き出しと background worker のどちらも共通の cache 書き込み lock (`<cache_dir>/.write.lock`) の中で行い、書き込み条件の判定と書き込みの間に別の書き込みが割り込むのを防ぎます。公式経路の書き出しは lock を取得できなければその描画では書き出しません。background worker は lock を最大 2 秒待ち、fetch の開始後に他の書き手が cache を更新していた場合は書き込みません (fetch 開始前の状態に基づく値で新しい値を上書きしないため)。lock を取得できなかった worker は fetch lock を解放せずに終了し、fetch lock が stale として回収されるまで (120 秒) 次の fetch を止めます (再試行間隔を記録できないまま API を呼び続けないため)。lock には所有者トークンを置き、解放は自分のトークンのときだけ行います。120 秒より古い lock の奪取は、古い lock の個体ごとに固有の奪取用 lock (`<cache_dir>/.write.lock.takeover.*`) の中で、lock が作り直されておらず古いままであることを確認し直してから行います
 - **token の取り扱い**: `~/.claude/.credentials.json` の `claudeAiOauth.accessToken` (macOS では Keychain もフォールバック先) を読み、`curl --config -` で stdin 経由にのみ渡します。argv・ログ・stderr・一時ファイルに token を書き出すことはありません
 - **fail-open**: `curl` が無い環境、非サブスクリプション環境 (API が `weekly_scoped` を返さない) では 3 行目に 7d のみ、あるいは 3 行目自体が表示されません。表示処理・statusline のレンダリングを background fetch がブロックすることもありません
 
@@ -85,7 +86,7 @@ plugin cache 配下から実行された場合は、`~/.claude/natsuume-statusli
 | `statusline/line1.sh` | 1 行目 (パス / repo / branch / 変更量 / 未コミット) のレンダラ |
 | `statusline/line2.sh` | 2 行目 (モデル名 / context 使用量 / 5h レートリミット) のレンダラ |
 | `statusline/line3.sh` | 3 行目 (7d レートリミット / モデル別週次枠) のレンダラ |
-| `statusline/weekly-scoped-limits.sh` | モデル別週次枠の cache 読み出し (`read_weekly_scoped_entries`)、background fetch の起動 (`kick_weekly_scoped_refresh`)、OAuth usage API を叩く fetch worker (`--fetch-worker` として自身を直接実行) |
+| `statusline/weekly-scoped-limits.sh` | モデル別週次枠の cache 読み出し (`read_weekly_scoped_entries`)、background fetch の起動 (`kick_weekly_scoped_refresh`)、公式経路 (stdin) の値の cache 書き出し (`write_weekly_scoped_from_stdin`)、OAuth usage API を叩く fetch worker (`--fetch-worker` として自身を直接実行) |
 | `statusline/context-cache-dump.sh` | context cache dump (session-handoff plugin 連携) の `dump_context_cache` 関数 |
 
 ## アンインストール / 元に戻す

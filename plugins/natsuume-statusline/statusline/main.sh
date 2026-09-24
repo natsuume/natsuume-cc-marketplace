@@ -39,16 +39,27 @@ eval "$(printf '%s' "$input" | jq -r '
   @sh "rate_7d_reset=\(.rate_limits.seven_day.resets_at // "")"
 ')"
 
-# rate_limits.model_scoped[]（モデル別週次枠。Claude Code バイナリに schema は存在するが
-# issue #231 時点の実 stdin には未出現の公式経路）を TSV で別途抽出する。
+# rate_limits.model_scoped[]（モデル別週次枠）を TSV で別途抽出する。
 # 複数行になりうるため上の eval ブロック（1 スカラー値ずつの @sh）とは別呼び出しにする。
-# utilization は 0-100 スケールと推定する (five_hour.used_percentage と同スケールという
-# 想定。公式ドキュメント未確認・バイナリの文字列解析からの推定である点に注意)。
+# Claude Code 2.1.281 のバイナリで確認した内容 (2026-09-24):
+#   - model_scoped は usage 情報の payload (OAuth usage API の limits[] から組み立てる) にあり、
+#     statusline の stdin の rate_limits (five_hour / seven_day / spend_limit) には含まれない。
+#     stdin に含まれるようになった場合に備えて読む (含まれない間は cache 経路が使われる)
+#   - utilization は 0-100 のパーセント値 (同 payload の表示処理が five_hour と同じく
+#     `Math.floor(utilization)% used` と整形している)。resets_at は ISO 8601 文字列
 model_scoped_tsv=$(printf '%s' "$input" | jq -r '
   .rate_limits.model_scoped // [] | .[]
   | select((.display_name|type=="string") and (.display_name|length>0) and (.utilization|type=="number"))
   | [.display_name, (.utilization|tostring), (.resets_at // "")]
   | @tsv
+' 2>/dev/null)
+
+# 同じ抽出条件の entry を weekly-scoped.json の weekly_scoped と同形の JSON 配列に変換する
+# (cache 書き出し用)。TSV では resets_at の型が失われるため、値をそのまま保つ JSON で別に作る。
+model_scoped_json=$(printf '%s' "$input" | jq -c '
+  [ .rate_limits.model_scoped // [] | .[]
+    | select((.display_name|type=="string") and (.display_name|length>0) and (.utilization|type=="number"))
+    | {display_name: .display_name, percent: .utilization, resets_at: (.resets_at // "")} ]
 ' 2>/dev/null)
 
 # 共通関数・各行のコンポーネントを読み込み
@@ -195,12 +206,15 @@ fi
 source "$SCRIPT_DIR/context-cache-dump.sh"
 dump_context_cache "$session_id" "$ctx_pct" "$ctx_used" "$ctx_max" "$received_at"
 
-# --- モデル別週次枠 (OAuth usage API) の background fetch kick ---
-# stdin に公式経路の model_scoped が来ていれば cache 経路は不要なので起動しない。
+# --- モデル別週次枠 cache の更新 ---
+# stdin に公式経路の model_scoped が来ていれば、OAuth usage API の background fetch は
+# 起動せず、stdin の値を cache へ書き出す (cache を読む他 plugin 向け)。来ていなければ
+# cache 経路の background fetch を kick する。
 # 表示への不干渉のため全出力 (dump_context_cache 含む) の後にのみ呼ぶ。
-# if の条件が偽だったときの終了ステータスを script の exit code に漏らさないよう、
-# 末尾で明示的に 0 を返す。
+# 関数の終了ステータスを script の exit code に漏らさないよう、末尾で明示的に 0 を返す。
 if [ -z "$model_scoped_tsv" ]; then
   kick_weekly_scoped_refresh
+else
+  write_weekly_scoped_from_stdin "$model_scoped_json"
 fi
 exit 0
