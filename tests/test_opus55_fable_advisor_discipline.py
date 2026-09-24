@@ -1,12 +1,11 @@
 """agent-discipline: Opus 5.5 メイン + Fable Advisor パターン向け分業規律・自走方針の契約テスト。
 
 背景:
-- メインセッションを Opus 5.5 にし、Fable は pre-push-review の reviewer 2 体と
-  cross-model-advisor の fable-advisor-runner でのみ使う構成へ移行する。
-- discipline-opus.md / discipline-sonnet.md の rule:delegation-rules 節は、Fable を
-  全面禁止する記述から「reviewer / advisor の起動に限り `model: "fable"` を明示して
-  使い、週次枠ガードで deny されたら reviewer は Opus で再起動・advisor はスキップ」
-  の記述に置き換える。
+- メインセッションを Opus 5.5 にし、Fable は cross-model-advisor の fable-advisor-runner
+  でのみ使う。pre-push-review の reviewer 2 体は常に Opus で起動するため Fable の用途に含めない。
+- discipline-opus.md / discipline-sonnet.md の rule:delegation-rules 節は、「advisor の
+  起動に限り `model: "fable"` を明示して使い、週次枠ガードで deny されたら advisor は
+  スキップ」と記述し、pre-push-review の reviewer には言及しない。
 - discipline-opus.md の effort 規律は公式ガイド「Prompting Claude Opus 5.5」
   (prompting-claude-opus-5-5、既定 effort は medium) を基準に書き換える。Opus 5 向けの
   3 規律 (委任しない作業・スコープ制限の 1 文・汎用再確認指示の禁止) は Opus 5 /
@@ -49,9 +48,8 @@ FABLE_PROHIBITION_PHRASE = "Fable をサブエージェントに使わない"
 
 # rule:delegation-rules 節に必須の Fable 用途の記述 (opus / sonnet 共通の canonical 文言)。
 FABLE_USAGE_PHRASES = (
-    # 用途を reviewer 2 体と fable-advisor-runner の起動に限る
-    "`pre-push-review:code-reviewer`",
-    "`pre-push-review:security-reviewer`",
+    # 用途を fable-advisor-runner の起動に限る
+    "**Fable は advisor の起動に限る**",
     "`cross-model-advisor:fable-advisor-runner`",
     "ワーカー (実装・調査・一括修正等) には使わない",
     # hook (PreToolUse の Agent|Task) が捕捉しない Workflow の agent() では使わない
@@ -61,13 +59,18 @@ FABLE_USAGE_PHRASES = (
     "model 未指定・agent 定義 frontmatter による Fable 実行は使わない",
     # 週次枠ガードによる deny と deny 後の振る舞い
     "Fable 週次枠の使用率が閾値を超えた場合・確認できない場合",
-    'reviewer は `model: "opus"` で再起動し',
     "fable-advisor-runner は再起動せずスキップする",
     # Fable メインのセッション
     (
         "Fable メインのセッションでは Fable サブエージェントを使わず、"
         "model を非 Fable で明示する (未指定の継承は block-fable-subagent.sh が deny する)。"
     ),
+)
+
+# rule:delegation-rules 節に含めない記述 (pre-push-review の reviewer は Fable の用途ではない)。
+FABLE_EXCLUDED_PHRASES = (
+    "pre-push-review:",
+    "reviewer / advisor",
 )
 
 # discipline-opus.md の effort 規律 (Opus 5.5 基準)。
@@ -142,6 +145,17 @@ class FableUsageDelegationRulesTests(unittest.TestCase):
         ]
         self.assertEqual(
             [], missing, f"rule:delegation-rules 節に無い Fable 用途の記述: {missing}"
+        )
+
+    def test_reviewers_are_not_fable_usage_in_delegation_rules(self) -> None:
+        present = [
+            f"{name}: {phrase!r}"
+            for name, path in DISCIPLINES.items()
+            for phrase in FABLE_EXCLUDED_PHRASES
+            if phrase in delegation_rules_section(read(path))
+        ]
+        self.assertEqual(
+            [], present, f"rule:delegation-rules 節に残る reviewer の Fable 用途: {present}"
         )
 
 
