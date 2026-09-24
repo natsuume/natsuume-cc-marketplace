@@ -44,7 +44,7 @@ Phase 文脈を渡すのは code-reviewer と security-reviewer だけです。c
 - `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` が見つからない → core が未 install の環境です。 3 レビュー構成にしたい場合は `claude plugin install pre-push-review@natsuume-plugins` で core を導入してください。 導入しない場合は codex-reviewer のみで push gate は成立します
 - codex review wrapper が「codex プラグインが見つかりません」 で失敗 → 公式 codex プラグインを install (`claude plugin install codex@openai-codex`) してから codex-reviewer subagent を再起動
 - 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ subagent を順次起動しても push gate の構造的保証は同じ (= マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。 順次起動する場合は **code-reviewer → security-reviewer → codex-reviewer** の順を推奨します (codex-reviewer は wrapper が codex CLI を foreground で hold するため最長になりやすく、 後段に置くと前段の review 結果を主 session が並行確認できる)。
-- 一部の marker のみ失効している場合は、 全 subagent を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (各 plugin の push gate の deny メッセージも同じ案内をします)。 単独再起動時も上記の起動仕様と同じ model 指定を必ず添えてください (model 未指定の起動は Fable セッションでは agent-discipline の hook に deny されます)。 並列発出が既定であることは変わりません (= 初回実行や複数 marker が失効した場合は引き続き並列起動を使う)。
+- 一部の marker のみ失効している場合は、 全 subagent を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (各 plugin の push gate の deny メッセージも同じ案内をします)。 単独再起動時も上記の起動仕様と同じ model 指定を必ず添えてください。 並列発出が既定であることは変わりません (= 初回実行や複数 marker が失効した場合は引き続き並列起動を使う)。
 - code-reviewer / security-reviewer の起動が model 利用不可 (Opus 5 を提供しないプラン等) で失敗する場合は `model: "sonnet"` の明示で、codex-reviewer の起動が Sonnet 制限環境で失敗する場合は利用可能な非 Fable モデル (例: `model: "opus"`) の明示で、該当 reviewer を単独再起動してよい (呼び出し側の model 指定は frontmatter より優先され、marker は subagent の agent_type に対して発行されるため fallback でも機能する)。fallback 使用時はレビューの実効モデルが既定と異なる
 
 ## レビュー指摘の修正フロー (subagent 完了後)

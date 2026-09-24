@@ -75,7 +75,7 @@
 
 起動規律は次のとおり:
 
-- Codex 側 runner の Agent call は `model: "sonnet"` を明示する (model 未指定の継承は Fable セッションで deny される)
+- Codex 側 runner の Agent call は `model: "sonnet"` を明示する
 - 起動 mode は Claude Code が決めるため、Agent call で起動 mode を指定しない
 - runner の terminal report は completion notification (auto mode では SubagentHandback、それ以外では SubagentStop) で後続 turn に届く
 - main session は completion notification を受け取ってから runner の report を処理する

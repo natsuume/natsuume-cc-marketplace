@@ -354,7 +354,7 @@ subagent が codex review を実行し、 完了時にレビュー記録を repo
 
 レビューは **current branch の PR** に対して実行され、 記録も current branch の PR に紐づきます。 別の PR を番号で指定して merge しようとしている場合は、 先にその PR のブランチへ \`git switch\` してから subagent を起動してください (別ブランチのまま起動すると、 記録が current branch の PR のものになり、 この merge は deny のままになります)。
 
-model 未指定の Agent 起動は Fable セッションでは agent-discipline の hook に deny されるため、 上記の model を常に明示してください。
+上記の model を常に明示してください。
 
 PR に commit を追加すると head SHA が変わり、 過去のレビュー記録と投稿済みコメントは自動的に失効します (再レビューが必要になります)。"
 
