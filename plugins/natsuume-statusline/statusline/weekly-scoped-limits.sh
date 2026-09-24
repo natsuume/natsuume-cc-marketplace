@@ -96,7 +96,8 @@
 #      next_attempt_at = now + min(60 * 2^(consecutive_failures - 1), 1800)
 #      成功時: consecutive_failures = 0、next_attempt_at = now + TTL。
 #      4・5 の cache 書き込みは cache 書き込み lock の保持下で行い (取得は 0.1 秒間隔で
-#      最大 20 回試行し、取得できなければ書き込まない)、worker 開始時に読んだ fetched_at より
+#      最大 20 回試行し、取得できなければ書き込まず、fetch lock を解放せずに終了して 120 秒の
+#      stale 判定まで次の fetch を止める)、worker 開始時に読んだ fetched_at より
 #      cache の fetched_at が新しければ書き込まない (fetch 中に stdin 経路が書き出した新しい
 #      値を、fetch 開始前の状態に基づく値で上書きしないため)。
 #   6. 終了時に必ず lock を解放する (trap)。
@@ -110,12 +111,11 @@
 #   間に他の書き込みを割り込ませないために使う。
 #     - lock dir に所有者トークン (owner ファイル) を置き、解放はトークンが一致するときだけ行う
 #     - mtime が 120 秒より古い lock は奪取する。奪取は奪取用 lock
-#       <cache_dir>/.write.lock.takeover.<古い lock の識別子>.<時間枠> の保持下でのみ行い、
+#       <cache_dir>/.write.lock.takeover.<古い lock の識別子> の保持下でのみ行い、
 #       その中で lock の識別子が変わっておらず stale のままであることを確認し直してから
-#       削除・再作成する。識別子は所有者トークンと mtime から作り、時間枠は now / 120 の整数部。
-#       同じ古い lock を同じ時間枠に奪取できるのは 1 つだけで、奪取中に強制終了して
-#       奪取用 lock が残っても、次の時間枠では別名になるため奪取を再開できる。
-#       奪取用 lock は奪取の後に自分で削除し、2 つ前より古い時間枠のものは後片付けで削除する
+#       削除・再作成する。識別子は所有者トークンと mtime から作る。同じ古い lock を奪取
+#       できるのは 1 つだけになる。奪取用 lock は奪取の後に自分で削除し、奪取中に強制終了して
+#       残ったもの (mtime が 120 秒より古いもの) は後片付けで削除する
 #
 # ■ 依存と縮退
 #   jq: 必須 (プラグイン全体の必須依存)。curl: optional — 無ければ fetch せず
@@ -352,16 +352,14 @@ weekly_scoped_write_lock_identity() {
   printf '%s-%s' "$owner" "$mtime"
 }
 
-# 2 つ前より古い時間枠の奪取用 lock を削除する (奪取中に強制終了した残骸の後片付け)。
-# 奪取は一瞬で終わるため、2 つ前の時間枠の奪取用 lock を使用中のプロセスは無い。
-# 引数: $1=現在の時間枠
+# mtime が WEEKLY_SCOPED_LOCK_STALE_SEC 秒より古い奪取用 lock を削除する (奪取中に強制終了した
+# 残骸の後片付け)。奪取は一瞬で終わるため、stale な奪取用 lock を使用中のプロセスは無い。
+# 引数: $1=now
 weekly_scoped_cleanup_takeover_dirs() {
-  local current_slot="$1" dir slot
+  local now="$1" dir
   for dir in "$WEEKLY_SCOPED_WRITE_LOCK_DIR".takeover.*; do
     [ -d "$dir" ] || continue
-    slot="${dir##*.}"
-    [[ "$slot" =~ ^[0-9]+$ ]] || continue
-    [ "$slot" -lt $((current_slot - 1)) ] && rm -rf "$dir" 2>/dev/null
+    weekly_scoped_lock_is_stale "$dir" "$now" && rm -rf "$dir" 2>/dev/null
   done
   return 0
 }
@@ -370,12 +368,13 @@ weekly_scoped_cleanup_takeover_dirs() {
 # 取得できれば WEEKLY_SCOPED_WRITE_LOCK_TOKEN が所有者トークンになる。
 #
 # lock 保持中に強制終了された場合に備え、mtime が WEEKLY_SCOPED_LOCK_STALE_SEC 秒より古い
-# lock は奪取する。奪取は「古い lock の識別子 + 時間枠」ごとに固有の奪取用 lock の保持下で
-# のみ行い、その中で lock の識別子が変わっておらず stale のままであることを確認し直してから
-# 削除・再作成する。これにより、同じ古い lock を複数の描画が同時に見ても奪取するのは 1 つだけで、
-# 他のプロセスの奪取用 lock を削除する必要も無い。
+# lock は奪取する。奪取は古い lock の識別子ごとに固有の奪取用 lock の保持下でのみ行い、
+# その中で lock の識別子が変わっておらず stale のままであることを確認し直してから
+# 削除・再作成する。これにより、同じ古い lock を複数の描画が同時に見ても奪取するのは 1 つだけになる。
+# 奪取用 lock を取得できなければ、stale な奪取用 lock (奪取中に強制終了した残骸) を削除して
+# その描画では取得を諦める (次の描画で奪取をやり直す)。
 weekly_scoped_acquire_write_lock() {
-  local now="$1" observed slot takeover_dir acquired=1
+  local now="$1" observed takeover_dir acquired=1
 
   WEEKLY_SCOPED_WRITE_LOCK_TOKEN="$$.$RANDOM.$now"
   (umask 077; mkdir -p "$WEEKLY_SCOPED_CACHE_DIR") 2>/dev/null || return 1
@@ -384,9 +383,11 @@ weekly_scoped_acquire_write_lock() {
   weekly_scoped_lock_is_stale "$WEEKLY_SCOPED_WRITE_LOCK_DIR" "$now" || return 1
   observed=$(weekly_scoped_write_lock_identity) || return 1
 
-  slot=$((now / WEEKLY_SCOPED_LOCK_STALE_SEC))
-  takeover_dir="$WEEKLY_SCOPED_WRITE_LOCK_DIR.takeover.$observed.$slot"
-  (umask 077; mkdir "$takeover_dir") 2>/dev/null || return 1
+  takeover_dir="$WEEKLY_SCOPED_WRITE_LOCK_DIR.takeover.$observed"
+  if ! (umask 077; mkdir "$takeover_dir") 2>/dev/null; then
+    weekly_scoped_cleanup_takeover_dirs "$now"
+    return 1
+  fi
 
   if [ "$(weekly_scoped_write_lock_identity)" = "$observed" ] \
     && weekly_scoped_lock_is_stale "$WEEKLY_SCOPED_WRITE_LOCK_DIR" "$now"; then
@@ -394,7 +395,7 @@ weekly_scoped_acquire_write_lock() {
     weekly_scoped_create_write_lock && acquired=0
   fi
   rmdir "$takeover_dir" 2>/dev/null
-  weekly_scoped_cleanup_takeover_dirs "$slot"
+  weekly_scoped_cleanup_takeover_dirs "$now"
   return "$acquired"
 }
 
@@ -411,6 +412,9 @@ weekly_scoped_release_write_lock() {
 
 # fetch worker の cache 書き込みを cache 書き込み lock の保持下で行う。lock は 0.1 秒間隔で
 # 最大 WEEKLY_SCOPED_WRITE_LOCK_WORKER_TRIES 回試行し、取得できなければ書き込まない。
+# このとき next_attempt_at を進められず、次の描画ですぐ再 fetch が起動してしまうため、
+# WEEKLY_SCOPED_KEEP_FETCH_LOCK=1 にして worker 終了時に fetch lock を解放しない
+# (fetch lock は stale 判定 (120 秒) で回収されるまで kick を止める)。
 # worker 開始時に読んだ fetched_at より cache の fetched_at が新しければ (fetch 中に他の
 # 書き手が書き込んだので) 書き込まない。
 # 引数: $1=worker 開始時の fetched_at, $2 以降=書き込みを行う関数とその引数
@@ -422,7 +426,10 @@ weekly_scoped_worker_write() {
     now=$(date +%s 2>/dev/null) || return 0
     weekly_scoped_acquire_write_lock "$now" && break
     tries=$((tries + 1))
-    [ "$tries" -ge "$WEEKLY_SCOPED_WRITE_LOCK_WORKER_TRIES" ] && return 0
+    if [ "$tries" -ge "$WEEKLY_SCOPED_WRITE_LOCK_WORKER_TRIES" ]; then
+      WEEKLY_SCOPED_KEEP_FETCH_LOCK=1
+      return 0
+    fi
     sleep 0.1
   done
 
@@ -498,12 +505,14 @@ weekly_scoped_record_failure() {
   weekly_scoped_atomic_write "$prev_fetched_at" "$new_failures" "$next_attempt_at" "$prev_weekly_scoped"
 }
 
-# fetch worker 本体。fetch lock の保持は kick 側から引き継ぐ前提 (trap で必ず解放する)。
+# fetch worker 本体。fetch lock の保持は kick 側から引き継ぐ前提で、終了時に trap で解放する
+# (cache 書き込み lock を取得できず WEEKLY_SCOPED_KEEP_FETCH_LOCK=1 のときは解放しない)。
 # cache 書き込み lock も、書き込み中に終了した場合に備えて trap で解放する
 # (所有者トークンが一致するときだけ解放されるため、未取得なら何もしない)。
 weekly_scoped_fetch_worker() {
   set +x
-  trap 'weekly_scoped_release_write_lock; rmdir "$WEEKLY_SCOPED_LOCK_DIR" 2>/dev/null' EXIT
+  WEEKLY_SCOPED_KEEP_FETCH_LOCK=0
+  trap 'weekly_scoped_release_write_lock; [ "$WEEKLY_SCOPED_KEEP_FETCH_LOCK" = 1 ] || rmdir "$WEEKLY_SCOPED_LOCK_DIR" 2>/dev/null' EXIT
 
   local now fetched_at=0 next_attempt_at=0 consecutive_failures=0
   now=$(date +%s 2>/dev/null) || return 0

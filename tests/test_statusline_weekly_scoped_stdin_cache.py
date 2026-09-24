@@ -318,34 +318,34 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
 
     def test_stale_lock_is_not_taken_over_while_takeover_lock_is_held(self) -> None:
         lock_dir = self.make_lock(".write.lock", stale=True, owner="crashed")
-        identity = self.lock_identity(lock_dir)
-        slot = int(time.time()) // 120
-        # 実行中に時間枠が変わっても保持中の扱いになるよう、現在と次の時間枠の両方を作る。
-        takeover_dirs = [
-            self.make_lock(f".write.lock.takeover.{identity}.{s}", stale=False)
-            for s in (slot, slot + 1)
-        ]
+        takeover_dir = self.make_lock(
+            f".write.lock.takeover.{self.lock_identity(lock_dir)}", stale=False
+        )
 
         self.run_main_ok(self.payload([{"display_name": "Fable", "utilization": 5}]))
 
         self.assertFalse(self.cache_file.exists())
         self.assertEqual((lock_dir / "owner").read_text(), "crashed")
-        for takeover_dir in takeover_dirs:
-            self.assertTrue(takeover_dir.is_dir())
+        self.assertTrue(takeover_dir.is_dir())
 
-    def test_takeover_left_in_old_time_slot_does_not_block_and_is_cleaned(self) -> None:
+    def test_stale_takeover_lock_is_cleaned_and_takeover_retried_on_next_render(self) -> None:
+        # 奪取中に強制終了して残った奪取用 lock は、削除した描画では奪取せず、次の描画で奪取する。
         lock_dir = self.make_lock(".write.lock", stale=True, owner="crashed")
-        identity = self.lock_identity(lock_dir)
-        slot = int(time.time()) // 120
-        leftover = self.make_lock(f".write.lock.takeover.{identity}.{slot - 2}", stale=True)
+        leftover = self.make_lock(
+            f".write.lock.takeover.{self.lock_identity(lock_dir)}", stale=True
+        )
+        stdin = self.payload([{"display_name": "Fable", "utilization": 5}])
 
-        self.run_main_ok(self.payload([{"display_name": "Fable", "utilization": 5}]))
+        self.run_main_ok(stdin)
+        self.assertFalse(self.cache_file.exists())
+        self.assertFalse(leftover.exists())
 
+        self.run_main_ok(stdin)
         self.assertEqual(
             self.read_cache()["weekly_scoped"],
             [{"display_name": "Fable", "percent": 5, "resets_at": ""}],
         )
-        self.assertFalse(leftover.exists())
+        self.assertFalse(lock_dir.exists())
 
     def test_takeover_aborts_when_lock_identity_changed(self) -> None:
         # 奪取用 lock を取った後に lock が作り直されていた (他の書き手が奪取済み) 場合は奪取しない。
@@ -411,6 +411,42 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
         self.assertEqual(cache["fetched_at"], fetched_at)
         self.assertEqual(cache["consecutive_failures"], 2)
         self.assertFalse((self.cache_dir / ".write.lock").exists())
+
+    def run_fetch_worker_with_token_failure(self, write_lock_held: bool) -> None:
+        # kick が取得した fetch lock を worker が引き継いだ状態を作り、token 取得の失敗
+        # (実環境の認証情報・API に触れないようスタブで失敗させる) で worker を終了させる。
+        fetched_at = int(time.time()) - 10000
+        self.write_cache(
+            {
+                "fetched_at": fetched_at,
+                "consecutive_failures": 1,
+                "next_attempt_at": fetched_at + 60,
+                "weekly_scoped": [],
+            }
+        )
+        self.make_lock(".fetch.lock", stale=False)
+        if write_lock_held:
+            self.make_lock(".write.lock", stale=False, owner="other")
+
+        result = self.run_bash_with_lib(
+            "WEEKLY_SCOPED_WRITE_LOCK_WORKER_TRIES=2\n"
+            "weekly_scoped_read_token() { return 1; }\n"
+            "weekly_scoped_fetch_worker\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_fetch_worker_releases_fetch_lock_after_recording(self) -> None:
+        self.run_fetch_worker_with_token_failure(write_lock_held=False)
+
+        self.assertEqual(self.read_cache()["consecutive_failures"], 2)
+        self.assertFalse((self.cache_dir / ".fetch.lock").exists())
+
+    def test_fetch_worker_keeps_fetch_lock_when_write_lock_unavailable(self) -> None:
+        # 書き込めず next_attempt_at を進められないため、fetch lock を残して次の kick を止める。
+        self.run_fetch_worker_with_token_failure(write_lock_held=True)
+
+        self.assertEqual(self.read_cache()["consecutive_failures"], 1)
+        self.assertTrue((self.cache_dir / ".fetch.lock").is_dir())
 
     def test_worker_write_gives_up_while_lock_is_held(self) -> None:
         fetched_at = int(time.time()) - 10000
