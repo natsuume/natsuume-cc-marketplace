@@ -9,7 +9,7 @@
 #
 # build_context_segment
 #   引数: $1=使用率%, $2=使用トークン数, $3=最大コンテキスト長,
-#         $4=使用率%を表示するか(1/0), $5=使用率を四捨五入して整数表示するか(1/0)
+#         $4=使用率を四捨五入して整数表示するか(1/0)
 #   出力: "ctx: (45%) 75.1k/1M" 形式のセグメント (詳細は関数直前のコメント参照)
 #
 # build_ratelimit_segment
@@ -30,17 +30,18 @@
 #   引数:
 #     $1=先頭固定セグメント (例: モデル名 "Fable 5"。空なら無し)
 #     $2=ctx_pct, $3=ctx_used, $4=ctx_max (context 無しの行は 3 つとも空を渡す)
+#     $5=先頭固定セグメントの短縮形 (段階1 で $1 と差し替える。空なら差し替えない)
 #   出力: 1 行分の組み立て済み文字列 (先頭固定セグメント・ctx・ゲージがすべて
 #         無ければ空。呼び出し元はその場合行自体を出力しない)
 #
-# ■ 段階的縮小ラダー (先頭固定セグメントのみ縮小対象外)
+# ■ 段階的縮小ラダー
 #   段階0: 使用率の小数を四捨五入して整数化
-#   段階1: ctx の "(P%)" を削除 (used/max が残る。ctx 無しの行ではスキップ)
+#   段階1: 先頭固定セグメントを短縮形に差し替える (短縮形が無い・同じ行ではスキップ)
 #   段階2: ゲージのバー長を短縮 (GAUGE_MAX_BAR_WIDTH → GAUGE_MIN_BAR_WIDTH)
 #   段階3: バーを削除
 #   段階4: ctx を使用率 "(P%)" のみにする (used/max を削除。ctx 無しの行ではスキップ)
-#   先頭固定セグメントは縮小対象にせず、幅計算にはその可視幅 + separator 幅を含める
-#   (最終手段の fit_segments の … 切り詰めのみ縮小されうる)。
+#   幅計算には先頭固定セグメントの可視幅 + separator 幅を含める。それでも収まらない
+#   場合は最終手段の fit_segments が … で切り詰める。
 #
 # ■ 依存
 #   lib.sh (rate_color / progress_bar / time_remaining / format_pct /
@@ -56,13 +57,12 @@ GAUGE_BAR_DECORATION_WIDTH=3
 
 # context 使用量セグメントを組み立てる（バー無し・reset 無しの数値表示）
 # 引数: $1=使用率%, $2=使用トークン数, $3=最大コンテキスト長,
-#       $4=使用率%を表示するか(1/0), $5=使用率を四捨五入して整数表示するか(1/0)
+#       $4=使用率を四捨五入して整数表示するか(1/0)
 # 出力フォーマット:
-#   show_pct=1                 : "ctx: (45%) 75.1k/1M"
-#   show_pct=0 かつ used/max 有 : "ctx: 75.1k/1M"（横幅節約のため % を省略）
-#   used/max 無                : "ctx: (45%)"（% が唯一の情報なので show_pct に関わらず表示）
+#   used/max 有 : "ctx: (45%) 75.1k/1M"
+#   used/max 無 : "ctx: (45%)"
 build_context_segment() {
-  local pct="$1" used="$2" max="$3" show_pct="$4" round="${5:-0}"
+  local pct="$1" used="$2" max="$3" round="${4:-0}"
   local display_pct int_pct color tokens="" segment
 
   # 表示用は format_pct（round=1 で四捨五入の整数表示）、色判定用は floor の整数
@@ -77,13 +77,7 @@ build_context_segment() {
     tokens=$(printf ' %s/%s' "$(humanize_tokens "$used")" "$(humanize_tokens "$max")")
   fi
 
-  # % を表示する条件: show_pct=1、または used/max が無く % しか情報が無いとき。
-  if [ "$show_pct" -eq 1 ] || [ -z "$tokens" ]; then
-    segment=$(printf 'ctx: %s(%s%%)%b%s' "$color" "$display_pct" "$RESET" "$tokens")
-  else
-    segment=$(printf 'ctx:%s' "$tokens")
-  fi
-
+  segment=$(printf 'ctx: %s(%s%%)%b%s' "$color" "$display_pct" "$RESET" "$tokens")
   printf '%s' "$segment"
 }
 
@@ -125,14 +119,14 @@ build_ratelimit_segment() {
 # 横幅に収まる最も豊かな表示を選び、収まらなければ段階的に縮小する。
 # 縮小の優先順位（先に削るもの順）:
 #   段階0: 使用率の小数表示を四捨五入して整数化（"(45.2%)"→"(45%)", "62.5%"→"63%"）
-#   段階1: ctx の使用率表示 "(P%)" を削除（used/max が残るので情報は保たれる）
+#   段階1: 先頭固定セグメントを短縮形に差し替える（2 行目ではモデル名の括弧書きを削除。
+#          context サイズは ctx の used/max に残るので情報は保たれる）
 #   段階2: レートリミットのバー長を短縮（GAUGE_MAX→GAUGE_MIN）
 #   段階3: バーを削除（"label: P% (reset)" のみ）
 #   段階4: ctx を使用率のみ "(P%)" にする（used/max を削除）
 # それでも収まらない極端な狭幅は最後に fit_segments が … で切り詰める。
-# 先頭固定セグメントはどの段階でも縮小対象にしない。
 render_gauge_line() {
-  local leading="$1" ctx_pct="$2" ctx_used="$3" ctx_max="$4"
+  local leading_full="$1" ctx_pct="$2" ctx_used="$3" ctx_max="$4" leading_short="${5:-}"
   local term_width="${TERM_WIDTH:-80}"
   local separator=" | "
   local sep_w=${#separator}
@@ -145,29 +139,35 @@ render_gauge_line() {
   local has_ctx=0
   [ -n "$ctx_pct" ] && has_ctx=1
 
-  local leading_w=0
-  [ -n "$leading" ] && leading_w=$(visible_length "$leading")
+  # 短縮形が無い・元と同じなら段階1 は意味を持たないためスキップする。
+  local has_short=0
+  [ -n "$leading_short" ] && [ "$leading_short" != "$leading_full" ] && has_short=1
 
   # 表示レベルを richest→poorest の順に試し、バー最大幅で横幅に収まる最初を採用する。
-  # 各レベル = (round, show_pct) の組:
-  #   "0 1": 小数% + ctx% 表示（最も豊か）
-  #   "1 1": 整数%（段階0）+ ctx% 表示
-  #   "1 0": 整数% + ctx% 非表示（段階1）
-  # ※ 段階0（整数化）を段階1（ctx% 削除）より先に試すため、この順序で並べる。
+  # 各レベル = (round, use_short) の組:
+  #   "0 0": 小数% + 先頭固定セグメントそのまま（最も豊か）
+  #   "1 0": 整数%（段階0）+ 先頭固定セグメントそのまま
+  #   "1 1": 整数% + 先頭固定セグメントの短縮形（段階1）
+  # ※ 段階0（整数化）を段階1（短縮形）より先に試すため、この順序で並べる。
   # ※ 確定後にバー幅で段階2/3（短縮・削除）を吸収する。
-  # ※ どのレベルも収まらない場合は最後の "1 0" を採用し、バー縮小/fit_segments で詰める。
-  # ループ脱出後に使うのは round と組み立て済みの ctx_seg/rate_core_total/sep_total。
-  # show_pct は ctx_seg に焼き込まれるのでループ内 (lvl_show) でのみ使う。
-  local round="" ctx_seg="" rate_core_total=0 sep_total=0
-  local level lvl_round lvl_show cseg rct i nonbar total_segments full_bars total_w
-  for level in "0 1" "1 1" "1 0"; do
+  # ※ どのレベルも収まらない場合は最後に試したレベルを採用し、バー縮小/fit_segments で詰める。
+  # ループ脱出後に使うのは round と leading / leading_w、組み立て済みの
+  # ctx_seg / rate_core_total / sep_total。
+  local round="" leading="" leading_w=0 ctx_seg="" rate_core_total=0 sep_total=0
+  local level lvl_round lvl_short lvl_leading cseg rct i nonbar total_segments full_bars total_w
+  for level in "0 0" "1 0" "1 1"; do
     lvl_round=${level%% *}
-    lvl_show=${level##* }
-    # show_pct=0（ctx% 非表示）は ctx があるときのみ意味を持つ。
-    [ "$lvl_show" -eq 0 ] && [ "$has_ctx" -eq 0 ] && continue
+    lvl_short=${level##* }
+    [ "$lvl_short" -eq 1 ] && [ "$has_short" -eq 0 ] && continue
+
+    lvl_leading="$leading_full"
+    [ "$lvl_short" -eq 1 ] && lvl_leading="$leading_short"
+    leading="$lvl_leading"
+    leading_w=0
+    [ -n "$leading" ] && leading_w=$(visible_length "$leading")
 
     cseg=""
-    [ "$has_ctx" -eq 1 ] && cseg=$(build_context_segment "$ctx_pct" "$ctx_used" "$ctx_max" "$lvl_show" "$lvl_round")
+    [ "$has_ctx" -eq 1 ] && cseg=$(build_context_segment "$ctx_pct" "$ctx_used" "$ctx_max" "$lvl_round")
 
     # この round でのレートリミット非バー部（"label: P% (reset)"）の可視幅合計。
     rct=0
@@ -188,7 +188,7 @@ render_gauge_line() {
     round="$lvl_round"
     ctx_seg="$cseg"; rate_core_total="$rct"
     sep_total=$(( (total_segments - 1) * sep_w ))
-    # バー最大幅で収まればこのレベルを確定。最後の "1 0" は収まらなくても採用。
+    # バー最大幅で収まればこのレベルを確定。最後に試したレベルは収まらなくても採用。
     [ "$total_w" -le "$term_width" ] && break
   done
 
@@ -210,7 +210,7 @@ render_gauge_line() {
   # (used/max を渡さないと build_context_segment は % だけを出力する)。
   if [ "$bar_width" -eq 0 ] && [ -n "$ctx_seg" ] \
     && [ $(( leading_w + ctx_w + rate_core_total + sep_total )) -gt "$term_width" ]; then
-    ctx_seg=$(build_context_segment "$ctx_pct" "" "" 1 "$round")
+    ctx_seg=$(build_context_segment "$ctx_pct" "" "" "$round")
   fi
 
   # 最終セグメントを組み立てる（先頭固定 → context → レートリミットの順）。round を反映する。

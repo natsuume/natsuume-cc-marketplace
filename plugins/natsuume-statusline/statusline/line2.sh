@@ -5,6 +5,16 @@
 # gauges.sh に一元化されている。本ファイルはモデル名 + effort を先頭固定セグメント
 # として、5h ゲージを render_gauge_line に渡す薄い assembler。
 
+# モデル名の末尾にある括弧書き (例: "Opus 5.5 (1M context)" の " (1M context)") を
+# すべて取り除いた短縮形を返す。取り除くと空になる場合は元の名前を返す。
+# context サイズは ctx セグメントの used/max と重複するため、横幅が足りないときに削る。
+shorten_model_name() {
+  local name="$1" short
+  short=$(printf '%s' "$name" | sed -e ':strip' -e 's/[[:space:]]*([^()]*)[[:space:]]*$//' -e 't strip')
+  [ -z "$short" ] && short="$name"
+  printf '%s' "$short"
+}
+
 # 2行目を描画する。
 # 引数: $1=モデル名 (空なら先頭セグメント無し), $2=effort level (空なら非表示),
 #       $3=ctx_pct, $4=ctx_used, $5=ctx_max, $6=5h 使用率%, $7=5h リセット時刻
@@ -24,9 +34,12 @@ render_line2() {
 
   # effort はモデル名の修飾なので、モデル名が空のとき単独では表示しない
   # ("(high)" だけが先頭に浮くのを防ぐ)。
-  local leading="$model_name"
+  # leading_short は縮小段階1 で使う、モデル名の括弧書きを削った形。
+  local leading="$model_name" leading_short
+  leading_short=$(shorten_model_name "$model_name")
   if [ -n "$leading" ] && [ -n "$effort_level" ]; then
     leading="$leading ($effort_level)"
+    leading_short="$leading_short ($effort_level)"
   fi
 
   # レートリミット（バー付き）を render_gauge_line に渡す。使用率が空のもの
@@ -40,5 +53,5 @@ render_line2() {
     GAUGE_RESETS+=("$reset_5h")
   fi
 
-  render_gauge_line "$leading" "$ctx_pct" "$ctx_used" "$ctx_max"
+  render_gauge_line "$leading" "$ctx_pct" "$ctx_used" "$ctx_max" "$leading_short"
 }

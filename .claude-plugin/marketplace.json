@@ -65,7 +65,7 @@
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
       "description": "git 状態と使用量を表示する statusLine",
-      "version": "0.11.3",
+      "version": "0.11.4",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
