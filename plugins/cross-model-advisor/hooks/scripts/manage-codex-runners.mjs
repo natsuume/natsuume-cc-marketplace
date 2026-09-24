@@ -608,7 +608,9 @@ function quotedHeredocDataCommandLine(command) {
   const newline = command.indexOf("\n");
   if (newline === -1) return null;
   const firstLine = command.slice(0, newline);
-  const tokens = firstLine.trim().split(/[ \t]+/);
+  // shell の blank (空白と tab) だけで分割する。`\r` 等を除去すると、bash が区切り語の一部と
+  // して扱う文字を gate だけが無視し、終端行の位置が bash とずれる。
+  const tokens = firstLine.replace(/^[ \t]+|[ \t]+$/g, "").split(/[ \t]+/);
   if (!HEREDOC_DATA_COMMANDS.has(tokens[0])) return null;
   let heredoc = null;
   let redirected = false;

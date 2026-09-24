@@ -542,6 +542,15 @@ class CodexRunnerHeredocGateTest(HookHarness):
                 ")",
                 "rescue",
             ),
+            # bash は 1 行目末尾の CR を区切り語の一部 (EOF\r) として扱い、本文は "EOF\r" の行で
+            # 終わる。後続の起動行は実行されるため免除しない。
+            "carriage-return-in-first-line": (
+                "cat <<'EOF'\r\n"
+                "EOF\r\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
             "parameter-expansion-before-heredoc": (
                 "cat ${x<<X} <<'EOF'\n"
                 f"{COMMANDS['rescue']}\n"
