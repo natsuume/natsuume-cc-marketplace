@@ -63,6 +63,8 @@ FABLE_USAGE_PHRASES = (
     "`pre-push-review:security-reviewer`",
     "`cross-model-advisor:fable-advisor-runner`",
     "ワーカー (実装・調査・一括修正等) には使わない",
+    # hook (PreToolUse の Agent|Task) が捕捉しない Workflow の agent() では使わない
+    "Workflow の `agent()` では Fable を使わない",
     # model の明示 (未指定・frontmatter 経由の Fable 実行は使わない)
     'model を `"fable"` と明示する',
     "model 未指定・agent 定義 frontmatter による Fable 実行は使わない",
