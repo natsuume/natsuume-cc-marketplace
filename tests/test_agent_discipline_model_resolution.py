@@ -132,8 +132,10 @@ FORBIDDEN_PROMPT_PHRASES = (
 FORBIDDEN_SUBAGENT_RULES_PHRASE = "subagent は Fable になり得ず"
 REQUIRED_SUBAGENT_RULES_PHRASE = "fork / frontmatter 経路では Fable になりうる"
 
-# 利用者が user settings に置く主防御の permission rule。
-PERMISSION_DENY_RULES = ("Agent(model:fable)", "Agent(fork)")
+# 利用者が user settings に置く主防御の permission rule。`Agent(model:fable)` は
+# 非 Fable メインでの週次枠判定付きの fable 明示許可 (hook の判定) も止めるため推奨しない
+# (README の設定例に載らないことは tests/test_agent_discipline_fable_weekly_gate.py が検査する)。
+PERMISSION_DENY_RULES = ("Agent(fork)",)
 
 # agent-discipline README の「既知の制約」節に必要なキーワード。
 README_KNOWN_LIMITATION_KEYWORDS = (
@@ -977,7 +979,7 @@ class AgentDisciplineReadmeDefenseTest(unittest.TestCase):
     """agent-discipline README が主防御 (permission rule) と既知制約を書いている。"""
 
     def test_readme_shows_the_permission_deny_settings_example(self) -> None:
-        """`permissions.deny` に 2 つの rule を置く JSON の設定例がある。"""
+        """`permissions.deny` に主防御の rule を置く JSON の設定例がある。"""
         denies = [
             block["permissions"]["deny"]
             for block in json_code_blocks(read(BASE_README))
