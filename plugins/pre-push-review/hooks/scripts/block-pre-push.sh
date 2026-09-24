@@ -764,6 +764,21 @@ format_status() {
 CODE_REVIEWED_STATUS=$(format_status "$CODE_REVIEWED_HASH")
 SECURITY_STATUS=$(format_status "$SECURITY_HASH")
 
+# reviewer の起動 model を Fable 週次枠の使用率で決める (利用可 → fable、超過・不明 → opus)。
+# 判定は bin/pre-push-review-reviewer-model と共有する lib が行う。lib を読み込めない場合は
+# opus を案内する (fail-closed)。
+REVIEWER_MODEL="opus"
+REVIEWER_MODEL_REASON="Fable 週次枠の使用率を確認できないため opus で起動します (判定処理を読み込めません)。"
+# shellcheck source=lib/fable-weekly-usage.sh
+if source "$SCRIPT_DIR/lib/fable-weekly-usage.sh" 2>/dev/null; then
+  reviewer_model_decision
+fi
+FABLE_DENY_FALLBACK=""
+if [ "$REVIEWER_MODEL" = "fable" ]; then
+  FABLE_DENY_FALLBACK="
+model=\"fable\" の起動が agent-discipline の hook に deny された場合 (Fable メインのセッション、判定後に使用率が閾値を超えた等) は、同じ reviewer を model=\"opus\" で再起動してください。"
+fi
+
 REASON=$(cat <<EOF
 プッシュをブロックしました。 push 前に 2 レビューを実行してください。
 
@@ -780,8 +795,10 @@ linked worktree では marker / launch attestation は main \`.git\` 直下で�
 **\`/pre-push-review:review\`** (2 namespaced custom agent を並列起動) を使ってください。
 
 一部のマーカーのみ「未実行」 / 「失効」 の場合は、 該当レビューの subagent だけを Agent / Task tool で単独再起動してもかまいません (全 2 subagent の再走も可)。 マーカーと subagent_type の対応:
-  - correctness review (code-reviewed)  → subagent_type="pre-push-review:code-reviewer", model="opus"
-  - security review (security-reviewed) → subagent_type="pre-push-review:security-reviewer", model="opus"
+  - correctness review (code-reviewed)  → subagent_type="pre-push-review:code-reviewer", model="${REVIEWER_MODEL}"
+  - security review (security-reviewed) → subagent_type="pre-push-review:security-reviewer", model="${REVIEWER_MODEL}"
+
+起動 model: ${REVIEWER_MODEL_REASON}${FABLE_DENY_FALLBACK}
 
 model 未指定の Agent 起動は Fable セッションでは agent-discipline の hook に deny されるため、上記の model を常に明示してください。
 

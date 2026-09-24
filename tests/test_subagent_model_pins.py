@@ -67,9 +67,12 @@ ALL_PINNED_AGENTS = {**OPUS_AGENTS, **SONNET_AGENTS}
 # 変更仕様 2: 各 review.md の起動仕様が近傍に明示すべき model。core の
 # `/pre-push-review:review` は 2 起動仕様、codex 経路を持つ
 # `/pre-push-codex-review:review` は core 併用時の 3 起動仕様を発出する。
+# core の 2 reviewer は Fable 週次枠の判定コマンド (pre-push-review-reviewer-model) の出力で
+# 起動 model を決めるため、起動仕様は置換 placeholder を明示する (判定の契約は
+# tests/test_pre_push_review_fable_reviewer_model.py が検査する)。
 CORE_LAUNCH_MODELS = {
-    "pre-push-review:code-reviewer": "opus",
-    "pre-push-review:security-reviewer": "opus",
+    "pre-push-review:code-reviewer": "{{REVIEWER_MODEL}}",
+    "pre-push-review:security-reviewer": "{{REVIEWER_MODEL}}",
 }
 CODEX_LAUNCH_MODELS = {
     "pre-push-review:code-reviewer": "opus",
@@ -177,7 +180,7 @@ class ReviewCommandLaunchSpecModelAnnotationTest(unittest.TestCase):
                 ):
                     pattern = (
                         rf'subagent_type: "{re.escape(subagent_type)}".{{0,60}}'
-                        rf'model: "{model}"'
+                        rf'model: "{re.escape(model)}"'
                     )
                     self.assertIsNotNone(
                         re.search(pattern, body),
@@ -197,8 +200,8 @@ class BlockPrePushMarkerTableModelAnnotationTest(unittest.TestCase):
     def test_marker_correspondence_table_declares_model_per_reviewer(self) -> None:
         body = read(BLOCK_PRE_PUSH)
         expected_literals = (
-            'subagent_type="pre-push-review:code-reviewer", model="opus"',
-            'subagent_type="pre-push-review:security-reviewer", model="opus"',
+            'subagent_type="pre-push-review:code-reviewer", model="${REVIEWER_MODEL}"',
+            'subagent_type="pre-push-review:security-reviewer", model="${REVIEWER_MODEL}"',
         )
         for literal in expected_literals:
             with self.subTest(literal=literal):

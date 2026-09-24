@@ -262,7 +262,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "git-guardrails": "0.7.1",
     "enforce-draft-pr": "0.5.5",
     "auto-lint-check": "0.8.2",
-    "pre-push-review": "6.1.2",
+    "pre-push-review": "6.2.0",
     "pre-push-codex-review": "2.2.3",
     "pre-merge-codex-review": "2.2.1",
     "update-default-branch": "0.4.4",
