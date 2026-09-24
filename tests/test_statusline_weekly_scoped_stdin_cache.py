@@ -254,6 +254,60 @@ class StatuslineWeeklyScopedStdinCacheTest(unittest.TestCase):
             [{"display_name": "Fable", "percent": 3, "resets_at": "new-window"}],
         )
 
+    def test_snapshot_from_earlier_window_does_not_overwrite_newer_window(self) -> None:
+        for cached_reset, new_reset in (
+            ("2026-10-08T00:00:00Z", "2026-10-01T00:00:00Z"),
+            (1791417600, 1790812800),
+        ):
+            with self.subTest(cached_reset=cached_reset):
+                original_text = self.fresh_cache(
+                    [{"display_name": "Fable", "percent": 3, "resets_at": cached_reset}]
+                )
+
+                self.run_main_ok(
+                    self.payload(
+                        [{"display_name": "Fable", "utilization": 95, "resets_at": new_reset}]
+                    )
+                )
+
+                self.assertEqual(self.cache_file.read_text(), original_text)
+                self.cache_file.unlink()
+
+    def test_snapshot_from_later_window_overwrites(self) -> None:
+        self.fresh_cache(
+            [{"display_name": "Fable", "percent": 95, "resets_at": "2026-10-01T00:00:00Z"}]
+        )
+
+        self.run_main_ok(
+            self.payload(
+                [{"display_name": "Fable", "utilization": 3, "resets_at": "2026-10-08T00:00:00Z"}]
+            )
+        )
+
+        self.assertEqual(
+            self.read_cache()["weekly_scoped"],
+            [{"display_name": "Fable", "percent": 3, "resets_at": "2026-10-08T00:00:00Z"}],
+        )
+
+    def test_resets_at_of_different_types_or_empty_is_not_compared(self) -> None:
+        for cached_reset, new_reset in (
+            ("2026-10-08T00:00:00Z", 1790812800),
+            ("2026-10-08T00:00:00Z", ""),
+        ):
+            with self.subTest(cached_reset=cached_reset, new_reset=new_reset):
+                self.fresh_cache(
+                    [{"display_name": "Fable", "percent": 3, "resets_at": cached_reset}]
+                )
+                entry = {"display_name": "Fable", "utilization": 95, "resets_at": new_reset}
+
+                self.run_main_ok(self.payload([entry]))
+
+                self.assertEqual(
+                    self.read_cache()["weekly_scoped"],
+                    [{"display_name": "Fable", "percent": 95, "resets_at": new_reset}],
+                )
+                self.cache_file.unlink()
+
     def test_monotonic_guard_does_not_apply_to_stale_cache(self) -> None:
         self.fresh_cache(
             [{"display_name": "Fable", "percent": 42, "resets_at": "r1"}],
