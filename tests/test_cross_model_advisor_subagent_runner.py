@@ -421,11 +421,13 @@ class CodexRunnerDirectExecutionGateTest(HookHarness):
 class CodexRunnerHeredocGateTest(HookHarness):
     """heredoc 本文を shell の意味どおりに解析する (#464)。
 
-    区切り語を quote した heredoc の本文は literal なデータで、wrapper 名が文字列として
-    現れても起動ではない。本文を shell が実行する形 (本文を shell の stdin に渡す) と、
-    区切り語を quote しない heredoc 本文のコマンド置換は従来どおり実行形として判定する。
+    本文をデータとして読む consumer (cat / tee / python3 等) が区切り語を quote した heredoc
+    を受け取る場合、本文に wrapper 名が文字列として現れても起動ではない。consumer がそれ以外
+    (shell、launcher 経由、subshell / brace group、先頭のリダイレクト、未知・解決できない
+    command) の場合と、pipeline で後段へ渡る場合は、本文を shell が実行しうるため従来どおり
+    実行形として判定する。区切り語を quote しない本文のコマンド置換も判定対象である。
     heredoc の終端より後ろの行と、heredoc 演算子と同じ行の後続 segment もコマンドである。
-    終端行が見つからない `<<` は heredoc として扱わず、後続行をコマンドとして解析する。
+    終端行が見つからない `<<` とコメント内の `<<` は heredoc として扱わない。
     """
 
     def assert_allowed_without_state(self, command: str) -> None:
@@ -465,6 +467,16 @@ class CodexRunnerHeredocGateTest(HookHarness):
                 f"{COMMANDS['rescue']}\n"
                 "EOF"
             ),
+            "git-commit-message": (
+                "git commit -F - <<'EOF'\n"
+                f"{COMMANDS['advisor']} の説明を直す\n"
+                "EOF"
+            ),
+            "gh-body-file-stdin": (
+                "gh issue create --title t --body-file - <<'EOF'\n"
+                f"`{COMMANDS['review']}`\n"
+                "EOF"
+            ),
         }
         for name, command in cases.items():
             with self.subTest(case=name):
@@ -498,6 +510,26 @@ class CodexRunnerHeredocGateTest(HookHarness):
                 "advisor",
             ),
         }
+        # 本文をデータとして読むと確認できない consumer は、shell が本文を実行しうるものとして
+        # 扱う (fail-closed)。
+        consumers = {
+            "pipe-to-bash": "cat <<'EOF' | bash",
+            "tee-pipe-to-sh": "tee log.txt <<'EOF' | sh",
+            "exec": "exec bash <<'EOF'",
+            "time": "time bash <<'EOF'",
+            "nice": "nice bash <<'EOF'",
+            "ssh": "ssh host <<'EOF'",
+            "fish": "fish <<'EOF'",
+            "unknown-command": "some-tool <<'EOF'",
+            "brace-group": "{ bash; } <<'EOF'",
+            "redirect-first": "<<'EOF' bash",
+        }
+        for name, head in consumers.items():
+            cases[name] = (f"{head}\n{COMMANDS['rescue']}\nEOF", "rescue")
+        cases["subshell"] = (
+            f"( bash <<'EOF'\n{COMMANDS['rescue']}\nEOF\n)",
+            "rescue",
+        )
         for name, (command, operation) in cases.items():
             with self.subTest(case=name):
                 self.assert_denied(
@@ -587,6 +619,12 @@ class CodexRunnerHeredocGateTest(HookHarness):
                 f"{COMMANDS['advisor']}\n"
                 "EOF ",
                 "advisor",
+            ),
+            "heredoc-operator-in-comment": (
+                "echo ok # cat <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
             ),
         }
         for name, (command, operation) in cases.items():
