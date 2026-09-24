@@ -18,7 +18,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIRS = (
     ROOT / "plugins" / "agent-discipline",
-    ROOT / "plugins" / "experimental-agent-discipline",
 )
 SCRIPT_NAME = "check-uncommitted-on-session-start.sh"
 

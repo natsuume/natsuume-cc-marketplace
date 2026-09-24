@@ -65,7 +65,7 @@ def script_path(basename: str) -> str:
 CODEX_RUNNERS_SCRIPT = script_path("manage-codex-runners.mjs")
 REVIEW_CADENCE_SCRIPT = script_path("manage-review-cadence.mjs")
 
-# agent-discipline と experimental-agent-discipline は同一の hooks 構造を持つ。
+# agent-discipline の command hook。
 AGENT_DISCIPLINE_COMMAND_HOOKS = (
     ("PostModelSwitch", script_path("update-model-on-switch.sh"), ()),
     ("SessionStart", script_path("inject-always.sh"), ()),
@@ -85,7 +85,6 @@ AGENT_DISCIPLINE_COMMAND_HOOKS = (
 # 起動形だけを exec form に揃えるため、event と実行される script の対応は固定する。
 EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] = {
     "agent-discipline": AGENT_DISCIPLINE_COMMAND_HOOKS,
-    "experimental-agent-discipline": AGENT_DISCIPLINE_COMMAND_HOOKS,
     "auto-lint-check": (
         ("PreToolUse", script_path("block-ignore-lint-comment.sh"), ()),
         ("PreToolUse", script_path("block-commit-lint.sh"), ()),
@@ -175,12 +174,6 @@ EXPECTED_AGENT_HOOKS: dict[str, tuple[tuple[str, str], ...]] = {
         ("PreToolUse", "Bash(gh pr create:*)"),
         ("PreToolUse", "Bash(gh pr edit:*)"),
     ),
-    "experimental-agent-discipline": (
-        ("PreToolUse", "Bash(gh issue create:*)"),
-        ("PreToolUse", "Bash(gh issue edit:*)"),
-        ("PreToolUse", "Bash(gh pr create:*)"),
-        ("PreToolUse", "Bash(gh pr edit:*)"),
-    ),
 }
 
 # hooks.json top-level の `description` は起動形の変更で改変しない。
@@ -197,10 +190,6 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
     "cross-model-advisor": (
         720,
         "9cdf1a8278188e276e4475ce7b5fd6b99a31bd0174279ebcc533da9b15051eae",
-    ),
-    "experimental-agent-discipline": (
-        1719,
-        "c0a1150c9871c5d5f3c93d4a63b1bc57d3bbd043a85cc8e4b8aaaef806ff2047",
     ),
     "git-guardrails": (
         114,
@@ -268,7 +257,6 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "update-default-branch": "0.4.5",
     "natsuume-statusline": "0.11.1",
     "agent-discipline": "0.31.1",
-    "experimental-agent-discipline": "0.6.1",
     "ui-discipline": "0.4.5",
     "natsuume-writing": "0.8.1",
     "cross-model-advisor": "5.0.0",

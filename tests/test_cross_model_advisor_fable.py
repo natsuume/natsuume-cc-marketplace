@@ -17,8 +17,7 @@
 - review cadence checkpoint も並列に相談し、gate が検証する attestation は従来どおり
   codex-advisor-runner が発行する。
 - 改名後、リポジトリ内の `codex-advisor` は renames の旧名・新名の一部 (`codex-advisor-runner`)・
-  Codex advisor の wrapper 名 (`run-codex-advisor.sh` とそのログ prefix) 以外に残らない (廃止予定の
-  experimental-agent-discipline 配下は対象外)。
+  Codex advisor の wrapper 名 (`run-codex-advisor.sh` とそのログ prefix) 以外に残らない。
 
 subTest は使わない: 違反をリストに集約して 1 テスト = 1 判定に保つ。
 """
@@ -62,8 +61,7 @@ USAGE_COMMAND_NAME = "cross-model-advisor-fable-usage"
 
 # リポジトリ内に残ってよい `codex-advisor` を含む識別子 (新名の一部・wrapper 名とそのログ prefix)。
 ALLOWED_CODEX_ADVISOR_TOKENS = ("codex-advisor-runner", "run-codex-advisor")
-# grep の対象外 (廃止予定 plugin、本テスト自身)。
-GREP_EXCLUDED_PREFIXES = ("plugins/experimental-agent-discipline/",)
+# grep の対象外 (本テスト自身)。
 GREP_EXCLUDED_FILES = ("tests/test_cross_model_advisor_fable.py",)
 
 CACHE_RELATIVE = Path("natsuume-statusline") / "weekly-scoped.json"
@@ -186,7 +184,7 @@ class RenameTest(unittest.TestCase):
         ).stdout.splitlines()
         offenders = []
         for relative in tracked:
-            if relative.startswith(GREP_EXCLUDED_PREFIXES) or relative in GREP_EXCLUDED_FILES:
+            if relative in GREP_EXCLUDED_FILES:
                 continue
             path = ROOT / relative
             if not path.is_file():

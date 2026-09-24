@@ -30,9 +30,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "prompts"
-FORK_PROMPTS = (
-    REPO_ROOT / "plugins" / "experimental-agent-discipline" / "hooks" / "prompts"
-)
 
 DISCIPLINE_FABLE = PROMPTS / "discipline-fable.md"
 DISCIPLINE_OPUS = PROMPTS / "discipline-opus.md"
@@ -46,7 +43,6 @@ NON_FABLE_DISCIPLINES = {
 
 AUTO_MODE_FILES = {
     "agent-discipline/auto-mode.md": PROMPTS / "auto-mode.md",
-    "experimental-agent-discipline/auto-mode.md": FORK_PROMPTS / "auto-mode.md",
 }
 
 # 節スコープ検査で切り出すセクション境界 (rule ID マーカー)。
@@ -180,7 +176,7 @@ class Opus55EffortTests(unittest.TestCase):
 
 
 class AutoModeStopPatternTests(unittest.TestCase):
-    """auto-mode.md (base / fork) が止まり方の禁止と止まってよい場合を明記すること。"""
+    """auto-mode.md が止まり方の禁止と止まってよい場合を明記すること。"""
 
     def test_auto_mode_contains_stop_pattern_phrases(self) -> None:
         missing = [
