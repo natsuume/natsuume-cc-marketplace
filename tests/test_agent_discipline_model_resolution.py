@@ -54,7 +54,7 @@ BASE_PLUGIN = ROOT / "plugins" / "agent-discipline"
 FORK_PLUGIN = ROOT / "plugins" / "experimental-agent-discipline"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "0.30.0"
+PLUGIN_VERSION = "0.31.0"
 
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 REPO_README = ROOT / "README.md"
@@ -1082,7 +1082,7 @@ class AgentDisciplineVersionConsistencyTest(unittest.TestCase):
     """version 整合: plugin.json / marketplace.json / 2 つの README が一致する。"""
 
     def test_plugin_json_declares_name_and_version(self) -> None:
-        """plugin.json の name と version が agent-discipline / 0.30.0 である。"""
+        """plugin.json の name と version が agent-discipline / 0.31.0 である。"""
         manifest = json.loads(read(BASE_PLUGIN_JSON))
         self.assertEqual(PLUGIN_NAME, manifest["name"])
         self.assertEqual(PLUGIN_VERSION, manifest["version"])
@@ -1103,7 +1103,7 @@ class AgentDisciplineVersionConsistencyTest(unittest.TestCase):
         )
 
     def test_plugin_readme_version_heading_declares_the_version(self) -> None:
-        """plugin README の `## バージョン` 直下の行が v0.30.0 である。"""
+        """plugin README の `## バージョン` 直下の行が v0.31.0 である。"""
         lines = read(BASE_README).splitlines()
         self.assertIn("## バージョン", lines)
         index = lines.index("## バージョン")
