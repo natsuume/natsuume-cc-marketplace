@@ -419,15 +419,15 @@ class CodexRunnerDirectExecutionGateTest(HookHarness):
 
 
 class CodexRunnerHeredocGateTest(HookHarness):
-    """heredoc 本文を shell の意味どおりに解析する (#464)。
+    """heredoc を含む command の gate 判定 (#464)。
 
-    本文をデータとして読む consumer (cat / tee / python3 等) が区切り語を quote した heredoc
-    を受け取る場合、本文に wrapper 名が文字列として現れても起動ではない。consumer がそれ以外
-    (shell、launcher 経由、subshell / brace group、先頭のリダイレクト、未知・解決できない
-    command) の場合と、pipeline で後段へ渡る場合は、本文を shell が実行しうるため従来どおり
-    実行形として判定する。区切り語を quote しない本文のコマンド置換も判定対象である。
-    heredoc の終端より後ろの行と、heredoc 演算子と同じ行の後続 segment もコマンドである。
-    終端行が見つからない `<<` とコメント内の `<<` は heredoc として扱わない。
+    command 全体が「本文をデータとして読む command (cat / tee / python / python3 / node) 1 つ
+    + 区切り語を quote した heredoc 1 つ (+ ファイルへのリダイレクト 1 つまで)」だけで構成
+    される場合、本文に wrapper 名が文字列として現れても起動ではない。この形から少しでも外れる
+    command (shell や未知の command への heredoc、pipeline・process substitution・コマンド
+    置換・compound command を伴う形、quote しない区切り語、終端行の後ろに続く行等) は免除せず、
+    heredoc の本文も含めてコマンドとして判定する。本文は切り出して解析するため、本文中の
+    quote が終端行より後ろの行の判定に及ばない。
     """
 
     def assert_allowed_without_state(self, command: str) -> None:
@@ -467,27 +467,84 @@ class CodexRunnerHeredocGateTest(HookHarness):
                 f"{COMMANDS['rescue']}\n"
                 "EOF"
             ),
-            "git-commit-message": (
-                "git commit -F - <<'EOF'\n"
-                f"{COMMANDS['advisor']} の説明を直す\n"
-                "EOF"
-            ),
-            "gh-body-file-stdin": (
-                "gh issue create --title t --body-file - <<'EOF'\n"
-                f"`{COMMANDS['review']}`\n"
-                "EOF"
+            "trailing-newline-after-terminator": (
+                "tee notes.md <<'EOF'\n"
+                f"{COMMANDS['review']}\n"
+                "EOF\n"
             ),
         }
         for name, command in cases.items():
             with self.subTest(case=name):
                 self.assert_allowed_without_state(command)
 
-    def test_unquoted_heredoc_plain_body_line_is_data(self) -> None:
-        self.assert_allowed_without_state(
-            "cat <<EOF > notes.md\n"
-            f"{COMMANDS['advisor']}\n"
-            "EOF"
-        )
+    def test_heredoc_outside_the_exempt_form_is_classified(self) -> None:
+        """免除する形から外れる heredoc は、本文も含めて従来どおり判定する。"""
+        cases = {
+            "unquoted-delimiter": (
+                "cat <<EOF > notes.md\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF",
+                "advisor",
+            ),
+            # git / gh は同じ command の中で shell を起動できる (alias 等) ため免除しない。
+            "git-commit-message": (
+                "git commit -F - <<'EOF'\n"
+                f"{COMMANDS['advisor']}\n"
+                "EOF",
+                "advisor",
+            ),
+            "gh-body-file-stdin": (
+                "gh issue create --title t --body-file - <<'EOF'\n"
+                f"{COMMANDS['review']}\n"
+                "EOF",
+                "review",
+            ),
+            "redirect-ampersand-then-pipe": (
+                "cat <<'EOF' 2>&1 | bash\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+            "brace-group-piped": (
+                "{ cat <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF\n"
+                "} | bash",
+                "rescue",
+            ),
+            "input-process-substitution": (
+                "bash <(cat <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF\n"
+                ")",
+                "rescue",
+            ),
+            "output-process-substitution": (
+                "cat <<'EOF' > >(bash)\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+            "command-substitution": (
+                "$(cat <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF\n"
+                ")",
+                "rescue",
+            ),
+            "parameter-expansion-before-heredoc": (
+                "cat ${x<<X} <<'EOF'\n"
+                f"{COMMANDS['rescue']}\n"
+                "EOF",
+                "rescue",
+            ),
+        }
+        for name, (command, operation) in cases.items():
+            with self.subTest(case=name):
+                self.assert_denied(
+                    self.hook_response(self.bash_payload(command)),
+                    RUNNERS[operation],
+                )
 
     def test_heredoc_executed_by_a_shell_is_classified(self) -> None:
         cases = {
@@ -624,6 +681,14 @@ class CodexRunnerHeredocGateTest(HookHarness):
                 "echo ok # cat <<'EOF'\n"
                 f"{COMMANDS['rescue']}\n"
                 "EOF",
+                "rescue",
+            ),
+            "escaped-space-before-hash": (
+                f"echo a\\ #; {COMMANDS['rescue']}",
+                "rescue",
+            ),
+            "line-continuation-before-hash": (
+                f"echo a\\\n#; {COMMANDS['rescue']}",
                 "rescue",
             ),
         }
