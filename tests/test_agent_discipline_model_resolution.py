@@ -15,10 +15,10 @@ model 指定にも env にも依らずメインセッションのモデルを継
 - PostModelSwitch 追随 (``PostModelSwitchHookRegistrationTest`` /
   ``UpdateModelOnSwitchScriptTest``): agent-discipline の hooks.json が
   `update-model-on-switch.sh` を `PostModelSwitch` に 1 本登録し、スクリプトが
-  `to_model` で session model state を上書きし、pending マーカーを消し、fable ⇄ 非 fable の
-  切替でだけ `additionalContext` を出すこと。
+  `to_model` で session model state を上書きし、pending マーカーを消し、pending マーカーを
+  消したときだけ `additionalContext` を出すこと。
 - 配送文言 (``DisciplinePromptResolutionOrderTest`` /
-  ``SubagentRulesInjectionPremiseTest``): 分業規律 3 種の
+  ``SubagentRulesInjectionPremiseTest``): 分業規律 2 種の
   `rule:delegation-rules` 節が ``MODEL_RESOLUTION_CANONICAL_SENTENCE`` を持ち、旧前提の
   文言 (``FORBIDDEN_PROMPT_PHRASES``) を持たないこと。`inject-subagent-rules.sh` が
   「subagent は Fable になり得ない」前提を持たないこと。
@@ -51,7 +51,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE_PLUGIN = ROOT / "plugins" / "agent-discipline"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "0.31.1"
+PLUGIN_VERSION = "1.0.0"
 
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 REPO_README = ROOT / "README.md"
@@ -76,13 +76,13 @@ INJECT_SUBAGENT_RULES_SCRIPTS = {
     "agent-discipline": BASE_PLUGIN / "hooks" / "scripts" / "inject-subagent-rules.sh",
 }
 
-# 分業規律 3 種。モデル解決順序の記述は全ファイル共通の canonical 文。
+# 分業規律 2 種。モデル解決順序の記述は全ファイル共通の canonical 文。
 DISCIPLINE_PROMPTS = {
     f"{plugin}/{name}": plugin_dir / "hooks" / "prompts" / name
     for plugin, plugin_dir in (
         ("agent-discipline", BASE_PLUGIN),
     )
-    for name in ("discipline-fable.md", "discipline-sonnet.md", "discipline-opus.md")
+    for name in ("discipline-sonnet.md", "discipline-opus.md")
 }
 
 # PostModelSwitch hook の登録内容 (既存 entry と同じ ${CLAUDE_PLUGIN_ROOT} 相対の書き方)。
@@ -94,7 +94,7 @@ POST_MODEL_SWITCH_COMMAND = (
 # session model state / pending マーカーの置き場 (両 hook が共有する)。
 STATE_DIR_NAME = "agent-discipline-state"
 
-# 分業規律 3 ファイルの rule:delegation-rules 節に必須の canonical 文 (空白を無視して照合)。
+# 分業規律 2 ファイルの rule:delegation-rules 節に必須の canonical 文 (空白を無視して照合)。
 MODEL_RESOLUTION_CANONICAL_SENTENCE = (
     "サブエージェントのモデルは 明示 model > agent 定義の frontmatter >"
     " `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 の順に解決される。"
@@ -102,7 +102,7 @@ MODEL_RESOLUTION_CANONICAL_SENTENCE = (
     "env (未設定なら main model) が全てを上書きする"
 )
 
-# 分業規律 3 ファイル全文から消えていること (空白を無視して照合)。
+# 分業規律 2 ファイル全文から消えていること (空白を無視して照合)。
 FORBIDDEN_PROMPT_PHRASES = (
     "model の明示指定や agent 定義の frontmatter より優先され",
     "env が `sonnet` の間は opus を指定しても sonnet で走る",
@@ -791,11 +791,10 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
     ) -> None:
         """pending マーカーがあれば削除し、確定版ルールの所在を additionalContext で案内する。
 
-        pending は「モデル未確定」であると同時に、常時適用ルールと分業規律の確定版が
-        まだ配送されていない (UserPromptSubmit の one-shot 補正が pending を発火条件にする)
-        ことを表す。PostModelSwitch が pending を消すと one-shot 補正は走らないので、
-        代わりに確定版 (always-<版>.md / discipline-<版>.md) を prompts ディレクトリから
-        Read して自己修復するよう案内する。fable 境界をまたがない切替でも案内する。
+        pending は「モデル未確定」であり、自己ゲート付きの暫定版が配送されていることを表す。
+        PostModelSwitch が pending を消すときは、切替後のモデルに対応する確定版
+        (always-sonnet-{1,2,3}.md / discipline-<版>.md) を prompts ディレクトリから Read して
+        自己修復するよう案内する。
         """
         prompts_dir = str(BASE_PLUGIN / "hooks" / "prompts")
         cases = {
@@ -835,29 +834,13 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
         self.assertIsNone(outcome["state"])
         self.assertTrue(outcome["pending"])
 
-    def test_switch_across_the_fable_boundary_notifies_the_prompts_directory(
-        self,
-    ) -> None:
-        """fable ⇄ 非 fable の切替では分業規律の版の切替を prompts の絶対パス付きで通知する。"""
-        prompts_dir = str(BASE_PLUGIN / "hooks" / "prompts")
-        cases = {
-            "to-fable": ("claude-sonnet-5", "claude-fable-5-1"),
-            "from-fable": ("claude-fable-5-1", "claude-opus-5"),
-        }
-        for label, (from_model, to_model) in cases.items():
-            with self.subTest(switch=label):
-                context = self.additional_context(
-                    self.run_switch(from_model=from_model, to_model=to_model)
-                )
-                self.assertIsNotNone(context, "additionalContext が出力されていない")
-                self.assertIn("分業規律", str(context))
-                self.assertIn(prompts_dir, str(context))
-
-    def test_switch_within_non_fable_models_is_silent(self) -> None:
-        """非 fable → 非 fable の切替では additionalContext を出さない。"""
+    def test_switch_without_pending_is_silent(self) -> None:
+        """pending が無い切替では、Fable をまたぐ場合も含めて additionalContext を出さない。"""
         for from_model, to_model in (
             ("claude-sonnet-5", "claude-opus-5"),
             ("claude-opus-5", "claude-haiku-4-5"),
+            ("claude-sonnet-5", "claude-fable-5-1"),
+            ("claude-fable-5-1", "claude-opus-5"),
         ):
             with self.subTest(switch=f"{from_model}->{to_model}"):
                 self.assertIsNone(
@@ -901,7 +884,7 @@ class UpdateModelOnSwitchScriptTest(HookSubprocessTestBase):
 
 
 class DisciplinePromptResolutionOrderTest(unittest.TestCase):
-    """分業規律 3 ファイルのモデル解決順序の記述を固定する。"""
+    """分業規律 2 ファイルのモデル解決順序の記述を固定する。"""
 
     def test_delegation_rules_state_the_canonical_resolution_order(self) -> None:
         """rule:delegation-rules 節に canonical 文がある (空白を無視して照合)。"""
@@ -1045,7 +1028,7 @@ class AgentDisciplineVersionConsistencyTest(unittest.TestCase):
         )
 
     def test_plugin_readme_version_heading_declares_the_version(self) -> None:
-        """plugin README の `## バージョン` 直下の行が v0.31.1 である。"""
+        """plugin README の `## バージョン` 直下の行が v1.0.0 である。"""
         lines = read(BASE_README).splitlines()
         self.assertIn("## バージョン", lines)
         index = lines.index("## バージョン")

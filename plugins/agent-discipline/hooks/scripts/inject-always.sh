@@ -4,15 +4,14 @@
 # part 1/3 を、セッションのモデルに応じて additionalContext として注入する (#175、issue #236
 # で 3 part 分割に再設計)。
 #
-# ## issue #236 (注入ペイロード分割) の背景
+# ## 分割配送
 #
-# 旧設計は常時ルール全文 (always-fable.md / always-sonnet.md) + 分業規律を 1 つの
-# additionalContext に連結しており、Claude Code の inline 配送閾値 (約 9〜10K 文字/要素) を
-# 超えて persisted-output (2KB プレビューのみ) に劣化していた。本スクリプトは SessionStart で
-# part 1 (delivery-note + 常時ルールの一部) のみを注入し、残りの part (part 2/3・part 3/3) と
-# 分業規律は UserPromptSubmit の別スクリプト (inject-rules-part.sh / inject-discipline.sh) が
-# 最初のユーザプロンプト処理時に個別の要素として配送する。設計契約全文は Phase A commit の
-# docs/issue-236-phase-a.md (Phase B 完了後に削除済み) を参照。
+# 常時ルール全文と分業規律を 1 つの additionalContext に連結すると、Claude Code の inline
+# 配送閾値 (約 9〜10K 文字/要素) を超えて persisted-output (2KB プレビューのみ) に劣化する。
+# 本スクリプトは SessionStart で part 1 (delivery-note + 常時ルールの一部) のみを注入し、
+# 残りの part (part 2/3・part 3/3) と分業規律は UserPromptSubmit の別スクリプト
+# (inject-rules-part.sh / inject-discipline.sh) が最初のユーザプロンプト処理時に個別の要素
+# として配送する。
 #
 # ## モデル判定 fallback chain (先に確定した段階で判定を打ち切る、本スクリプトのみが実行する)
 #
@@ -25,33 +24,30 @@
 #    (同一セッションの過去 SessionStart で確定した値のキャッシュ)
 # 4. 上記いずれも空 → 判定不能
 #
-# ## 配送マトリクス (issue #236 再設計後)
+# ## 配送マトリクス
 #
-#   | モデル判定     | SessionStart (本スクリプト、1 要素)                    |
-#   |----------------|----------------------------------------------------------|
-#   | fable を含む   | delivery-note + always-fable.md                          |
-#   | sonnet を含む  | delivery-note + always-sonnet-1.md                       |
-#   | 非空でその他   | delivery-note + always-sonnet-1.md                       |
-#   | 判定不能       | delivery-note + preamble-self-gate.md + always-sonnet-1.md |
+#   | モデル判定                          | SessionStart (本スクリプト、1 要素)                        |
+#   |-------------------------------------|------------------------------------------------------------|
+#   | 非空 (fable / sonnet / opus / その他) | delivery-note + always-sonnet-1.md                         |
+#   | 判定不能                            | delivery-note + preamble-self-gate.md + always-sonnet-1.md |
 #
-# 全分岐共通で、要素の最先頭 (delivery-note より前) に自己修復指示 (SELF_HEAL、issue #235、
-# 下記「自己修復指示」節) が付く。
+# 全分岐共通で、要素の最先頭 (delivery-note より前) に自己修復指示 (SELF_HEAL、下記
+# 「自己修復指示」節) が付く。
 #
 # 残り (UserPromptSubmit で個別配送、本スクリプトの責務外):
-#   - always-sonnet-2.md / always-sonnet-3.md (非 fable 確定時、または判定不能時は
-#     part-self-gate.md 付き) … inject-rules-part.sh
+#   - always-sonnet-2.md / always-sonnet-3.md (判定不能時は part-self-gate.md 付き) …
+#     inject-rules-part.sh
 #   - 分業規律 (discipline-*.md、モデル別) … inject-discipline.sh
-#   - 判定不能 → Fable 確定時の常時ルール one-shot 補正 (prefix + always-fable.md) …
-#     resolve-model-on-prompt.sh
 #
-# ## state file の atomic 書込と成否確認 (issue #236 で追加)
+# ## state file の atomic 書込と成否確認
 #
 # state file (`model-<session_id>`) は分割後の part 2/3・分業規律スクリプトが読む IPC に
 # なるため、同一ディレクトリ内に temp file を書いてから `mv` する atomic 書込にし、書込の成否
 # (temp 書込・mv の両方) を確認する。モデルが確定したのに書込が失敗した場合は pending マーカー
 # (`pending-model-<session_id>`) の作成にフォールバックし、判定不能セマンティクス (自己ゲート
-# 付き配送 + resolve-model-on-prompt.sh の one-shot 補正) に縮退する。pending の作成にも
-# 失敗した場合は state 変更なしで注入のみ継続する (既知の制約、設計契約 §8-4 の床)。
+# 付き配送 + resolve-model-on-prompt.sh によるモデル確定と inject-discipline.sh による分業規律の
+# one-shot 補正) に縮退する。pending の作成にも失敗した場合は state 変更なしで注入のみ継続する
+# (既知の制約、設計契約 §8-4 の床)。
 # state 書込が成功した場合のみ、過去の判定不能 SessionStart が残した pending マーカーを削除する。
 #
 # session_id が取得できない (空の) 場合は、state 書込自体を試みない (書けないため) 上に
@@ -64,33 +60,31 @@
 # `delivered-discipline-<session_id>`) は SessionStart のたびに無条件で削除する (`startup` 以外に
 # `resume` / `clear` / `compact` でも発火するため、全要素を毎回再配送するセマンティクスを維持する)。
 #
-# ## 自己修復指示 (issue #235 で追加)
+# ## 自己修復指示
 #
 # Claude Code は hook の additionalContext 1 要素が inline 閾値 (約 9〜10K 文字、UTF-16
 # code unit 基準) を超えると本文をファイルへ退避し、`<persisted-output>` スタブ (退避パス +
-# 先頭 2KB プレビュー) のみを context に載せる。#236 の分割で全要素は 8,000 字以下に収まって
+# 先頭 2KB プレビュー) のみを context に載せる。分割配送で全要素は 8,000 字以下に収まって
 # いるが、将来の閾値変動・ペイロード増加で劣化が再発しても「退避ファイルを読み直せば機能する」
-# 状態を保つため、additionalContext の最先頭 (4 分岐すべて、delivery-note より前 = プレビュー
+# 状態を保つため、additionalContext の最先頭 (全分岐、delivery-note より前 = プレビュー
 # 2KB に必ず入る位置) に自己修復指示 1 段落を必ず置く:
 #
 # - 文言はプレビューを圧迫しないよう 200 字以内とし、「persisted-output として退避されている
 #   場合は」という条件付き文言にする (inline 配送時に読んでも違和感がないこと)。指示には
 #   「退避ファイル (スタブに記載されたパス) を Read で全文読了してから作業を開始する」ことを
 #   明記する
-# - 文言は本スクリプト内の SELF_HEAL 定数が保持する (issue #235 の I/O 契約により、md
-#   ファイル側には置かずスクリプト側で付与する)
-# - resolve-model-on-prompt.sh の one-shot 補正ペイロード最先頭にも byte-identical な同文を
-#   置く (スクリプト間の二重管理。変更時は必ず両スクリプトを同時に更新すること)
+# - 文言は本スクリプト内の SELF_HEAL 定数が保持する (md ファイル側には置かずスクリプト側で
+#   付与する)
 #
-# ## delivery-note と 8K ガード (issue #236 で追加、設計契約 §2。#235 で不落単位を拡張)
+# ## delivery-note と 8K ガード (設計契約 §2)
 #
 # 自己修復指示 (SELF_HEAL) に続けて `delivery-note.md` (常時ルール・分業規律が複数メッセージに
 # 分割配送される旨の短い前置き) と、実行時に解決した prompts ディレクトリの絶対パス 1 行を
 # 付加する。prompts ディレクトリの実パスは実行環境依存で長さが非有界のため、additionalContext
 # を最終的に組み立てた後の全文に対して文字数を計測し、8,000 を超える場合は
 #   (i) 実パス行を落として再計測 → (ii) それでも超える場合は delivery-note 全体を落として再計測
-# の順で段階的に縮退する。SELF_HEAL とルール本文 (self-gate 前置き preamble-self-gate.md を
-# 含む always-fable.md / always-sonnet-1.md) は不落単位 (ESSENTIAL = SELF_HEAL + CORE) であり、
+# の順で段階的に縮退する。SELF_HEAL とルール本文 (always-sonnet-1.md と、判定不能時の
+# 自己ゲート前置き preamble-self-gate.md) は不落単位 (ESSENTIAL = SELF_HEAL + CORE) であり、
 # いかなる場合も落とさない。ESSENTIAL 単体が 8,000 字を超える場合、ガードは超過を許容する
 # (best effort) — persisted-output 化されたときにこそ自己修復指示が必要になるため、その場合も
 # 指示を先頭に残すことを優先する。
@@ -108,8 +102,8 @@
 #
 # - jq 不在
 # - stdin が不正 JSON / hook_event_name が空
-# - 注入対象の part 1 本文 (always-fable.md / always-sonnet-1.md / preamble-self-gate.md) が
-#   読めない (空文字列を含む)
+# - 注入対象の part 1 本文 (always-sonnet-1.md / preamble-self-gate.md) が読めない
+#   (空文字列を含む)
 # - delivery-note.md が読めない場合は delivery-note 無しで part 1 本文のみ注入する
 #   (ペイロード単位の fail-open)
 # - state file / pending マーカー / 配送済みマーカーの書き込み失敗 (state はあくまで補助情報
@@ -230,22 +224,16 @@ if [ "$USE_SELF_GATE" -eq 1 ]; then
   CORE="$PREAMBLE
 
 $BODY"
-elif printf '%s' "$MODEL" | grep -qi 'fable'; then
-  CORE=$(cat "$PROMPTS_DIR/always-fable.md" 2>/dev/null)
-  if [ -z "$CORE" ]; then
-    exit 0
-  fi
 else
-  # sonnet を含む場合も、非空でそのいずれでもない (opus / haiku 等) 場合も、
-  # 同じく always-sonnet-1.md (part 1/3) を注入する。
+  # モデルが確定している場合は、モデルに依らず (fable / sonnet / opus / haiku 等)
+  # always-sonnet-1.md (part 1/3) を注入する。
   CORE=$(cat "$PROMPTS_DIR/always-sonnet-1.md" 2>/dev/null)
   if [ -z "$CORE" ]; then
     exit 0
   fi
 fi
 
-# 自己修復指示 (issue #235、ヘッダ「自己修復指示」節)。additionalContext の最先頭に必ず置く。
-# 文言は resolve-model-on-prompt.sh の SELF_HEAL と byte-identical に保つこと (二重管理)。
+# 自己修復指示 (ヘッダ「自己修復指示」節)。additionalContext の最先頭に必ず置く。
 SELF_HEAL='(自己修復) このメッセージが persisted-output として退避されている場合は、スタブに記載されたパスの退避ファイルを Read で全文読了してから作業を開始すること。'
 
 NOTE=$(cat "$PROMPTS_DIR/delivery-note.md" 2>/dev/null)

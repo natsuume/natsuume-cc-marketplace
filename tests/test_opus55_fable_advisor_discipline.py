@@ -1,22 +1,18 @@
 """agent-discipline: Opus 5.5 メイン + Fable Advisor パターン向け分業規律・自走方針の契約テスト。
 
-背景 (spec-first Phase A):
+背景:
 - メインセッションを Opus 5.5 にし、Fable は pre-push-review の reviewer 2 体と
   cross-model-advisor の fable-advisor-runner でのみ使う構成へ移行する。
 - discipline-opus.md / discipline-sonnet.md の rule:delegation-rules 節は、Fable を
   全面禁止する記述から「reviewer / advisor の起動に限り `model: "fable"` を明示して
   使い、週次枠ガードで deny されたら reviewer は Opus で再起動・advisor はスキップ」
-  の記述に置き換える。discipline-fable.md (Fable メイン時の分業規律) は変更しない。
+  の記述に置き換える。
 - discipline-opus.md の effort 規律は公式ガイド「Prompting Claude Opus 5.5」
   (prompting-claude-opus-5-5、既定 effort は medium) を基準に書き換える。Opus 5 向けの
   3 規律 (委任しない作業・スコープ制限の 1 文・汎用再確認指示の禁止) は Opus 5 /
   Opus 5.5 の両方に適用する記述にする。
 - auto-mode.md (全モデル共通で配送) に、作業が残っている間の 4 種類の止まり方の
   禁止、止まってよい場合、既存の禁止 / 要確認事項を不要にしない旨を追加する。
-
-変更要求の契約は Phase A で red、Phase B のプロンプト修正で green になる。
-discipline-fable.md の保全ガード (test_fable_discipline_keeps_prohibition) は
-Phase A から green であり、Phase B が Fable 分岐を誤って書き換えないことを固定する。
 
 subTest は使わない: pytest (subtest 対応版) では個々の subTest 失敗が SUBFAILED として
 分離報告される一方、親テストノード自体は PASSED と表示され判定が曖昧になるため、
@@ -31,12 +27,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "prompts"
 
-DISCIPLINE_FABLE = PROMPTS / "discipline-fable.md"
 DISCIPLINE_OPUS = PROMPTS / "discipline-opus.md"
 DISCIPLINE_SONNET = PROMPTS / "discipline-sonnet.md"
 
-# Fable の用途を書き換える 2 ファイル (discipline-fable.md は対象外)。
-NON_FABLE_DISCIPLINES = {
+# Fable の用途を限定して記述する分業規律 2 ファイル。
+DISCIPLINES = {
     "discipline-opus.md": DISCIPLINE_OPUS,
     "discipline-sonnet.md": DISCIPLINE_SONNET,
 }
@@ -49,7 +44,7 @@ AUTO_MODE_FILES = {
 DELEGATION_RULES_MARKER = "<!-- rule:delegation-rules -->"
 DELEGATION_INSTRUCTION_MARKER = "<!-- rule:delegation-instruction -->"
 
-# 全面禁止の旧 bullet 見出し (opus / sonnet から消え、fable には残る)。
+# 全面禁止の bullet 見出し (opus / sonnet に含まれない)。
 FABLE_PROHIBITION_PHRASE = "Fable をサブエージェントに使わない"
 
 # rule:delegation-rules 節に必須の Fable 用途の記述 (opus / sonnet 共通の canonical 文言)。
@@ -69,7 +64,10 @@ FABLE_USAGE_PHRASES = (
     'reviewer は `model: "opus"` で再起動し',
     "fable-advisor-runner は再起動せずスキップする",
     # Fable メインのセッション
-    "Fable メインのセッションでは Fable サブエージェントを使わない",
+    (
+        "Fable メインのセッションでは Fable サブエージェントを使わず、"
+        "model を非 Fable で明示する (未指定の継承は block-fable-subagent.sh が deny する)。"
+    ),
 )
 
 # discipline-opus.md の effort 規律 (Opus 5.5 基準)。
@@ -127,10 +125,10 @@ def header_comment(text: str) -> str:
 class FableUsageDelegationRulesTests(unittest.TestCase):
     """opus / sonnet 版の rule:delegation-rules 節が Fable の用途を限定して許可すること。"""
 
-    def test_prohibition_phrase_absent_from_non_fable_disciplines(self) -> None:
+    def test_prohibition_phrase_absent_from_disciplines(self) -> None:
         offenders = [
             name
-            for name, path in NON_FABLE_DISCIPLINES.items()
+            for name, path in DISCIPLINES.items()
             if FABLE_PROHIBITION_PHRASE in read(path)
         ]
         self.assertEqual([], offenders, f"全面禁止の旧記述が残るファイル: {offenders}")
@@ -138,19 +136,13 @@ class FableUsageDelegationRulesTests(unittest.TestCase):
     def test_fable_usage_phrases_present_in_delegation_rules(self) -> None:
         missing = [
             f"{name}: {phrase!r}"
-            for name, path in NON_FABLE_DISCIPLINES.items()
+            for name, path in DISCIPLINES.items()
             for phrase in FABLE_USAGE_PHRASES
             if phrase not in delegation_rules_section(read(path))
         ]
         self.assertEqual(
             [], missing, f"rule:delegation-rules 節に無い Fable 用途の記述: {missing}"
         )
-
-    def test_fable_discipline_keeps_prohibition(self) -> None:
-        """保全ガード (Phase A から green): Fable メイン時の分業規律は変更しない。"""
-        text = read(DISCIPLINE_FABLE)
-        self.assertIn(FABLE_PROHIBITION_PHRASE, text)
-        self.assertNotIn("`cross-model-advisor:fable-advisor-runner`", text)
 
 
 class Opus55EffortTests(unittest.TestCase):

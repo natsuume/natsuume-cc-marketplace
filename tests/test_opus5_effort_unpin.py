@@ -1,21 +1,20 @@
 """Opus 5 effort=medium 固定の撤廃 (Claude Opus 5 System Card 準拠) の契約テスト。
 
-背景 (spec-first Phase A):
+背景:
 - Claude Opus 5 System Card の実測は、(1) 高難度タスクの性能が effort とともに
   スケールすること (§8.5 FrontierBench / §8.10.1 HLE / §8.12.2 BenchCAD)、
   (2) high 超の effort ではタスク範囲外の変更 (依頼外リファクタリング等) による
   スコア低下が起きるが、スコープ制限のプロンプト指示 1 文で大半が回復すること
   (§8.4 FrontierCode、モデル限界ではないと明記)、(3) 高 effort で自己修正ループ
   (検証済み回答の再検証の反復) が報告されること (§6.2.1) を示す。
-- これに基づき、agent-discipline 分業規律 3 ファイルの「Opus 5 を使う委任では
+- これに基づき、agent-discipline 分業規律 2 ファイルの「Opus 5 を使う委任では
   effort を medium にする」固定 (v0.20.0 導入) を撤廃し、非拘束の effort 選択
   指針とスコープ制限指示の必須化に置換する。pre-push-review の code-reviewer /
   security-reviewer frontmatter の effort: medium 固定も撤廃する (model: opus は
   維持。frontmatter の契約は tests/test_subagent_model_pins.py が検査する)。
 
-変更要求の契約は Phase A で red、Phase B のプロンプト修正で green になる。
-存続規範の保全ガード (test_sonnet_no_effort_rule_preserved) は Phase A から
-green であり、Phase B の書換えが既存規範を丸ごと失わないことを固定する。
+存続規範の保全ガード (test_sonnet_no_effort_rule_preserved) は、medium 固定の
+撤廃が既存規範を丸ごと失わせていないことを固定する。
 """
 
 from __future__ import annotations
@@ -28,8 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "prompts"
 PRE_PUSH_AGENTS = REPO_ROOT / "plugins" / "pre-push-review" / "agents"
 
-THREE_WAY = {
-    "discipline-fable.md": PROMPTS / "discipline-fable.md",
+DISCIPLINE_VARIANTS = {
     "discipline-opus.md": PROMPTS / "discipline-opus.md",
     "discipline-sonnet.md": PROMPTS / "discipline-sonnet.md",
 }
@@ -58,23 +56,20 @@ REMOVED_PHRASES = (
 # 適用する記述にするため、ファイルごとに文言が異なる
 # (Opus 5.5 基準の契約は tests/test_opus55_fable_advisor_discipline.py が検査する)。
 EFFORT_GUIDANCE_PHRASE = {
-    "discipline-fable.md": "Opus 5 を使う委任では effort を固定しない",
     "discipline-opus.md": "Opus 5.5 への委任では effort の既定 `medium` を基準にする",
     "discipline-sonnet.md": "Opus 5 を使う委任では effort を固定しない",
 }
 SCOPE_INSTRUCTION_PHRASE = {
-    "discipline-fable.md": "Opus 5 への委任指示にはスコープ制限の 1 文を必ず含める",
     "discipline-opus.md": "Opus 5 / Opus 5.5 への委任指示にはスコープ制限の 1 文を必ず含める",
     "discipline-sonnet.md": "Opus 5 への委任指示にはスコープ制限の 1 文を必ず含める",
 }
 RECHECK_BAN_PHRASE = {
-    "discipline-fable.md": "Opus 5 への委任では汎用的な再確認指示を加えない",
     "discipline-opus.md": "Opus 5 / Opus 5.5 への委任では汎用的な再確認指示を加えない",
     "discipline-sonnet.md": "Opus 5 への委任では汎用的な再確認指示を加えない",
 }
 
 # 撤廃断片 (medium 指定のみ) を含む既存 bullet のうち、存続させるべき規範文。
-# Phase B の書換えが bullet 全体を誤って削除しないことを固定する保全ガード。
+# bullet 全体が誤って削除されていないことを固定する保全ガード。
 SONNET_RULE_PHRASE = "Sonnet 系には effort を指定しない"
 
 # 節スコープ検査で切り出すセクション境界 (rule ID マーカー)。
@@ -110,7 +105,7 @@ def body_after_frontmatter(text: str) -> str:
 
 
 class DisciplineEffortUnpinTests(unittest.TestCase):
-    """3-way 分業規律から medium 固定が消え、新指針が入ること。
+    """分業規律 2 ファイルから medium 固定が消え、新指針が入ること。
 
     subTest は使わない: pytest (subtest 対応版) では個々の subTest 失敗が
     SUBFAILED として分離報告される一方、親テストノード自体は PASSED と表示され
@@ -122,7 +117,7 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
         violations = [
             f"{name}: {phrase!r}"
             for phrase in REMOVED_PHRASES
-            for name, path in THREE_WAY.items()
+            for name, path in DISCIPLINE_VARIANTS.items()
             if phrase in read(path)
         ]
         self.assertEqual([], violations, f"旧固定文が残る箇所: {violations}")
@@ -130,7 +125,7 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
     def test_effort_selection_guidance_present(self) -> None:
         """effort 選択指針が delegation-rules 節内に存在する (節外の言及は不可)。"""
         missing = []
-        for name, path in THREE_WAY.items():
+        for name, path in DISCIPLINE_VARIANTS.items():
             text = read(path)
             start = text.find(DELEGATION_RULES_MARKER)
             end = text.find(DELEGATION_INSTRUCTION_MARKER, max(start, 0))
@@ -142,7 +137,7 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
     def test_scope_instruction_requirement_present(self) -> None:
         missing = [
             name
-            for name, path in THREE_WAY.items()
+            for name, path in DISCIPLINE_VARIANTS.items()
             if SCOPE_INSTRUCTION_PHRASE[name] not in read(path)
         ]
         self.assertEqual(
@@ -158,7 +153,7 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
         段落 index の隣接まで固定する。
         """
         violations = []
-        for name, path in THREE_WAY.items():
+        for name, path in DISCIPLINE_VARIANTS.items():
             text = read(path)
             start = text.find(DELEGATION_INSTRUCTION_MARKER)
             if start < 0:
@@ -185,14 +180,14 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
         self.assertEqual([], violations, f"隣接配置が不成立: {violations}")
 
     def test_sonnet_no_effort_rule_preserved(self) -> None:
-        """「Sonnet 系には effort を指定しない」ルール本体の保全ガード (Phase A から green)。
+        """「Sonnet 系には effort を指定しない」ルール本体の保全ガード。
 
-        撤廃断片「medium 指定のみ」はこの bullet の末尾にあり、Phase B は末尾の
-        参照だけを書き換える。bullet 全体の削除 (存続規範の喪失) を red にする。
+        撤廃断片「medium 指定のみ」はこの bullet の末尾にあった参照であり、bullet
+        全体の削除 (存続規範の喪失) を失敗として検出する。
         """
         missing = [
             name
-            for name, path in THREE_WAY.items()
+            for name, path in DISCIPLINE_VARIANTS.items()
             if SONNET_RULE_PHRASE not in read(path)
         ]
         self.assertEqual(

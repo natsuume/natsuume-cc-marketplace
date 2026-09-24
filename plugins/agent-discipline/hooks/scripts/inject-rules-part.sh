@@ -24,9 +24,8 @@
 #
 # - pending (`pending-model-<session_id>`) あり → 自己ゲート行 (part-self-gate.md) +
 #   always-sonnet-<n>.md を注入し、マーカーを書く (state の有無・内容は見ない)
-# - pending 無し + state (`model-<session_id>`) が fable を含む → 配送不要
-#   (fable は part 1 = always-fable.md 全文で完結)。マーカーのみ書く
-# - pending 無し + state が非 fable → always-sonnet-<n>.md を注入し、マーカーを書く
+# - pending 無し + state (`model-<session_id>`) あり → モデルに依らず always-sonnet-<n>.md を
+#   注入し、マーカーを書く
 # - pending も state も無い (SessionStart hook が失敗した異常系) → 判定不能と同じ自己ゲート
 #   付き配送にフォールバックし、マーカーを書く (規律が届かないまま session が進む方が危険、
 #   という保守側の倒し方)
@@ -99,47 +98,39 @@ fi
 
 # 優先規則 (設計契約 §5): pending が存在する間は state を信頼しない。
 USE_SELF_GATE=0
-DELIVER=1
 
 if [ -f "$PENDING_FILE" ]; then
   USE_SELF_GATE=1
-elif [ -f "$STATE_FILE" ]; then
-  MODEL=$(cat "$STATE_FILE" 2>/dev/null)
-  if printf '%s' "$MODEL" | grep -qi 'fable'; then
-    DELIVER=0
-  fi
-else
+elif [ ! -f "$STATE_FILE" ]; then
   # pending も state も無い異常系: 判定不能と同じ自己ゲート付き配送にフォールバックする。
   USE_SELF_GATE=1
 fi
 
-if [ "$DELIVER" -eq 1 ]; then
-  if [ "$USE_SELF_GATE" -eq 1 ]; then
-    GATE=$(cat "$PROMPTS_DIR/part-self-gate.md" 2>/dev/null)
-    if [ -z "$GATE" ]; then
-      exit 0
-    fi
-    CONTEXT="$GATE
-
-$RULES_BODY"
-  else
-    CONTEXT="$RULES_BODY"
-  fi
-
-  OUTPUT=$(jq -n --arg evt "$HOOK_EVENT" --arg ctx "$CONTEXT" '{
-    hookSpecificOutput: {
-      hookEventName: $evt,
-      additionalContext: $ctx
-    }
-  }')
-  if [ -z "$OUTPUT" ]; then
+if [ "$USE_SELF_GATE" -eq 1 ]; then
+  GATE=$(cat "$PROMPTS_DIR/part-self-gate.md" 2>/dev/null)
+  if [ -z "$GATE" ]; then
     exit 0
   fi
-  printf '%s\n' "$OUTPUT"
+  CONTEXT="$GATE
+
+$RULES_BODY"
+else
+  CONTEXT="$RULES_BODY"
 fi
 
-# 注入本文と出力 JSON の生成に成功した後 (または fable で配送不要と判定した後) にのみ
-# マーカーを atomic に書く。書込失敗は無視する (次プロンプトで再試行)。
+OUTPUT=$(jq -n --arg evt "$HOOK_EVENT" --arg ctx "$CONTEXT" '{
+  hookSpecificOutput: {
+    hookEventName: $evt,
+    additionalContext: $ctx
+  }
+}')
+if [ -z "$OUTPUT" ]; then
+  exit 0
+fi
+printf '%s\n' "$OUTPUT"
+
+# 注入本文と出力 JSON の生成に成功した後にのみマーカーを atomic に書く。書込失敗は無視する
+# (次プロンプトで再試行)。
 if mkdir -p "$STATE_DIR" 2>/dev/null; then
   TMP_MARKER="$MARKER.tmp.$$"
   # 2>/dev/null は「>」より前に置く (bash の出力リダイレクト失敗は後置の 2>/dev/null では
