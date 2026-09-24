@@ -70,8 +70,9 @@ source "$SCRIPT_DIR/line2.sh"
 source "$SCRIPT_DIR/line3.sh"
 source "$SCRIPT_DIR/weekly-scoped-limits.sh"
 
-# ターミナル幅を一度だけ取得し、各行の組み立てで共有する
-TERM_WIDTH=$(terminal_width)
+# statusline が使える幅 (ターミナル幅 - Claude Code フッターの予約幅) を一度だけ取得し、
+# 各行の組み立てで共有する
+TERM_WIDTH=$(statusline_width)
 
 # --- 1行目: パス、リポジトリ、ブランチ、変更量、未コミット ---
 # 段階的フォールバックで組み立てる:
