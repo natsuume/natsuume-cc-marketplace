@@ -17,7 +17,13 @@
   すべて利用不可 (使用率不明)。``fetched_at`` が未来時刻でも stale とみなさない。
 - deny 理由では、reviewer は ``model: "opus"`` で再起動し、fable-advisor-runner は
   再起動せずスキップするよう案内する。
-- hook は cache を書き込まない。model 未指定 (継承経路) と FORCE 有効時の判定は変えない。
+- サブエージェント内 (入力に agent_id がある) からの model 未指定 (inherit を含む)・fork の
+  起動は deny し、model の明示を求める (nested guard)。継承先が起動元サブエージェントの
+  モデルになり、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承
+  しうるため。CLAUDE_CODE_SUBAGENT_MODEL が非空なら子の実効モデルは env で決まるため
+  従来どおり env で判定する。
+- hook は cache を書き込まない。メインセッションからの model 未指定 (継承経路) と FORCE
+  有効時の判定は変えない。
 
 hook を実行するテストは ``TMPDIR`` / ``HOME`` / ``XDG_CACHE_HOME`` を一時ディレクトリへ
 向け、親プロセスの env を継承しない (tests/test_agent_discipline_model_resolution.py の
@@ -60,6 +66,7 @@ RELAUNCH_REVIEWER_ON_OPUS = r'model: "opus"'
 SKIP_ADVISOR = r"fable-advisor-runner[^。]*スキップ"
 WAIT_ONE_TURN = r"1 turn"
 NAMES_PRODUCER = r"natsuume-statusline"
+NESTED_EXPLICIT_MODEL = r"model に sonnet / opus"
 
 # UNSET: 引数を「与えなかった」ことを表す番兵 / OMIT: cache の key 自体を書かない番兵。
 UNSET = object()
@@ -122,6 +129,8 @@ def row(
     env: object = UNSET,
     force: object = UNSET,
     broken_date: bool = False,
+    agent_id: object = UNSET,
+    subagent_type: str = "pre-push-review:code-reviewer",
     keywords: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """判定表の 1 行。``expect`` は ``"deny"`` / ``"allow"``。
@@ -131,7 +140,8 @@ def row(
     ``"symlink"`` (正常な cache への symlink) / ``"directory"``。``threshold`` は env
     ``FABLE_WEEKLY_MAX_PERCENT``、``env`` は ``CLAUDE_CODE_SUBAGENT_MODEL``、``force`` は
     ``CLAUDE_CODE_SUBAGENT_MODEL_FORCE``。``broken_date`` は PATH 先頭に失敗する ``date``
-    を置き、現在時刻を取得できない状態を再現する。
+    を置き、現在時刻を取得できない状態を再現する。``agent_id`` を与えると hook 入力の
+    ``agent_id`` (サブエージェント内からの起動) として渡す。
     """
     return {
         "label": label,
@@ -146,6 +156,8 @@ def row(
         "env": env,
         "force": force,
         "broken_date": broken_date,
+        "agent_id": agent_id,
+        "subagent_type": subagent_type,
         "keywords": keywords,
     }
 
@@ -374,6 +386,76 @@ DECISION_TABLE = (
         expect="deny",
         keywords=UNKNOWN_DENY,
     ),
+    # --- nested guard: サブエージェント内 (agent_id あり) からの継承・fork は deny ---
+    # 継承先は起動元サブエージェントのモデルで、週次枠判定を通った Fable サブエージェントの
+    # 子が判定なしで Fable を継承しうるため、model の明示を求める。
+    row(
+        "nested/model-unspecified/opus-session",
+        model=UNSET,
+        agent_id="parent-agent",
+        subagent_type="general-purpose",
+        expect="deny",
+        keywords=(NESTED_EXPLICIT_MODEL,),
+    ),
+    row(
+        "nested/model-inherit/opus-session",
+        model="inherit",
+        agent_id="parent-agent",
+        subagent_type="general-purpose",
+        expect="deny",
+        keywords=(NESTED_EXPLICIT_MODEL,),
+    ),
+    row(
+        "nested/fork/opus-session",
+        model=UNSET,
+        agent_id="parent-agent",
+        subagent_type="fork",
+        expect="deny",
+        keywords=(NESTED_EXPLICIT_MODEL,),
+    ),
+    row(
+        "nested/fork-with-explicit-model/opus-session",
+        model="sonnet",
+        agent_id="parent-agent",
+        subagent_type="fork",
+        expect="deny",
+        keywords=(NESTED_EXPLICIT_MODEL,),
+    ),
+    row(
+        "nested/model-sonnet",
+        model="sonnet",
+        agent_id="parent-agent",
+        subagent_type="general-purpose",
+        cache_kind="missing",
+        expect="allow",
+    ),
+    row(
+        "nested/model-fable/usage-ok",
+        agent_id="parent-agent",
+        expect="allow",
+    ),
+    row(
+        "nested/model-fable/over-threshold",
+        agent_id="parent-agent",
+        cache_body=cache([fable_entry(81)]),
+        expect="deny",
+        keywords=USAGE_DENY,
+    ),
+    row(
+        "nested/model-unspecified/env-sonnet",
+        model=UNSET,
+        env="sonnet",
+        agent_id="parent-agent",
+        subagent_type="general-purpose",
+        expect="allow",
+    ),
+    row(
+        "nested/empty-agent-id-is-main-session",
+        model=UNSET,
+        agent_id="",
+        subagent_type="general-purpose",
+        expect="allow",
+    ),
     # --- 変えない経路: 継承経路の env fable、FORCE 有効時、非 fable 明示 ---
     row(
         "unchanged/model-unspecified/env-fable/usage-ok",
@@ -474,14 +556,16 @@ class FableWeeklyGateDecisionTableTest(unittest.TestCase):
             cache_path = self.prepare(temp, env, case)
             before = self.snapshot(cache_path.parent)
 
-            tool_input: dict[str, object] = {"subagent_type": "pre-push-review:code-reviewer"}
+            tool_input: dict[str, object] = {"subagent_type": case["subagent_type"]}
             if case["model"] is not UNSET:
                 tool_input["model"] = case["model"]
-            payload = {
+            payload: dict[str, object] = {
                 "hook_event_name": "PreToolUse",
                 "session_id": SESSION_ID,
                 "tool_input": tool_input,
             }
+            if case["agent_id"] is not UNSET:
+                payload["agent_id"] = case["agent_id"]
             result = subprocess.run(
                 ["/bin/bash", str(BLOCK_FABLE)],
                 cwd=ROOT,
