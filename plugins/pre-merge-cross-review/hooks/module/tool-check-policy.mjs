@@ -6,6 +6,7 @@
 // 不変条件:
 // - 下位判定が `ask` の場合に限り `allow` へ引き上げる。`deny` / `allow` は変更しない
 //   (merge gate の deny・permissions.deny を上書きしない)
+// - `rule` を持つ `ask` (ユーザが permissions.ask ルールで明示した確認) は引き上げない
 // - 引き上げは permission mode が `auto` のときだけ行う。mode 不明 (undefined 等) は引き上げない
 // - `deny` を自ら返さない
 
@@ -31,15 +32,27 @@ const isForbiddenMergeFlag = (token) =>
 const tokenize = (command) => command.trim().split(/\s+/);
 
 /**
- * command が「単一の gh pr merge / view / checks 呼び出し」かを判定する。
+ * command が次の正規形の単独呼び出しかを判定する。
  *
- * - 前後の空白を除いた command 全体が `gh pr <merge|view|checks>` で始まる単一の呼び出しであること
- * - `;` `&` `|` `<` `>` バッククォート `$(` `${` 改行を含まないこと
- * - `gh` の前に env 代入やラッパー (`env` / `bash -c` / `eval` / `xargs` 等) が無いこと
- * - `gh pr merge` の場合、FORBIDDEN_MERGE_FLAGS のいずれも (`--flag=value` 形と、`-sd` のように
- *   `d` を含む短フラグの束ね形を含め) 含まないこと
+ * - `gh pr merge [<番号>] <--squash|--merge|--rebase>`: 番号は 1 以上の整数で任意、戦略フラグは
+ *   ちょうど 1 つ。順序は問わない。それ以外の引数 (`--admin`・`--delete-branch`・`-R` 等) を含む
+ *   形は対象外
+ * - `gh pr view [<番号>|<branch>] [flags]`: flags は `--json <fields>` / `--jq <式>` / `-q <式>` /
+ *   `--comments` / `-c`
+ * - `gh pr checks [<番号>|<branch>] [flags]`: flags は `--json <fields>` / `--jq <式>` / `-q <式>` /
+ *   `--watch` / `--interval <秒>` / `-i <秒>` / `--required` / `--fail-fast`
  *
- * quote の解釈は行わない。quote の内側にある metacharacter も対象外の理由になる。
+ * 引数の規則:
+ * - 値を取るフラグは `--flag value` と `--flag=value` の両方を受け付ける
+ * - `<fields>` は英数字・`_`・`,` のみ、`<秒>` は整数のみ
+ * - `<式>` はシングルクォートで囲んだ 1 語 (内側に `'` を含まない)、または英数字・`_`・`.` のみ
+ * - `<branch>` は英数字・`.`・`_`・`/`・`-` のみで、`-` で始まらない (`:` を含む指定や URL は対象外)
+ * - 位置引数は 1 つまで
+ *
+ * command 全体の規則:
+ * - 前後の空白を除いた command が `gh` で始まること (env 代入・ラッパーを前置しない)
+ * - `;` `&` `|` `<` `>` バッククォート `$(` `${` 改行を、quote の内側を含めて含まないこと
+ * - シングルクォートの外に `$` `"` `\` を含まないこと (上記の引数規則で弾かれる)
  *
  * @param {unknown} command Bash tool の input.command
  * @returns {boolean}
@@ -59,6 +72,9 @@ const isObject = (value) => typeof value === "object" && value !== null && !Arra
 
 /**
  * tool.check の最終判定を返す。
+ *
+ * beneath が `rule` を持たない (または空文字列の) `ask`、permissionMode が `auto`、tool が `Bash`、
+ * input.command が isTargetCommand を満たす場合に限り `{ decision: "allow", reason }` を返す。
  *
  * @param {{ tool: unknown, input: unknown, beneath: { decision: string, reason?: string, rule?: string }, permissionMode: unknown }} args
  * @returns {{ decision: string, reason?: string, rule?: string }} 引き上げない場合は beneath をそのまま (同一オブジェクトで) 返す

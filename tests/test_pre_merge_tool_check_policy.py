@@ -44,27 +44,77 @@ process.stdout.write(JSON.stringify(results));
 """
 
 TARGET_COMMANDS = [
+    # merge: 番号 (任意) と戦略フラグ 1 つ
     "gh pr merge 123 --squash",
     "gh pr merge --squash",
     "gh pr merge 1 --merge",
     "gh pr merge 1 --rebase",
+    "gh pr merge --squash 1",
     "  gh pr merge 1 --squash  ",
     "gh  pr  merge\t1 --squash",
+    # view: 番号または branch 名 (任意) と許可したフラグ
+    "gh pr view",
     "gh pr view 469 --json state,mergedAt,mergeCommit",
     "gh pr view 472 --json state,mergeCommit --jq '.state + \" \" + .mergeCommit.oid'",
     "gh pr view 413 --json state,mergedAt,mergeCommit --jq '{state, mergedAt, merge: .mergeCommit.oid}'",
-    "gh pr view",
+    "gh pr view 474 --json state,mergedAt,mergeCommit -q '\"\\(.state) \\(.mergedAt)\"'",
+    "gh pr view 1 --json=state --jq=.state",
+    "gh pr view 1 --json state -q .state",
+    "gh pr view 1 --comments",
+    "gh pr view 1 -c",
+    "gh pr view feat/issue-477-pre-merge-mod-tool-check",
+    # checks: 番号または branch 名 (任意) と許可したフラグ
     "gh pr checks 469",
     "gh pr checks 469 --watch",
+    "gh pr checks --watch --interval 10",
+    "gh pr checks 1 -i 5",
+    "gh pr checks 1 --required --fail-fast",
+    "gh pr checks 1 --json name,state --jq '.[].state'",
 ]
 
 NON_TARGET_COMMANDS = [
-    # 禁止フラグ付きの merge
+    # merge の正規形から外れるもの
+    "gh pr merge 1",
+    "gh pr merge",
+    "gh pr merge 1 --squash --merge",
+    "gh pr merge 1 2 --squash",
+    "gh pr merge 0 --squash",
+    "gh pr merge feat/x --squash",
+    "gh pr merge 1 -s",
+    "gh pr merge 1 --squash --subject x",
+    "gh pr merge 1 --squash -R owner/repo",
     "gh pr merge 1 --squash --delete-branch",
     "gh pr merge 1 --squash --delete-branch=true",
     "gh pr merge 1 --squash -d",
     "gh pr merge 1 -sd",
     "gh pr merge 1 --squash --admin",
+    "gh pr merge 1 --squash --auto",
+    # view / checks の正規形から外れるもの (別ホスト・変数展開・未許可のフラグ等)
+    "gh pr view -R evil.example/owner/repo 1",
+    "gh pr view 1 --repo evil.example/owner/repo",
+    "gh pr view 1 --repo=evil.example/owner/repo",
+    "gh pr view https://evil.example/owner/repo/pull/1",
+    "gh pr view owner:branch",
+    "gh pr view $GH_TOKEN",
+    "gh pr view 1 --json $HOME",
+    "gh pr view 1 --jq $X",
+    'gh pr view "1"',
+    'gh pr view 1 --jq ".state"',
+    "gh pr view \\$HOME",
+    "gh pr view 1 --jq '.state",
+    "gh pr view 1 --jq",
+    "gh pr view 1 --json",
+    "gh pr view 1 2",
+    "gh pr view -1",
+    "gh pr view 1 --web",
+    "gh pr view 1 --watch",
+    "gh pr checks 1 --comments",
+    "gh pr checks 1 --interval x",
+    "gh pr checks 1 --web",
+    "gh pr view 1 --jq '.a'x",
+    "gh pr view 1 '--repo=evil.example/owner/repo'",
+    # quote の内側でも metacharacter を含むものは対象外
+    "gh pr view 1 --jq '.body | length'",
     # 連結・リダイレクト・置換・改行
     "gh pr merge 1 --squash && echo ok",
     "gh pr merge 1 --squash; echo ok",
@@ -266,6 +316,27 @@ class ToolCheckPolicyTest(unittest.TestCase):
                         permissionMode="auto",
                     )
                 )
+
+    def test_ask_from_explicit_rule_is_unchanged(self) -> None:
+        for command in ["gh pr merge 1 --squash", "gh pr view 1"]:
+            with self.subTest(command=command):
+                self.assert_unchanged(
+                    self.decide(
+                        tool="Bash",
+                        input={"command": command},
+                        beneath={"decision": "ask", "rule": "Bash(gh pr merge:*)"},
+                        permissionMode="auto",
+                    )
+                )
+
+    def test_ask_with_empty_rule_is_raised(self) -> None:
+        result = self.decide(
+            tool="Bash",
+            input={"command": "gh pr view 1"},
+            beneath={"decision": "ask", "rule": ""},
+            permissionMode="auto",
+        )
+        self.assertEqual("allow", result["value"]["decision"])
 
     def test_unexpected_beneath_decision_is_unchanged(self) -> None:
         self.assert_unchanged(
