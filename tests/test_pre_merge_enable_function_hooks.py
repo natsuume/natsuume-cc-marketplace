@@ -67,7 +67,12 @@ class EnableFunctionHooksCommandTest(unittest.TestCase):
         if extra_env:
             env.update(extra_env)
         return subprocess.run(
-            [str(COMMAND)], env=env, capture_output=True, text=True, check=False
+            [str(COMMAND)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
         )
 
     def write_settings(self, text: str) -> None:
@@ -186,6 +191,26 @@ class EnableFunctionHooksCommandTest(unittest.TestCase):
                 completed = self.run_command()
                 self.assert_result(completed, "aborted")
                 self.assert_file_unchanged(original)
+
+    def test_aborts_on_dangling_symlink(self) -> None:
+        target = Path(self._tmp.name) / "dotfiles" / "settings.json"
+        self.settings.parent.mkdir(parents=True)
+        self.settings.symlink_to(target)
+        completed = self.run_command()
+        self.assert_result(completed, "aborted")
+        self.assertIn("symlink", completed.stdout.splitlines()[1])
+        self.assertTrue(self.settings.is_symlink())
+        self.assertFalse(target.exists())
+
+    def test_aborts_on_cyclic_symlink(self) -> None:
+        other = self.settings.parent / "other.json"
+        self.settings.parent.mkdir(parents=True)
+        self.settings.symlink_to(other)
+        other.symlink_to(self.settings)
+        completed = self.run_command()
+        self.assert_result(completed, "aborted")
+        self.assertIn("symlink", completed.stdout.splitlines()[1])
+        self.assertTrue(self.settings.is_symlink())
 
     def test_aborts_without_jq(self) -> None:
         bin_dir = Path(self._tmp.name) / "bin-without-jq"

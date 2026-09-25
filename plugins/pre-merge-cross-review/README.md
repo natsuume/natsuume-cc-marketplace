@@ -102,7 +102,7 @@ merge gate (`block-pre-merge.sh`) は classic PreToolUse として `tool.check` 
 
 呼び出し元の agent に mode の記録が無い間 (起動直後の subagent 等) は、mode 不明として引き上げません。
 
-`tool.call` と `tool.check` のハンドラは Bash の呼び出しに限って登録します。Claude Code は、`tool.call` のハンドラが登録されたツールの呼び出しを background へ切り離さないため、Bash 以外のツールには関与しません。
+`tool.call` と `tool.check` のハンドラは Bash の呼び出しに限って登録します。Claude Code は、`tool.call` のハンドラが登録されたツールの呼び出しを background へ切り離さないため、module が読み込まれている間は Bash の呼び出しが切り離されなくなります。Bash 以外のツールには関与しません。
 
 **読み込まれる条件**: Claude Code プロセスの env に `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` があり、workspace trust を承諾済みであることが必要です。managed settings の `disableAllHooks` / `allowManagedHooksOnly`、`--bare`、Safe mode では読み込まれません。読み込まれない環境でも、本 plugin の他の機能は従来どおり動作します。env は次の setup skill で設定できます。
 

@@ -55,6 +55,11 @@ if [ ! -e "$SETTINGS" ] && [ ! -L "$SETTINGS" ]; then
   exit 0
 fi
 
+# リンク先が存在しない symlink と循環する symlink は、どちらも -e が偽になる。
+if [ -L "$SETTINGS" ] && [ ! -e "$SETTINGS" ]; then
+  abort "${SETTINGS} は symlink ですが、リンク先が存在しないか循環しているため中止しました。リンクを修正してから再実行してください。"
+fi
+
 # 現在の状態を 1 語で得る。解析できない JSON は jq が非 0 で終わる。空ファイルは無出力、
 # 複数の JSON 値は複数行になるため、下の case でいずれも中止に倒れる。
 if ! STATE=$(jq -r --arg key "$ENV_KEY" '
