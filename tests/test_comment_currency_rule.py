@@ -2,7 +2,7 @@
 
 このルールは、コードコメント・docstring・README 等の説明文書には現在の内容に
 対する説明のみを書き、過去の経緯・変更履歴の解説を書かないことを規定する。
-配送 2 面 (メインセッション向け常時適用ルール always-sonnet-{1,2,3}.md / subagent
+配送 2 面 (メインセッション向け常時適用ルール always-{1,2,3}.md / subagent
 向け常時適用ルール) それぞれについて、次を検証する:
 
 1. ルールマーカーが単独行 (行頭から行末までがマーカーのみの行) として規定
@@ -16,17 +16,17 @@
    確定内容の正本) と完全一致すること — 文単位・見出し・ラベルの
    個別検査は canonical 要素を保持したままの追記 (追加型矛盾) を見逃すため、
    ブロック全体一致が最終的な契約になる
-3. 各配送経路 — SessionStart (inject-always.sh のモデル確定時配送・sonnet part 1
-   self-gate 配送)、UserPromptSubmit (inject-rules-part.sh の sonnet part 2/3
-   self-gate 配送)、SubagentStart (inject-subagent-rules.sh の配送) — が実際に生成する
-   additionalContext の最大構成が UTF-16 code units 8,000 以下 (inject-always.sh
-   の `-gt 8000` 縮退条件と整合する境界) に収まること (判定は単一の共有述語
-   within_size_budget を使う)。5 経路すべてこの検査を無条件に実行する。
-   段階的縮退ガードを持つ 2 経路 (inject-always.sh 系) はさらに、
-   inject-always.sh が明示的に許可する第一段縮退 ((参照パス) 行のみを落とす)
-   は許容しつつ、配送メモ (delivery-note.md) 本文の残存は無条件必須とする
-   (「縮退後の payload がたまたま収まっただけ」の本文喪失・第二段以降の
-   縮退を green にしない)
+3. 各配送経路 — SessionStart (inject-always.sh の part 1 配送)、UserPromptSubmit
+   (inject-rules-part.sh の part 2/3 配送)、SubagentStart (inject-subagent-rules.sh の
+   配送) — が実際に生成する additionalContext が UTF-16 code units 8,000 以下
+   (inject-always.sh の `-gt 8000` 縮退条件と整合する境界) に収まること (判定は単一の
+   共有述語 within_size_budget を使う)。4 経路すべてこの検査を無条件に実行する。
+   段階的縮退ガードを持つ inject-always.sh の経路はさらに、inject-always.sh が
+   明示的に許可する第一段縮退 ((参照パス) 行のみを落とす) は許容しつつ、配送メモ
+   (delivery-note.md) 本文の残存は無条件必須とする (「縮退後の payload がたまたま
+   収まっただけ」の本文喪失・第二段以降の縮退を green にしない)。UTF-8 以外の locale
+   で文字数をバイト数で数える場合は、縮退が発動して自己修復指示とルール本文だけが
+   配送されること
 4. ルール本文ブロック自身、および面ごとに解決した冒頭 HTML コメントヘッダが、
    面固有の静的自己準拠述語 (static_surface_*、定義直前のコメント参照) が
    定める禁止対象の経緯記述 (issue/PR 番号・年月日。大文字小文字や年月日単位
@@ -67,14 +67,13 @@ AGENT_DISCIPLINE_PLUGIN_JSON = (
 # 恒久テストが壊れるのを避けるため、下限のみを契約とする。
 MINIMUM_AGENT_DISCIPLINE_VERSION = (0, 25, 0)
 
-SONNET_MD = {
-    "always-sonnet-1.md": PROMPTS / "always-sonnet-1.md",
-    "always-sonnet-2.md": PROMPTS / "always-sonnet-2.md",
-    "always-sonnet-3.md": PROMPTS / "always-sonnet-3.md",
+ALWAYS_MD = {
+    "always-1.md": PROMPTS / "always-1.md",
+    "always-2.md": PROMPTS / "always-2.md",
+    "always-3.md": PROMPTS / "always-3.md",
 }
 SUBAGENT_MD = PROMPTS / "subagent-rules.md"
 DELIVERY_NOTE_MD = PROMPTS / "delivery-note.md"
-PREAMBLE_SELF_GATE_MD = PROMPTS / "preamble-self-gate.md"
 
 INJECT_ALWAYS_SH = SCRIPTS / "inject-always.sh"
 INJECT_RULES_PART_SH = SCRIPTS / "inject-rules-part.sh"
@@ -94,10 +93,11 @@ EXPECTED_HEADING_TEXT = "説明は常に最新の内容のみ"
 # 使うため DOTALL 等は不要。
 HEADING_INDENT_PATTERN = re.compile(r"^( {0,3})(#.*)$")
 
-# 配送面のラベル。subagent は固定ファイル、sonnet はマーカーを保持する
+# 配送面のラベル。subagent は固定ファイル、常時適用ルールはマーカーを保持する
 # part を動的に解決する (resolve_face_path 参照)。
+ALWAYS_FACE = "always-{1,2,3}.md"
 FACES = (
-    "always-sonnet-{1,2,3}.md",
+    ALWAYS_FACE,
     "subagent-rules.md",
 )
 
@@ -106,17 +106,17 @@ FACES = (
 # 段落順序・同一段落性は固定しない。太字見出し接頭辞 (`**指示**: ` 等) は、
 # 実ファイルで同じ文に地続きで付いている場合のみ含める。
 CANONICAL_SENTENCES = {
-    "always-sonnet-{1,2,3}.md": (
+    ALWAYS_FACE: (
         # 中核指示文
         "説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説を書かない。",
         # 禁止対象文
         "禁止対象: 版数・日付・issue/PR 番号による過去の変更の記述 (「vX で追加」「#N で移設」等)、旧実装の説明 (「以前は〜だったが」)、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照。",
         # 履歴置き場文
         "履歴と検討経緯は commit message・PR 説明・issue に置く。",
-        # 契約・制約文 (sonnet は 2 文に分かれる。両方を要求する)
+        # 契約・制約文 (2 文に分かれる。両方を要求する)
         "契約・制約は issue 参照に頼らず、その場で読んで完結するように書く。",
         "コード変更で対応する説明が古くなる場合は同時に更新する。",
-        # touch-time 文 (sonnet は 2 文に分かれる。両方を要求する)
+        # touch-time 文 (2 文に分かれる。両方を要求する)
         "適用は touch-time: 新規作成・意味を変更した説明ブロックに適用する。",
         "単純移設・整形のみの変更で既存記述の書き換えに波及させず、指示のない一括清掃を行わない。",
         # 例外文
@@ -139,7 +139,7 @@ CANONICAL_SENTENCES = {
         "commit message・PR 説明・issue body と、明示的に履歴を目的とする文書は対象外。",
         # 例外文
         "例外: 撤去条件付き暫定措置の「現在の不具合・撤去条件・確認方法」(導入日なし) と、現行の主張への検証日・検証環境の付記。",
-        # 境界末尾文 (現在形の設計理由は禁止対象外。sonnet の境界末尾文の compact 版)
+        # 境界末尾文 (現在形の設計理由は禁止対象外。常時適用ルールの境界末尾文の compact 版)
         "過去に言及しない現在形の設計理由の説明は禁止対象ではない。",
     ),
 }
@@ -149,7 +149,7 @@ CANONICAL_SENTENCES = {
 # 存在を検査する。文言の内容 (CANONICAL_SENTENCES) とは別に、規律としての骨格
 # が欠落していないかを確認する。
 STRUCTURAL_ELEMENT_LABELS = {
-    "always-sonnet-{1,2,3}.md": ("**適用範囲**:", "**なぜ**:", "**境界**:", "**例**:"),
+    ALWAYS_FACE: ("**適用範囲**:", "**なぜ**:", "**境界**:", "**例**:"),
     "subagent-rules.md": ("**適用範囲**:", "**なぜ**:"),
 }
 
@@ -158,16 +158,12 @@ STRUCTURAL_ELEMENT_LABELS = {
 # (test_rule_block_matches_confirmed_body_exactly) の正本であり、この
 # 定数からそのまま各面の確定本文を逐語復元できる。
 #
-# 配置先の決定 (契約): sonnet 面の配置先は always-sonnet-2.md とする (3 part
-# (always-sonnet-{1,2,3}.md) のうち配送予算の残余が最大のため)。ルール番号
-# ("## N.") は 3 part 集合全体で一意に振られ、単一 part 内での連番性は
-# 要求しない — always-sonnet-2.md は既存ルール 3〜6 を持つため、本ルールの
-# 見出し番号がその直後の連番になるとは限らない。FACES / CANONICAL_SENTENCES /
-# STRUCTURAL_ELEMENT_LABELS の "always-sonnet-{1,2,3}.md" キーは、マーカーを
-# 保持する part を動的に解決する (resolve_face_path 参照) ため、この配置先
-# 決定自体をテストの検査対象として固定するものではない。
+# ルール番号 ("## N.") は 3 part 集合全体で一意に振られ、単一 part 内での
+# 連番性は要求しない。FACES / CANONICAL_SENTENCES / STRUCTURAL_ELEMENT_LABELS の
+# ALWAYS_FACE キーは、マーカーを保持する part を動的に解決する
+# (resolve_face_path 参照) ため、どの part に置くかはテストの検査対象にしない。
 CONFIRMED_BLOCK_TEXT = {
-    'always-sonnet-{1,2,3}.md': (
+    ALWAYS_FACE: (
         '\n## 10. 説明は常に最新の内容のみ\n\n**適用範囲**: コードコメント・docstring・README 等、リポジトリ内の説明文書を新規作成・編集するすべての場面に適用する。\n\n説明文書には現在の内容に対する説明のみを書き、過去の経緯・変更履歴の解説を書かない。禁止対象: 版数・日付・issue/PR 番号による過去の変更の記述 (「vX で追加」「#N で移設」等)、旧実装の説明 (「以前は〜だったが」)、移設・置換・廃止の記録、不採用案の経緯記録、出典としての issue/PR 番号参照。履歴と検討経緯は commit message・PR 説明・issue に置く。契約・制約は issue 参照に頼らず、その場で読んで完結するように書く。コード変更で対応する説明が古くなる場合は同時に更新する。\n\n適用は touch-time: 新規作成・意味を変更した説明ブロックに適用する。単純移設・整形のみの変更で既存記述の書き換えに波及させず、指示のない一括清掃を行わない。\n\n**なぜ**: 履歴の正規の置き場は git log / PR / issue であり、コメント・README に書いた経緯は更新されず腐る。読者の多くは AI エージェントでリポジトリ内テキストを信頼ソースとして扱うため、古い経緯記述は誤誘導になる。セッションへ注入される文書では経緯記述が毎セッションのトークンと配送予算を消費する。\n\n**境界**: 例外は 2 つ — (1) 撤去条件付き暫定措置は「現在の不具合・撤去条件・確認方法」の 3 要素で書く (導入日は書かない) (2) 現行の主張への検証日・検証環境の付記 (「YYYY-MM-DD 実測」「バージョン X で確認」等) は証拠の鮮度情報として許可する。commit message・PR 説明・issue body、および明示的に履歴を目的とする文書は対象外。過去に言及しない現在形の設計理由 (「なぜこうするか」「X 方式は〜のため使わない」) は禁止対象ではない。\n\n**例**:\n- 悪い例: リファクタリング時に「以前の実装を issue 対応で置き換えた」という経緯コメントを版数・issue 番号付きで書き添える\n- 良い例: 現在の実装が前提とする制約のみをコメントに書き、置き換えの経緯は commit message と PR 説明に書く\n'
     ),
     'subagent-rules.md': (
@@ -219,7 +215,7 @@ STRUCTURAL_MARKER_PATTERN = re.compile(r"(?m)^<!-- (?:rule|subagent-rule):")
 # 面固有の静的自己準拠述語 (static_surface_*)
 # ============================================================================
 # 以下の述語は、rule:comment-currency を配送する静的ファイル
-# (always-sonnet-{1,2,3}.md / subagent-rules.md) 自身の
+# (always-{1,2,3}.md / subagent-rules.md) 自身の
 # ルールブロック・冒頭ヘッダにのみ適用する面固有の契約であり、ルール本文が
 # 説明文書一般に対して規定する規律の実装ではない。
 #
@@ -568,18 +564,18 @@ def resolve_face_path(face: str) -> tuple[Path | None, str | None]:
     """配送面から、実際にマーカーを保持するファイルの Path を解決する。
 
     戻り値は (path, 失敗理由)。subagent は固定ファイルのため常に成功する。
-    sonnet はマーカーを保持する part がちょうど 1 つの場合のみ成功し、それ以外
+    常時適用ルールはマーカーを保持する part がちょうど 1 つの場合のみ成功し、それ以外
     (0 件・複数件) は resolve_marker_holder の理由をそのまま伝播する。
     """
     if face == "subagent-rules.md":
         return SUBAGENT_MD, None
-    if face == "always-sonnet-{1,2,3}.md":
+    if face == ALWAYS_FACE:
         holder, reason = resolve_marker_holder(
-            {name: read(path) for name, path in SONNET_MD.items()}
+            {name: read(path) for name, path in ALWAYS_MD.items()}
         )
         if reason is not None:
             return None, reason
-        return SONNET_MD[holder], None
+        return ALWAYS_MD[holder], None
     raise ValueError(f"unknown face: {face}")
 
 
@@ -768,33 +764,15 @@ def run_hook(
     return data["hookSpecificOutput"]["additionalContext"]
 
 
-def delivery_part1_confirmed_model(tmp_dir: str, locale: str | None = UTF8_LOCALE) -> str:
-    """SessionStart (inject-always.sh) がモデル確定時に配送する additionalContext
-    (delivery-note + always-sonnet-1.md)。モデルにはメインセッションの Opus 5.5 を与え、
-    確定モデル向けの part 1 が配送される経路を測る。
+def delivery_part1(tmp_dir: str, locale: str | None = UTF8_LOCALE) -> str:
+    """SessionStart (inject-always.sh) が配送する additionalContext (自己修復指示 +
+    delivery-note + (参照パス) 行 + always-1.md)。配送内容はモデルに依らない。
 
     locale は run_hook へそのまま渡す (既定は定義時点で束縛された検出済み
     UTF-8 locale。locale fallback 検証だけが None を明示指定し、run_hook に
     LC_ALL/LANG を設定させず、テストが制御した ambient を継承させる)。
     """
-    payload = {
-        "session_id": "size-budget-confirmed-model",
-        "hook_event_name": "SessionStart",
-        "model": "claude-opus-5-5",
-    }
-    return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
-
-
-def delivery_sonnet_part1_self_gate(
-    tmp_dir: str, locale: str | None = UTF8_LOCALE
-) -> str:
-    """SessionStart (inject-always.sh) がモデル判定不能時に配送する、self-gate
-    前置き + always-sonnet-1.md (part 1 の最大構成)。
-
-    locale は run_hook へそのまま渡す (既定と None の意味は
-    delivery_part1_confirmed_model と同じ契約)。
-    """
-    payload = {"session_id": "size-budget-sonnet-1", "hook_event_name": "SessionStart"}
+    payload = {"session_id": "size-budget-part-1", "hook_event_name": "SessionStart"}
     return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
 
 
@@ -803,9 +781,8 @@ def payload_content_missing(context: str, source_md: Path) -> list[str]:
     実際に含まれているかを検査する。
 
     サイズ (UTF-16 code unit 数) のみの検査、あるいは先頭見出し行 1 行のみの
-    照合では、見出しだけ含んで本文の大半を欠落させた payload や、self-gate
-    前置き等の別要素が同じ見出しを引用しているだけの payload でも green に
-    なってしまう。各経路の実 payload を確認したところ、各 hook は
+    照合では、見出しだけ含んで本文の大半を欠落させた payload や、別要素が同じ
+    見出しを引用しているだけの payload でも green になってしまう。各経路の実 payload を確認したところ、各 hook は
     対応する md ファイル (冒頭のヘッダコメントを含む全文) を `$(cat ...)`
     でそのまま埋め込んでおり、bash のコマンド置換が末尾の改行を除去する
     以外は逐語一致する (空白・改行の変形は発生しない) ため、正規化なしの
@@ -839,9 +816,8 @@ def pre_degradation_missing_elements(context: str, note_payload: str) -> list[st
     inject-always.sh は 8K 超過時にまず (参照パス) 行のみを落とす第一段縮退を
     明示的に許可しているため、この行単独の欠落は fail 条件にしない (深い
     checkout パス等での正当な縮退を誤検知しないため)。一方、配送メモ本文は
-    段階的縮退ガードを持つ経路 (delivery_part1_confirmed_model /
-    delivery_sonnet_part1_self_gate)
-    のサイズ測定が「縮退後 payload がたまたま予算内に収まっただけ」の場合にも
+    段階的縮退ガードを持つ経路 (delivery_part1) のサイズ測定が
+    「縮退後 payload がたまたま予算内に収まっただけ」の場合にも
     green になりうる盲点を塞ぐ、本文喪失・第二段以降の縮退に対する唯一の
     防衛線であるため、無条件必須とする。note_payload は呼び出し側が
     delivery_note_payload_text() 等で用意した配送メモ本文の期待値を渡す
@@ -859,23 +835,20 @@ def pre_degradation_missing_elements(context: str, note_payload: str) -> list[st
     return missing
 
 
-# 段階的縮退ガードを持つ 2 経路 (inject-always.sh 系のみ。inject-rules-part.sh /
+# 段階的縮退ガードを持つ経路 (inject-always.sh のみ。inject-rules-part.sh /
 # inject-subagent-rules.sh は縮退ガードを持たない)。
+PART1_DELIVERY_LABEL = "part 1 配送 (inject-always.sh)"
 PRE_DEGRADATION_DELIVERY_BUILDERS = {
-    "モデル確定時の part 1 配送 (inject-always.sh, model=opus)": delivery_part1_confirmed_model,
-    "sonnet part 1 配送 (inject-always.sh, self-gate)": delivery_sonnet_part1_self_gate,
+    PART1_DELIVERY_LABEL: delivery_part1,
 }
 
 
-def delivery_sonnet_part_self_gate(part: str, tmp_dir: str) -> str:
-    """UserPromptSubmit (inject-rules-part.sh <part>) が self-gate 付きで配送する、
-    part-self-gate.md + always-sonnet-<part>.md (part 2/3 の最大構成)。
-    """
-    session_id = f"size-budget-sonnet-{part}"
-    state_dir = Path(tmp_dir) / "agent-discipline-state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / f"pending-model-{session_id}").write_text("", encoding="utf-8")
-    payload = {"session_id": session_id, "hook_event_name": "UserPromptSubmit"}
+def delivery_rules_part(part: str, tmp_dir: str) -> str:
+    """UserPromptSubmit (inject-rules-part.sh <part>) が配送する always-<part>.md。"""
+    payload = {
+        "session_id": f"size-budget-part-{part}",
+        "hook_event_name": "UserPromptSubmit",
+    }
     return run_hook(INJECT_RULES_PART_SH, payload, tmp_dir, args=[part])
 
 
@@ -887,10 +860,10 @@ def delivery_subagent(tmp_dir: str) -> str:
 class MarkerPresenceTests(unittest.TestCase):
     """rule:comment-currency マーカーが各配送面に規定回数だけ単独行として存在すること。"""
 
-    def test_sonnet_marker_appears_exactly_once_across_parts(self) -> None:
-        total = sum(count_marker_lines(read(path)) for path in SONNET_MD.values())
+    def test_always_marker_appears_exactly_once_across_parts(self) -> None:
+        total = sum(count_marker_lines(read(path)) for path in ALWAYS_MD.values())
         self.assertEqual(
-            1, total, f"always-sonnet-{{1,2,3}}.md 合計のマーカー出現数: {total}"
+            1, total, f"always-{{1,2,3}}.md 合計のマーカー出現数: {total}"
         )
 
     def test_subagent_marker_appears_exactly_once(self) -> None:
@@ -981,13 +954,12 @@ class SizeBudgetTests(unittest.TestCase):
     units 以下) に収まること。
 
     DELIVERY_BUILDERS のキーが計測対象の配送経路の一覧そのものである
-    (モデル確定時の part 1 配送・sonnet part 1/2/3 配送・subagent-rules 配送の
-    計 5 経路)。判定は共有述語 within_size_budget を使い、5 経路すべて無条件に
-    実行する (locale 検出の成否によらず skip しない)。
+    (part 1/2/3 配送・subagent-rules 配送の計 4 経路)。判定は共有述語
+    within_size_budget を使い、4 経路すべて無条件に実行する (locale 検出の成否に
+    よらず skip しない)。
 
-    段階的縮退ガードを持つ 2 経路 (PRE_DEGRADATION_DELIVERY_BUILDERS の
-    モデル確定時 part 1 / sonnet part 1 self-gate) はさらに、配送メモ (delivery-note.md) 本文が
-    payload に残存していることをサイズ予算検査・payload 内容検査の両方の
+    段階的縮退ガードを持つ part 1 配送 (PRE_DEGRADATION_DELIVERY_BUILDERS) はさらに、
+    配送メモ (delivery-note.md) 本文が payload に残存していることをサイズ予算検査の
     合否判定に無条件で組み込む (pre_degradation_missing_elements 参照)。
     inject-always.sh が明示的に許可する第一段縮退 ((参照パス) 行のみを落とす)
     は許容し、この行単独の欠落は fail 条件にしない。UTF8_LOCALE (detect_utf8_
@@ -996,35 +968,20 @@ class SizeBudgetTests(unittest.TestCase):
     """
 
     DELIVERY_BUILDERS = {
-        "モデル確定時の part 1 配送 (inject-always.sh, model=opus)": delivery_part1_confirmed_model,
-        "sonnet part 1 配送 (inject-always.sh, self-gate)": delivery_sonnet_part1_self_gate,
-        "sonnet part 2 配送 (inject-rules-part.sh 2, self-gate)": (
-            lambda tmp_dir: delivery_sonnet_part_self_gate("2", tmp_dir)
+        PART1_DELIVERY_LABEL: delivery_part1,
+        "part 2 配送 (inject-rules-part.sh 2)": (
+            lambda tmp_dir: delivery_rules_part("2", tmp_dir)
         ),
-        "sonnet part 3 配送 (inject-rules-part.sh 3, self-gate)": (
-            lambda tmp_dir: delivery_sonnet_part_self_gate("3", tmp_dir)
+        "part 3 配送 (inject-rules-part.sh 3)": (
+            lambda tmp_dir: delivery_rules_part("3", tmp_dir)
         ),
         "subagent-rules 配送 (inject-subagent-rules.sh)": delivery_subagent,
     }
 
-    # DELIVERY_BUILDERS と同一のラベルキーで、各経路が実際に配送する md
-    # ファイルを対応付ける (payload の内容検査用)。
-    DELIVERY_PATH_SOURCE_FILES = {
-        "モデル確定時の part 1 配送 (inject-always.sh, model=opus)": SONNET_MD["always-sonnet-1.md"],
-        "sonnet part 1 配送 (inject-always.sh, self-gate)": SONNET_MD["always-sonnet-1.md"],
-        "sonnet part 2 配送 (inject-rules-part.sh 2, self-gate)": SONNET_MD[
-            "always-sonnet-2.md"
-        ],
-        "sonnet part 3 配送 (inject-rules-part.sh 3, self-gate)": SONNET_MD[
-            "always-sonnet-3.md"
-        ],
-        "subagent-rules 配送 (inject-subagent-rules.sh)": SUBAGENT_MD,
-    }
-
     def test_all_delivery_paths_within_budget(self) -> None:
         """各配送経路の additionalContext が配送予算 (SIZE_BUDGET_UNITS) 以下に
-        収まること。段階的縮退ガード付き 2 経路は配送メモ本文の残存も合否
-        判定に組み込む (クラス docstring 参照)。5 経路すべて無条件に実行する。
+        収まること。段階的縮退ガード付きの part 1 配送は配送メモ本文の残存も合否
+        判定に組み込む (クラス docstring 参照)。4 経路すべて無条件に実行する。
         """
         note_payload = delivery_note_payload_text()
         violations = []
@@ -1045,46 +1002,24 @@ class SizeBudgetTests(unittest.TestCase):
             f"配送メモ本文の証拠を確認できない経路: {violations}",
         )
 
-    def test_all_delivery_paths_include_source_file_content(self) -> None:
-        """各配送経路の additionalContext に、その経路が配送する md ファイル
-        (DELIVERY_PATH_SOURCE_FILES) の本文全体が実際に含まれること
-        (payload_content_missing 参照)。段階的縮退ガード付き 2 経路は配送メモ
-        本文の残存も合否判定に組み込む (クラス docstring 参照)。5 経路すべて
-        無条件に実行する。
+    def test_subagent_delivery_includes_source_file_content(self) -> None:
+        """SubagentStart の配送 (inject-subagent-rules.sh) の additionalContext に
+        subagent-rules.md の本文全体が含まれること (payload_content_missing 参照)。
 
-        サイズ検査 (test_all_delivery_paths_within_budget) はサイズのみを
-        見るため、hook が本文を欠落させた (それでいて長さだけは偶然予算内に
-        収まる) 出力でも green になる盲点がある。見出し 1 行のみの照合でも、
-        見出しだけ含んで本文を欠落させた payload や別要素が同じ見出しを
-        引用しているだけの payload を見逃す。判定は動的に行う (対象 md
-        ファイルを都度読んで全文照合する) ため、確定本文の逐語に依存せず、
-        現状ファイルでも今後の本文更新後でも自然に成立する。
+        サイズ検査 (test_all_delivery_paths_within_budget) はサイズのみを見るため、
+        hook が本文を欠落させた (それでいて長さだけは偶然予算内に収まる) 出力でも
+        green になる。part 1/2/3 配送の本文は
+        tests/test_agent_discipline_unified_discipline.py が完全一致で検査する。
         """
-        note_payload = delivery_note_payload_text()
-        violations = []
-        for label, builder in self.DELIVERY_BUILDERS.items():
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                context = builder(tmp_dir)
-            source_md = self.DELIVERY_PATH_SOURCE_FILES[label]
-            missing = payload_content_missing(context, source_md)
-            if missing:
-                violations.append(f"{label}: {missing}")
-            if label in PRE_DEGRADATION_DELIVERY_BUILDERS:
-                missing_evidence = pre_degradation_missing_elements(context, note_payload)
-                if missing_evidence:
-                    violations.append(f"{label}: 配送メモ本文の証拠が無い {missing_evidence}")
-        self.assertEqual(
-            [],
-            violations,
-            f"配送経路の payload に本文内容が含まれていない、または配送メモ"
-            f"本文の証拠を確認できない経路: {violations}",
-        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            context = delivery_subagent(tmp_dir)
+        self.assertEqual([], payload_content_missing(context, SUBAGENT_MD))
 
     def test_pre_degradation_check_runs_unconditionally_without_utf8_locale(
         self,
     ) -> None:
-        """UTF8_LOCALE が None (locale probe 失敗) をシミュレートしても、モデル確定時の
-        part 1 配送経路の hook 出力が実検出済み locale で pin した場合と同一であり、
+        """UTF8_LOCALE が None (locale probe 失敗) をシミュレートしても、part 1 配送
+        経路の hook 出力が実検出済み locale で pin した場合と同一であり、
         予算・配送メモ本文の各検査が skip されず実行されること。
 
         run_hook の locale 引数は既定で (関数定義時点で束縛されるため、この後
@@ -1094,14 +1029,14 @@ class SizeBudgetTests(unittest.TestCase):
         実行環境の ambient locale (既定 locale) に左右されない。
         """
         with tempfile.TemporaryDirectory() as tmp_dir_pinned:
-            pinned_context = delivery_part1_confirmed_model(tmp_dir_pinned)
+            pinned_context = delivery_part1(tmp_dir_pinned)
 
         global UTF8_LOCALE
         original = UTF8_LOCALE
         UTF8_LOCALE = None
         try:
             with tempfile.TemporaryDirectory() as tmp_dir_simulated:
-                simulated_context = delivery_part1_confirmed_model(tmp_dir_simulated)
+                simulated_context = delivery_part1(tmp_dir_simulated)
         finally:
             UTF8_LOCALE = original
 
@@ -1156,21 +1091,18 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
       した ambient を hook subprocess が env の copy 経由で継承する (= locale
       未指定 fallback 分岐の実走)。ambient は区間内でテストが明示制御する
       ため、テスト実行環境の既定 locale には依存しない
-    - 対象経路: 段階的縮退ガードを持つ 2 経路 (inject-always.sh のモデル確定時配送 /
-      sonnet part 1 self-gate 配送) のみ。他 3 経路はサイズ計測を持たず locale
-      で挙動が変わらないため対象外
+    - 対象経路: 段階的縮退ガードを持つ inject-always.sh の part 1 配送のみ。他の
+      経路はサイズ計測を持たず locale で挙動が変わらないため対象外
     - 期待挙動: 非 UTF-8 locale では `wc -m` が日本語 payload をバイト数
       (UTF-8 で 1 文字 3 バイト前後) で計上するため、現行 payload は必ず
       8,000 を超え、二段縮退 ((参照パス) 行の除去 → 配送メモ全体の除去) が
-      発動して ESSENTIAL (自己修復指示 + CORE) だけが配送される。CORE を
-      構成する各 md の全文が残存し、sonnet part 1 self-gate 経路の CORE は
-      preamble-self-gate.md と always-sonnet-1.md の両方を含む。検査は文言の
-      逐語固定ではなく縮退機構の意味的検証とする:
+      発動して ESSENTIAL (自己修復指示 + CORE) だけが配送される。CORE は
+      always-1.md の全文である。検査は文言の逐語固定ではなく縮退機構の意味的
+      検証とする:
       (a) hook が正常終了し additionalContext を持つ有効な JSON を返す
       (b) 配送メモ (delivery-note.md) 本文が payload に存在しない
       (c) (参照パス) 行が payload に存在しない
-      (d) その経路の CORE を構成する各 md の全文が payload に残存する
-      (ESSENTIAL 不落)
+      (d) CORE (always-1.md の全文) が payload に残存する (ESSENTIAL 不落)
       (e) payload が自己修復指示 (「(自己修復)」) で始まる
     - 前提の明示: 本検査は「バイト計上では現行 payload が必ず予算を超える」
       という現行サイズを前提とする。payload がバイト計上でも 8,000 以下まで
@@ -1215,13 +1147,11 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
                     else:
                         os.environ.pop(key, None)
 
-    def test_confirmed_model_delivery_degrades_to_essential_under_non_utf8_locale(
+    def test_part1_delivery_degrades_to_essential_under_non_utf8_locale(
         self,
     ) -> None:
-        """モデル確定時の part 1 配送がバイト計上の縮退で ESSENTIAL のみになること
-        (a)〜(e)。(d) の CORE は always-sonnet-1.md で構成される。
-        """
-        context = self._deliver_under_non_utf8_locale(delivery_part1_confirmed_model)
+        """part 1 配送がバイト計上の縮退で ESSENTIAL のみになること (a)〜(e)。"""
+        context = self._deliver_under_non_utf8_locale(delivery_part1)
         # (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
         note_payload = delivery_note_payload_text()
         self.assertTrue(
@@ -1240,47 +1170,8 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
         )
         self.assertEqual(
             [],
-            payload_content_missing(context, SONNET_MD["always-sonnet-1.md"]),
+            payload_content_missing(context, ALWAYS_MD["always-1.md"]),
             "ルール md 全文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
-        )
-        self.assertTrue(
-            context.startswith("(自己修復)"),
-            "payload が自己修復指示で始まっていない",
-        )
-
-    def test_sonnet_part1_delivery_degrades_to_essential_under_non_utf8_locale(
-        self,
-    ) -> None:
-        """sonnet part 1 self-gate 配送がバイト計上の縮退で ESSENTIAL のみに
-        なること (a)〜(e)。(d) の CORE は preamble-self-gate.md +
-        always-sonnet-1.md の 2 ファイルで構成される。
-        """
-        context = self._deliver_under_non_utf8_locale(delivery_sonnet_part1_self_gate)
-        # (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
-        note_payload = delivery_note_payload_text()
-        self.assertTrue(
-            note_payload, "delivery-note.md から配送メモ本文を抽出できない (空・ヘッダのみの疑い)"
-        )
-        self.assertNotIn(
-            note_payload,
-            context,
-            "配送メモ本文が縮退後も payload に残存している"
-            " (バイト計上での二段縮退が発動していない疑い)",
-        )
-        self.assertNotIn(
-            PATH_LINE_PREFIX,
-            context,
-            "(参照パス) 行が縮退後も payload に残存している (第一段縮退が発動していない疑い)",
-        )
-        self.assertEqual(
-            [],
-            payload_content_missing(context, SONNET_MD["always-sonnet-1.md"]),
-            "ルール md 全文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
-        )
-        self.assertEqual(
-            [],
-            payload_content_missing(context, PREAMBLE_SELF_GATE_MD),
-            "self-gate 前置きが縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
         )
         self.assertTrue(
             context.startswith("(自己修復)"),

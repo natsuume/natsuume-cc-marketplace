@@ -1,20 +1,14 @@
-"""Opus 5 effort=medium 固定の撤廃 (Claude Opus 5 System Card 準拠) の契約テスト。
+"""委任先の effort を固定しない規律と、スコープ制限指示の配置の契約テスト。
 
-背景:
-- Claude Opus 5 System Card の実測は、(1) 高難度タスクの性能が effort とともに
-  スケールすること (§8.5 FrontierBench / §8.10.1 HLE / §8.12.2 BenchCAD)、
-  (2) high 超の effort ではタスク範囲外の変更 (依頼外リファクタリング等) による
-  スコア低下が起きるが、スコープ制限のプロンプト指示 1 文で大半が回復すること
-  (§8.4 FrontierCode、モデル限界ではないと明記)、(3) 高 effort で自己修正ループ
-  (検証済み回答の再検証の反復) が報告されること (§6.2.1) を示す。
-- これに基づき、agent-discipline 分業規律 2 ファイルの「Opus 5 を使う委任では
-  effort を medium にする」固定 (v0.20.0 導入) を撤廃し、非拘束の effort 選択
-  指針とスコープ制限指示の必須化に置換する。pre-push-review の code-reviewer /
-  security-reviewer frontmatter の effort: medium 固定も撤廃する (model: opus は
-  維持。frontmatter の契約は tests/test_subagent_model_pins.py が検査する)。
-
-存続規範の保全ガード (test_sonnet_no_effort_rule_preserved) は、medium 固定の
-撤廃が既存規範を丸ごと失わせていないことを固定する。
+- 分業規律 (discipline.md) は委任先の effort を medium に固定する記述を持たない
+  (``REMOVED_PHRASES``)。effort の選び方は rule:delegation-rules 節の Opus 5.5 基準の指針が
+  定める (tests/test_opus55_fable_advisor_discipline.py が検査する)。
+- rule:delegation-instruction 節では、スコープ制限の 1 文を必須とする段落の直後に、汎用的な
+  再確認指示を加えない段落を置く (対で先に読ませる)。両段落の存在は
+  tests/test_agent_discipline_unified_discipline.py が検査する。
+- pre-push-review の code-reviewer / security-reviewer は effort を指定せずセッション既定を
+  継承し、高 effort での自己修正ループを避ける較正文を本文に持つ。README はその構成を書く
+  (frontmatter の契約は tests/test_subagent_model_pins.py が検査する)。
 """
 
 from __future__ import annotations
@@ -28,8 +22,7 @@ PROMPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "prompts"
 PRE_PUSH_AGENTS = REPO_ROOT / "plugins" / "pre-push-review" / "agents"
 
 DISCIPLINE_VARIANTS = {
-    "discipline-opus.md": PROMPTS / "discipline-opus.md",
-    "discipline-sonnet.md": PROMPTS / "discipline-sonnet.md",
+    "discipline.md": PROMPTS / "discipline.md",
 }
 
 REVIEWERS = {
@@ -39,9 +32,8 @@ REVIEWERS = {
 
 PRE_PUSH_README = REPO_ROOT / "plugins" / "pre-push-review" / "README.md"
 
-# 撤廃対象の旧固定文 (部分文字列)。ルール見出しだけでなく、旧 bullet 内の
-# Workflow 向け明示 (effort: 'medium') と fail-closed 節 (実効 effort が medium に
-# なると保証できない場合の Sonnet 降格) の断片も含め、部分書換えの残存を検知する。
+# effort を medium に固定する記述 (部分文字列)。ルール見出しだけでなく、Workflow 向けの
+# 明示 (effort: 'medium') と、実効 effort が medium にならない場合の降格の断片も含める。
 REMOVED_PHRASES = (
     "effort を medium にする",
     "medium 指定のみ",
@@ -51,29 +43,11 @@ REMOVED_PHRASES = (
     "難度による引き上げ・引き下げをしない",
 )
 
-# 置換後の新 canonical 文 (部分文字列)。discipline-opus.md は Opus 5.5 メインを対象に
-# effort 規律を Opus 5.5 基準で書き、Opus 5 向けの 2 規律を Opus 5 / Opus 5.5 の両方に
-# 適用する記述にするため、ファイルごとに文言が異なる
-# (Opus 5.5 基準の契約は tests/test_opus55_fable_advisor_discipline.py が検査する)。
-EFFORT_GUIDANCE_PHRASE = {
-    "discipline-opus.md": "Opus 5.5 への委任では effort の既定 `medium` を基準にする",
-    "discipline-sonnet.md": "Opus 5 を使う委任では effort を固定しない",
-}
-SCOPE_INSTRUCTION_PHRASE = {
-    "discipline-opus.md": "Opus 5 / Opus 5.5 への委任指示にはスコープ制限の 1 文を必ず含める",
-    "discipline-sonnet.md": "Opus 5 への委任指示にはスコープ制限の 1 文を必ず含める",
-}
-RECHECK_BAN_PHRASE = {
-    "discipline-opus.md": "Opus 5 / Opus 5.5 への委任では汎用的な再確認指示を加えない",
-    "discipline-sonnet.md": "Opus 5 への委任では汎用的な再確認指示を加えない",
-}
-
-# 撤廃断片 (medium 指定のみ) を含む既存 bullet のうち、存続させるべき規範文。
-# bullet 全体が誤って削除されていないことを固定する保全ガード。
-SONNET_RULE_PHRASE = "Sonnet 系には effort を指定しない"
+# rule:delegation-instruction 節で隣接させる 2 段落の書き出し (部分文字列)。
+SCOPE_INSTRUCTION_PHRASE = "委任指示にはスコープ制限の 1 文を必ず含める"
+RECHECK_BAN_PHRASE = "委任では汎用的な再確認指示を加えない"
 
 # 節スコープ検査で切り出すセクション境界 (rule ID マーカー)。
-DELEGATION_RULES_MARKER = "<!-- rule:delegation-rules -->"
 DELEGATION_INSTRUCTION_MARKER = "<!-- rule:delegation-instruction -->"
 ESCALATION_MARKER = "<!-- rule:escalation -->"
 
@@ -105,7 +79,7 @@ def body_after_frontmatter(text: str) -> str:
 
 
 class DisciplineEffortUnpinTests(unittest.TestCase):
-    """分業規律 2 ファイルから medium 固定が消え、新指針が入ること。
+    """分業規律が effort の medium 固定を持たず、スコープ制限指示を対で置くこと。
 
     subTest は使わない: pytest (subtest 対応版) では個々の subTest 失敗が
     SUBFAILED として分離報告される一方、親テストノード自体は PASSED と表示され
@@ -120,29 +94,7 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
             for name, path in DISCIPLINE_VARIANTS.items()
             if phrase in read(path)
         ]
-        self.assertEqual([], violations, f"旧固定文が残る箇所: {violations}")
-
-    def test_effort_selection_guidance_present(self) -> None:
-        """effort 選択指針が delegation-rules 節内に存在する (節外の言及は不可)。"""
-        missing = []
-        for name, path in DISCIPLINE_VARIANTS.items():
-            text = read(path)
-            start = text.find(DELEGATION_RULES_MARKER)
-            end = text.find(DELEGATION_INSTRUCTION_MARKER, max(start, 0))
-            section = text[start:end] if 0 <= start < end else ""
-            if EFFORT_GUIDANCE_PHRASE[name] not in section:
-                missing.append(name)
-        self.assertEqual([], missing, f"effort 選択指針が無いファイル: {missing}")
-
-    def test_scope_instruction_requirement_present(self) -> None:
-        missing = [
-            name
-            for name, path in DISCIPLINE_VARIANTS.items()
-            if SCOPE_INSTRUCTION_PHRASE[name] not in read(path)
-        ]
-        self.assertEqual(
-            [], missing, f"スコープ制限指示の必須化が無いファイル: {missing}"
-        )
+        self.assertEqual([], violations, f"effort の medium 固定文を含む箇所: {violations}")
 
     def test_scope_instruction_precedes_recheck_ban(self) -> None:
         """スコープ制限 → 汎用再確認禁止の順の隣接配置 (対で先に読ませる)。
@@ -163,10 +115,10 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
             section = text[start:end] if end >= 0 else text[start:]
             paragraphs = section.split("\n\n")
             scope_idxs = [
-                i for i, p in enumerate(paragraphs) if SCOPE_INSTRUCTION_PHRASE[name] in p
+                i for i, p in enumerate(paragraphs) if SCOPE_INSTRUCTION_PHRASE in p
             ]
             recheck_idxs = [
-                i for i, p in enumerate(paragraphs) if RECHECK_BAN_PHRASE[name] in p
+                i for i, p in enumerate(paragraphs) if RECHECK_BAN_PHRASE in p
             ]
             if len(scope_idxs) != 1 or len(recheck_idxs) != 1:
                 violations.append(
@@ -179,24 +131,9 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
                 )
         self.assertEqual([], violations, f"隣接配置が不成立: {violations}")
 
-    def test_sonnet_no_effort_rule_preserved(self) -> None:
-        """「Sonnet 系には effort を指定しない」ルール本体の保全ガード。
-
-        撤廃断片「medium 指定のみ」はこの bullet の末尾にあった参照であり、bullet
-        全体の削除 (存続規範の喪失) を失敗として検出する。
-        """
-        missing = [
-            name
-            for name, path in DISCIPLINE_VARIANTS.items()
-            if SONNET_RULE_PHRASE not in read(path)
-        ]
-        self.assertEqual(
-            [], missing, f"存続すべき Sonnet 規範文が無いファイル: {missing}"
-        )
-
 
 class ReviewerCalibrationTests(unittest.TestCase):
-    """effort 継承化に伴う reviewer body の較正文の存在。"""
+    """effort を継承する reviewer の本文にある検証較正文。"""
 
     def test_reviewer_bodies_contain_verification_calibration(self) -> None:
         missing = [
@@ -208,7 +145,7 @@ class ReviewerCalibrationTests(unittest.TestCase):
 
 
 class ReviewerDocConsistencyTests(unittest.TestCase):
-    """pre-push-review README の現状参照節が撤廃後の構成と整合すること。
+    """pre-push-review README の現状参照節が effort 継承の構成と整合すること。
 
     検査文字列は現状参照節 (Agents 節の動作 bullet) に現れる書式を選んでいる。
     """

@@ -10,10 +10,11 @@
 #            inject-advisor-rules-subagent.sh と同方針)
 #
 # 設計:
-#   - モデル判定 (Fable/Sonnet 分岐) を持たない: subagent は原則 Sonnet / Opus だが、
-#     fork / frontmatter 経路では Fable になりうる (block-fable-subagent.sh が捕捉できる
-#     のは明示 model・env・継承の各経路に限る)。加えて SubagentStart hook input のモデル
-#     情報にも保証がないため、どのモデルで実行されても成り立つ単一テンプレートを常に注入する
+#   - モデル判定を持たない: subagent のモデルは起動経路 (明示 model・frontmatter・env・
+#     継承・fork) ごとに決まり、fork / frontmatter 経路では Fable になりうる
+#     (block-fable-subagent.sh が捕捉できるのは明示 model・env・継承の各経路に限る)。
+#     加えて SubagentStart hook input のモデル情報にも保証がないため、どのモデルで実行
+#     されても成り立つ単一テンプレートを常に注入する
 #   - agent_type による条件分岐も持たない (cross-model-advisor / ui-discipline の SubagentStart
 #     注入と同方針)
 #   - プレースホルダ置換なし (静的全文注入)。パス解決は script 自身の位置基準

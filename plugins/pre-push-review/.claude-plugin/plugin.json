@@ -1,6 +1,6 @@
 {
   "name": "pre-push-review",
-  "version": "7.0.0",
+  "version": "7.0.1",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "push 前に code / security レビューを強制する"
 }

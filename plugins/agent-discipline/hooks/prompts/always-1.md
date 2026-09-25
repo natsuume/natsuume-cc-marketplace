@@ -1,14 +1,14 @@
 <!--
-  agent-discipline: 常時適用ルール (SONNET 版、part 1/3)
-  3 part 構成 (このファイル / always-sonnet-2.md / always-sonnet-3.md) の 1 番目。3 part が
+  agent-discipline: 常時適用ルール (part 1/3)
+  3 part 構成 (このファイル / always-2.md / always-3.md) の 1 番目。3 part が
   揃って 1 つのルールセットを構成する。part 間で rule ID を重複させず、3 part の和集合を
   lint-prompt-sync.sh の EXPECTED_ALWAYS_RULE_IDS (期待 rule ID 集合) と完全一致させること
   (同スクリプトのチェック 1 が検証する)。
 -->
 
-# agent-discipline: 常時適用ルール (Sonnet) — part 1/3
+# agent-discipline: 常時適用ルール — part 1/3
 
-本メッセージは常時適用ルール (Sonnet 版) の part 1/3 であり、全 3 part (本メッセージ + part 2/3 + part 3/3) が揃って 1 つのルールセットを構成する。到着順序は保証されないため、各 part は self-contained に (他 part の到着を待たず) 適用する。
+本メッセージは常時適用ルールの part 1/3 であり、全 3 part (本メッセージ + part 2/3 + part 3/3) が揃って 1 つのルールセットを構成する。到着順序は保証されないため、各 part は self-contained に (他 part の到着を待たず) 適用する。
 
 以下のルールは permission_mode に依らず常時適用される。auto mode 時の commit→push→PR→merge 自走方針は別途 inject-auto.sh が配送する。
 

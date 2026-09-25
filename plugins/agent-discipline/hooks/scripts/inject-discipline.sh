@@ -1,44 +1,19 @@
 #!/bin/bash
 # inject-discipline.sh
-# UserPromptSubmit で発火し、分業規律 (discipline-*.md、モデル別) を additionalContext として
-# 配送する (注入ペイロード分割の設計契約 §4.3)。常時ルールと分業規律を同一 additionalContext
-# に連結すると合計文字数が inline 配送閾値を超えるため、本スクリプトが独立した要素として
-# UserPromptSubmit 側で配送する。
+# UserPromptSubmit で発火し、分業規律 (hooks/prompts/discipline.md) を additionalContext
+# として配送する。常時ルールと分業規律を同一 additionalContext に連結すると合計文字数が
+# inline 配送閾値を超えるため、本スクリプトが独立した要素として UserPromptSubmit 側で配送する。
+# セッションのモデルは判定せず、全モデルへ同じ内容を配送する。
 #
-# ## モデル分類
+# ## 配送済みマーカー
 #
-# state のモデル ID (大文字小文字無視の部分一致) で 2 版に分類する:
+# マーカー `${TMPDIR:-/tmp}/agent-discipline-state/delivered-discipline-<session_id>` が
+# 存在すれば (内容は問わない) 即 exit 0。マーカー不在時は見出し
+# `# agent-discipline: 分業規律` + 空行 + discipline.md の本文を配送し、マーカー (内容
+# `delivered`) を書く。マーカーは inject-always.sh が SessionStart のたびに削除する。
 #
-# - Opus 版 (見出し「# agent-discipline: 分業規律 (Opus)」+ discipline-opus.md):
-#   opus を含む
-# - Sonnet 版 (見出し「# agent-discipline: 分業規律 (Sonnet)」+ discipline-sonnet.md):
-#   それ以外 (sonnet / haiku / fable 等)
-#
-# ## マーカーの 3 状態
-#
-# マーカー `delivered-discipline-<session_id>` は内容として 3 状態を持つ:
-#
-# - **無し**: 未配送。pending 優先・state 次点 (設計契約 §5) で分岐する:
-#   - pending あり → discipline-preamble-self-gate.md + discipline-sonnet.md
-#     (見出し「# agent-discipline: 分業規律 (Sonnet)」付き) を注入、マーカーを `sonnet-gate` にする
-#   - pending 無し + state が Opus 版の対象 → 分業規律 Opus 版を注入、マーカーを `final` にする
-#   - pending 無し + state が Sonnet 版の対象 → 分業規律 Sonnet 版を注入、マーカーを `final`
-#     にする
-#   - pending も state も無い異常系 → pending 時と同じ自己ゲート付き配送、マーカーを
-#     `sonnet-gate` にする
-# - **`sonnet-gate`**: 判定不能時の自己ゲート付き分業規律を配送済み。one-shot 補正の対象:
-#   - pending 無し + state が Opus 版の対象に確定していた → 補正前置き (自己ゲート付きで
-#     配送済みの Sonnet 版分業規律を破棄し本要素を優先する旨) + 分業規律 Opus 版を注入し、
-#     マーカーを `final` に更新する
-#   - pending 無し + state が Sonnet 版の対象に確定していた → 注入なしでマーカーを `final` に
-#     更新する (配送済みの Sonnet 版がそのまま確定内容であるため)
-#   - pending あり、または state 無し → 何もしない (次プロンプトで再確認。resolve-model-on-prompt.sh
-#     の state 書込 → pending 削除が同一 event 内で完了する前に本スクリプトが読んだ場合の
-#     最大 1 プロンプト遅延、設計契約 §8-2 の既知の制約)
-# - **`final`**: 確定済み。即 exit 0
-#
-# マーカーの書き込みは注入本文と出力 JSON の生成に成功した後に行う (`sonnet-gate` → `final` の
-# 「注入なし」更新は本文生成が無いため直接書く)。マーカーの読み書きは同一ディレクトリ内
+# マーカーの書き込みは注入本文と出力 JSON の生成に成功した後に行う (先にマーカーを書くと、
+# 本文読取失敗時に分業規律が session 中永久欠落する)。マーカー自体の書込も同一ディレクトリ内
 # temp file → mv の atomic 書込にする。
 #
 # ## 出力 JSON 形状 (配送する場合のみ)
@@ -46,16 +21,15 @@
 #   {
 #     "hookSpecificOutput": {
 #       "hookEventName": "<入力の hook_event_name をそのまま echo>",
-#       "additionalContext": "<分岐に応じた分業規律ブロック>"
+#       "additionalContext": "# agent-discipline: 分業規律\n\n<discipline.md の本文>"
 #     }
 #   }
 #
 # ## fail-open 条件
 #
 # - jq 不在 / 不正 stdin / hook_event_name・session_id が空
-# - 配送対象のペイロード (discipline-preamble-self-gate.md / discipline-sonnet.md /
-#   discipline-opus.md) のいずれかが読めない (空文字列を含む) → 無音 exit 0、マーカーは
-#   書かない (次プロンプトで再試行)
+# - discipline.md が読めない (空文字列を含む)
+# - 上記いずれも「無音 exit 0、マーカーは書かない」= 次プロンプトで再試行する
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -81,152 +55,43 @@ fi
 
 STATE_DIR="${TMPDIR:-/tmp}/agent-discipline-state"
 MARKER="$STATE_DIR/delivered-discipline-$SAFE_SESSION_ID"
-PENDING_FILE="$STATE_DIR/pending-model-$SAFE_SESSION_ID"
-STATE_FILE="$STATE_DIR/model-$SAFE_SESSION_ID"
 
-MARKER_STATE=""
 if [ -f "$MARKER" ]; then
-  MARKER_STATE=$(cat "$MARKER" 2>/dev/null)
-fi
-
-if [ "$MARKER_STATE" = "final" ]; then
   exit 0
 fi
 
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
-
-# $1 = マーカーに書く内容 (sonnet-gate|final)。同一ディレクトリ内 temp file → mv で atomic に書く。
-write_marker() {
-  local content tmp
-  content="$1"
-  if ! mkdir -p "$STATE_DIR" 2>/dev/null; then
-    return 1
-  fi
-  tmp="$MARKER.tmp.$$"
-  # 2>/dev/null は「>」より前に置く (bash の出力リダイレクト失敗は後置の 2>/dev/null では
-  # 抑制できないため、無音 fail-open のため先に stderr を /dev/null へ向ける)。
-  if ! printf '%s' "$content" 2>/dev/null > "$tmp"; then
-    rm -f "$tmp" 2>/dev/null
-    return 1
-  fi
-  if ! mv "$tmp" "$MARKER" 2>/dev/null; then
-    rm -f "$tmp" 2>/dev/null
-    return 1
-  fi
-  return 0
-}
-
-# $1 = モデル ID。分業規律 Opus 版の対象 (opus を含む) なら 0 を返す
-# (ヘッダ「モデル分類」節)。
-uses_opus_discipline() {
-  printf '%s' "$1" | grep -qi 'opus'
-}
-
-# $1 = additionalContext 本文。成功したら JSON を stdout に出力し 0 を返す。
-emit() {
-  local out
-  out=$(jq -n --arg evt "$HOOK_EVENT" --arg ctx "$1" '{
-    hookSpecificOutput: {
-      hookEventName: $evt,
-      additionalContext: $ctx
-    }
-  }')
-  if [ -z "$out" ]; then
-    return 1
-  fi
-  printf '%s\n' "$out"
-  return 0
-}
-
-if [ -z "$MARKER_STATE" ]; then
-  if [ -f "$PENDING_FILE" ]; then
-    SELF_GATE_PREAMBLE=$(cat "$PROMPTS_DIR/discipline-preamble-self-gate.md" 2>/dev/null)
-    SONNET_BODY=$(cat "$PROMPTS_DIR/discipline-sonnet.md" 2>/dev/null)
-    if [ -z "$SELF_GATE_PREAMBLE" ] || [ -z "$SONNET_BODY" ]; then
-      exit 0
-    fi
-    CONTEXT="# agent-discipline: 分業規律 (Sonnet)
-
-$SELF_GATE_PREAMBLE
-
-$SONNET_BODY"
-    if emit "$CONTEXT"; then
-      write_marker "sonnet-gate"
-    fi
-    exit 0
-  fi
-
-  if [ -f "$STATE_FILE" ]; then
-    MODEL=$(cat "$STATE_FILE" 2>/dev/null)
-    if uses_opus_discipline "$MODEL"; then
-      OPUS_BODY=$(cat "$PROMPTS_DIR/discipline-opus.md" 2>/dev/null)
-      if [ -z "$OPUS_BODY" ]; then
-        exit 0
-      fi
-      CONTEXT="# agent-discipline: 分業規律 (Opus)
-
-$OPUS_BODY"
-    else
-      SONNET_BODY=$(cat "$PROMPTS_DIR/discipline-sonnet.md" 2>/dev/null)
-      if [ -z "$SONNET_BODY" ]; then
-        exit 0
-      fi
-      CONTEXT="# agent-discipline: 分業規律 (Sonnet)
-
-$SONNET_BODY"
-    fi
-    if emit "$CONTEXT"; then
-      write_marker "final"
-    fi
-    exit 0
-  fi
-
-  # pending も state も無い異常系: pending 時と同じ自己ゲート付き配送にフォールバックする。
-  SELF_GATE_PREAMBLE=$(cat "$PROMPTS_DIR/discipline-preamble-self-gate.md" 2>/dev/null)
-  SONNET_BODY=$(cat "$PROMPTS_DIR/discipline-sonnet.md" 2>/dev/null)
-  if [ -z "$SELF_GATE_PREAMBLE" ] || [ -z "$SONNET_BODY" ]; then
-    exit 0
-  fi
-  CONTEXT="# agent-discipline: 分業規律 (Sonnet)
-
-$SELF_GATE_PREAMBLE
-
-$SONNET_BODY"
-  if emit "$CONTEXT"; then
-    write_marker "sonnet-gate"
-  fi
+BODY=$(cat "$PROMPTS_DIR/discipline.md" 2>/dev/null)
+if [ -z "$BODY" ]; then
   exit 0
 fi
 
-if [ "$MARKER_STATE" = "sonnet-gate" ]; then
-  if [ -f "$PENDING_FILE" ] || [ ! -f "$STATE_FILE" ]; then
-    # pending がまだ残っている、または state が無い: モデル未確定として何もしない
-    # (resolve-model-on-prompt.sh の state 書込 → pending 削除の完了待ち、最大 1 プロンプト遅延)。
-    exit 0
-  fi
+CONTEXT="# agent-discipline: 分業規律
 
-  MODEL=$(cat "$STATE_FILE" 2>/dev/null)
-  if uses_opus_discipline "$MODEL"; then
-    OPUS_BODY=$(cat "$PROMPTS_DIR/discipline-opus.md" 2>/dev/null)
-    if [ -z "$OPUS_BODY" ]; then
-      exit 0
-    fi
-    CORRECTION_PREFIX="(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの分業規律を暫定配送していた。会話の進行によりこのセッションのモデルが Opus 版分業規律の対象 (Opus 系) であると確定したため、以後は本メッセージ以下の Opus 版分業規律を優先し、先に配送済みの Sonnet 版分業規律は破棄すること。"
-    CONTEXT="$CORRECTION_PREFIX
+$BODY"
 
-# agent-discipline: 分業規律 (Opus)
-
-$OPUS_BODY"
-    if emit "$CONTEXT"; then
-      write_marker "final"
-    fi
-    exit 0
-  fi
-
-  # Sonnet 版の対象に確定: 自己ゲート付きで配送済みの Sonnet 版がそのまま確定内容のため、
-  # 追加の注入はせずマーカーのみ final に更新する。
-  write_marker "final"
+OUTPUT=$(jq -n --arg evt "$HOOK_EVENT" --arg ctx "$CONTEXT" '{
+  hookSpecificOutput: {
+    hookEventName: $evt,
+    additionalContext: $ctx
+  }
+}')
+if [ -z "$OUTPUT" ]; then
   exit 0
+fi
+printf '%s\n' "$OUTPUT"
+
+# 注入本文と出力 JSON の生成に成功した後にのみマーカーを atomic に書く。書込失敗は無視する
+# (次プロンプトで再試行)。
+if mkdir -p "$STATE_DIR" 2>/dev/null; then
+  TMP_MARKER="$MARKER.tmp.$$"
+  # 2>/dev/null は「>」より前に置く (bash の出力リダイレクト失敗は後置の 2>/dev/null では
+  # 抑制できないため、無音 fail-open のため先に stderr を /dev/null へ向ける)。
+  if printf 'delivered' 2>/dev/null > "$TMP_MARKER"; then
+    mv "$TMP_MARKER" "$MARKER" 2>/dev/null || rm -f "$TMP_MARKER" 2>/dev/null
+  else
+    rm -f "$TMP_MARKER" 2>/dev/null
+  fi
 fi
 
 exit 0

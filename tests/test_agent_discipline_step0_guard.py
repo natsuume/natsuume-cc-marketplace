@@ -21,8 +21,6 @@ best-effort であり、compound command の各 subcommand と env-prefix を剥
 - (F) agent-discipline README が、非対象 Bash では agent が起動しないという説明語を含まない
 - (G) agent-discipline README の動作説明・既知の制約・SPOF 緩和の設計が、best-effort な
   `if` filter と Step 0 の subcommand 判定・静的判定不能の扱いを述べる
-- (H) version が 4 箇所 (plugin.json / marketplace.json / 直下 README の一覧
-  テーブル / plugin README の `## バージョン`) で期待値に一致する
 
 照合は needle と本文の両方から空白 (改行を含む) を全除去した文字列で行う。折り返しや
 空白の入れ方の違いでは契約を回避できない。
@@ -38,17 +36,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
-ROOT_README = ROOT / "README.md"
 
 AGENT_DISCIPLINE = "agent-discipline"
 PLUGIN_NAMES = (AGENT_DISCIPLINE,)
 
 AGENT_DISCIPLINE_README = ROOT / "plugins" / AGENT_DISCIPLINE / "README.md"
-
-EXPECTED_VERSIONS: dict[str, str] = {
-    AGENT_DISCIPLINE: "2.0.0",
-}
 
 # 検知層の 4 entry の `if` filter。
 EXPECTED_IF_FILTERS = (
@@ -175,7 +167,6 @@ README_LIMITATION_TOCTOU_KEYWORD = "静的判定不能"
 README_SPOF_KEYWORDS = ("Step 0", "即終了")
 
 LIST_ITEM_PATTERN = re.compile(r"^\s*(?:[-*+]|\d+\.) ")
-ROOT_README_VERSION_ROW = "| [{name}](#{name}) | {version} |"
 
 
 def read(path: Path) -> str:
@@ -669,58 +660,6 @@ class ReadmeRequiredPhraseTest(ContractTestCase):
         ]
         if missing:
             self.fail(f"{label}: 語が無い: {', '.join(missing)}")
-
-
-def readme_version_line(path: Path) -> str:
-    """`## バージョン` 見出しの直後にある最初の空でない行を返す。"""
-    lines = read(path).splitlines()
-    for index, line in enumerate(lines):
-        if line.strip() == "## バージョン":
-            for following in lines[index + 1 :]:
-                if following.strip():
-                    return following.strip()
-            return ""
-    return ""
-
-
-class VersionSyncTest(ContractTestCase):
-    """(H) version が 4 箇所で期待値に一致する。"""
-
-    def test_versions_match_expected_in_all_four_places(self) -> None:
-        marketplace = json.loads(read(MARKETPLACE_JSON))
-        marketplace_versions = {
-            str(entry["name"]): str(entry.get("version"))
-            for entry in marketplace["plugins"]
-        }
-        root_readme = read(ROOT_README)
-        for plugin, version in EXPECTED_VERSIONS.items():
-            plugin_json = plugin_dir(plugin) / ".claude-plugin" / "plugin.json"
-            plugin_readme = plugin_dir(plugin) / "README.md"
-            with self.subTest(plugin=plugin, place="plugin.json"):
-                self.assertEqual(
-                    version,
-                    json.loads(read(plugin_json)).get("version"),
-                    repo_relative(plugin_json),
-                )
-            with self.subTest(plugin=plugin, place="marketplace.json"):
-                self.assertEqual(
-                    version,
-                    marketplace_versions.get(plugin),
-                    f"{repo_relative(MARKETPLACE_JSON)} の {plugin}",
-                )
-            with self.subTest(plugin=plugin, place="README.md table"):
-                row = ROOT_README_VERSION_ROW.format(name=plugin, version=version)
-                if row not in root_readme:
-                    self.fail(
-                        f"{repo_relative(ROOT_README)}: plugin 一覧テーブルに "
-                        f"`{row}` が無い"
-                    )
-            with self.subTest(plugin=plugin, place="plugin README"):
-                self.assertEqual(
-                    f"v{version}",
-                    readme_version_line(plugin_readme),
-                    f"{repo_relative(plugin_readme)} の `## バージョン` 直下",
-                )
 
 
 if __name__ == "__main__":

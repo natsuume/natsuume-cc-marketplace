@@ -1,41 +1,21 @@
 """agent-discipline: Fable をメインセッションで使う運用を前提にしない契約テスト。
 
-メインセッションは Opus 系で、Fable は advisor と pre-merge review の起動にのみ使う。
-agent-discipline はメインセッションのモデルごとに規律テキストを配送するが、Fable 専用の規律
-(常時適用ルール・分業規律) も Fable メイン向けの分岐も持たず、Fable がメインで動いた場合は
-「その他のモデル」として扱う。これを、hook を隔離した TMPDIR 上の subprocess として起動し、
-stdout JSON・state ファイル・prompt ファイルの有無と本文で観測して固定する。
+メインセッションは Opus 5.5 で、Fable は advisor と pre-merge review の起動にのみ使う。
+agent-discipline は Fable 専用の規律 (常時適用ルール・分業規律) を持たない。これを、prompt
+ファイルの有無と plugins/ 配下・README の記述で観測して固定する。
 
-- Fable 専用の prompt ファイル (常時適用ルール・分業規律・分業規律前置き) が存在しない
-- inject-always.sh (SessionStart) は Fable 判定時に Opus 判定時と同じ part 1/3 を配送する
-  (常時適用ルールはモデルに依らない)
-- inject-rules-part.sh (UserPromptSubmit) は state が Fable でも part 2/3・part 3/3 を配送する
-- inject-discipline.sh (UserPromptSubmit) は state が Fable のとき Sonnet 確定時と同じ
-  Sonnet 版の分業規律を配送し、自己ゲート後に Fable と確定しても one-shot 補正を配送しない
-- resolve-model-on-prompt.sh (UserPromptSubmit) は判定不能から Fable に確定しても state を
-  書いて pending を消すだけで、追加の配送をしない
-- update-model-on-switch.sh (PostModelSwitch) は Opus と Fable の間の切替では通知せず、
-  pending を消す通知では Fable 向けに Sonnet 版 (discipline-sonnet.md) を案内する
-- 自己ゲート前置き (常時適用ルール用・part 用・分業規律用) の本文に Fable 専用の読み方指示が
-  無く、分業規律用の前置きは Fable に言及しない
-- block-fable-subagent.sh の判定は session model state に依らない (Fable メインでも
-  model 未指定の継承・fork を deny せず、model: fable の明示は週次枠判定だけで決まる)
+- Fable 専用の prompt ファイル (常時適用ルール・分業規律・分業規律前置き) が存在せず、
+  plugin 配下と CI workflow のどのファイルもその名前を参照しない
 - plugins/ 配下に Fable メインセッション向けの記述が残らない (lint-payload-size.sh の
-  Fable メイン専用ケース、README の Fable メイン前提の記述と sonnet pin の旧根拠を含む)
+  Fable メイン専用ケース、README の Fable メイン前提の記述と sonnet pin の根拠を含む)
 
-各テストは tempfile.TemporaryDirectory で TMPDIR / HOME / XDG_CACHE_HOME を隔離し、実環境の
-``${TMPDIR:-/tmp}/agent-discipline-state`` を読み書きしない。
+配送内容がモデルに依らないことは tests/test_agent_discipline_unified_discipline.py、
+block-fable-subagent.sh の判定は tests/test_agent_discipline_model_resolution.py と
+tests/test_agent_discipline_fable_weekly_gate.py が検査する。
 """
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import shutil
-import subprocess
-import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -43,30 +23,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "plugins" / "agent-discipline"
 PROMPTS_DIR = PLUGIN_DIR / "hooks" / "prompts"
-SCRIPTS_DIR = PLUGIN_DIR / "hooks" / "scripts"
-
-INJECT_ALWAYS_SH = SCRIPTS_DIR / "inject-always.sh"
-INJECT_RULES_PART_SH = SCRIPTS_DIR / "inject-rules-part.sh"
-INJECT_DISCIPLINE_SH = SCRIPTS_DIR / "inject-discipline.sh"
-RESOLVE_MODEL_ON_PROMPT_SH = SCRIPTS_DIR / "resolve-model-on-prompt.sh"
-UPDATE_MODEL_ON_SWITCH_SH = SCRIPTS_DIR / "update-model-on-switch.sh"
-BLOCK_FABLE_SUBAGENT_SH = SCRIPTS_DIR / "block-fable-subagent.sh"
 LINT_PAYLOAD_SIZE_SH = PLUGIN_DIR / "scripts" / "lint-payload-size.sh"
 
 PLUGINS_DIR = ROOT / "plugins"
 AGENT_DISCIPLINE_README = PLUGIN_DIR / "README.md"
 REPO_README = ROOT / "README.md"
 UI_DISCIPLINE_README = PLUGINS_DIR / "ui-discipline" / "README.md"
-
-# Fable 週次枠の使用率 cache (XDG_CACHE_HOME 相対)。
-WEEKLY_CACHE_RELATIVE = Path("natsuume-statusline") / "weekly-scoped.json"
-
-STATE_DIR_NAME = "agent-discipline-state"
-SESSION_ID = "fable-orchestrator-removed-session"
-
-FABLE_MODEL = "claude-fable-5-1"
-OPUS_MODEL = "claude-opus-5"
-SONNET_MODEL = "claude-sonnet-5"
 
 # 存在してはならない Fable 専用の prompt ファイル。
 FABLE_ONLY_PROMPT_FILES = (
@@ -75,19 +37,10 @@ FABLE_ONLY_PROMPT_FILES = (
     "discipline-preamble-fable.md",
 )
 
-# Fable 専用の常時適用ルールの見出し (SessionStart の配送に含まれてはならない)。
-FABLE_ALWAYS_HEADING = "# agent-discipline: 常時適用ルール (Fable)"
-
-OPUS_DISCIPLINE_HEADING = "# agent-discipline: 分業規律 (Opus)"
-SONNET_DISCIPLINE_HEADING = "# agent-discipline: 分業規律 (Sonnet)"
-
-# 判定不能時の分業規律配送に含まれてはならない、Fable 専用の版を指す語。
-FABLE_VERSION_WORDS = ("Fable 版", "discipline-fable")
-
 # plugins/ 配下のどのファイルにも含まれてはならない、Fable メインセッション向けの記述。
 FABLE_MAIN_SESSION_PHRASES = ("Fable メインのセッション", "Fable メインセッション")
 
-# lint-payload-size.sh の CASE_TABLE に残ってはならない Fable メイン専用ケースの ID。
+# lint-payload-size.sh の CASE_TABLE に含めない Fable メイン専用ケースの ID。
 FABLE_MAIN_ONLY_LINT_CASES = (
     "always.fable",
     "part2.fable",
@@ -98,127 +51,16 @@ FABLE_MAIN_ONLY_LINT_CASES = (
     "switch.to-fable",
 )
 
-# sonnet pin の旧根拠 (実装系メインセッションと同系列に pin する) の記述。
+# sonnet pin を「実装系メインセッションと同系列に pin する」とする根拠の記述。
 SUPERSEDED_PIN_RATIONALE_PHRASE = "実装系メインセッション"
 
-# ui-discipline README の prompt 構成の記述 (新) と、消えていること (旧)。
+# ui-discipline README の prompt 構成の記述と、書かない記述。
 UI_SINGLE_PROMPT_PHRASE = "モデルに依らない 1 prompt"
 UI_SUPERSEDED_SINGLE_PROMPT_PHRASE = "Fable / Sonnet 共通の 1 prompt"
 
-# 分業規律用の自己ゲート前置きで、Opus 版が後続で再配送される対象モデルの記述。
-DISCIPLINE_SELF_GATE_OPUS_TARGET_PHRASE = "それ以外のモデル (Opus 系) では"
-
-# 自己ゲート前置きの本文に含まれてはならない、Fable 専用の読み方指示。
-SELF_GATE_PROMPT_FILES = (
-    "preamble-self-gate.md",
-    "part-self-gate.md",
-    "discipline-preamble-self-gate.md",
-)
-FABLE_READING_INSTRUCTIONS = (
-    "Fable の場合",
-    "Fable または Opus",
-    "自分が Fable である場合",
-)
-
-HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
-
-
-def read_prompt(name: str) -> str:
-    """prompt ファイルを読む。hook は ``$(cat ...)`` で読むため末尾の改行を落とす。"""
-    return (PROMPTS_DIR / name).read_text(encoding="utf-8").rstrip("\n")
-
-
-def strip_html_comments(text: str) -> str:
-    """HTML コメント ``<!-- ... -->`` を取り除いた本文を返す。"""
-    return HTML_COMMENT_PATTERN.sub("", text)
-
-
-def first_heading_line(text: str) -> str:
-    """HTML コメントを除いた本文の、最初の見出し行 (``# `` で始まる行) を返す。"""
-    for line in strip_html_comments(text).splitlines():
-        if line.startswith("# "):
-            return line
-    raise AssertionError("見出し行が見つからない")
-
-
-def isolated_env(temp: Path) -> dict[str, str]:
-    """親プロセスの env を継承せず、PATH と隔離ディレクトリだけを渡す env を作る。"""
-    home = temp / "home"
-    tmpdir = temp / "tmp"
-    cache_home = temp / "cache"
-    for directory in (home, tmpdir, cache_home):
-        directory.mkdir(exist_ok=True)
-    return {
-        "PATH": os.environ["PATH"],
-        "HOME": str(home),
-        "TMPDIR": str(tmpdir),
-        "XDG_CACHE_HOME": str(cache_home),
-        "CLAUDE_PLUGIN_ROOT": str(PLUGIN_DIR),
-    }
-
-
-def state_dir_of(env: dict[str, str]) -> Path:
-    return Path(env["TMPDIR"]) / STATE_DIR_NAME
-
-
-def prepare_state(
-    env: dict[str, str],
-    *,
-    model: str | None = None,
-    pending: bool = False,
-    discipline_marker: str | None = None,
-) -> Path:
-    """隔離した TMPDIR 配下に model / pending / 分業規律配送マーカーを用意する。"""
-    state_dir = state_dir_of(env)
-    state_dir.mkdir(parents=True, exist_ok=True)
-    if model is not None:
-        (state_dir / f"model-{SESSION_ID}").write_text(model, encoding="utf-8")
-    if pending:
-        (state_dir / f"pending-model-{SESSION_ID}").write_text("", encoding="utf-8")
-    if discipline_marker is not None:
-        (state_dir / f"delivered-discipline-{SESSION_ID}").write_text(
-            discipline_marker, encoding="utf-8"
-        )
-    return state_dir
-
-
-def run_hook(
-    script: Path,
-    env: dict[str, str],
-    payload: dict[str, object],
-    *args: str,
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["/bin/bash", str(script), *args],
-        cwd=ROOT,
-        env=env,
-        input=json.dumps(payload, ensure_ascii=False),
-        text=True,
-        capture_output=True,
-        timeout=10,
-        check=False,
-    )
-
-
-def read_optional(path: Path) -> str | None:
-    return path.read_text(encoding="utf-8") if path.is_file() else None
-
-
-class HookTestCase(unittest.TestCase):
-    def additional_context(
-        self, result: subprocess.CompletedProcess[str], event: str
-    ) -> str | None:
-        """stdout から additionalContext を取り出す (出力が無ければ None)。"""
-        self.assertEqual(0, result.returncode, result.stderr)
-        if not result.stdout.strip():
-            return None
-        hook_output = json.loads(result.stdout)["hookSpecificOutput"]
-        self.assertEqual(event, hook_output.get("hookEventName"))
-        return hook_output.get("additionalContext")
-
 
 class FableOnlyPromptFilesTest(unittest.TestCase):
-    """契約 1: Fable 専用の prompt ファイルが存在しない。"""
+    """Fable 専用の prompt ファイルが存在しない。"""
 
     def test_fable_only_prompt_files_do_not_exist(self) -> None:
         for name in FABLE_ONLY_PROMPT_FILES:
@@ -242,307 +84,8 @@ class FableOnlyPromptFilesTest(unittest.TestCase):
                     self.assertNotIn(name, text)
 
 
-@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
-class InjectAlwaysFableTest(HookTestCase):
-    """契約 2: SessionStart で Fable 判定時に Opus 判定時と同じ part 1/3 を配送する。"""
-
-    def session_start_context(self, model: str) -> str:
-        with tempfile.TemporaryDirectory() as temporary:
-            env = isolated_env(Path(temporary))
-            payload = {
-                "hook_event_name": "SessionStart",
-                "session_id": SESSION_ID,
-                "model": model,
-            }
-            result = run_hook(INJECT_ALWAYS_SH, env, payload)
-        context = self.additional_context(result, "SessionStart")
-        self.assertIsNotNone(context, f"{model}: additionalContext が出力されていない")
-        # モデル ID に依存する差分は比較から除く。
-        return str(context).replace(model, "<MODEL>")
-
-    def test_fable_session_start_delivers_the_opus_part_one(self) -> None:
-        fable_context = self.session_start_context(FABLE_MODEL)
-        opus_context = self.session_start_context(OPUS_MODEL)
-        sonnet_heading = first_heading_line(read_prompt("always-sonnet-1.md"))
-
-        with self.subTest(check="always-sonnet-1.md の見出しを含む"):
-            self.assertIn(sonnet_heading, fable_context)
-        with self.subTest(check="Fable 版の見出しを含まない"):
-            self.assertNotIn(FABLE_ALWAYS_HEADING, fable_context)
-        with self.subTest(check="Opus 判定時と同じ additionalContext"):
-            self.assertEqual(opus_context, fable_context)
-
-
-@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
-class InjectRulesPartFableTest(HookTestCase):
-    """契約 3: state が Fable でも part 2/3・part 3/3 を Opus と同じく配送する。"""
-
-    def rules_part_context(self, model: str, part: str) -> str | None:
-        with tempfile.TemporaryDirectory() as temporary:
-            env = isolated_env(Path(temporary))
-            prepare_state(env, model=model)
-            payload = {"hook_event_name": "UserPromptSubmit", "session_id": SESSION_ID}
-            result = run_hook(INJECT_RULES_PART_SH, env, payload, part)
-        return self.additional_context(result, "UserPromptSubmit")
-
-    def test_fable_state_receives_parts_two_and_three(self) -> None:
-        for part in ("2", "3"):
-            with self.subTest(part=part):
-                body = read_prompt(f"always-sonnet-{part}.md")
-                fable_context = self.rules_part_context(FABLE_MODEL, part)
-                opus_context = self.rules_part_context(OPUS_MODEL, part)
-                self.assertIsNotNone(
-                    fable_context, f"state fable で part {part} が配送されない"
-                )
-                self.assertIn(body, str(fable_context))
-                self.assertEqual(opus_context, fable_context)
-
-
-@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
-class InjectDisciplineFableTest(HookTestCase):
-    """契約 4: 分業規律は Fable 確定時も判定不能・Sonnet 確定時と同じく Sonnet 版。"""
-
-    def run_discipline(
-        self,
-        *,
-        model: str | None = None,
-        pending: bool = False,
-        discipline_marker: str | None = None,
-    ) -> tuple[str | None, str | None]:
-        """hook を 1 回実行し、(additionalContext, 実行後のマーカー内容) を返す。"""
-        with tempfile.TemporaryDirectory() as temporary:
-            env = isolated_env(Path(temporary))
-            state_dir = prepare_state(
-                env, model=model, pending=pending, discipline_marker=discipline_marker
-            )
-            payload = {"hook_event_name": "UserPromptSubmit", "session_id": SESSION_ID}
-            result = run_hook(INJECT_DISCIPLINE_SH, env, payload)
-            marker = read_optional(state_dir / f"delivered-discipline-{SESSION_ID}")
-        return self.additional_context(result, "UserPromptSubmit"), marker
-
-    def test_fable_state_without_marker_delivers_the_sonnet_discipline(self) -> None:
-        fable_context, fable_marker = self.run_discipline(model=FABLE_MODEL)
-        self.assertIsNotNone(fable_context, "state fable で分業規律が配送されない")
-        self.assertEqual(
-            f"{SONNET_DISCIPLINE_HEADING}\n\n{read_prompt('discipline-sonnet.md')}",
-            fable_context,
-        )
-        self.assertNotIn(OPUS_DISCIPLINE_HEADING, str(fable_context))
-        self.assertEqual("final", fable_marker)
-
-    def test_fable_state_after_sonnet_gate_delivers_no_correction(self) -> None:
-        fable_context, fable_marker = self.run_discipline(
-            model=FABLE_MODEL, discipline_marker="sonnet-gate"
-        )
-        sonnet_context, _ = self.run_discipline(
-            model=SONNET_MODEL, discipline_marker="sonnet-gate"
-        )
-        self.assertIsNone(sonnet_context, "state sonnet で one-shot 補正が配送された")
-        self.assertIsNone(fable_context, "state fable で one-shot 補正が配送された")
-        self.assertEqual("final", fable_marker)
-
-    def test_pending_delivers_the_self_gated_sonnet_discipline(self) -> None:
-        preamble = strip_html_comments(
-            read_prompt("discipline-preamble-self-gate.md")
-        ).strip()
-        sonnet_body = read_prompt("discipline-sonnet.md")
-        for label, model in (("state 無し", None), ("state fable (stale)", FABLE_MODEL)):
-            with self.subTest(case=label):
-                context, marker = self.run_discipline(model=model, pending=True)
-                self.assertIsNotNone(context, "pending 時に分業規律が配送されない")
-                text = str(context)
-                self.assertTrue(text.startswith(SONNET_DISCIPLINE_HEADING), text[:200])
-                self.assertIn(preamble, text)
-                self.assertIn(sonnet_body, text)
-                self.assertEqual("sonnet-gate", marker)
-                visible = strip_html_comments(text)
-                for word in FABLE_VERSION_WORDS:
-                    self.assertNotIn(word, visible)
-
-    def test_sonnet_state_delivers_the_sonnet_discipline(self) -> None:
-        context, marker = self.run_discipline(model=SONNET_MODEL)
-        self.assertEqual(
-            f"{SONNET_DISCIPLINE_HEADING}\n\n{read_prompt('discipline-sonnet.md')}",
-            context,
-        )
-        self.assertEqual("final", marker)
-
-
-@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
-class ResolveModelOnPromptFableTest(HookTestCase):
-    """契約 5: 判定不能から Fable / Opus に確定しても state 更新のみで配送しない。"""
-
-    def test_confirmed_model_is_recorded_without_additional_context(self) -> None:
-        for model in (FABLE_MODEL, OPUS_MODEL):
-            with self.subTest(model=model):
-                with tempfile.TemporaryDirectory() as temporary:
-                    temp = Path(temporary)
-                    env = isolated_env(temp)
-                    state_dir = prepare_state(env, pending=True)
-                    transcript = temp / "transcript.jsonl"
-                    lines = [
-                        {"type": "user", "message": {"content": "hello"}},
-                        {
-                            "type": "assistant",
-                            "isSidechain": False,
-                            "message": {"model": model},
-                        },
-                    ]
-                    transcript.write_text(
-                        "".join(json.dumps(line) + "\n" for line in lines),
-                        encoding="utf-8",
-                    )
-                    payload = {
-                        "hook_event_name": "UserPromptSubmit",
-                        "session_id": SESSION_ID,
-                        "transcript_path": str(transcript),
-                    }
-                    result = run_hook(RESOLVE_MODEL_ON_PROMPT_SH, env, payload)
-                    state = read_optional(state_dir / f"model-{SESSION_ID}")
-                    pending_left = (state_dir / f"pending-model-{SESSION_ID}").exists()
-                self.assertEqual(model, state)
-                self.assertFalse(pending_left, "pending マーカーが残っている")
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual("", result.stdout, "additionalContext が出力された")
-
-
-@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
-class UpdateModelOnSwitchFableTest(HookTestCase):
-    """契約 6: Opus → Fable の切替は通知せず、Fable への pending 解消の通知は Sonnet 版を案内する。"""
-
-    def run_switch(
-        self, *, from_model: str, to_model: str, state: str | None, pending: bool
-    ) -> tuple[subprocess.CompletedProcess[str], str | None, bool]:
-        with tempfile.TemporaryDirectory() as temporary:
-            env = isolated_env(Path(temporary))
-            state_dir = prepare_state(env, model=state, pending=pending)
-            payload = {
-                "hook_event_name": "PostModelSwitch",
-                "session_id": SESSION_ID,
-                "from_model": from_model,
-                "to_model": to_model,
-            }
-            result = run_hook(UPDATE_MODEL_ON_SWITCH_SH, env, payload)
-            new_state = read_optional(state_dir / f"model-{SESSION_ID}")
-            pending_left = (state_dir / f"pending-model-{SESSION_ID}").exists()
-        return result, new_state, pending_left
-
-    def test_opus_to_fable_switch_updates_state_silently(self) -> None:
-        result, state, _ = self.run_switch(
-            from_model=OPUS_MODEL, to_model=FABLE_MODEL, state=OPUS_MODEL, pending=False
-        )
-        self.assertEqual(FABLE_MODEL, state)
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("", result.stdout, "Opus → Fable の切替で通知が出力された")
-
-    def test_pending_notice_for_fable_points_at_the_sonnet_discipline(self) -> None:
-        result, state, pending_left = self.run_switch(
-            from_model=SONNET_MODEL, to_model=FABLE_MODEL, state=None, pending=True
-        )
-        self.assertEqual(FABLE_MODEL, state)
-        self.assertFalse(pending_left, "pending マーカーが残っている")
-        context = self.additional_context(result, "PostModelSwitch")
-        self.assertIsNotNone(context, "pending 解消時に通知が出力されない")
-        for name in ("always-fable.md", "discipline-fable.md"):
-            with self.subTest(check=f"{name} に言及しない"):
-                self.assertNotIn(name, str(context))
-        with self.subTest(check="discipline-sonnet.md に言及する"):
-            self.assertIn("discipline-sonnet.md", str(context))
-        with self.subTest(check="discipline-opus.md に言及しない"):
-            self.assertNotIn("discipline-opus.md", str(context))
-
-
-class SelfGatePromptsTest(unittest.TestCase):
-    """契約 7: 自己ゲート前置きの本文に Fable 専用の読み方指示が無い。"""
-
-    def test_self_gate_prompts_have_no_fable_specific_reading_instruction(
-        self,
-    ) -> None:
-        for name in SELF_GATE_PROMPT_FILES:
-            body = strip_html_comments(read_prompt(name))
-            for phrase in FABLE_READING_INSTRUCTIONS:
-                with self.subTest(file=name, phrase=phrase):
-                    self.assertNotIn(phrase, body)
-
-    def test_discipline_self_gate_does_not_mention_fable(self) -> None:
-        """分業規律用の前置きは Fable に言及せず、Opus 版の再配送対象を Opus 系とだけ書く。"""
-        text = read_prompt("discipline-preamble-self-gate.md")
-        with self.subTest(check="Fable に言及しない"):
-            self.assertNotIn("Fable", text)
-        with self.subTest(check="再配送対象を Opus 系とだけ書く"):
-            self.assertIn(DISCIPLINE_SELF_GATE_OPUS_TARGET_PHRASE, text)
-
-
-@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
-class BlockFableSubagentRegressionTest(unittest.TestCase):
-    """契約 8: block-fable-subagent.sh の判定は session model state (Fable) に依らない。"""
-
-    def run_gate(
-        self, tool_input: dict[str, object], *, fable_percent: float | None = None
-    ) -> subprocess.CompletedProcess[str]:
-        """state=Fable のセッションで hook を 1 回実行する。
-
-        ``fable_percent`` を与えると、その使用率の新鮮な Fable 週次枠 cache を置く。
-        """
-        with tempfile.TemporaryDirectory() as temporary:
-            env = isolated_env(Path(temporary))
-            prepare_state(env, model=FABLE_MODEL)
-            if fable_percent is not None:
-                cache_path = Path(env["XDG_CACHE_HOME"]) / WEEKLY_CACHE_RELATIVE
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_text(
-                    json.dumps(
-                        {
-                            "fetched_at": int(time.time()),
-                            "weekly_scoped": [
-                                {
-                                    "display_name": "Fable",
-                                    "percent": fable_percent,
-                                    "resets_at": "2026-09-28T00:00:00Z",
-                                }
-                            ],
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-            payload = {
-                "hook_event_name": "PreToolUse",
-                "session_id": SESSION_ID,
-                "tool_name": "Agent",
-                "tool_input": tool_input,
-            }
-            return run_hook(BLOCK_FABLE_SUBAGENT_SH, env, payload)
-
-    def test_fable_main_session_allows_inherited_and_fork_subagents(self) -> None:
-        cases = (
-            ("model 未指定 (継承)", {"subagent_type": "general-purpose"}),
-            ("fork", {"subagent_type": "fork"}),
-        )
-        for label, tool_input in cases:
-            with self.subTest(case=label):
-                result = self.run_gate(tool_input)
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual("", result.stdout, "state fable で deny された")
-
-    def test_fable_explicit_is_decided_by_weekly_usage_only(self) -> None:
-        tool_input = {
-            "subagent_type": "cross-model-advisor:fable-advisor-runner",
-            "model": "fable",
-        }
-        with self.subTest(case="使用率に余裕 → allow"):
-            result = self.run_gate(tool_input, fable_percent=10)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertEqual("", result.stdout, "state fable で fable 明示が deny された")
-        with self.subTest(case="使用率超過 → deny"):
-            result = self.run_gate(tool_input, fable_percent=95)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertTrue(result.stdout.strip(), "deny JSON が出力されていない")
-            output = json.loads(result.stdout)["hookSpecificOutput"]
-            self.assertEqual("deny", output["permissionDecision"])
-
-
 class FableMainSessionDocumentsRemovedTest(unittest.TestCase):
-    """契約 9: plugins/ 配下と README に Fable メインセッション前提の記述が残らない。"""
+    """plugins/ 配下と README に Fable メインセッション前提の記述が無い。"""
 
     def test_plugins_do_not_mention_fable_main_session(self) -> None:
         offenders = [
@@ -560,7 +103,7 @@ class FableMainSessionDocumentsRemovedTest(unittest.TestCase):
         end = text.index("\nEOF\n", start)
         case_ids = {line.split("|", 1)[0] for line in text[start:end].splitlines()[1:]}
         present = sorted(case_ids & set(FABLE_MAIN_ONLY_LINT_CASES))
-        self.assertEqual([], present, f"CASE_TABLE に残る Fable メイン専用ケース: {present}")
+        self.assertEqual([], present, f"CASE_TABLE の Fable メイン専用ケース: {present}")
 
     def test_readmes_drop_the_superseded_pin_rationale(self) -> None:
         offenders = [
@@ -569,7 +112,7 @@ class FableMainSessionDocumentsRemovedTest(unittest.TestCase):
             if SUPERSEDED_PIN_RATIONALE_PHRASE in path.read_text(encoding="utf-8")
         ]
         self.assertEqual(
-            [], offenders, f"sonnet pin の旧根拠 (実装系メインセッション) が残る: {offenders}"
+            [], offenders, f"sonnet pin の根拠を実装系メインセッションとする記述: {offenders}"
         )
 
     def test_ui_discipline_readme_describes_a_model_independent_prompt(self) -> None:

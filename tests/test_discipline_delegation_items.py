@@ -1,6 +1,6 @@
-"""agent-discipline 分業規律 2 ファイルの委任対象 (スケルトン一括作成・指摘修正の一括反映) の契約テスト。
+"""agent-discipline 分業規律の委任対象 (スケルトン一括作成・指摘修正の一括反映) の契約テスト。
 
-分業規律 (discipline-opus.md / discipline-sonnet.md) の「サブエージェントに委任する作業」
+分業規律 (discipline.md) の「サブエージェントに委任する作業」
 リストが、初期スケルトンの一括作成とレビュー・受入検証の指摘修正の一括反映を委任対象として
 明示し、その規模境界を role-split 節内に持つことを固定する。既存の委任項目・直接作業の例外
 文言が保全されていることも検査する。
@@ -11,16 +11,13 @@
   (無関係な箇所での偶然一致・節境界をまたいだ誤検出) を防ぐ。
 - 規模境界・小規模修正の判定文字列は句点込みの全文で固定し、部分文字列一致による意味反転
   (否定を含む書換えなど) の見逃しを防ぐ。境界段落は bullet ブロック直後の段落を行末 rstrip
-  連結で正規化したうえで ``SCALE_SENTENCE + SMALL_FIX_SENTENCE[name]`` と完全一致させる。
+  連結で正規化したうえで ``SCALE_SENTENCE + SMALL_FIX_SENTENCE`` と完全一致させる。
   bullet ブロックと境界段落の間には空行を必須とする (空行が無いと markdown の lazy
   continuation により最後の bullet の継続行として render され、規模境界がリスト全体に
   掛からないため)。
 - delegation_bullet_block の bullet 収集は行頭 (インデント無し) の ``- `` に限定し、ネスト
   した子 bullet を top-level 項目と誤認しない (この契約における「top-level」は Markdown
   一般の定義ではなく、この判定基準を指す)。
-- discipline-sonnet.md は配送予算 (self-gate 前置き + 本体の合算が 8,000 UTF-16 units) の
-  制約があるため、スケルトン一括作成の bullet 文言のみ圧縮した canonical 文言を契約とする
-  (ITEM_SKELETON をファイル別の辞書にする)。
 - 例外段落は太字 + コロンの段落先頭形 (DIRECT_EXCEPTION_PARAGRAPH_PREFIX) の先頭一致で
   特定し、段落を正規化して「。」区切りで分割した文リストに canonical 肯定文
   (DIRECT_EXCEPTION_CANONICAL_SENTENCE) が完全一致で存在することを検査する (substring
@@ -42,24 +39,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "prompts"
 
 DISCIPLINE_VARIANTS = {
-    "discipline-opus.md": PROMPTS / "discipline-opus.md",
-    "discipline-sonnet.md": PROMPTS / "discipline-sonnet.md",
+    "discipline.md": PROMPTS / "discipline.md",
 }
 
-# 委任 bullet (column-zero の raw 行と完全一致させる)。sonnet は配送予算
-# (self-gate + sonnet 合算 8,000 UTF-16 units、残余 ~156 units) に収める圧縮文言を契約とする。
-ITEM_SKELETON = {
-    "discipline-opus.md": "- 実装初期のスケルトン / スタブ / 型骨格の一括作成 (設計契約をコメントとして埋め込む場合を含む)",
-    "discipline-sonnet.md": "- 実装初期のスケルトン / スタブ / 型骨格の一括作成",
-}
-ITEM_REVIEW_FIX = "- レビュー・受入検証の指摘修正の一括反映"  # 2 ファイル共通
+# 委任 bullet (column-zero の raw 行と完全一致させる)。
+ITEM_SKELETON = "- 実装初期のスケルトン / スタブ / 型骨格の一括作成 (設計契約をコメントとして埋め込む場合を含む)"
+ITEM_REVIEW_FIX = "- レビュー・受入検証の指摘修正の一括反映"
 
 # 規模境界 (完全文・句点込み。意味反転を排除するため主語 + 述部の全文で固定する)
-SCALE_SENTENCE = "スケルトン一括作成・指摘修正の一括反映は複数ファイルまたは数十行以上の規模で適用する。"  # 2 ファイル共通
-SMALL_FIX_SENTENCE = {
-    "discipline-sonnet.md": "単一ファイル数行の指摘修正は後述の「自明な修正」の定義に従って扱う。",
-    "discipline-opus.md": "単一ファイル数行の指摘修正は後述の「委任しない作業」として直接行ってよい。",
-}
+SCALE_SENTENCE = "スケルトン一括作成・指摘修正の一括反映は複数ファイルまたは数十行以上の規模で適用する。"
+SMALL_FIX_SENTENCE = "単一ファイル数行の指摘修正は後述の「委任しない作業」として直接行ってよい。"
 
 # 「サブエージェントに委任する作業:」見出し (この見出し直下の bullet 行を検査範囲にする)。
 DELEGATION_LIST_HEADING = "サブエージェントに委任する作業:"
@@ -68,40 +57,22 @@ DELEGATION_LIST_HEADING = "サブエージェントに委任する作業:"
 ROLE_SPLIT_MARKER = "<!-- rule:role-split -->"
 DELEGATION_RULES_MARKER = "<!-- rule:delegation-rules -->"
 
-# 保全ガード対象の既存委任項目 (sonnet と opus で文言が異なる)。
-EXISTING_ITEM_IMPLEMENTATION = {
-    "discipline-sonnet.md": "- 明確化された仕様に基づく実装",
-    "discipline-opus.md": "- 明確化された仕様に基づく、相応の規模がある実装",
-}
-# 2 ファイル共通の既存委任項目。
+# 保全ガード対象の既存委任項目。
+EXISTING_ITEM_IMPLEMENTATION = "- 明確化された仕様に基づく、相応の規模がある実装"
 EXISTING_ITEM_INVESTIGATION = "- 方針・仕様の検討・決定のための具体的な調査"
 EXISTING_ITEM_MECHANICAL = "- 機械的で並列化可能な作業 (一括修正、テスト実行と修正のループ等)"
 
-# 直接編集/直接作業してよいものの例外段落の先頭 (太字 + コロンまで。sonnet と opus
-# で文言が異なる)。段落先頭一致で使うため、実ファイルの段落冒頭の整形
-# (`**...**:`) をそのまま含める。
-DIRECT_EXCEPTION_PARAGRAPH_PREFIX = {
-    "discipline-sonnet.md": "**例外 (直接編集してよいもの)**:",
-    "discipline-opus.md": "**委任しない作業 (直接行ってよいもの)**:",
-}
-# 直接編集/直接作業の例外段落 (上記 prefix で始まる段落) の第 1 文全文
+# 直接作業してよいものの例外段落の先頭 (太字 + コロンまで)。段落先頭一致で使うため、
+# 実ファイルの段落冒頭の整形 (`**...**:`) をそのまま含める。
+DIRECT_EXCEPTION_PARAGRAPH_PREFIX = "**委任しない作業 (直接行ってよいもの)**:"
+# 直接作業の例外段落 (上記 prefix で始まる段落) の第 1 文全文
 # (太字 prefix + 主語 + 述部 + 句点)。段落を正規化し「。」区切りで文に分割した
-# うえで、この文が文リストに完全一致で存在することを検査する
-# (対象ファイルの現物の文と一字一句一致することを確認済み)。
-DIRECT_EXCEPTION_CANONICAL_SENTENCE = {
-    "discipline-sonnet.md": (
-        "**例外 (直接編集してよいもの)**: 上記「自明な修正」は委任オーバーヘッド"
-        " (サブエージェント起動 + コンテキスト再構築) の方が高くつくため"
-        "直接行ってよい。"
-    ),
-    "discipline-opus.md": (
-        "**委任しない作業 (直接行ってよいもの)**: 数回の tool call で完結する作業"
-        " (自明な修正、単発の確認、1 ファイルの小さな編集) は、委任オーバーヘッド"
-        " (サブエージェント起動 + コンテキスト再構築) の方が高くつくため、"
-        "Opus 5 / Opus 5.5 とも直接行う (Opus 5 には小さなタスクまで"
-        "サブエージェントへ委任する傾向がある)。"
-    ),
-}
+# うえで、この文が文リストに完全一致で存在することを検査する。
+DIRECT_EXCEPTION_CANONICAL_SENTENCE = (
+    "**委任しない作業 (直接行ってよいもの)**: 数回の tool call で完結する作業"
+    " (自明な修正、単発の確認、1 ファイルの小さな編集) は、委任オーバーヘッド"
+    " (サブエージェント起動 + コンテキスト再構築) の方が高くつくため直接行う。"
+)
 
 
 def read(path: Path) -> str:
@@ -131,13 +102,13 @@ def role_split_section(text: str) -> str | None:
     return text[start:end]
 
 
-def scale_boundary_phrases(name: str) -> tuple[str, str]:
+def scale_boundary_phrases() -> tuple[str, str]:
     """規模境界の 2 文 (存在検査・節外漂流検査の両方で共有する単一ソース)。
 
     片方のテストだけを更新して他方が古い定数を参照し続ける (片側更新漏れ) を
     構造的に防ぐため、検査フレーズの取得口をこの関数に一本化する。
     """
-    return SCALE_SENTENCE, SMALL_FIX_SENTENCE[name]
+    return SCALE_SENTENCE, SMALL_FIX_SENTENCE
 
 
 def normalize_soft_wrapped(text: str) -> str:
@@ -225,9 +196,9 @@ def paragraph_after(lines: list[str], start_idx: int) -> str | None:
 def find_paragraph_starting_with(section: str, prefix: str) -> str | None:
     """節内を空行区切りの段落に分割し、prefix で始まる最初の段落を返す。
 
-    substring 包含 (旧 find_paragraph_with) では、境界段落の本文が偶然
-    アンカー文字列を含むだけで誤って一致してしまう (段落衝突) ため、段落先頭
-    一致に限定する。該当する段落が無ければ None。
+    substring 包含では、境界段落の本文が偶然アンカー文字列を含むだけで誤って
+    一致してしまう (段落衝突) ため、段落先頭一致に限定する。該当する段落が無ければ
+    None。
     """
     for para in section.split("\n\n"):
         if para.startswith(prefix):
@@ -278,7 +249,7 @@ class DelegationItemsAdditionTests(unittest.TestCase):
                 continue
             bullets, _end_idx = block
             v = missing_item_violation(
-                section, bullets, ITEM_SKELETON[name], name, "スケルトン一括作成の項目"
+                section, bullets, ITEM_SKELETON, name, "スケルトン一括作成の項目"
             )
             if v is not None:
                 violations.append(v)
@@ -295,13 +266,12 @@ class DelegationItemsAdditionTests(unittest.TestCase):
         段落抽出の前提として、bullet ブロックと直後段落の間に空行が必須である
         ことをまず検査する。空行なしで境界文を置くと markdown の lazy
         continuation により最後の bullet の継続行として render され、規模境界
-        がリスト全体ではなく最後の項目のみに掛かって見える (codex /
-        correctness の 2 レビュアーが独立に確認、片方は再現実行済みの決定的
-        経路)。空行が確認できた場合のみ、段落を normalize_soft_wrapped (行末
-        rstrip 連結。行頭インデントは保持し、行間に区切り文字を挟まない) で
-        正規化したうえで `SCALE_SENTENCE + SMALL_FIX_SENTENCE[name]` と完全
-        一致するかを検査する。substring 包含 2 回では、無関係な文脈に同じ
-        部分文字列が現れる再文脈化ですり抜ける可能性があったため。
+        がリスト全体ではなく最後の項目のみに掛かって見える。空行が確認できた
+        場合のみ、段落を normalize_soft_wrapped (行末 rstrip 連結。行頭
+        インデントは保持し、行間に区切り文字を挟まない) で正規化したうえで
+        `SCALE_SENTENCE + SMALL_FIX_SENTENCE` と完全一致するかを検査する
+        (部分文字列の包含では、無関係な文脈に同じ部分文字列が現れる場合を
+        区別できないため)。
         """
         violations = []
         for name, path in DISCIPLINE_VARIANTS.items():
@@ -326,7 +296,7 @@ class DelegationItemsAdditionTests(unittest.TestCase):
                 violations.append(f"{name} (bullet ブロック直後に段落が無い)")
                 continue
             normalized = normalize_soft_wrapped(para)
-            scale_sentence, small_fix_sentence = scale_boundary_phrases(name)
+            scale_sentence, small_fix_sentence = scale_boundary_phrases()
             expected = scale_sentence + small_fix_sentence
             if normalized != expected:
                 violations.append(f"{name} (直後の段落が canonical 2 文と完全一致しない)")
@@ -355,7 +325,7 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
             v = missing_item_violation(
                 section,
                 bullets,
-                EXISTING_ITEM_IMPLEMENTATION[name],
+                EXISTING_ITEM_IMPLEMENTATION,
                 name,
                 "既存の実装委任項目",
             )
@@ -379,10 +349,10 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
         段落を find_paragraph_starting_with (段落先頭一致) で特定したうえで
         normalize_soft_wrapped で正規化し、「。」区切りで文に分割する
         (句点は各文の末尾に保持する)。canonical 文がその文リストに完全一致で
-        存在するかを検査する。substring 存在検査では、文中の否定化・改変
-        (「〜てよい。」→「〜てよいわけではない。」等) を検出できなかったため
-        文境界の完全一致に強化した (段落全体の意味保証は対象外。モジュール
-        docstring の残余リスク節を参照)。
+        存在するかを検査する。部分文字列の存在検査では文中の否定化・改変
+        (「〜直接行う。」→「〜直接行わない。」等) を検出できないため、文境界の
+        完全一致で照合する (段落全体の意味保証は対象外。モジュール docstring の
+        検査方式を参照)。
         """
         violations = []
         for name, path in DISCIPLINE_VARIANTS.items():
@@ -390,14 +360,14 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
             if section is None:
                 violations.append(f"{name} (role-split 節が見つからない)")
                 continue
-            prefix = DIRECT_EXCEPTION_PARAGRAPH_PREFIX[name]
+            prefix = DIRECT_EXCEPTION_PARAGRAPH_PREFIX
             para = find_paragraph_starting_with(section, prefix)
             if para is None:
                 violations.append(f"{name} (直接作業の例外段落 (prefix 先頭一致) が節内に無い)")
                 continue
             normalized = normalize_soft_wrapped(para)
             sentences = re.findall(r"[^。]*。", normalized)
-            canonical_sentence = DIRECT_EXCEPTION_CANONICAL_SENTENCE[name]
+            canonical_sentence = DIRECT_EXCEPTION_CANONICAL_SENTENCE
             if canonical_sentence not in sentences:
                 violations.append(f"{name} (canonical 肯定文が文単位で一致しない)")
         self.assertEqual(
@@ -424,7 +394,7 @@ class ExistingDelegationRulesPreservedTests(unittest.TestCase):
             start, end = bounds
             prefix = normalize_soft_wrapped(text[:start])
             suffix = normalize_soft_wrapped(text[end:])
-            for phrase in scale_boundary_phrases(name):
+            for phrase in scale_boundary_phrases():
                 if phrase in prefix or phrase in suffix:
                     violations.append(f"{name}: {phrase!r}")
         self.assertEqual([], violations, f"規模境界の記述が節外に漂流: {violations}")

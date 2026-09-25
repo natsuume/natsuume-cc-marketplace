@@ -1,14 +1,14 @@
 <!--
-  agent-discipline: 常時適用ルール (SONNET 版、part 2/3)
-  常時適用ルール (Sonnet 版) は part 1/3・part 2/3・part 3/3 の 3 ファイルで 1 セットを
+  agent-discipline: 常時適用ルール (part 2/3)
+  常時適用ルールは part 1/3・part 2/3・part 3/3 の 3 ファイルで 1 セットを
   構成する。part 間で rule ID を重複させず、3 part の和集合を lint-prompt-sync.sh の
   EXPECTED_ALWAYS_RULE_IDS (期待 rule ID 集合) と完全一致させること (同スクリプトの
   チェック 1 が検証する)。
 -->
 
-# agent-discipline: 常時適用ルール (Sonnet) — part 2/3
+# agent-discipline: 常時適用ルール — part 2/3
 
-本メッセージは常時適用ルール (Sonnet 版) の part 2/3 であり、part 1/3 (Bash コマンド分解・設計判断の事前確認) および part 3/3 (排他制御・AskUserQuestion 必須化・spec-first 2 段階) と合わせて 1 つのルールセットを構成する。到着順序に依らず、本 part 単独でも各ルールはそのまま適用される。
+本メッセージは常時適用ルールの part 2/3 であり、part 1/3 (Bash コマンド分解・設計判断の事前確認) および part 3/3 (排他制御・AskUserQuestion 必須化・spec-first 2 段階) と合わせて 1 つのルールセットを構成する。到着順序に依らず、本 part 単独でも各ルールはそのまま適用される。
 
 <!-- rule:issue-body -->
 ## 3. issue 起票時の詳細化

@@ -1,23 +1,22 @@
 """agent-discipline: Opus 5.5 メイン + Fable Advisor パターン向け分業規律・自走方針の契約テスト。
 
-背景:
-- メインセッションを Opus 5.5 にし、ワーカー (実装・調査・一括修正等) のサブエージェントも
-  model 未指定でメインセッションの Opus 5.5 を継承して動かす。Fable は cross-model-advisor の
-  fable-advisor-runner と pre-merge-cross-review の fable-reviewer の起動にのみ使う。
-  pre-push-review の reviewer 2 体は常に Opus で起動するため Fable の用途に含めない。
-- Fable をメインセッションで使う運用は無いため、分業規律に Fable メイン向けの記述を持たない。
-- discipline-opus.md / discipline-sonnet.md の rule:delegation-rules 節は、「advisor と
-  pre-merge review の起動に限り `model: "fable"` を明示して使い、週次枠ガードで deny
-  されたら再起動せずスキップ」と記述し、pre-push-review の reviewer には言及しない。
-- discipline-opus.md は、ワーカーをメインセッションと同じモデルで動かし Sonnet / Haiku へ
-  下げない旨を記述する。ヘッダコメントと冒頭文の対象は Opus 系のメインセッションのみで、
-  Fable を含めない。discipline-sonnet.md のヘッダコメントの対象読者は「Opus 系以外のモデル」。
-- discipline-opus.md の effort 規律は公式ガイド「Prompting Claude Opus 5.5」
-  (prompting-claude-opus-5-5、既定 effort は medium) を基準に書き換える。Opus 5 向けの
-  3 規律 (委任しない作業・スコープ制限の 1 文・汎用再確認指示の禁止) は Opus 5 /
-  Opus 5.5 の両方に適用する記述にする。
-- auto-mode.md (全モデル共通で配送) に、作業が残っている間の 4 種類の止まり方の
-  禁止、止まってよい場合、既存の禁止 / 要確認事項を不要にしない旨を追加する。
+- メインセッションとワーカー (実装・調査・一括修正等) のサブエージェントは Opus 5.5 で動かす。
+  Fable は cross-model-advisor の fable-advisor-runner と pre-merge-cross-review の
+  fable-reviewer の起動にのみ使う。pre-push-review の reviewer 2 体は常に Opus で起動するため
+  Fable の用途に含めない。
+- 分業規律 (discipline.md) の rule:delegation-rules 節は、「advisor と pre-merge review の
+  起動に限り `model: "fable"` を明示して使い、週次枠ガードで deny されたら再起動せず
+  スキップ」と記述し、pre-push-review の reviewer には言及しない。Fable をメインセッションで
+  使う運用は無いため、Fable メイン向けの記述を持たず、ヘッダコメントと冒頭文の対象に Fable を
+  含めない。
+- discipline.md の effort 規律は公式ガイド「Prompting Claude Opus 5.5」
+  (prompting-claude-opus-5-5、既定 effort は medium) を基準にし、rule:delegation-rules 節に
+  置く。Opus 5 基準の effort 見出しは持たない。
+- auto-mode.md (全モデル共通で配送) は、作業が残っている間の 4 種類の止まり方の禁止、
+  止まってよい場合、既存の禁止 / 要確認事項を不要にしない旨を記述する。
+
+ワーカーのモデル・スコープ制限・再確認指示の文言など分業規律全体の必須文言は
+tests/test_agent_discipline_unified_discipline.py が検査する。
 
 subTest は使わない: pytest (subtest 対応版) では個々の subTest 失敗が SUBFAILED として
 分離報告される一方、親テストノード自体は PASSED と表示され判定が曖昧になるため、
@@ -32,13 +31,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "prompts"
 
-DISCIPLINE_OPUS = PROMPTS / "discipline-opus.md"
-DISCIPLINE_SONNET = PROMPTS / "discipline-sonnet.md"
+DISCIPLINE = PROMPTS / "discipline.md"
 
-# Fable の用途を限定して記述する分業規律 2 ファイル。
+# Fable の用途を限定して記述する分業規律。
 DISCIPLINES = {
-    "discipline-opus.md": DISCIPLINE_OPUS,
-    "discipline-sonnet.md": DISCIPLINE_SONNET,
+    "discipline.md": DISCIPLINE,
 }
 
 AUTO_MODE_FILES = {
@@ -49,10 +46,10 @@ AUTO_MODE_FILES = {
 DELEGATION_RULES_MARKER = "<!-- rule:delegation-rules -->"
 DELEGATION_INSTRUCTION_MARKER = "<!-- rule:delegation-instruction -->"
 
-# 全面禁止の bullet 見出し (opus / sonnet に含まれない)。
+# 全面禁止の bullet 見出し (分業規律に含めない)。
 FABLE_PROHIBITION_PHRASE = "Fable をサブエージェントに使わない"
 
-# rule:delegation-rules 節に必須の Fable 用途の記述 (opus / sonnet 共通の canonical 文言)。
+# rule:delegation-rules 節に必須の Fable 用途の記述 (canonical 文言)。
 FABLE_USAGE_PHRASES = (
     # 用途を fable-advisor-runner と fable-reviewer の起動に限る
     (
@@ -71,26 +68,15 @@ FABLE_USAGE_PHRASES = (
     "再起動せずスキップする",
 )
 
-# rule:delegation-rules 節から消えていること (旧方針の記述)。
+# rule:delegation-rules 節に含めない記述 (Fable の用途を狭く・誤って書いたもの)。
 FABLE_REMOVED_PHRASES = (
-    # advisor のみに限定していた旧見出し
+    # 用途を advisor だけに限る見出し
     "**Fable は advisor の起動に限る**",
-    # スキップ対象を fable-advisor-runner だけに書いた旧文言
+    # スキップ対象を fable-advisor-runner だけに書いた文言
     "fable-advisor-runner は再起動せずスキップする",
     # Fable メインのセッション向けの記述
     "Fable メインのセッション",
 )
-
-# discipline-opus.md に必須の委任先モデルの記述 (bullet の書き出し)。
-WORKER_MODEL_PHRASE = (
-    "**ワーカーはメインセッションと同じモデルで動かす**: 実装・調査・一括修正の"
-    "サブエージェントは model 未指定 (メインセッションの Opus 5.5 を継承) で起動し、"
-    "Sonnet / Haiku へ下げない"
-)
-
-# discipline-sonnet.md のヘッダコメントの対象読者の記述と、消えていること (旧記述)。
-SONNET_HEADER_AUDIENCE_PHRASE = "Opus 系以外のモデル"
-SONNET_HEADER_REMOVED_PHRASE = "Opus 系・Fable 以外"
 
 # rule:delegation-rules 節に含めない記述 (pre-push-review の reviewer は Fable の用途ではない)。
 FABLE_EXCLUDED_PHRASES = (
@@ -98,22 +84,15 @@ FABLE_EXCLUDED_PHRASES = (
     "reviewer / advisor",
 )
 
-# discipline-opus.md の effort 規律 (Opus 5.5 基準)。
+# discipline.md の effort 規律 (Opus 5.5 基準)。
 OPUS55_EFFORT_PHRASES = (
     "Opus 5.5 への委任では effort の既定 `medium` を基準にする",
     "境界が明確な機械的作業では `low` を検討し",
     "`xhigh` / `max` は品質向上を確認できた作業に限る",
     "Opus 5 で使っていた effort をそのまま持ち込まない",
 )
-# 置き換えで消える Opus 5 基準の effort 見出し。
+# 分業規律に含めない Opus 5 基準の effort 見出し。
 OPUS5_EFFORT_PHRASE = "Opus 5 を使う委任では effort を固定しない"
-
-# Opus 5 向けの 3 規律を Opus 5 / Opus 5.5 の両方に適用する記述。
-OPUS_BOTH_MODEL_PHRASES = (
-    "Opus 5 / Opus 5.5 とも直接行う",
-    "Opus 5 / Opus 5.5 への委任指示にはスコープ制限の 1 文を必ず含める",
-    "Opus 5 / Opus 5.5 への委任では汎用的な再確認指示を加えない",
-)
 
 # ヘッダコメントで参照する公式ガイド。
 OPUS55_GUIDE_SLUG = "prompting-claude-opus-5-5"
@@ -158,7 +137,7 @@ def intro_paragraph(text: str) -> str:
 
 
 class FableUsageDelegationRulesTests(unittest.TestCase):
-    """opus / sonnet 版の rule:delegation-rules 節が Fable の用途を限定して許可すること。"""
+    """分業規律の rule:delegation-rules 節が Fable の用途を限定して許可すること。"""
 
     def test_prohibition_phrase_absent_from_disciplines(self) -> None:
         offenders = [
@@ -166,7 +145,7 @@ class FableUsageDelegationRulesTests(unittest.TestCase):
             for name, path in DISCIPLINES.items()
             if FABLE_PROHIBITION_PHRASE in read(path)
         ]
-        self.assertEqual([], offenders, f"全面禁止の旧記述が残るファイル: {offenders}")
+        self.assertEqual([], offenders, f"Fable の全面禁止の記述を含むファイル: {offenders}")
 
     def test_fable_usage_phrases_present_in_delegation_rules(self) -> None:
         missing = [
@@ -187,7 +166,7 @@ class FableUsageDelegationRulesTests(unittest.TestCase):
             if phrase in delegation_rules_section(read(path))
         ]
         self.assertEqual(
-            [], present, f"rule:delegation-rules 節に残る旧方針の Fable 記述: {present}"
+            [], present, f"rule:delegation-rules 節に含めない Fable 記述: {present}"
         )
 
     def test_reviewers_are_not_fable_usage_in_delegation_rules(self) -> None:
@@ -202,14 +181,11 @@ class FableUsageDelegationRulesTests(unittest.TestCase):
         )
 
 
-class WorkerModelTests(unittest.TestCase):
-    """ワーカーをメインセッションと同じモデルで動かす規律と、対象モデルの記述。"""
+class DisciplineAudienceTests(unittest.TestCase):
+    """分業規律のヘッダコメントと冒頭文が Fable を対象に含めないこと。"""
 
-    def test_opus_discipline_keeps_workers_on_the_main_session_model(self) -> None:
-        self.assertIn(WORKER_MODEL_PHRASE, read(DISCIPLINE_OPUS))
-
-    def test_opus_header_and_intro_do_not_target_fable(self) -> None:
-        text = read(DISCIPLINE_OPUS)
+    def test_header_and_intro_do_not_target_fable(self) -> None:
+        text = read(DISCIPLINE)
         present = [
             part
             for part, body in (
@@ -218,34 +194,22 @@ class WorkerModelTests(unittest.TestCase):
             )
             if "Fable" in body
         ]
-        self.assertEqual([], present, f"discipline-opus.md で Fable を対象に含む箇所: {present}")
-
-    def test_sonnet_header_audience_is_models_other_than_opus(self) -> None:
-        header = header_comment(read(DISCIPLINE_SONNET))
-        self.assertIn(SONNET_HEADER_AUDIENCE_PHRASE, header)
-        self.assertNotIn(SONNET_HEADER_REMOVED_PHRASE, header)
+        self.assertEqual([], present, f"discipline.md で Fable を対象に含む箇所: {present}")
 
 
 class Opus55EffortTests(unittest.TestCase):
-    """discipline-opus.md の effort 規律が Opus 5.5 基準であること。"""
+    """discipline.md の effort 規律が Opus 5.5 基準で rule:delegation-rules 節にあること。"""
 
     def test_opus55_effort_phrases_present_in_delegation_rules(self) -> None:
-        section = delegation_rules_section(read(DISCIPLINE_OPUS))
+        section = delegation_rules_section(read(DISCIPLINE))
         missing = [phrase for phrase in OPUS55_EFFORT_PHRASES if phrase not in section]
         self.assertEqual([], missing, f"Opus 5.5 基準の effort 規律に無い文言: {missing}")
 
     def test_opus5_effort_heading_absent(self) -> None:
-        self.assertNotIn(OPUS5_EFFORT_PHRASE, read(DISCIPLINE_OPUS))
-
-    def test_opus5_rules_apply_to_both_models(self) -> None:
-        text = read(DISCIPLINE_OPUS)
-        missing = [phrase for phrase in OPUS_BOTH_MODEL_PHRASES if phrase not in text]
-        self.assertEqual(
-            [], missing, f"Opus 5 / Opus 5.5 の両方に適用する記述が無い: {missing}"
-        )
+        self.assertNotIn(OPUS5_EFFORT_PHRASE, read(DISCIPLINE))
 
     def test_header_comment_references_opus55_guide(self) -> None:
-        self.assertIn(OPUS55_GUIDE_SLUG, header_comment(read(DISCIPLINE_OPUS)))
+        self.assertIn(OPUS55_GUIDE_SLUG, header_comment(read(DISCIPLINE)))
 
 
 class AutoModeStopPatternTests(unittest.TestCase):
