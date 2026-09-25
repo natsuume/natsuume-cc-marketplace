@@ -21,6 +21,10 @@ import { decideToolCheck } from './tool-check-policy.mjs'
  * 切り替え前の mode が使われる。classic イベントと tool.call は next(e) でそのまま下位へ渡し、
  * 内容を変えない。
  *
+ * tool.call と tool.check は matcher で Bash に限って登録する。engine は、一致する tool.call の
+ * ハンドラが存在するツールの呼び出しを background へ切り離さないため、matcher 無しで登録すると
+ * Bash 以外のツールの切り離しまで止めてしまう。
+ *
  * merge gate (block-pre-merge.sh) は classic PreToolUse として tool.check より先に評価され、
  * その deny は tool.check の下位判定 (next(e) の結果) として渡される。判定ロジックは deny を
  * 上書きしないため、gate が deny した merge は allow にならない。
@@ -51,7 +55,7 @@ export const register = (on: On) => {
     return next(e)
   })
 
-  on('tool.call', async ($, e, next) => {
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     tracker.recordCall({ toolUseId: e.tool_use_id, agentId: e.agentId })
     try {
       return await next(e)
@@ -60,7 +64,7 @@ export const register = (on: On) => {
     }
   })
 
-  on('tool.check', async ($, e, next) =>
+  on('tool.check', { tool: 'Bash' }, async ($, e, next) =>
     decideToolCheck({
       tool: e.tool,
       input: e.input,
