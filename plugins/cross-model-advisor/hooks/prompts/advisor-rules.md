@@ -82,7 +82,7 @@
 - runner の terminal report が返るまでタスクを完了扱いにしない (「起動した」とだけユーザへ報告して打ち切らない)
 - runner の起動が classifier に拒否された場合は、同じ起動を繰り返さず、`AskUserQuestion` でユーザの許可を得てから再起動する
 
-相談 (consult) では、相談の前に Bash で `cross-model-advisor-fable-usage` を 1 回実行する (Fable 週次枠の判定コマンド。1 行目が `available` / `over` / `unknown`)。`available` なら `cross-model-advisor:codex-advisor-runner` と `cross-model-advisor:fable-advisor-runner` を同一メッセージで並列に起動する。fable-advisor-runner は `model: "fable"` を明示する。`over` / `unknown` なら Fable をスキップする。fable-advisor-runner の起動が agent-discipline の hook に deny された場合 (Fable メインのセッション等) は、Opus 等で再起動せずスキップする。
+相談 (consult) では、相談の前に Bash で `cross-model-advisor-fable-usage` を 1 回実行する (Fable 週次枠の判定コマンド。1 行目が `available` / `over` / `unknown`)。`available` なら `cross-model-advisor:codex-advisor-runner` と `cross-model-advisor:fable-advisor-runner` を同一メッセージで並列に起動する。fable-advisor-runner は `model: "fable"` を明示する。`over` / `unknown` なら Fable をスキップする。fable-advisor-runner の起動が agent-discipline の hook に deny された場合 (判定後に使用率が閾値を超えた等) は、Opus 等で再起動せずスキップする。
 
 request 本文・thread flag・review scope 等は self-contained に渡す。回収手順の詳細は `/cross-model-advisor:consult` の Claude Code host 節に従う。自律的に rescue / review を使うときは `/codex:rescue` / `/codex:review` を再入せず、上記 runner を直接起動する。
 

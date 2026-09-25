@@ -73,14 +73,14 @@
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "作業規律を注入し issue / PR 本文の独断を検知する",
-      "version": "1.0.2",
+      "version": "2.0.0",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
       "description": "UI 実装規律の常時注入と実装パターンを提供する",
-      "version": "0.4.6",
+      "version": "0.4.7",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     },
     {
