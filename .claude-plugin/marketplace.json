@@ -17,7 +17,7 @@
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
       "description": "既定ブランチへの直接 commit / push を禁止する",
-      "version": "0.7.4",
+      "version": "0.7.5",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
@@ -73,7 +73,7 @@
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "作業規律を注入し issue / PR 本文の独断を検知する",
-      "version": "3.0.1",
+      "version": "3.0.2",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {

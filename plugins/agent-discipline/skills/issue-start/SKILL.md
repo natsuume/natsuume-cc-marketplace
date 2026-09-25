@@ -5,7 +5,7 @@ description: 「issue に着手する」「issue の実装を始める」「issu
 
 # issue-start
 
-issue 駆動開発における **着手・実装開始フェーズ** の詳細手順です。常時注入 (SessionStart) が配送する原則 (`rule:issue-claim` / `rule:tdd-two-phase` / `rule:closing-keyword`) を前提に、本 skill はそれらを実行するための分岐判定・具体的な手順を提供します。常時注入ルールの手順本体、特に安全機構である `rule:issue-claim` の排他制御はここでは複製せず、参照するに留めます。
+issue 駆動開発における **着手・実装開始フェーズ** の詳細手順です。常時適用ルールとして配送される原則 (`rule:issue-claim` / `rule:tdd-two-phase` / `rule:closing-keyword`) を前提に、本 skill はそれらを実行するための分岐判定・具体的な手順を提供します。常時注入ルールの手順本体、特に安全機構である `rule:issue-claim` の排他制御はここでは複製せず、参照するに留めます。
 
 ## 1. pick-up 分岐
 

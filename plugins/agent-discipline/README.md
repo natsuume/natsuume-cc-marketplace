@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v3.0.1
+v3.0.2
 
 ## 概要
 
@@ -14,10 +14,11 @@ Claude Code に「個人の開発スタイル」を一括で適用するため�
 
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
-| **物理層 (Bash 分解)** | `SessionStart` (inject-always.sh、`always-1.md` の part 1 を配送) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
-| **before 系** | `SessionStart` (同上) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約、 AskUserQuestion の必須化、 spec-first 2 段階の開発手順 |
-| **during 系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
-| **排他系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` を持たない claim は自分のものと確認できないため他 session 扱いで削除禁止) |
+| **物理層 (Bash 分解)** | `SessionStart` (inject-always.sh、`always-1.md` の part 1/3) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
+| **before 系** | `SessionStart` (inject-always.sh、part 1/3: 設計 / 仕様の事前壁打ち) + `UserPromptSubmit` (inject-rules-part.sh 2、part 2/3: issue / PR 関連) | 常時 (part 2/3 は session 内初回のプロンプト処理時) | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
+| **during 系** | `UserPromptSubmit` (inject-rules-part.sh 2、part 2/3) | 常時 (`permission_mode` 非依存、session 内初回のプロンプト処理時) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
+| **排他系** | `UserPromptSubmit` (inject-rules-part.sh 3、part 3/3) | 常時 (`permission_mode` 非依存、session 内初回のプロンプト処理時) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` を持たない claim は自分のものと確認できないため他 session 扱いで削除禁止) |
+| **作業手順系** | `UserPromptSubmit` (inject-rules-part.sh 2 / inject-rules-part.sh 3) | 常時 (session 内初回のプロンプト処理時) | ユーザへの質問は `AskUserQuestion` で行う (part 3/3)、 軽微な修正を除き spec-first 2 段階 (Phase A: テスト / 設計骨格 → Phase B: 実装本体) で進める (part 3/3)、 説明文書には現在の内容のみを書き経緯を書かない (part 2/3) |
 | **分割配送** | `SessionStart` (inject-always.sh、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh) | 常時 (UserPromptSubmit 側の各要素は session ごとに at-most-once) | 常時ルールと分業規律は、メインセッションのモデルに依らず同じ 1 版を配送する。SessionStart で常時ルールの part 1 (`always-1.md`) のみ注入し、残りの part (`always-2.md` / `always-3.md`) と分業規律 (`discipline.md`) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (1 要素の `additionalContext` を 8K 字以下に保つための分割)。UserPromptSubmit 側の各要素は配送済みマーカーで 1 度だけ配送し、SessionStart のたびにマーカーをリセットして再配送する |
 | **検知系 (gh issue/pr body)** | `PreToolUse` (hooks.json inline `type: agent` 4 entries) | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。claude-sonnet-5 pin |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
@@ -51,7 +52,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **動作**:
 
 - 全 subagent の起動時に `hooks/prompts/subagent-rules.md` 全文を `additionalContext` として注入する。モデル判定・agent_type 分岐を持たない静的全文注入
-- 注入内容は 4 規律: bash-decompose (always-1.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点)
+- 注入内容は 5 規律: bash-decompose (always-1.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点) / 説明は常に最新の内容のみ (always-2.md と同一 rule ID の comment-currency。subagent も説明文書を編集するため)
 - `jq` 不在 / prompt ファイル欠落・空の場合は無音 `exit 0` (フェイルセーフ)。subagent-rules.md の rule ID 整合は `lint-prompt-sync.sh` チェック 5 (サブセット検査) が CI で担保する
 
 #### inject-always
@@ -197,7 +198,7 @@ editor 経路 / `--body-file -` (stdin 経路) は Step 1 の扱いのまま判�
 - `if` field は単一 command pattern (`Bash(prefix:*)` 形式) のみで、 alternation (`Bash(gh (issue|pr) (create|edit):*)`) は公式 syntax では非対応
 - 1 entry に `if: "Bash(gh issue:*)"` のような broader filter を置くと、 `gh issue view` / `gh issue list` / `gh issue close` 等にも agent が起動して narrow scope が損なわれる
 - 4 つの target command (`create` / `edit` × `issue` / `pr`) ごとに個別 entry を持ち、 prompt は 4× 完全 duplicate という maintenance トレードオフを受け入れる代わりに、 真の narrow scope (= `if` filter が target command にだけ反応するよう hook config 段階で prefilter し、 `$()` / `$VAR` 等を含むために `if` filter が通した非対象 Bash は Step 0 が即終了する) を確保している
-- prompt 更新時は 4 箇所同期する必要あり (`jq` で各 entry の `.prompt` を抽出して比較する scripts での lint が将来必要になり得る)
+- prompt 更新時は 4 箇所を同期する。4 entries の共通ブロックの一致は `lint-prompt-sync.sh` のチェック 2 が CI で検査する
 
 **なぜ `type: agent` か (vs `type: prompt`)**:
 
@@ -371,7 +372,7 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 
 ### なぜ常時系と auto 系で hook event を分けるか
 
-- **常時系 (inject-always.sh)**: 物理層 (Bash 分解) と before 系 (設計壁打ち / issue 規約 / closing keyword) と during 系 (自律作業中の判断境界) は permission_mode に依らず常に有用なので `SessionStart` で 1 回注入する。 トークンコストを抑えるため per-turn 再注入はしない
+- **常時系 (inject-always.sh / inject-rules-part.sh)**: 物理層 (Bash 分解) と before 系 (設計壁打ち / issue 規約 / closing keyword) と during 系 (自律作業中の判断境界) と排他系は permission_mode に依らず常に有用なので、 session ごとに 1 回だけ注入する。 part 1/3 は `SessionStart` で、 part 2/3・part 3/3 は `UserPromptSubmit` の最初のプロンプト処理時に配送済みマーカーで at-most-once 配送する (SessionStart のたびにマーカーをリセットして再配送する)。 トークンコストを抑えるため per-turn 再注入はしない
 - **auto 系 (inject-auto.sh)**: after 系 (commit→push→PR→merge 自走パイプライン) は auto でのみ自動注入し、long-running session で薄れないよう `UserPromptSubmit` で per-turn 再注入する
 
 ### 誘導層と検知層の defense-in-depth
@@ -380,7 +381,7 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 
 | レイヤ | 機構 | 効き目 | 対象 leak 経路 |
 |---|---|---|---|
-| 誘導層 | SessionStart で additionalContext 注入 | Claude が自発的に self-check する確率を上げる | issue body / PR 説明 / plan / commit message / 実装コード (= 全 leak 経路) |
+| 誘導層 | SessionStart (part 1/3) と UserPromptSubmit (part 2/3・part 3/3、session 内 1 回) で additionalContext 注入 | Claude が自発的に self-check する確率を上げる | issue body / PR 説明 / plan / commit message / 実装コード (= 全 leak 経路) |
 | 検知層 | PreToolUse type:agent hook 4 entries | `gh issue/pr create/edit` 経路の物理 intercept (誘導層の取りこぼし防止)。literal head prefilter により非該当 Bash では model を起動しない | `gh issue create/edit` / `gh pr create/edit` のうち `--body inline` / `--body-file PATH` 形式 |
 
 検知層は対象範囲を限定的にしています (= `gh api` 直接叩き / editor 起動経路 / 実装コード内のコメント等は cover しない)。 これは誘導層 (= Claude の自発遵守) を主、 検知層を補助とする非対称設計です。 全 leak 経路を物理層で塞ぐと regex / semantic 判定の網羅が困難になり false positive / false negative が増えるため、 「Claude 自身に最も書きやすい経路 (`gh issue/pr create/edit`)」 だけを物理 catch する戦略を採っています。
