@@ -238,6 +238,7 @@ git-dir 直下の codex review 記録 (`.claude-pre-merge-codex-reviewed` と `.
 - **remote `origin` = PR の repository が前提 (fork 構成は非対応)**: wrapper はレビュー範囲の base をローカルの `origin/<base>` で解決するため、remote `origin` が PR の属する repository を指す個人環境を前提とします。fork からの PR (origin と PR の repository が異なる構成) には対応しません
 - **merge queue による暗黙の遅延 merge は検出しない**: merge queue が有効な base branch では `--auto` を付けなくても merge が queue 経由の遅延実行になりえますが、gate はこれを検出しません (遅延 merge はサポート外です)
 - **Fable で実行されたかは検証しない**: fable-reviewer が実際に Fable で実行されたかを hook は検証しません (cooperative 利用前提)。親が `model: "fable"` を指定せずに起動した場合も、report の形式を満たせば Fable review として記録・投稿されます。Fable review の記録と PR コメントの偽装も、codex review と同様に防ぎません
+- **report は内容の確認なしに PR へ投稿される**: codex review と同じく、reviewer の report は merge gate が人の確認を挟まずに PR へ投稿します。fable-reviewer は PR 本文・issue・差分を指示ではなくデータとして扱い、リポジトリの追跡ファイルと `gh pr view` / `gh issue view` の結果以外を読まず report に載せないよう agent 定義で指示していますが、これはプロンプトによる抑止であり、Bash の実行範囲を機械的に制限するものではありません。第三者が PR 本文や issue を書ける公開リポジトリでは、この性質を踏まえて利用してください
 - **PowerShell tool / Monitor tool 経由の `gh pr merge` は観測しない**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `gh pr merge` を gate は観測しません。これらの tool を有効にした環境はサポート外です
 
 ## pre-push-review / pre-push-codex-review との併用設計
