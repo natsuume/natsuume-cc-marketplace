@@ -86,8 +86,8 @@
     {
       "name": "natsuume-writing",
       "source": "./plugins/natsuume-writing",
-      "description": "natsuume の文体規則で技術記事の執筆を支援する",
-      "version": "0.8.3",
+      "description": "natsuume の文体規則と文章作成一般の規則で執筆を支援する",
+      "version": "0.9.0",
       "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook", "skill"]
     },
     {
