@@ -21,9 +21,33 @@
  *   modeForCall: (toolUseId: unknown) => string | undefined,
  * }}
  */
-export const createPermissionModeTracker = () => ({
-  recordMode: () => {},
-  recordCall: () => {},
-  forgetCall: () => {},
-  modeForCall: () => undefined,
-});
+export const createPermissionModeTracker = () => {
+  // メインの loop を表すキー。agent の id (空でない文字列) と衝突しない値にする。
+  const MAIN = Symbol("main");
+  const modesByAgent = new Map();
+  const agentsByCall = new Map();
+
+  const agentKey = (agentId) =>
+    typeof agentId === "string" && agentId !== "" ? agentId : MAIN;
+  const isToolUseId = (toolUseId) => typeof toolUseId === "string" && toolUseId !== "";
+
+  return {
+    recordMode: ({ agentId, mode }) => {
+      if (typeof mode === "string") {
+        modesByAgent.set(agentKey(agentId), mode);
+      }
+    },
+    recordCall: ({ toolUseId, agentId }) => {
+      if (isToolUseId(toolUseId)) {
+        agentsByCall.set(toolUseId, agentKey(agentId));
+      }
+    },
+    forgetCall: (toolUseId) => {
+      agentsByCall.delete(toolUseId);
+    },
+    modeForCall: (toolUseId) =>
+      isToolUseId(toolUseId) && agentsByCall.has(toolUseId)
+        ? modesByAgent.get(agentsByCall.get(toolUseId))
+        : undefined,
+  };
+};

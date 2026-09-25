@@ -95,7 +95,12 @@ codex review wrapper (`run-pre-merge-codex-review.sh`) の起動を検証する 
 
 merge gate (`block-pre-merge.sh`) は classic PreToolUse として `tool.check` より先に評価され、その deny は `tool.check` の下位判定として渡されます。module は deny を上書きしないため、codex review の記録が無い merge は従来どおり gate の deny で止まります。module 自身は review 記録を検証しません。
 
-`tool.check` の入力は permission mode を持たないため、permission mode を持つ classic イベント (SessionStart / UserPromptSubmit / PostToolUse / PostToolUseFailure) の入力から最新の mode を記録して使います。
+`tool.check` の入力は permission mode も呼び出し元の agent も持たないため、次の 2 つを記録して引き当てます。
+
+- agent ごとの permission mode: permission mode を持つ classic イベント (SessionStart / UserPromptSubmit / PostToolUse / PostToolUseFailure) の入力から、メインと subagent を区別して記録します
+- 呼び出しごとの agent: `tool.call` イベントの入力から、呼び出しの id と呼び出し元の agent の対応を記録します
+
+呼び出し元の agent に mode の記録が無い間 (起動直後の subagent 等) は、mode 不明として引き上げません。
 
 **読み込まれる条件**: Claude Code プロセスの env に `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` があり、workspace trust を承諾済みであることが必要です。managed settings の `disableAllHooks` / `allowManagedHooksOnly`、`--bare`、Safe mode では読み込まれません。読み込まれない環境でも、本 plugin の他の機能は従来どおり動作します。env は次の setup skill で設定できます。
 
@@ -205,7 +210,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - **TOCTOU 窓は防がない**: gate 確認後から実 merge までの間に head が更新される競合窓は防ぎません (ローカル記録の SHA は gate 確認時点の head と照合されます)
 - **`--auto` / `--admin` は常に deny**: 遅延 merge 予約 (gate 確認と実 merge の分離) と保護 bypass はサポート外です。必要な場合は plugin を無効化して実行してください
 - **hooks module は early access の API に依存する**: Claude Mods (function hooks) の API は Claude Code のリリース間で予告なく変わりえます。`tool.check` の allow が classifier の判定を省略する挙動は Claude Code 2.1.282 の実装で確認したもので、公式ドキュメントには記述がありません
-- **hooks module が参照する permission mode は直近の classic イベント時点の値**: ターンの途中で permission mode を切り替えた直後の 1 回のツール呼び出しには、切り替え前の mode が使われます
+- **hooks module が参照する permission mode は直近の classic イベント時点の値**: 呼び出し元の agent ごとに記録していますが、ターンの途中で permission mode を切り替えた直後の 1 回のツール呼び出しには、その agent の切り替え前の mode が使われます
 - **hooks module は rule を持たない ask の由来を区別しない**: core の既定の ask だけでなく、他の PreToolUse hook が返した ask も、条件を満たせば allow に引き上げます。`permissions.ask` ルールによる ask は引き上げません
 - **hooks module の対象リポジトリは作業ディレクトリで決まる**: `-R` / URL の指定は対象外にしていますが、対象リポジトリは Bash の作業ディレクトリの git remote で決まります。merge の安全性は merge gate のレビュー記録の照合に委ねます
 - **粗い検出による誤爆**: `gh pr merge` の連続列を quoted な文字列として含むだけのコマンド (コミットメッセージへの言及等) も関与対象になります。誤 deny された場合はコマンドを言い換えて回避してください
@@ -251,7 +256,8 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 | `agents/codex-reviewer.md` | `pre-merge-cross-review:codex-reviewer` subagent 定義 |
 | `agents/fable-reviewer.md` | `pre-merge-cross-review:fable-reviewer` subagent 定義 |
 | `bin/pre-merge-cross-review-fable-usage` | Fable 週次枠の判定コマンド (fable-reviewer を起動するか) |
-| `hooks/module/register.ts` | hooks module のエントリ。permission mode を記録し、tool.check で判定ロジックを呼ぶ |
+| `hooks/module/register.ts` | hooks module のエントリ。permission mode と呼び出し元の agent を記録し、tool.check で判定ロジックを呼ぶ |
+| `hooks/module/permission-mode-tracker.mjs` | agent ごとの permission mode と、呼び出しごとの agent の記録 |
 | `hooks/module/tool-check-policy.mjs` | tool.check の判定ロジック (純関数) |
 | `skills/setup/SKILL.md` | hooks module を有効化する setup skill |
 | `bin/pre-merge-cross-review-enable-function-hooks` | user settings の env に `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` を書き込むコマンド |
