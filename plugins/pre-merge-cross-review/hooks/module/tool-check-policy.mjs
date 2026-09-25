@@ -13,10 +13,18 @@
 // shell の連結・リダイレクト・置換・改行。quote の内側にあっても対象外とする (保守側に倒す)。
 const SHELL_METACHARACTERS = /[;&|<>`\n\r]|\$\(|\$\{/;
 
-const MERGE_REASON =
-  "pre-merge-cross-review: auto mode で merge gate を通過した単独の gh pr merge を許可しました";
-const READ_ONLY_REASON =
-  "pre-merge-cross-review: auto mode で単独の gh pr view / gh pr checks を許可しました";
+// タブと印字可能な ASCII 以外の文字 (制御文字・非 ASCII の空白・全角文字等)。
+const NON_PRINTABLE_ASCII = /[^\t\x20-\x7e]/;
+
+// jq の式で識別子として現れる env (`.env` / `$env` / `env_x` 等のフィールド・名前は除く)。
+const JQ_ENV_IDENTIFIER = /(^|[^A-Za-z0-9_.$])env(?![A-Za-z0-9_])/;
+
+const REASONS = {
+  merge:
+    "pre-merge-cross-review: auto mode で merge gate を通過した単独の gh pr merge を許可しました",
+  view: "pre-merge-cross-review: auto mode で単独の gh pr view を許可しました",
+  checks: "pre-merge-cross-review: auto mode で単独の gh pr checks を許可しました",
+};
 
 const MERGE_STRATEGY_FLAGS = ["--squash", "--merge", "--rebase"];
 
@@ -24,7 +32,13 @@ const PR_NUMBER = /^[1-9][0-9]*$/;
 const BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 const FIELDS = /^[A-Za-z0-9_,]+$/;
 const SECONDS = /^[0-9]+$/;
-const JQ_EXPRESSION = /^'[^']*'$|^[A-Za-z0-9_.]+$/;
+const JQ_EXPRESSION_FORM = /^'[^']*'$|^[A-Za-z0-9_.]+$/;
+
+// jq の env / $ENV は環境変数を読み出せるため、$ と識別子 env を含む式は許可しない。
+const JQ_EXPRESSION = {
+  test: (value) =>
+    JQ_EXPRESSION_FORM.test(value) && !value.includes("$") && !JQ_ENV_IDENTIFIER.test(value),
+};
 
 // サブコマンドごとの許可フラグ。値を取るフラグは値の形 (正規表現) を持つ。
 const READ_ONLY_FLAGS = {
@@ -45,7 +59,7 @@ const READ_ONLY_FLAGS = {
 };
 
 /**
- * 空白で語に分ける。シングルクォートの内側の空白は語を区切らず、quote は語に残す。
+ * スペースとタブで語に分ける。シングルクォートの内側の空白は語を区切らず、quote は語に残す。
  * 閉じていないシングルクォートがある場合は null を返す。
  */
 const splitWords = (command) => {
@@ -59,7 +73,7 @@ const splitWords = (command) => {
       inQuote = character !== "'";
       continue;
     }
-    if (/\s/.test(character)) {
+    if (character === " " || character === "\t") {
       if (inWord) {
         words.push(current);
         current = "";
@@ -152,7 +166,11 @@ const isCanonicalReadOnly = (subcommand, args) => {
  * @returns {boolean}
  */
 export const isTargetCommand = (command) => {
-  if (typeof command !== "string" || SHELL_METACHARACTERS.test(command)) {
+  if (
+    typeof command !== "string" ||
+    NON_PRINTABLE_ASCII.test(command) ||
+    SHELL_METACHARACTERS.test(command)
+  ) {
     return false;
   }
   const words = splitWords(command.trim());
@@ -196,13 +214,13 @@ export const decideToolCheck = ({ tool, input, beneath, permissionMode }) => {
   if (!isObject(beneath) || beneath.decision !== "ask" || permissionMode !== "auto") {
     return beneath;
   }
-  // permissions.ask ルールでユーザが明示した確認は残す
-  if (typeof beneath.rule === "string" && beneath.rule !== "") {
+  // permissions.ask ルールでユーザが明示した確認は残す。rule が想定外の値の場合も引き上げない
+  if (beneath.rule !== undefined && beneath.rule !== "") {
     return beneath;
   }
   if (tool !== "Bash" || !isObject(input) || !isTargetCommand(input.command)) {
     return beneath;
   }
   const subcommand = splitWords(input.command.trim())[2];
-  return { decision: "allow", reason: subcommand === "merge" ? MERGE_REASON : READ_ONLY_REASON };
+  return { decision: "allow", reason: REASONS[subcommand] };
 };

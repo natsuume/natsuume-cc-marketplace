@@ -91,7 +91,7 @@ codex review wrapper (`run-pre-merge-codex-review.sh`) の起動を検証する 
    - `gh pr view [<番号>|<branch>]` に `--json <fields>` / `--jq <式>` / `-q <式>` / `--comments` / `-c` を付けたもの
    - `gh pr checks [<番号>|<branch>]` に `--json <fields>` / `--jq <式>` / `-q <式>` / `--watch` / `--interval <秒>` / `-i <秒>` / `--required` / `--fail-fast` を付けたもの
 
-`<fields>` は英数字・`_`・`,`、`<秒>` は整数、`<式>` はシングルクォートで囲んだ 1 語か英数字・`_`・`.` だけの語、`<branch>` は英数字・`.`・`_`・`/`・`-` だけの語 (先頭は `-` 以外) に限ります。`-R` / `--repo`・URL・`:` を含む指定は、別ホストへの通信になりうるため対象外です。quote の内側を含めて `;` `&` `|` `<` `>` バッククォート `$(` `${` 改行を含む command、シングルクォートの外に `$` `"` `\` を含む command、`gh` の前に env 代入・ラッパー (`env` / `bash -c` / `eval` / `xargs` 等) がある command も対象外です。対象外の command は従来どおり classifier の審査を受けます。
+`<fields>` は英数字・`_`・`,`、`<秒>` は整数、`<式>` はシングルクォートで囲んだ 1 語か英数字・`_`・`.` だけの語、`<branch>` は英数字・`.`・`_`・`/`・`-` だけの語 (先頭は `-` 以外) に限ります。`<式>` に `$` や識別子としての `env` を含むものは、jq の `env` / `$ENV` で環境変数を読み出せるため対象外です。値付きフラグの `=` 形は長フラグだけで受け付け、タブと印字可能な ASCII 以外の文字を含む command も対象外です。`-R` / `--repo`・URL・`:` を含む指定は、別ホストへの通信になりうるため対象外です。quote の内側を含めて `;` `&` `|` `<` `>` バッククォート `$(` `${` 改行を含む command、シングルクォートの外に `$` `"` `\` を含む command、`gh` の前に env 代入・ラッパー (`env` / `bash -c` / `eval` / `xargs` 等) がある command も対象外です。対象外の command は従来どおり classifier の審査を受けます。
 
 merge gate (`block-pre-merge.sh`) は classic PreToolUse として `tool.check` より先に評価され、その deny は `tool.check` の下位判定として渡されます。module は deny を上書きしないため、codex review の記録が無い merge は従来どおり gate の deny で止まります。module 自身は review 記録を検証しません。
 
@@ -206,6 +206,8 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - **`--auto` / `--admin` は常に deny**: 遅延 merge 予約 (gate 確認と実 merge の分離) と保護 bypass はサポート外です。必要な場合は plugin を無効化して実行してください
 - **hooks module は early access の API に依存する**: Claude Mods (function hooks) の API は Claude Code のリリース間で予告なく変わりえます。`tool.check` の allow が classifier の判定を省略する挙動は Claude Code 2.1.282 の実装で確認したもので、公式ドキュメントには記述がありません
 - **hooks module が参照する permission mode は直近の classic イベント時点の値**: ターンの途中で permission mode を切り替えた直後の 1 回のツール呼び出しには、切り替え前の mode が使われます
+- **hooks module は rule を持たない ask の由来を区別しない**: core の既定の ask だけでなく、他の PreToolUse hook が返した ask も、条件を満たせば allow に引き上げます。`permissions.ask` ルールによる ask は引き上げません
+- **hooks module の対象リポジトリは作業ディレクトリで決まる**: `-R` / URL の指定は対象外にしていますが、対象リポジトリは Bash の作業ディレクトリの git remote で決まります。merge の安全性は merge gate のレビュー記録の照合に委ねます
 - **粗い検出による誤爆**: `gh pr merge` の連続列を quoted な文字列として含むだけのコマンド (コミットメッセージへの言及等) も関与対象になります。誤 deny された場合はコマンドを言い換えて回避してください
 - **連続列判定はフラグ介在形に一致しない**: サブコマンドの語間にフラグが入る呼び出し形 (`gh -R owner/repo pr merge 123` 等) は `gh pr merge` の連続列を含まないため gate が関与せず、この形の merge は観測できません。別 repo の PR を merge する場合はその repo のディレクトリへ移動し、`gh pr merge` を先頭に置いた単独コマンドとして番号指定 (`gh pr merge 123`) か current branch 指定 (`gh pr merge --squash`) で実行してください (repo selector 付きの形は gate が deny します)
 - **レビュー記録は current branch の PR にのみ紐づく**: codex-reviewer subagent が実行する wrapper は current branch の PR を対象にレビューし、その PR 番号を記録に書きます。別 PR を番号指定した merge が deny されたときは、先にその PR のブランチへ `git switch` してから subagent を起動してください (別ブランチのまま起動すると、記録が current branch の PR のものになり、codex の利用枠だけを消費して目的の merge は deny のままになります)
