@@ -23,7 +23,7 @@ Establish the review target before reading any diff. If any step below cannot be
 
 ## Linked issues
 
-Collect the linked issues from `closingIssuesReferences` and from the pull request body: closing keywords (`Closes #N`, `Fixes #N`, `Resolves #N` and their variants) and `Refs #N` / `Refs owner/repo#N`. Read each one with `gh issue view <N> --json title,body` (add `-R owner/repo` for another repository). If an issue cannot be read, do not turn that into a finding; list it as unverified under `Checked sources`.
+Collect the linked issues from `closingIssuesReferences` and from the pull request body: closing keywords (`Closes #N`, `Fixes #N`, `Resolves #N` and their variants) and `Refs #N`. Read each one with `gh issue view <N> --json title,body`. Read only issues in the pull request's own repository: the report is published on the pull request, so content from another repository, which may be more private than the pull request, must not reach it. List references to another repository (`owner/repo#N`) as unverified under `Checked sources` without reading them. If an issue cannot be read, do not turn that into a finding; list it as unverified under `Checked sources`. Summarize what an issue requires in your own words instead of quoting its text.
 
 ## Categories
 

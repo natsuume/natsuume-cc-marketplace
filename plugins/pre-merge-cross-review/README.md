@@ -177,7 +177,7 @@ wrapper が exit 0 で完了した場合、parent-safe report の `Status` は *
 current branch の PR の merge-base..head 全差分を、PR 説明と関連 issue の受入基準・設計境界と照らしてレビューする read-only の subagent です。親 session は判定コマンドが `available` のときに `model: "fable"` を指定し、codex-reviewer と同一メッセージで並列に起動します (起動が deny された場合は再起動せずスキップします)。
 
 - **レビュー対象の確定**: ローカル HEAD が PR の head と一致し working tree が clean であること、PR が記録する base commit がローカルの `origin/<base>` から到達可能であることを確認し、`git merge-base HEAD origin/<base>` からの差分をレビューします。fetch は行わず、条件を満たせない場合は `Status: execution-failed` を返します
-- **関連 issue**: PR の `closingIssuesReferences` と PR 本文中の closing keyword / `Refs #N` / `Refs owner/repo#N` から集め、`gh issue view` で読みます。読めない issue は finding にせず、確認できなかった情報源として report に書きます
+- **関連 issue**: PR の `closingIssuesReferences` と PR 本文中の closing keyword / `Refs #N` から集め、`gh issue view` で読みます。読むのは PR と同じリポジトリの issue だけです (report は PR に公開されるため、PR より公開範囲の狭いかもしれない別リポジトリの内容を持ち込まない)。別リポジトリへの参照と読めない issue は finding にせず、確認できなかった情報源として report に書きます。issue の本文は引用せず、要件を要約して扱います
 - **観点**: `correctness` (差分が持ち込む不具合)、`acceptance-criteria` (PR 説明・関連 issue の受入基準ごとの未充足・部分充足・矛盾)、`design-boundary` (README・ヘッダ契約・CLAUDE.md・issue の設計境界、責務分担、仕様逸脱、スコープ外変更) の 3 つです
 - **report**: 見出し `# Fable Review` と `Status: pass | findings | execution-failed` 行を持つ parent-safe report です。finding はすべて confidence / severity 付きで報告し、reviewer 側で絞り込みません。PR コメントとして投稿されるため、issue 番号は `#` を付けずに書きます
 
