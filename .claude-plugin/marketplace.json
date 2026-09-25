@@ -86,8 +86,8 @@
     {
       "name": "natsuume-writing",
       "source": "./plugins/natsuume-writing",
-      "description": "natsuume の文体規則で技術記事の執筆を支援する",
-      "version": "0.8.3",
+      "description": "natsuume の文体規則と文章作成一般の規則で執筆を支援する",
+      "version": "0.9.0",
       "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook", "skill"]
     },
     {
@@ -117,6 +117,13 @@
       "description": "AI タスクのリードタイム推移を分析・報告する",
       "version": "0.2.9",
       "keywords": ["analytics", "leadtime", "github", "metrics", "report"]
+    },
+    {
+      "name": "enforce-japanese-response",
+      "source": "./plugins/enforce-japanese-response",
+      "description": "英語の応答を検知し日本語で書き直させる",
+      "version": "0.1.0",
+      "keywords": ["language", "japanese", "response", "stop", "hook"]
     }
   ]
 }

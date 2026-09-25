@@ -1,0 +1,6 @@
+{
+  "name": "enforce-japanese-response",
+  "version": "0.1.0",
+  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
+  "description": "英語の応答を検知し日本語で書き直させる"
+}

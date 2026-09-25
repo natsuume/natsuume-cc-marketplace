@@ -32,11 +32,12 @@ claude plugin install git-guardrails@natsuume-plugins
 | [natsuume-statusline](#natsuume-statusline) | 0.11.5 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 3.0.2 | 作業規律を SessionStart / UserPromptSubmit / SubagentStart の hook で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [ui-discipline](#ui-discipline) | 0.4.8 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
-| [natsuume-writing](#natsuume-writing) | 0.8.3 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
+| [natsuume-writing](#natsuume-writing) | 0.9.0 | natsuume の文体規則でテックブログ・技術書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
 | [cross-model-advisor](#cross-model-advisor) | 5.0.7 | Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.4 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.5.3 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.9 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
+| [enforce-japanese-response](#enforce-japanese-response) | 0.1.0 | settings の `language` が日本語のとき、turn 末尾の応答が英語で書かれていたら Stop hook で検知し、日本語で書き直させるプラグイン |
 
 ---
 
@@ -328,9 +329,9 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## natsuume-writing
 
-テックブログ・技術書執筆を支援するプラグインです。natsuume の過去執筆物から抽象化した執筆ルール (文体コア + 媒体プロファイル) を `rules/writing-rules.md` に配置します。`rules/core-summary.md` を SessionStart で常時注入します。詳細ルールは共有 Skills が同じ正本から読みます。
+テックブログ・技術書執筆を支援し、文章作成一般のルールを提供するプラグインです。成果物として書く日本語の文章すべて (チャットでの応答を除く) に適用する文章作成一般のルールを `rules/general-writing.md` に、natsuume の過去執筆物から抽象化した技術文書の執筆ルール (文体コア + 媒体プロファイル) を `rules/writing-rules.md` に配置します。2 層の要点をまとめた `rules/core-summary.md` を SessionStart で常時注入します。詳細ルールは共有 Skills が同じ正本から読みます。
 
-現時点では rules 配置 + SessionStart コア注入 hook + outline skill (章立ての壁打ち + インファイルスケルトン書き込み) + draft skill (スケルトンからのたたき台一括生成 + 未検証事項の TODO 明示) + review skill (文体・構成・技術的正確さ・表記の 4 観点レビュー) を提供します。
+現時点では rules 配置 + SessionStart コア注入 hook + outline skill (章立ての壁打ち + インファイルスケルトン書き込み) + draft skill (スケルトンからのたたき台一括生成 + 未検証事項の TODO 明示) + review skill (文体・構成・技術的/事実の正確さ・表記の 4 観点レビュー。技術文書以外の文章も対象) を提供します。
 
 ### 機能
 
@@ -338,7 +339,7 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-core` | SessionStart | `rules/core-summary.md` を `additionalContext` として常時注入する |
+| `inject-core` | SessionStart | `rules/core-summary.md` と `rules/` の絶対パス (`(参照パス)` 行) を `additionalContext` として常時注入する |
 
 #### Skills
 
@@ -346,7 +347,7 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 |---------|---------|------|
 | outline | `/natsuume-writing:outline` | 壁打ちで技術記事・技術書の章立て・セクション構成を決め、記事ファイルにインファイルスケルトン (見出し + HTML コメント) を書き込む |
 | draft | `/natsuume-writing:draft` | スケルトン付き記事ファイルから、執筆ルールに準拠したたたき台を一括生成する。未検証事項は TODO コメントで明示する |
-| review | `/natsuume-writing:review` | 原稿を文体・構成・技術的正確さ・表記の 4 観点で読み取り専用レビューし、severity 付きの指摘一覧を提示する |
+| review | `/natsuume-writing:review` | 原稿・文書を文体・構成・技術的/事実の正確さ・表記の 4 観点で読み取り専用レビューし、severity 付きの指摘一覧を提示する。技術文書以外の文章は文章作成一般のルールで判定する |
 
 ### キーワード
 
@@ -485,6 +486,26 @@ Skill `leadtime` は `/repo-analytics:leadtime` で呼び出します。対象�
 ### キーワード
 
 `analytics` `leadtime` `github` `metrics` `report`
+
+---
+
+## enforce-japanese-response
+
+settings の `language` が日本語なのに turn 末尾の応答が英語で書かれた場合に、Stop hook でそれを検知して Claude に日本語で書き直させるプラグインです。コード・インライン code・URL を除いた本文で英字が 40 字以上あり、ひらがな・カタカナ・漢字の割合が 5% 未満の応答を英語の応答と判定します。ユーザが英語での出力を明示的に求めていた場合は、書き直さずにその旨を日本語 1 文で添えるよう指示します。tool 呼び出しの合間の英語と subagent の応答は対象外です。
+
+判定基準・block しない条件・目標言語の決め方は [plugins/enforce-japanese-response/README.md](plugins/enforce-japanese-response/README.md) を参照してください。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `enforce-japanese-response` | Stop | 直前の応答 (`last_assistant_message`) が英語なら `decision: block` を返し、日本語での書き直しを指示する |
+
+### キーワード
+
+`language` `japanese` `response` `stop` `hook`
 
 ---
 

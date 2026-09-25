@@ -103,6 +103,7 @@ EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] 
     "enforce-draft-pr": (
         ("PreToolUse", script_path("enforce-draft-pr.sh"), ()),
     ),
+    "enforce-japanese-response": (("Stop", script_path("enforce-japanese-response.sh"), ()),),
     "git-guardrails": (
         ("PreToolUse", script_path("block-default-branch-commit.sh"), ()),
         ("PreToolUse", script_path("block-default-branch-push.sh"), ()),
@@ -191,8 +192,8 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str] | None] = {
         "8e55e12971027e180cddba7a861d505310ef4bf37c7753926cdfa232cac0d02a",
     ),
     "natsuume-writing": (
-        181,
-        "e033c2ff52ba9799ab772102e1dd5ff34b9e578b31922c07776f9e446ee37f1e",
+        224,
+        "a24d5b1d023b9944ebdc03ab09d81cf3e0bd2936443587e45ceef5b27fce95f4",
     ),
     "pre-merge-cross-review": (
         1024,
@@ -249,11 +250,12 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "natsuume-statusline": "0.11.5",
     "agent-discipline": "3.0.2",
     "ui-discipline": "0.4.8",
-    "natsuume-writing": "0.8.3",
+    "natsuume-writing": "0.9.0",
     "cross-model-advisor": "5.0.7",
     "rate-limit": "0.5.4",
     "session-handoff": "0.5.3",
     "repo-analytics": "0.2.9",
+    "enforce-japanese-response": "0.1.0",
 }
 
 
