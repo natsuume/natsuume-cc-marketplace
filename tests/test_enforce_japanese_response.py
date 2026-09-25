@@ -11,8 +11,10 @@ exit code を検証する。期待値は hook の公開契約であり、実装�
   `{"decision": "block", "reason": "<日本語の reason>"}`。それ以外は無出力
 - exit code: どの場合も 0
 - 除去処理: fenced code block (``` から次の ``` まで。閉じが無ければ末尾まで)、
-  インライン code (` から次の ` まで)、URL (`http://` / `https://` から次の空白の直前
-  まで) をこの順に取り除く
+  インライン code (` から次の ` まで)、URL (`http://` / `https://` と、それに続く
+  1 文字以上の URL 本体) をこの順に取り除く。URL 本体は印字可能な ASCII (0x21〜0x7E)
+  のうち `(` `)` `<` `>` `[` `]` `"` を除いた文字の並びで、空白文字・印字可能な ASCII
+  以外の文字 (日本語など)・上記 7 文字のいずれかの直前で終わる
 - 判定: 除去後の本文の ASCII 英字数 L と、ひらがな・カタカナ・漢字の数 J について、
   `L >= 40` かつ `J / (J + L) < 0.05` なら英語の応答
 - 目標言語: `<cwd>/.claude/settings.local.json` → `<cwd>/.claude/settings.json` →
@@ -386,10 +388,51 @@ class StripTest(HookTestCase):
         message = japanese_text(3) + " " + url + "\n"
         self.assert_no_output(self.stop_input(message))
 
-    def test_japanese_inside_url_is_not_counted(self) -> None:
-        url = "https://ja.wikipedia.org/wiki/" + japanese_text(20)
-        message = english_text(40) + " " + url
-        self.assert_block(self.stop_input(message))
+    def test_japanese_right_after_url_path_is_counted(self) -> None:
+        # URL は日本語の直前で終わるため、URL に続く日本語 (J=20) は数えられる
+        # (J=20, L=40 で 20 / 60 >= 0.05)
+        message = (
+            english_text(40) + " https://ja.wikipedia.org/wiki/" + japanese_text(20)
+        )
+        self.assert_no_output(self.stop_input(message))
+
+    def test_japanese_sentence_right_after_url_is_counted(self) -> None:
+        # URL の直後に空白なしで続く日本語 (J=10) は数えられる (10 / 70 >= 0.05)。
+        # 日本語まで除去すると J=0, L=60 で block になる
+        url = "https://github.com/example/" + english_text(60, separator="/")
+        message = url + japanese_text(10) + "。 " + english_text(60)
+        self.assert_no_output(self.stop_input(message))
+
+    def test_markdown_link_with_english_text_is_not_english(self) -> None:
+        # リンク文字 (L=50) と、閉じ括弧の直後の日本語 (J=7) を数える (7 / 57 >= 0.05)。
+        # 閉じ括弧以降まで URL として除去すると J=0, L=50 で block になる
+        tail = "を作成しました。"
+        self.assertEqual(count_japanese(tail), 7)
+        message = "[" + english_text(50) + "](https://github.com/o/r/pull/1)" + tail
+        self.assert_no_output(self.stop_input(message))
+
+    def test_url_ends_before_delimiter_characters(self) -> None:
+        # URL は区切り文字の直前で終わり、区切り文字の後ろの英字 (L=40) は数えられる
+        # (J=1, L=40 で block)。区切り文字以降まで除去すると L=0 で block しない
+        for delimiter in (")", "]", ">", '"', "(", "<", "["):
+            with self.subTest(delimiter=delimiter):
+                message = (
+                    japanese_text(1)
+                    + " https://example.com/path"
+                    + delimiter
+                    + english_text(40, separator="-")
+                )
+                self.assert_block(self.stop_input(message))
+
+    def test_url_keeps_other_ascii_punctuation(self) -> None:
+        # クエリ・フラグメント等の ASCII 記号は URL 本体に含まれ、英字ごと除去される
+        url = (
+            "https://example.com/search?q="
+            + english_text(100, separator="+")
+            + "&lang=en#top,v1.0;x='y'"
+        )
+        message = japanese_text(3) + " " + url
+        self.assert_no_output(self.stop_input(message))
 
     def test_url_ends_at_whitespace(self) -> None:
         # URL の後ろの英文 (L=40) は除去されずに数えられる
