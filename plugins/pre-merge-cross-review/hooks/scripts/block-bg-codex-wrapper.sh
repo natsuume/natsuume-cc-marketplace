@@ -7,7 +7,7 @@
 # policy: 環境失敗 (jq 不在・command 不在) のみ fail-open で抜け、 それ以外の判定は
 #   fail-closed。 wrapper の起動形が判定できない場合は deny 側に倒す。
 #   本 hook は merge gate の補助であり、 未レビュー merge を通さない保証そのものは
-#   block-pre-merge.sh の PR レビューコメント照合が担う。
+#   block-pre-merge.sh のローカルレビュー記録の照合が担う。
 #
 # ## なぜ必要か
 #

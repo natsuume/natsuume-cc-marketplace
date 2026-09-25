@@ -47,9 +47,9 @@ CODEX_REVIEWER_AGENT = PLUGIN_DIR / "agents" / "codex-reviewer.md"
 
 DEFAULT_PAYLOAD = {"hook_event_name": "SessionStart"}
 
-# SubagentStart / SubagentStop で auto-mark.sh を呼ぶ group の matcher (codex-reviewer と
-# fable-reviewer の 2 agent に完全一致する)。
-REVIEWER_LIFECYCLE_MATCHER = "^pre-merge-cross-review:(codex|fable)-reviewer$"
+# SubagentStart / SubagentStop で auto-mark.sh を呼ぶ group の matcher (codex-reviewer だけに
+# 完全一致する。fable-reviewer の report は記録しない)。
+REVIEWER_LIFECYCLE_MATCHER = "^pre-merge-cross-review:codex-reviewer$"
 
 PROMPT_SIZE_LIMIT = 6000
 
@@ -122,6 +122,12 @@ FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 
 FORBIDDEN_DESCRIPTION_SUBSTRINGS = ["gh pr merge", "merge gate", "deny", "投稿"]
 REQUIRED_DESCRIPTION_SUBSTRINGS = ["read-only", "parent-safe"]
+
+# 注入文に書かない語 (PR 上のコメントを再起動の判断材料にしない・gate は投稿しない)。
+PR_COMMENT_WORDS = ("コメント", "投稿", "PR に残す")
+# merge gate はローカルの codex review 記録を検証し、Fable review を見ないことを示す文。
+LOCAL_RECORD_SENTENCE = "merge gate がローカルの codex review 記録を検証して merge に進む"
+FABLE_NOT_GATED_SENTENCE = "merge gate は Fable review を見ない"
 
 SH = shutil.which("sh")
 HAS_JQ = shutil.which("jq") is not None
@@ -324,6 +330,20 @@ class PromptContractTest(unittest.TestCase):
             if substring not in text
         ]
         self.assertEqual([], missing, f"merge-order-rules.md に無い記述: {missing}")
+
+    def test_prompt_does_not_rely_on_pr_comments(self) -> None:
+        """レビュー済みの判断材料は、このセッションで受け取った report と gate が検証する
+        ローカル記録であり、PR 上のコメントや PR への投稿に触れない。"""
+        text = self._read_prompt()
+        hits = [
+            f"L{number}: {line.strip()[:120]}"
+            for number, line in enumerate(text.splitlines(), start=1)
+            for word in PR_COMMENT_WORDS
+            if word in line
+        ]
+        self.assertEqual([], hits, "PR コメント・投稿への言及が残っている")
+        self.assertIn(LOCAL_RECORD_SENTENCE, text)
+        self.assertIn(FABLE_NOT_GATED_SENTENCE, text)
 
     def test_prompt_requires_report_before_merge_ordering(self) -> None:
         """report 受領 → findings の分類・対応 → `gh pr merge` の順序を固定する。

@@ -94,7 +94,7 @@
       "name": "cross-model-advisor",
       "source": "./plugins/cross-model-advisor",
       "description": "Codex と Fable へ並列相談し runner を管理する",
-      "version": "5.0.5",
+      "version": "5.0.6",
       "keywords": ["codex", "fable", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {

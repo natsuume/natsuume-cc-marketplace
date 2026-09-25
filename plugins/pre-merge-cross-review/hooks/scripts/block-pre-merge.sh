@@ -1,57 +1,37 @@
 #!/bin/bash
 # block-pre-merge.sh
-# codex review の確認と、 codex / Fable レビューの投稿を行う PreToolUse フック。 codex
-# review 済みでない PR の `gh pr merge` をブロックし、 レビュー済みならローカルの codex
-# review 記録を PR へ投稿してから merge を通す。 Fable review のローカル記録があれば、 codex
-# 側の通過が確定した後に続けて投稿する (Fable review の欠落・投稿失敗では deny しない)。
+# codex review 済みでない PR の `gh pr merge` をブロックする PreToolUse フック。 レビュー済みの
+# 証拠は merge 実行 repo の git-dir 直下にあるローカル記録 (final attestation) であり、 それが
+# PR 番号と現在の head SHA の両方に一致する場合だけ merge を通す。 GitHub には何も書かず、 gh は
+# PR 番号と head SHA の取得だけに使う。 Fable review は merge の前提条件ではなく、 本 gate は
+# Fable review を見ない。
 #
 # policy: fail-closed (関与したコマンドに限る)
 #   関与条件 (下記 1.) を満たさない Bash 呼び出しには一切関与しない (無出力で exit 0)。
 #   関与したコマンドについては、 判定不能・想定外状況 (gh / jq 不在、 PR 解決失敗、
-#   取得・照合失敗、 ローカル記録の解決・検証失敗、 投稿失敗) をすべて deny に倒す。
+#   PR 番号・head SHA の取得失敗、 ローカル記録の解決・検証失敗) をすべて deny に倒す。
 #
 # ## 判定の流れ
 #
 # 1. **関与条件**: Bash コマンド文字列が `gh pr merge` の連続列を含む場合のみ関与する。
 #    検出は粗い文字列判定であり、 フラグ文法の解析や invocation の厳密な分類は行わない。
 #    誤爆した場合はコマンドの言い換えで回避できる (cooperative 利用前提)。
-# 2. **`--auto` / `--admin`**: 関与したコマンドがこれらの文字列を含む場合は、 PR 上の
-#    レビューコメントの有無に依らず deny する。 `--auto` は gate 確認と実 merge を
+# 2. **`--auto` / `--admin`**: 関与したコマンドがこれらの文字列を含む場合は、 ローカルの
+#    レビュー記録の有無に依らず deny する。 `--auto` は gate 確認と実 merge を
 #    分離する遅延予約、 `--admin` は保護 bypass であり、 いずれも本 gate の観測範囲外の
 #    merge を作るためサポート外とする。
-# 3. **レビューコメント照合**: merge 対象 PR の番号・現在の head SHA・PR レビュー一覧を gh で
-#    取得し、 レビュー本文の **先頭行** が機械可読 header
-#    `<!-- codex-review: head=<full head SHA> status=pass|findings -->` で、 その head SHA が
-#    現在の head と完全一致するものがあるかを確認する。 在れば無出力で終了する (既定の許可
-#    フローに委ねる。 同じ PR・head のローカル記録が残っていれば best-effort で掃除する)。
-#    status は pass / findings のどちらでも「レビュー済み」として成立する (merge の approve や
-#    findings 0 件の証明ではない)。
-# 4. **ローカル記録の検証と投稿**: 一致コメントが無い場合は、 merge 実行 repo (payload の
-#    `cwd`) の git-dir 直下にある codex review の記録を検証する。 final attestation
-#    (2 行 `pr=<全数字>` / `head=<40 hex 小文字>`) が symlink でない regular file として在り、
-#    番号と head SHA が gh の値に一致し、 投稿用の本文ファイルの先頭行が同じ head SHA の
-#    header であるときだけ、 `gh pr review <番号> --comment --body-file <本文>` で投稿する。
-#    投稿に成功したら記録を掃除して無出力で終了し、 投稿に失敗したら記録を残したまま deny する
-#    (再実行で投稿を再試行できる)。 記録が無い / git-dir を解決できない / 記録が不正 /
-#    番号や head が不一致 / 本文を欠く場合はいずれも deny し、
-#    `pre-merge-cross-review:codex-reviewer` subagent の実行を案内する。
-#    レビュー記録の書き手は subagent が起動する wrapper と subagent lifecycle hook
-#    (auto-mark.sh) であり、 本 gate は検証と投稿だけを行う。
-# 4.5 **Fable 記録の投稿**: codex 側の通過が確定した 2 つの経路 (3. の一致コメントあり、
-#    4. の投稿成功) でだけ、 exit の直前に Fable review のローカル記録を扱う
-#    (post_fable_review_if_recorded)。 記録は auto-mark.sh が fable-reviewer の report から
-#    書く attestation (`.claude-pre-merge-fable-reviewed`、 内容 `head=<40 hex 小文字>` の
-#    1 行) と投稿用本文 (`.claude-pre-merge-fable-comment.md`、 先頭行
-#    `<!-- fable-review: head=<full head SHA> status=pass|findings -->`) である。
-#    - 記録が無い / 解決できない、 attestation が symlink・通常ファイルでない・head が現在の
-#      head と不一致の場合は、 投稿も削除もしない
-#    - PR 上に現在の head の Fable review コメント (先頭行の header が完全一致) が在れば、
-#      投稿せず記録を掃除する
-#    - 本文の先頭行が現在の head の header でなければ投稿しない
-#    - それ以外は `gh pr review <番号> --comment --body-file <本文>` で投稿し、 成功したら
-#      記録を掃除する。 失敗したら記録を残し、 stderr に手動投稿の手順を案内する
-#    いずれの場合も stdout には何も出さず merge を通す (Fable review は merge の前提条件では
-#    ない)。 codex 側で deny する経路では Fable 記録を投稿しない。
+# 3. **PR 番号と head SHA の取得**: merge 対象 PR の番号と現在の head SHA を gh
+#    (`gh pr view --json number,headRefOid`) で取得する。 取得できない・形式が不正な場合は
+#    deny する。
+# 4. **ローカル記録の検証**: merge 実行 repo (payload の `cwd`) の git-dir 直下にある codex
+#    review の final attestation (2 行 `pr=<全数字>` / `head=<40 hex 小文字>`) が symlink で
+#    ない regular file として在り、 番号と head SHA が gh の値の両方に一致するときだけ無出力で
+#    終了する (既定の許可フローに委ねる)。 記録が無い (pending だけの場合を含む) / git-dir を
+#    解決できない / 記録が不正 / 番号や head が不一致の場合はいずれも deny し、
+#    `pre-merge-cross-review:codex-reviewer` subagent の実行を案内する。 記録は merge の
+#    approve や findings 0 件の証明ではない (findings があっても 「レビュー済み」 として成立
+#    する)。 レビュー記録の書き手は subagent が起動する wrapper と subagent lifecycle hook
+#    (auto-mark.sh) であり、 本 gate は検証だけを行い、 記録を書き換えない。
 #
 # ## 受理正規形 (allow 判定の唯一の経路)
 #
@@ -148,13 +128,13 @@ codex review 済みであることを確認したうえで、 \`--auto\` / \`--a
 esac
 
 # repo selector (`--repo` / `-R`) 付きの merge は、 本 gate が照合に使う repo (hook プロセスの
-# cwd) と実際に merge される repo が食い違いうる。 別 repo の同番号 PR のレビューコメントで
+# cwd) と実際に merge される repo が食い違いうる。 別 repo の同番号 PR のレビュー記録で
 # 未レビュー merge を通す経路になるため deny する (`--auto` / `--admin` と同じ粗い文字列検出)。
 case "$NORMALIZED" in
   *--repo*|*-R*)
     deny "マージをブロックしました。 repo 指定付きの merge (\`--repo\` / \`-R\`) はサポート外です。
 
-本 gate はコマンドを実行する repo の文脈でレビューコメントを照合するため、 repo を切り替える指定が入ると別 repo の PR を照合してしまう可能性があります。
+本 gate はコマンドを実行する repo の文脈で PR とレビュー記録を照合するため、 repo を切り替える指定が入ると別 repo の PR を照合してしまう可能性があります。
 
 対象 repo のディレクトリに移動し、 repo 指定を外した \`gh pr merge\` を単独のコマンドとして実行してください。"
     exit 0
@@ -210,7 +190,7 @@ case "$FIRST_TOKEN" in
 esac
 
 if ! command -v gh >/dev/null 2>&1; then
-  deny "マージをブロックしました。 gh が見つからないため、 対象 PR の head SHA と codex review コメントを取得できません。 gh CLI をインストール (および \`gh auth login\`) してから、もう一度 gh pr merge を実行してください。"
+  deny "マージをブロックしました。 gh が見つからないため、 対象 PR の番号と head SHA を取得できません。 gh CLI をインストール (および \`gh auth login\`) してから、もう一度 gh pr merge を実行してください。"
   exit 0
 fi
 
@@ -235,7 +215,7 @@ esac
 if [ -n "$CWD_PROBLEM" ]; then
   deny "マージをブロックしました。 ${CWD_PROBLEM}。
 
-本 gate は merge が実行されるディレクトリの repo でレビューコメントを照合します。 そのディレクトリを特定できないと、 別 repo の PR を照合して未レビューの merge を通してしまう可能性があるため、 判定せず deny します。
+本 gate は merge が実行されるディレクトリの repo で PR とレビュー記録を照合します。 そのディレクトリを特定できないと、 別 repo の PR を照合して未レビューの merge を通してしまう可能性があるため、 判定せず deny します。
 
 merge 対象 repo のディレクトリが存在しアクセスできる状態にしてから、もう一度 gh pr merge を実行してください。"
   exit 0
@@ -246,9 +226,9 @@ fi
 run_gh_pr_view() {
   cd "$PAYLOAD_CWD" || return 1
   if [ -n "$1" ]; then
-    gh pr view "$1" --json number,headRefOid,reviews 2>/dev/null
+    gh pr view "$1" --json number,headRefOid 2>/dev/null
   else
-    gh pr view --json number,headRefOid,reviews 2>/dev/null
+    gh pr view --json number,headRefOid 2>/dev/null
   fi
 }
 
@@ -257,7 +237,7 @@ PR_JSON=$(run_gh_pr_view "$TARGET") || PR_JSON=""
 if [ -z "$PR_JSON" ]; then
   deny "マージをブロックしました。 merge 対象 PR の情報を gh から取得できませんでした (PR を解決できない / 認証が切れている / ネットワーク不通 等)。
 
-\`gh pr view --json headRefOid,reviews\` が成功する状態にしてから、もう一度 gh pr merge を実行してください。"
+\`gh pr view --json number,headRefOid\` が成功する状態にしてから、もう一度 gh pr merge を実行してください。"
   exit 0
 fi
 
@@ -271,51 +251,9 @@ gh の認証・バージョンと PR の状態を確認してから、もう一�
     ;;
 esac
 
-# PR 番号はローカルのレビュー記録との照合と、 記録を投稿する際の対象指定に使う。 正規形の
-# `gh pr merge` は番号を省略できる (current branch 解決) ため、 番号は常に gh の応答から取る。
-# 一致コメントが在る場合は番号を使わずに通すため、 ここでは取得だけ行い、 番号が要る経路
-# (記録の照合・投稿) の直前で検証する。
+# PR 番号はローカルのレビュー記録との照合に使う。 正規形の `gh pr merge` は番号を省略できる
+# (current branch 解決) ため、 番号は常に gh の応答から取る。
 PR_NUMBER=$(printf '%s' "$PR_JSON" | jq -r '.number // empty' 2>/dev/null) || PR_NUMBER=""
-
-# header は本文の **先頭行** にあるものだけを attestation として扱う。 本文の途中に現れる
-# header 形の文字列 (レビュー report がレビュー対象の差分から引用したもの等) を受理すると、
-# 別 SHA の attestation として機能してしまうため。
-MATCHED=$(printf '%s' "$PR_JSON" | jq -r --arg head "$HEAD_SHA" '
-  [
-    .reviews[]?
-    | (.body // "")
-    | (split("\n")[0] // "")
-    | rtrimstr("\r")
-    | select(
-        startswith("<!-- codex-review: head=" + $head + " status=pass -->")
-        or startswith("<!-- codex-review: head=" + $head + " status=findings -->")
-      )
-  ] | length
-' 2>/dev/null) || MATCHED=""
-
-# 現在の head SHA の Fable review コメントの数。 解析に失敗した場合は空にする (Fable review は
-# merge の前提条件ではないため deny しない。 Fable 記録の投稿だけを見送る)。
-FABLE_MATCHED=$(printf '%s' "$PR_JSON" | jq -r --arg head "$HEAD_SHA" '
-  [
-    .reviews[]?
-    | (.body // "")
-    | (split("\n")[0] // "")
-    | rtrimstr("\r")
-    | select(
-        startswith("<!-- fable-review: head=" + $head + " status=pass -->")
-        or startswith("<!-- fable-review: head=" + $head + " status=findings -->")
-      )
-  ] | length
-' 2>/dev/null) || FABLE_MATCHED=""
-
-case "$MATCHED" in
-  ""|*[!0-9]*)
-    deny "マージをブロックしました。 PR レビューコメントと head SHA の照合に失敗しました (gh の応答を解析できませんでした)。
-
-\`gh pr view --json headRefOid,reviews\` の出力を確認してから、もう一度 gh pr merge を実行してください。"
-    exit 0
-    ;;
-esac
 
 # レビュー記録のファイル名は lib/markers.sh が単一ソース。 読み込めない場合は記録を検証でき
 # ないため deny に倒す (fail-closed)。
@@ -337,16 +275,8 @@ resolve_absolute_git_dir() {
 GIT_DIR=$(resolve_absolute_git_dir) || GIT_DIR=""
 
 FINAL_PATH=""
-PENDING_PATH=""
-BODY_PATH=""
-FABLE_FINAL_PATH=""
-FABLE_BODY_PATH=""
 if [ -n "$GIT_DIR" ]; then
   FINAL_PATH=$(pre_merge_final_marker_path "$GIT_DIR" 2>/dev/null) || FINAL_PATH=""
-  PENDING_PATH=$(pre_merge_pending_marker_path "$GIT_DIR" 2>/dev/null) || PENDING_PATH=""
-  BODY_PATH=$(pre_merge_comment_body_path "$GIT_DIR" 2>/dev/null) || BODY_PATH=""
-  FABLE_FINAL_PATH=$(pre_merge_fable_final_marker_path "$GIT_DIR" 2>/dev/null) || FABLE_FINAL_PATH=""
-  FABLE_BODY_PATH=$(pre_merge_fable_comment_body_path "$GIT_DIR" 2>/dev/null) || FABLE_BODY_PATH=""
 fi
 
 # attestation の 1 行目 / 2 行目を読む (行末 CR は除去する)。
@@ -354,107 +284,12 @@ read_record_line() {
   sed -n "$1p" "$2" 2>/dev/null | tr -d '\r'
 }
 
-# 記録一式 (final attestation / pending attestation / 投稿用本文) を削除する。
-local_record_is_resolvable() {
-  [ -n "$FINAL_PATH" ] && [ -n "$PENDING_PATH" ] && [ -n "$BODY_PATH" ]
-}
-discard_local_record() {
-  local_record_is_resolvable || return 0
-  rm -f "$FINAL_PATH" "$PENDING_PATH" "$BODY_PATH" 2>/dev/null
-}
-
-# Fable review のローカル記録を PR に投稿する (ヘッダ 4.5)。 codex 側の通過が確定した経路の
-# exit 直前でだけ呼ぶ。 stdout には何も出さず (hook の stdout は decision JSON 専用)、 戻り値は
-# 常に 0。 利用者への通知は stderr に出す。
-post_fable_review_if_recorded() {
-  local attestation_line body_first_line
-
-  if [ -z "$FABLE_FINAL_PATH" ] || [ -z "$FABLE_BODY_PATH" ]; then
-    return 0
-  fi
-  if [ ! -e "$FABLE_FINAL_PATH" ] && [ ! -L "$FABLE_FINAL_PATH" ]; then
-    return 0
-  fi
-  # attestation が検証できない記録は、 投稿も削除もしない (別 head の記録は次の head の
-  # fable-reviewer 完了時に上書きされる)。
-  if [ -L "$FABLE_FINAL_PATH" ] || [ ! -f "$FABLE_FINAL_PATH" ]; then
-    return 0
-  fi
-  attestation_line=$(read_record_line 1 "$FABLE_FINAL_PATH")
-  if ! printf '%s' "$attestation_line" | grep -qE '^head=[0-9a-f]{40}$'; then
-    return 0
-  fi
-  if [ "$attestation_line" != "head=${HEAD_SHA}" ]; then
-    return 0
-  fi
-
-  case "$FABLE_MATCHED" in
-    ""|*[!0-9]*)
-      printf '[pre-merge-cross-review] PR の Fable review コメントを照合できなかったため、 ローカルの Fable review 記録 (%s) の投稿を見送りました。\n' \
-        "$FABLE_BODY_PATH" >&2
-      return 0
-      ;;
-  esac
-  if [ "$FABLE_MATCHED" -gt 0 ]; then
-    # 現在の head の Fable review コメントが PR に在る。 記録は二重投稿の材料にならないよう
-    # best-effort で掃除する。
-    rm -f "$FABLE_BODY_PATH" "$FABLE_FINAL_PATH" 2>/dev/null || true
-    return 0
-  fi
-
-  if [ -L "$FABLE_BODY_PATH" ] || [ ! -f "$FABLE_BODY_PATH" ]; then
-    return 0
-  fi
-  body_first_line=$(read_record_line 1 "$FABLE_BODY_PATH")
-  case "$body_first_line" in
-    "<!-- fable-review: head=${HEAD_SHA} status=pass -->") ;;
-    "<!-- fable-review: head=${HEAD_SHA} status=findings -->") ;;
-    *) return 0 ;;
-  esac
-
-  case "$PR_NUMBER" in
-    ""|*[!0-9]*)
-      printf '[pre-merge-cross-review] gh の応答から PR 番号を取得できなかったため、 ローカルの Fable review 記録 (%s) の投稿を見送りました。\n' \
-        "$FABLE_BODY_PATH" >&2
-      return 0
-      ;;
-  esac
-
-  if ( cd "$PAYLOAD_CWD" && gh pr review "$PR_NUMBER" --comment --body-file "$FABLE_BODY_PATH" >&2 ); then
-    if ! rm -f "$FABLE_BODY_PATH" "$FABLE_FINAL_PATH" 2>/dev/null; then
-      printf '[pre-merge-cross-review] Fable review を PR #%s に投稿しましたが、 ローカルの記録 (%s と %s) を削除できませんでした。 次の merge で二重投稿にならないよう、 手動で削除してください。\n' \
-        "$PR_NUMBER" "$FABLE_BODY_PATH" "$FABLE_FINAL_PATH" >&2
-    fi
-  else
-    printf '[pre-merge-cross-review] Fable review の PR #%s への投稿に失敗しました (merge は続行します)。 記録はローカル (%s) に残しています。 gh の認証・権限・ネットワークを確認してから、 次のコマンドで手動投稿できます: gh pr review %s --comment --body-file %s\n' \
-      "$PR_NUMBER" "$FABLE_BODY_PATH" "$PR_NUMBER" "$FABLE_BODY_PATH" >&2
-  fi
-  return 0
-}
-
-if [ "$MATCHED" -gt 0 ]; then
-  # 現 head SHA に一致する codex review コメントが在る = レビュー済み。 decision を出さず
-  # 既定の許可フローに委ねる。 同じ PR・head のローカル記録が残っている場合は、 同じ内容を
-  # 二重投稿する材料にならないよう best-effort で掃除する (掃除の失敗では deny しない)。
-  if local_record_is_resolvable && [ ! -L "$FINAL_PATH" ] && [ -f "$FINAL_PATH" ]; then
-    if [ "$(read_record_line 1 "$FINAL_PATH")" = "pr=${PR_NUMBER}" ] \
-      && [ "$(read_record_line 2 "$FINAL_PATH")" = "head=${HEAD_SHA}" ]; then
-      discard_local_record || true
-    fi
-  fi
-  post_fable_review_if_recorded
-  exit 0
-fi
-
-# ここから先は 「現 head SHA に一致する codex review コメントが PR に無い」 場合の処理。
-# ローカルのレビュー記録を検証し、 成立していれば PR に投稿してから merge を通す。
-
-# 記録が無い / 解決できない場合に共通で案内する本文。
+# 記録が無い / 解決できない場合に共通で示す案内文。
 REVIEW_GUIDANCE="Agent / Task tool で subagent_type=\"pre-merge-cross-review:codex-reviewer\", model=\"sonnet\" を起動してください。 起動 mode は Claude Code が決める (対話セッションでは background が既定) ため指定せず、 report は completion notification (SubagentHandback / SubagentStop) 経由で届きます。 起動 prompt は、 subagent が実際に行う操作 (read-only の codex review 1 回と report の返却) を述べた次の定型文だけを使います:
 
 current branch の PR (#<番号>) の merge-base..head 差分に対して、agent body の契約に従い codex review を 1 回実行し、parent-safe な markdown report を返してください。
 
-subagent が codex review を実行し、 完了時にレビュー記録を repo の git-dir 直下 (ローカル) に保存します。 その後 \`gh pr merge\` を再実行すると、 この gate が記録を検証して PR に投稿してから merge に進みます。
+subagent が codex review を実行し、 完了時にレビュー記録を repo の git-dir 直下 (ローカル) に保存します。 その後 \`gh pr merge\` を再実行すると、 この gate が記録を検証してから merge に進みます。
 
 次回以降は、 マージ前提条件を確認した時点 (\`gh pr merge\` を実行する前) で同じ subagent を起動してください。 auto mode の classifier は \`gh pr merge\` の直後の subagent 起動を拒否することがあります。 起動が拒否された場合は同じ起動を繰り返さず、 AskUserQuestion でユーザにレビュー実行の許可を求めてください。
 
@@ -462,16 +297,14 @@ subagent が codex review を実行し、 完了時にレビュー記録を repo
 
 上記の model を常に明示してください。
 
-PR に commit を追加すると head SHA が変わり、 過去のレビュー記録と投稿済みコメントは自動的に失効します (再レビューが必要になります)。"
+PR に commit を追加すると head SHA が変わり、 過去のレビュー記録は自動的に失効します (再レビューが必要になります)。"
 
-# ここから先は PR 番号を使う (記録の照合・投稿対象の指定)。 取得できていない場合は判定不能な
-# ため deny する。
 case "$PR_NUMBER" in
   ""|*[!0-9]*)
     deny "マージをブロックしました。 merge 前に codex review を実行してください。
 
 対象 PR の head SHA: ${HEAD_SHA}
-この head SHA に一致する codex review コメントが PR に無く、 gh の応答から PR 番号 (number) を取得できなかったため、 ローカルのレビュー記録とも照合できませんでした。
+gh の応答から PR 番号 (number) を取得できなかったため、 ローカルのレビュー記録と照合できませんでした。
 
 gh の認証・バージョンと PR の状態も併せて確認してください。
 
@@ -480,21 +313,21 @@ ${REVIEW_GUIDANCE}"
     ;;
 esac
 
-if ! local_record_is_resolvable; then
+if [ -z "$FINAL_PATH" ]; then
   deny "マージをブロックしました。 merge 前に codex review を実行してください。
 
 対象 PR: #${PR_NUMBER} (head SHA: ${HEAD_SHA})
-この head SHA に一致する codex review コメントが PR に無く、 merge を実行するディレクトリ (\`${PAYLOAD_CWD}\`) から git-dir を解決できないため、 ローカルのレビュー記録も参照できませんでした (git repository の外で merge しようとしている可能性があります)。
+merge を実行するディレクトリ (\`${PAYLOAD_CWD}\`) から git-dir を解決できないため、 ローカルのレビュー記録を参照できませんでした (git repository の外で merge しようとしている可能性があります)。
 
 ${REVIEW_GUIDANCE}"
   exit 0
 fi
 
-if [ ! -e "$FINAL_PATH" ]; then
+if [ ! -e "$FINAL_PATH" ] && [ ! -L "$FINAL_PATH" ]; then
   deny "マージをブロックしました。 merge 前に codex review を実行してください。
 
 対象 PR: #${PR_NUMBER} (head SHA: ${HEAD_SHA})
-この head SHA に一致する codex review コメントが PR に無く、 ローカルのレビュー記録 (\`${FINAL_PATH}\`) もありません。
+ローカルのレビュー記録 (\`${FINAL_PATH}\`) がありません。
 
 ${REVIEW_GUIDANCE}"
   exit 0
@@ -538,48 +371,7 @@ PR に commit が追加されるなどして head が変わっているため、
   exit 0
 fi
 
-if [ -L "$BODY_PATH" ] || [ ! -f "$BODY_PATH" ]; then
-  deny "マージをブロックしました。 ローカルのレビュー記録が不完全です (投稿用の本文 \`${BODY_PATH}\` が通常のファイルとして見つかりません)。
-
-subagent_type=\"pre-merge-cross-review:codex-reviewer\", model=\"sonnet\" で codex review をやり直してから、もう一度 gh pr merge を実行してください。"
-  exit 0
-fi
-
-BODY_FIRST_LINE=$(sed -n '1p' "$BODY_PATH" 2>/dev/null | tr -d '\r')
-case "$BODY_FIRST_LINE" in
-  "<!-- codex-review: head=${HEAD_SHA} status=pass -->") ;;
-  "<!-- codex-review: head=${HEAD_SHA} status=findings -->") ;;
-  *)
-    deny "マージをブロックしました。 ローカルのレビュー記録が不完全です (投稿用の本文 \`${BODY_PATH}\` の先頭行が対象 head SHA の header になっていません)。
-
-本文の先頭行は \`<!-- codex-review: head=${HEAD_SHA} status=pass|findings -->\` である必要があります。
-
-subagent_type=\"pre-merge-cross-review:codex-reviewer\", model=\"sonnet\" で codex review をやり直してから、もう一度 gh pr merge を実行してください。"
-    exit 0
-    ;;
-esac
-
-# 検証を通過した記録を PR レビューとして投稿する。 gh の確認出力は stderr へ回し、 hook の
-# stdout は decision JSON 専用に保つ (通過時は無出力)。
-post_review_comment() {
-  cd "$PAYLOAD_CWD" || return 1
-  gh pr review "$PR_NUMBER" --comment --body-file "$BODY_PATH" >&2
-}
-
-if ! post_review_comment; then
-  deny "マージをブロックしました。 codex review は完了していますが、 レビュー記録の PR への投稿に失敗しました。
-
-対象 PR: #${PR_NUMBER} (head SHA: ${HEAD_SHA})
-レビュー記録はローカルに保持しています。 gh の認証・権限・ネットワークを確認してから gh pr merge を再実行すると、 投稿を再試行します。"
-  exit 0
-fi
-
-# 投稿済みの記録は不要になる。 残すと次の merge で同じ内容を二重投稿する材料になるため掃除
-# するが、 掃除の失敗で merge を止めはしない (投稿は成功しており、 PR 上のコメントが正本)。
-if ! discard_local_record; then
-  printf '[pre-merge-cross-review] レビュー記録を PR #%s に投稿しましたが、 ローカルの記録 (%s 直下) を削除できませんでした。 次の merge で二重投稿にならないよう、 手動で削除してください。\n' \
-    "$PR_NUMBER" "$GIT_DIR" >&2
-fi
-
-post_fable_review_if_recorded
+# 記録が PR 番号と現在の head SHA の両方に一致する = レビュー済み。 decision を出さず既定の
+# 許可フローに委ねる。 記録は消さない (merge が失敗して再実行する場合も同じ記録で通すため。
+# head SHA が変われば記録は自動的に失効する)。
 exit 0

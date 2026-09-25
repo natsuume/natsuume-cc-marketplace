@@ -200,8 +200,8 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
         "63c76f4494d06962cec7372e968340b865078f1e6c5e780543651fb169b0bbf2",
     ),
     "pre-merge-cross-review": (
-        961,
-        "2e9690f199ba6838248729eca18ed59e4c57d75d719d4becc1494744d97036e4",
+        832,
+        "a7ad837d3eb677482355bbb113a19438927e34ef2fe8232091a138c3cebe9e49",
     ),
     "pre-push-codex-review": (
         1301,
@@ -259,7 +259,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "agent-discipline": "2.0.0",
     "ui-discipline": "0.4.7",
     "natsuume-writing": "0.8.2",
-    "cross-model-advisor": "5.0.5",
+    "cross-model-advisor": "5.0.6",
     "rate-limit": "0.5.4",
     "session-handoff": "0.5.2",
     "repo-analytics": "0.2.8",

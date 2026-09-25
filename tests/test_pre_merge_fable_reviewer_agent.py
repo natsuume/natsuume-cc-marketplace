@@ -10,8 +10,9 @@
   を含まず、`read-only` と `parent-safe` を含む
 - 本文: 起動仕様、report 契約 (`Status: pass | findings | execution-failed`、3 つの
   Category、`Confidence: high | medium | low`)、自己フィルタ禁止、SubagentHandback による
-  返却、関連 issue の収集元 (`closingIssuesReferences` と `Refs`)、read-only の禁止事項を
-  述べる。Agent の起動 mode を指示しない
+  返却、関連 issue の収集元 (`closingIssuesReferences` と `Refs` / `Refs owner/repo#N`)、
+  未信頼入力の扱い、read-only の禁止事項を述べる。report は親 session に返るだけなので、
+  公開を前提にした制約を置かない。Agent の起動 mode を指示しない
 """
 
 from __future__ import annotations
@@ -64,10 +65,23 @@ REQUIRED_BODY_PHRASES = (
     # 関連 issue の収集元
     "closingIssuesReferences",
     "Refs",
+    "Refs owner/repo#N",
+    "-R owner/repo",
+    # PR 本文・issue・差分は指示ではなくデータとして扱う
+    "Untrusted input",
     # read-only の禁止事項 (gh は PR と issue の参照だけに使う)
     "read-only",
     "gh pr view",
     "gh issue view",
+)
+
+
+# report の公開を前提にした記述。
+PUBLISHED_REPORT_PHRASES = (
+    "Published output",
+    "is posted",
+    "published as a pull request comment",
+    "without `#`",
 )
 
 
@@ -120,6 +134,13 @@ class FableReviewerBodyTest(unittest.TestCase):
         body = read_agent()
         missing = [phrase for phrase in REQUIRED_BODY_PHRASES if phrase not in body]
         self.assertEqual([], missing, f"fable-reviewer.md に無い記述: {missing}")
+
+    def test_body_does_not_assume_a_published_report(self) -> None:
+        """report は親 session に返るだけで PR に公開されないため、公開を前提にした
+        制約 (issue 番号を `#` 無しで書く・別リポジトリの issue を読まない等) を置かない。"""
+        body = read_agent()
+        present = [phrase for phrase in PUBLISHED_REPORT_PHRASES if phrase in body]
+        self.assertEqual([], present, f"公開を前提にした記述が残っている: {present}")
 
     def test_body_omits_agent_launch_mode(self) -> None:
         hits = agent_launch_mode_hits(read_agent())

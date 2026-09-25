@@ -3,7 +3,7 @@
 <!-- rule:merge-order -->
 ## 1. `gh pr merge` を実行する前に cross review を起動する
 
-**なぜ**: auto mode の classifier は tool result (merge gate の deny 文) を読まず、ユーザ発言と tool call の並びだけを見る。`gh pr merge` の呼び出し直後に reviewer subagent を起動すると、classifier には「ユーザが依頼していない merge 系操作の一部」に見えて起動が拒否される。merge 試行を挟まずに起動すれば拒否されない。Fable review は codex review と別の観点 (PR 説明・関連 issue の受入基準との整合、設計境界) のレビューを PR に残す。
+**なぜ**: auto mode の classifier は tool result (merge gate の deny 文) を読まず、ユーザ発言と tool call の並びだけを見る。`gh pr merge` の呼び出し直後に reviewer subagent を起動すると、classifier には「ユーザが依頼していない merge 系操作の一部」に見えて起動が拒否される。merge 試行を挟まずに起動すれば拒否されない。Fable review は codex review と別の観点 (PR 説明・関連 issue の受入基準との整合、設計境界) の指摘を merge 前に得る。
 
 **指示**: PR のマージ前提条件 (draft でない・CI・レビュー承認・mergeable) を確認したら、`gh pr merge` を実行する **前に**、merge 対象 PR のブランチを checkout した状態 (ローカル HEAD が PR の head と一致し、working tree が clean) で次を行う。merge gate の deny を待ってから起動しない。
 
@@ -19,7 +19,7 @@ fable-reviewer には:
 
 > current branch の PR (#<番号>) の merge-base..head 差分と PR 説明・関連 issue に対して、agent body の契約に従い read-only のレビューを 1 回実行し、parent-safe な markdown report を返してください。
 
-起動は reviewer ごとに PR の head SHA ごとに 1 回でよい。現在の head SHA について、このセッションでその reviewer から `Status: pass` / `Status: findings` の report を既に受け取っている場合、または PR 上に現在の head SHA のその reviewer のコメント (codex review / Fable review) が既にある場合は、その reviewer を再起動しない (ローカル記録の有無は判断材料にしない。gate が受理する状態かどうかは gate 自身が判定する)。`Status: execution-failed` の場合は原因を解消してから、判定コマンドの実行を含めて再起動してよい。report の findings を分類・対応し、head SHA が変わる commit を追加した場合は、次の merge 試行の前に判定コマンドの実行から同じ手順で再実行する。report を受け取った後の `gh pr merge` で、merge gate がローカルのレビュー記録を検証して PR に投稿してから merge に進む (Fable review の記録が無くても gate は merge を止めない)。
+起動は reviewer ごとに PR の head SHA ごとに 1 回でよい。このセッションで現在の head SHA についてその reviewer から `Status: pass` / `Status: findings` の report を受け取っている場合に限り、その reviewer を再起動しない (ローカル記録の有無は判断材料にしない。gate が受理する状態かどうかは gate 自身が判定する)。`Status: execution-failed` の場合は原因を解消してから、判定コマンドの実行を含めて再起動してよい。report の findings を分類・対応し、head SHA が変わる commit を追加した場合は、次の merge 試行の前に判定コマンドの実行から同じ手順で再実行する。report を受け取った後の `gh pr merge` で、merge gate がローカルの codex review 記録を検証して merge に進む。Fable review の report は findings を分類・対応するためだけに使い、merge gate は Fable review を見ない (Fable review をスキップしても merge は止まらない)。
 
 **境界**: 本規律は permission mode に依らず適用する (auto 以外でも手順は同じで無害)。merge gate に deny された後にその案内に従って起動することも引き続きできるが、それは復旧経路であり既定の順序ではない。その場合も codex-reviewer を起動するときは、同じ判定で fable-reviewer を並列に起動する。
 

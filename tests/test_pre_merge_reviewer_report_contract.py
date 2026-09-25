@@ -1,10 +1,8 @@
 """pre-merge-cross-review の codex-reviewer parent-safe report 契約テスト。
 
-wrapper が PR レビューコメントの header に付ける `status=pass|findings` は
-`lib/review-status.sh` の heuristic 判定であり、Codex の report 本文の結論と
-食い違うことがある。codex-reviewer subagent は `Status` を必ず report 本文
-から導出し、header との食い違いを finding として捏造しない (`Note:` 1 行で
-表現する) ことをこのテストで固定する。
+wrapper は review report の本文をファイルに残さず、機械可読 header も書かない。
+codex-reviewer subagent は `Status` を必ず Codex の report 本文から導出し、wrapper の
+挙動や記録の書き込みの成否を finding として捏造しないことをこのテストで固定する。
 
 あわせて、この subagent の tool grant と background-move 回収契約が
 pre-push-codex-review 側の codex-reviewer と同一であることを固定する。共通の
@@ -75,13 +73,15 @@ REQUIRED_REPORT_FIELDS = (
     "### Deriving `Status`",
     "Status: pass | findings | execution-failed",
     "Findings: 0",
-    "Note: recorded header status=",
-    "regardless of the posted header status",
+    "derive `Status` from the **Codex report body**",
     "Never turn wrapper behavior",
     "applies only to a finding that Codex reported without a severity label",
     "Disposition: must-fix-before-merge | may-defer",
     "If the body is inconclusive",
 )
+
+# header と投稿を前提にした記述 (現行の wrapper は header も投稿用本文も書かない)。
+FORBIDDEN_HEADER_PHRASES = ("header", "Note:", "posted", "comment body")
 
 REQUIRED_SAFETY_RULES = (
     "Do not include executable command lines",
@@ -102,6 +102,12 @@ class PreMergeReviewerParentSafeReportContractTest(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(field, body)
 
+    def test_agent_does_not_refer_to_a_header_or_posting(self) -> None:
+        body = self.read(AGENT)
+        for phrase in FORBIDDEN_HEADER_PHRASES:
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, body)
+
     def test_agent_keeps_executable_detail_in_subagent_context(self) -> None:
         body = self.read(AGENT)
         for rule in REQUIRED_SAFETY_RULES:
@@ -117,8 +123,8 @@ class PreMergeReviewerParentSafeReportContractTest(unittest.TestCase):
 
     def test_documentation_states_status_is_derived_from_report_body(self) -> None:
         body = self.read(PLUGIN_README)
-        self.assertIn("Note:", body)
         self.assertIn("Codex の report 本文", body)
+        self.assertNotIn("Note:", body)
 
 
 class PreMergeReviewerToolGrantTest(ContractTestCase):

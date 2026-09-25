@@ -2,25 +2,20 @@
 # markers.sh
 # pre-merge-cross-review プラグインが git-dir 直下に置くファイルの名前を単一ソース化する。
 #
-# codex review wrapper が pending attestation と投稿用のレビュー本文を書き、 subagent
-# lifecycle hook (auto-mark.sh) が launch attestation / tombstone を扱って pending を
-# final attestation へ昇格する。 Fable review は wrapper を持たないため、 auto-mark.sh が
-# fable-reviewer の report から Fable attestation と投稿用本文を書く。 merge gate は
-# attestation と本文ファイルを読み、 PR にレビューコメントを投稿してから merge を通す。 これらの path が 1 文字でも乖離すると
-# attestation は永遠に一致せず merge が通らなくなるため、 ここに集約する。
+# codex review wrapper が pending attestation を書き、 subagent lifecycle hook (auto-mark.sh)
+# が launch attestation / tombstone を扱って pending を final attestation へ昇格する。 merge
+# gate は final attestation を読み、 PR 番号と現在の head SHA に一致すれば merge を通す。
+# これらの path が 1 文字でも乖離すると attestation は永遠に一致せず merge が通らなくなるため、
+# ここに集約する。 Fable review は記録を作らない (report は親 session に返るだけ)。
 #
 # ## 本 plugin が扱うファイル
 #
 # - PRE_MERGE_FINAL_MARKER   ← report / HEAD 検証を通過した final attestation
 # - PRE_MERGE_PENDING_MARKER ← codex review wrapper が書く pending attestation
-# - PRE_MERGE_COMMENT_BODY   ← codex review wrapper が書く投稿用のレビュー本文
 # - LAUNCH_ATTESTATION       ← SubagentStart が記録するレビュー開始時 HEAD (agent_id ごと)
 # - LAUNCH_TOMBSTONE         ← attestation 消費時に排他作成される one-shot 記録 (agent_id ごと)
+# - HANDBACK_REPORT          ← SubagentHandback で届いた report の Status 判定結果 (agent_id ごと)
 # - TERMINAL_SENTINEL        ← wrapper が exit 時に書く run ごとの終了状態 (run id ごと)
-# - FABLE_FINAL_MARKER       ← auto-mark.sh が書く Fable review の attestation
-# - FABLE_COMMENT_BODY       ← auto-mark.sh が書く Fable review の投稿用本文
-# - FABLE_HANDBACK_BODY      ← PostToolUse (SubagentHandback) が保存する fable-reviewer の
-#                              report 本文 (agent_id ごと。 SubagentStop が one-shot で消費する)
 #
 # attestation 類のファイル名の prefix はすべて `.claude-pre-merge-` であり、 pre-push 系が
 # 使う `.claude-pre-push-*` とは衝突しない (両 plugin が同じ git-dir を共有しても互いの
@@ -34,35 +29,14 @@
 #   pr=<PR 番号 (全数字)>
 #   head=<full head SHA (40 hex 小文字)>
 #
-# 投稿用の本文ファイルは 1 行目が機械可読 header で、 2 行目以降が codex review report:
-#
-#   <!-- codex-review: head=<attestation と同じ head SHA> status=pass|findings -->
-#   # Codex Review
-#   ...
-#
-# Fable attestation は次の 1 行のテキストで、 投稿用本文の 1 行目は同じ head の機械可読
-# header、 2 行目以降が fable-reviewer の report である:
-#
-#   head=<full head SHA (40 hex 小文字)>
-#
-#   <!-- fable-review: head=<attestation と同じ head SHA> status=pass|findings -->
-#   # Fable Review
-#   ...
-#
-# Fable attestation は head だけに束縛する (hook は gh を呼ばないため PR 番号を持たない)。
-# codex 側の pending に相当する段は無い。
-#
 # launch attestation と tombstone の内容は、 いずれも記録時点のローカル HEAD の full SHA
 # 1 行である。
 
-# 検証を通過した attestation。 gate はこれと本文ファイルの組を見てレビューを投稿する。
+# 検証を通過した attestation。 gate はこれが PR 番号と現在の head SHA に一致するかを見る。
 PRE_MERGE_FINAL_MARKER_NAME=".claude-pre-merge-codex-reviewed"
 # codex review wrapper が書く pending attestation。 auto-mark.sh が report / HEAD 検証を
 # 通過した場合にのみ final へ昇格する。
 PRE_MERGE_PENDING_MARKER_NAME=".claude-pre-merge-codex-reviewed.pending"
-# codex review wrapper が書く投稿用のレビュー本文。 gate が投稿の本文として使うため、
-# final への昇格後も残す (投稿完了時に gate が attestation と併せて掃除する)。
-PRE_MERGE_COMMENT_BODY_NAME=".claude-pre-merge-codex-comment.md"
 # SubagentStart が書く launch attestation (agent_id ごとに 1 ファイル) の prefix。
 # auto-mark.sh の SubagentStart / SubagentStop 契約が「レビュー開始時のローカル HEAD」を
 # 束縛するために使う。
@@ -88,16 +62,6 @@ HANDBACK_REPORT_PREFIX=".claude-pre-merge-handback-"
 # 先頭にドットを付けないのは、 このファイルが gate の検証対象ではなく実行中の run を外から
 # 観測するための一時的な信号であり、 attestation 類と区別して掃除対象を見分けやすくするため。
 TERMINAL_SENTINEL_PREFIX="pre-merge-cross-review-terminal-"
-# auto-mark.sh が fable-reviewer の report から書く Fable review の attestation。 gate は
-# これと Fable 投稿用本文の組を見て Fable review を投稿する。
-FABLE_FINAL_MARKER_NAME=".claude-pre-merge-fable-reviewed"
-# auto-mark.sh が書く Fable review の投稿用本文。 投稿完了時に gate が attestation と併せて
-# 掃除する。
-FABLE_COMMENT_BODY_NAME=".claude-pre-merge-fable-comment.md"
-# PostToolUse (SubagentHandback) が保存する fable-reviewer の report 本文 (agent_id ごとに
-# 1 ファイル) の prefix。 auto mode では report が SubagentHandback の message として届き、
-# SubagentStop の last_assistant_message には締めの文しか入らないため、 本文をここに運ぶ。
-FABLE_HANDBACK_BODY_PREFIX=".claude-pre-merge-fable-body-"
 
 # 引数: <git-dir>
 # 出力: attestation storage directory (= git-dir 直下)
@@ -127,12 +91,6 @@ pre_merge_final_marker_path() {
 # 出力: codex review wrapper が書く pending attestation の path
 pre_merge_pending_marker_path() {
   marker_path "$1" "$PRE_MERGE_PENDING_MARKER_NAME"
-}
-
-# 引数: <git-dir>
-# 出力: codex review wrapper が書く投稿用レビュー本文の path
-pre_merge_comment_body_path() {
-  marker_path "$1" "$PRE_MERGE_COMMENT_BODY_NAME"
 }
 
 # 引数: <git-dir> <run id>
@@ -185,28 +143,4 @@ handback_report_path() {
   local git_dir="$1"
   local agent_id="$2"
   marker_path "$git_dir" "${HANDBACK_REPORT_PREFIX}${agent_id}"
-}
-
-# 引数: <git-dir>
-# 出力: Fable review の attestation の path
-pre_merge_fable_final_marker_path() {
-  marker_path "$1" "$FABLE_FINAL_MARKER_NAME"
-}
-
-# 引数: <git-dir>
-# 出力: Fable review の投稿用本文の path
-pre_merge_fable_comment_body_path() {
-  marker_path "$1" "$FABLE_COMMENT_BODY_NAME"
-}
-
-# 引数: <git-dir> <agent_id>
-# 出力: PostToolUse (SubagentHandback) が保存する fable-reviewer の report 本文
-#       (git-dir/.claude-pre-merge-fable-body-<agent_id>) の path
-#
-# agent_id の validation は launch_attestation_path と同様に呼び出し側 (auto-mark.sh) の
-# 責務。 SubagentStop が読み取り後に削除する (one-shot)。
-fable_handback_body_path() {
-  local git_dir="$1"
-  local agent_id="$2"
-  marker_path "$git_dir" "${FABLE_HANDBACK_BODY_PREFIX}${agent_id}"
 }

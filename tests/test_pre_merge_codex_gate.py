@@ -1,38 +1,29 @@
-"""pre-merge-cross-review の軽量 merge gate 契約テスト (Phase A: spec-first, red)。
+"""pre-merge-cross-review の軽量 merge gate 契約テスト。
 
-gate (`plugins/pre-merge-cross-review/hooks/scripts/block-pre-merge.sh`) は
-Phase A 時点でまだ存在しない。全テストは gate が実装されるまで意図した失敗で
-red になる。
-
-固定する契約:
+gate (`plugins/pre-merge-cross-review/hooks/scripts/block-pre-merge.sh`) が固定する契約:
 
 - gate は Bash コマンド文字列に `gh pr merge` の連続列を含む場合のみ関与する。
-  含まないコマンドには関与しない (無出力)。連続列の検出は粗い文字列判定で
-  よく、フラグ文法の解析や invocation の厳密な分類は行わない (quoted な言及
-  等で誤爆した場合はコマンドの言い換えで回避できる、cooperative 利用前提)。
-- 関与したコマンドに `--auto` または `--admin` の文字列を含む場合は deny する
-  (遅延 merge 予約・保護 bypass はサポート外。粗い文字列検出でよく、
-  レビューコメントの有無に依らない)。
-- それ以外の関与コマンドでは、merge 対象 PR の現在の head SHA を gh で取得し、
-  PR 上のレビューコメントに機械可読 header
-  `<!-- codex-review: head=<full head SHA> status=pass|findings -->`
-  を持ち、head SHA が現在の head と完全一致するものが存在するかを確認する:
-  - 存在すれば無出力で終了する (gate は decision を出さず、既定の許可フロー
-    に委ねる)
-  - 存在しなければ deny し、`pre-merge-cross-review:codex-reviewer` subagent
-    の実行を案内する
-- status は pass / findings のどちらでも「レビュー済み」として成立する
-  (merge の approve や findings 0 件の証明ではない)。
-- 対象 PR の解決と head SHA の取得は gh に委ねる。gh / jq が見つからない・
-  PR の解決や取得に失敗した・head SHA が得られない場合はすべて deny する
-  (fail-closed)。merge と無関係な Bash 呼び出しには関与しない。
-- gate は permissionDecision として deny 以外を出さない (allow / updatedInput
-  を出さない。通過時は無出力で既定の許可フローに委ねる)。
+  含まないコマンドには関与しない (無出力)。連続列の検出は粗い文字列判定でよく、
+  フラグ文法の解析や invocation の厳密な分類は行わない (cooperative 利用前提)。
+- 関与したコマンドに `--auto` / `--admin` / `--repo` / `-R` の文字列を含む場合は、
+  レビュー記録の有無に依らず deny する。受理正規形 `gh pr merge [<number>] [flags...]`
+  以外の関与形も deny する。
+- それ以外の関与コマンドでは、merge 対象 PR の番号と現在の head SHA を gh
+  (`gh pr view --json number,headRefOid`) で取得し、merge 実行 repo (hook payload の
+  `cwd`) の git-dir 直下にある final attestation
+  (`.claude-pre-merge-codex-reviewed`、2 行 `pr=<番号>` / `head=<40 hex>`) が両方に一致する
+  場合だけ無出力で終了する (既定の許可フローに委ねる)。記録が無い・不一致・形式不正は
+  deny し、`pre-merge-cross-review:codex-reviewer` の実行を案内する。
+- gh / jq が見つからない・PR の解決や取得に失敗した・番号や head SHA が得られない場合は
+  すべて deny する (fail-closed)。
+- gate は GitHub に何も書かず、PR のレビューやコメントも取得しない (gh は `pr view` で
+  `number,headRefOid` を取得するためだけに呼ぶ)。PR 上に codex review 形式のコメントが
+  あっても判断材料にしない。
+- gate は permissionDecision として deny 以外を出さない。
 
-テストは一時ディレクトリに fake `gh` を置き PATH の先頭に通す。fake は呼び出し
-引数に依らず、設定された head SHA と PR レビュー一覧を含む JSON を返す寛容な
-実装であり、gate がどの gh 呼び出し形を採るかは Phase B の実装裁量とする
-(検証するのは「gh から得た実状態と照合する」という契約のみ)。
+テストは一時ディレクトリに fake `gh` を置き PATH の先頭に通す。fake gh はすべての呼び出しの
+引数を calls.jsonl に記録し、`pr view` には設定された PR 番号・head SHA (とテスト用の
+reviews) を返す。
 """
 
 from __future__ import annotations
@@ -60,8 +51,12 @@ OTHER_SHA = "fedcba0987654321fedcba0987654321fedcba09"
 
 MERGE_COMMAND = f"gh pr merge {PR_NUMBER} --squash"
 
-# 寛容 fake gh: 引数に依らず gh-config.json の payload (headRefOid + reviews) を
-# 返す。graphql_fail 相当の失敗注入は fail フラグで行う。
+# gate がローカル記録を読む場所 (merge 実行 repo の git-dir 直下)。
+FINAL_ATTESTATION = ".claude-pre-merge-codex-reviewed"
+PENDING_ATTESTATION = ".claude-pre-merge-codex-reviewed.pending"
+
+# fake gh: すべての呼び出しを calls.jsonl に記録する。`pr view` には gh-config.json の
+# payload を返し、fail フラグで失敗を注入する。それ以外の呼び出しは記録だけして成功する。
 FAKE_GH_SCRIPT = """#!/usr/bin/env python3
 import json
 import os
@@ -71,16 +66,23 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 with open(os.path.join(HERE, "gh-config.json"), encoding="utf-8") as fp:
     config = json.load(fp)
 
-if config.get("fail"):
-    print("fake-gh: injected failure", file=sys.stderr)
-    sys.exit(1)
+args = sys.argv[1:]
+with open(os.path.join(HERE, "calls.jsonl"), "a", encoding="utf-8") as fp:
+    fp.write(json.dumps(args) + "\\n")
 
-print(json.dumps(config["payload"]))
+if args[:2] == ["pr", "view"]:
+    if config.get("fail"):
+        print("fake-gh: injected failure", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(config["payload"]))
+    sys.exit(0)
+
+sys.exit(0)
 """
 
 
 def codex_review_comment(head_sha: str, status: str = "pass") -> str:
-    """wrapper が投稿する PR レビュー本文の形 (機械可読 header + report)。"""
+    """codex review 形式の PR コメント本文 (gate が判断材料にしないことの確認に使う)。"""
     return (
         f"<!-- codex-review: head={head_sha} status={status} -->\n"
         "# Codex Review\n\nStatus: "
@@ -88,68 +90,122 @@ def codex_review_comment(head_sha: str, status: str = "pass") -> str:
     )
 
 
-@unittest.skipUnless(
-    shutil.which("bash") and shutil.which("jq"),
-    "gate integration requires bash and jq",
-)
-class PreMergeCodexGateTest(unittest.TestCase):
+def git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def initialize_repository(work: Path) -> Path:
+    """work に git repo を作り、絶対 git-dir を返す。"""
+    work.mkdir(parents=True, exist_ok=True)
+    git(work, "init")
+    git(work, "config", "user.name", "Marketplace Test")
+    git(work, "config", "user.email", "marketplace@example.invalid")
+    (work / "example.txt").write_text("base\n", encoding="utf-8")
+    git(work, "add", "example.txt")
+    git(work, "commit", "-m", "base")
+    value = subprocess.check_output(
+        ["git", "-C", str(work), "rev-parse", "--absolute-git-dir"]
+    )
+    return Path(value.decode().strip())
+
+
+def attestation_content(*, pr: int = PR_NUMBER, head: str = HEAD_SHA) -> str:
+    return f"pr={pr}\nhead={head}\n"
+
+
+class GateHarness(unittest.TestCase):
+    """一時 git repo・fake gh・ローカル記録を用意して gate を実行する共通 helper。"""
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        temporary_path = Path(self.temporary.name)
-        self.work = temporary_path / "work"
-        self.work.mkdir()
+        self.addCleanup(self.temporary.cleanup)
+        self.temporary_path = Path(self.temporary.name)
 
-        self.fake_bin_dir = temporary_path / "fake-bin"
+        self.work = self.temporary_path / "work"
+        self.git_dir = initialize_repository(self.work)
+
+        self.fake_bin_dir = self.temporary_path / "fake-bin"
         self.fake_bin_dir.mkdir()
         gh_path = self.fake_bin_dir / "gh"
         gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
         gh_path.chmod(
             gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
-        self.configure_fake_gh(review_bodies=[])
+        self.configure_fake_gh()
 
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
+        isolated_tmp = self.temporary_path / "tmp"
+        isolated_tmp.mkdir()
+        self.gate_env = os.environ.copy()
+        self.gate_env["PATH"] = (
+            f"{self.fake_bin_dir}{os.pathsep}{self.gate_env.get('PATH', '')}"
+        )
+        self.gate_env["TMPDIR"] = str(isolated_tmp)
 
     def configure_fake_gh(
         self,
         *,
-        review_bodies: list[str],
+        number: int | None = PR_NUMBER,
         head_oid: str | None = HEAD_SHA,
+        review_bodies: list[str] | None = None,
         fail: bool = False,
     ) -> None:
-        payload: dict[str, object] = {
-            "reviews": [{"body": body} for body in review_bodies],
-        }
+        payload: dict[str, object] = {}
+        if number is not None:
+            payload["number"] = number
         if head_oid is not None:
             payload["headRefOid"] = head_oid
+        if review_bodies is not None:
+            payload["reviews"] = [{"body": body} for body in review_bodies]
         config = {"payload": payload, "fail": fail}
         (self.fake_bin_dir / "gh-config.json").write_text(
             json.dumps(config, ensure_ascii=False), encoding="utf-8"
         )
 
-    def run_gate(self, command: str) -> subprocess.CompletedProcess[bytes]:
-        payload = {
+    def final_attestation_path(self, git_dir: Path | None = None) -> Path:
+        return (git_dir or self.git_dir) / FINAL_ATTESTATION
+
+    def write_final_attestation(
+        self,
+        *,
+        pr: int = PR_NUMBER,
+        head: str = HEAD_SHA,
+        git_dir: Path | None = None,
+    ) -> Path:
+        path = self.final_attestation_path(git_dir)
+        path.write_text(attestation_content(pr=pr, head=head), encoding="utf-8")
+        return path
+
+    def run_gate(
+        self,
+        command: str = MERGE_COMMAND,
+        *,
+        payload_cwd: Path | str | None = None,
+        omit_cwd: bool = False,
+        process_cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        payload: dict[str, object] = {
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_input": {"command": command},
-            "cwd": str(self.work),
         }
-        env = os.environ.copy()
-        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
-        return subprocess.run(
+        if not omit_cwd:
+            payload["cwd"] = str(self.work if payload_cwd is None else payload_cwd)
+        result = subprocess.run(
             ["bash", str(GATE)],
-            cwd=self.work,
+            cwd=process_cwd or self.work,
             input=json.dumps(payload).encode("utf-8"),
-            env=env,
+            env=self.gate_env,
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        return result
 
     def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
         if not result.stdout.strip():
@@ -161,10 +217,28 @@ class PreMergeCodexGateTest(unittest.TestCase):
         response = json.loads(result.stdout)
         return response["hookSpecificOutput"]["permissionDecisionReason"]
 
-    # ------------------------------------------------------------------
-    # (a) hook script の存在 (Phase A 骨格契約)
-    # ------------------------------------------------------------------
+    def gh_calls(self) -> list[list[str]]:
+        log = self.fake_bin_dir / "calls.jsonl"
+        if not log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
 
+    def assert_allowed(self, result: subprocess.CompletedProcess[bytes], label: str = "") -> None:
+        self.assertEqual(result.stdout, b"", f"{label}: {result.stdout.decode()}")
+
+    def assert_denied(self, result: subprocess.CompletedProcess[bytes], label: str = "") -> None:
+        self.assertEqual(self.decision(result), "deny", label)
+
+
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq") and shutil.which("git"),
+    "gate integration requires bash, jq, and git",
+)
+class PreMergeCodexGateTest(GateHarness):
     def test_gate_script_exists(self) -> None:
         self.assertTrue(GATE.is_file(), f"missing gate script: {GATE}")
 
@@ -172,10 +246,6 @@ class PreMergeCodexGateTest(unittest.TestCase):
         self.assertTrue(
             WRAPPER_GUARD.is_file(), f"missing wrapper guard: {WRAPPER_GUARD}"
         )
-
-    # ------------------------------------------------------------------
-    # (b) 関与条件: `gh pr merge` の連続列を含む場合のみ
-    # ------------------------------------------------------------------
 
     def test_ignores_commands_without_merge_sequence(self) -> None:
         commands = {
@@ -185,16 +255,10 @@ class PreMergeCodexGateTest(unittest.TestCase):
         }
         for label, command in commands.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIsNone(self.decision(result), f"case={label}")
+                self.assert_allowed(self.run_gate(command), label)
 
-    # ------------------------------------------------------------------
-    # (c) --auto / --admin はレビューコメントの有無に依らず deny
-    # ------------------------------------------------------------------
-
-    def test_denies_auto_and_admin_regardless_of_review_comment(self) -> None:
-        self.configure_fake_gh(review_bodies=[codex_review_comment(HEAD_SHA)])
+    def test_denies_auto_and_admin_regardless_of_local_record(self) -> None:
+        self.write_final_attestation()
         commands = {
             "auto": f"gh pr merge {PR_NUMBER} --auto --squash",
             "auto_equals": f"gh pr merge {PR_NUMBER} --auto=true --squash",
@@ -202,77 +266,34 @@ class PreMergeCodexGateTest(unittest.TestCase):
         }
         for label, command in commands.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
-    # ------------------------------------------------------------------
-    # (d) 現 head SHA に一致する codex-review コメントが無ければ deny。
-    #     deny 文は subagent namespace と codex への言及を持つ
-    # ------------------------------------------------------------------
+    def test_denies_merge_without_local_record(self) -> None:
+        result = self.run_gate()
+        self.assert_denied(result)
+        reason = self.deny_reason(result)
+        self.assertIn(CODEX_SUBAGENT_NAME, reason)
+        self.assertIn("codex", reason.lower())
+        self.assertIn("ローカル", reason)
 
-    def test_denies_merge_without_matching_review_comment(self) -> None:
-        cases = {
-            "no_comments": [],
-            "different_head": [codex_review_comment(OTHER_SHA)],
-            "plain_comment_without_header": [
-                "LGTM! (通常のレビューコメント。codex-review header なし)"
-            ],
-        }
-        for label, review_bodies in cases.items():
-            with self.subTest(case=label):
-                self.configure_fake_gh(review_bodies=review_bodies)
-                result = self.run_gate(MERGE_COMMAND)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
-                reason = self.deny_reason(result)
-                self.assertIn(CODEX_SUBAGENT_NAME, reason)
-                self.assertIn("codex", reason.lower())
-
-    # ------------------------------------------------------------------
-    # (e) 一致するコメントが在れば無出力 (既定の許可フローへ)。
-    #     status は pass / findings のどちらでも成立する
-    # ------------------------------------------------------------------
-
-    def test_passes_through_merge_with_matching_review_comment(self) -> None:
-        cases = {
-            "status_pass": [codex_review_comment(HEAD_SHA, status="pass")],
-            "status_findings": [
-                codex_review_comment(HEAD_SHA, status="findings")
-            ],
-            "mixed_with_other_comments": [
-                "先行する通常コメント",
-                codex_review_comment(OTHER_SHA),
-                codex_review_comment(HEAD_SHA),
-            ],
-        }
-        for label, review_bodies in cases.items():
-            with self.subTest(case=label):
-                self.configure_fake_gh(review_bodies=review_bodies)
-                result = self.run_gate(MERGE_COMMAND)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIsNone(
-                    self.decision(result),
-                    f"一致コメントがあれば decision を出さない契約 (case={label})",
-                )
-
-    # ------------------------------------------------------------------
-    # (f) fail-closed: gh の失敗・head SHA の欠落は deny
-    # ------------------------------------------------------------------
+    def test_passes_through_merge_with_matching_local_record(self) -> None:
+        self.write_final_attestation()
+        self.assert_allowed(self.run_gate())
 
     def test_denies_merge_when_gh_fails(self) -> None:
-        self.configure_fake_gh(review_bodies=[], fail=True)
-        result = self.run_gate(MERGE_COMMAND)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
+        self.write_final_attestation()
+        self.configure_fake_gh(fail=True)
+        self.assert_denied(self.run_gate())
 
     def test_denies_merge_when_head_sha_is_unavailable(self) -> None:
-        self.configure_fake_gh(
-            review_bodies=[codex_review_comment(HEAD_SHA)], head_oid=None
-        )
-        result = self.run_gate(MERGE_COMMAND)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
+        self.write_final_attestation()
+        self.configure_fake_gh(head_oid=None)
+        self.assert_denied(self.run_gate())
+
+    def test_denies_merge_when_pr_number_is_unavailable(self) -> None:
+        self.write_final_attestation()
+        self.configure_fake_gh(number=None)
+        self.assert_denied(self.run_gate())
 
 
 class PreMergeGateMissingDependencyTest(unittest.TestCase):
@@ -366,92 +387,37 @@ class PreMergeGateMissingDependencyTest(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    shutil.which("bash") and shutil.which("jq"),
-    "gate integration requires bash and jq",
+    shutil.which("bash") and shutil.which("jq") and shutil.which("git"),
+    "gate integration requires bash, jq, and git",
 )
-class PreMergeGateTargetResolutionTest(unittest.TestCase):
+class PreMergeGateTargetResolutionTest(GateHarness):
     """merge 対象 PR の解決契約 (fail-closed)。
 
     gate はフラグ文法を解析しないため、「`gh pr merge` の直後に置かれた対象指定」
     だけを受理し、それ以外の曖昧な形 (フラグ先行の位置に現れる非フラグトークン・
     複数の `gh pr merge` 連続列) は照合対象を一意に決められないものとして deny する。
-    フラグのみの形は従来どおり current branch 解決 (gh 委譲) に委ねる。
+    フラグのみの形は current branch 解決 (gh 委譲) に委ねる。
 
     行継続 `\\<改行>` は bash が **削除** して前後のトークンを連結するため、gate も
     削除して連続列を検出する (空白への置換では `gh pr me\\<改行>rge` を取りこぼす)。
     """
 
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        temporary_path = Path(self.temporary.name)
-        self.work = temporary_path / "work"
-        self.work.mkdir()
-
-        self.fake_bin_dir = temporary_path / "fake-bin"
-        self.fake_bin_dir.mkdir()
-        gh_path = self.fake_bin_dir / "gh"
-        gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
-        gh_path.chmod(
-            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-        )
-        # 既定では 「現 head SHA に一致するレビューコメントが在る」 状態にする。
-        # 対象解決の失敗が 「レビュー済みでも deny される」 ことを示すため。
-        self.configure_fake_gh(review_bodies=[codex_review_comment(HEAD_SHA)])
-
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    def configure_fake_gh(self, *, review_bodies: list[str]) -> None:
-        config = {
-            "payload": {
-                "headRefOid": HEAD_SHA,
-                "reviews": [{"body": body} for body in review_bodies],
-            },
-            "fail": False,
-        }
-        (self.fake_bin_dir / "gh-config.json").write_text(
-            json.dumps(config, ensure_ascii=False), encoding="utf-8"
-        )
-
-    def run_gate(self, command: str) -> subprocess.CompletedProcess[bytes]:
-        payload = {
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": command},
-            "cwd": str(self.work),
-        }
-        env = os.environ.copy()
-        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
-        return subprocess.run(
-            ["bash", str(GATE)],
-            cwd=self.work,
-            input=json.dumps(payload).encode("utf-8"),
-            env=env,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
-        if not result.stdout.strip():
-            return None
-        response = json.loads(result.stdout)
-        return response["hookSpecificOutput"]["permissionDecision"]
+        super().setUp()
+        # 既定では一致するローカル記録が在る状態にする。対象解決の失敗が
+        # 「レビュー済みでも deny される」ことを示すため。
+        self.write_final_attestation()
 
     def test_denies_non_flag_token_after_flags(self) -> None:
-        """フラグ先行形は、対象指定かフラグの値かを判別できないため deny。"""
         cases = {
             "squash_then_number": f"gh pr merge --squash {PR_NUMBER}",
             "flag_value_shape": f"gh pr merge --body text {PR_NUMBER}",
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
     def test_denies_multiple_merge_sequences(self) -> None:
-        """1 呼び出しに複数の merge があると照合対象が一意に決まらないため deny。"""
         cases = {
             "and_chain": (
                 f"gh pr merge {PR_NUMBER} --squash && gh pr merge 456 --squash"
@@ -462,34 +428,22 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
     def test_denies_branch_name_target(self) -> None:
-        """PR 番号にも URL にも解釈できない対象指定は deny。"""
-        result = self.run_gate("gh pr merge my-feature-branch --squash")
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
+        self.assert_denied(self.run_gate("gh pr merge my-feature-branch --squash"))
 
     def test_line_continuation_inside_merge_sequence_is_detected(self) -> None:
         """行継続で分断された `gh pr merge` も連続列として検出する。"""
-        self.configure_fake_gh(review_bodies=[])
+        self.final_attestation_path().unlink()
         command = f"gh pr me\\\nrge {PR_NUMBER} --squash"
-        result = self.run_gate(command)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
+        self.assert_denied(self.run_gate(command))
 
-    def test_line_continuation_form_passes_with_matching_comment(self) -> None:
-        """行継続形でも、一致コメントが在れば decision を出さない。"""
+    def test_line_continuation_form_passes_with_matching_record(self) -> None:
         command = f"gh pr me\\\nrge {PR_NUMBER} --squash"
-        result = self.run_gate(command)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIsNone(self.decision(result))
+        self.assert_allowed(self.run_gate(command))
 
     def test_canonical_forms_are_accepted(self) -> None:
-        """受理正規形 (`gh pr merge [<number>] [flags]`) は照合フローへ進み、
-        一致コメントが在れば decision を出さない。"""
         cases = {
             "bare": "gh pr merge",
             "flag_only": "gh pr merge --squash",
@@ -504,12 +458,9 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIsNone(self.decision(result), f"case={label}")
+                self.assert_allowed(self.run_gate(command), label)
 
     def test_single_char_short_flags_are_accepted(self) -> None:
-        """単文字の短フラグは正規形として受理する。"""
         cases = {
             "delete_branch": f"gh pr merge {PR_NUMBER} -d",
             "squash": f"gh pr merge {PR_NUMBER} -s",
@@ -518,16 +469,10 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIsNone(self.decision(result), f"case={label}")
+                self.assert_allowed(self.run_gate(command), label)
 
     def test_bundled_short_flags_are_denied(self) -> None:
-        """短フラグの束ね形は deny する。
-
-        束の中に repo selector (`-R`) を隠すと `--repo` / `-R` の文字列検出をすり抜けて
-        別 repo の PR を merge できてしまうため、束ね形自体を正規形から外す。
-        """
+        """短フラグの束ね形は deny する (束の中に repo selector を隠せるため)。"""
         cases = {
             "bundle_with_repo_and_value": (
                 f"gh pr merge {PR_NUMBER} -dR owner/other"
@@ -538,13 +483,9 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
     def test_edge_separators_are_trimmed(self) -> None:
-        """コマンドの前後にある空行・空白は正規形照合の前に落とす
-        (前後の区切りは実行内容に影響しないため)。"""
         cases = {
             "trailing_newline": f"gh pr merge {PR_NUMBER} --squash\n",
             "leading_newline": f"\ngh pr merge {PR_NUMBER} --squash",
@@ -556,12 +497,9 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIsNone(self.decision(result), f"case={label}")
+                self.assert_allowed(self.run_gate(command), label)
 
     def test_trailing_separator_forms_are_denied(self) -> None:
-        """後続コマンドとの連結は正規形に一致しないため deny する。"""
         cases = {
             "and_chain": "gh pr merge --squash && echo merged",
             "semicolon_chain": "gh pr merge --squash; git switch master",
@@ -571,80 +509,26 @@ class PreMergeGateTargetResolutionTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
 
 @unittest.skipUnless(
-    shutil.which("bash") and shutil.which("jq"),
-    "gate integration requires bash and jq",
+    shutil.which("bash") and shutil.which("jq") and shutil.which("git"),
+    "gate integration requires bash, jq, and git",
 )
-class PreMergeGateRepoScopeTest(unittest.TestCase):
+class PreMergeGateRepoScopeTest(GateHarness):
     """照合 repo の一本化契約 (fail-closed)。
 
-    gate は hook プロセスの cwd の repo 文脈でレビューコメントを照合するため、実際に
-    merge される repo がそこから動きうる形 (repo selector 付き・前置コマンド連結・
-    URL 指定) はレビューコメントの有無に依らず deny する。リダイレクトは引数ではない
-    ため走査対象から除外し、対象指定なしの merge として current branch 解決に委ねる。
+    gate は hook payload の `cwd` の repo 文脈で PR とローカル記録を照合するため、
+    実際に merge される repo がそこから動きうる形 (repo selector 付き・前置コマンド連結・
+    URL 指定) はローカル記録の有無に依らず deny する。
     """
 
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        temporary_path = Path(self.temporary.name)
-        self.work = temporary_path / "work"
-        self.work.mkdir()
-
-        self.fake_bin_dir = temporary_path / "fake-bin"
-        self.fake_bin_dir.mkdir()
-        gh_path = self.fake_bin_dir / "gh"
-        gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
-        gh_path.chmod(
-            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-        )
-        # 現 head SHA に一致するレビューコメントが在る状態を既定にする
-        # (repo スコープ違反が 「レビュー済みでも deny される」 ことを示すため)。
-        config = {
-            "payload": {
-                "headRefOid": HEAD_SHA,
-                "reviews": [{"body": codex_review_comment(HEAD_SHA)}],
-            },
-            "fail": False,
-        }
-        (self.fake_bin_dir / "gh-config.json").write_text(
-            json.dumps(config, ensure_ascii=False), encoding="utf-8"
-        )
-
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    def run_gate(self, command: str) -> subprocess.CompletedProcess[bytes]:
-        payload = {
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": command},
-            "cwd": str(self.work),
-        }
-        env = os.environ.copy()
-        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
-        return subprocess.run(
-            ["bash", str(GATE)],
-            cwd=self.work,
-            input=json.dumps(payload).encode("utf-8"),
-            env=env,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
-        if not result.stdout.strip():
-            return None
-        response = json.loads(result.stdout)
-        return response["hookSpecificOutput"]["permissionDecision"]
+        super().setUp()
+        self.write_final_attestation()
 
     def test_denies_repo_selector(self) -> None:
-        """repo selector 付き merge は別 repo の PR を merge しうるため deny。"""
         cases = {
             "short": f"gh pr merge {PR_NUMBER} -R owner/other",
             "long": f"gh pr merge {PR_NUMBER} --repo owner/other",
@@ -652,12 +536,9 @@ class PreMergeGateRepoScopeTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
     def test_denies_command_prefix_before_merge(self) -> None:
-        """前置コマンド連結・環境変数前置きは merge 対象 repo が cwd と食い違いうるため deny。"""
         cases = {
             "cd_prefix": f"cd other-repo; gh pr merge {PR_NUMBER} --squash",
             "and_prefix": f"cd other-repo && gh pr merge {PR_NUMBER} --squash",
@@ -666,12 +547,9 @@ class PreMergeGateRepoScopeTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
     def test_denies_url_target(self) -> None:
-        """URL 指定は別 repo を指しうるため deny (対象は同 repo 内の番号のみ)。"""
         cases = {
             "https": (
                 "gh pr merge https://github.com/owner/other/pull/123 --squash"
@@ -680,13 +558,9 @@ class PreMergeGateRepoScopeTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
     def test_non_canonical_forms_are_denied(self) -> None:
-        """正規形に一致しない関与形は、gate の解釈と shell 実挙動が乖離しうるため
-        レビューコメントの有無に依らず一律 deny する。"""
         cases = {
             "redirect_stdout": "gh pr merge --squash > /tmp/merge.log",
             "redirect_attached": "gh pr merge --squash >/tmp/merge.log",
@@ -707,231 +581,60 @@ class PreMergeGateRepoScopeTest(unittest.TestCase):
         }
         for label, command in cases.items():
             with self.subTest(case=label):
-                result = self.run_gate(command)
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
+                self.assert_denied(self.run_gate(command), label)
 
 
 @unittest.skipUnless(
-    shutil.which("bash") and shutil.which("jq"),
-    "gate integration requires bash and jq",
+    shutil.which("bash") and shutil.which("jq") and shutil.which("git"),
+    "gate integration requires bash, jq, and git",
 )
-class PreMergeGatePayloadCwdTest(unittest.TestCase):
+class PreMergeGatePayloadCwdTest(GateHarness):
     """照合を実行する repo の決定契約。
 
-    Bash tool の cwd は tool 呼び出しをまたいで持続するため、hook プロセス自身の cwd が
-    merge 実行位置と一致するとは限らない。hook payload の `cwd` があればその位置で gh を
-    実行し、無い場合のみ自プロセスの cwd で実行する。payload の `cwd` が存在しない
-    ディレクトリを指す場合は、どの repo を照合すべきか決められないため deny する。
+    hook payload の `cwd` がある場合はその位置の repo で gh を実行し、その git-dir の
+    ローカル記録を検証する。hook プロセス自身の cwd への fallback は持たず、payload の
+    `cwd` が欠落・非絶対パス・不在の場合は deny する。
     """
 
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        temporary_path = Path(self.temporary.name)
-        self.work = temporary_path / "work"
-        self.work.mkdir()
-        self.other_repo = temporary_path / "other-repo"
-        self.other_repo.mkdir()
+        super().setUp()
+        self.other_repo = self.temporary_path / "other-repo"
+        self.other_git_dir = initialize_repository(self.other_repo)
 
-        self.fake_bin_dir = temporary_path / "fake-bin"
-        self.fake_bin_dir.mkdir()
-        gh_path = self.fake_bin_dir / "gh"
-        gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
-        gh_path.chmod(
-            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    def test_payload_cwd_record_is_used(self) -> None:
+        """payload cwd の repo に記録があれば、hook プロセスの cwd に記録が無くても通す。"""
+        self.write_final_attestation(git_dir=self.other_git_dir)
+        self.assert_allowed(self.run_gate(payload_cwd=self.other_repo))
+
+    def test_process_cwd_record_is_not_used(self) -> None:
+        """hook プロセスの cwd の repo にだけ記録がある場合は deny する。"""
+        self.write_final_attestation()
+        self.assert_denied(
+            self.run_gate(payload_cwd=self.other_repo, process_cwd=self.work)
         )
-        self.configure_fake_gh(review_bodies=[codex_review_comment(HEAD_SHA)])
-
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    def configure_fake_gh(self, *, review_bodies: list[str]) -> None:
-        config = {
-            "payload": {
-                "headRefOid": HEAD_SHA,
-                "reviews": [{"body": body} for body in review_bodies],
-            },
-            "fail": False,
-        }
-        (self.fake_bin_dir / "gh-config.json").write_text(
-            json.dumps(config, ensure_ascii=False), encoding="utf-8"
-        )
-
-    def run_gate(
-        self, command: str, payload_cwd: str | None
-    ) -> subprocess.CompletedProcess[bytes]:
-        payload: dict[str, object] = {
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": command},
-        }
-        if payload_cwd is not None:
-            payload["cwd"] = payload_cwd
-        env = os.environ.copy()
-        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
-        return subprocess.run(
-            ["bash", str(GATE)],
-            cwd=self.work,
-            input=json.dumps(payload).encode("utf-8"),
-            env=env,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
-        if not result.stdout.strip():
-            return None
-        response = json.loads(result.stdout)
-        return response["hookSpecificOutput"]["permissionDecision"]
-
-    def test_payload_cwd_is_used_for_matching(self) -> None:
-        """payload の cwd が別ディレクトリでも、そこで gh を実行して照合する。"""
-        result = self.run_gate(MERGE_COMMAND, str(self.other_repo))
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIsNone(self.decision(result))
-
-    def test_payload_cwd_without_matching_comment_denies(self) -> None:
-        """payload cwd 指定時も照合は実行され、一致コメントが無ければ deny する。"""
-        self.configure_fake_gh(review_bodies=[])
-        result = self.run_gate(MERGE_COMMAND, str(self.other_repo))
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
 
     def test_missing_payload_cwd_denies(self) -> None:
-        """payload に cwd が無ければ照合対象 repo を決められないため deny する
-        (hook プロセスの cwd への fallback は持たない)。"""
-        result = self.run_gate(MERGE_COMMAND, None)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
+        self.write_final_attestation()
+        self.assert_denied(self.run_gate(omit_cwd=True))
 
     def test_relative_payload_cwd_denies(self) -> None:
-        """payload cwd が絶対パスでなければ照合対象 repo を特定できないため deny。"""
-        result = self.run_gate(MERGE_COMMAND, "other-repo")
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
+        self.write_final_attestation()
+        self.assert_denied(self.run_gate(payload_cwd="other-repo"))
 
     def test_nonexistent_payload_cwd_denies(self) -> None:
-        """payload cwd が存在しなければ照合対象 repo を決められないため deny。"""
-        missing = str(self.other_repo / "does-not-exist")
-        result = self.run_gate(MERGE_COMMAND, missing)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
-
-
-@unittest.skipUnless(
-    shutil.which("bash") and shutil.which("jq"),
-    "gate integration requires bash and jq",
-)
-class PreMergeGateHeaderAnchorTest(unittest.TestCase):
-    """attestation header は本文の先頭行にあるものだけを受理する契約。
-
-    本文の途中に現れる header 形の文字列 (レビュー report がレビュー対象の差分から
-    引用したもの等) を受理すると、レビューされていない head SHA への attestation として
-    機能してしまう。
-    """
-
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        temporary_path = Path(self.temporary.name)
-        self.work = temporary_path / "work"
-        self.work.mkdir()
-
-        self.fake_bin_dir = temporary_path / "fake-bin"
-        self.fake_bin_dir.mkdir()
-        gh_path = self.fake_bin_dir / "gh"
-        gh_path.write_text(FAKE_GH_SCRIPT, encoding="utf-8")
-        gh_path.chmod(
-            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        self.write_final_attestation()
+        self.assert_denied(
+            self.run_gate(payload_cwd=self.other_repo / "does-not-exist")
         )
 
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    def configure_fake_gh(self, *, review_bodies: list[str]) -> None:
-        config = {
-            "payload": {
-                "headRefOid": HEAD_SHA,
-                "reviews": [{"body": body} for body in review_bodies],
-            },
-            "fail": False,
-        }
-        (self.fake_bin_dir / "gh-config.json").write_text(
-            json.dumps(config, ensure_ascii=False), encoding="utf-8"
-        )
-
-    def run_gate(self) -> subprocess.CompletedProcess[bytes]:
-        payload = {
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": MERGE_COMMAND},
-            "cwd": str(self.work),
-        }
-        env = os.environ.copy()
-        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
-        return subprocess.run(
-            ["bash", str(GATE)],
-            cwd=self.work,
-            input=json.dumps(payload).encode("utf-8"),
-            env=env,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
-        if not result.stdout.strip():
-            return None
-        response = json.loads(result.stdout)
-        return response["hookSpecificOutput"]["permissionDecision"]
-
-    def test_header_below_first_line_is_denied(self) -> None:
-        """先頭行以外に現れる header は attestation として受理しない。"""
-        header = f"<!-- codex-review: head={HEAD_SHA} status=pass -->"
-        cases = {
-            "quoted_in_report": (
-                "# Codex Review\n\n"
-                "レビュー対象の差分に次の行が含まれています:\n\n"
-                f"    {header}\n"
-            ),
-            "second_line": f"先行するテキスト\n{header}\n",
-            "indented_first_line": f"  {header}\n# Codex Review\n",
-        }
-        for label, body in cases.items():
-            with self.subTest(case=label):
-                self.configure_fake_gh(review_bodies=[body])
-                result = self.run_gate()
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
-
-    def test_header_on_first_line_is_accepted(self) -> None:
-        """先頭行の header は従来どおり attestation として成立する。"""
-        cases = {
-            "pass": codex_review_comment(HEAD_SHA, status="pass"),
-            "findings": codex_review_comment(HEAD_SHA, status="findings"),
-            "with_quoted_header_in_report": (
-                codex_review_comment(HEAD_SHA)
-                + "\n<!-- codex-review (quoted): head=other status=pass -->\n"
-            ),
-        }
-        for label, body in cases.items():
-            with self.subTest(case=label):
-                self.configure_fake_gh(review_bodies=[body])
-                result = self.run_gate()
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertIsNone(self.decision(result), f"case={label}")
+    def test_non_repository_payload_cwd_denies(self) -> None:
+        plain = self.temporary_path / "plain"
+        plain.mkdir()
+        self.assert_denied(self.run_gate(payload_cwd=plain))
 
 
-@unittest.skipUnless(
-    shutil.which("bash") and shutil.which("jq"),
-    "gate integration requires bash and jq",
-)
 class PreMergeGateMalformedPayloadTest(unittest.TestCase):
-    """payload を解析できない場合の fail-closed 契約。
-
-    粗フィルタを通過した payload の解析に失敗したときに「merge と無関係」と読み替えて
-    通過させると、未レビュー merge が素通りする。解析できない状態は deny に倒す。
-    """
+    """payload を解析できない場合の fail-closed 契約。"""
 
     def run_gate(self, raw_payload: bytes) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
@@ -949,8 +652,8 @@ class PreMergeGateMalformedPayloadTest(unittest.TestCase):
         response = json.loads(result.stdout)
         return response["hookSpecificOutput"]["permissionDecision"]
 
+    @unittest.skipUnless(shutil.which("jq"), "requires jq")
     def test_malformed_payload_with_merge_shape_is_denied(self) -> None:
-        """粗フィルタにかかる形の壊れた JSON は deny する。"""
         cases = {
             "truncated": b'{"tool_input": {"command": "gh pr merge 123"',
             "not_json": b'gh pr merge 123 --squash',
@@ -965,386 +668,135 @@ class PreMergeGateMalformedPayloadTest(unittest.TestCase):
                 self.assertEqual(self.decision(result), "deny", f"case={label}")
 
     def test_malformed_payload_without_merge_shape_is_ignored(self) -> None:
-        """粗フィルタにかからない壊れた payload には関与しない (無出力)。"""
         result = self.run_gate(b'{"tool_input": {"command": "printf hello"')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(result.stdout, b"")
-
-
-# gate がローカル attestation を読む場所 (merge 実行 repo の git-dir 直下)。
-FINAL_ATTESTATION = ".claude-pre-merge-codex-reviewed"
-PENDING_ATTESTATION = ".claude-pre-merge-codex-reviewed.pending"
-COMMENT_BODY = ".claude-pre-merge-codex-comment.md"
-
-# `pr view` は設定 JSON の payload を返し、`pr review` は argv を calls.log に追記して
-# review_fail フラグに従い成否を返す fake gh。
-POSTING_FAKE_GH_SCRIPT = """#!/usr/bin/env python3
-import json
-import os
-import sys
-
-HERE = os.path.dirname(os.path.realpath(__file__))
-with open(os.path.join(HERE, "gh-config.json"), encoding="utf-8") as fp:
-    config = json.load(fp)
-
-args = sys.argv[1:]
-if args[:2] == ["pr", "view"]:
-    print(json.dumps(config["payload"]))
-    sys.exit(0)
-
-if args[:2] == ["pr", "review"]:
-    with open(os.path.join(HERE, "calls.log"), "a", encoding="utf-8") as fp:
-        fp.write(" ".join(args) + "\\n")
-    if config.get("review_fail"):
-        print("fake-gh: injected review failure", file=sys.stderr)
-        sys.exit(1)
-    sys.exit(0)
-
-sys.exit(0)
-"""
 
 
 @unittest.skipUnless(
     shutil.which("bash") and shutil.which("jq") and shutil.which("git"),
     "gate integration requires bash, jq, and git",
 )
-class PreMergeGateLocalAttestationTest(unittest.TestCase):
-    """レビューコメントの投稿主体が gate である契約。
+class PreMergeGateLocalAttestationTest(GateHarness):
+    """ローカルの final attestation の検証契約 (fail-closed)。"""
 
-    PR に現在の head SHA と一致する codex review コメントが無い場合、gate は merge 実行
-    repo の git-dir 直下にあるローカル attestation (`.claude-pre-merge-codex-reviewed`) と
-    投稿用本文 (`.claude-pre-merge-codex-comment.md`) を検証し、成立していれば
-    `gh pr review <PR> --comment --body-file <本文>` で投稿してから merge を通す。
-
-    - attestation は 2 行 (`pr=<PR 番号>` / `head=<full head SHA>`) で、gh から得た PR 番号
-      と head SHA の両方に一致することを要求する
-    - 本文ファイルの先頭行は attestation と同じ head の機械可読 header であることを要求する
-    - 投稿に成功したら attestation 一式 (final / pending / 本文) を掃除する
-    - attestation が無い・欠ける・食い違う・投稿に失敗した場合はいずれも deny する
-      (fail-closed)
-    """
-
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        temporary_path = Path(self.temporary.name)
-
-        self.work = temporary_path / "work"
-        self.work.mkdir()
-        self.initialize_repository(self.work)
-        self.git_dir = self.resolve_git_dir(self.work)
-
-        # git repo ではない照合先 (attestation を解決できない状況の再現に使う)。
-        self.plain_dir = temporary_path / "plain"
-        self.plain_dir.mkdir()
-
-        self.fake_bin_dir = temporary_path / "fake-bin"
-        self.fake_bin_dir.mkdir()
-        gh_path = self.fake_bin_dir / "gh"
-        gh_path.write_text(POSTING_FAKE_GH_SCRIPT, encoding="utf-8")
-        gh_path.chmod(
-            gh_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-        )
-        self.configure_fake_gh(review_bodies=[])
-
-    def tearDown(self) -> None:
-        self.temporary.cleanup()
-
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
-
-    def git(self, cwd: Path, *args: str) -> None:
-        subprocess.run(
-            ["git", *args],
-            cwd=cwd,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def initialize_repository(self, work: Path) -> None:
-        self.git(work, "init")
-        self.git(work, "config", "user.name", "Marketplace Test")
-        self.git(work, "config", "user.email", "marketplace@example.invalid")
-        (work / "example.txt").write_text("base\n", encoding="utf-8")
-        self.git(work, "add", "example.txt")
-        self.git(work, "commit", "-m", "base")
-
-    def resolve_git_dir(self, work: Path) -> Path:
-        value = subprocess.check_output(
-            ["git", "rev-parse", "--absolute-git-dir"], cwd=work
-        )
-        return Path(value.decode().strip())
-
-    def configure_fake_gh(
-        self,
-        *,
-        review_bodies: list[str],
-        number: int = PR_NUMBER,
-        head_oid: str = HEAD_SHA,
-        review_fail: bool = False,
-    ) -> None:
-        config = {
-            "payload": {
-                "number": number,
-                "headRefOid": head_oid,
-                "reviews": [{"body": body} for body in review_bodies],
-            },
-            "review_fail": review_fail,
-        }
-        (self.fake_bin_dir / "gh-config.json").write_text(
-            json.dumps(config, ensure_ascii=False), encoding="utf-8"
-        )
-
-    def final_attestation_path(self) -> Path:
-        return self.git_dir / FINAL_ATTESTATION
-
-    def pending_attestation_path(self) -> Path:
-        return self.git_dir / PENDING_ATTESTATION
-
-    def comment_body_path(self) -> Path:
-        return self.git_dir / COMMENT_BODY
-
-    def attestation_content(
-        self, *, pr: int = PR_NUMBER, head: str = HEAD_SHA
-    ) -> str:
-        return f"pr={pr}\nhead={head}\n"
-
-    def write_final_attestation(
-        self, *, pr: int = PR_NUMBER, head: str = HEAD_SHA
-    ) -> Path:
-        path = self.final_attestation_path()
-        path.write_text(self.attestation_content(pr=pr, head=head), encoding="utf-8")
-        return path
-
-    def write_pending_attestation(
-        self, *, pr: int = PR_NUMBER, head: str = HEAD_SHA
-    ) -> Path:
-        path = self.pending_attestation_path()
-        path.write_text(self.attestation_content(pr=pr, head=head), encoding="utf-8")
-        return path
-
-    def write_comment_body(
-        self,
-        *,
-        head: str = HEAD_SHA,
-        status: str = "pass",
-        first_line: str | None = None,
-    ) -> Path:
-        header = (
-            first_line
-            if first_line is not None
-            else f"<!-- codex-review: head={head} status={status} -->"
-        )
-        path = self.comment_body_path()
-        path.write_text(
-            f"{header}\n# Codex Review\n\nStatus: {status}\n", encoding="utf-8"
-        )
-        return path
-
-    def run_gate(
-        self, command: str = MERGE_COMMAND, *, payload_cwd: Path | None = None
-    ) -> subprocess.CompletedProcess[bytes]:
-        cwd = self.work if payload_cwd is None else payload_cwd
-        payload = {
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": command},
-            "cwd": str(cwd),
-        }
-        env = os.environ.copy()
-        env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{env.get('PATH', '')}"
-        return subprocess.run(
-            ["bash", str(GATE)],
-            cwd=cwd,
-            input=json.dumps(payload).encode("utf-8"),
-            env=env,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def decision(self, result: subprocess.CompletedProcess[bytes]) -> str | None:
-        if not result.stdout.strip():
-            return None
-        response = json.loads(result.stdout)
-        return response["hookSpecificOutput"]["permissionDecision"]
-
-    def deny_reason(self, result: subprocess.CompletedProcess[bytes]) -> str:
-        response = json.loads(result.stdout)
-        return response["hookSpecificOutput"]["permissionDecisionReason"]
-
-    def gh_review_calls(self) -> list[str]:
-        log = self.fake_bin_dir / "calls.log"
-        if not log.exists():
-            return []
-        return [
-            line for line in log.read_text(encoding="utf-8").splitlines() if line
-        ]
-
-    def assert_no_review_posted(self) -> None:
-        self.assertEqual(self.gh_review_calls(), [])
-
-    # ------------------------------------------------------------------
-    # 投稿経路
-    # ------------------------------------------------------------------
-
-    def test_posts_review_comment_and_cleans_attestation(self) -> None:
+    def test_matching_record_allows_and_is_kept(self) -> None:
         final = self.write_final_attestation()
-        body = self.write_comment_body()
-        pending = self.write_pending_attestation()
+        before = final.read_bytes()
+        self.assert_allowed(self.run_gate())
+        self.assertTrue(final.exists(), "記録は gate が消さない")
+        self.assertEqual(final.read_bytes(), before)
 
-        result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIsNone(self.decision(result), result.stdout.decode())
-
-        calls = self.gh_review_calls()
-        self.assertEqual(len(calls), 1, calls)
-        self.assertTrue(
-            calls[0].startswith(f"pr review {PR_NUMBER} --comment"), calls[0]
-        )
-        self.assertIn(f"--body-file {body}", calls[0])
-
-        self.assertFalse(final.exists())
-        self.assertFalse(body.exists())
-        self.assertFalse(pending.exists())
-
-    def test_posts_for_merge_without_pr_number(self) -> None:
-        """番号なし merge でも、gh が返す PR 番号と attestation を照合して投稿する。"""
+    def test_merge_without_pr_number_uses_gh_number(self) -> None:
+        """番号なし merge でも、gh が返す PR 番号と記録を照合する。"""
         self.write_final_attestation()
-        self.write_comment_body()
-
-        result = self.run_gate("gh pr merge --squash")
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIsNone(self.decision(result), result.stdout.decode())
-        calls = self.gh_review_calls()
-        self.assertEqual(len(calls), 1, calls)
-        self.assertTrue(
-            calls[0].startswith(f"pr review {PR_NUMBER} --comment"), calls[0]
-        )
-
-    def test_denies_when_review_post_fails(self) -> None:
-        self.configure_fake_gh(review_bodies=[], review_fail=True)
-        final = self.write_final_attestation()
-        body = self.write_comment_body()
-
-        result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
-        reason = self.deny_reason(result)
-        self.assertIn("投稿に失敗", reason)
-        self.assertIn("再実行", reason)
-        self.assertTrue(
-            final.exists(), "投稿に失敗した attestation は再実行のため保持する"
-        )
-        self.assertTrue(body.exists())
-
-    # ------------------------------------------------------------------
-    # attestation の検証 (fail-closed)
-    # ------------------------------------------------------------------
-
-    def test_denies_without_local_attestation(self) -> None:
-        result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
-        reason = self.deny_reason(result)
-        self.assertIn(CODEX_SUBAGENT_NAME, reason)
-        self.assertIn("ローカル", reason)
-        self.assertIn("gate", reason)
-        self.assertNotIn(
-            "投稿します",
-            reason,
-            "投稿するのは subagent ではなく gate である旨と食い違う案内を出さない",
-        )
-        self.assert_no_review_posted()
+        self.assert_allowed(self.run_gate("gh pr merge --squash"))
+        self.write_final_attestation(pr=456)
+        self.assert_denied(self.run_gate("gh pr merge --squash"))
 
     def test_denies_on_pr_number_mismatch(self) -> None:
         self.write_final_attestation(pr=456)
-        self.write_comment_body()
         result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
-        self.assert_no_review_posted()
+        self.assert_denied(result)
+        self.assertIn("456", self.deny_reason(result))
 
     def test_denies_on_head_mismatch(self) -> None:
         self.write_final_attestation(head=OTHER_SHA)
-        self.write_comment_body(head=OTHER_SHA)
         result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
+        self.assert_denied(result)
         reason = self.deny_reason(result)
         self.assertIn(HEAD_SHA, reason)
         self.assertIn(OTHER_SHA, reason)
         self.assertIn("再レビュー", reason)
-        self.assert_no_review_posted()
 
-    def test_denies_when_comment_body_is_missing(self) -> None:
-        self.write_final_attestation()
-        self.assertFalse(self.comment_body_path().exists())
-        result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
-        self.assert_no_review_posted()
-
-    def test_denies_on_comment_body_header_mismatch(self) -> None:
+    def test_denies_malformed_record(self) -> None:
         cases = {
-            "other_head": {"head": OTHER_SHA},
-            "unknown_status": {"status": "unknown"},
-            "not_a_header": {"first_line": "# Codex Review"},
+            "missing_pr_line": f"head={HEAD_SHA}\n",
+            "short_head": f"pr={PR_NUMBER}\nhead=deadbeef\n",
+            "uppercase_head": f"pr={PR_NUMBER}\nhead={HEAD_SHA.upper()}\n",
+            "empty": "",
         }
-        for label, kwargs in cases.items():
+        for label, content in cases.items():
             with self.subTest(case=label):
-                self.write_final_attestation()
-                self.write_comment_body(**kwargs)
-                result = self.run_gate()
-                self.assertEqual(result.returncode, 0, result.stderr.decode())
-                self.assertEqual(self.decision(result), "deny", f"case={label}")
-                self.assert_no_review_posted()
+                self.final_attestation_path().write_text(content, encoding="utf-8")
+                self.assert_denied(self.run_gate(), label)
 
     def test_denies_with_pending_attestation_only(self) -> None:
-        self.write_pending_attestation()
-        self.write_comment_body()
+        (self.git_dir / PENDING_ATTESTATION).write_text(
+            attestation_content(), encoding="utf-8"
+        )
         self.assertFalse(self.final_attestation_path().exists())
-        result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
-        self.assert_no_review_posted()
+        self.assert_denied(self.run_gate())
 
     def test_denies_when_final_attestation_is_symlink(self) -> None:
-        target = Path(self.temporary.name) / "attestation-target"
-        target.write_text(self.attestation_content(), encoding="utf-8")
+        target = self.temporary_path / "attestation-target"
+        target.write_text(attestation_content(), encoding="utf-8")
         self.final_attestation_path().symlink_to(target)
-        self.write_comment_body()
+        self.assert_denied(self.run_gate())
+
+    def test_denies_when_final_attestation_is_directory(self) -> None:
+        self.final_attestation_path().mkdir()
+        self.assert_denied(self.run_gate())
+
+
+@unittest.skipUnless(
+    shutil.which("bash") and shutil.which("jq") and shutil.which("git"),
+    "gate integration requires bash, jq, and git",
+)
+class PreMergeGateNoGitHubWriteTest(GateHarness):
+    """gate は GitHub に書かず、PR のレビュー・コメントを判断材料にしない契約。"""
+
+    def assert_only_number_and_head_are_requested(self) -> None:
+        calls = self.gh_calls()
+        self.assertTrue(calls, "gate は gh pr view を呼ぶ")
+        for call in calls:
+            self.assertEqual(call[:2], ["pr", "view"], call)
+            self.assertIn("--json", call)
+            fields = call[call.index("--json") + 1].split(",")
+            self.assertEqual(sorted(fields), ["headRefOid", "number"], call)
+
+    def test_allow_path_calls_only_pr_view_for_number_and_head(self) -> None:
+        self.write_final_attestation()
+        self.assert_allowed(self.run_gate())
+        self.assert_only_number_and_head_are_requested()
+
+    def test_deny_paths_call_only_pr_view_for_number_and_head(self) -> None:
+        cases = {
+            "no_record": None,
+            "head_mismatch": OTHER_SHA,
+        }
+        for label, head in cases.items():
+            with self.subTest(case=label):
+                (self.fake_bin_dir / "calls.jsonl").unlink(missing_ok=True)
+                self.final_attestation_path().unlink(missing_ok=True)
+                if head is not None:
+                    self.write_final_attestation(head=head)
+                self.assert_denied(self.run_gate(), label)
+                self.assert_only_number_and_head_are_requested()
+
+    def test_pr_review_comment_does_not_satisfy_the_gate(self) -> None:
+        """PR 上に現在の head の codex review 形式のコメントがあっても、ローカル記録が
+        無ければ deny する。"""
+        self.configure_fake_gh(
+            review_bodies=[
+                codex_review_comment(HEAD_SHA, "pass"),
+                codex_review_comment(HEAD_SHA, "findings"),
+            ]
+        )
+        self.assert_denied(self.run_gate())
+        self.assert_only_number_and_head_are_requested()
+
+    def test_matching_record_allows_regardless_of_pr_review_comments(self) -> None:
+        self.configure_fake_gh(review_bodies=[codex_review_comment(OTHER_SHA)])
+        self.write_final_attestation()
+        self.assert_allowed(self.run_gate())
+
+    def test_deny_message_does_not_mention_posting(self) -> None:
         result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
-        self.assert_no_review_posted()
-
-    # ------------------------------------------------------------------
-    # 既存コメントとの関係 / 照合 repo
-    # ------------------------------------------------------------------
-
-    def test_existing_review_comment_skips_posting_and_cleans(self) -> None:
-        """PR に一致コメントが在れば投稿せず通し、不要になった attestation を掃除する。"""
-        self.configure_fake_gh(review_bodies=[codex_review_comment(HEAD_SHA)])
-        final = self.write_final_attestation()
-        body = self.write_comment_body()
-        pending = self.write_pending_attestation()
-
-        result = self.run_gate()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIsNone(self.decision(result), result.stdout.decode())
-        self.assert_no_review_posted()
-        self.assertFalse(final.exists())
-        self.assertFalse(body.exists())
-        self.assertFalse(pending.exists())
-
-    def test_denies_when_workdir_is_not_a_repository(self) -> None:
-        """attestation の置き場を解決できない (git repo でない) 場合は deny する。"""
-        result = self.run_gate(payload_cwd=self.plain_dir)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertEqual(self.decision(result), "deny")
-        self.assert_no_review_posted()
+        self.assert_denied(result)
+        reason = self.deny_reason(result)
+        self.assertNotIn("投稿", reason)
+        self.assertNotIn("コメント", reason)
 
 
 if __name__ == "__main__":

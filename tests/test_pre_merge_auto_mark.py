@@ -1,11 +1,11 @@
 """pre-merge-cross-review auto-mark の subagent lifecycle 契約テスト。
 
-pre-merge-cross-review plugin では、PR へのレビューコメント投稿を merge gate
-(`block-pre-merge.sh`) が行う。codex review wrapper
-(`run-pre-merge-codex-review.sh`) は投稿せず、投稿用の本文ファイルと pending
+pre-merge-cross-review plugin では、レビュー済みの証拠は git-dir 直下のローカル記録であり、
+GitHub には何も書かない。codex review wrapper (`run-pre-merge-codex-review.sh`) は pending
 attestation を git-dir 直下に書くだけで終わり、`pre-merge-cross-review:codex-reviewer`
-subagent の lifecycle hook (SubagentStart / SubagentStop) が正規 report と head SHA
-一致を確認して final attestation へ昇格させる。
+subagent の lifecycle hook (SubagentStart / SubagentStop) が正規 report と head SHA 一致を
+確認して final attestation へ昇格する。merge gate は final attestation を PR 番号と現在の
+head SHA に照合する。fable-reviewer の report は記録しない (hook の対象外)。
 
 契約 (auto-mark.sh):
 
@@ -26,19 +26,17 @@ subagent の lifecycle hook (SubagentStart / SubagentStop) が正規 report と 
     tool_input.message を SubagentStop と同じ規則で判定した結果
     (pass / findings / invalid) を handback record に書く
   - launch attestation の HEAD が現在の HEAD と一致し、pending attestation が
-    `pr=<全数字>` / `head=<40 hex>` の 2 行で head が現在の HEAD と一致し、投稿用の
-    本文ファイルの先頭行が同じ head の header であるときのみ final へ昇格する。
-    いずれかを欠けば pending と本文ファイルを破棄して skip する (fail-closed)
-  - 本文ファイルは昇格後も残す (gate が投稿の本文として使う)
-- PostToolUseFailure (Agent|Task): pending attestation と本文ファイルの best-effort
-  破棄のみ (補助的な掃除経路)
-- wrapper: 成功時は pending attestation と本文ファイルだけを書き、PR には投稿しない。
-  失敗時は stale な attestation / 本文ファイルを掃除する
+    `pr=<全数字>` / `head=<40 hex>` の 2 行で head が現在の HEAD と一致するときのみ
+    final へ昇格する。いずれかを欠けば pending を破棄して skip する (fail-closed)
+  - terminal な掃除経路でも、昇格済みの final attestation には触れない
+- PostToolUseFailure (Agent|Task): pending attestation の best-effort 破棄のみ
+  (補助的な掃除経路)
+- wrapper: 成功時は pending attestation だけを書き、GitHub には書き込まない。
+  失敗時は stale な attestation を掃除する
 
 attestation の内容契約:
 
 - pending / final: `pr=<PR 番号>` と `head=<full head SHA>` の 2 行
-- 本文ファイル: 先頭行が `<!-- codex-review: head=<同じ head SHA> status=pass|findings -->`
 """
 
 from __future__ import annotations
@@ -65,13 +63,15 @@ HOOKS_CONFIG = PLUGIN_DIR / "hooks" / "hooks.json"
 
 CODEX_REVIEWER = "pre-merge-cross-review:codex-reviewer"
 PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
-# SubagentStart / SubagentStop の matcher は codex-reviewer と fable-reviewer の両方に一致する。
-REVIEWER_LIFECYCLE_MATCHER = "^pre-merge-cross-review:(codex|fable)-reviewer$"
+# SubagentStart / SubagentStop の matcher は codex-reviewer だけに一致する (fable-reviewer の
+# report は記録しない)。
+REVIEWER_LIFECYCLE_MATCHER = "^pre-merge-cross-review:codex-reviewer$"
 FABLE_REVIEWER = "pre-merge-cross-review:fable-reviewer"
 
 FINAL_MARKER = ".claude-pre-merge-codex-reviewed"
 PENDING_MARKER = ".claude-pre-merge-codex-reviewed.pending"
-COMMENT_BODY = ".claude-pre-merge-codex-comment.md"
+# wrapper が書かないことを確認する、review 本文を置くファイル名 (旧来の投稿用本文の名前)。
+LEGACY_COMMENT_BODY = ".claude-pre-merge-codex-comment.md"
 LAUNCH_ATTESTATION_PREFIX = ".claude-pre-merge-launch-"
 LAUNCH_TOMBSTONE_PREFIX = ".claude-pre-merge-done-"
 HANDBACK_REPORT_PREFIX = ".claude-pre-merge-handback-"
@@ -92,7 +92,7 @@ FINDINGS_REPORT = (
 )
 
 # fake gh: `pr view` は設定ファイルの JSON を返し、それ以外の呼び出しは argv を
-# calls.log に 1 行追記する (wrapper が PR へ投稿しないことを検証するため)。
+# calls.log に 1 行追記する (wrapper が GitHub に書き込まないことを検証するため)。
 FAKE_GH_SCRIPT = """#!/usr/bin/env python3
 import json
 import os
@@ -190,8 +190,6 @@ class RepositoryFixture:
     def pending_marker_path(self, work: Path) -> Path:
         return self.git_dir(work) / PENDING_MARKER
 
-    def comment_body_path(self, work: Path) -> Path:
-        return self.git_dir(work) / COMMENT_BODY
 
     def launch_attestation_path(
         self, work: Path, agent_id: str = DEFAULT_AGENT_ID
@@ -211,21 +209,12 @@ class RepositoryFixture:
     def pending_content(self, head: str, *, pr: int = PR_NUMBER) -> str:
         return f"pr={pr}\nhead={head}\n"
 
-    def comment_body_content(self, head: str, *, status: str = "pass") -> str:
-        return (
-            f"<!-- codex-review: head={head} status={status} -->\n"
-            "# Codex Review\n\nNo findings.\n"
-        )
 
     def write_pending(self, work: Path, content: str) -> Path:
         pending = self.pending_marker_path(work)
         pending.write_text(content, encoding="utf-8")
         return pending
 
-    def write_comment_body(self, work: Path, content: str) -> Path:
-        body = self.comment_body_path(work)
-        body.write_text(content, encoding="utf-8")
-        return body
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
@@ -366,7 +355,7 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
     # SubagentStop: pending → final の昇格
     # ------------------------------------------------------------------
 
-    def test_stop_promotes_pending_to_final_and_keeps_body(self) -> None:
+    def test_stop_promotes_pending_to_final(self) -> None:
         reports = {"pass": PASS_REPORT, "findings": FINDINGS_REPORT}
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
@@ -382,9 +371,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                     head = self.head_sha(work)
                     pending_text = self.pending_content(head)
                     pending = self.write_pending(work, pending_text)
-                    body = self.write_comment_body(
-                        work, self.comment_body_content(head, status=status)
-                    )
                     result = self.run_hook(
                         work, self.stop_payload(report, agent_id=agent_id)
                     )
@@ -396,10 +382,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                         final.read_text(encoding="utf-8"), pending_text
                     )
                     self.assertFalse(pending.exists())
-                    self.assertTrue(
-                        body.exists(),
-                        "本文ファイルは gate が投稿に使うため昇格後も残す",
-                    )
                     self.assertFalse(
                         self.launch_attestation_path(work, agent_id).exists()
                     )
@@ -420,9 +402,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                     head = self.head_sha(work)
                     pending_text = self.pending_content(head)
                     pending = self.write_pending(work, pending_text)
-                    body = self.write_comment_body(
-                        work, self.comment_body_content(head, status=status)
-                    )
                     result = self.run_hook(
                         work, self.handback_payload(report, agent_id=agent_id)
                     )
@@ -445,19 +424,17 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                         final.read_text(encoding="utf-8"), pending_text
                     )
                     self.assertFalse(pending.exists())
-                    self.assertTrue(body.exists())
                     self.assertFalse(record.exists())
                     self.assertTrue(
                         self.launch_tombstone_path(work, agent_id).exists()
                     )
 
-    def test_handback_execution_failed_discards_pending_and_body(self) -> None:
+    def test_handback_execution_failed_discards_pending(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
             self.run_start(work, agent_id="handbackfail0")
             head = self.head_sha(work)
             pending = self.write_pending(work, self.pending_content(head))
-            body = self.write_comment_body(work, self.comment_body_content(head))
             result = self.run_hook(
                 work,
                 self.handback_payload(
@@ -471,7 +448,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                 work, self.stop_payload(PASS_REPORT, agent_id="handbackfail0")
             )
             self.assertFalse(pending.exists())
-            self.assertFalse(body.exists())
             self.assertFalse(
                 self.handback_report_path(work, "handbackfail0").exists()
             )
@@ -482,7 +458,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             self.run_start(work, agent_id="duplicate0")
             head = self.head_sha(work)
             pending = self.write_pending(work, self.pending_content(head))
-            body = self.write_comment_body(work, self.comment_body_content(head))
             for _ in range(2):
                 result = self.run_hook(
                     work, self.handback_payload(PASS_REPORT, agent_id="duplicate0")
@@ -495,7 +470,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                 self.stop_payload(HANDBACK_CLOSING_MESSAGE, agent_id="duplicate0"),
             )
             self.assertFalse(pending.exists())
-            self.assertFalse(body.exists())
             self.assertFalse(record.exists())
 
     def test_handback_without_launch_attestation_is_not_recorded(self) -> None:
@@ -531,7 +505,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             )
             head = self.head_sha(work)
             self.write_pending(work, self.pending_content(head))
-            self.write_comment_body(work, self.comment_body_content(head))
             self.assert_no_final(
                 work,
                 self.stop_payload(HANDBACK_CLOSING_MESSAGE, agent_id="resumed0"),
@@ -554,7 +527,7 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                 self.handback_report_path(work, "otheragent0").exists()
             )
 
-    def test_stop_with_invalid_report_discards_pending_and_body(self) -> None:
+    def test_stop_with_invalid_report_discards_pending(self) -> None:
         cases = {
             "execution_failed": "# Codex Review\n\nStatus: execution-failed\n",
             "missing_status": "# Codex Review\n\nFindings: 0\n",
@@ -573,21 +546,16 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                     pending = self.write_pending(
                         work, self.pending_content(head)
                     )
-                    body = self.write_comment_body(
-                        work, self.comment_body_content(head)
-                    )
                     self.assert_no_final(
                         work, self.stop_payload(report, agent_id=agent_id)
                     )
                     self.assertFalse(pending.exists(), f"case={label}")
-                    self.assertFalse(body.exists(), f"case={label}")
 
     def test_stop_with_stale_pending_head_discards_pending(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
             self.run_start(work)
             pending = self.write_pending(work, self.pending_content(OTHER_SHA))
-            self.write_comment_body(work, self.comment_body_content(OTHER_SHA))
             self.assert_no_final(work, self.stop_payload(PASS_REPORT))
             self.assertFalse(pending.exists())
 
@@ -600,7 +568,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             self.add_commit(work, "changed again\n")
             head = self.head_sha(work)
             pending = self.write_pending(work, self.pending_content(head))
-            self.write_comment_body(work, self.comment_body_content(head))
             self.assert_no_final(work, self.stop_payload(PASS_REPORT))
             self.assertFalse(pending.exists())
 
@@ -617,63 +584,36 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                     agent_id = f"{DEFAULT_AGENT_ID}{index}"
                     self.run_start(work, agent_id=agent_id)
                     pending = self.write_pending(work, pending_text)
-                    self.write_comment_body(
-                        work, self.comment_body_content(head)
-                    )
                     self.assert_no_final(
                         work, self.stop_payload(PASS_REPORT, agent_id=agent_id)
                     )
                     self.assertFalse(pending.exists(), f"case={label}")
 
-    def test_stop_requires_comment_body_file(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_name:
-            work = self.create_feature_repository(Path(temporary_name))
-            self.run_start(work)
-            head = self.head_sha(work)
-            pending = self.write_pending(work, self.pending_content(head))
-            self.comment_body_path(work).unlink(missing_ok=True)
-            self.assert_no_final(work, self.stop_payload(PASS_REPORT))
-            self.assertFalse(pending.exists())
-
-    def test_stop_requires_matching_body_header(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_name:
-            work = self.create_feature_repository(Path(temporary_name))
-            self.run_start(work)
-            head = self.head_sha(work)
-            pending = self.write_pending(work, self.pending_content(head))
-            self.write_comment_body(work, self.comment_body_content(OTHER_SHA))
-            self.assert_no_final(work, self.stop_payload(PASS_REPORT))
-            self.assertFalse(pending.exists())
-
-    def test_stop_without_attestation_discards_pending_and_body(self) -> None:
-        # 偽装 stop (launch attestation 無し) では昇格せず、pending と本文ファイルを
-        # 破棄する (orphan 化した組を後続の別 stop が昇格できる経路を塞ぐ)。
+    def test_stop_without_attestation_discards_pending(self) -> None:
+        # 偽装 stop (launch attestation 無し) では昇格せず、pending を破棄する
+        # (orphan 化した pending を後続の別 stop が昇格できる経路を塞ぐ)。
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
             head = self.head_sha(work)
             pending = self.write_pending(work, self.pending_content(head))
-            body = self.write_comment_body(work, self.comment_body_content(head))
             self.assertFalse(self.launch_attestation_path(work).exists())
             self.assert_no_final(work, self.stop_payload(PASS_REPORT))
             self.assertFalse(pending.exists())
-            self.assertFalse(body.exists())
 
-    def test_stop_without_attestation_keeps_promoted_pair(self) -> None:
-        # final と本文は gate が投稿に使う対 (pair) であり、昇格済みの対は terminal な
-        # 掃除経路でも壊さない。偽装 stop で消えるのは pending だけ。
+    def test_stop_without_attestation_keeps_promoted_final(self) -> None:
+        # 昇格済みの final は完走したレビューの記録であり、terminal な掃除経路でも
+        # 壊さない。偽装 stop で消えるのは pending だけ。
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
             head = self.head_sha(work)
             final = self.final_marker_path(work)
             final.write_text(self.pending_content(head), encoding="utf-8")
-            body = self.write_comment_body(work, self.comment_body_content(head))
             pending = self.write_pending(work, self.pending_content(head))
             self.assertFalse(self.launch_attestation_path(work).exists())
 
             result = self.run_hook(work, self.stop_payload(PASS_REPORT))
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertTrue(final.exists(), "昇格済みの final は保持する")
-            self.assertTrue(body.exists(), "final と対になる本文も保持する")
             self.assertFalse(pending.exists())
 
     def test_stop_with_existing_tombstone_discards_pending(self) -> None:
@@ -684,7 +624,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             head = self.head_sha(work)
             self.launch_tombstone_path(work).write_text(head, encoding="utf-8")
             pending = self.write_pending(work, self.pending_content(head))
-            self.write_comment_body(work, self.comment_body_content(head))
             self.assert_no_final(work, self.stop_payload(PASS_REPORT))
             self.assertFalse(pending.exists())
             self.assertFalse(
@@ -702,7 +641,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             target.write_text(self.pending_content(head), encoding="utf-8")
             pending = self.pending_marker_path(work)
             pending.symlink_to(target)
-            self.write_comment_body(work, self.comment_body_content(head))
             self.assert_no_final(work, self.stop_payload(PASS_REPORT))
             self.assertFalse(os.path.lexists(pending))
 
@@ -712,13 +650,11 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             self.run_start(work)
             head = self.head_sha(work)
             pending = self.write_pending(work, self.pending_content(head))
-            body = self.write_comment_body(work, self.comment_body_content(head))
             self.assert_no_final(
                 work, self.stop_payload(PASS_REPORT, stop_hook_active=True)
             )
             self.assertTrue(self.launch_attestation_path(work).exists())
             self.assertTrue(pending.exists())
-            self.assertTrue(body.exists())
 
     def test_other_agent_type_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
@@ -738,7 +674,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             self.run_start(work)
             head = self.head_sha(work)
             pending = self.write_pending(work, self.pending_content(head))
-            body = self.write_comment_body(work, self.comment_body_content(head))
             self.assert_no_final(
                 work,
                 self.stop_payload(
@@ -748,7 +683,6 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
                 ),
             )
             self.assertTrue(pending.exists())
-            self.assertTrue(body.exists())
             self.assertTrue(self.launch_attestation_path(work).exists())
 
     # ------------------------------------------------------------------
@@ -764,30 +698,26 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
             "is_interrupt": False,
         }
 
-    def test_post_tool_use_failure_discards_pending_and_body(self) -> None:
+    def test_post_tool_use_failure_discards_pending(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
             head = self.head_sha(work)
             pending = self.write_pending(work, self.pending_content(head))
-            body = self.write_comment_body(work, self.comment_body_content(head))
             result = self.run_hook(work, self.failure_payload(CODEX_REVIEWER))
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertFalse(self.final_marker_path(work).exists())
             self.assertFalse(pending.exists())
-            self.assertFalse(body.exists())
 
     def test_post_tool_use_failure_ignores_other_subagent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             work = self.create_feature_repository(Path(temporary_name))
             head = self.head_sha(work)
             pending = self.write_pending(work, self.pending_content(head))
-            body = self.write_comment_body(work, self.comment_body_content(head))
             result = self.run_hook(
                 work, self.failure_payload(PUSH_CODEX_REVIEWER)
             )
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertTrue(pending.exists())
-            self.assertTrue(body.exists())
 
     # ------------------------------------------------------------------
     # hooks.json 配線
@@ -813,13 +743,11 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
         self.assertEqual(len(stop_groups), 1)
         self.assertIn("auto-mark.sh", stop_groups[0]["hooks"][0]["command"])
 
-        # matcher は 2 reviewer にだけ完全一致し、pre-push 側や類似 namespace には
-        # 一致しない。
-        for agent_type in (CODEX_REVIEWER, FABLE_REVIEWER):
-            self.assertIsNotNone(
-                re.fullmatch(REVIEWER_LIFECYCLE_MATCHER, agent_type), agent_type
-            )
+        # matcher は codex-reviewer にだけ完全一致し、fable-reviewer・pre-push 側・類似
+        # namespace には一致しない。
+        self.assertIsNotNone(re.fullmatch(REVIEWER_LIFECYCLE_MATCHER, CODEX_REVIEWER))
         for agent_type in (
+            FABLE_REVIEWER,
             PUSH_CODEX_REVIEWER,
             "pre-merge-cross-review:code-reviewer",
             f"{CODEX_REVIEWER}-extra",
@@ -874,7 +802,7 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
 )
 @unittest.skipUnless(shutil.which("jq"), "wrapper integration requires jq")
 class PreMergeCodexWrapperTest(RepositoryFixture, unittest.TestCase):
-    """wrapper は投稿せず、pending attestation と投稿用本文だけを書く契約。"""
+    """wrapper は GitHub に書き込まず、pending attestation だけを書く契約。"""
 
     def install_fake_gh(self, directory: Path, work: Path) -> Path:
         bin_dir = directory / "fake-bin"
@@ -949,7 +877,7 @@ class PreMergeCodexWrapperTest(RepositoryFixture, unittest.TestCase):
         log = fake_bin_dir / "calls.log"
         return log.read_text(encoding="utf-8") if log.exists() else ""
 
-    def test_wrapper_writes_pending_and_body_without_posting(self) -> None:
+    def test_wrapper_writes_only_pending_without_github_writes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
             temporary = Path(temporary_name)
             work = self.create_feature_repository(temporary)
@@ -963,11 +891,9 @@ class PreMergeCodexWrapperTest(RepositoryFixture, unittest.TestCase):
             self.assertIn("# Codex Review", result.stdout.decode())
 
             head = self.head_sha(work)
-            body = self.comment_body_path(work)
-            self.assertTrue(body.exists(), result.stderr.decode())
-            self.assertEqual(
-                body.read_text(encoding="utf-8").split("\n")[0],
-                f"<!-- codex-review: head={head} status=pass -->",
+            self.assertFalse(
+                (self.git_dir(work) / LEGACY_COMMENT_BODY).exists(),
+                "wrapper は review 本文をファイルに残さない",
             )
             pending = self.pending_marker_path(work)
             self.assertTrue(pending.exists(), result.stderr.decode())
@@ -977,12 +903,11 @@ class PreMergeCodexWrapperTest(RepositoryFixture, unittest.TestCase):
             )
             self.assertFalse(self.final_marker_path(work).exists())
 
-            for line in self.gh_calls(fake_bin_dir).splitlines():
-                self.assertNotIn(
-                    "review",
-                    line,
-                    "wrapper は PR に投稿しない (投稿は merge gate の責務)",
-                )
+            self.assertEqual(
+                self.gh_calls(fake_bin_dir),
+                "",
+                "wrapper は gh pr view 以外の gh を呼ばない (GitHub に書き込まない)",
+            )
             self.assertIn("ローカル", result.stderr.decode())
 
     def test_wrapper_failure_removes_stale_attestation(self) -> None:
@@ -993,7 +918,6 @@ class PreMergeCodexWrapperTest(RepositoryFixture, unittest.TestCase):
             pending = self.write_pending(work, "stale\n")
             final = self.final_marker_path(work)
             final.write_text(self.pending_content(head), encoding="utf-8")
-            body = self.write_comment_body(work, self.comment_body_content(head))
 
             fake_bin_dir = self.install_fake_gh(temporary, work)
             home = temporary / "home"
@@ -1007,7 +931,6 @@ class PreMergeCodexWrapperTest(RepositoryFixture, unittest.TestCase):
             )
             self.assertFalse(pending.exists(), result.stderr.decode())
             self.assertFalse(final.exists(), result.stderr.decode())
-            self.assertFalse(body.exists(), result.stderr.decode())
 
     def test_wrapper_aborts_on_dirty_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_name:
@@ -1024,7 +947,6 @@ class PreMergeCodexWrapperTest(RepositoryFixture, unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(self.pending_marker_path(work).exists())
             self.assertFalse(self.final_marker_path(work).exists())
-            self.assertFalse(self.comment_body_path(work).exists())
 
 
 if __name__ == "__main__":
