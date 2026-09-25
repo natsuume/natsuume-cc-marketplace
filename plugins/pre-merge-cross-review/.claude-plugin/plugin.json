@@ -2,5 +2,5 @@
   "name": "pre-merge-cross-review",
   "version": "3.0.0",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
-  "description": "merge 前に codex と Fable のレビューを確認する"
+  "description": "merge 前の codex review を必須化し Fable review も行う"
 }
