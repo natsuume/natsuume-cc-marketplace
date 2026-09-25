@@ -153,7 +153,7 @@ README_FORBIDDEN_PHRASES = (
 # README の検知層「動作」bullet 群の範囲 (開始目印は終了目印の直前にある最後の出現)。
 README_BEHAVIOR_MARKER = "**動作**:"
 README_SPOF_MARKER = "**SPOF 緩和の設計**:"
-README_DESIGN_HISTORY_MARKER = "**設計の変遷**"
+README_DESIGN_HISTORY_MARKER = "**`if` filter と prompt 内 guard の分担**"
 README_KNOWN_LIMITATIONS_HEADING = "## 既知の制約"
 
 # 動作 bullet 群の同一 bullet に共起させる語。

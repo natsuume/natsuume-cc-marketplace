@@ -80,7 +80,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 - **他 session の claim comment / branch / ラベルは絶対に削除しない**
 - 「自分の claim か」の判定基準: claim comment 本文の `session=` 値が **自分のセッション ID と一致するか**
   - 一致 → 自分の claim、削除可
-  - 不一致、または `session=` キーが無い (旧形式) → 他 session の claim として扱い、削除禁止 (旧形式は自分のものと確認できないため)
+  - 不一致、または `session=` キーが無い → 他 session の claim として扱い、削除禁止 (`session=` の無い claim は自分のものと確認できないため)
 
 ### 撤退時のクリーンアップ手順
 
@@ -90,14 +90,14 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 2. 自分が作った branch があれば削除: `git switch master && git push origin --delete <branch> && git branch -D <branch>`
 3. ユーザに撤退理由を **1 行で必ず報告** する (例: 「issue #12 は他 session が先着のため撤退しました」)。auto mode 中でもこの報告は省略しない (= ユーザが進捗状況を把握できなくなるため)
 
-### よくある誤操作 (= 過去事例) と回避
+### よくある誤操作と回避
 
 - **誤着手**: 「ラベル確認 → ラベル付与」だけで判定したため race condition で同 issue に複数 session が着手 → step 2-5 の二段排他で防ぐ
 - **ラベル誤削除**: 「ラベル単独だと誰が付けたか不明」でつい削除 → claim comment の `session=` 値で持ち主を識別、自分のものでなければ触らない
 - **撤退時の clean-up 忘れ**: claim comment が残ったまま次の issue へ進む → ゴーストの claim が後続 session の撤退判定を誤らせる → step 1-3 を必ずセットで実行
 
 <!-- rule:ask-user-question -->
-## 8. AskUserQuestion の必須化 (R6)
+## 8. AskUserQuestion の必須化
 
 **適用範囲**: ユーザへの質問・確認・判断伺い・すり合わせを行う全ての場面に適用する。テキスト応答の自由文で尋ねて turn を終えることを禁止する。
 
@@ -119,7 +119,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 - 良い例: 同じ確認を `AskUserQuestion` ツールで発行し、「進める」「別タスクに切替える」等の選択肢を構造化して提示する
 
 <!-- rule:tdd-two-phase -->
-## 9. spec-first 2 段階の開発手順 (R3c)
+## 9. spec-first 2 段階の開発手順
 
 **適用範囲**: 軽微な修正を除く実装作業全体に適用する。
 

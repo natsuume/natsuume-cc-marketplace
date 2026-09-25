@@ -8,8 +8,7 @@ Fable review は merge の前提条件ではありません。fable-reviewer sub
 
 ## バージョン
 
-v3.0.0
-
+v3.0.1
 ## インストール
 
 ```bash
@@ -124,7 +123,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 
 tools は `Bash, Read` に制限され (`Read` は Bash timeout による background 移行後の回収専用で、wrapper が書く terminal sentinel とその run の output file だけを読みます)、model は `sonnet` に固定されます。
 
-wrapper が exit 0 で完了した場合、parent-safe report の `Status` は **Codex の report 本文** から決めます (wrapper が非 0 で終了した場合は本文の内容に関わらず従来どおり `Status: execution-failed` です)。本文に finding の記述 (`## Finding` 節・`Severity:` 行・番号付き / 箇条書きの個別指摘) が 1 つも無く「指摘なし」の趣旨で結ばれている場合は `Status: pass` / `Findings: 0` を返し、個別の指摘が 1 つでもあれば `Status: findings` を返します。finding として返せるのは Codex の report 本文に存在する指摘のみで、wrapper の挙動・記録の書き込みの成否・subagent 自身の観測範囲の限界は finding にしません (`Status: execution-failed` の Failure class で表現します)。本文が finding も「指摘なし」の結論も含まず判定できない場合 (途中で切れている・空・記述のみ等) は pass に倒さず、`Status: execution-failed` (Exit status 0・Failure class `other`) で返し、wrapper 自体は完了しレビュー記録を書き終えている可能性がある旨を recovery direction に書きます。
+wrapper が exit 0 で完了した場合、parent-safe report の `Status` は **Codex の report 本文** から決めます (wrapper が非 0 で終了した場合は本文の内容に関わらず `Status: execution-failed` です)。本文に finding の記述 (`## Finding` 節・`Severity:` 行・番号付き / 箇条書きの個別指摘) が 1 つも無く「指摘なし」の趣旨で結ばれている場合は `Status: pass` / `Findings: 0` を返し、個別の指摘が 1 つでもあれば `Status: findings` を返します。finding として返せるのは Codex の report 本文に存在する指摘のみで、wrapper の挙動・記録の書き込みの成否・subagent 自身の観測範囲の限界は finding にしません (`Status: execution-failed` の Failure class で表現します)。本文が finding も「指摘なし」の結論も含まず判定できない場合 (途中で切れている・空・記述のみ等) は pass に倒さず、`Status: execution-failed` (Exit status 0・Failure class `other`) で返し、wrapper 自体は完了しレビュー記録を書き終えている可能性がある旨を recovery direction に書きます。
 
 #### `pre-merge-cross-review:fable-reviewer` (subagent)
 
@@ -165,19 +164,6 @@ auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 
 classifier は project settings (`.claude/settings.json` / `.claude/settings.local.json`) の `autoMode` を読まないため、ユーザ設定 (`~/.claude/settings.json`) に書く必要があります。classifier は CLAUDE.md も読むため、プロジェクトの CLAUDE.md に同趣旨の 1 文を書く方法でも代替できます。設定なしで拒否された場合は、ユーザが「マージ前レビューとマージを実行してよい」と発言すれば次の起動は通ります (classifier は明示的なユーザ意図で soft block を解除します)。
 
 `gh pr merge` 自体が classifier に拒否されることもあります。`--delete-branch` は remote branch の削除として組み込み soft_deny の対象になるため、merge は `gh pr merge <番号> --squash` 等の単独正規形で実行し、branch の掃除は merge 後に別コマンドで行ってください。
-
-## pre-merge-codex-review からの移行
-
-marketplace の `renames` により、旧名 `pre-merge-codex-review` は Claude Code 2.1.193 以降で起動時に `pre-merge-cross-review` として読み込まれ、`enabledPlugins` / `pluginConfigs` の旧名キーも新名へ自動で書き換わります。2.1.192 までの Claude Code は `renames` を解釈せず旧名を `plugin-not-found` として報告するため、`claude plugin install pre-merge-cross-review@natsuume-plugins` で入れ直してください。managed settings で旧名を有効化している場合は自動で書き換わらないため、管理者が新名へ更新する必要があります。
-
-subagent の名前は `pre-merge-codex-review:codex-reviewer` から `pre-merge-cross-review:codex-reviewer` に変わります。旧版と新版の hook が同じセッションに混在すると、正規の起動が wrapper の起動検証に拒否されたり、レビューが記録されなかったりします。次の順で切り替えてください:
-
-1. 稼働中の codex-reviewer の完了を待ち、旧版のセッションを終了する
-2. pre-push-codex-review を併せて install している場合は、本 plugin と pre-push-codex-review (4.0.0 以降) を同時に更新する。片方だけを更新すると、review cadence が codex-reviewer の review を計数しなくなる
-3. 新しいセッションを起動し、注入文と merge gate の案内が新しい subagent 名になっていることを確認する
-4. `~/.claude/settings.json` の `autoMode.allow` に旧 subagent 名 (`pre-merge-codex-review:codex-reviewer`) を含むルールを書いている場合は、「auto mode での利用」節のルールに書き換える
-
-git-dir 直下の codex review 記録 (`.claude-pre-merge-codex-reviewed`) のファイル名と内容は変わらないため、旧版で保存した記録も新版の gate がそのまま検証します。旧版が PR に投稿したレビューコメントは本版の gate では参照しません。旧版で PR に投稿済みでローカル記録が残っていない PR は、codex-reviewer を起動して再レビューしてから merge してください。
 
 ## 既知の制約
 

@@ -86,6 +86,6 @@
 
 request 本文・thread flag・review scope 等は self-contained に渡す。回収手順の詳細は `/cross-model-advisor:consult` の Claude Code host 節に従う。自律的に rescue / review を使うときは `/codex:rescue` / `/codex:review` を再入せず、上記 runner を直接起動する。
 
-PreToolUse gate は `codex-companion.mjs task|review|adversarial-review` と `run-codex-advisor.sh` の実行形を、対応 runner 以外では deny する。ユーザが旧 `/codex:rescue` / `/codex:review` を明示した場合も deny と Stop hook の案内に従い、追加質問をせず runner へ reroute する。runner が tracking failure を報告した場合は lifecycle hook が 1 回だけ新規 runner で retry を要求する。2 回目の失敗、cancel、未 install / 未認証、入力不正は terminal failure として明示報告する。
+PreToolUse gate は `codex-companion.mjs task|review|adversarial-review` と `run-codex-advisor.sh` の実行形を、対応 runner 以外では deny する。ユーザが `/codex:rescue` / `/codex:review` を明示した場合も deny と Stop hook の案内に従い、追加質問をせず runner へ reroute する。runner が tracking failure を報告した場合は lifecycle hook が 1 回だけ新規 runner で retry を要求する。2 回目の失敗、cancel、未 install / 未認証、入力不正は terminal failure として明示報告する。
 
 **境界**: `status` / `result` / `cancel` 等の管理操作は遮断しない。`pre-push-codex-review:codex-reviewer` の正規 review 経路も通常は維持するが、pre-push-codex-review plugin の review cadence gate が次の wrapper 起動を根本方針 checkpoint まで block することがある。通常 subagent が advisor を必要とする場合、wrapper を直接実行せず相談 request を親へ返す。親は委任時に外部呼び出しを許可した範囲で advisor runner を起動する。

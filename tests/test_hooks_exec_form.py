@@ -12,9 +12,7 @@
   plugin 名を `null` に対応づける (利用者に削除通知が届く)
 - C. gate 系 4 plugin の README の `## 既知の制約` 節が、PowerShell tool / Monitor tool
   経由で発行されたコマンドを gate が観測しないことを明記する
-- D. リポジトリ直下 README の移行節が、廃止 plugin の削除通知が自動で出ることを
-  必要な Claude Code 版数とともに案内する
-- E. 16 plugin の version が 4 箇所 (plugin.json / marketplace.json / 直下 README の
+- D. 16 plugin の version が 4 箇所 (plugin.json / marketplace.json / 直下 README の
   一覧テーブル / plugin README の `## バージョン` 節) で一致する
 
 exec form が必要な理由: shell form (`args` 無し) では `command` 全体が shell で
@@ -193,8 +191,8 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str] | None] = {
         "8e55e12971027e180cddba7a861d505310ef4bf37c7753926cdfa232cac0d02a",
     ),
     "natsuume-writing": (
-        194,
-        "63c76f4494d06962cec7372e968340b865078f1e6c5e780543651fb169b0bbf2",
+        181,
+        "e033c2ff52ba9799ab772102e1dd5ff34b9e578b31922c07776f9e446ee37f1e",
     ),
     "pre-merge-cross-review": (
         832,
@@ -213,8 +211,8 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str] | None] = {
         "90626da44b2df5eeae7466555da039d3d02912b2ecd145ec8ad1297ce0e93d72",
     ),
     "ui-discipline": (
-        442,
-        "3a6785133e2803b6e7e33105ca0c835106a66fb06bee411dc3bf22586ab84419",
+        425,
+        "e90df5f278bcc0ea72e8b3d36262a5874381d5d659ebec4127cba83003d8563e",
     ),
 }
 
@@ -238,28 +236,24 @@ UNOBSERVED_TOOL_KEYWORDS = (
 # 説明文書に書かない経緯記述の語。
 HISTORY_NARRATIVE_WORDS = ("以前は", "かつては", "#398")
 
-# 直下 README の移行案内の節と、そこに必須の語 (同一文に両方が現れること)。
-MIGRATION_HEADING = "## 旧 Codex 配布からの移行"
-AUTO_REMOVAL_NOTICE_WORDS = ("2.1.193", "自動")
-
 # 4 箇所 (plugin.json / marketplace.json / 直下 README の一覧テーブル /
 # plugin README の `## バージョン` 節) で一致させる version。
 EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
-    "git-guardrails": "0.7.3",
-    "enforce-draft-pr": "0.5.7",
+    "git-guardrails": "0.7.4",
+    "enforce-draft-pr": "0.5.8",
     "auto-lint-check": "0.8.4",
-    "pre-push-review": "7.0.1",
-    "pre-push-codex-review": "4.0.1",
-    "pre-merge-cross-review": "3.0.0",
+    "pre-push-review": "7.0.2",
+    "pre-push-codex-review": "4.0.2",
+    "pre-merge-cross-review": "3.0.1",
     "update-default-branch": "0.4.6",
-    "natsuume-statusline": "0.11.4",
-    "agent-discipline": "3.0.0",
-    "ui-discipline": "0.4.7",
-    "natsuume-writing": "0.8.2",
-    "cross-model-advisor": "5.0.6",
+    "natsuume-statusline": "0.11.5",
+    "agent-discipline": "3.0.1",
+    "ui-discipline": "0.4.8",
+    "natsuume-writing": "0.8.3",
+    "cross-model-advisor": "5.0.7",
     "rate-limit": "0.5.4",
-    "session-handoff": "0.5.2",
-    "repo-analytics": "0.2.8",
+    "session-handoff": "0.5.3",
+    "repo-analytics": "0.2.9",
 }
 
 
@@ -686,27 +680,6 @@ class GateConstraintDocumentationTest(unittest.TestCase):
                         word in section,
                         f"{plugin}: '{CONSTRAINT_HEADING}' 節に経緯記述 {word!r} を書かない",
                     )
-
-
-class RepositoryReadmeMigrationTest(unittest.TestCase):
-    """直下 README の移行案内が、削除通知が自動で出ることを版数付きで書く。"""
-
-    def migration_section(self) -> str:
-        section = markdown_section(read_text(REPO_README), MIGRATION_HEADING)
-        if section is None:
-            self.fail(f"{REPO_README}: '{MIGRATION_HEADING}' 節が無い")
-        return section
-
-    def test_section_states_the_automatic_removal_notice(self) -> None:
-        section = self.migration_section()
-        sentences = [part for part in re.split(r"[。\n]", section) if part.strip()]
-        self.assertTrue(
-            any(
-                all(word in sentence for word in AUTO_REMOVAL_NOTICE_WORDS)
-                for sentence in sentences
-            ),
-            f"{MIGRATION_HEADING} 節に {AUTO_REMOVAL_NOTICE_WORDS} を同じ文で含める",
-        )
 
 
 class PluginVersionSyncTest(unittest.TestCase):

@@ -6,8 +6,7 @@ context 使用率が閾値を超えたときに handoff ドキュメントの作
 
 ## バージョン
 
-v0.5.2
-
+v0.5.3
 ## 機能概要
 
 producer と consumer で構成されます。
@@ -173,7 +172,7 @@ context 使用率キャッシュの producer が未構成の場合は、続け�
 | ファイル | 用途 |
 |---------|------|
 | `scripts/setup-wrapper.sh` | setup skill から呼ばれる設置スクリプト本体 (inspect / install-wrap / install-cache-only / regenerate-launcher) |
-| `scripts/context-cache-dump.sh` | natsuume-statusline v0.6.0 の同名ファイルの同梱コピー (`dump_context_cache` 関数)。launcher の dump 処理から解決・source される |
+| `scripts/context-cache-dump.sh` | natsuume-statusline の `statusline/context-cache-dump.sh` の同梱コピー (`dump_context_cache` 関数)。launcher の dump 処理から解決・source される |
 
 ## 関連情報
 

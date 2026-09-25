@@ -479,7 +479,7 @@ python3 compute_leadtime.py \
 
 ### 個別の実行時挙動への対応
 
-- `repos[].closedIssues == 0` のリポジトリでも、OPEN issue が ready 到達済みの qualifying PR を持てば `mainSeries` に `completionBasis == "ready_unmerged"` として編入されうる (mainSeries への編入は issue の `state` を問わないため、closedIssues の値だけでは mainSeries 対象外と断定できない)。レポート・サマリで「ready 済み・未 merge」のタスクがあると記載してよいかどうかは、`mainSeries` に `completionBasis == "ready_unmerged"` のレコードが 1 件以上存在するかで判定する (実メンバーシップ判定。派生カウンタ `repos[].openReadyPrs` による判定は廃止する — `openReadyPrs` は issue との紐付けを問わない repo 単位の PR 集計であり、mainSeries への編入有無と一致しない)。該当レコードが無いにもかかわらず `closedIssues == 0` の repo は、`repos[].mergedPrs` / `repos[].openReadyPrs` (merged PR 系の補助指標) のみで報告し、主系列 (`mainSeries`) の対象外である旨を明記する。エラーとして扱わない。
+- `repos[].closedIssues == 0` のリポジトリでも、OPEN issue が ready 到達済みの qualifying PR を持てば `mainSeries` に `completionBasis == "ready_unmerged"` として編入されうる (mainSeries への編入は issue の `state` を問わないため、closedIssues の値だけでは mainSeries 対象外と断定できない)。レポート・サマリで「ready 済み・未 merge」のタスクがあると記載してよいかどうかは、`mainSeries` に `completionBasis == "ready_unmerged"` のレコードが 1 件以上存在するかで判定する (実メンバーシップ判定。派生カウンタ `repos[].openReadyPrs` では判定しない — `openReadyPrs` は issue との紐付けを問わない repo 単位の PR 集計であり、mainSeries への編入有無と一致しない)。該当レコードが無いにもかかわらず `closedIssues == 0` の repo は、`repos[].mergedPrs` / `repos[].openReadyPrs` (merged PR 系の補助指標) のみで報告し、主系列 (`mainSeries`) の対象外である旨を明記する。エラーとして扱わない。
 - `markerCoverage[].coverage == 0.0` (該当 repo × 月に着手マーカーが 1 件も無い) はエラーにせず「marker coverage 0%」としてそのまま報告する。`coverage == null` (`closedIssues == 0`、観測不能) とは区別して報告する。
 - draft を経ていない PR は `resolve_ready` の契約により ready 時刻 = PR `createdAt` として `compute_leadtime.py` が解決済みである。SKILL.md 側で追加の判定は行わず、`result.json` の値をそのまま使う。
 - 再 draft 化された PR (`redraftCount > 0`) は `dataQuality.redraftPrCount` の件数をそのまま「測定上の限界」チェックリストで開示する (上記チェックリスト参照)。

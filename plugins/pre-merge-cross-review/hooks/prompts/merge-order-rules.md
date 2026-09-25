@@ -21,7 +21,7 @@ fable-reviewer には:
 
 起動は reviewer ごとに PR の head SHA ごとに 1 回でよい。このセッションで現在の head SHA についてその reviewer から `Status: pass` / `Status: findings` の report を受け取っている場合に限り、その reviewer を再起動しない (ローカル記録の有無は判断材料にしない。gate が受理する状態かどうかは gate 自身が判定する)。`Status: execution-failed` の場合は原因を解消してから、判定コマンドの実行を含めて再起動してよい。report の findings を分類・対応し、head SHA が変わる commit を追加した場合は、次の merge 試行の前に判定コマンドの実行から同じ手順で再実行する。report を受け取った後の `gh pr merge` で、merge gate がローカルの codex review 記録を検証して merge に進む。Fable review の report は findings を分類・対応するためだけに使い、merge gate は Fable review を見ない (Fable review をスキップしても merge は止まらない)。
 
-**境界**: 本規律は permission mode に依らず適用する (auto 以外でも手順は同じで無害)。merge gate に deny された後にその案内に従って起動することも引き続きできるが、それは復旧経路であり既定の順序ではない。その場合も codex-reviewer を起動するときは、同じ判定で fable-reviewer を並列に起動する。
+**境界**: 本規律は permission mode に依らず適用する (auto 以外でも手順は同じで無害)。merge gate に deny された後にその案内に従って起動することもできるが、それは復旧経路であり既定の順序ではない。その場合も codex-reviewer を起動するときは、同じ判定で fable-reviewer を並列に起動する。
 
 <!-- rule:merge-command-form -->
 ## 2. merge コマンドの形

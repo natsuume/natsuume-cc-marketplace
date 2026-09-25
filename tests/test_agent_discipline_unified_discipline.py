@@ -71,7 +71,7 @@ REPO_README = ROOT / "README.md"
 PLUGIN_README = PLUGIN_DIR / "README.md"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "3.0.0"
+PLUGIN_VERSION = "3.0.1"
 
 INJECT_ALWAYS = "inject-always.sh"
 INJECT_RULES_PART = "inject-rules-part.sh"

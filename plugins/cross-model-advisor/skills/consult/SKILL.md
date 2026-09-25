@@ -60,7 +60,7 @@ pre-push-codex-review plugin の lifecycle hook が checkpoint を要求した�
 
 ## 2. host ごとの起動
 
-プロンプト本文を Bash の command 文字列に一切載せない (heredoc・引数直渡しは使わない)。Claude Code では role 固有 runner が prompt file transport と detached job tracking を所有する。Codex host では従来どおり分離された PTY stdin channel を使う。
+プロンプト本文を Bash の command 文字列に一切載せない (heredoc・引数直渡しは使わない)。Claude Code では role 固有 runner が prompt file transport と detached job tracking を所有する。Codex host では分離された PTY stdin channel を使う。
 
 ### Claude Code host
 

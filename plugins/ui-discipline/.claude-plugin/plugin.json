@@ -1,6 +1,6 @@
 {
   "name": "ui-discipline",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "UI 実装規律の常時注入と実装パターンを提供する"
 }

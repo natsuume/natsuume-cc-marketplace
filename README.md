@@ -18,40 +18,25 @@ claude plugin install git-guardrails@natsuume-plugins
 
 > Claude Code セッション内からは `/plugin marketplace add natsuume/natsuume-cc-marketplace` → `/plugin install <plugin-name>@natsuume-plugins` でも同じ操作ができます。
 
-## 旧 Codex 配布からの移行
-
-本リポジトリはかつて OpenAI Codex CLI 向けにも plugin を配布していましたが、2026-07 に廃止しました (fable-risk-labeler plugin は Codex 実行を前提としていたため plugin ごと廃止)。marketplace の更新だけでは Codex 側に install 済みの plugin の local config / cache は削除されないため、旧配布を利用していた場合は以下で撤去してください:
-
-```bash
-# Codex 側: install 済みの各 plugin を削除 (config / cache も削除される)
-# <plugin-name> は実際の plugin 名に置換する (例: codex plugin remove agent-discipline@natsuume-plugins)
-codex plugin remove <plugin-name>@natsuume-plugins
-
-# Codex 側: marketplace 登録を削除
-codex plugin marketplace remove natsuume-plugins
-```
-
-Claude Code 側で fable-risk-labeler を install していた場合は、Claude Code 2.1.193 以降なら起動時に自動で削除通知が出ます。それより古いバージョンでは `claude plugin uninstall fable-risk-labeler@natsuume-plugins` で削除してください。
-
 ## プラグイン一覧
 
 | プラグイン | バージョン | 説明 |
 |-----------|------------:|------|
-| [git-guardrails](#git-guardrails) | 0.7.3 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
-| [enforce-draft-pr](#enforce-draft-pr) | 0.5.7 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
+| [git-guardrails](#git-guardrails) | 0.7.4 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
+| [enforce-draft-pr](#enforce-draft-pr) | 0.5.8 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.8.4 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 7.0.1 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
-| [pre-push-codex-review](#pre-push-codex-review) | 4.0.1 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
-| [pre-merge-cross-review](#pre-merge-cross-review) | 3.0.0 | `gh pr merge` 前に codex review 完了 (PR 番号と head SHA を記録したローカル記録) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させ、Fable 週次枠に余裕があれば Fable review も並列に実行して report を親 session に返す |
+| [pre-push-review](#pre-push-review) | 7.0.2 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-codex-review](#pre-push-codex-review) | 4.0.2 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
+| [pre-merge-cross-review](#pre-merge-cross-review) | 3.0.1 | `gh pr merge` 前に codex review 完了 (PR 番号と head SHA を記録したローカル記録) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させ、Fable 週次枠に余裕があれば Fable review も並列に実行して report を親 session に返す |
 | [update-default-branch](#update-default-branch) | 0.4.6 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
-| [natsuume-statusline](#natsuume-statusline) | 0.11.4 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
-| [agent-discipline](#agent-discipline) | 3.0.0 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
-| [ui-discipline](#ui-discipline) | 0.4.7 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
-| [natsuume-writing](#natsuume-writing) | 0.8.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
-| [cross-model-advisor](#cross-model-advisor) | 5.0.6 | Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
+| [natsuume-statusline](#natsuume-statusline) | 0.11.5 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
+| [agent-discipline](#agent-discipline) | 3.0.1 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
+| [ui-discipline](#ui-discipline) | 0.4.8 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
+| [natsuume-writing](#natsuume-writing) | 0.8.3 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
+| [cross-model-advisor](#cross-model-advisor) | 5.0.7 | Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.4 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
-| [session-handoff](#session-handoff) | 0.5.2 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
-| [repo-analytics](#repo-analytics) | 0.2.8 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
+| [session-handoff](#session-handoff) | 0.5.3 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
+| [repo-analytics](#repo-analytics) | 0.2.9 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
 
 ---
 
@@ -75,7 +60,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 |---------|---------|------|
 | rebase-workflow | `/rebase-workflow` | rebase を用いてリモートのデフォルトブランチの変更を作業ブランチに取り込む |
 
-> v0.1.0 までは `gh pr create` の `--draft` 自動付与もこのプラグインに含まれていましたが、責務分離のため [enforce-draft-pr](#enforce-draft-pr) プラグインへ切り出しました。draft 強制を使いたい場合はそちらを別途インストールしてください。
+> `gh pr create` への `--draft` 自動付与は、責務分離のため [enforce-draft-pr](#enforce-draft-pr) プラグインが提供します。draft 強制を使いたい場合はそちらを別途インストールしてください。
 
 ### キーワード
 
@@ -85,7 +70,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## enforce-draft-pr
 
-`gh pr create` に `--draft` フラグを自動付与する `PreToolUse` フックプラグインです。「PR は必ず draft で起こし、レビュー後に手動で ready 化する」運用を強制したい場合に使います。git-guardrails から切り出した独立プラグインで、利用は任意 (使いたくない場合はインストールしないだけ) です。
+`gh pr create` に `--draft` フラグを自動付与する `PreToolUse` フックプラグインです。「PR は必ず draft で起こし、レビュー後に手動で ready 化する」運用を強制したい場合に使います。git-guardrails とは独立したプラグインで、利用は任意 (使いたくない場合はインストールしないだけ) です。
 
 ### 機能
 
@@ -133,7 +118,7 @@ ignore コメント挿入を編集時に禁止し、 `git commit` 直前に stag
 
 ## pre-push-review
 
-`git push` を実行する前に **2 subagent によるレビュー** (`pre-push-review:code-reviewer` = self-contained correctness バグ検出 + `pre-push-review:security-reviewer` = self-contained security review) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです (`pre-commit-review` の後継)。codex review (OpenAI クロスモデルレビュー) の gate は [pre-push-codex-review](#pre-push-codex-review) プラグインが独立して担当します。両プラグインを併用すると、Anthropic 系 (code-reviewer) と OpenAI 系 (codex review) の **独立した 2 つのバグレビュー** に security review を加えた 3 レビュー構成になり、脆弱性経路も同じ最終形を観点でレビューされます。
+`git push` を実行する前に **2 subagent によるレビュー** (`pre-push-review:code-reviewer` = self-contained correctness バグ検出 + `pre-push-review:security-reviewer` = self-contained security review) を必ず実行させ、未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。codex review (OpenAI クロスモデルレビュー) の gate は [pre-push-codex-review](#pre-push-codex-review) プラグインが独立して担当します。両プラグインを併用すると、Anthropic 系 (code-reviewer) と OpenAI 系 (codex review) の **独立した 2 つのバグレビュー** に security review を加えた 3 レビュー構成になり、脆弱性経路も同じ最終形を観点でレビューされます。
 
 2 レビューはいずれも subagent 経由で実行されます。これにより:
 
@@ -148,7 +133,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ### 設計上のメリット
 
-- **commit 履歴の意味的解像度を保てる**: 初期実装 / code review 指摘修正 / security 指摘修正をそれぞれ独立 commit として記録できる (`git log` / `blame` / `bisect` の精度が上がる)。`pre-commit-review` ではこれらすべてが 1 commit に圧縮されていた
+- **commit 履歴の意味的解像度を保てる**: 初期実装 / code review 指摘修正 / security 指摘修正をそれぞれ独立 commit として記録できる (`git log` / `blame` / `bisect` の精度が上がる)。commit 単位でレビューを強制する方式では、これらすべてが 1 commit に圧縮される
 - **WIP / checkpoint commit の自由度**: 中間 commit を自由に重ねられるため、長時間 uncommitted 状態による作業損失リスクが減る
 - **Web UI / IDE 経由の PR 作成にも対応**: push 段階で gate するため、PR 作成手段 (`gh CLI` / Web UI / IDE / API) のいずれを使われても **precondition (remote branch の存在) を破壊** することで構造的に PR 成立を阻止できる
 - **多 commit PR の review 回数削減**: PR 全差分に対して 1 周のループで済む (実測ベースで 40-48% の review 回数削減見込み。1-commit PR では同等)
@@ -166,7 +151,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 | Agent 名 | 説明 |
 |---------|------|
-| `code-reviewer` | `git push` 前のレビューループの code review (correctness バグ検出) ステップで起動する self-contained subagent (v3.0.0 で追加)。 logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す。 v2.x までの Skill `/code-review` を置換 |
+| `code-reviewer` | `git push` 前のレビューループの code review (correctness バグ検出) ステップで起動する self-contained subagent。 logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す |
 | `security-reviewer` | `git push` 前のレビューループの security review ステップで起動する self-contained subagent。 input validation / authn / crypto / injection / data exposure の各カテゴリを自前の prompt で single-pass review し、 markdown report を親 session に返す。 標準 `/security-review` skill を invoke しないのは、 (1) confidence / severity 付きの parent-safe report 契約を固定し、 (2) SubagentStart / SubagentStop / SubagentHandback の lifecycle hook で reviewer の実行を marker として検知し、 (3) `tools` から `Agent` を除外して reviewer を read-only に保つため |
 
 ### キーワード
@@ -215,7 +200,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 `gh pr merge` を実行する前に codex review (OpenAI クロスモデルレビュー) の完了を確認するプラグインです。codex-reviewer subagent はレビュー対象の PR 番号と head SHA をローカル記録として repo の git-dir 直下に保存し、merge gate はその記録が PR 番号と現在の head SHA の両方に一致する場合だけ merge を通します (記録が無い・一致しなければ deny)。GitHub には何も書かないため、別マシン・別 clone から merge する場合はそこで再レビューが必要です。Fable 週次枠の使用率が閾値以下のときは、codex-reviewer と並列に fable-reviewer subagent (PR 説明・関連 issue の受入基準との整合と設計境界を見る read-only のレビュー) も起動し、その report を親 session に返します (merge gate は Fable review を見ません)。SessionStart では、auto mode の classifier に subagent 起動を拒否されないよう「`gh pr merge` の前に cross review を起動する」規律を注入します。個人環境 (ChatGPT Plus の codex CLI) 向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させます。push 毎の codex review を要求する [pre-push-codex-review](#pre-push-codex-review) との併用は前提としていません。
 
-詳細な gate 手順・ローカル記録の仕様・既知の制約・旧名からの移行手順は [plugins/pre-merge-cross-review/README.md](plugins/pre-merge-cross-review/README.md) を参照してください。
+詳細な gate 手順・ローカル記録の仕様・既知の制約は [plugins/pre-merge-cross-review/README.md](plugins/pre-merge-cross-review/README.md) を参照してください。
 
 ### キーワード
 
@@ -267,23 +252,23 @@ Claude Code の `statusLine` 表示 (カレントパス / GitHub リポジトリ
 
 ## agent-discipline
 
-Claude Code の振る舞い規律 (= agent としての discipline) を配送する system prompt plugin + gh issue/pr 物理層検知です。旧 `decompose-bash` と `auto-followthrough` を吸収し、個人 marketplace の plugin 数肥大化を抑えるため、機能ごとに別 plugin に分けず 1 plugin 内に複数のルール群を集約しています。
+Claude Code の振る舞い規律 (= agent としての discipline) を配送する system prompt plugin + gh issue/pr 物理層検知です。個人 marketplace の plugin 数肥大化を抑えるため、機能ごとに別 plugin に分けず 1 plugin 内に複数のルール群を集約しています。
 
-以下の 6 レイヤと v0.4.0 以降の説明は配送設計です。
+以下の 6 レイヤは配送設計です。
 
-v0.4.0 で PreToolUse `type:agent` hook を追加し、 `gh (issue|pr) (create|edit)` の body content をセクション 2.1 / 3.1 の禁止表現規範で semantic 検証する **検知層** を新設しました。 `--body inline` と `--body-file PATH` の両形式に対応 (`block-commit-lint` plugin が PR body に `--body-file` を強制している repo policy との整合上、 ファイル読み取りが必要なため `type: agent` を採用)。 `model` はメインセッションのモデルとは独立に、コストと応答時間を抑えるため明示的に `claude-sonnet-5` に pin し、 各 hook の `if: "Bash(gh <cmd>:*)"` filter (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) で 4 entries (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) に分割した hook config 段階の物理 prefilter と組み合わせて、 旧 `llm-default-branch-push-poc` 廃止教訓の非対称 SPOF (= 全 Bash 発火の hook が暗黙 default = haiku ダウン時に全 Bash を PreToolUse error にする経路) を構造的に排除しました。 非該当 Bash 呼び出し (= `ls` / `git status` / `rg` / `gh issue view` 等の大半) では agent subagent がそもそも起動しません。 これにより誘導層 (v0.3.0 までの additionalContext 注入) と検知層 (v0.4.0 の物理 intercept) の defense-in-depth が成立しています。
+**検知層** は PreToolUse `type:agent` hook で、 `gh (issue|pr) (create|edit)` の body content をセクション 2.1 / 3.1 の禁止表現規範で semantic 検証します。 `--body inline` と `--body-file PATH` の両形式に対応します (`block-commit-lint` plugin が PR body に `--body-file` を強制している repo policy との整合上、 ファイル読み取りが必要なため `type: agent` を採用しています)。 `model` はメインセッションのモデルとは独立に、コストと応答時間を抑えるため明示的に `claude-sonnet-5` に pin し、 各 hook の `if: "Bash(gh <cmd>:*)"` filter (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) で 4 entries (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) に分割した hook config 段階の物理 prefilter と組み合わせています。 これにより、全 Bash に発火する agent hook では暗黙 default の model が利用できないときに全 Bash 呼び出しが PreToolUse error になる、という非対称 SPOF を構造的に排除しています。 非該当 Bash 呼び出し (= `ls` / `git status` / `rg` / `gh issue view` 等の大半) では agent subagent がそもそも起動しません。 誘導層 (additionalContext 注入) と検知層 (物理 intercept) で defense-in-depth を構成します。
 
-v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定化は要承認」 非対称ルールへ強化しました。 Claude が設計レベルで複数案 (A 案 / B 案 / C 案) を検討した結果、 ユーザに `AskUserQuestion` で意思決定を委ねず自分で推奨を選んで issue body / PR 説明 / plan / commit に固定化してしまう failure mode を、 名指し禁止表現 (8 つの自己検知トリガー: 推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 「選択点なし」 即断) + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出で塞ぎます。 規律の checkpoint を「思考の中」 ではなく「成果物への書き出しの瞬間」 に置く非対称構造により、 検討段階での比較・推奨思考自体は禁止せず、 issue 駆動開発の前提「issue body = ユーザ承認済み契約書」 のみを守る形に整理されました。 v0.2.0 で `/goal` 等の並列 session フロー向けに claim comment (先着判定) + branch push (確定的排他) + ラベル削除規律をセクション 7 として追加 (誤着手 / ラベル誤削除事故への構造的対策)。 v0.1.1 で during 系を `inject-always.sh` に移動 (= permission_mode 非依存化、 default / acceptEdits などでも届く) し、 PostToolBatch 経路と once-per-turn dedup logic を撤去 (per-turn 2 回 inject → 1 回)。
+セクション 2 / 3 は「思考は自由、 成果物への固定化は要承認」 の非対称ルールです。 Claude が設計レベルで複数案 (A 案 / B 案 / C 案) を検討した結果、 ユーザに `AskUserQuestion` で意思決定を委ねず自分で推奨を選んで issue body / PR 説明 / plan / commit に固定化してしまう failure mode を、 名指し禁止表現 (8 つの自己検知トリガー: 推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 「選択点なし」 即断) + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出で塞ぎます。 規律の checkpoint を「思考の中」 ではなく「成果物への書き出しの瞬間」 に置く非対称構造により、 検討段階での比較・推奨思考自体は禁止せず、 issue 駆動開発の前提「issue body = ユーザ承認済み契約書」 のみを守ります。 セクション 7 は `/goal` 等の並列 session フロー向けの claim comment (先着判定) + branch push (確定的排他) + ラベル削除規律で、 誤着手 / ラベル誤削除への構造的対策です。 during 系は `inject-always.sh` から配送するため `permission_mode` に依存せず、 default / acceptEdits などでも届きます。
 
-### 配送される 6 レイヤ (v0.4.0 で検知層を追加)
+### 配送される 6 レイヤ
 
 | レイヤ | 配送経路 | inject / 発火条件 | 内容 |
 |---|---|---|---|
 | **物理層 (Bash 分解)** | `SessionStart` (`inject-always.sh`) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
-| **before 系** | `SessionStart` (`inject-always.sh`) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー 8 項目 / 名指し禁止表現 (v0.3.0)、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出 + PR / plan / commit にも同規律を適用 (3.1 / 3.2、 v0.3.0)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
+| **before 系** | `SessionStart` (`inject-always.sh`) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー 8 項目 / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出 + PR / plan / commit にも同規律を適用 (3.1 / 3.2)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
 | **during 系** | `SessionStart` (`inject-always.sh`) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様の再確認では止まらない (= issue 起票時に決まっているはず)。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
-| **排他系** (v0.2.0) | `SessionStart` (`inject-always.sh`) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成。 branch 名規約 `<prefix>/issue-<N>-<slug>`。 merge による issue close 後の完了時クリーンアップ (ラベル + claim comment の削除) は必須ではなく、行う場合は claim comment の `session=` 値が自分のセッション ID と一致する場合のみ (`session=` の無い旧形式 claim は他 session 扱いで削除禁止) |
-| **検知系 (gh issue/pr body)** (v0.4.0) | `PreToolUse` (`hooks.json` 内に inline 定義の type:agent hook を 4 entries) | Bash ツール呼び出し時、 個別 hook の `if: "Bash(gh <cmd>:*)"` filter で `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` 該当時のみ agent subagent を起動 (= hook config 段階の物理 prefilter、 非該当 Bash には影響ゼロ) | 誘導層 (before 系 2.1 / 3.1) で禁止された推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み を、 `--body inline` / `--body-file PATH` の双方から抽出して semantic 判定 → 違反時 `{"ok": false}` で block。 model はメインセッションのモデルとは独立に、コストと応答時間を抑えるため `claude-sonnet-5` に pin (narrow scope と組合せて blast radius を narrow に保つ) |
+| **排他系** | `SessionStart` (`inject-always.sh`) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成。 branch 名規約 `<prefix>/issue-<N>-<slug>`。 merge による issue close 後の完了時クリーンアップ (ラベル + claim comment の削除) は必須ではなく、行う場合は claim comment の `session=` 値が自分のセッション ID と一致する場合のみ (`session=` を持たない claim comment は自分のものと確認できないため他 session の claim として扱い、削除しない) |
+| **検知系 (gh issue/pr body)** | `PreToolUse` (`hooks.json` 内に inline 定義の type:agent hook を 4 entries) | Bash ツール呼び出し時、 個別 hook の `if: "Bash(gh <cmd>:*)"` filter で `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` 該当時のみ agent subagent を起動 (= hook config 段階の物理 prefilter、 非該当 Bash には影響ゼロ) | 誘導層 (before 系 2.1 / 3.1) で禁止された推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み を、 `--body inline` / `--body-file PATH` の双方から抽出して semantic 判定 → 違反時 `{"ok": false}` で block。 model はメインセッションのモデルとは独立に、コストと応答時間を抑えるため `claude-sonnet-5` に pin (narrow scope と組合せて blast radius を narrow に保つ) |
 | **after 系** | `UserPromptSubmit` (`inject-auto.sh`) | `permission_mode == "auto"` 時のみ | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、 auto mode セッションの `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
@@ -294,29 +279,16 @@ v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-always` | SessionStart | 常時適用ルール (物理層 + before 系 + closing keyword 規約 + during 系 + 排他系) を `additionalContext` として一括注入する。 内訳: (1) Bash 分解、 (2) 設計 / 仕様事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) と自己検知トリガー 8 項目 / 名指し禁止表現 (v0.3.0)、 (3) issue 詳細化と body 全埋め込み規約 + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出 + PR / plan / commit へも同規律適用 (3.1 / 3.2、 v0.3.0)、 (4) issue 粒度と sub-issue + `#N` 関係性、 (5) PR closing keyword、 (6) 自律作業中の判断境界、 (7) 連続 issue 解決時の claim comment + branch push 排他制御 |
+| `inject-always` | SessionStart | 常時適用ルール (物理層 + before 系 + closing keyword 規約 + during 系 + 排他系) を `additionalContext` として一括注入する。 内訳: (1) Bash 分解、 (2) 設計 / 仕様事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) と自己検知トリガー 8 項目 / 名指し禁止表現、 (3) issue 詳細化と body 全埋め込み規約 + 起票直前 / pick up 時 self-check + 過去 session 独断の遡及検出 + PR / plan / commit へも同規律適用 (3.1 / 3.2)、 (4) issue 粒度と sub-issue + `#N` 関係性、 (5) PR closing keyword、 (6) 自律作業中の判断境界、 (7) 連続 issue 解決時の claim comment + branch push 排他制御 |
 | **(inline) type:agent hook × 4** | PreToolUse (matcher: Bash) | 4本の pinned agent hook が対象4 commandを独立 read-only process で評価し、違反時のみ deny する |
 | `inject-auto` | UserPromptSubmit | `permission_mode == "auto"` 時だけ after 系を注入する |
 | `check-uncommitted-on-session-start` | UserPromptSubmit (session 内初回のみ) | auto で未コミット変更を4分類する |
-
-### 統合経緯 (旧 plugin との関係)
-
-| 旧 plugin | 吸収先 | 等価機能 |
-|---|---|---|
-| `decompose-bash` (v0.1.1) | `inject-always.sh` の「物理層」 セクション | Bash コマンド分解の `additionalContext` 注入 |
-| `auto-followthrough` (v0.2.3) | `inject-auto.sh` + `check-uncommitted-on-session-start.sh` | auto mode 時の commit→push→PR→merge 自走 / 未コミット分類チェック |
-
-旧 2 plugin は本 plugin 導入時に同 PR で削除されています。 hook 構造と機能はそのまま維持されており、 マーカー dir のみ `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されています (移行直後の旧 marker は OS の tmpfs cleanup で自然消去)。
+| `inject-discipline` | UserPromptSubmit | 分業規律を配送する |
+| `block-fable-subagent` | PreToolUse (`Agent\|Task`) | サブエージェントの Fable 実行を防止する (`model: "fable"` を明示し、Fable 週次枠の使用率が閾値以下の場合に限り許可する) |
 
 ### キーワード
 
 `system-prompt` `discipline` `auto` `issue-driven` `bash` `decompose` `askuserquestion` `permission-mode` `hook` `guardrail`
-
-### fable-discipline からの移行 (v0.8.0)
-
-- `fable-discipline` は v0.8.0 で `agent-discipline` に統合され、本リポジトリから削除されました。分業規律の配送 (`inject-discipline.sh`) とサブエージェントの Fable 実行防止 (`block-fable-subagent.sh`、PreToolUse `Agent|Task`) は `agent-discipline` の hook として提供されます。
-- `fable-discipline` を install 済みの利用者は、当該 plugin を uninstall したうえで `agent-discipline` を update してください。
-- 旧 state dir (`${TMPDIR:-/tmp}/fable-discipline-state`) は本統合後は参照されなくなり、OS の tmpfs cleanup により自然消去されます (手動削除は不要)。
 
 ---
 
@@ -389,9 +361,9 @@ runner は Codex 起動前の companion job 集合を保持します。rescue / 
 
 通常 subagent が相談を必要とする場合、wrapper を直接実行せず self-contained な request を親へ返します。親が advisor runner を起動できるのは、委任指示が cross-model-advisor の使用を明示的に許可した場合だけです (相談は課金・利用枠の消費を伴う呼び出しのため)。
 
-v0.2.0 からは相談規律に加えて `/codex:rescue` の thread 選択規律 (`rule:rescue-thread`) も注入します。rescue 起動時の `--resume` / `--fresh` を Claude が自律決定して常に付与し、thread 選択の質問で自走を止めません (`--resume` は「直前の rescue と同一論点の続き + 対象がセッション内最新の再開可能 task と確実に分かる場合」のみ、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先)。openai-codex plugin の「フラグ指定時は質問しない」挙動 (v1.0.6) を前提とするため、外部 plugin 側は無変更です。
+相談規律に加えて `/codex:rescue` の thread 選択規律 (`rule:rescue-thread`) も注入します。rescue 起動時の `--resume` / `--fresh` を Claude が自律決定して常に付与し、thread 選択の質問で自走を止めません (`--resume` は「直前の rescue と同一論点の続き + 対象がセッション内最新の再開可能 task と確実に分かる場合」のみ、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先)。openai-codex plugin (v1.0.6 以降) の「フラグ指定時は質問しない」挙動を前提とし、外部 plugin には手を加えません。
 
-Claude Code からの利用には [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) と Codex CLI + 認証が必要です。この plugin は Claude Code から異種モデルの Codex へ相談するためのものなので、Codex marketplace では配布しません。Claude Code marketplace の hook、Skill、wrapper は従来どおり利用できます。
+Claude Code からの利用には [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) と Codex CLI + 認証が必要です。
 
 ### 機能
 
