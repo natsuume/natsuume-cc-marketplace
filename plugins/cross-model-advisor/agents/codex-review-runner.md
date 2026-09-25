@@ -82,7 +82,7 @@ find "$HOME/.claude/plugins/cache" -path '*cross-model-advisor*/scripts/run-code
 
 ## review cadence
 
-`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の正常終了と
+`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の正常終了と
 同じく、この runner の正常終了は pre-push-codex-review plugin の review cadence enforcement が
 消費する。この runner 自身は advisor を起動せず、gate を迂回しない。起動時の PreToolUse が deny
 した場合は、その理由を terminal failure として親へ返す。

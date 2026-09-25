@@ -35,11 +35,11 @@ RUNNERS = {
     "advisor": "cross-model-advisor:codex-advisor-runner",
 }
 # レビュー系 subagent の namespace。review の起動・計数は pre-push-codex-review /
-# pre-merge-codex-review plugin の責務であり、cross-model-advisor の SubagentStart /
+# pre-merge-cross-review plugin の責務であり、cross-model-advisor の SubagentStart /
 # SubagentStop matcher・hooks.json はこれらに関知しない (マッチしない)。
 PRE_PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
 PRE_PUSH_CODEX_REVIEWER_LEGACY = "pre-push-review:codex-reviewer"
-PRE_MERGE_CODEX_REVIEWER = "pre-merge-codex-review:codex-reviewer"
+PRE_MERGE_CODEX_REVIEWER = "pre-merge-cross-review:codex-reviewer"
 # cross-model-advisor 自身の PreToolUse gate (classifyModelLaunch) が分類しないコマンド例
 # として使う、pre-push-codex-review plugin が所有する codex review wrapper。
 PRE_PUSH_CODEX_WRAPPER = (
@@ -1296,7 +1296,7 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
             )
         ]
         self.assertEqual(["^SubagentHandback$"], post_tool_use_matchers)
-        # review の起動・計数は pre-push-codex-review / pre-merge-codex-review
+        # review の起動・計数は pre-push-codex-review / pre-merge-cross-review
         # plugin の責務であり、cross-model-advisor の hooks.json は reviewer
         # namespace に関知しない。
         serialized = json.dumps(hooks, ensure_ascii=False)
@@ -1309,7 +1309,7 @@ class CodexRunnerArtifactContractTest(unittest.TestCase):
         # role 固有 runner namespace にのみ fullmatch し、review 系 reviewer
         # namespace (canonical / legacy いずれも) や類似の未承認 namespace には
         # match しないことを固定する (review の計数は pre-push-codex-review /
-        # pre-merge-codex-review plugin の責務であり、cross-model-advisor は関知
+        # pre-merge-cross-review plugin の責務であり、cross-model-advisor は関知
         # しない)。
         manifest = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
         hooks = manifest["hooks"]

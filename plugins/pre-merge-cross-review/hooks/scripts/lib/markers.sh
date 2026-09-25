@@ -1,20 +1,20 @@
 #!/bin/bash
 # markers.sh
-# pre-merge-codex-review プラグインが git-dir 直下に置くファイルの名前を単一ソース化する。
+# pre-merge-cross-review プラグインが git-dir 直下に置くファイルの名前を単一ソース化する。
 #
-# codex review wrapper が pending attestation と投稿用のレビュー本文を書き、 subagent
-# lifecycle hook (auto-mark.sh) が launch attestation / tombstone を扱って pending を
-# final attestation へ昇格する。 merge gate は final attestation と本文ファイルを読み、
-# PR にレビューコメントを投稿してから merge を通す。 これらの path が 1 文字でも乖離すると
-# attestation は永遠に一致せず merge が通らなくなるため、 ここに集約する。
+# codex review wrapper が pending attestation を書き、 subagent lifecycle hook (auto-mark.sh)
+# が launch attestation / tombstone を扱って pending を final attestation へ昇格する。 merge
+# gate は final attestation を読み、 PR 番号と現在の head SHA に一致すれば merge を通す。
+# これらの path が 1 文字でも乖離すると attestation は永遠に一致せず merge が通らなくなるため、
+# ここに集約する。 Fable review は記録を作らない (report は親 session に返るだけ)。
 #
 # ## 本 plugin が扱うファイル
 #
 # - PRE_MERGE_FINAL_MARKER   ← report / HEAD 検証を通過した final attestation
 # - PRE_MERGE_PENDING_MARKER ← codex review wrapper が書く pending attestation
-# - PRE_MERGE_COMMENT_BODY   ← codex review wrapper が書く投稿用のレビュー本文
 # - LAUNCH_ATTESTATION       ← SubagentStart が記録するレビュー開始時 HEAD (agent_id ごと)
 # - LAUNCH_TOMBSTONE         ← attestation 消費時に排他作成される one-shot 記録 (agent_id ごと)
+# - HANDBACK_REPORT          ← SubagentHandback で届いた report の Status 判定結果 (agent_id ごと)
 # - TERMINAL_SENTINEL        ← wrapper が exit 時に書く run ごとの終了状態 (run id ごと)
 #
 # attestation 類のファイル名の prefix はすべて `.claude-pre-merge-` であり、 pre-push 系が
@@ -29,23 +29,14 @@
 #   pr=<PR 番号 (全数字)>
 #   head=<full head SHA (40 hex 小文字)>
 #
-# 投稿用の本文ファイルは 1 行目が機械可読 header で、 2 行目以降が codex review report:
-#
-#   <!-- codex-review: head=<attestation と同じ head SHA> status=pass|findings -->
-#   # Codex Review
-#   ...
-#
 # launch attestation と tombstone の内容は、 いずれも記録時点のローカル HEAD の full SHA
 # 1 行である。
 
-# 検証を通過した attestation。 gate はこれと本文ファイルの組を見てレビューを投稿する。
+# 検証を通過した attestation。 gate はこれが PR 番号と現在の head SHA に一致するかを見る。
 PRE_MERGE_FINAL_MARKER_NAME=".claude-pre-merge-codex-reviewed"
 # codex review wrapper が書く pending attestation。 auto-mark.sh が report / HEAD 検証を
 # 通過した場合にのみ final へ昇格する。
 PRE_MERGE_PENDING_MARKER_NAME=".claude-pre-merge-codex-reviewed.pending"
-# codex review wrapper が書く投稿用のレビュー本文。 gate が投稿の本文として使うため、
-# final への昇格後も残す (投稿完了時に gate が attestation と併せて掃除する)。
-PRE_MERGE_COMMENT_BODY_NAME=".claude-pre-merge-codex-comment.md"
 # SubagentStart が書く launch attestation (agent_id ごとに 1 ファイル) の prefix。
 # auto-mark.sh の SubagentStart / SubagentStop 契約が「レビュー開始時のローカル HEAD」を
 # 束縛するために使う。
@@ -70,7 +61,7 @@ HANDBACK_REPORT_PREFIX=".claude-pre-merge-handback-"
 # 終端信号にすることで、 review 本文の文面や別 run の残骸に判定が影響されない。
 # 先頭にドットを付けないのは、 このファイルが gate の検証対象ではなく実行中の run を外から
 # 観測するための一時的な信号であり、 attestation 類と区別して掃除対象を見分けやすくするため。
-TERMINAL_SENTINEL_PREFIX="pre-merge-codex-review-terminal-"
+TERMINAL_SENTINEL_PREFIX="pre-merge-cross-review-terminal-"
 
 # 引数: <git-dir>
 # 出力: attestation storage directory (= git-dir 直下)
@@ -78,7 +69,7 @@ marker_storage_dir() {
   local git_dir="$1"
 
   if [ -z "$git_dir" ]; then
-    printf '%s\n' '[pre-merge-codex-review] git-dir が空のため attestation path を解決できません。' >&2
+    printf '%s\n' '[pre-merge-cross-review] git-dir が空のため attestation path を解決できません。' >&2
     return 1
   fi
   printf '%s' "$git_dir"
@@ -102,15 +93,9 @@ pre_merge_pending_marker_path() {
   marker_path "$1" "$PRE_MERGE_PENDING_MARKER_NAME"
 }
 
-# 引数: <git-dir>
-# 出力: codex review wrapper が書く投稿用レビュー本文の path
-pre_merge_comment_body_path() {
-  marker_path "$1" "$PRE_MERGE_COMMENT_BODY_NAME"
-}
-
 # 引数: <git-dir> <run id>
 # 出力: その run の terminal sentinel
-#       (git-dir/pre-merge-codex-review-terminal-<run id>) の path
+#       (git-dir/pre-merge-cross-review-terminal-<run id>) の path
 #
 # run id の形状 (`<pid>-<epoch 秒>-<8 桁 16 進>`) の生成と検証は呼び出し側 (wrapper) の
 # 責務。 本関数は prefix に run id を連結するだけで、 run id の中身を検証しない。

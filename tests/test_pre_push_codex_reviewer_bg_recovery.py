@@ -12,7 +12,7 @@ sentinel ファイルに置くことで、判定は出力ストリームのテ�
 
 本ファイルは、その回収契約を成す一文 (canonical 文) を module 定数として固定し、
 `## Background-move recovery` セクション内に空白正規化した上で存在することを検証する。
-pre-merge-codex-review 側の codex-reviewer も同じ回収契約に従うため、両 agent で共通の
+pre-merge-cross-review 側の codex-reviewer も同じ回収契約に従うため、両 agent で共通の
 一文は `SHARED_RECOVERY_CLAUSES` として公開し、pre-merge 側の契約テストが再利用する
 (sentinel 名を含む一文と gate 名を含む resume 時の一文だけが plugin ごとに異なる)。
 """
@@ -795,14 +795,14 @@ class AgentLaunchModeHelperTest(unittest.TestCase):
 
     def test_agent_launch_line_is_detected(self) -> None:
         text = (
-            '`pre-merge-codex-review:codex-reviewer` を Agent tool で '
+            '`pre-merge-cross-review:codex-reviewer` を Agent tool で '
             '`model: "sonnet"`、foreground (`run_in_background: false`) で起動する\n'
         )
         self.assertEqual(len(agent_launch_mode_hits(text)), 1)
 
     def test_agent_launch_split_across_lines_is_detected(self) -> None:
         text = (
-            "**指示**: `pre-merge-codex-review:codex-reviewer` を Agent tool で\n"
+            "**指示**: `pre-merge-cross-review:codex-reviewer` を Agent tool で\n"
             '`model: "sonnet"`、foreground (`run_in_background: false`) で\n'
             "起動し、report を受け取る\n"
         )
@@ -810,7 +810,7 @@ class AgentLaunchModeHelperTest(unittest.TestCase):
 
     def test_natural_language_foreground_demand_is_detected(self) -> None:
         text = (
-            'Agent / Task tool で subagent_type="pre-merge-codex-review:'
+            'Agent / Task tool で subagent_type="pre-merge-cross-review:'
             'codex-reviewer", model="sonnet" を foreground 起動してください。\n'
         )
         self.assertEqual(len(agent_launch_mode_hits(text)), 1)
@@ -834,7 +834,7 @@ class AgentLaunchModeHelperTest(unittest.TestCase):
 
     def test_agent_launch_line_without_the_parameter_is_not_detected(self) -> None:
         text = (
-            '`pre-merge-codex-review:codex-reviewer` を Agent tool で '
+            '`pre-merge-cross-review:codex-reviewer` を Agent tool で '
             '`model: "sonnet"` を指定して起動する\n'
         )
         self.assertEqual(agent_launch_mode_hits(text), [])

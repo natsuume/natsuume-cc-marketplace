@@ -1,7 +1,7 @@
-"""pre-merge-codex-review の codex review wrapper が書く terminal sentinel の契約テスト。
+"""pre-merge-cross-review の codex review wrapper が書く terminal sentinel の契約テスト。
 
 wrapper は起動ごとに一意な run id を作り、その run 専用の sentinel
-(`<git-dir>/pre-merge-codex-review-terminal-<run id>`) の絶対パスと run id を案内行
+(`<git-dir>/pre-merge-cross-review-terminal-<run id>`) の絶対パスと run id を案内行
 (`terminal sentinel: <絶対パス> run=<id>`) として stdout と stderr の両方に出す。EXIT
 trap は stdout へ終了行 (`terminal sentinel end run=<id>`) を出してから、sentinel に
 終了状態を 1 行 (`status=<ok|failed> run=<id>`) だけ書く。起動時の掃除は 24 時間より
@@ -29,13 +29,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / "plugins" / "pre-merge-codex-review"
+PLUGIN = ROOT / "plugins" / "pre-merge-cross-review"
 WRAPPER = PLUGIN / "hooks" / "scripts" / "run-pre-merge-codex-review.sh"
 MARKERS_LIB = PLUGIN / "hooks" / "scripts" / "lib" / "markers.sh"
 
 # run ごとの sentinel の固定 prefix と、その path を組み立てる lib/markers.sh の helper
 # (引数は git-dir と run id の 2 つ)。
-SENTINEL_NAME_PREFIX = "pre-merge-codex-review-terminal"
+SENTINEL_NAME_PREFIX = "pre-merge-cross-review-terminal"
 SENTINEL_PATH_HELPER = "pre_merge_terminal_sentinel_path"
 # 起動時の掃除が対象にする古さ。
 STALE_SENTINEL_AGE_SECONDS = 24 * 60 * 60

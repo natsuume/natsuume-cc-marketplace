@@ -1,5 +1,5 @@
-"""pre-merge-codex-review: merge 前に codex review を起動する規律を SessionStart hook
-で additionalContext として注入する契約テスト。
+"""pre-merge-cross-review: merge 前に cross review (codex review と Fable review) を起動する
+規律を SessionStart hook で additionalContext として注入する契約テスト。
 
 対象:
 
@@ -11,7 +11,9 @@
   欠落 / 空 / 読み取り不能のいずれでも無出力のまま exit 0 とする (fail-open)
 - `hooks/prompts/merge-order-rules.md`: 先頭行が固定の見出しであること、UTF-16 code
   unit 換算で 6,000 以下のサイズであること、必須文字列 (agent 起動条件・定型 prompt 文
-  等) を含むこと、issue/PR 番号参照や日付を含まないこと
+  等) を含むこと、issue/PR 番号参照や日付を含まないこと。Fable review については、週次枠の
+  判定コマンド・fable-reviewer の起動仕様 (`model: "fable"`、codex-reviewer と同一
+  メッセージでの並列起動、deny 時のスキップ)・fable-reviewer 用の定型 prompt 文を含むこと
 - `hooks/scripts/block-pre-merge.sh`: 上記の定型 prompt 文をそのまま含む (subagent 起動
   を案内する文言と注入文を同一の 1 文に統一する契約)
 - `agents/codex-reviewer.md` の YAML frontmatter `description`: merge 実行権限を示唆する
@@ -34,7 +36,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_DIR = ROOT / "plugins" / "pre-merge-codex-review"
+PLUGIN_DIR = ROOT / "plugins" / "pre-merge-cross-review"
 HOOKS_DIR = PLUGIN_DIR / "hooks"
 HOOKS_JSON = HOOKS_DIR / "hooks.json"
 SCRIPT = HOOKS_DIR / "scripts" / "inject-merge-order-rules.sh"
@@ -44,6 +46,10 @@ BLOCK_BG_CODEX_WRAPPER = HOOKS_DIR / "scripts" / "block-bg-codex-wrapper.sh"
 CODEX_REVIEWER_AGENT = PLUGIN_DIR / "agents" / "codex-reviewer.md"
 
 DEFAULT_PAYLOAD = {"hook_event_name": "SessionStart"}
+
+# SubagentStart / SubagentStop で auto-mark.sh を呼ぶ group の matcher (codex-reviewer だけに
+# 完全一致する。fable-reviewer の report は記録しない)。
+REVIEWER_LIFECYCLE_MATCHER = "^pre-merge-cross-review:codex-reviewer$"
 
 PROMPT_SIZE_LIMIT = 6000
 
@@ -57,7 +63,7 @@ FIXED_PROMPT_SENTENCE = (
 )
 
 REQUIRED_PROMPT_SUBSTRINGS = [
-    "pre-merge-codex-review:codex-reviewer",
+    "pre-merge-cross-review:codex-reviewer",
     'model: "sonnet"',
     # subagent の結果は completion notification 経由で届く (起動 mode は Claude Code
     # が決め、呼び出し側は指定しない)。この前提を注入文が明記する。
@@ -74,6 +80,25 @@ REPORT_BEFORE_MERGE_SENTENCE = "report を受け取った後の `gh pr merge`"
 ORDERING_PROMPT_SUBSTRINGS = [
     FINDINGS_TRIAGE_SENTENCE,
     REPORT_BEFORE_MERGE_SENTENCE,
+]
+
+# fable-reviewer の起動 prompt に使う定型文。
+FABLE_FIXED_PROMPT_SENTENCE = (
+    "current branch の PR (#<番号>) の merge-base..head 差分と PR 説明・関連 issue に"
+    "対して、agent body の契約に従い read-only のレビューを 1 回実行し、"
+    "parent-safe な markdown report を返してください。"
+)
+
+# Fable review の起動規律: 週次枠の判定コマンドを実行し、available のときだけ
+# fable-reviewer を codex-reviewer と同一メッセージで並列に起動する。起動が deny
+# されたら再起動せずスキップする。
+FABLE_REQUIRED_PROMPT_SUBSTRINGS = [
+    "pre-merge-cross-review:fable-reviewer",
+    'model: "fable"',
+    "pre-merge-cross-review-fable-usage",
+    "同一メッセージで並列に起動",
+    "再起動せずスキップする",
+    FABLE_FIXED_PROMPT_SENTENCE,
 ]
 
 _TESTS_DIR = Path(__file__).resolve().parent
@@ -97,6 +122,12 @@ FORBIDDEN_EXECUTION_TOOL = _shared_contract.FORBIDDEN_EXECUTION_TOOL
 
 FORBIDDEN_DESCRIPTION_SUBSTRINGS = ["gh pr merge", "merge gate", "deny", "投稿"]
 REQUIRED_DESCRIPTION_SUBSTRINGS = ["read-only", "parent-safe"]
+
+# 注入文に書かない語 (PR 上のコメントを再起動の判断材料にしない・gate は投稿しない)。
+PR_COMMENT_WORDS = ("コメント", "投稿", "PR に残す")
+# merge gate はローカルの codex review 記録を検証し、Fable review を見ないことを示す文。
+LOCAL_RECORD_SENTENCE = "merge gate がローカルの codex review 記録を検証して merge に進む"
+FABLE_NOT_GATED_SENTENCE = "merge gate は Fable review を見ない"
 
 SH = shutil.which("sh")
 HAS_JQ = shutil.which("jq") is not None
@@ -146,7 +177,7 @@ class HooksJsonSessionStartWiringTest(unittest.TestCase):
             groups = [
                 group
                 for group in hooks[event]
-                if group.get("matcher") == "^pre-merge-codex-review:codex-reviewer$"
+                if group.get("matcher") == REVIEWER_LIFECYCLE_MATCHER
             ]
             self.assertEqual(len(groups), 1, (event, groups))
             self.assertIn("auto-mark.sh", groups[0]["hooks"][0]["command"])
@@ -277,7 +308,7 @@ class PromptContractTest(unittest.TestCase):
         first_line = text.splitlines()[0] if text else ""
         self.assertEqual(
             first_line,
-            "# pre-merge-codex-review: merge 前 codex review の起動順",
+            "# pre-merge-cross-review: merge 前 cross review の起動順",
         )
 
     def test_prompt_size_is_within_utf16_code_unit_limit(self) -> None:
@@ -290,6 +321,29 @@ class PromptContractTest(unittest.TestCase):
         for substring in REQUIRED_PROMPT_SUBSTRINGS:
             with self.subTest(substring=substring):
                 self.assertIn(substring, text)
+
+    def test_prompt_contains_fable_review_launch_rules(self) -> None:
+        text = self._read_prompt()
+        missing = [
+            substring
+            for substring in FABLE_REQUIRED_PROMPT_SUBSTRINGS
+            if substring not in text
+        ]
+        self.assertEqual([], missing, f"merge-order-rules.md に無い記述: {missing}")
+
+    def test_prompt_does_not_rely_on_pr_comments(self) -> None:
+        """レビュー済みの判断材料は、このセッションで受け取った report と gate が検証する
+        ローカル記録であり、PR 上のコメントや PR への投稿に触れない。"""
+        text = self._read_prompt()
+        hits = [
+            f"L{number}: {line.strip()[:120]}"
+            for number, line in enumerate(text.splitlines(), start=1)
+            for word in PR_COMMENT_WORDS
+            if word in line
+        ]
+        self.assertEqual([], hits, "PR コメント・投稿への言及が残っている")
+        self.assertIn(LOCAL_RECORD_SENTENCE, text)
+        self.assertIn(FABLE_NOT_GATED_SENTENCE, text)
 
     def test_prompt_requires_report_before_merge_ordering(self) -> None:
         """report 受領 → findings の分類・対応 → `gh pr merge` の順序を固定する。

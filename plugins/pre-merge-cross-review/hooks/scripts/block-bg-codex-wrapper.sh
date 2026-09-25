@@ -1,13 +1,13 @@
 #!/bin/bash
 # block-bg-codex-wrapper.sh
 # codex review wrapper (`run-pre-merge-codex-review.sh`) の起動を検証する PreToolUse フック。
-# `pre-merge-codex-review:codex-reviewer` subagent 以外からの起動と、 background / pipeline
+# `pre-merge-cross-review:codex-reviewer` subagent 以外からの起動と、 background / pipeline
 # 経由の起動を deny する。
 #
 # policy: 環境失敗 (jq 不在・command 不在) のみ fail-open で抜け、 それ以外の判定は
 #   fail-closed。 wrapper の起動形が判定できない場合は deny 側に倒す。
 #   本 hook は merge gate の補助であり、 未レビュー merge を通さない保証そのものは
-#   block-pre-merge.sh の PR レビューコメント照合が担う。
+#   block-pre-merge.sh のローカルレビュー記録の照合が担う。
 #
 # ## なぜ必要か
 #
@@ -29,14 +29,14 @@
 #    plugin が併存する環境で互いの basename ベース検出が相手の wrapper 起動を deny し合う
 #    干渉を避けるため。
 # 2. **agent_type gate**: hook payload のトップレベル `agent_type` が
-#    `pre-merge-codex-review:codex-reviewer` に完全一致しなければ deny する (欠落・別値
+#    `pre-merge-cross-review:codex-reviewer` に完全一致しなければ deny する (欠落・別値
 #    いずれも deny)。 メインセッションの Bash では `agent_type` がペイロードに含まれない。
 # 3. **background / pipeline**: Bash tool option `tool_input.run_in_background` が true の
 #    場合、 またはコマンドが単独の `&` (background) / `|` (pipeline) を含む場合は deny する
 #    (`&&` / `||` は逐次実行なので許容)。
 
 WRAPPER_BASENAME="run-pre-merge-codex-review.sh"
-REVIEWER_AGENT_TYPE="pre-merge-codex-review:codex-reviewer"
+REVIEWER_AGENT_TYPE="pre-merge-cross-review:codex-reviewer"
 
 INPUT=$(cat)
 

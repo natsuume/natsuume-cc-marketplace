@@ -1,9 +1,9 @@
-"""pre-merge-codex-review の wrapper 起動検証 hook (block-bg-codex-wrapper.sh) の契約テスト。
+"""pre-merge-cross-review の wrapper 起動検証 hook (block-bg-codex-wrapper.sh) の契約テスト。
 
 固定する契約:
 
 - codex review wrapper (`run-pre-merge-codex-review.sh`) を含む Bash 実行は、hook payload
-  のトップレベル `agent_type` が `pre-merge-codex-review:codex-reviewer` に完全一致する
+  のトップレベル `agent_type` が `pre-merge-cross-review:codex-reviewer` に完全一致する
   場合のみ許可する。欠落 (= メインセッション or agent_type 未対応の Claude Code) と
   不一致はいずれも deny する。
 - agent_type が一致していても、background 起動 (`run_in_background: true`) と
@@ -25,17 +25,17 @@ ROOT = Path(__file__).resolve().parents[1]
 HOOK = (
     ROOT
     / "plugins"
-    / "pre-merge-codex-review"
+    / "pre-merge-cross-review"
     / "hooks"
     / "scripts"
     / "block-bg-codex-wrapper.sh"
 )
 
 WRAPPER_COMMAND = (
-    "bash /opt/claude/plugins/pre-merge-codex-review/hooks/scripts/"
+    "bash /opt/claude/plugins/pre-merge-cross-review/hooks/scripts/"
     "run-pre-merge-codex-review.sh"
 )
-CODEX_REVIEWER_AGENT_TYPE = "pre-merge-codex-review:codex-reviewer"
+CODEX_REVIEWER_AGENT_TYPE = "pre-merge-cross-review:codex-reviewer"
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
@@ -166,7 +166,7 @@ class BlockBgCodexWrapperAgentTypeGateTest(unittest.TestCase):
         # 行継続で basename を分断しても検出を素通りしない。
         with tempfile.TemporaryDirectory() as name:
             split_command = (
-                "bash /opt/claude/plugins/pre-merge-codex-review/hooks/scripts/"
+                "bash /opt/claude/plugins/pre-merge-cross-review/hooks/scripts/"
                 "run-pre-merge-codex-\\\nreview.sh"
             )
             payload = {
@@ -180,9 +180,9 @@ class BlockBgCodexWrapperAgentTypeGateTest(unittest.TestCase):
         """agents/codex-reviewer.md の fallback step 1 (候補列挙) が deny されない。"""
         listing_command = (
             'for candidate in "$HOME"/.claude/plugins/cache/*/'
-            "pre-merge-codex-review/*/hooks/scripts/"
+            "pre-merge-cross-review/*/hooks/scripts/"
             "run-pre-merge-codex-review.sh "
-            '"$HOME"/.claude/plugins/cache/*/pre-merge-codex-review/hooks/'
+            '"$HOME"/.claude/plugins/cache/*/pre-merge-cross-review/hooks/'
             "scripts/run-pre-merge-codex-review.sh; do "
             'if [ -f "$candidate" ]; then echo "$candidate"; fi; done'
         )
@@ -199,7 +199,7 @@ class BlockBgCodexWrapperAgentTypeGateTest(unittest.TestCase):
         """agents/codex-reviewer.md の fallback step 2 (実 path 起動) が deny されない。"""
         launch_command = (
             'bash "/home/user/.claude/plugins/cache/natsuume-plugins/'
-            "pre-merge-codex-review/1.0.0/hooks/scripts/"
+            "pre-merge-cross-review/1.0.0/hooks/scripts/"
             'run-pre-merge-codex-review.sh"'
         )
         with tempfile.TemporaryDirectory() as name:

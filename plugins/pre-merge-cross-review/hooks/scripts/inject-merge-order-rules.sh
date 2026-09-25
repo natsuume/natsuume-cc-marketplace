@@ -1,8 +1,9 @@
 #!/bin/sh
-# inject-merge-order-rules.sh — pre-merge-codex-review plugin の SessionStart hook スクリプト
+# inject-merge-order-rules.sh — pre-merge-cross-review plugin の SessionStart hook スクリプト
 #
 # 役割:
-#   `gh pr merge` を試行する前に codex-reviewer subagent を起動する規律を、
+#   `gh pr merge` を試行する前に cross review の reviewer subagent (codex-reviewer と、
+#   Fable 週次枠が利用可能なときの fable-reviewer) を起動する規律を、
 #   SessionStart の additionalContext としてセッションへ注入する。
 #
 # I/O 契約:

@@ -1,6 +1,6 @@
 #!/bin/bash
 # auto-mark.sh
-# `pre-merge-codex-review:codex-reviewer` subagent の実行完了を subagent lifecycle hook
+# `pre-merge-cross-review:codex-reviewer` subagent の実行完了を subagent lifecycle hook
 # (SubagentStart / SubagentStop) で検知し、 codex review wrapper が書いた pending
 # attestation を final attestation へ昇格する。
 #
@@ -8,12 +8,15 @@
 # 設計契約 (本ヘッダが契約の正本)
 # ============================================================================
 #
-# 本 plugin では PR へのレビューコメント投稿を merge gate (block-pre-merge.sh) が行う。
-# wrapper は codex review を実行して「投稿用の本文ファイル」と「pending attestation」を
-# git-dir 直下に書くだけで投稿せず、 本 hook が subagent の完了を検証して pending を
-# final attestation へ昇格する。 gate は PR にレビューコメントが無いとき、 final
-# attestation と本文ファイルを検証して `gh pr review <PR> --comment --body-file <本文>`
-# で投稿してから merge を通す。
+# 本 plugin はレビュー済みの証拠を git-dir 直下のローカル記録に置き、 GitHub には何も
+# 書かない。 wrapper は codex review を実行して pending attestation を git-dir 直下に書き、
+# 本 hook が subagent の完了を検証して pending を final attestation へ昇格する。 merge gate
+# (block-pre-merge.sh) は final attestation が PR 番号と現在の head SHA の両方に一致する
+# 場合だけ merge を通す。
+#
+# fable-reviewer (`pre-merge-cross-review:fable-reviewer`) の report は親 session に返る
+# だけで記録を作らないため、 本 hook の対象外である (hooks.json の matcher も codex-reviewer
+# だけに一致し、 script 側でも agent_type を完全一致で再検証する)。
 #
 # Claude Code の Agent tool は既定で background 起動になり、 PostToolUse は起動受理時
 # (tool_response.status="async_launched") に 1 回発火するのみで、 subagent 完了時には
@@ -33,16 +36,15 @@
 # working tree が clean であることを確認してからレビューするため、 ローカル HEAD の SHA が
 # レビュー対象を一意に表す。
 #
-# **final attestation と本文ファイルは対 (pair) で gate に使われる**。 そのため本 hook の
-# terminal な掃除経路 (launch attestation 無し / 既存 tombstone / report 無効 / 検証
-# 不一致による skip / PostToolUseFailure) では、 pending は常に破棄するが、 本文ファイルは
-# final attestation が存在しない場合にのみ削除する (昇格済みの pair を、 後続の別 stop や
-# Agent 失敗イベントが壊さないため)。
+# 本 hook の terminal な掃除経路 (launch attestation 無し / 既存 tombstone / report 無効 /
+# 検証不一致による skip / PostToolUseFailure) では pending attestation を破棄し、 昇格済みの
+# final attestation には触れない (後続の別 stop や Agent 失敗イベントが、 完走したレビューの
+# 記録を壊さないため)。
 #
 # イベント別契約:
 #
-# - SubagentStart (hooks.json matcher: ^pre-merge-codex-review:codex-reviewer$):
-#   1. agent_type が `pre-merge-codex-review:codex-reviewer` の完全一致でなければ exit 0
+# - SubagentStart (hooks.json matcher: ^pre-merge-cross-review:codex-reviewer$):
+#   1. agent_type が `pre-merge-cross-review:codex-reviewer` の完全一致でなければ exit 0
 #      (script 側でも再検証する。 matcher の regex 解釈には依存しない)
 #   2. agent_id が ^[A-Za-z0-9._-]{1,128}$ に一致しなければ exit 0 (path 混入防止。
 #      filesystem 操作は一切行わない)
@@ -97,12 +99,12 @@
 #      attestation の残存有無に関わらず昇格せず skip する (過去の stop で attestation の
 #      rm に失敗して残存した場合に、 その残存 attestation を resume 再 stop が再利用する
 #      経路の遮断。 残存 attestation の掃除だけを再試行する)。 これら 2 つの terminal な
-#      拒否経路では、 pending attestation を破棄し、 本文ファイルも (final が無い場合に
-#      限り) 破棄する (resume が wrapper を再実行して書き直した pending / 本文を放置
-#      すると、 後続の別 stop がそれを昇格できてしまう)。 中間 stop (2) と遷移保留 (4 の
-#      ln 失敗) は次の stop で完結する non-terminal 経路のため、 pending と本文を保持する
+#      拒否経路では、 pending attestation を破棄する (resume が wrapper を再実行して書き
+#      直した pending を放置すると、 後続の別 stop がそれを昇格できてしまう)。 中間 stop (2)
+#      と遷移保留 (4 の ln 失敗) は次の stop で完結する non-terminal 経路のため、 pending を
+#      保持する
 #   4. attestation は最初の SubagentStop (stop_hook_active=false) で tombstone へ不可逆
-#      遷移させて消費する: 以降の検証 (5〜9) の成否に関わらず、 まず launch tombstone を
+#      遷移させて消費する: 以降の検証 (5〜8) の成否に関わらず、 まず launch tombstone を
 #      排他 `ln` で作り (中身は attestation の HEAD。 既存なら失敗を無視)、 tombstone の
 #      存在を確認できた場合のみ attestation を rm する (読み取り後に削除。 one-shot)。
 #      tombstone が存在しない (ストレージ障害等で ln が失敗した) 場合は attestation を
@@ -123,19 +125,13 @@
 #   7. pending attestation が symlink でない regular file であり、 内容が
 #      「1 行目 pr=<全数字>」「2 行目 head=<40 hex>」の形式で、 その head が現在の HEAD と
 #      一致するときのみ次へ進む
-#   8. 投稿用の本文ファイルが symlink でない regular file として存在し、 その 1 行目が
-#      `<!-- codex-review: head=<pending と同じ head> status=(pass|findings) -->` に完全
-#      一致するときのみ次へ進む (投稿する本文と attestation の head が乖離した組を final に
-#      しない)
-#   9. 5〜8 をすべて満たす場合のみ、 pending を同一 filesystem 内 `mv` で final
-#      attestation へ昇格する。 いずれかを欠けば pending を削除し、 本文ファイルも
-#      (final が無い場合に限り) 削除して skip する (fail-closed)。 昇格に成功した場合、
-#      本文ファイルは残す — gate が投稿の `--body-file` として使う
+#   8. 5〜7 をすべて満たす場合のみ、 pending を同一 filesystem 内 `mv` で final
+#      attestation へ昇格する。 いずれかを欠けば pending を削除して skip する (fail-closed)
 #
 # - PostToolUseFailure (hooks.json matcher: Agent|Task):
 #   tool_name が Agent または Task で、 `tool_input.subagent_type` が
-#   `pre-merge-codex-review:codex-reviewer` の場合に、 pending attestation を best-effort
-#   で破棄し、 本文ファイルも (final が無い場合に限り) 破棄する補助掃除経路。 async
+#   `pre-merge-cross-review:codex-reviewer` の場合に、 pending attestation を best-effort
+#   で破棄する補助掃除経路。 async
 #   harness では tool call は起動受理で成功するため主経路にはならない (失敗した subagent は
 #   Status 行の無い stop として SubagentStop 側 3-5 で遮断される)
 #
@@ -143,7 +139,7 @@
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を阻害
 #   しない設計判断)。 対照: PreToolUse 側の block-pre-merge.sh は fail-closed。 同じ失敗が
 #   Pre=deny / Post=skip という非対称は意図的である。 ただし completion 証明は
-#   fail-closed: 上記 SubagentStop 契約の 1〜9 をすべて満たす場合だけ final attestation を
+#   fail-closed: 上記 SubagentStop 契約の 1〜8 をすべて満たす場合だけ final attestation を
 #   書く。
 #
 # **subagent 内 Skill invoke の silent-pass 防止**: codex-reviewer subagent は tools から
@@ -159,10 +155,10 @@
 #     紐づく lifecycle event) で、 report の Status (SubagentHandback で届いた report は
 #     handback record 経由、 それ以外は last_assistant_message) と launch attestation の
 #     HEAD 束縛を併せて検証し、 launch 時点・内部失敗・resume 再 stop では
-#     final attestation を書かない (= merge gate が投稿せず deny のままになる) ことを
-#     担保する。
-#   - 投稿主体を gate に置くため、 本 hook が保証するのは「投稿してよい状態か」の判定と
-#     その永続化までである。 投稿の成否と投稿後の掃除は gate の責務。
+#     final attestation を書かない (= merge gate が deny のままになる) ことを担保する。
+#   - 本 hook が保証するのは 「subagent がこの HEAD に対するレビューを完走した」 ことの判定と
+#     その永続化までである。 記録が PR 番号と現在の head SHA に一致するかの判定は gate の
+#     責務。
 #
 # レビュー対象 repo の前提:
 #   本 hook は HEAD 取得と attestation path をすべて hook 発火時の cwd で行う (= 「いま
@@ -176,16 +172,17 @@
 #   いずれも exit 0 で抜ける silent skip 設計である。 想定外の非ゼロ終了が発生した場合のみ
 #   EXIT trap が stderr に診断ログを出してユーザに知らせる (trap は exit code を変更しない
 #   ため、 subagent の動作には影響しない)。 pre-push-codex-review の lib/exit-trap.sh と
-#   同等の機能を本 script 内にインラインで持つのは、 本 plugin が保持する pre-push からの
-#   コピーを codex companion 解決ロジックの 1 ファイルに限る契約のため。
+#   同等の機能を本 script 内にインラインで持つのは、 本 plugin が保持する他 plugin の lib の
+#   コピーを codex companion 解決ロジック (codex-companion-resolver.sh) と Fable 週次枠の
+#   使用率判定 (fable-weekly-usage.sh) の 2 ファイルに限る契約のため。
 
 # 予期せぬ非ゼロ終了をユーザの stderr に通知する EXIT trap。
 _pre_merge_auto_mark_exit_handler() {
   local exit_code=$?
   if [ "$exit_code" -ne 0 ]; then
-    printf '[pre-merge-codex-review/auto-mark] 予期せぬエラーで hook が exit %s で終了しました。\n' \
+    printf '[pre-merge-cross-review/auto-mark] 予期せぬエラーで hook が exit %s で終了しました。\n' \
       "$exit_code" >&2
-    printf '[pre-merge-codex-review/auto-mark] codex review の attestation 更新が skip された可能性があり、 次の `gh pr merge` 時に merge gate が「レビュー未実行」 で deny する経路があります。 marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' >&2
+    printf '[pre-merge-cross-review/auto-mark] codex review の attestation 更新が skip された可能性があり、 次の `gh pr merge` 時に merge gate が「レビュー未実行」 で deny する経路があります。 marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' >&2
   fi
 }
 trap _pre_merge_auto_mark_exit_handler EXIT
@@ -210,7 +207,7 @@ _PRE_MERGE_AUTO_MARK_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_PRE_MERGE_AUTO_MARK_SCRIPT_DIR/lib/markers.sh"
 
 # 対象 subagent の完全一致名 (hooks.json の matcher とは独立に script 側でも検証する)。
-REVIEWER_AGENT_TYPE="pre-merge-codex-review:codex-reviewer"
+REVIEWER_AGENT_TYPE="pre-merge-cross-review:codex-reviewer"
 
 # agent_id の validation 正規表現 (SubagentStart / SubagentStop 共通)。 path 混入防止の
 # ため、 マッチしない agent_id は filesystem 操作を一切行わずに exit 0 する。
@@ -394,8 +391,8 @@ case "$HOOK_EVENT_NAME" in
 
   SubagentStop)
     # ------------------------------------------------------------------
-    # SubagentStop: launch attestation を one-shot 消費し、 report / HEAD / pending /
-    # 本文の検証を経て pending を final attestation へ昇格する。
+    # SubagentStop: launch attestation を one-shot 消費し、 report / HEAD / pending の
+    # 検証を経て pending を final attestation へ昇格する。
     # ------------------------------------------------------------------
     AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
     if [ "$AGENT_TYPE" != "$REVIEWER_AGENT_TYPE" ]; then
@@ -418,21 +415,16 @@ case "$HOOK_EVENT_NAME" in
     GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
     ATTESTATION_PATH=$(launch_attestation_path "$GIT_DIR" "$AGENT_ID") || exit 0
     PENDING_PATH=$(pre_merge_pending_marker_path "$GIT_DIR") || exit 0
-    BODY_PATH=$(pre_merge_comment_body_path "$GIT_DIR") || exit 0
     FINAL_PATH=$(pre_merge_final_marker_path "$GIT_DIR") || exit 0
 
-    # terminal な拒否経路と検証失敗経路で共有する掃除。 pending は常に破棄し、 本文
-    # ファイルは final attestation が無い場合にのみ破棄する (final と本文は gate が投稿に
-    # 使う対であり、 昇格済みの対を壊さないため)。
-    discard_pending_and_orphan_body() {
+    # terminal な拒否経路と検証失敗経路で共有する掃除。 pending だけを破棄し、 昇格済みの
+    # final attestation には触れない。
+    discard_pending() {
       rm -f "$PENDING_PATH" 2>/dev/null || true
-      if [ ! -e "$FINAL_PATH" ]; then
-        rm -f "$BODY_PATH" 2>/dev/null || true
-      fi
     }
 
     skip_promotion() {
-      discard_pending_and_orphan_body
+      discard_pending
       exit 0
     }
 
@@ -443,7 +435,7 @@ case "$HOOK_EVENT_NAME" in
     # attestation に束縛されない handback record が残っていれば掃除だけ行う。
     if [ -L "$ATTESTATION_PATH" ] || [ ! -f "$ATTESTATION_PATH" ]; then
       rm -f "$HANDBACK_REPORT_PATH" 2>/dev/null || true
-      discard_pending_and_orphan_body
+      discard_pending
       exit 0
     fi
 
@@ -458,7 +450,7 @@ case "$HOOK_EVENT_NAME" in
     if [ -e "$TOMBSTONE_PATH" ]; then
       rm -f "$ATTESTATION_PATH" 2>/dev/null || true
       rm -f "$HANDBACK_REPORT_PATH" 2>/dev/null || true
-      discard_pending_and_orphan_body
+      discard_pending
       exit 0
     fi
     # attestation → tombstone の不可逆遷移: 最初の (stop_hook_active=false の)
@@ -478,8 +470,8 @@ case "$HOOK_EVENT_NAME" in
     # one-shot)。 tombstone が存在しない (ストレージ障害等で ln が失敗した) 場合は
     # attestation を rm せず exit 0 し、 遷移を次の stop まで保留する — tombstone 無しで
     # attestation だけが消えると、 同一 agent_id の SubagentStart 再発火を拒否する記録が
-    # 残らず、 resume 再鋳造ガードが失われるため。 この経路は non-terminal なので pending と
-    # 本文は保持する。
+    # 残らず、 resume 再鋳造ガードが失われるため。 この経路は non-terminal なので pending は
+    # 保持する。
     if [ ! -e "$TOMBSTONE_PATH" ]; then
       exit 0
     fi
@@ -529,30 +521,15 @@ case "$HOOK_EVENT_NAME" in
       skip_promotion
     fi
 
-    # 投稿用の本文ファイルは symlink でない regular file で、 1 行目が pending と同じ head の
-    # 機械可読 header である必要がある (投稿する本文と attestation の head が乖離した組を
-    # final にしない)。
-    if [ -L "$BODY_PATH" ] || [ ! -f "$BODY_PATH" ]; then
-      skip_promotion
-    fi
-    BODY_FIRST_LINE=$(sed -n '1p' "$BODY_PATH" 2>/dev/null)
-    BODY_FIRST_LINE="${BODY_FIRST_LINE%$'\r'}"
-    case "$BODY_FIRST_LINE" in
-      "<!-- codex-review: head=${PENDING_HEAD} status=pass -->") ;;
-      "<!-- codex-review: head=${PENDING_HEAD} status=findings -->") ;;
-      *) skip_promotion ;;
-    esac
-
-    # 同一 filesystem 内 rename で final attestation へ昇格する。 本文ファイルは gate が
-    # 投稿の --body-file として使うため残す。
+    # 同一 filesystem 内 rename で final attestation へ昇格する。
     mv "$PENDING_PATH" "$FINAL_PATH" 2>/dev/null || skip_promotion
     exit 0
     ;;
 
   PostToolUseFailure)
     # ------------------------------------------------------------------
-    # Agent tool 呼び出し自体の失敗時、 pending attestation と (final が無い場合のみ)
-    # 本文ファイルを best-effort で破棄する補助掃除経路。 async harness では tool call は
+    # Agent tool 呼び出し自体の失敗時、 pending attestation を best-effort で破棄する
+    # 補助掃除経路。 async harness では tool call は
     # 起動受理で成功するため主経路にはならない (失敗した subagent は Status 行の無い stop と
     # して SubagentStop 側で遮断される)。
     # ------------------------------------------------------------------
@@ -565,12 +542,7 @@ case "$HOOK_EVENT_NAME" in
     if [ "$SUBAGENT_TYPE" = "$REVIEWER_AGENT_TYPE" ]; then
       GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
       PENDING_PATH=$(pre_merge_pending_marker_path "$GIT_DIR") || exit 0
-      BODY_PATH=$(pre_merge_comment_body_path "$GIT_DIR") || exit 0
-      FINAL_PATH=$(pre_merge_final_marker_path "$GIT_DIR") || exit 0
       rm -f "$PENDING_PATH" 2>/dev/null || true
-      if [ ! -e "$FINAL_PATH" ]; then
-        rm -f "$BODY_PATH" 2>/dev/null || true
-      fi
     fi
     exit 0
     ;;
