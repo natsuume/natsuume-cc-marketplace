@@ -83,6 +83,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - Node.js
 - jq (hook の注入 JSON 生成と Fable 週次枠の判定に使用。不在時は注入をスキップし (fail-open)、Fable 判定は `unknown` として Fable をスキップする)
 - natsuume-statusline (Fable 週次枠 cache の producer。未導入・cache が古い場合は Fable をスキップし Codex だけに相談する)
+- pre-push-codex-review (任意。review cadence の checkpoint と併用する場合は 3.0.0 以上。runner の agent 名 `cross-model-advisor:codex-*-runner` を計数・checkpoint 判定に使う)
 - POSIX awk / `stty` (Codex host の PTY framing。Linux / macOS の標準ツール)
 - Linux (WSL2 含む) / macOS
 - subagent への配送 (SubagentStart hook) は Claude Code 2.0.43 以降。それ未満ではメインセッション向け機能のみ有効

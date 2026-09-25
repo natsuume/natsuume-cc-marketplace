@@ -5,6 +5,8 @@
 - **`pre-push-review:code-reviewer` subagent** (self-contained correctness バグ検出 / 詳細は [Agents](#agents))
 - **`pre-push-review:security-reviewer` subagent** (self-contained security review / 詳細は [Agents](#agents))
 
+codex review の gate は独立した `pre-push-codex-review` プラグインが提供し、本プラグインは codex review のマーカー (`.claude-pre-push-codex-reviewed`) を参照しません。両プラグインを併用すると push 前のレビューは 3 レビュー構成になります。
+
 correctness バグ検出に security review を重ねた defense-in-depth です。 修正や commit 列の変更 (add→revert / amend / rebase 含む) により hash が変わると 2 マーカーは自動失効し、 Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
 
 2 レビューをどちらも subagent 経由に統一していることの意味:

@@ -361,7 +361,7 @@ runner は Codex 起動前の companion job 集合を保持します。rescue / 
 
 通常 subagent が相談を必要とする場合、wrapper を直接実行せず self-contained な request を親へ返します。親が advisor runner を起動できるのは、委任指示が cross-model-advisor の使用を明示的に許可した場合だけです (相談は課金・利用枠の消費を伴う呼び出しのため)。
 
-相談規律に加えて `/codex:rescue` の thread 選択規律 (`rule:rescue-thread`) も注入します。rescue 起動時の `--resume` / `--fresh` を Claude が自律決定して常に付与し、thread 選択の質問で自走を止めません (`--resume` は「直前の rescue と同一論点の続き + 対象がセッション内最新の再開可能 task と確実に分かる場合」のみ、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先)。openai-codex plugin (v1.0.6 以降) の「フラグ指定時は質問しない」挙動を前提とし、外部 plugin には手を加えません。
+相談規律に加えて `/codex:rescue` の thread 選択規律 (`rule:rescue-thread`) も注入します。rescue 起動時の `--resume` / `--fresh` を Claude が自律決定して常に付与し、thread 選択の質問で自走を止めません (`--resume` は「直前の rescue と同一論点の続き + 対象がセッション内最新の再開可能 task と確実に分かる場合」のみ、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先)。openai-codex plugin (v1.0.6 で確認) の「フラグ指定時は質問しない」挙動を前提とし、外部 plugin には手を加えません。
 
 Claude Code からの利用には [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) と Codex CLI + 認証が必要です。
 
