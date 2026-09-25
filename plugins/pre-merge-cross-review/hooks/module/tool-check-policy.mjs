@@ -134,11 +134,16 @@ const isCanonicalReadOnly = (subcommand, args) => {
  * 引数の規則:
  * - 値を取るフラグは `--flag value` と `--flag=value` の両方を受け付ける
  * - `<fields>` は英数字・`_`・`,` のみ、`<秒>` は整数のみ
- * - `<式>` はシングルクォートで囲んだ 1 語 (内側に `'` を含まない)、または英数字・`_`・`.` のみ
+ * - `<式>` はシングルクォートで囲んだ 1 語 (内側に `'` を含まない)、または英数字・`_`・`.` のみ。
+ *   いずれの形でも `$` と、識別子としての `env` (`.env` のようなフィールド参照は除く) を含まない
+ *   (jq の `env` / `$ENV` は環境変数を読み出せるため)
+ * - 値付きフラグの `=` 形は長フラグ (`--`) のみ。短フラグは空白区切りのみ (`-q=.x` / `-i5` は対象外)。
+ *   真偽値フラグ・merge の戦略フラグに `=` は付けない。同じ戦略フラグの重複は対象外
  * - `<branch>` は英数字・`.`・`_`・`/`・`-` のみで、`-` で始まらない (`:` を含む指定や URL は対象外)
  * - 位置引数は 1 つまで
  *
  * command 全体の規則:
+ * - タブと印字可能な ASCII (0x20〜0x7E) 以外の文字を含まないこと。語の区切りはスペースとタブのみ
  * - 前後の空白を除いた command が `gh` で始まること (env 代入・ラッパーを前置しない)
  * - `;` `&` `|` `<` `>` バッククォート `$(` `${` 改行を、quote の内側を含めて含まないこと
  * - シングルクォートの外に `$` `"` `\` を含まないこと (上記の引数規則で弾かれる)
@@ -172,8 +177,17 @@ const isObject = (value) => typeof value === "object" && value !== null && !Arra
 /**
  * tool.check の最終判定を返す。
  *
- * beneath が `rule` を持たない (または空文字列の) `ask`、permissionMode が `auto`、tool が `Bash`、
- * input.command が isTargetCommand を満たす場合に限り `{ decision: "allow", reason }` を返す。
+ * beneath が `rule` を持たない (値が undefined または空文字列の) `ask`、permissionMode が `auto`、
+ * tool が `Bash`、input.command が isTargetCommand を満たす場合に限り `{ decision: "allow", reason }` を
+ * 返す。rule がそれ以外の値 (null・空白のみの文字列・object 等) の ask は引き上げない。reason は
+ * 許可したコマンド名 (gh pr merge / gh pr view / gh pr checks) を含む日本語の文である。
+ *
+ * 制約:
+ * - rule を持たない ask の由来 (core の既定・PreToolUse hook の ask・core の安全検査) は区別できず、
+ *   いずれも引き上げの対象になる
+ * - 検査するのは engine が tool.check に渡した input であり、PreToolUse hook の updatedInput との
+ *   前後関係はこの関数では保証しない
+ * - 対象リポジトリは Bash の作業ディレクトリの git remote で決まる。merge の安全性は merge gate に委ねる
  *
  * @param {{ tool: unknown, input: unknown, beneath: { decision: string, reason?: string, rule?: string }, permissionMode: unknown }} args
  * @returns {{ decision: string, reason?: string, rule?: string }} 引き上げない場合は beneath をそのまま (同一オブジェクトで) 返す

@@ -63,6 +63,9 @@ TARGET_COMMANDS = [
     "gh pr view 1 --comments",
     "gh pr view 1 -c",
     "gh pr view feat/issue-477-pre-merge-mod-tool-check",
+    "gh pr view 1 --json body --jq '.env'",
+    "gh pr view 1 --jq .environment",
+    "gh pr view 1 --jq='.state'",
     # checks: 番号または branch 名 (任意) と許可したフラグ
     "gh pr checks 469",
     "gh pr checks 469 --watch",
@@ -127,6 +130,37 @@ NON_TARGET_COMMANDS = [
     "gh pr view `echo 1`",
     "gh pr view 1\ngh pr merge 1 --squash",
     "gh pr view < in.txt",
+    # quote の内側の metacharacter
+    "gh pr view 1 --jq '.a; .b'",
+    "gh pr view 1 --jq '.a > 1'",
+    "gh pr view 1 --jq '$(x)'",
+    "gh pr view 1 --jq '${x}'",
+    "gh pr view 1 --jq '`x`'",
+    "gh pr view 1 --jq '.a & .b'",
+    "gh pr view 1 --jq '.a\n.b'",
+    # jq の式での環境変数・変数の参照
+    "gh pr view 1 --json number -q env",
+    "gh pr view 1 --json number --jq env.GH_TOKEN",
+    "gh pr view 1 --json number --jq '$ENV.ANTHROPIC_API_KEY'",
+    "gh pr view 1 --json state --jq '{state, t: env.GH_TOKEN}'",
+    "gh pr view 1 --json state --jq '(env)'",
+    "gh pr checks 1 --json name --jq 'env'",
+    "gh pr view 1 --jq '$x'",
+    "gh pr view 1 --jq=env",
+    # スペース・タブ以外の空白、印字可能な ASCII 以外の文字
+    "gh pr merge 1 --squash",
+    "gh pr view 1\r",
+    "gh pr view 1\v",
+    "gh pr view\f1",
+    "﻿gh pr view 1",
+    "gh pr view 1 --jq '.タイトル'",
+    # 値付きフラグ・真偽値フラグ・番号の細かい形
+    "gh pr view 1 -q=.state",
+    "gh pr checks 1 -i5",
+    "gh pr merge 1 --squash=true",
+    "gh pr checks 1 --watch=false",
+    "gh pr merge 1 --squash --squash",
+    "gh pr merge 01 --squash",
     # env 代入・ラッパー
     "GH_TOKEN=x gh pr merge 1 --squash",
     "env gh pr view 1",
@@ -228,6 +262,22 @@ class ToolCheckPolicyTest(unittest.TestCase):
         self.assertIn("gh pr merge", merge["value"]["reason"])
         self.assertIn("gh pr view", view["value"]["reason"])
 
+    def test_reason_names_the_command_in_japanese(self) -> None:
+        for command, name in [
+            ("gh pr merge 1 --squash", "gh pr merge"),
+            ("gh pr view 1", "gh pr view"),
+            ("gh pr checks 1", "gh pr checks"),
+        ]:
+            with self.subTest(command=command):
+                reason = self.decide(
+                    tool="Bash",
+                    input={"command": command},
+                    beneath=ASK,
+                    permissionMode="auto",
+                )["value"]["reason"]
+                self.assertIn(name, reason)
+                self.assertRegex(reason, r"[぀-ヿ一-鿿]")
+
     # --- decideToolCheck: 下位判定をそのまま返す場合 ----------------------
 
     def assert_unchanged(self, result: dict) -> None:
@@ -325,6 +375,18 @@ class ToolCheckPolicyTest(unittest.TestCase):
                         tool="Bash",
                         input={"command": command},
                         beneath={"decision": "ask", "rule": "Bash(gh pr merge:*)"},
+                        permissionMode="auto",
+                    )
+                )
+
+    def test_ask_with_non_string_or_blank_rule_is_unchanged(self) -> None:
+        for rule in [None, {}, [], 0, "  "]:
+            with self.subTest(rule=rule):
+                self.assert_unchanged(
+                    self.decide(
+                        tool="Bash",
+                        input={"command": "gh pr view 1"},
+                        beneath={"decision": "ask", "rule": rule},
                         permissionMode="auto",
                     )
                 )
