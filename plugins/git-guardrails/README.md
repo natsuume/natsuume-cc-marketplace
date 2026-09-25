@@ -5,6 +5,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 ## バージョン
 
 v0.7.4
+
 ## 概要
 
 「デフォルトブランチ (master/main) への変更は、他ブランチからの **GitHub 上の PR merge** 経由のみで取り込む」という運用を構造的に保証します。ローカル側の write 経路 (commit / push / PR head) を 3 つの PreToolUse フックで多層防御し、cooperative 利用前提で誤操作・横紙破りを deny に倒します。

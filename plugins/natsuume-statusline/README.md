@@ -5,6 +5,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 ## バージョン
 
 v0.11.5
+
 ## 表示内容
 
 3 行構成 (内容に応じて省略あり):

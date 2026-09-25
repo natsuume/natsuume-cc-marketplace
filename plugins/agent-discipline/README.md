@@ -5,6 +5,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 ## バージョン
 
 v3.0.1
+
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。

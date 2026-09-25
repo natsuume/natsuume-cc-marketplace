@@ -5,6 +5,7 @@
 ## バージョン
 
 v0.5.8
+
 ## 概要
 
 `PreToolUse` (matcher: `Bash`) で `gh pr create` の呼び出しを検知し、`--draft` が付いていなければコマンドを書き換えてフラグを追加します。`updatedInput.command` を返すため、Claude Code は書き換え後のコマンドで実行します。
