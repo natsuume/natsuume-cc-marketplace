@@ -4,7 +4,7 @@ GitHub Flow に準拠した Git ワークフローを **構造強制** するプ
 
 ## バージョン
 
-v0.7.4
+v0.7.5
 
 ## 概要
 
@@ -245,7 +245,7 @@ git -C /tmp/claude-sandbox/repo commit --allow-empty -F /tmp/claude-sandbox/mess
      - **opener 直後が保護対象コマンドでない形** (`"$(cd /x; git push origin feature)"` 等): opener-anchored 検出は「opener の直後」のみを見るため、`;` 等の区切りを挟んだ後続コマンドは dquote 内では検出されません (dquote 内で `;` を境界として扱う設計は heredoc 例文の誤検出を増やすため採用していません)
      
      逆に、**保守的 deny 側の false positive** として、引用符内に `$(git push origin master)` という **リテラルな例文テキスト** を opener 直後の形で書いた場合も deny されます (実行されない例文であっても区別できません)。回避するには例文の記法を変えてください (バッククォートで囲む・空白を挟む等)
-  4. **quote されていない heredoc body の行頭例文は false positive になり得ます**: `split_command` は heredoc (`<<DELIM ... DELIM`) を追跡しないため、`cat > doc.md <<'EOF'` で書き出すドキュメント本文のように **quote で囲まれていない** heredoc body の各行は通常の segment として解析されます。body の行頭に `git push origin master` のような保護対象コマンドの例文がそのまま置かれると、token level 検出でも実 invocation と区別できず deny されます。quote 内に包まれた heredoc (リポジトリ規約のコミット形式 `git commit -m "$(cat <<'EOF' ... EOF)"` 等) は quote 内改行の正規化により 1 segment に保持されるため、この問題は起きません。回避するにはファイル書き出しに Write 系ツールを使うか、例文の行頭にバッククォート等を置いてください (heredoc 追跡の実装は follow-up issue で検討)
+  4. **quote されていない heredoc body の行頭例文は false positive になり得ます**: `split_command` は heredoc (`<<DELIM ... DELIM`) を追跡しないため、`cat > doc.md <<'EOF'` で書き出すドキュメント本文のように **quote で囲まれていない** heredoc body の各行は通常の segment として解析されます。body の行頭に `git push origin master` のような保護対象コマンドの例文がそのまま置かれると、token level 検出でも実 invocation と区別できず deny されます。quote 内に包まれた heredoc (リポジトリ規約のコミット形式 `git commit -m "$(cat <<'EOF' ... EOF)"` 等) は quote 内改行の正規化により 1 segment に保持されるため、この問題は起きません。回避するにはファイル書き出しに Write 系ツールを使うか、例文の行頭にバッククォート等を置いてください
   5. **複数行文字列内の double quote が奇数個の場合の false positive**: quote の対応が取れない複数行文字列では、奇数個目の quote 以降のテキストが quote 外と解釈され、そこに含まれる改行が segment 境界に化けます。その位置に保護対象コマンドの行頭例文があると false positive になり得ます (行内で対応が取れた quote では発生しません)
   6. **稀な git global option (`--namespace` 等) は token level 検出を素通りし得ます**: token walk は「2 token 消費する global option」を `-C`/`--git-dir`/`--work-tree`/`-c`/`--config`/`--config-env` に固定したハードコードリストで判定します。`git --namespace foo push origin master` のようにリスト外の「引数を取る global option」が使われると、`foo` を subcommand と誤認して push 検出を素通りします。あえて機械的には塞いでいません: 「任意の option は次の非 `-` token を引数として消費し得る」という汎用ルールに一般化すると、`--bare` / `-p` / `--paginate` のような**引数を取らないブールフラグ**の直後に来る本物の subcommand token (`git --bare push origin master` の `push`) を誤って「フラグの引数」と飲み込んでしまい、`--namespace` 等を経由する穴より広い bypass を生みます。参照実装である pre-push-review (`block-pre-push.sh`) 自身も同じ固定リスト方式を採用しており、本プラグインはそれに意図的に揃えています。`--namespace` 等の稀な global option 経由の push は、cooperative 利用では発生しにくい edge case として許容します
 

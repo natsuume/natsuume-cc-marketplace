@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v3.0.1
+v3.0.2
 
 ## 概要
 
@@ -51,7 +51,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **動作**:
 
 - 全 subagent の起動時に `hooks/prompts/subagent-rules.md` 全文を `additionalContext` として注入する。モデル判定・agent_type 分岐を持たない静的全文注入
-- 注入内容は 4 規律: bash-decompose (always-1.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点)
+- 注入内容は 5 規律: bash-decompose (always-1.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点) / 説明は常に最新の内容のみ (always-2.md と同一 rule ID の comment-currency。subagent も説明文書を編集するため)
 - `jq` 不在 / prompt ファイル欠落・空の場合は無音 `exit 0` (フェイルセーフ)。subagent-rules.md の rule ID 整合は `lint-prompt-sync.sh` チェック 5 (サブセット検査) が CI で担保する
 
 #### inject-always
@@ -197,7 +197,7 @@ editor 経路 / `--body-file -` (stdin 経路) は Step 1 の扱いのまま判�
 - `if` field は単一 command pattern (`Bash(prefix:*)` 形式) のみで、 alternation (`Bash(gh (issue|pr) (create|edit):*)`) は公式 syntax では非対応
 - 1 entry に `if: "Bash(gh issue:*)"` のような broader filter を置くと、 `gh issue view` / `gh issue list` / `gh issue close` 等にも agent が起動して narrow scope が損なわれる
 - 4 つの target command (`create` / `edit` × `issue` / `pr`) ごとに個別 entry を持ち、 prompt は 4× 完全 duplicate という maintenance トレードオフを受け入れる代わりに、 真の narrow scope (= `if` filter が target command にだけ反応するよう hook config 段階で prefilter し、 `$()` / `$VAR` 等を含むために `if` filter が通した非対象 Bash は Step 0 が即終了する) を確保している
-- prompt 更新時は 4 箇所同期する必要あり (`jq` で各 entry の `.prompt` を抽出して比較する scripts での lint が将来必要になり得る)
+- prompt 更新時は 4 箇所を同期する。4 entries の共通ブロックの一致は `lint-prompt-sync.sh` のチェック 2 が CI で検査する
 
 **なぜ `type: agent` か (vs `type: prompt`)**:
 

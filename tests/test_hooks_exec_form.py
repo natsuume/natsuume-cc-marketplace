@@ -239,7 +239,7 @@ HISTORY_NARRATIVE_WORDS = ("以前は", "かつては", "#398")
 # 4 箇所 (plugin.json / marketplace.json / 直下 README の一覧テーブル /
 # plugin README の `## バージョン` 節) で一致させる version。
 EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
-    "git-guardrails": "0.7.4",
+    "git-guardrails": "0.7.5",
     "enforce-draft-pr": "0.5.8",
     "auto-lint-check": "0.8.4",
     "pre-push-review": "7.0.2",
@@ -247,7 +247,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "pre-merge-cross-review": "3.0.1",
     "update-default-branch": "0.4.6",
     "natsuume-statusline": "0.11.5",
-    "agent-discipline": "3.0.1",
+    "agent-discipline": "3.0.2",
     "ui-discipline": "0.4.8",
     "natsuume-writing": "0.8.3",
     "cross-model-advisor": "5.0.7",
