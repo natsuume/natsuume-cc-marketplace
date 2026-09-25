@@ -22,7 +22,8 @@
 #   - 書き込みに失敗した
 #
 # 既存の他のキー・`env` の他のキーは保持する。settings.json が symlink の場合も symlink を
-# 置き換えず、リンク先の内容を書き換える。親ディレクトリが無い場合は作成する。
+# 置き換えず、リンク先の内容を書き換える。既存ファイルの更新は一時ファイルからの rename で
+# 行い、権限を保つ。親ディレクトリが無い場合は作成する。
 
 set -u
 
@@ -83,8 +84,26 @@ if ! UPDATED=$(jq --arg key "$ENV_KEY" '.env = ((.env // {}) + {($key): "1"})' "
   abort "${SETTINGS} の更新内容を作成できませんでした。"
 fi
 
-# symlink を置き換えないよう、リダイレクトでリンク先の内容を書き換える。
-if ! printf '%s\n' "$UPDATED" >"$SETTINGS"; then
+# symlink を置き換えないよう、リンクをたどった実体のファイルを書き換える対象にする。
+# (`readlink -f` は macOS の古い版に無いため、1 段ずつたどる)
+TARGET="$SETTINGS"
+while [ -L "$TARGET" ]; do
+  LINK=$(readlink "$TARGET") || abort "${SETTINGS} の symlink を解決できませんでした。"
+  case "$LINK" in
+    /*) TARGET="$LINK" ;;
+    *) TARGET="$(dirname "$TARGET")/$LINK" ;;
+  esac
+done
+
+# 実体と同じディレクトリに権限ごと複製した一時ファイルへ書き、rename で置き換える。
+# 途中で失敗しても元のファイルは変わらない。
+TMP_FILE="$(dirname "$TARGET")/.settings.json.pre-merge-cross-review.$$"
+if ! cp -p "$TARGET" "$TMP_FILE" 2>/dev/null; then
+  rm -f "$TMP_FILE"
+  abort "${SETTINGS} の一時ファイルを作成できませんでした。"
+fi
+if ! printf '%s\n' "$UPDATED" >"$TMP_FILE" || ! mv -f "$TMP_FILE" "$TARGET"; then
+  rm -f "$TMP_FILE"
   abort "${SETTINGS} に書き込めませんでした。"
 fi
 report updated "${SETTINGS} の env に ${ENV_KEY}=1 を設定しました。"
