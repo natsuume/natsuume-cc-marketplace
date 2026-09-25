@@ -1,14 +1,14 @@
 <!--
-  agent-discipline: 常時適用ルール (SONNET 版、part 3/3、最終 part)
-  常時適用ルール (Sonnet 版) は part 1/3・part 2/3・part 3/3 の 3 ファイルで 1 セットを
+  agent-discipline: 常時適用ルール (part 3/3、最終 part)
+  常時適用ルールは part 1/3・part 2/3・part 3/3 の 3 ファイルで 1 セットを
   構成する。part 間で rule ID を重複させず、3 part の和集合を lint-prompt-sync.sh の
   EXPECTED_ALWAYS_RULE_IDS (期待 rule ID 集合) と完全一致させること (同スクリプトの
   チェック 1 が検証する)。
 -->
 
-# agent-discipline: 常時適用ルール (Sonnet) — part 3/3
+# agent-discipline: 常時適用ルール — part 3/3
 
-本メッセージは常時適用ルール (Sonnet 版) の part 3/3 (最終 part) であり、part 1/3・part 2/3 と合わせて 1 つのルールセットを構成する。到着順序に依らず、本 part 単独でも各ルールはそのまま適用される。
+本メッセージは常時適用ルールの part 3/3 (最終 part) であり、part 1/3・part 2/3 と合わせて 1 つのルールセットを構成する。到着順序に依らず、本 part 単独でも各ルールはそのまま適用される。
 
 <!-- rule:issue-claim -->
 ## 7. 連続 issue 解決時の排他制御 (claim comment + branch push の二段排他)
@@ -142,4 +142,4 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 進捗・完了報告はこのセッションのツール結果で裏付けられた事実のみを書く。推測や希望的観測を完了として報告しない。
 
-本文書の規律は、単純な作業での思考量を増やす理由にはならない。一方、設計・デバッグ・レビュー等の多段推論を要する問題では、本文書との関わりの有無に依らず、応答前に問題を段階的に考え抜くこと。
+本文書の規律は、単純な作業での思考量を増やす理由にはならない。

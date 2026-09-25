@@ -1,9 +1,9 @@
 #!/bin/sh
 # lint-prompt-sync.sh
 #
-# agent-discipline plugin のプロンプトファイル (常時適用ルール hooks/prompts/always-sonnet-1.md /
-# always-sonnet-2.md / always-sonnet-3.md の 3 part、分業規律 discipline-sonnet.md /
-# discipline-opus.md、subagent-rules.md) と hooks/hooks.json の 4 type:agent entries
+# agent-discipline plugin のプロンプトファイル (常時適用ルール hooks/prompts/always-1.md /
+# always-2.md / always-3.md の 3 part、分業規律 discipline.md、subagent-rules.md) と
+# hooks/hooks.json の 4 type:agent entries
 # (gh issue create / gh issue edit / gh pr create / gh pr edit) が、意図せず同期ドリフト
 # していないかを検証する構造 lint。
 # .github/workflows/agent-discipline-prompt-lint.yml から呼ばれる。
@@ -27,36 +27,36 @@
 #   実行時は利用者が別途インストールする前提とする。
 #
 # ============================================================================
-# チェック 1: 常時適用ルール 3 part (always-sonnet-{1,2,3}.md) の rule ID セット
+# チェック 1: 常時適用ルール 3 part (always-{1,2,3}.md) の rule ID セット
 # ============================================================================
 #
 # 対象ファイル:
-#   - plugins/agent-discipline/hooks/prompts/always-sonnet-1.md
-#   - plugins/agent-discipline/hooks/prompts/always-sonnet-2.md
-#   - plugins/agent-discipline/hooks/prompts/always-sonnet-3.md
+#   - plugins/agent-discipline/hooks/prompts/always-1.md
+#   - plugins/agent-discipline/hooks/prompts/always-2.md
+#   - plugins/agent-discipline/hooks/prompts/always-3.md
 #
 # 背景:
 #   常時適用ルールは注入ペイロードを 8K 以下に保つため rule 境界で 3 part に分割されており、
 #   3 part ファイルの和集合が 1 つのルールセットを構成する。
 #
 # 契約:
-#   1. always-sonnet-{1,2,3}.md それぞれから `<!-- rule:<id> -->` 形式のコメント行
+#   1. always-{1,2,3}.md それぞれから `<!-- rule:<id> -->` 形式のコメント行
 #      (例: `<!-- rule:bash-decompose -->`) を抽出し、 ID 集合を作る (grep -o
 #      '<!-- rule:[a-z0-9-]\+ -->' などで抽出し、 `rule:` プレフィクスと `-->` サフィックスを
 #      取り除いた ID 文字列を要素とする)。 抽出結果は重複を保持したまま sort する (2. の
 #      単一ファイル内重複検査が重複保持出力に依存するため、 ここでは sort -u しない)。
 #      いずれかのファイルからマーカーが 1 件も抽出できない場合は fail (exit 1) とする。
-#   2. always-sonnet-{1,2,3}.md の各ファイル単体について、 同一ファイル内で rule ID マーカーが
+#   2. always-{1,2,3}.md の各ファイル単体について、 同一ファイル内で rule ID マーカーが
 #      重複していないことを検証する (1. の重複保持出力に `uniq -d` を掛けて重複 ID を抽出する)。
 #      3. のペアワイズ検査は自分自身とは比較しないため単一ファイル内の重複を検出できず、
 #      4. の和集合化 (sort -u) は重複を無音で吸収してしまうため、 両方より前に検証する。
 #      重複があれば fail してその ID を列挙する。
-#   3. always-sonnet-{1,2,3}.md 3 ファイルの ID 集合は互いに素であること (part 間で rule ID が
+#   3. always-{1,2,3}.md 3 ファイルの ID 集合は互いに素であること (part 間で rule ID が
 #      重複しないこと) を検証する。 和集合化によって重複が隠れてしまうため、 和集合を作る前に
 #      3 ファイルの全 2 組 (1-2, 1-3, 2-3) についてペアワイズに共通要素が無いことを確認し、
 #      共通要素があれば fail してその ID を列挙する。
-#   4. always-sonnet-{1,2,3}.md 3 ファイルの ID 集合の和集合を「常時適用ルールの ID 集合」
-#      (ids_sonnet.txt) とする。 チェック 5 はこの和集合を母集合として使う。
+#   4. always-{1,2,3}.md 3 ファイルの ID 集合の和集合を「常時適用ルールの ID 集合」
+#      (ids_always.txt) とする。 チェック 5 はこの和集合を母集合として使う。
 #   5. 4. の和集合を、 本スクリプト内の定数 EXPECTED_ALWAYS_RULE_IDS (常時適用ルールが持つ
 #      べき rule ID の正本) と、 順序に依らない集合として比較する。 完全一致すれば pass。
 #      一致しない場合は fail し、 和集合に欠落している ID と和集合にだけ存在する (過剰な)
@@ -185,40 +185,39 @@
 #      同型の運用方針)。
 #
 # ============================================================================
-# チェック 4: 分業規律 2 ファイルの rule ID セット一致
+# チェック 4: 分業規律 (discipline.md) の rule ID セット
 # ============================================================================
 #
 # 対象ファイル:
-#   - plugins/agent-discipline/hooks/prompts/discipline-sonnet.md
-#   - plugins/agent-discipline/hooks/prompts/discipline-opus.md
+#   - plugins/agent-discipline/hooks/prompts/discipline.md
 #
 # 背景:
-#   分業規律はモデル別の 2 ファイル (Sonnet 版 / Opus 版) で構成され、同一 rule ID セット
-#   (role-split / delegation-rules / delegation-instruction / escalation) を持つべき契約である。
-#   rule マーカー外・lint 対象外のドリフトは手動レビューでしか発見できないため、片方の版にのみ
-#   rule が追加・削除されるドリフトを構造 lint で検知する。常時ルールの part 分割検証
-#   (チェック 1 の和集合方式) とは意味が異なるため、和集合方式は流用せず 2 ファイルの
-#   完全一致を検査する。
+#   分業規律は全モデル共通の 1 ファイルであり、rule ID セット (role-split / delegation-rules /
+#   delegation-instruction / escalation) を持つべき契約である。rule の意図しない追加・削除・
+#   改名と、同一 rule マーカーの重複を構造 lint で検知する。
 #
 # 契約:
-#   1. チェック 1 と同じ抽出方式 (extract_rule_ids) で 2 ファイルの `<!-- rule:<id> -->`
-#      ID 集合をそれぞれ抽出し、順序に依らない集合として比較する。
-#   2. discipline-sonnet.md を基準に discipline-opus.md と diff を取る。完全一致すれば pass。
-#      一致しなければ fail し、片方にのみ存在する ID (差集合) を両方向とも列挙して
-#      エラーメッセージに含める。
-#   3. 対象 2 ファイルは pre-flight の存在チェック対象に加え、見つからなければ fail-closed
-#      (exit 1) とする。マーカーが 1 件も抽出できない場合も fail (チェック 1 と同方針)。
-#   4. 既存チェック 1〜3 の挙動には影響しない (共有するのは extract_rule_ids と WORKDIR のみ)。
+#   1. チェック 1 と同じ抽出方式 (extract_rule_ids) で discipline.md の `<!-- rule:<id> -->`
+#      ID を重複保持のまま抽出する。マーカーが 1 件も抽出できない場合は fail (exit 1) とする。
+#   2. 同一ファイル内で rule ID マーカーが重複していないことを検証する (チェック 1 と同じ
+#      check_no_intra_file_dup_ids)。重複があれば fail してその ID を列挙する。
+#   3. 抽出した ID 集合を、本スクリプト内の定数 EXPECTED_DISCIPLINE_RULE_IDS (分業規律が持つ
+#      べき rule ID の正本) と、順序に依らない集合として比較する。完全一致すれば pass。
+#      一致しない場合は fail し、欠落している ID と過剰な ID の両方向を列挙してエラー
+#      メッセージに含める。rule の追加・削除・改名は、prompt ファイルと同時にこの定数を
+#      更新する。
+#   4. 対象ファイルは pre-flight の存在チェック対象に加え、見つからなければ fail-closed
+#      (exit 1) とする。
 #
 # CI 発火:
-#   .github/workflows/agent-discipline-prompt-lint.yml の paths filter に対象 2 ファイルを
-#   含め、discipline ファイルの変更でも本 lint が発火するようにする。
+#   .github/workflows/agent-discipline-prompt-lint.yml の paths filter に discipline.md を
+#   含め、分業規律の変更でも本 lint が発火するようにする。
 #
 # スコープ外 (チェック 1 と同じ方針): ID セットが一致した上でのルール本文の表現差分
 # (意味的ドリフト) は自動検出せず、PR レビュー担当者が目視で確認する運用とする。
 #
 # ============================================================================
-# チェック 5 (新設, #221): subagent-rules.md の rule ID サブセット検査
+# チェック 5: subagent-rules.md の rule ID サブセット検査
 # ============================================================================
 #
 # 対象ファイル:
@@ -226,11 +225,11 @@
 #
 # 背景:
 #   subagent-rules.md (SubagentStart 注入) は常時適用ルールの「サブセット + subagent 固有
-#   ブロック」で構成されるため、チェック 1 (期待集合との完全一致) やチェック 4 (2 ファイル間の
-#   完全一致) のような完全一致検査は適用できない。代わりに「rule: プレフィクスのマーカー ID が
-#   always-sonnet-{1,2,3}.md の ID セットの和集合 (チェック 1 で期待集合との一致を検証済み)
-#   に含まれること」を検証し、always 側での rule ID の改名・削除に subagent 版が追従し損ねる
-#   ドリフト (存在しない rule への参照) を CI で検知する。
+#   ブロック」で構成されるため、チェック 1 / 4 (期待集合との完全一致) のような完全一致検査は
+#   適用できない。代わりに「rule: プレフィクスのマーカー ID が always-{1,2,3}.md の ID
+#   セットの和集合 (チェック 1 で期待集合との一致を検証済み) に含まれること」を検証し、
+#   always 側での rule ID の改名・削除に subagent 版が追従し損ねるドリフト (存在しない rule
+#   への参照) を CI で検知する。
 #
 # 契約:
 #   1. チェック 1 と同じ抽出方式 (extract_rule_ids) で subagent-rules.md の rule ID 集合を
@@ -238,18 +237,18 @@
 #      extract_rule_ids のパターンにマッチしないため、自然に検査対象外となる。
 #   2. 抽出できた ID が 1 件も無い場合は fail (チェック 1/4 と同方針。マーカー形式の変更や
 #      共有ルールの全削除という前提崩壊時に silent pass しない)。
-#   3. 抽出した各 ID が always-sonnet-{1,2,3}.md の ID 集合の和集合 (チェック 1 で抽出・
-#      重複検査済みの ids_sonnet.txt) に含まれていれば pass。含まれない ID があれば fail し、
-#      その ID を列挙してエラーメッセージに含める (方向は subagent -> sonnet の片方向のみ。
-#      sonnet 側にのみ存在する ID は「subagent に配送しない」という意図的な選択であり、
+#   3. 抽出した各 ID が always-{1,2,3}.md の ID 集合の和集合 (チェック 1 で抽出・
+#      重複検査済みの ids_always.txt) に含まれていれば pass。含まれない ID があれば fail し、
+#      その ID を列挙してエラーメッセージに含める (方向は subagent -> always の片方向のみ。
+#      always 側にのみ存在する ID は「subagent に配送しない」という意図的な選択であり、
 #      検査しない)。
 #   4. 対象ファイルは pre-flight の存在チェック対象に加え、見つからなければ fail-closed
 #      (exit 1) とする。
-#   5. 既存チェック 1〜4 の挙動には影響しない (共有するのは extract_rule_ids と WORKDIR、
-#      チェック 1 の ids_sonnet.txt のみ)。
+#   5. チェック 1〜4 の挙動には影響しない (共有するのは extract_rule_ids と WORKDIR、
+#      チェック 1 の ids_always.txt のみ)。
 #
-# CI 発火 (#221): .github/workflows/agent-discipline-prompt-lint.yml の paths filter に
-# subagent-rules.md を追加する (paths 以外の workflow 構造は変更しない)。
+# CI 発火: .github/workflows/agent-discipline-prompt-lint.yml の paths filter に
+# subagent-rules.md を含める。
 #
 # スコープ外 (チェック 1 と同じ方針): ID が一致した上でのルール本文の表現差分 (意味的
 # ドリフト) は自動検出せず、PR レビュー担当者が目視で確認する運用とする。
@@ -261,15 +260,14 @@
 set -u
 
 # 常時適用ルールは 3 part ファイルの和集合として扱う (チェック 1/5)。
-SONNET_MD_1="plugins/agent-discipline/hooks/prompts/always-sonnet-1.md"
-SONNET_MD_2="plugins/agent-discipline/hooks/prompts/always-sonnet-2.md"
-SONNET_MD_3="plugins/agent-discipline/hooks/prompts/always-sonnet-3.md"
+ALWAYS_MD_1="plugins/agent-discipline/hooks/prompts/always-1.md"
+ALWAYS_MD_2="plugins/agent-discipline/hooks/prompts/always-2.md"
+ALWAYS_MD_3="plugins/agent-discipline/hooks/prompts/always-3.md"
 HOOKS_JSON="plugins/agent-discipline/hooks/hooks.json"
-DISCIPLINE_SONNET_MD="plugins/agent-discipline/hooks/prompts/discipline-sonnet.md"
-DISCIPLINE_OPUS_MD="plugins/agent-discipline/hooks/prompts/discipline-opus.md"
+DISCIPLINE_MD="plugins/agent-discipline/hooks/prompts/discipline.md"
 SUBAGENT_MD="plugins/agent-discipline/hooks/prompts/subagent-rules.md"
 
-# チェック 1 で always-sonnet-{1,2,3}.md の和集合と完全一致を検査する、常時適用ルールの
+# チェック 1 で always-{1,2,3}.md の和集合と完全一致を検査する、常時適用ルールの
 # rule ID の正本 (1 行 1 ID)。rule の追加・削除・改名は prompt ファイルと同時に更新する。
 EXPECTED_ALWAYS_RULE_IDS="bash-decompose
 design-approval
@@ -282,13 +280,20 @@ ask-user-question
 tdd-two-phase
 comment-currency"
 
+# チェック 4 で discipline.md の rule ID 集合と完全一致を検査する、分業規律の rule ID の
+# 正本 (1 行 1 ID)。rule の追加・削除・改名は prompt ファイルと同時に更新する。
+EXPECTED_DISCIPLINE_RULE_IDS="role-split
+delegation-rules
+delegation-instruction
+escalation"
+
 # チェック 2 前提検証 (#186) で使う、 期待される type:agent entry 数。
 EXPECTED_AGENT_ENTRIES=4
 
 overall_fail=0
 
 # --- pre-flight: リポジトリルートから実行されているか / jq が使えるか ---
-for f in "$SONNET_MD_1" "$SONNET_MD_2" "$SONNET_MD_3" "$HOOKS_JSON" "$DISCIPLINE_SONNET_MD" "$DISCIPLINE_OPUS_MD" "$SUBAGENT_MD"; do
+for f in "$ALWAYS_MD_1" "$ALWAYS_MD_2" "$ALWAYS_MD_3" "$HOOKS_JSON" "$DISCIPLINE_MD" "$SUBAGENT_MD"; do
   if [ ! -f "$f" ]; then
     echo "ERROR: $f が見つかりません。リポジトリルートから実行してください。" >&2
     exit 1
@@ -307,7 +312,7 @@ trap 'rm -rf "$WORKDIR"' EXIT INT TERM HUP
 # チェック 1: ルール ID 一致
 # ============================================================================
 
-echo "== check 1: rule ID set (always-sonnet-{1,2,3}.md) =="
+echo "== check 1: rule ID set (always-{1,2,3}.md) =="
 
 extract_rule_ids() {
   # $1 = file path。 `<!-- rule:<id> -->` から <id> だけを取り出しソートする。
@@ -345,12 +350,12 @@ check_no_dup_ids() {
   return 0
 }
 
-extract_rule_ids "$SONNET_MD_1" > "$WORKDIR/ids_sonnet_1.txt"
-extract_rule_ids "$SONNET_MD_2" > "$WORKDIR/ids_sonnet_2.txt"
-extract_rule_ids "$SONNET_MD_3" > "$WORKDIR/ids_sonnet_3.txt"
+extract_rule_ids "$ALWAYS_MD_1" > "$WORKDIR/ids_always_1.txt"
+extract_rule_ids "$ALWAYS_MD_2" > "$WORKDIR/ids_always_2.txt"
+extract_rule_ids "$ALWAYS_MD_3" > "$WORKDIR/ids_always_3.txt"
 
-if [ ! -s "$WORKDIR/ids_sonnet_1.txt" ] || [ ! -s "$WORKDIR/ids_sonnet_2.txt" ] || [ ! -s "$WORKDIR/ids_sonnet_3.txt" ]; then
-  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($SONNET_MD_1 / $SONNET_MD_2 / $SONNET_MD_3)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
+if [ ! -s "$WORKDIR/ids_always_1.txt" ] || [ ! -s "$WORKDIR/ids_always_2.txt" ] || [ ! -s "$WORKDIR/ids_always_3.txt" ]; then
+  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($ALWAYS_MD_1 / $ALWAYS_MD_2 / $ALWAYS_MD_3)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
   exit 1
 fi
 
@@ -358,12 +363,12 @@ fi
 # part 間 pairwise 検査 (このすぐ後) は自分自身とは比較しないため単一ファイル内の重複を
 # 検出できず、後続の和集合化 (sort -u) は重複を無音で吸収してしまう。両方より前に検査する。
 check1_intra_dup_fail=0
-check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_1.txt" "$SONNET_MD_1" || check1_intra_dup_fail=1
-check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_2.txt" "$SONNET_MD_2" || check1_intra_dup_fail=1
-check_no_intra_file_dup_ids "$WORKDIR/ids_sonnet_3.txt" "$SONNET_MD_3" || check1_intra_dup_fail=1
+check_no_intra_file_dup_ids "$WORKDIR/ids_always_1.txt" "$ALWAYS_MD_1" || check1_intra_dup_fail=1
+check_no_intra_file_dup_ids "$WORKDIR/ids_always_2.txt" "$ALWAYS_MD_2" || check1_intra_dup_fail=1
+check_no_intra_file_dup_ids "$WORKDIR/ids_always_3.txt" "$ALWAYS_MD_3" || check1_intra_dup_fail=1
 
 if [ "$check1_intra_dup_fail" -eq 0 ]; then
-  echo "OK: no intra-file duplicate rule IDs within always-sonnet-{1,2,3}.md"
+  echo "OK: no intra-file duplicate rule IDs within always-{1,2,3}.md"
 else
   overall_fail=1
 fi
@@ -371,31 +376,31 @@ fi
 # part 間で rule ID が重複しないことを検査する (和集合化によって重複が隠れるため、
 # 和集合を作る前に全 2 組をペアワイズに検査する)。
 check1_dup_fail=0
-check_no_dup_ids "$WORKDIR/ids_sonnet_1.txt" "$WORKDIR/ids_sonnet_2.txt" "$SONNET_MD_1" "$SONNET_MD_2" || check1_dup_fail=1
-check_no_dup_ids "$WORKDIR/ids_sonnet_1.txt" "$WORKDIR/ids_sonnet_3.txt" "$SONNET_MD_1" "$SONNET_MD_3" || check1_dup_fail=1
-check_no_dup_ids "$WORKDIR/ids_sonnet_2.txt" "$WORKDIR/ids_sonnet_3.txt" "$SONNET_MD_2" "$SONNET_MD_3" || check1_dup_fail=1
+check_no_dup_ids "$WORKDIR/ids_always_1.txt" "$WORKDIR/ids_always_2.txt" "$ALWAYS_MD_1" "$ALWAYS_MD_2" || check1_dup_fail=1
+check_no_dup_ids "$WORKDIR/ids_always_1.txt" "$WORKDIR/ids_always_3.txt" "$ALWAYS_MD_1" "$ALWAYS_MD_3" || check1_dup_fail=1
+check_no_dup_ids "$WORKDIR/ids_always_2.txt" "$WORKDIR/ids_always_3.txt" "$ALWAYS_MD_2" "$ALWAYS_MD_3" || check1_dup_fail=1
 
 if [ "$check1_dup_fail" -eq 0 ]; then
-  echo "OK: no duplicate rule IDs across always-sonnet-{1,2,3}.md"
+  echo "OK: no duplicate rule IDs across always-{1,2,3}.md"
 else
   overall_fail=1
 fi
 
-cat "$WORKDIR/ids_sonnet_1.txt" "$WORKDIR/ids_sonnet_2.txt" "$WORKDIR/ids_sonnet_3.txt" | sort -u > "$WORKDIR/ids_sonnet.txt"
+cat "$WORKDIR/ids_always_1.txt" "$WORKDIR/ids_always_2.txt" "$WORKDIR/ids_always_3.txt" | sort -u > "$WORKDIR/ids_always.txt"
 
-if [ ! -s "$WORKDIR/ids_sonnet.txt" ]; then
-  echo "ERROR: always-sonnet-{1,2,3}.md の rule ID 和集合が空です。" >&2
+if [ ! -s "$WORKDIR/ids_always.txt" ]; then
+  echo "ERROR: always-{1,2,3}.md の rule ID 和集合が空です。" >&2
   exit 1
 fi
 
 # 和集合と期待集合 (EXPECTED_ALWAYS_RULE_IDS) の完全一致を検査する。両辺を同じ sort で
 # 整列してから comm で欠落 (期待集合にのみ存在) と過剰 (和集合にのみ存在) を取り出す。
 printf '%s\n' "$EXPECTED_ALWAYS_RULE_IDS" | sort -u > "$WORKDIR/ids_always_expected.txt"
-comm -23 "$WORKDIR/ids_always_expected.txt" "$WORKDIR/ids_sonnet.txt" > "$WORKDIR/ids_always_missing.txt"
-comm -13 "$WORKDIR/ids_always_expected.txt" "$WORKDIR/ids_sonnet.txt" > "$WORKDIR/ids_always_extra.txt"
+comm -23 "$WORKDIR/ids_always_expected.txt" "$WORKDIR/ids_always.txt" > "$WORKDIR/ids_always_missing.txt"
+comm -13 "$WORKDIR/ids_always_expected.txt" "$WORKDIR/ids_always.txt" > "$WORKDIR/ids_always_extra.txt"
 
 if [ -s "$WORKDIR/ids_always_missing.txt" ] || [ -s "$WORKDIR/ids_always_extra.txt" ]; then
-  echo "FAIL: always-sonnet-{1,2,3}.md の rule ID 和集合が期待集合 (EXPECTED_ALWAYS_RULE_IDS) と一致しません:" >&2
+  echo "FAIL: always-{1,2,3}.md の rule ID 和集合が期待集合 (EXPECTED_ALWAYS_RULE_IDS) と一致しません:" >&2
   if [ -s "$WORKDIR/ids_always_missing.txt" ]; then
     echo "  和集合に欠落している ID:" >&2
     sed 's/^/    - /' "$WORKDIR/ids_always_missing.txt" >&2
@@ -406,8 +411,8 @@ if [ -s "$WORKDIR/ids_always_missing.txt" ] || [ -s "$WORKDIR/ids_always_extra.t
   fi
   overall_fail=1
 else
-  id_count=$(wc -l < "$WORKDIR/ids_sonnet.txt" | tr -d ' ')
-  echo "OK: always-sonnet-{1,2,3}.md union matches the expected rule ID set (${id_count} IDs)"
+  id_count=$(wc -l < "$WORKDIR/ids_always.txt" | tr -d ' ')
+  echo "OK: always-{1,2,3}.md union matches the expected rule ID set (${id_count} IDs)"
 fi
 
 # ============================================================================
@@ -598,37 +603,56 @@ else
 fi
 
 # ============================================================================
-# チェック 4: 分業規律 2 ファイルの rule ID セット一致
-# (discipline-sonnet.md <-> discipline-opus.md)
+# チェック 4: 分業規律 (discipline.md) の rule ID セット
 # ============================================================================
 
 echo ""
-echo "== check 4: discipline rule ID set (discipline-sonnet.md <-> discipline-opus.md) =="
+echo "== check 4: discipline rule ID set (discipline.md) =="
 
-extract_rule_ids "$DISCIPLINE_SONNET_MD" > "$WORKDIR/ids_discipline_sonnet.txt"
-extract_rule_ids "$DISCIPLINE_OPUS_MD" > "$WORKDIR/ids_discipline_opus.txt"
+extract_rule_ids "$DISCIPLINE_MD" > "$WORKDIR/ids_discipline_all.txt"
 
-if [ ! -s "$WORKDIR/ids_discipline_sonnet.txt" ] || [ ! -s "$WORKDIR/ids_discipline_opus.txt" ]; then
-  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($DISCIPLINE_SONNET_MD / $DISCIPLINE_OPUS_MD)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
+if [ ! -s "$WORKDIR/ids_discipline_all.txt" ]; then
+  echo "ERROR: <!-- rule:<id> --> 形式のコメントが 1 件も抽出できませんでした ($DISCIPLINE_MD)。ファイル欠如またはコメント形式の変更の可能性があります。" >&2
   exit 1
 fi
 
-if diff -u "$WORKDIR/ids_discipline_sonnet.txt" "$WORKDIR/ids_discipline_opus.txt" > "$WORKDIR/ids_discipline_diff.txt" 2>&1; then
-  discipline_id_count=$(wc -l < "$WORKDIR/ids_discipline_sonnet.txt" | tr -d ' ')
-  echo "OK: discipline rule ID sets match (${discipline_id_count} IDs, sonnet <-> opus)"
+check4_fail=0
+check_no_intra_file_dup_ids "$WORKDIR/ids_discipline_all.txt" "$DISCIPLINE_MD" || check4_fail=1
+
+# 抽出した ID 集合と期待集合 (EXPECTED_DISCIPLINE_RULE_IDS) の完全一致を検査する (チェック 1 と
+# 同じく、両辺を sort -u で整列してから comm で欠落と過剰を取り出す)。
+sort -u "$WORKDIR/ids_discipline_all.txt" > "$WORKDIR/ids_discipline.txt"
+printf '%s\n' "$EXPECTED_DISCIPLINE_RULE_IDS" | sort -u > "$WORKDIR/ids_discipline_expected.txt"
+comm -23 "$WORKDIR/ids_discipline_expected.txt" "$WORKDIR/ids_discipline.txt" > "$WORKDIR/ids_discipline_missing.txt"
+comm -13 "$WORKDIR/ids_discipline_expected.txt" "$WORKDIR/ids_discipline.txt" > "$WORKDIR/ids_discipline_extra.txt"
+
+if [ -s "$WORKDIR/ids_discipline_missing.txt" ] || [ -s "$WORKDIR/ids_discipline_extra.txt" ]; then
+  echo "FAIL: $DISCIPLINE_MD の rule ID 集合が期待集合 (EXPECTED_DISCIPLINE_RULE_IDS) と一致しません:" >&2
+  if [ -s "$WORKDIR/ids_discipline_missing.txt" ]; then
+    echo "  欠落している ID:" >&2
+    sed 's/^/    - /' "$WORKDIR/ids_discipline_missing.txt" >&2
+  fi
+  if [ -s "$WORKDIR/ids_discipline_extra.txt" ]; then
+    echo "  期待集合に無い (過剰な) ID:" >&2
+    sed 's/^/    - /' "$WORKDIR/ids_discipline_extra.txt" >&2
+  fi
+  check4_fail=1
+fi
+
+if [ "$check4_fail" -eq 0 ]; then
+  discipline_id_count=$(wc -l < "$WORKDIR/ids_discipline.txt" | tr -d ' ')
+  echo "OK: discipline.md matches the expected rule ID set (${discipline_id_count} IDs, no duplicates)"
 else
-  echo "FAIL: discipline rule ID sets differ between $DISCIPLINE_SONNET_MD and $DISCIPLINE_OPUS_MD" >&2
-  cat "$WORKDIR/ids_discipline_diff.txt" >&2
   overall_fail=1
 fi
 
 # ============================================================================
 # チェック 5: subagent-rules.md の rule ID サブセット検査
-# (subagent-rules.md ⊆ always-sonnet-{1,2,3}.md の和集合)
+# (subagent-rules.md ⊆ always-{1,2,3}.md の和集合)
 # ============================================================================
 
 echo ""
-echo "== check 5: subagent rule ID subset (subagent-rules.md ⊆ always-sonnet-{1,2,3}.md union) =="
+echo "== check 5: subagent rule ID subset (subagent-rules.md ⊆ always-{1,2,3}.md union) =="
 
 extract_rule_ids "$SUBAGENT_MD" > "$WORKDIR/ids_subagent.txt"
 
@@ -637,19 +661,19 @@ if [ ! -s "$WORKDIR/ids_subagent.txt" ]; then
   exit 1
 fi
 
-# always-sonnet-{1,2,3}.md の ID 集合の和集合 (チェック 1 で抽出・重複検査済みの
-# ids_sonnet.txt) に対する片方向の包含検査。comm -23 (sorted 前提) で
+# always-{1,2,3}.md の ID 集合の和集合 (チェック 1 で抽出・重複検査済みの
+# ids_always.txt) に対する片方向の包含検査。comm -23 (sorted 前提) で
 # 「subagent 側にのみ存在する ID」を取り出す。extract_rule_ids は sort 済みの出力を
 # 返すため、そのまま comm に渡せる。
-comm -23 "$WORKDIR/ids_subagent.txt" "$WORKDIR/ids_sonnet.txt" > "$WORKDIR/ids_subagent_orphan.txt"
+comm -23 "$WORKDIR/ids_subagent.txt" "$WORKDIR/ids_always.txt" > "$WORKDIR/ids_subagent_orphan.txt"
 
 if [ -s "$WORKDIR/ids_subagent_orphan.txt" ]; then
-  echo "FAIL: $SUBAGENT_MD に、always-sonnet-{1,2,3}.md の和集合に存在しない rule ID が含まれています (always 側での改名・削除への追従漏れ、または typo):" >&2
+  echo "FAIL: $SUBAGENT_MD に、always-{1,2,3}.md の和集合に存在しない rule ID が含まれています (always 側での改名・削除への追従漏れ、または typo):" >&2
   sed 's/^/  - /' "$WORKDIR/ids_subagent_orphan.txt" >&2
   overall_fail=1
 else
   subagent_id_count=$(wc -l < "$WORKDIR/ids_subagent.txt" | tr -d ' ')
-  echo "OK: subagent rule IDs (${subagent_id_count} IDs) はすべて always-sonnet-{1,2,3}.md の和集合に存在します"
+  echo "OK: subagent rule IDs (${subagent_id_count} IDs) はすべて always-{1,2,3}.md の和集合に存在します"
 fi
 
 # ============================================================================

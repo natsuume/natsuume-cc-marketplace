@@ -2,10 +2,10 @@
   agent-discipline: subagent 向け常時適用ルール
   配送は SubagentStart hook (inject-subagent-rules.sh) が全 subagent に行う
   (agent_type / モデル判定の分岐なし。SubagentStart hook は Claude Code 2.0.43+ で発火)。
-  構成: 常時適用ルールのうち subagent にも適用される bash-decompose (always-sonnet-1.md と
+  構成: 常時適用ルールのうち subagent にも適用される bash-decompose (always-1.md と
   同一の rule ID マーカーを維持) + subagent 固有の 3 ブロック (報告の事実性 / default-deny /
   エスカレーション。subagent-rule: プレフィクスのマーカーを使う)。
-  rule: プレフィクスのマーカー ID は、3 ファイル構成の always-sonnet-{1,2,3}.md の ID セットの
+  rule: プレフィクスのマーカー ID は、3 ファイル構成の always-{1,2,3}.md の ID セットの
   和集合のサブセットであること (lint-prompt-sync.sh チェック 5 が検証する)。subagent-rule:
   プレフィクスのマーカーはチェック 5 の対象外。このヘッダコメントにはマーカーのリテラル
   表記を書かない (lint の抽出 grep に誤マッチさせないため)。

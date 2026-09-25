@@ -40,12 +40,12 @@ Claude Code 側で fable-risk-labeler を install していた場合は、Claude
 | [git-guardrails](#git-guardrails) | 0.7.3 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.5.7 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.8.4 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 7.0.0 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
-| [pre-push-codex-review](#pre-push-codex-review) | 4.0.0 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
+| [pre-push-review](#pre-push-review) | 7.0.1 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-codex-review](#pre-push-codex-review) | 4.0.1 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
 | [pre-merge-cross-review](#pre-merge-cross-review) | 3.0.0 | `gh pr merge` 前に codex review 完了 (PR 番号と head SHA を記録したローカル記録) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させ、Fable 週次枠に余裕があれば Fable review も並列に実行して report を親 session に返す |
 | [update-default-branch](#update-default-branch) | 0.4.6 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.11.4 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
-| [agent-discipline](#agent-discipline) | 2.0.0 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
+| [agent-discipline](#agent-discipline) | 3.0.0 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [ui-discipline](#ui-discipline) | 0.4.7 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.8.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
 | [cross-model-advisor](#cross-model-advisor) | 5.0.6 | Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
@@ -314,7 +314,7 @@ v0.3.0 でセクション 2 / 3 を「思考は自由、 成果物への固定�
 
 ### fable-discipline からの移行 (v0.8.0)
 
-- `fable-discipline` は v0.8.0 で `agent-discipline` に統合され、本リポジトリから削除されました。モデル別分業規律の配送 (`inject-discipline.sh`) とサブエージェントの Fable 実行防止 (`block-fable-subagent.sh`、PreToolUse `Agent|Task`) は `agent-discipline` の hook として提供されます。
+- `fable-discipline` は v0.8.0 で `agent-discipline` に統合され、本リポジトリから削除されました。分業規律の配送 (`inject-discipline.sh`) とサブエージェントの Fable 実行防止 (`block-fable-subagent.sh`、PreToolUse `Agent|Task`) は `agent-discipline` の hook として提供されます。
 - `fable-discipline` を install 済みの利用者は、当該 plugin を uninstall したうえで `agent-discipline` を update してください。
 - 旧 state dir (`${TMPDIR:-/tmp}/fable-discipline-state`) は本統合後は参照されなくなり、OS の tmpfs cleanup により自然消去されます (手動削除は不要)。
 
