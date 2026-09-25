@@ -12,7 +12,12 @@ import { decideToolCheck } from './tool-check-policy.mjs'
  * tool.check の入力は permission mode を持たないため、permission_mode を持つ classic イベント
  * (SessionStart / UserPromptSubmit / PostToolUse / PostToolUseFailure) の入力から最新の mode を
  * 記録して使う。記録が無い間は mode 不明として引き上げない。classic イベントは next(e) で
- * そのまま下位へ渡し、内容を変えない。
+ * そのまま下位へ渡し、内容を変えない。記録は直近の classic イベント時点の mode なので、ターンの
+ * 途中で mode を切り替えた直後の 1 回のツール呼び出しには、切り替え前の mode が使われる。
+ *
+ * merge gate (block-pre-merge.sh) は classic PreToolUse として tool.check より先に評価され、
+ * その deny は tool.check の下位判定 (next(e) の結果) として渡される。判定ロジックは deny を
+ * 上書きしないため、gate が deny した merge は allow にならない。
  *
  * @param on the engine's registrar
  */

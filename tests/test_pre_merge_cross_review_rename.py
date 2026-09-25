@@ -30,7 +30,7 @@ OLD_PLUGIN = ROOT / "plugins" / OLD_NAME
 PLUGIN_JSON = PLUGIN / ".claude-plugin" / "plugin.json"
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 AGENTS_DIR = PLUGIN / "agents"
-EXPECTED_VERSION = "3.0.1"
+EXPECTED_VERSION = "3.1.0"
 EXPECTED_AGENTS = {"codex-reviewer.md", "fable-reviewer.md"}
 
 # 旧名を含んでよい codex 専用の動作名 (wrapper basename と codex 記録ファイル名)。

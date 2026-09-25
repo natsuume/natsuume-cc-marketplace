@@ -244,7 +244,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "auto-lint-check": "0.8.4",
     "pre-push-review": "7.0.2",
     "pre-push-codex-review": "4.0.2",
-    "pre-merge-cross-review": "3.0.1",
+    "pre-merge-cross-review": "3.1.0",
     "update-default-branch": "0.4.6",
     "natsuume-statusline": "0.11.5",
     "agent-discipline": "3.0.2",
