@@ -52,7 +52,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BASE_PLUGIN = ROOT / "plugins" / "agent-discipline"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "1.0.2"
+PLUGIN_VERSION = "2.0.0"
 
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 REPO_README = ROOT / "README.md"
@@ -152,6 +152,15 @@ FORBIDDEN_DENY_PHRASES = ("model の明示指定より優先されて", "env 値
 
 # deny メッセージに書かない、ワーカーを Sonnet / Haiku へ下げる案内 (全 deny を対象に照合)。
 FORBIDDEN_DOWNGRADE_PHRASES = ("model に sonnet / opus", "機械的作業なら haiku")
+
+# Sonnet / Haiku を model として推奨する表現 (正規表現、大文字小文字を無視)。呼び出し側が指定した
+# model 値を理由中で繰り返す記述は推奨ではないため、推奨の言い回しに限定して照合する。
+DOWNGRADE_RECOMMENDATION_PATTERNS = (
+    r'(?i)model:\s*"(sonnet|haiku)',
+    r"(?i)model\s*に\s*(sonnet|haiku)",
+    r"(?i)(sonnet|haiku)[^。]{0,20}を明示",
+    r"(?i)(sonnet|haiku)\s*へ(下げ|切り替え|変更)",
+)
 
 # UNSET: 引数を「与えなかった」(env 未設定 / key 自体を書かない) ことを表す番兵。
 UNSET = object()
@@ -652,6 +661,8 @@ class BlockFableSubagentDecisionTableTest(HookSubprocessTestBase):
                 reason = self.deny_reason(self.run_gate(case), label)
                 for phrase in FORBIDDEN_DOWNGRADE_PHRASES:
                     self.assertNotIn(phrase, reason, f"{label}: {phrase}")
+                for pattern in DOWNGRADE_RECOMMENDATION_PATTERNS:
+                    self.assertNotRegex(reason, pattern, f"{label}: {pattern}")
 
     def test_non_pretooluse_event_produces_no_output(self) -> None:
         """`hook_event_name` が PreToolUse 以外なら無出力で exit 0 になる。"""

@@ -70,6 +70,14 @@ NESTED_EXPLICIT_MODEL = r'model: "opus"'
 REVIEWER_RELAUNCH_GUIDE = "pre-push-review"
 # deny 理由に含めない、ワーカーを Sonnet / Haiku へ下げる案内。
 DOWNGRADE_GUIDES = ("model に sonnet / opus", "機械的作業なら haiku")
+# Sonnet / Haiku を model として推奨する表現 (正規表現、大文字小文字を無視)。呼び出し側が指定した
+# model 値を理由中で繰り返す記述は推奨ではないため、推奨の言い回しに限定して照合する。
+DOWNGRADE_RECOMMENDATION_PATTERNS = (
+    r'(?i)model:\s*"(sonnet|haiku)',
+    r"(?i)model\s*に\s*(sonnet|haiku)",
+    r"(?i)(sonnet|haiku)[^。]{0,20}を明示",
+    r"(?i)(sonnet|haiku)\s*へ(下げ|切り替え|変更)",
+)
 
 # UNSET: 引数を「与えなかった」ことを表す番兵 / OMIT: cache の key 自体を書かない番兵。
 UNSET = object()
@@ -632,6 +640,11 @@ class FableWeeklyGateDecisionTableTest(unittest.TestCase):
         for guide in DOWNGRADE_GUIDES:
             if guide in reason:
                 problems.append(f"{label}: deny 理由に Sonnet / Haiku への案内 {guide!r} が残る ({reason})")
+        for pattern in DOWNGRADE_RECOMMENDATION_PATTERNS:
+            if re.search(pattern, reason):
+                problems.append(
+                    f"{label}: deny 理由に Sonnet / Haiku の model 推奨 {pattern!r} がある ({reason})"
+                )
         return problems
 
     def test_decision_table(self) -> None:

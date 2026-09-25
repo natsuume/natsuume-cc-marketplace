@@ -73,7 +73,7 @@ pre-push-codex-review plugin の lifecycle hook が checkpoint を要求した�
 - Fable: `subagent_type: "cross-model-advisor:fable-advisor-runner"`
   - model: "fable"
 
-fable-advisor-runner の起動が agent-discipline の hook に deny された場合 (Fable メインのセッション、判定後に使用率が閾値を超えた等) は、Opus 等で再起動せず Fable をスキップする。
+fable-advisor-runner の起動が agent-discipline の hook に deny された場合 (判定後に使用率が閾値を超えた等) は、Opus 等で再起動せず Fable をスキップする。
 
 起動規律は次のとおり。
 

@@ -1,6 +1,6 @@
 {
   "name": "cross-model-advisor",
-  "version": "5.0.4",
+  "version": "5.0.5",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "Codex と Fable へ並列相談し runner を管理する"
 }

@@ -10,9 +10,9 @@
 # state のモデル ID (大文字小文字無視の部分一致) で 2 版に分類する:
 #
 # - Opus 版 (見出し「# agent-discipline: 分業規律 (Opus)」+ discipline-opus.md):
-#   opus または fable を含む
+#   opus を含む
 # - Sonnet 版 (見出し「# agent-discipline: 分業規律 (Sonnet)」+ discipline-sonnet.md):
-#   それ以外 (sonnet / haiku 等)
+#   それ以外 (sonnet / haiku / fable 等)
 #
 # ## マーカーの 3 状態
 #
@@ -116,10 +116,10 @@ write_marker() {
   return 0
 }
 
-# $1 = モデル ID。分業規律 Opus 版の対象 (opus または fable を含む) なら 0 を返す
+# $1 = モデル ID。分業規律 Opus 版の対象 (opus を含む) なら 0 を返す
 # (ヘッダ「モデル分類」節)。
 uses_opus_discipline() {
-  printf '%s' "$1" | grep -qi -e 'opus' -e 'fable'
+  printf '%s' "$1" | grep -qi 'opus'
 }
 
 # $1 = additionalContext 本文。成功したら JSON を stdout に出力し 0 を返す。
@@ -211,7 +211,7 @@ if [ "$MARKER_STATE" = "sonnet-gate" ]; then
     if [ -z "$OPUS_BODY" ]; then
       exit 0
     fi
-    CORRECTION_PREFIX="(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの分業規律を暫定配送していた。会話の進行によりこのセッションのモデルが Opus 版分業規律の対象 (Opus 系・Fable) であると確定したため、以後は本メッセージ以下の Opus 版分業規律を優先し、先に配送済みの Sonnet 版分業規律は破棄すること。"
+    CORRECTION_PREFIX="(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの分業規律を暫定配送していた。会話の進行によりこのセッションのモデルが Opus 版分業規律の対象 (Opus 系) であると確定したため、以後は本メッセージ以下の Opus 版分業規律を優先し、先に配送済みの Sonnet 版分業規律は破棄すること。"
     CONTEXT="$CORRECTION_PREFIX
 
 # agent-discipline: 分業規律 (Opus)
