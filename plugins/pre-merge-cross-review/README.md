@@ -8,7 +8,7 @@ Fable review は merge の前提条件ではありません。fable-reviewer sub
 
 ## バージョン
 
-v3.0.1
+v3.1.0
 
 ## インストール
 

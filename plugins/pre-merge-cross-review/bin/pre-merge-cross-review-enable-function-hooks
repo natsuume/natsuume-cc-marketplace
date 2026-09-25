@@ -1,0 +1,26 @@
+#!/bin/bash
+# pre-merge-cross-review-enable-function-hooks
+#
+# Claude Code の user settings (`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json`) の `env` に
+# `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1"` を書き込み、本 plugin の hooks module (Claude Mods) を
+# 読み込ませる。`/pre-merge-cross-review:setup` skill から実行する。
+#
+# 出力 (stdout、常に 2 行):
+#   1 行目: 結果。次のいずれか
+#     created      settings.json が無かったため {"env":{"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS":"1"}} で作成した
+#     updated      既存の settings.json に書き込んだ (値が "1" 以外だった場合の上書きを含む)
+#     already-set  既に "1" が設定済みのため書き込まなかった
+#     aborted      書き込まずに中止した
+#   2 行目: 理由・対象ファイルの説明 (日本語)
+# exit code: created / updated / already-set は 0、aborted は 1
+#
+# 中止する条件 (ファイルは変更しない):
+#   - jq が無い
+#   - settings.json が JSON として解析できない、または top-level が object でない
+#   - `env` が存在し object でない
+#   - 書き込みに失敗した
+#
+# 既存の他のキー・`env` の他のキーは保持する。settings.json が symlink の場合も symlink を
+# 置き換えず、リンク先の内容を書き換える。親ディレクトリが無い場合は作成する。
+
+exit 0
