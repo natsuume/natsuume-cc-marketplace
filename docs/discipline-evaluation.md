@@ -1,6 +1,6 @@
 # 規律評価の運用手順 (session log 事後分析)
 
-本書は、prompt 規律 (agent-discipline plugin 等が SessionStart / SubagentStart で注入する行動規律) の効果・回帰を、実際の Claude Code session transcript の事後分析によって評価する運用手順を定義する。既存 CI は決定論的テストであり、規律文言の変更が実際の挙動 (判断・手順遵守) に与える影響を検出できないため、事後分析でこれを補う。live eval ハーネス (シナリオを都度実行して判定する方式) ではなく事後分析を選ぶのは、個人運用の規模では rate limit 消費・シナリオ保守・判定 oracle の維持コストが得られる価値を上回るためである。事後分析は追加の LLM コストが分析実行時のみに発生し、実際のタスク分布上での評価と、規律変更前後の期間比較 (擬似 ablation) が可能になる。
+本書は、prompt 規律 (agent-discipline plugin 等が SessionStart / UserPromptSubmit / SubagentStart の hook で注入する行動規律) の効果・回帰を、実際の Claude Code session transcript の事後分析によって評価する運用手順を定義する。既存 CI は決定論的テストであり、規律文言の変更が実際の挙動 (判断・手順遵守) に与える影響を検出できないため、事後分析でこれを補う。live eval ハーネス (シナリオを都度実行して判定する方式) ではなく事後分析を選ぶのは、個人運用の規模では rate limit 消費・シナリオ保守・判定 oracle の維持コストが得られる価値を上回るためである。事後分析は追加の LLM コストが分析実行時のみに発生し、実際のタスク分布上での評価と、規律変更前後の期間比較 (擬似 ablation) が可能になる。
 
 ## 1. 目的と対象
 
