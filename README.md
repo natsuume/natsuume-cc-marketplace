@@ -37,6 +37,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [rate-limit](#rate-limit) | 0.5.4 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.5.3 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.9 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
+| [enforce-japanese-response](#enforce-japanese-response) | 0.1.0 | settings の `language` が日本語のとき、turn 末尾の応答が英語で書かれていたら Stop hook で検知し、日本語で書き直させるプラグイン |
 
 ---
 
@@ -485,6 +486,26 @@ Skill `leadtime` は `/repo-analytics:leadtime` で呼び出します。対象�
 ### キーワード
 
 `analytics` `leadtime` `github` `metrics` `report`
+
+---
+
+## enforce-japanese-response
+
+settings の `language` が日本語なのに turn 末尾の応答が英語で書かれた場合に、Stop hook でそれを検知して Claude に日本語で書き直させるプラグインです。コード・インライン code・URL を除いた本文で英字が 40 字以上あり、ひらがな・カタカナ・漢字の割合が 5% 未満の応答を英語の応答と判定します。ユーザが英語での出力を明示的に求めていた場合は、書き直さずにその旨を日本語 1 文で添えるよう指示します。tool 呼び出しの合間の英語と subagent の応答は対象外です。
+
+判定基準・block しない条件・目標言語の決め方は [plugins/enforce-japanese-response/README.md](plugins/enforce-japanese-response/README.md) を参照してください。
+
+### 機能
+
+#### Hooks
+
+| Hook 名 | イベント | 説明 |
+|---------|---------|------|
+| `enforce-japanese-response` | Stop | 直前の応答 (`last_assistant_message`) が英語なら `decision: block` を返し、日本語での書き直しを指示する |
+
+### キーワード
+
+`language` `japanese` `response` `stop` `hook`
 
 ---
 
