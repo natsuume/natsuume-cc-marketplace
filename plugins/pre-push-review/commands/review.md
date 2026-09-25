@@ -50,7 +50,7 @@ Phase 文脈は code-reviewer と security-reviewer の両方に渡します。
    - **invalid**: 現在の codebase では scenario が成立しないことを積極的に確認できた。成立しない根拠を user-facing summary に記録し、修正しない。
    - **needs-user-decision**: finding の扱いに設計・仕様判断が必要。`AskUserQuestion` でユーザーの決定を得てから、修正するか棄却するかを確定する。
 
-reviewer は confidence による自己フィルタをしない契約のため、report には `Confidence: low` の候補も含まれます。`Confidence: low` の finding は、裏取りで具体的な failure scenario を再構成できない場合に invalid へ分類してかまいません (積極的な不成立確認までは要しません)。`high` / `medium` には従来どおり fail-safe の既定 (確信が持てなければ valid) を適用します。
+reviewer は confidence による自己フィルタをしない契約のため、report には `Confidence: low` の候補も含まれます。`Confidence: low` の finding は、裏取りで具体的な failure scenario を再構成できない場合に invalid へ分類してかまいません (積極的な不成立確認までは要しません)。`high` / `medium` には上記の fail-safe の既定 (確信が持てなければ valid) を適用します。
 
 4. valid finding と、needs-user-decision からユーザー判断により修正対象となった finding は、修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)。invalid finding はこの修正工程へ進めない。
 5. **code-reviewer / security-reviewer subagent の修正対象 finding** は通常具体的な対処 (バグ修正 / input validation / 秘匿情報削除 / injection 対策) なので追加の壁打ちは optional。 ただし設計判断が絡む修正では壁打ち推奨。

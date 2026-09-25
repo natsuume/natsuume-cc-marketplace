@@ -1,6 +1,6 @@
 {
   "name": "repo-analytics",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "AI タスクのリードタイム推移を分析・報告する"
 }

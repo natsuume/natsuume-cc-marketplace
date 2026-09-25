@@ -87,7 +87,7 @@ gh issue edit <N> --add-sub-issue <M>
 gh issue edit <M> --add-blocked-by <K>
 ```
 
-**旧版 fallback** (ネイティブコマンドが使えない gh バージョン向け):
+**fallback** (ネイティブコマンドが使えない gh v2.94 未満向け):
 
 ```bash
 # sub_issue_id は issue 番号ではなく issue の内部数値 ID (gh api の .id) である点に注意する。

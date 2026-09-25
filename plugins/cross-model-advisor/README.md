@@ -6,7 +6,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v5.0.6
+v5.0.7
 
 ## 機構
 
@@ -19,9 +19,9 @@ v5.0.6
 | `fable-advisor-runner` agent | Fable 側の advisor。tools は Bash / Read / Glob / Grep で、リポジトリを読んで裏取りした助言を Codex 側と同じ形式 (推奨方針・理由・リスク・次の一手) で返す read-only runner。親が `model: "fable"` を明示して起動する。frontmatter の model は opus で、model 未指定の起動が使用率判定を経ずに Fable で走ることはない。lifecycle footer と review cadence の attestation は発行しない |
 | `bin/cross-model-advisor-fable-usage` | 相談の前に main session が 1 回実行する Fable 週次枠の判定コマンド。plugin が有効な間は Bash の PATH に載る。stdout に常に 2 行 (1 行目 `available` / `over` / `unknown`、2 行目 判定理由) を出力し exit 0 で終わる。判定は `scripts/lib/fable-weekly-usage.sh` が行う |
 | `scripts/lib/fable-weekly-usage.sh` | natsuume-statusline が書き出す週次枠 cache (`${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json`) を読み、Fable の使用率が閾値 (env `FABLE_WEEKLY_MAX_PERCENT`、既定 80、0〜100 の整数以外は既定値) 以下なら `available` とする。cache が無い・symlink・JSON でない・古い (30 分超)・Fable の entry や数値の percent が無い場合は `unknown`。cache は書き込まない。agent-discipline と同じ判定仕様を plugin 内に自前で持つ |
-| `/cross-model-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では判定コマンドの結果に応じて `cross-model-advisor:codex-advisor-runner` (`model: "sonnet"`) と `cross-model-advisor:fable-advisor-runner` (`model: "fable"`) を同一メッセージで並列に起動する。Codex host の source 契約は PTY stdin wrapper を維持する |
+| `/cross-model-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では判定コマンドの結果に応じて `cross-model-advisor:codex-advisor-runner` (`model: "sonnet"`) と `cross-model-advisor:fable-advisor-runner` (`model: "fable"`) を同一メッセージで並列に起動する。Codex host では PTY stdin wrapper を使う |
 | `scripts/run-codex-job.sh` | official companion v1.0.6 の task / review / status / result / cancel を runner 向けの path-only command に限定して公開する。status wait は単発 status の短い poll で構成する |
-| `scripts/run-codex-advisor.sh` | v0.3.0 の adapter 契約と Codex host source を維持する wrapper。Claude Code の通常 Skill は直接呼ばず advisor runner を使う。Codex host では PTY stdin から direct read-only / ephemeral `codex exec` を foreground 起動し、既定 10 分の watchdog で process group を回収する |
+| `scripts/run-codex-advisor.sh` | PTY / file-stdin adapter 契約と Codex host source を提供する wrapper。Claude Code の通常 Skill は直接呼ばず advisor runner を使う。Codex host では PTY stdin から direct read-only / ephemeral `codex exec` を foreground 起動し、既定 10 分の watchdog で process group を回収する |
 
 ### 注入される規律 (hooks/prompts/advisor-rules.md)
 
@@ -77,18 +77,6 @@ auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 
 
 classifier は project settings (`.claude/settings.json` / `.claude/settings.local.json`) の `autoMode` を読まないため、ユーザ設定 (`~/.claude/settings.json`) に書く必要があります。classifier は CLAUDE.md も読むため、プロジェクトの CLAUDE.md に同趣旨の 1 文を書く方法でも代替できます。設定なしで拒否された場合は、ユーザが `AskUserQuestion` の確認で許可すれば次の起動は通ります (classifier は明示的なユーザ意図で soft block を解除します)。
 
-## codex-advisor からの移行
-
-marketplace の `renames` により、旧名 `codex-advisor` は Claude Code 2.1.193 以降で起動時に `cross-model-advisor` として読み込まれ、`enabledPlugins` / `pluginConfigs` の旧名キーも新名へ自動で書き換わります。2.1.192 までの Claude Code は `renames` を解釈せず旧名を `plugin-not-found` として報告するため、`claude plugin install cross-model-advisor@natsuume-plugins` で入れ直してください。managed settings で旧名を有効化している場合は自動で書き換わらないため、管理者が新名へ更新する必要があります。
-
-runner の agent 名 (`cross-model-advisor:codex-*-runner`) と review cadence が識別する agent 名は、新旧の版で一致しません。旧版と新版の hook が同じセッションに混在すると、正規の runner 起動が gate に拒否されたり、checkpoint の充足が cadence に数えられず Stop の block が解けなかったりします。次の順で切り替えてください:
-
-1. 稼働中の runner (rescue / review / advisor) の完了を待ち、旧版のセッションを終了する
-2. cross-model-advisor と pre-push-codex-review (3.0.0 以降) を同時に更新する。片方だけを更新しない
-3. 新しいセッションを起動し、`/cross-model-advisor:consult` と runner が新名で起動することを確認する
-
-切り替え前のセッションで残った runner state が Stop を block し続ける場合は、稼働中の Codex job が無いことを `/codex:status` で確認したうえで、そのセッションの state だけを削除してください。runner state は OS の一時ディレクトリ配下の `cross-model-advisor-<uid>/runner-state/` (旧版は `codex-advisor-<uid>/runner-state/`) に置かれ、review cadence の state は [pre-push-codex-review の README](../pre-push-codex-review/README.md#state) の手順で解除します。
-
 ## 依存
 
 - [公式 codex plugin](https://github.com/openai/codex-plugin-cc) (`claude plugin install codex@openai-codex`) — Claude Code host の companion script 提供元。Codex host の direct 経路には不要
@@ -96,6 +84,7 @@ runner の agent 名 (`cross-model-advisor:codex-*-runner`) と review cadence �
 - Node.js
 - jq (hook の注入 JSON 生成と Fable 週次枠の判定に使用。不在時は注入をスキップし (fail-open)、Fable 判定は `unknown` として Fable をスキップする)
 - natsuume-statusline (Fable 週次枠 cache の producer。未導入・cache が古い場合は Fable をスキップし Codex だけに相談する)
+- pre-push-codex-review (任意。review cadence の checkpoint と併用する場合は 3.0.0 以上。runner の agent 名 `cross-model-advisor:codex-*-runner` を計数・checkpoint 判定に使う)
 - POSIX awk / `stty` (Codex host の PTY framing。Linux / macOS の標準ツール)
 - Linux (WSL2 含む) / macOS
 - subagent への配送 (SubagentStart hook) は Claude Code 2.0.43 以降。それ未満ではメインセッション向け機能のみ有効
@@ -114,7 +103,7 @@ Codex host の `$cross-model-advisor:consult` は、別 context・read-only sand
 
 Codex transport は受信中の PTY を echo 無効・raw/noncanonical mode にし、連続する 2 byte の EOT (`0x04 0x04`) を EOF 操作ではなく明示 frame terminator として扱います。2 byte により正常な delimiter と delimiter 前の切断を区別します。このため canonical PTY の行長上限と CR 変換を避けられますが、prompt 本文自体に `0x04` は含められません。direct process は `--sandbox read-only --ephemeral --disable hooks --skip-git-repo-check --color never -c 'model_reasoning_effort="xhigh"' -` で固定し、git repository 外でも相談できます。既定 600 秒を超えた独立 process group は TERM、grace period 後の KILL、leader の `wait` の順で descendant ごと終了・回収します。descendant が stdout / stderr の pipe FD を保持して foreground session を残す経路も同じ group signal で閉じます。
 
-`tests/test_cross_model_advisor_subagent_runner.py` は direct gate の agent type matrix、実行形 / audit 言及の分類、session state、retry 上限、codex-advisor-runner の review cadence attestation footer 契約検証、stale cleanup、3 runner / Skill / hook artifact を検証します。`tests/test_cross_model_advisor_adapter.py` は v0.3.0 から維持する PTY / file-stdin adapter と process-group cleanup を検証します。いずれも外部 service・認証・rate limit の可用性や Codex 出力品質までは保証しません。
+`tests/test_cross_model_advisor_subagent_runner.py` は direct gate の agent type matrix、実行形 / audit 言及の分類、session state、retry 上限、codex-advisor-runner の review cadence attestation footer 契約検証、stale cleanup、3 runner / Skill / hook artifact を検証します。`tests/test_cross_model_advisor_adapter.py` は PTY / file-stdin adapter と process-group cleanup を検証します。いずれも外部 service・認証・rate limit の可用性や Codex 出力品質までは保証しません。
 
 ## トラブルシュート
 
@@ -125,6 +114,7 @@ Codex transport は受信中の PTY を echo 無効・raw/noncanonical mode に�
 | Codex host の wrapper が `codex companion と codex CLI のどちらも見つかりません` を返す | Codex CLI を導入する |
 | 認証エラー | `/codex:setup` で診断し、`codex login` で認証 |
 | Fable の助言が返らない (Codex だけに相談される) | `cross-model-advisor-fable-usage` を実行し、2 行目の理由を確認する。`over` は週次枠の使用率が閾値を超えている状態で、閾値は env `FABLE_WEEKLY_MAX_PERCENT` で変更できる。`unknown` は natsuume-statusline の cache が無い・古い等で使用率を確認できない状態 |
+| 終了したセッションの runner state が Stop を block し続ける | 稼働中の Codex job が無いことを `/codex:status` で確認したうえで、そのセッションの state だけを削除する。runner state は OS の一時ディレクトリ配下の `cross-model-advisor-<uid>/runner-state/` に置かれる。review cadence の state は [pre-push-codex-review の README](../pre-push-codex-review/README.md#state) の手順で解除する |
 | 相談が 10 分でタイムアウトする | 相談プロンプトの `<context>` を絞る (参照パスを減らす)。それでも超える場合は相談を分割する |
 
 ## キーワード

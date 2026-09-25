@@ -17,14 +17,14 @@
       "name": "git-guardrails",
       "source": "./plugins/git-guardrails",
       "description": "既定ブランチへの直接 commit / push を禁止する",
-      "version": "0.7.3",
+      "version": "0.7.4",
       "keywords": ["git", "workflow", "github-flow", "rebase", "default-branch-protection"]
     },
     {
       "name": "enforce-draft-pr",
       "source": "./plugins/enforce-draft-pr",
       "description": "gh pr create に --draft を自動付与する",
-      "version": "0.5.7",
+      "version": "0.5.8",
       "keywords": ["git", "pr", "draft", "github", "github-flow"]
     },
     {
@@ -38,21 +38,21 @@
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "push 前に code / security レビューを強制する",
-      "version": "7.0.1",
+      "version": "7.0.2",
       "keywords": ["push", "review", "quality", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
       "name": "pre-push-codex-review",
       "source": "./plugins/pre-push-codex-review",
       "description": "push 前に codex review の完了を強制する",
-      "version": "4.0.1",
+      "version": "4.0.2",
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
       "name": "pre-merge-cross-review",
       "source": "./plugins/pre-merge-cross-review",
       "description": "merge 前の codex review を必須化し Fable review も行う",
-      "version": "3.0.0",
+      "version": "3.0.1",
       "keywords": ["merge", "review", "quality", "codex", "openai", "fable", "cross-review", "subagent", "pr-diff", "gate"]
     },
     {
@@ -66,35 +66,35 @@
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
       "description": "git 状態と使用量を表示する statusLine",
-      "version": "0.11.4",
+      "version": "0.11.5",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "作業規律を注入し issue / PR 本文の独断を検知する",
-      "version": "3.0.0",
+      "version": "3.0.1",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
       "description": "UI 実装規律の常時注入と実装パターンを提供する",
-      "version": "0.4.7",
+      "version": "0.4.8",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     },
     {
       "name": "natsuume-writing",
       "source": "./plugins/natsuume-writing",
       "description": "natsuume の文体規則で技術記事の執筆を支援する",
-      "version": "0.8.2",
+      "version": "0.8.3",
       "keywords": ["writing", "tech-blog", "technical-writing", "style-guide", "system-prompt", "hook", "skill"]
     },
     {
       "name": "cross-model-advisor",
       "source": "./plugins/cross-model-advisor",
       "description": "Codex と Fable へ並列相談し runner を管理する",
-      "version": "5.0.6",
+      "version": "5.0.7",
       "keywords": ["codex", "fable", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {
@@ -108,14 +108,14 @@
       "name": "session-handoff",
       "source": "./plugins/session-handoff",
       "description": "context 閾値超過時に handoff を作成・引き継ぐ",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "keywords": ["session-handoff", "context-window", "handoff", "session-start", "statusline", "cache", "hook", "skill"]
     },
     {
       "name": "repo-analytics",
       "source": "./plugins/repo-analytics",
       "description": "AI タスクのリードタイム推移を分析・報告する",
-      "version": "0.2.8",
+      "version": "0.2.9",
       "keywords": ["analytics", "leadtime", "github", "metrics", "report"]
     }
   ]

@@ -158,7 +158,7 @@ class RenameTest(unittest.TestCase):
     def test_plugin_json_name_and_major_version(self) -> None:
         manifest = json.loads(read(PLUGIN_JSON))
         self.assertEqual("cross-model-advisor", manifest["name"])
-        self.assertEqual("5.0.6", manifest["version"])
+        self.assertEqual("5.0.7", manifest["version"])
 
     def test_agent_files_are_renamed(self) -> None:
         names = {path.name for path in AGENTS_DIR.glob("*.md")}
@@ -180,17 +180,6 @@ class RenameTest(unittest.TestCase):
         entry = next(p for p in marketplace["plugins"] if p["name"] == "cross-model-advisor")
         self.assertEqual("./plugins/cross-model-advisor", entry["source"])
         self.assertEqual("cross-model-advisor", marketplace.get("renames", {}).get("codex-advisor"))
-
-    def test_readme_describes_migration_from_old_name(self) -> None:
-        text = read(ROOT / MIGRATION_SECTION_FILE)
-        self.assertIn(MIGRATION_SECTION_HEADING, text.splitlines())
-        section = text.split(MIGRATION_SECTION_HEADING, 1)[1].split("\n## ", 1)[0]
-        missing = [
-            phrase
-            for phrase in ("renames", "2.1.193", "pre-push-codex-review", "同時に更新", "新しいセッション")
-            if phrase not in section
-        ]
-        self.assertEqual([], missing, f"移行節に無い記述: {missing}")
 
     def test_no_leftover_codex_advisor_references(self) -> None:
         tracked = subprocess.run(

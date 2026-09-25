@@ -30,7 +30,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup-wrapper.sh" inspect
 | `statusline_command` | 現在の command 文字列 (未設定なら空文字列) |
 | `classification` | `none` / `self-launcher` / `natsuume-statusline` / `other` のいずれか |
 | `cache_producer_active_guess` | 直近 120 秒以内に更新された cache entry が存在するかの近似判定。**正確な「現セッションの cache」一致ではない** (session_id は本 skill の実行環境からは取得できないため、producer が「何かしら最近稼働しているらしい」ことのベストエフォート推測に留まる) |
-| `natsuume_statusline_cache_capable` | `classification` が `natsuume-statusline` のときのみ意味を持つ: `"true"` / `"false"` / `"unknown"` (0.6.0 で追加された `context-cache-dump.sh` の有無で判定) |
+| `natsuume_statusline_cache_capable` | `classification` が `natsuume-statusline` のときのみ意味を持つ: `"true"` / `"false"` / `"unknown"` (0.6.0 以降に含まれる `context-cache-dump.sh` の有無で判定) |
 | `natsuume_statusline_detail` | 上記の判定根拠 (解決したパス、または判定不能の理由) |
 | `chain_status` | `classification` が `other` のときのみ意味を持つ: `"clear"` / `"detected"` / `"ambiguous"` (1 段の連鎖検査の結果) |
 | `chain_detail` | 上記の判定根拠 |

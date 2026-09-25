@@ -1,26 +1,11 @@
 # pre-push-review プラグイン
 
-> **v6.0.0: codex review gate の分離 (互換破壊)**
->
-> 本プラグインの push gate は code review / security review の **2 レビュー** で構成されます。 codex review gate は独立した `pre-push-codex-review` プラグインへ分離されました。
->
-> v5.x から update すると、**push 時の codex review gate は無効になります** (codex review を伴わない push が本プラグインの gate を通過します)。 codex review gate を維持したい場合は、 update と同時に次を追加 install してください:
->
-> ```bash
-> claude plugin install pre-push-codex-review@natsuume-plugins
-> ```
->
-> 移行手順 (この順序で行うと、 review cadence の欠落と codex gate の空白のどちらも生じません):
->
-> 1. review cadence (Codex review 一定回数ごとの advisor checkpoint 強制) を維持したい場合: 旧 reviewer 識別子の cadence 互換受理は cross-model-advisor v2.1.0〜v2.x のみが持っていました。v3.0.0 以降は review cadence 自体が pre-push-codex-review (v2.0.0 以降) へ移設されているため、cadence を維持するには pre-push-codex-review v2.0.0 以降を install してください (次の手順 2 と同じ install で満たされます)
-> 2. push 時の codex review gate を維持する場合、 `claude plugin install pre-push-codex-review@natsuume-plugins` を実行する
-> 3. `claude plugin update pre-push-review` で v6.0.0 へ更新する
-> 4. `.claude-pre-push-code-reviewed` / `.claude-pre-push-security-reviewed` マーカーの名前と hash 計算式は変わらないため、 既存マーカーは hash が一致する限りそのまま有効です。 `.claude-pre-push-codex-reviewed` は本プラグインからは参照されなくなります (マーカーの名前・格納先は不変のため移行操作は不要です)
-
 `git push` を実行する前に **2 レビュー** を必ず実行させ、 未レビューな commit が remote に到達するのを構造的にブロックするプラグインです。 2 レビューはどちらも subagent 経由で実行されます:
 
 - **`pre-push-review:code-reviewer` subagent** (self-contained correctness バグ検出 / 詳細は [Agents](#agents))
 - **`pre-push-review:security-reviewer` subagent** (self-contained security review / 詳細は [Agents](#agents))
+
+codex review の gate は独立した `pre-push-codex-review` プラグインが提供し、本プラグインは codex review のマーカー (`.claude-pre-push-codex-reviewed`) を参照しません。両プラグインを併用すると push 前のレビューは 3 レビュー構成になります。
 
 correctness バグ検出に security review を重ねた defense-in-depth です。 修正や commit 列の変更 (add→revert / amend / rebase 含む) により hash が変わると 2 マーカーは自動失効し、 Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
 
@@ -34,7 +19,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v7.0.1
+v7.0.2
 
 ## インストール
 
@@ -83,9 +68,9 @@ push 前 2 レビューを **同じアシスタントメッセージで並列に
 - ハッシュは `head <HEAD の commit OID>` 行 + `mbase <merge-base の commit OID>` 行 + `git diff <merge-base> HEAD` + `git diff --cached` + `git diff` (diff 3 種はいずれも `--no-ext-diff --no-textconv` 付き) を連結した入力に対する sha256 として計算する。 HEAD の commit OID をハッシュ入力に束縛しているため、 レビュー後に commit A を積んでから revert して戻す (net diff は review 時と同一でも commit 列は変わっている) 操作でもマーカーは自動失効する。 未コミットの edit があると `git diff --cached` / `git diff` の内容が変わりハッシュも変わるため、 markers が失効し commit + 再 review を強制できる
 - `deny` 時の `permissionDecisionReason` には、 各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と `/pre-push-review:review` を記載する
 
-**残っている deny 制約 (loop discipline 維持に必要な最小防御)**:
+**deny 制約 (loop discipline 維持に必要な最小防御)**:
 
-- `bash -c "..."`、stdin / interactive / init file を使う **シェルラッパー** 経由 push は引き続き deny。通常の positional script path や引数に `push` が含まれるだけなら介入しない
+- `bash -c "..."`、stdin / interactive / init file を使う **シェルラッパー** 経由 push は deny。通常の positional script path や引数に `push` が含まれるだけなら介入しない
 - 単独の `&` (background) と `|` (pipeline) は deny (並列実行になりマーカー検証完了後に状態が変更される経路になるため)
 - `git push` の **後** にシェル区切り文字 (`;`, `&`, `&&`, `||`, `|`) を続ける複合コマンドは deny (1 マーカー = 1 push 保証のため)
 - 引用符で囲まれた `git push` 文字列 (`grep "git push" README` など) はテキスト参照とみなしフックは介入しません
@@ -94,7 +79,7 @@ push 前 2 レビューを **同じアシスタントメッセージで並列に
 - **`--all` / `--mirror` / `--tags`** は deny (複数参照 / tag 一括 push でマーカー検証対象外のコミットが混入するため)
   - tag を push したい場合は、 tag が指す commit を含むブランチを通常通りレビューして push し、 別の Bash 呼び出しで `git push origin <tag-name>` のように個別 tag を push する運用
 - **現在ブランチと一致しない refspec を明示する形 (`git push origin other-branch` 等)** は deny
-  - `git push` / `git push origin` / `git push origin HEAD` / `git push -u origin <現在ブランチ名>` は引き続き許容
+  - `git push` / `git push origin` / `git push origin HEAD` / `git push -u origin <現在ブランチ名>` は許容
   - `git push origin :branch` (削除、 source 空) はローカルレビュー対象外なので許容
   - `git push --delete origin <branch>` / `git push -d origin <branch>` (削除フラグ) は新規 commit を送らないので許容
   - `git push origin <tag-name>` (個別 tag push) は 2 段階の reachability check で扱う
@@ -103,7 +88,7 @@ push 前 2 レビューを **同じアシスタントメッセージで並列に
 
 **サポート外 (本プラグインの範囲外で別レイヤーが必要)**:
 
-- **意図的に command token を難読化した push / wrapper 起動**は cooperative 利用前提の範囲外 (#134)。本 plugin は Claude が通常生成する direct command の誤操作を防ぐ review gate であり、任意の shell 入力を解析・封じ込める security sandbox ではない。bash 実行時には通常形と等価でも、次の形は粗フィルタまたは token 比較より前で対象 command として認識されず、gate が介入しない:
+- **意図的に command token を難読化した push / wrapper 起動**は cooperative 利用前提の範囲外。本 plugin は Claude が通常生成する direct command の誤操作を防ぐ review gate であり、任意の shell 入力を解析・封じ込める security sandbox ではない。bash 実行時には通常形と等価でも、次の形は粗フィルタまたは token 比較より前で対象 command として認識されず、gate が介入しない:
   - command keyword 内の quote fragment / escape (`git pu"sh"` / `g\it push` / `$'git' push`)
   - command line 内で注入した git alias (`git -c alias.p=push p`)。hook は実行時の git config / alias を展開しない
   これらは「引用符で囲まれた `git push` 例文をテキスト参照として介入しない」仕様や、認識済み `git push` の未知 wrapper / quote 付き引数を保守的に deny する仕様とは別の境界である

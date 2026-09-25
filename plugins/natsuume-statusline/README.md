@@ -4,7 +4,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.11.4
+v0.11.5
 
 ## 表示内容
 
@@ -42,7 +42,7 @@ Claude Code が statusline の stdin に渡す `rate_limits` には `five_hour` 
 
 ## Context cache dump (session-handoff plugin 連携)
 
-表示処理とは別に、statusline は stdin JSON の `context_window` データを per-session の一時 cache ファイルへ書き出します。これは session-handoff plugin (#228) が読む plugin 間契約の producer 側であり、issue #227 で追加されました。
+表示処理とは別に、statusline は stdin JSON の `context_window` データを per-session の一時 cache ファイルへ書き出します。これは session-handoff plugin が読む plugin 間契約の producer 側です。
 
 - **出力先**: `${TMPDIR:-/tmp}/natsuume-context-cache-<uid>/<sanitized_session_id>.json` (`uid` は `id -u`、`sanitized_session_id` は `session_id` を `A-Za-z0-9._-` のみに制限した値)
 - **スキーマ**: `updated_at` (stdin 受領時刻の epoch 秒)、`session_id` (サニタイズ前)、`used_percentage`、`total_input_tokens`、`context_window_size`

@@ -23,7 +23,7 @@ subagent を発出する直前に、呼び出し側 (メインセッションの
 - **Phase B**: `現在の差分は spec-first 2 段階の Phase B (実装本体の commit) です。`
 - **判定不能の場合**: `{{PHASE_CONTEXT}}` とその直後の空白を空文字列に置換し、Phase 文脈なしの prompt にします。spec-first 2 段階を適用していない作業もこの扱いです。
 
-Phase 文脈を渡すのは code-reviewer と security-reviewer だけです。codex-reviewer が起動する通常の Codex review は branch target と custom focus text を同時に受け取れないため、codex-reviewer の prompt には `{{PHASE_CONTEXT}}` を追加せず、wrapper・agent 定義・marker 仕様も変更しません。本 plugin 単独 install の環境では Phase 文脈の置換結果を使う相手がいないため、判定自体を省略してかまいません。
+Phase 文脈を渡すのは code-reviewer と security-reviewer だけです。codex-reviewer が起動する通常の Codex review は branch target と custom focus text を同時に受け取れないため、codex-reviewer の prompt には `{{PHASE_CONTEXT}}` を含めません。本 plugin 単独 install の環境では Phase 文脈の置換結果を使う相手がいないため、判定自体を省略してかまいません。
 
 次のアシスタントメッセージ (= このコマンドへの最初の応答) で、 **以下の Agent / Task tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
 
@@ -60,7 +60,7 @@ subagent から markdown report が返ってきたら以下の規律で対応し
    - **invalid**: 現在の codebase では scenario が成立しないことを積極的に確認できた。成立しない根拠を user-facing summary に記録し、修正しない。
    - **needs-user-decision**: finding の扱いに設計・仕様判断が必要。`AskUserQuestion` でユーザーの決定を得てから、修正するか棄却するかを確定する。
 
-reviewer は confidence による自己フィルタをしない契約のため、report には `Confidence: low` の候補も含まれます。`Confidence: low` の finding は、裏取りで具体的な failure scenario を再構成できない場合に invalid へ分類してかまいません (積極的な不成立確認までは要しません)。`high` / `medium` には従来どおり fail-safe の既定 (確信が持てなければ valid) を適用します。
+reviewer は confidence による自己フィルタをしない契約のため、report には `Confidence: low` の候補も含まれます。`Confidence: low` の finding は、裏取りで具体的な failure scenario を再構成できない場合に invalid へ分類してかまいません (積極的な不成立確認までは要しません)。`high` / `medium` には上記の fail-safe の既定 (確信が持てなければ valid) を適用します。
 
 4. valid finding と、needs-user-decision からユーザー判断により修正対象となった finding は、修正方針を言語化する (どの指摘をどう直すか / 代替案 / トレードオフ)。invalid finding はこの修正工程へ進めない。
 5. **codex-reviewer subagent の修正対象 finding** は `/codex:rescue --wait` で方針を壁打ちし、 「指摘の根本原因に対する解として妥当か / 場当たり的でないか / 全体設計と一貫しているか」 の 3 観点で approve を得てから実装する (rescue 自体はマーカー対象外)。

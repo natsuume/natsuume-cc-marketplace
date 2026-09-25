@@ -9,7 +9,6 @@
   (wrapper basename `run-pre-merge-codex-review` と codex 記録ファイル名
   `.claude-pre-merge-codex-reviewed`)、marketplace.json の renames の 1 行、plugin README の
   「## pre-merge-codex-review からの移行」節、本テスト自身
-- 移行節は renames による自動移行の条件と、利用者が行う手順を述べる
 
 subTest は使わない: 違反をリストに集約して 1 テスト = 1 判定に保つ。
 """
@@ -31,7 +30,7 @@ OLD_PLUGIN = ROOT / "plugins" / OLD_NAME
 PLUGIN_JSON = PLUGIN / ".claude-plugin" / "plugin.json"
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 AGENTS_DIR = PLUGIN / "agents"
-EXPECTED_VERSION = "3.0.0"
+EXPECTED_VERSION = "3.0.1"
 EXPECTED_AGENTS = {"codex-reviewer.md", "fable-reviewer.md"}
 
 # 旧名を含んでよい codex 専用の動作名 (wrapper basename と codex 記録ファイル名)。
@@ -45,14 +44,6 @@ MARKETPLACE_RENAME_LINE = re.compile(
 # 旧名を利用者向けの移行手順として書く README の節 (見出しから次の `## ` 見出しの直前まで)。
 MIGRATION_SECTION_FILE = f"plugins/{NEW_NAME}/README.md"
 MIGRATION_SECTION_HEADING = f"## {OLD_NAME} からの移行"
-MIGRATION_SECTION_PHRASES = (
-    "renames",
-    "2.1.193",
-    "pre-push-codex-review",
-    "同時に更新",
-    "新しいセッション",
-    "autoMode.allow",
-)
 
 
 def read(path: Path) -> str:
@@ -99,13 +90,6 @@ class PluginRenameTest(unittest.TestCase):
             if f"name: {path.stem}" not in frontmatter(read(path)).splitlines()
         ]
         self.assertEqual([], wrong, f"frontmatter の name がファイル名と一致しない: {wrong}")
-
-    def test_readme_describes_migration_from_old_name(self) -> None:
-        text = read(ROOT / MIGRATION_SECTION_FILE)
-        self.assertIn(MIGRATION_SECTION_HEADING, text.splitlines())
-        section = text.split(MIGRATION_SECTION_HEADING, 1)[1].split("\n## ", 1)[0]
-        missing = [phrase for phrase in MIGRATION_SECTION_PHRASES if phrase not in section]
-        self.assertEqual([], missing, f"移行節に無い記述: {missing}")
 
     def test_no_leftover_old_name_references(self) -> None:
         tracked = subprocess.run(

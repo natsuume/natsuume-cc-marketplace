@@ -1,10 +1,10 @@
 # agent-discipline プラグイン
 
-Claude Code の振る舞い規律 (= agent としての discipline) を配送する system prompt plugin です。旧 [decompose-bash](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/decompose-bash) と [auto-followthrough](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/auto-followthrough) を吸収しています。規律はメインセッションのモデルに依らず、同じ内容を注入します。
+Claude Code の振る舞い規律 (= agent としての discipline) を配送する system prompt plugin です。規律はメインセッションのモデルに依らず、同じ内容を注入します。
 
 ## バージョン
 
-v3.0.0
+v3.0.1
 
 ## 概要
 
@@ -15,11 +15,11 @@ Claude Code に「個人の開発スタイル」を一括で適用するため�
 | レイヤ | 配送経路 | inject 条件 | 内容 |
 |---|---|---|---|
 | **物理層 (Bash 分解)** | `SessionStart` (inject-always.sh、`always-1.md` の part 1 を配送) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
-| **before 系** | `SessionStart` (同上) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約、 AskUserQuestion の必須化 (R6、 v0.5.0 新設)、 spec-first 2 段階の開発手順 (R3c、 v0.5.0 新設・v0.18.0 で TDD 2 段階から rename) |
+| **before 系** | `SessionStart` (同上) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約、 AskUserQuestion の必須化、 spec-first 2 段階の開発手順 |
 | **during 系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
-| **排他系** (v0.2.0) | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` の無い旧形式 claim は他 session 扱いで削除禁止、 v0.14.0) |
+| **排他系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` を持たない claim は自分のものと確認できないため他 session 扱いで削除禁止) |
 | **分割配送** | `SessionStart` (inject-always.sh、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh) | 常時 (UserPromptSubmit 側の各要素は session ごとに at-most-once) | 常時ルールと分業規律は、メインセッションのモデルに依らず同じ 1 版を配送する。SessionStart で常時ルールの part 1 (`always-1.md`) のみ注入し、残りの part (`always-2.md` / `always-3.md`) と分業規律 (`discipline.md`) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (1 要素の `additionalContext` を 8K 字以下に保つための分割)。UserPromptSubmit 側の各要素は配送済みマーカーで 1 度だけ配送し、SessionStart のたびにマーカーをリセットして再配送する |
-| **検知系 (gh issue/pr body)** (v0.4.0、Closes 検証 Step は v0.7.0) | `PreToolUse` (hooks.json inline `type: agent` 4 entries) | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。claude-sonnet-5 pin |
+| **検知系 (gh issue/pr body)** | `PreToolUse` (hooks.json inline `type: agent` 4 entries) | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。claude-sonnet-5 pin |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、auto セッションで `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
@@ -48,7 +48,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **ファイル**: `hooks/scripts/inject-subagent-rules.sh`
 **イベント**: `SubagentStart` (Claude Code 2.0.43+)
 
-**動作** (v0.13.0 新設、issue #221):
+**動作**:
 
 - 全 subagent の起動時に `hooks/prompts/subagent-rules.md` 全文を `additionalContext` として注入する。モデル判定・agent_type 分岐を持たない静的全文注入
 - 注入内容は 4 規律: bash-decompose (always-1.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点)
@@ -79,8 +79,8 @@ claude plugin install agent-discipline@natsuume-plugins
 5. **PR 作成時の closing keyword** (`rule:closing-keyword`): 完全解決時のみ PR body に `Closes #N` を書く。closing keyword は default branch 向け PR でのみ機能する。部分対応では `Refs #N` / `Part of #N` に切替
 6. **自律作業中の判断境界** (`rule:autonomy-boundary`): 実装は自走、設計 / 仕様 (= issue で決まっているはずの内容) は再確認しない。ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる
 7. **連続 issue 解決時の排他制御** (`rule:issue-claim`): `/goal` 等の並列 session フロー向け。(a) `gh issue view` で `ai:in-progress` ラベル / claim comment 早期判定、(b) claim comment 投稿 (`session=<セッションID>` で自他判別)、(c) 3 秒待機 + REST issue comments の全ページ再取得 + `(created_at, 数値 id)` の辞書順比較による先着判定、(d) 作業 branch 切ってセッション ID 入りの空 commit + 即 push で確定的排他、(e) push 成功時のみラベル付与。安全機構のため手順を省略せず全文記載する
-8. **AskUserQuestion の必須化** (`rule:ask-user-question`、v0.5.0 新設・R6): ユーザへの質問・確認・判断伺い・すり合わせは自由文で turn を終えず必ず `AskUserQuestion` を発行する
-9. **spec-first 2 段階の開発手順** (`rule:tdd-two-phase`、v0.5.0 新設・R3c、v0.18.0 で TDD 2 段階から rename): 軽微な修正を除き、実装は Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める。正典 TDD ではなく実行可能仕様の先行固定 (spec-first) であり、局所定義・評価基準の詳細は issue-start skill が持つ
+8. **AskUserQuestion の必須化** (`rule:ask-user-question`): ユーザへの質問・確認・判断伺い・すり合わせは自由文で turn を終えず必ず `AskUserQuestion` を発行する
+9. **spec-first 2 段階の開発手順** (`rule:tdd-two-phase`): 軽微な修正を除き、実装は Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める。正典 TDD ではなく実行可能仕様の先行固定 (spec-first) であり、局所定義・評価基準の詳細は issue-start skill が持つ
 10. **説明は常に最新の内容のみ** (`rule:comment-currency`、part 2/3 に含まれる): コードコメント・docstring・README 等の説明文書には現在の内容のみを書き、版数・issue/PR 番号による過去の変更の記述や旧実装の説明を書かない。履歴は commit message・PR 説明・issue に置く。新規作成・意味変更した説明ブロックにだけ適用し (touch-time)、指示のない一括清掃は行わない
 
 **常時適用ルールの書式**:
@@ -93,13 +93,13 @@ claude plugin install agent-discipline@natsuume-plugins
 **ファイル**: `hooks/scripts/inject-temporary.sh`
 **イベント**: `SessionStart` / `UserPromptSubmit`
 
-**動作** (v0.12.0 新設、issue #237 (v0.19.0) で実行中 session の追い配送を追加):
+**動作**:
 
-- `SessionStart` では従来どおり `hooks/prompts/temporary/*.md` の非空ファイルをファイル名の辞書順 (`LC_ALL=C`) で連結し、1 つの `additionalContext` として全件配送する。同時にファイル名の POSIX `cksum` (CRC + byte length) を session ごとの配送済み集合 `${TMPDIR:-/tmp}/agent-discipline-state/delivered-temporary-<session_id>` へ atomic に記録する
-- `UserPromptSubmit` では配送済み集合に無い非空 md だけを同じ順序で連結し、追加後の最初のプロンプト処理時に one-shot 配送する。配送済み集合は本文 hash ではなくファイル名単位なので、temporary rule の lifecycle は従来どおりファイル追加・削除で管理する
+- `SessionStart` では `hooks/prompts/temporary/*.md` の非空ファイルをファイル名の辞書順 (`LC_ALL=C`) で連結し、1 つの `additionalContext` として全件配送する。同時にファイル名の POSIX `cksum` (CRC + byte length) を session ごとの配送済み集合 `${TMPDIR:-/tmp}/agent-discipline-state/delivered-temporary-<session_id>` へ atomic に記録する
+- `UserPromptSubmit` では配送済み集合に無い非空 md だけを同じ順序で連結し、追加後の最初のプロンプト処理時に one-shot 配送する。配送済み集合は本文 hash ではなくファイル名単位なので、temporary rule の lifecycle はファイル追加・削除で管理する
 - SessionStart の全件配送は resume / clear / compact を含めて維持し、その時点の存在ファイルで配送済み集合を置き換える。temporary directory が空なら空集合を記録するため、その後に同名ファイルが追加されても次の UserPromptSubmit で配送できる
 - `agent_id` 付き UserPromptSubmit は subagent 経路として無音終了し、配送済み集合も変更しない。`jq` 不在 / 不正 JSON / session_id 不正 / state directory または atomic marker 書込失敗 / 全件配送済み / directory が空の場合も無音 `exit 0` する
-- SessionStart input に session_id が無い異常系だけは v0.12.0 からの既存挙動を保つため、marker 無しで全件配送する。正常系では出力 JSON を先に生成し、marker 更新に成功した後だけ stdout へ出す
+- SessionStart input に session_id が無い異常系では、marker 無しで全件配送する。正常系では出力 JSON を先に生成し、marker 更新に成功した後だけ stdout へ出す
 
 撤去手順: Claude Code 側で AskUserQuestion preview のスクロール問題 (一定行数を超える preview が「hidden XX lines」で隠され、ユーザが全文を確認できない) が修正されたら、`hooks/prompts/temporary/` 配下の md を削除するだけで注入が消えます (スクリプトと hooks.json entry は残っても no-op)。修正されたことは、長い preview を付けた AskUserQuestion を表示し、隠れた部分をスクロールで全文確認できることで確かめます。完全撤去する場合のみ entry・スクリプト・temporary ディレクトリも削除します。いずれの場合も version bump が必要です。
 
@@ -152,7 +152,7 @@ claude plugin install agent-discipline@natsuume-plugins
 - 作業が残っている間の止まり方の禁止 (次の手順の宣言だけで turn を終える / 続行の可否を尋ねる / 残作業を妨げない判断事項の列挙 / 区切りや turn の長さを理由にした報告)。進捗報告・推奨は次のツール呼び出しと同じメッセージに含める。止まってよいのは、ユーザの入力なしに進められる作業が無い場合と、進行を妨げているものが意図的に保護されたものである場合に限る。この規定は禁止 / 要確認事項やマージ前提条件の確認を不要にしない
 - 禁止 / 要確認: master への直接 push / 破壊的操作 / 秘匿情報コミット / 4 条件未充足の独断マージ
 
-#### PreToolUse type:agent hook (v0.4.0 新設)
+#### PreToolUse type:agent hook
 
 **定義場所**: `hooks/hooks.json` 内に inline 定義 (= 外部スクリプト不要、 prompt 全文を JSON 内に持つ)
 **イベント**: `PreToolUse`
@@ -172,25 +172,25 @@ claude plugin install agent-discipline@natsuume-plugins
 - body content に対し、 inject-always.sh セクション 2.1 / 3.1 の禁止カテゴリ (推奨マーキング / 独断の正当化 / 比較表で勝者決定 / 暗黙の決め打ち = 粒度差 / 「とりあえず」 系 / 暫定マーク残置 / ユーザ判断の先回り代弁 / 受入基準への未承認選択埋め込み) を semantic 判定
 - 該当なし → `{"ok": true}`、 該当あり → `{"ok": false, "reason": "違反箇所の引用 + カテゴリ名 + 修正方針 (= AskUserQuestion でユーザの decision を取り、 確定 1 案だけを残す)"}` で block
 
-**Closes 検証 Step (`gh pr create` entry のみ、v0.7.0 新設)**:
+**Closes 検証 Step (`gh pr create` entry のみ)**:
 
-`gh pr create` entry の prompt にのみ、 上記 Step 2 (禁止カテゴリの semantic 判定) の直後・Step 3 (返り値、 v0.7.0 で Step 4 に繰り下げ) の前に追加の判定 Step 3 を挿入する (#151/#153 対応、親 issue #173 決定事項 9)。 他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt はこの Step を持たない。 branch 名からの issue 推定は PR 作成時にのみ意味を持つ判定のため、 4 entries の prompt 完全 duplicate は維持しつつ本 Step だけ 1 entry に閉じる (= entry を増やさず model pin の保守対象も増やさない)。
+`gh pr create` entry の prompt にのみ、 上記 Step 2 (禁止カテゴリの semantic 判定) の直後に追加の判定 Step 3 を置き、 返り値を Step 4 とする。 他 3 entries (`gh issue create` / `gh issue edit` / `gh pr edit`) の prompt はこの Step を持たない。 branch 名からの issue 推定は PR 作成時にのみ意味を持つ判定のため、 4 entries の prompt 完全 duplicate は維持しつつ本 Step だけ 1 entry に閉じる (= entry を増やさず model pin の保守対象も増やさない)。
 
 判定の起点 `<cwd>` は、 hook input の `cwd` を起点に、 同じ command 内で対象 subcommand より前にある `cd <dir>` の subcommand を先頭から順にすべて適用した dir (各 `<dir>` が相対パスならその時点の dir を基準に解決する) とする (`cd` が無ければ hook input の `cwd`)。
 
-判定手順 (codex review P2 指摘 2 件を反映した最終形):
+判定手順:
 
 1. まず `<cwd>/.git` を Read tool で読む
-2. 読み取れた内容が `gitdir: <path>` 形式 (worktree) の場合: `<path>` が相対パスであれば、 `.git` ファイルの所在ディレクトリ (= `<cwd>` そのもの) を基準に解決したうえで、 解決後の `<path>/HEAD` を Read tool で読む (linked worktree では `.git` 自体が `gitdir:` ファイルであり `<cwd>/.git/HEAD` を先に読む実装は常に fail-open するバグだったため、 `.git` を先に読んでから分岐する順序に修正した)
+2. 読み取れた内容が `gitdir: <path>` 形式 (worktree) の場合: `<path>` が相対パスであれば、 `.git` ファイルの所在ディレクトリ (= `<cwd>` そのもの) を基準に解決したうえで、 解決後の `<path>/HEAD` を Read tool で読む (linked worktree では `.git` 自体が `gitdir:` ファイルであり、 `<cwd>/.git/HEAD` を先に読むと常に読み取れず fail-open するため、 `.git` を先に読んでから分岐する)
 3. `<cwd>/.git` の Read が「ディレクトリである」ことを理由に失敗する場合 (= worktree ではない通常のリポジトリ): `<cwd>/.git/HEAD` を Read tool で読む
 4. 上記いずれの経路でも HEAD が取得できない場合、 または取得できた内容が `ref: refs/heads/<branch>` 形式でない場合 (detached HEAD 等) は、 本 Step を判定不能として通過する (fail-open で誘導層の `rule:closing-keyword` に委ねる)。 `.git` 自体が存在しない bare リポジトリも本 Step の対象外として同様に通過する
 5. branch 名が `*/issue-<数字>-*` パターンに一致しない場合は本 Step を通過する
-6. 一致する場合、 パターンから issue 番号 `N` を抽出する。 branch 名に `issue-<数字>-` 形式の断片が複数含まれる場合は、 **最初に出現した断片の数字** を `N` として採用する (branch 名規約 `<prefix>/issue-<N>-<slug>` では prefix 直後の先頭断片が規約上の issue 番号。 例: `feat/issue-12-fix-issue-34-regression` では N=12。 v0.7.3 / #188)。 Step 1 で抽出済みの body content に、 以下のいずれかが `N` そのものを参照している場合のみ本 Step を通過する (境界一致で判定する: `#12` は `#123` にマッチしない、 すなわち `#N` の直後が数字でないことを確認する。 先頭ゼロの同一視はしない。 branch 名規約は issue 番号をそのまま埋めるため通常は先頭ゼロが発生しないが、 発生した場合は不一致として block 側に倒す):
+6. 一致する場合、 パターンから issue 番号 `N` を抽出する。 branch 名に `issue-<数字>-` 形式の断片が複数含まれる場合は、 **最初に出現した断片の数字** を `N` として採用する (branch 名規約 `<prefix>/issue-<N>-<slug>` では prefix 直後の先頭断片が規約上の issue 番号。 例: `feat/issue-12-fix-issue-34-regression` では N=12)。 Step 1 で抽出済みの body content に、 以下のいずれかが `N` そのものを参照している場合のみ本 Step を通過する (境界一致で判定する: `#12` は `#123` にマッチしない、 すなわち `#N` の直後が数字でないことを確認する。 先頭ゼロの同一視はしない。 branch 名規約は issue 番号をそのまま埋めるため通常は先頭ゼロが発生しないが、 発生した場合は不一致として block 側に倒す):
    - closing keyword (`Closes` / `Close` / `Closed` / `Fix` / `Fixes` / `Fixed` / `Resolve` / `Resolves` / `Resolved`、 case-insensitive、 colon 許容 = `Closes:` 等も可) + `#N` または `owner/repo#N`
    - 部分対応表記 (`Refs` / `Part of`、 case-insensitive) + `#N` または `owner/repo#N`
 7. 上記いずれにも該当しない場合 (= 他 issue への参照のみが併記されている場合を含む) は `{"ok": false, "reason": "branch 名から issue #<N> の作業と推定されるが、 PR body に issue #<N> を参照する closing keyword (例: Closes #<N>) も部分対応表記 (例: Refs #<N>) も無い。 完全解決なら Closes #<N> を、 部分対応なら Refs #<N> を body に追記して再実行する"}` で block する (reason 内の `<N>` は Step 6 で抽出した実際の issue 番号に置換する)。 該当する場合は Step 4 に進む
 
-editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのまま判定不能として通過する (= body content 自体が取得できないケースを本 Step が追加で救済することはない)。 worktree (相対 `gitdir:` の解決を含む) / detached HEAD / bare リポジトリ (対象外で通過) / branch 名不一致 / issue 番号一致の keyword あり / 番号不一致または keyword なし の各ケースについて、 上記手順から期待判定 (通過多数 + block は「番号一致の keyword が body に無い」場合のみ) が一意に導ける設計としている。
+editor 経路 / `--body-file -` (stdin 経路) は Step 1 の扱いのまま判定不能として通過する (= body content 自体が取得できないケースを本 Step が追加で救済することはない)。 worktree (相対 `gitdir:` の解決を含む) / detached HEAD / bare リポジトリ (対象外で通過) / branch 名不一致 / issue 番号一致の keyword あり / 番号不一致または keyword なし の各ケースについて、 上記手順から期待判定 (通過多数 + block は「番号一致の keyword が body に無い」場合のみ) が一意に導ける設計としている。
 
 **なぜ 4 entries に分けて prompt を duplicate しているか**:
 
@@ -207,16 +207,16 @@ editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのま�
 
 **SPOF 緩和の設計**:
 
-- 旧 `llm-default-branch-push-poc` 廃止教訓: 全 Bash 発火 prompt hook が暗黙の default model (haiku) ダウン時に全 Bash を PreToolUse error にする非対称 SPOF があった (memory: `reference_prompt_hook_model_spof.md`)
-- 今回はこれを 2 段で緩和:
+- 全 Bash で発火する LLM hook は、 hook の model が不可用になると全 Bash を PreToolUse error にする非対称 SPOF を持つ
+- 検知層はこれを 2 段で緩和する:
   - **narrow scope (物理層 + Step 0)**: 個別 hook の `if: "Bash(gh <cmd>:*)"` filter で target command に反応するよう **hook config 段階で** prefilter する。 `if` filter は best-effort のため、 `$()` / `$VAR` を含む非対象 Bash でも agent subagent が起動しうるが、 その場合は Step 0 guard が semantic 検証をせず即終了する。 結果として LLM 不可用時の影響は「`gh issue/pr create/edit` に加えて、 `$()` / `$VAR` を含む Bash も PreToolUse error になりうる」 範囲に narrow され、 それ以外の通常の Bash 呼び出し (= `ls` / `git status` / `rg` 等) は影響を受けない
   - **model pin**: `model` field を明示的に `claude-sonnet-5` に固定する。hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず、pin 値がそのまま dispatch される確定値である。検知層は body の禁止表現を判定する定型作業のため、メインセッションのモデルとは独立に、コストと応答時間を抑えるため sonnet に pin する
 
 これにより LLM 不可用の影響は「`gh issue/pr create|edit` (と `$()` / `$VAR` を含む Bash) が pin 先の Sonnet 障害時に PreToolUse error になる」範囲に閉じる。メインセッションは Sonnet 以外のモデルで動くため、Sonnet 側の障害時は hook だけが落ちうる。個別 call の transient error (rate limit / network blip) は残るが、これは Claude Code 通常使用の背景ノイズと同レベル
 
-**設計の変遷** (codex review からの修正):
+**`if` filter と prompt 内 guard の分担**:
 
-v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh (issue|pr) (create|edit)` 以外は即 ok:true」 という early return 構成だった。 これは codex review で「prompt 内 early return は agent subagent が **既に起動済み** の状態で起こるため、 全 Bash 呼び出しで Opus subagent が起動してしまい narrow blast radius が成立せず、 ordinary commands (tests / git status / rg 等) の latency / cost / model 可用性依存が増える」 と P1 指摘された (該当指摘の解は「`if` filter または lightweight command prefilter」)。 この指摘を受けて、 hook config 段階で物理 prefilter する `if` field (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) を採用し、 4 entries に分割した現在の設計に変更した。
+prompt 内の early return (「対象 command 以外は即 ok:true」) だけで絞り込む構成は採らない。 prompt 内の early return は agent subagent が **既に起動済み** の状態で起こるため、 matcher `Bash` のみの単一 entry では全 Bash 呼び出しで subagent が起動して narrow blast radius が成立せず、 ordinary commands (tests / git status / rg 等) に latency / cost / model 可用性への依存が生じる。 このため hook config 段階で物理 prefilter する `if` field (公式 plugin `claude-plugins-official/security-guidance` と同じ syntax) を使い、 4 entries に分割している。
 
 各 prompt 冒頭には **defense-in-depth command guard (Step 0)** を置いている。 `if` filter は best-effort であり、 `$()` / `$VAR` を含む Bash では対象外でも hook が起動しうるため、 unrelated command が semantic 検証されて誤 block されないよう、 prompt 内 guard が二段目として subcommand 単位で検証対象を決める。 `if` filter が通した非対象 Bash は即 `{"ok": true}` で通し、 静的判定不能な形 (command 置換内の対象 command、 引用符で分断された literal) は `{"ok": false}` で受け止める。 第一の narrow scope は `if` field の hook config 段階で、 prompt 内 guard が二段目を担う非対称設計
 
@@ -294,7 +294,7 @@ fork サブエージェントを止める主防御は、利用者の settings (`
 
 **ファイル**: `skills/issue-plan/SKILL.md`
 
-issue の起票・分解フェーズの手順をガイドします: 起票前の壁打ち、body template (背景 / 受入基準 / I/O 契約 / 制約 / 想定ファイル / 関連 issue の 6 セクション)、分割基準、関係設定コマンド (gh v2.94+ ネイティブ経路 + 旧版 fallback)、`#N` 相互参照と issue types 不使用の理由、親 issue の close 規約。
+issue の起票・分解フェーズの手順をガイドします: 起票前の壁打ち、body template (背景 / 受入基準 / I/O 契約 / 制約 / 想定ファイル / 関連 issue の 6 セクション)、分割基準、関係設定コマンド (gh v2.94+ ネイティブ経路 + v2.94 未満向け fallback)、`#N` 相互参照と issue types 不使用の理由、親 issue の close 規約。
 
 **使用シーン**:
 
@@ -323,15 +323,15 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 **ファイル**: `scripts/lint-prompt-sync.sh` (plugin 直下、`hooks/` 配下ではない)
 **呼び出し元**: `.github/workflows/agent-discipline-prompt-lint.yml`
 
-**動作** (v0.7.2 で 2 チェック構成から 3 チェック構成に拡張、v0.13.0 でチェック 4/5 を追加した 5 チェック構成):
+**動作** (5 チェック構成):
 
 - **チェック 1 (常時適用ルール 3 part の rule ID セット)**: `hooks/prompts/always-{1,2,3}.md` から `<!-- rule:<id> -->` コメントの ID 集合を抽出する。いずれかの part からマーカーが 1 件も抽出できなければ fail する。まず各 part ファイル単体で rule ID マーカーが重複していないこと (`uniq -d` で検出。part 間ペアワイズ検査は自分自身と比較しないため単一ファイル内の重複を検出できず、和集合化がそれを無音で吸収してしまう盲点への対処) を検証し、次に 3 part 間で rule ID が重複していないこと (part 分割は rule 境界で行う契約) をペアワイズに検証する。いずれかで重複があれば fail する。さらに 3 part の和集合を、スクリプト内定数 `EXPECTED_ALWAYS_RULE_IDS` (常時適用ルールが持つべき rule ID 10 個の正本) と順序に依らず比較し、欠落・過剰のどちらかがあれば差分 ID を列挙して fail する。3 part の和集合はチェック 5 の母集合になる。ルール本文の表現差 (意味的ドリフト) は検出対象外とし、PR レビューでの目視確認に委ねる
-- **チェック 2 (hooks.json 4 entries 共通ブロック一致)**: 抽出・正規化・比較より前に **前提検証** (v0.7.2 新設、#186) を行う — `hooks/hooks.json` の `type: agent` entry 数がスクリプト内定数 `EXPECTED_AGENT_ENTRIES` (= 4) と一致すること、および各 entry の `.prompt` が非空文字列であることを検証し、いずれか不成立なら fail する (entry 数の増減や prompt 欠落という前提崩壊時に、空同士の一致などで pass 側へ倒れることを防ぐ)。前提検証を通過した後、4 つの `type: agent` entry (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) の `prompt` から、entry 固有部分を除いた「共通ブロック」が一致するか検証する。entry 固有部分として除去する対象は 3 種類:
+- **チェック 2 (hooks.json 4 entries 共通ブロック一致)**: 抽出・正規化・比較より前に **前提検証** を行う — `hooks/hooks.json` の `type: agent` entry 数がスクリプト内定数 `EXPECTED_AGENT_ENTRIES` (= 4) と一致すること、および各 entry の `.prompt` が非空文字列であることを検証し、いずれか不成立なら fail する (entry 数の増減や prompt 欠落という前提崩壊時に、空同士の一致などで pass 側へ倒れることを防ぐ)。前提検証を通過した後、4 つの `type: agent` entry (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) の `prompt` から、entry 固有部分を除いた「共通ブロック」が一致するか検証する。entry 固有部分として除去する対象は 3 種類:
   1. 対象コマンド名の記載箇所 (`if` フィールドから機械導出した `gh <cmd>` をプレースホルダに置換)
-  2. `gh pr create` のみが持つ Closes 検証 Step (Step 3) と、それに伴う「返り値」Step の番号繰り下がり (Step 4 → Step 3 相当への読み替え)。**除去 (v0.7.2、#187)** より前に、除去対象の Step 3 ブロックが実在することを検証し、実在しなければ fail する
-  3. `gh pr create` / `gh pr edit` が共有する PR 固有の判定原則追加文 (「PR body で commit/discussion 経由でユーザ承認が明示されている文脈は禁止対象外」)。**除去 (v0.7.2、#187)** より前に、除去対象の文言が PR 系 2 entries それぞれに実在することを検証し、実在しなければ fail する
+  2. `gh pr create` のみが持つ Closes 検証 Step (Step 3) と、それに伴う「返り値」Step の番号繰り下がり (Step 4 → Step 3 相当への読み替え)。除去より前に、除去対象の Step 3 ブロックが実在することを検証し、実在しなければ fail する
+  3. `gh pr create` / `gh pr edit` が共有する PR 固有の判定原則追加文 (「PR body で commit/discussion 経由でユーザ承認が明示されている文脈は禁止対象外」)。除去より前に、除去対象の文言が PR 系 2 entries それぞれに実在することを検証し、実在しなければ fail する
   正規化後の 4 entries が byte-identical でなければ diff 形式で乖離箇所を報告して fail する
-- **チェック 3 (gh pr create Step 3 ブロック構造チェック、v0.7.2 新設、#185)**: チェック 2 の `norm_b` は `gh pr create` entry 固有の Step 3 (Closes 検証) ブロックを共通ブロック比較の対象外とするため丸ごと除去する。そのため Step 3 の判定手順がどのように破損しても、開始・終了の見出しパターンさえ残っていれば除去は成功し共通ブロック比較 (チェック 2) は pass してしまう (false pass)。これを埋めるため、除去される前の raw prompt から Step 3 ブロックを独立に抽出し、スクリプト内定数の必須キーワードリスト (`` `<cwd>/.git` ``、`gitdir:`、`ref: refs/heads/`、`issue-<数字>`、`closing keyword`、`境界一致`、`fail-open で誘導層の`、の 7 要素) をすべて含むかを検証する。期待構造のソース・オブ・トゥルースは README 等の外部文書ではなくスクリプト内定数とし (#185 の合意事項)、判定ロジックの意味的な等価性までは検証しない構造スモークチェックである旨を明記している (欠落があれば diff ではなく欠落キーワードの一覧を報告して fail する)
+- **チェック 3 (gh pr create Step 3 ブロック構造チェック)**: チェック 2 の `norm_b` は `gh pr create` entry 固有の Step 3 (Closes 検証) ブロックを共通ブロック比較の対象外とするため丸ごと除去する。そのため Step 3 の判定手順がどのように破損しても、開始・終了の見出しパターンさえ残っていれば除去は成功し共通ブロック比較 (チェック 2) は pass してしまう (false pass)。これを埋めるため、除去される前の raw prompt から Step 3 ブロックを独立に抽出し、スクリプト内定数の必須キーワードリスト (`` `<cwd>/.git` ``、`gitdir:`、`ref: refs/heads/`、`issue-<数字>`、`closing keyword`、`境界一致`、`fail-open で誘導層の`、の 7 要素) をすべて含むかを検証する。期待構造のソース・オブ・トゥルースは README 等の外部文書ではなくスクリプト内定数とし、判定ロジックの意味的な等価性までは検証しない構造スモークチェックである旨を明記している (欠落があれば diff ではなく欠落キーワードの一覧を報告して fail する)
 - **チェック 4 (分業規律の rule ID セット)**: `hooks/prompts/discipline.md` から、チェック 1 と同じ抽出方式で `<!-- rule:<id> -->` の ID 集合を抽出する。ファイル内で rule ID が重複していないことを検証し、ID 集合をスクリプト内定数 `EXPECTED_DISCIPLINE_RULE_IDS` (`role-split` / `delegation-rules` / `delegation-instruction` / `escalation` の 4 個。分業規律が持つべき rule ID の正本) と順序に依らず比較する。重複・欠落・過剰のいずれかがあれば fail する
 - **チェック 5 (subagent-rules.md の rule ID サブセット検査)**: `hooks/prompts/subagent-rules.md` の `rule:` プレフィクスの ID 集合が `always-{1,2,3}.md` の和集合 (チェック 1 で抽出・重複検査済みの集合) に含まれるかを片方向で検証する。含まれない ID があれば fail する (常時適用ルールにのみ存在する ID は「subagent に配送しない」意図的な選択のため検査しない。`subagent-rule:` プレフィクスのマーカーは対象外)
 - **引数**: なし。**実行位置**: リポジトリルートを前提とする (それ以外や前提ファイル欠如は fail-closed で exit 1)。**依存**: `jq` (CI・ローカルとも前提。不在時は明確なエラーメッセージで exit 1)。**exit code**: 全チェック (1〜5) pass で 0、いずれか fail または実行時エラーで 1
@@ -361,44 +361,31 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 
 `always-1.md` / `always-2.md` / `always-3.md` / `hooks.json` / `discipline.md` / `subagent-rules.md` / `hooks/prompts/` 配下の全 md (`temporary/` を含む) / `hooks/scripts/` 配下の全ファイル / lint スクリプト 2 本 / 本 workflow 自身のいずれかが変更された `push` (master 向け) / `pull_request` でのみ発火し、`ubuntu-latest` 上で `actions/checkout@v4` の後に `lint-prompt-sync.sh` と `lint-payload-size.sh` を実行する。ubuntu-latest には `jq` と `git` が標準搭載されているため追加のセットアップ step は無い。
 
-## 旧 plugin との関係 (移行ガイド)
-
-agent-discipline は以下の 2 plugin を吸収統合しています:
-
-| 旧 plugin | 吸収先 | 等価機能 |
-|---|---|---|
-| `decompose-bash` (v0.1.1) | inject-always.sh の「物理層」 セクション | Bash コマンド分解の `additionalContext` 注入 |
-| `auto-followthrough` (v0.2.3) | inject-auto.sh + check-uncommitted-on-session-start.sh | auto mode 時の commit→push→PR→merge 自走 / 未コミット分類チェック |
-
-旧 plugin の機能はそのまま維持しています。 v0.1.0 時点では旧 `auto-followthrough` の hook 構造 (`SessionStart` + `UserPromptSubmit` + `PostToolBatch`) も継承していましたが、 v0.1.1 で `PostToolBatch` 経路を撤去 + during 系を `inject-always.sh` 側に移動し、 現在は `SessionStart` + `UserPromptSubmit` の 2 経路構成です。 マーカー dir は `auto-followthrough-markers/` → `agent-discipline-markers/` に変更されており、 v0.1.1 では `inject-auto.sh` の dedup marker 自体も不要になっているため、 旧 marker は OS の tmpfs/tmp cleanup で自然に消去されます。
-
-旧 2 plugin は本 plugin 導入時に同 PR で削除済みです。
-
 ## 設計上の選択
 
-### なぜ統合 plugin か (vs 個別 plugin の維持)
+### なぜ 1 plugin に集約するか (vs 機能ごとの個別 plugin)
 
-このリポジトリは個人の Claude Code 開発スタイル marketplace です。 機能ごとに細かく plugin を分けると plugin 数が肥大化し、 enable list の見通しが悪くなります。 「物理層 + 思考層」 は抽象レイヤとしては別ですが、 個人運用では一括 on/off で問題が出ないため統合しました。
+このリポジトリは個人の Claude Code 開発スタイル marketplace です。 機能ごとに細かく plugin を分けると plugin 数が肥大化し、 enable list の見通しが悪くなります。 「物理層 + 思考層」 は抽象レイヤとしては別ですが、 個人運用では一括 on/off で問題が出ないため 1 plugin に集約しています。
 
 公開 marketplace でユーザに細かい on/off を提供する場合は分離が望ましいですが、 本リポジトリは個人運用前提のため統合粒度を採用しています。
 
 ### なぜ常時系と auto 系で hook event を分けるか
 
 - **常時系 (inject-always.sh)**: 物理層 (Bash 分解) と before 系 (設計壁打ち / issue 規約 / closing keyword) と during 系 (自律作業中の判断境界) は permission_mode に依らず常に有用なので `SessionStart` で 1 回注入する。 トークンコストを抑えるため per-turn 再注入はしない
-- **auto 系 (inject-auto.sh)**: after 系 (commit→push→PR→merge 自走パイプライン) は auto でのみ自動注入し、long-running session で薄れないよう `UserPromptSubmit` で per-turn 再注入する。v0.1.0 では `PostToolBatch` でも併送していたが、v0.1.1 で撤去した (per-turn 2 回 inject → 1 回に削減)
+- **auto 系 (inject-auto.sh)**: after 系 (commit→push→PR→merge 自走パイプライン) は auto でのみ自動注入し、long-running session で薄れないよう `UserPromptSubmit` で per-turn 再注入する
 
-### 誘導層と検知層の defense-in-depth (v0.4.0 で物理層を追加)
+### 誘導層と検知層の defense-in-depth
 
-v0.3.0 までは `additionalContext` 注入のみで Claude の自発的な遵守を期待する **誘導 (nudge)** だけでした。 v0.4.0 で PreToolUse type:agent hook を追加し、 issue / PR body に関しては「Claude が忘れたら hook が物理的に catch」 する **検知層** を追加しました。 両者は defense-in-depth として階層化されています:
+`additionalContext` 注入で Claude の自発的な遵守を促す **誘導 (nudge)** に加え、 issue / PR body に関しては「Claude が忘れたら hook が物理的に catch」 する **検知層** を PreToolUse type:agent hook で持ちます。 両者は defense-in-depth として階層化されています:
 
 | レイヤ | 機構 | 効き目 | 対象 leak 経路 |
 |---|---|---|---|
 | 誘導層 | SessionStart で additionalContext 注入 | Claude が自発的に self-check する確率を上げる | issue body / PR 説明 / plan / commit message / 実装コード (= 全 leak 経路) |
-| 検知層 (v0.4.0) | PreToolUse type:agent hook 4 entries | `gh issue/pr create/edit` 経路の物理 intercept (誘導層の取りこぼし防止)。literal head prefilter により非該当 Bash では model を起動しない | `gh issue create/edit` / `gh pr create/edit` のうち `--body inline` / `--body-file PATH` 形式 |
+| 検知層 | PreToolUse type:agent hook 4 entries | `gh issue/pr create/edit` 経路の物理 intercept (誘導層の取りこぼし防止)。literal head prefilter により非該当 Bash では model を起動しない | `gh issue create/edit` / `gh pr create/edit` のうち `--body inline` / `--body-file PATH` 形式 |
 
 検知層は対象範囲を限定的にしています (= `gh api` 直接叩き / editor 起動経路 / 実装コード内のコメント等は cover しない)。 これは誘導層 (= Claude の自発遵守) を主、 検知層を補助とする非対称設計です。 全 leak 経路を物理層で塞ぐと regex / semantic 判定の網羅が困難になり false positive / false negative が増えるため、 「Claude 自身に最も書きやすい経路 (`gh issue/pr create/edit`)」 だけを物理 catch する戦略を採っています。
 
-なお、 master への直接 push のように **強い deny で構造的に止めるべきケース** は引き続き別 plugin (例: `git-guardrails`, `pre-push-review`) が担当します。 本 plugin の検知層は推奨マーク等の semantic 判定対象に限定されているため、 deny 系 hook を完全代替するものではありません。
+なお、 master への直接 push のように **強い deny で構造的に止めるべきケース** は別 plugin (例: `git-guardrails`, `pre-push-review`) が担当します。 本 plugin の検知層は推奨マーク等の semantic 判定対象に限定されているため、 deny 系 hook を完全代替するものではありません。
 
 ## ディレクトリ構成
 
@@ -461,23 +448,23 @@ agent-discipline/
 
 ## 既知の制約
 
-- **誘導層は強制ではない**: `additionalContext` の追加だけなので Claude が指示を無視することは原理的に可能。 v0.4.0 で gh issue/pr 経路のみ検知層 (PreToolUse type:agent hook) を追加したが、 それ以外の leak 経路 (`gh api` 直接叩き / editor 起動経路 / 実装コード内コメント等) は誘導層のみ
+- **誘導層は強制ではない**: `additionalContext` の追加だけなので Claude が指示を無視することは原理的に可能。 検知層 (PreToolUse type:agent hook) が cover するのは gh issue/pr 経路のみで、 それ以外の leak 経路 (`gh api` 直接叩き / editor 起動経路 / 実装コード内コメント等) は誘導層のみ
 - **検知層は一部の gh CLI 呼び出し形式を bypass し、 静的判定不能な形は拒否する**: `if` filter (`Bash(prefix:*)`) は best-effort であり、 compound command の各 subcommand と env-prefix を剥がした command は評価され、 Step 0 も subcommand 単位で env-prefix を剥がして判定する。 ただし以下の形式は検知層を bypass する (= agent hook が発火しない、 または Step 0 が検証対象外とし、 誘導層のみが防衛) か、 静的判定不能として拒否される:
   - **global option を subcommand 前に置く形式**: `gh -R owner/repo issue create ...` / `gh --repo owner/repo pr create ...` (= cross-repo 操作で頻出するが、 通常は `cd` で repo に入って操作するため Claude のデフォルト出力では稀)
   - **wrapper 経路**: `eval "gh issue create ..."` / `bash -c "..."` / `xargs gh ...` (= 既に section 1 Bash 分解規律で禁止されているため、 規律遵守時には発生しない)
   - **command 置換内の起票**: shell が実際に実行する `$()` / バッククォートの内側で `gh issue create` 等を実行する形式と、 command 語の位置で引用符に literal を分断する形式 (`"gh" issue create` 等) は body を静的に判定できないため、 Step 0 が静的判定不能として `{"ok": false}` で拒否する。 single quote の内側や `<<'EOF'` heredoc 本文の中で command 名に言及しているだけの文字列 (commit message 本文等) は対象外
   - **PreToolUse の構造的 TOCTOU (`cat ... && gh ... -F body.md` 系)**: 同じ command 内で生成する body file (例: `cat > body.md <<'EOF' ... EOF && gh issue create -F body.md`) は、 PreToolUse hook が Bash 実行 **前** に発火するため hook 時点で存在しない。 検知層はこれを静的判定不能として `{"ok": false}` で拒否するため、 body file は別の Bash 呼び出しで先に生成するか、 `--body` の静的文字列で渡す。 相対 PATH は、 hook input の `cwd` に同じ command 内で先行する `cd <dir>` を先頭から順にすべて適用した dir を基準に解決してから存在を判定する
-  - bypass する形式は誘導層 (section 2.1 / 3.1 の禁止表現規範) が上流防衛として catch する想定。 完全に塞ぐには parser-backed command hook (= 別 plugin として再設計) が必要だが、 v0.4.0 の小修正範囲を超えるため意図的に既知制約として残している
+  - bypass する形式は誘導層 (section 2.1 / 3.1 の禁止表現規範) が上流防衛として catch する想定。 完全に塞ぐには parser-backed command hook (= 別 plugin としての再設計) が必要なため、 既知制約としている
 - **検知層の SPOF**: 検知層は LLM 呼び出しに依存するため、 hook の model (`claude-sonnet-5`) が API 不可用な状況では `gh issue/pr create/edit` が PreToolUse error で失敗する。 narrow scope で影響範囲を `gh issue/pr create|edit` (と `$()` / `$VAR` を含む Bash) に閉じているが、 pin 先の Sonnet 障害時はメインセッションが動いていても hook だけが落ちうる。 個別 call の transient エラー (rate limit / network blip) も残る
-- **model pin は env var の影響を受けない** (#151/#174 V2 実測、v0.7.0): `CLAUDE_CODE_SUBAGENT_MODEL` env var は hooks.json の `type: agent` hook の `model` field を上書きしない。 pin 値は env var の設定有無に関わらず常に dispatch される確定値であり、 「env 未設定環境向けの既定」 ではない。 実測の詳細は #174 のコメント参照
-- **検知層は公式ドキュメント上 experimental な type:agent hook に依存** (#153、v0.7.0): PreToolUse `type: agent` hook は Claude Code 公式ドキュメントで experimental (実験的機能) と位置付けられており、 将来の仕様変更で挙動が変わる、 または廃止される可能性がある。 検知層全体 (4 entries すべて) がこの機能に依存しているため、 仕様変更時は検知層が機能しなくなりうる (= その場合は誘導層のみが防衛する状態に自然縮退する。 fail-open 設計のため縮退時に semantic 誤 block が発生することはない)
+- **model pin は env var の影響を受けない** (実測で確認): `CLAUDE_CODE_SUBAGENT_MODEL` env var は hooks.json の `type: agent` hook の `model` field を上書きしない。 pin 値は env var の設定有無に関わらず常に dispatch される確定値であり、 「env 未設定環境向けの既定」 ではない
+- **検知層は公式ドキュメント上 experimental な type:agent hook に依存**: PreToolUse `type: agent` hook は Claude Code 公式ドキュメントで experimental (実験的機能) と位置付けられており、 将来の仕様変更で挙動が変わる、 または廃止される可能性がある。 検知層全体 (4 entries すべて) がこの機能に依存しているため、 仕様変更時は検知層が機能しなくなりうる (= その場合は誘導層のみが防衛する状態に自然縮退する。 fail-open 設計のため縮退時に semantic 誤 block が発生することはない)
 - **検知層の model pin は手動メンテナンス**: pin 先の Sonnet を upgrade する場合 (例: sonnet-5 → sonnet-6)、 `hooks/hooks.json` の `model` field を手動で同期する
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **配送済みマーカーは OS の tmp cleanup による自然消去のみ**: `${TMPDIR:-/tmp}/agent-discipline-state/` 配下の配送済みマーカーに明示的な保持期間 (retention) 処理は無く、`check-uncommitted-on-session-start.sh` が使う `agent-discipline-markers/` とは別 namespace を使う
 - **permission rule と `block-fable-subagent.sh` の捕捉範囲**: `model: "fable"` の明示 (alias `fable` / full model ID `claude-fable-5-1` とも) は hook が部分一致で捕捉し、Fable 週次枠の使用率で判定する。permission rule の `Agent(model:fable)` はこの許可経路も止めるため置かない。`Agent(fork)` は fork サブエージェントの起動自体を止める (fork は model 指定にも env にも依らず起動元のモデルを継承する。fork を許可する構成では、hook はサブエージェント内からの fork だけを deny する)。agent 定義 frontmatter の `model` は `tool_input` に現れないため permission rule でも hook でも捕捉できず、frontmatter が fable を指す agent への model 未指定の委任は、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` の併用で実効モデルが env 側に固定される場合を除いて素通りする
 - **`block-fable-subagent.sh` は Workflow ツール内部の `agent()` 呼び出しを PreToolUse で捕捉できない**: PreToolUse はメインループのツール呼び出しにのみ発火するため、Workflow スクリプト内部のサブエージェントスポーンは本 hook の対象外
 - **compact 直後のギャップ**: `SessionStart(source=compact)` 後、次のユーザプロンプトまでは part 1 要素 (delivery-note + `always-1.md`) のみが再注入され、残りの要素 (part 2/3・分業規律) は再配送されない (`UserPromptSubmit` はユーザプロンプトでしか発火しないため)。compact 後に agentic loop が自動継続する経路では、この間の推論は part 1 の delivery-note (自己修復指示) と compact summary 内の痕跡に依存する。常時ルールと分業規律を単一要素に連結する構成でも同経路では persisted-output (2KB プレビュー) しか届かないため、分割配送による劣化ではない
-- **exactly-once は保証しない** (issue #236、v0.15.0): hook 出力に配送 ACK が無いため、マーカー書込後に配送が失われた場合の再送はできない (SessionStart での全マーカーリセットが回復手段)。逆に TMPDIR 掃除等でマーカーが消えた場合は再配送される (重複は無害)
+- **exactly-once は保証しない**: hook 出力に配送 ACK が無いため、マーカー書込後に配送が失われた場合の再送はできない (SessionStart での全マーカーリセットが回復手段)。逆に TMPDIR 掃除等でマーカーが消えた場合は再配送される (重複は無害)
 
 ## 関連情報
 

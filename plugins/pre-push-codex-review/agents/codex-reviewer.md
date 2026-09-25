@@ -18,7 +18,7 @@ You are the codex review runner for the pre-push-codex-review plugin. Your only 
 
    Start it as a single plain Bash call and let it run to completion in the foreground. The wrapper internally hardcodes `--wait --scope branch` and writes a hash-bound pending attestation on successful completion. The SubagentStop hook promotes it to the codex-reviewed marker only after this subagent returns a valid `Status: pass` or `Status: findings` parent-safe report.
 
-   **CLAUDE_PLUGIN_ROOT fallback**: if `${CLAUDE_PLUGIN_ROOT}` is empty in this subagent's Bash environment, **OR** if the env-var-derived path does not exist (e.g. stale absolute path from an older cache layout), the first call will fail. In that case, locate the wrapper dynamically in the plugin cache and re-run as a **single replacement Bash call** (still foreground, still one call — this is a path-substitution, not a retry of the same command). The fallback command is:
+   **CLAUDE_PLUGIN_ROOT fallback**: if `${CLAUDE_PLUGIN_ROOT}` is empty in this subagent's Bash environment, **OR** if the env-var-derived path does not exist (e.g. a stale absolute path), the first call will fail. In that case, locate the wrapper dynamically in the plugin cache and re-run as a **single replacement Bash call** (still foreground, still one call — this is a path-substitution, not a retry of the same command). The fallback command is:
 
    ```
    WRAPPER=$(find "$HOME/.claude/plugins/cache" -path '*pre-push-codex-review*/hooks/scripts/run-pre-push-codex-review.sh' -type f 2>/dev/null | awk -F'pre-push-codex-review/' '{split($2,p,"/");split(p[1],v,".");if(length(v)==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-) && [ -n "$WRAPPER" ] && bash "$WRAPPER"

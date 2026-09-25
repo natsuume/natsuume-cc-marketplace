@@ -20,7 +20,7 @@ The wrapper resolves the pull request for the current branch, reviews the full d
 
    Start it as a single plain Bash call and let it run to completion in the foreground. The wrapper internally hardcodes `--wait`, so there is no background variant to choose.
 
-   **CLAUDE_PLUGIN_ROOT fallback**: if `${CLAUDE_PLUGIN_ROOT}` is empty in this subagent's Bash environment, **OR** if the env-var-derived path does not exist (e.g. a stale absolute path from an older cache layout), the first call will fail. In that case, locate the wrapper in the plugin cache with the two-step fallback below and launch it once from the resolved path (this is a path substitution, not a retry of the same command).
+   **CLAUDE_PLUGIN_ROOT fallback**: if `${CLAUDE_PLUGIN_ROOT}` is empty in this subagent's Bash environment, **OR** if the env-var-derived path does not exist (e.g. a stale absolute path), the first call will fail. In that case, locate the wrapper in the plugin cache with the two-step fallback below and launch it once from the resolved path (this is a path substitution, not a retry of the same command).
 
    The plugin's own `block-bg-codex-wrapper.sh` denies any wrapper command that contains a lone pipeline `|` or a lone background separator `&` (doubled `&&` / `||` are treated as sequential and allowed, and the hook does not inspect command substitutions at all). Keep the fallback to the two separate Bash calls below anyway: a single foreground command per call is what lets this subagent observe the wrapper's completed output.
 

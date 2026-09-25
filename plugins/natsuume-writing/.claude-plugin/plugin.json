@@ -1,6 +1,6 @@
 {
   "name": "natsuume-writing",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "natsuume の文体規則で技術記事の執筆を支援する"
 }

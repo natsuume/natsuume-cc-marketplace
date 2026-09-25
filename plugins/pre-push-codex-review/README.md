@@ -4,11 +4,11 @@
 
 修正や commit 列の変更 (add→revert / amend / rebase 含む) により「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」のハッシュが変わると codex マーカーは自動失効し、Claude は `pre-push-codex-review:codex-reviewer` subagent を再走させる以外に push を通す手段がありません。
 
-本 plugin は Codex review の **review cadence** も enforcement します。`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 native / adversarial review (旧 `pre-push-review:codex-reviewer` は計数対象外) を session ごとに合算し、前回の根本方針 checkpoint から 5 回完了すると、次の review 起動と main session の停止を block します。checkpoint の実行 (`cross-model-advisor` の consult skill による `cross-model-advisor:codex-advisor-runner` の起動と attestation の発行) 自体は cross-model-advisor plugin が担います。詳細は [review cadence](#review-cadence) を参照してください。
+本 plugin は Codex review の **review cadence** も enforcement します。`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 native / adversarial review を session ごとに合算し、前回の根本方針 checkpoint から 5 回完了すると、次の review 起動と main session の停止を block します。checkpoint の実行 (`cross-model-advisor` の consult skill による `cross-model-advisor:codex-advisor-runner` の起動と attestation の発行) 自体は cross-model-advisor plugin が担います。詳細は [review cadence](#review-cadence) を参照してください。
 
 ## バージョン
 
-v4.0.1
+v4.0.2
 
 ## インストール
 
@@ -29,7 +29,7 @@ claude plugin install codex@openai-codex
 claude plugin install pre-push-review@natsuume-plugins
 ```
 
-checkpoint 実行の companion として `cross-model-advisor` を併用する場合は **v5.0.0 以上**を使用してください。companion の役割は checkpoint の実行 (`cross-model-advisor:codex-advisor-runner` の起動と attestation の発行) のみであり、review cadence の計数・enforcement は本 plugin (v2.0.0 以上) が単独で担います。cadence を自身で持つ v2.x 系の `cross-model-advisor` と本 plugin を併用すると、独立した cadence カウンターが二重に走り、それぞれが review 起動 deny / main session の Stop block を行うため非推奨です。
+checkpoint 実行の companion として `cross-model-advisor` を併用する場合は **v5.0.0 以上**を使用してください。companion の役割は checkpoint の実行 (`cross-model-advisor:codex-advisor-runner` の起動と attestation の発行) のみであり、review cadence の計数・enforcement は本 plugin が単独で担います。
 
 ### 依存コマンド
 
@@ -59,7 +59,7 @@ push 前レビューを **同じアシスタントメッセージで並列に** 
 
 **ファイル**: `hooks/scripts/block-bg-codex-wrapper.sh`
 
-codex review wrapper (`run-pre-push-codex-review.sh`) の起動を検証する PreToolUse hook です。hook payload トップレベルの `agent_type` が `pre-push-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ fail-closed に deny します。wrapper の basename を `pre-push-review` core の wrapper (`run-codex-review.sh`) と別名にしているのは、codex gate を持つ版の core と本 plugin が併存する環境で、互いの wrapper 検出 gate (basename ベース) が相手の wrapper 起動を deny し合う干渉を塞ぐためです。foreground 起動を強制する理由は、background 起動では `pre-push-codex-review:codex-reviewer` subagent が wrapper の stdout / stderr (= codex review の verdict / findings) を完全に観察できず、正しい parent-safe report を組み立てられないためです。
+codex review wrapper (`run-pre-push-codex-review.sh`) の起動を検証する PreToolUse hook です。hook payload トップレベルの `agent_type` が `pre-push-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ fail-closed に deny します。wrapper の basename を `pre-merge-cross-review` の wrapper (`run-pre-merge-codex-review.sh`) と別名にしているのは、両 plugin が併存する環境で、互いの wrapper 検出 gate (basename ベース) が相手の wrapper 起動を deny し合う干渉を塞ぐためです。foreground 起動を強制する理由は、background 起動では `pre-push-codex-review:codex-reviewer` subagent が wrapper の stdout / stderr (= codex review の verdict / findings) を完全に観察できず、正しい parent-safe report を組み立てられないためです。
 
 #### 3. auto-mark (SubagentStart / PostToolUse / SubagentStop)
 
@@ -125,7 +125,7 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 ## review cadence
 
-`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review、`cross-model-advisor:codex-review-runner` の成功 native / adversarial review を 1 サイクルと数え、前回の根本方針 checkpoint から合計 5 サイクル完了すると、次の review 起動と main session の停止を block する enforcement です。旧 `pre-push-review:codex-reviewer` (codex gate 分離前の namespace) は計数対象に含まれません。
+`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review、`cross-model-advisor:codex-review-runner` の成功 native / adversarial review を 1 サイクルと数え、前回の根本方針 checkpoint から合計 5 サイクル完了すると、次の review 起動と main session の停止を block する enforcement です。
 
 `pre-merge-cross-review:fable-reviewer` (merge 前の Fable review) は codex review ではないため計数しません。
 
@@ -186,7 +186,7 @@ checkpoint の実行には `cross-model-advisor` plugin の install が必要で
 | `hooks/scripts/manage-review-cadence.mjs` | review cadence の state 管理と enforcement (PreToolUse / SubagentStart / PostToolUse / SubagentStop / PostToolUseFailure / Stop / SessionEnd) |
 | `hooks/scripts/inject-review-cadence-rules.sh` | review cadence 規律の SessionStart 注入 |
 | `hooks/prompts/review-cadence-rules.md` | review cadence 規律の本文 (SessionStart additionalContext) |
-| `hooks/scripts/run-pre-push-codex-review.sh` | codex review wrapper 本体 (basename は core の wrapper と別名) |
+| `hooks/scripts/run-pre-push-codex-review.sh` | codex review wrapper 本体 (basename は `pre-merge-cross-review` の wrapper と別名) |
 | `hooks/scripts/lib/cmd-parser.sh` | Bash command のセグメント分割・tokenize (core からの byte-identical コピー) |
 | `hooks/scripts/lib/target-resolver.sh` | push target cwd の解決 (core からの byte-identical コピー) |
 | `hooks/scripts/lib/diff-hash.sh` | レビューハッシュ計算・空 push 判定 (core からの byte-identical コピー) |
