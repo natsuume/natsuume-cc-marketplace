@@ -1,6 +1,6 @@
 <!--
   agent-discipline: 分業規律 (SONNET 版)
-  対象読者: Opus 系・Fable 以外のモデル (Sonnet / Haiku 等) のメインセッション。判定不能
+  対象読者: Opus 系以外のモデル (Sonnet / Haiku 等) のメインセッション。判定不能
   セッションにも discipline-preamble-self-gate.md 付きで暫定配送される。
   設計契約: 委任根拠はコンテキスト分離 + fresh
   context の検証独立性で記述し、モデル能力の非対称を根拠にしない。verifier 委任は「非自明な
@@ -58,7 +58,7 @@
 
 **適用範囲**: Agent ツール / Workflow script の `agent()` / SendMessage による継続を含む、すべての委任に適用する。
 
-- **Fable は advisor の起動に限る**: Fable は `cross-model-advisor:fable-advisor-runner` の起動にだけ使い、ワーカー (実装・調査・一括修正等) や reviewer には使わない。Workflow の `agent()` では Fable を使わない (hook の週次枠判定が及ばないため)。Fable を使う起動では model を `"fable"` と明示する (model 未指定・agent 定義 frontmatter による Fable 実行は使わない)。Fable 週次枠の使用率が閾値を超えた場合・確認できない場合は hook が deny する。その場合 fable-advisor-runner は再起動せずスキップする。Fable メインのセッションでは Fable サブエージェントを使わず、model を非 Fable で明示する (未指定の継承は block-fable-subagent.sh が deny する)。それ以外の委任では model 未指定 (継承) を既定としてよい
+- **Fable は advisor と pre-merge review の起動に限る**: Fable は `cross-model-advisor:fable-advisor-runner` と `pre-merge-cross-review:fable-reviewer` の起動にだけ使い、ワーカー (実装・調査・一括修正等) やそれ以外の reviewer には使わない。Workflow の `agent()` では Fable を使わない (hook の週次枠判定が及ばないため)。Fable を使う起動では model を `"fable"` と明示する (model 未指定・agent 定義 frontmatter による Fable 実行は使わない)。Fable 週次枠の使用率が閾値を超えた場合・確認できない場合は hook が deny する。その場合は再起動せずスキップする。それ以外の委任では model 未指定 (継承) を既定としてよい
 - **Opus 5 を使う委任では effort を固定しない**: 難度・コストに応じて選択してよい。境界が明確な機械的・コスト優先の作業では低め、長期・多段の推論が品質を左右する検証・調査・実装では高めを検討する (性能は effort に対して単調増加とは限らない)。高 effort の副作用はセクション 3 の Opus 5 固有指示 (スコープ制限・汎用再確認指示の禁止) で抑え、明示しない経路ではセッション既定の継承でよい
 - **モデルの解決順序**: サブエージェントのモデルは 明示 model > agent 定義の frontmatter > `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 の順に解決される。`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が設定されている場合のみ、env (未設定なら main model) が全てを上書きする。品質・コストは実効モデルで走る前提で見積もる
 - **Sonnet 系には effort を指定しない**: セッション既定の effort の継承を前提とし、Workflow の `agent()` でも effort オプションは付けない。effort を明示する場合は Opus 5 への委任に限る

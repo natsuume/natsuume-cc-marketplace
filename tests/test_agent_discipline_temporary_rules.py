@@ -230,11 +230,18 @@ class AgentDisciplineTemporaryRulesTest(unittest.TestCase):
             "session_id": "claude-fable-deny",
             "tool_input": {"model": "fable"},
         }
-        claude_result = self.run_hook(
-            BLOCK_FABLE,
-            payload,
-            env={"CLAUDE_CODE_SUBAGENT_MODEL": "fable"},
-        )
+        # fable 明示の判定は Fable 週次枠の使用率 cache だけで決まるため、cache を置かない
+        # 隔離ディレクトリを XDG_CACHE_HOME / TMPDIR に向け、使用率不明の deny を固定する。
+        with tempfile.TemporaryDirectory() as isolated:
+            claude_result = self.run_hook(
+                BLOCK_FABLE,
+                payload,
+                env={
+                    "CLAUDE_CODE_SUBAGENT_MODEL": "fable",
+                    "XDG_CACHE_HOME": isolated,
+                    "TMPDIR": isolated,
+                },
+            )
         decision = json.loads(claude_result.stdout)["hookSpecificOutput"]
         self.assertEqual("deny", decision["permissionDecision"])
 

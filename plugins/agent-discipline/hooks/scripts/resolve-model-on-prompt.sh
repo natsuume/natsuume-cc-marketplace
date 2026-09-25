@@ -10,7 +10,6 @@
 #   確定内容そのものであるため、再送しない
 # - 分業規律: inject-discipline.sh が state を読み、`sonnet-gate` → `final` マーカー遷移で
 #   one-shot 補正 (Opus 版の対象なら Opus 版を配送) を行う
-# - Fable サブエージェントの判定: block-fable-subagent.sh が state を読む
 #
 # ## 発火条件
 #

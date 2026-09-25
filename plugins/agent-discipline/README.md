@@ -1,10 +1,10 @@
 # agent-discipline プラグイン
 
-Claude Code の振る舞い規律 (= agent としての discipline) を配送する system prompt plugin です。旧 [decompose-bash](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/decompose-bash) と [auto-followthrough](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/auto-followthrough) を吸収しています。Sonnet / Opus 向けの規律を注入し、Fable メインのセッションには Opus 系と同じ版を注入します。
+Claude Code の振る舞い規律 (= agent としての discipline) を配送する system prompt plugin です。旧 [decompose-bash](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/decompose-bash) と [auto-followthrough](https://github.com/natsuume/natsuume-cc-marketplace/tree/93e5e9aa0c4dadb2e2eb13fb38c87b34cf3d10e0/plugins/auto-followthrough) を吸収しています。メインセッションのモデルに応じて、Opus 系向けとそれ以外のモデル向けの規律を注入します。
 
 ## バージョン
 
-v1.0.2
+v2.0.0
 
 ## 概要
 
@@ -18,21 +18,17 @@ Claude Code に「個人の開発スタイル」を一括で適用するため�
 | **before 系** | `SessionStart` (同上) | 常時 | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約、 AskUserQuestion の必須化 (R6、 v0.5.0 新設)、 spec-first 2 段階の開発手順 (R3c、 v0.5.0 新設・v0.18.0 で TDD 2 段階から rename) |
 | **during 系** | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
 | **排他系** (v0.2.0) | `SessionStart` (同上) | 常時 (`permission_mode` 非依存) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment (先着判定) + branch push (確定的排他) の二段構成で、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` の無い旧形式 claim は他 session 扱いで削除禁止、 v0.14.0) |
-| **モデル判定 / 分割配送** | `SessionStart` (inject-always.sh の fallback chain、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh / resolve-model-on-prompt.sh) | 常時 (各要素は at-most-once、判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し、SessionStart で常時ルールの part 1 (`always-sonnet-1.md`、モデルに依らず共通) のみ注入する。残りの part (`always-sonnet-2.md` / `always-sonnet-3.md`) と分業規律 (Opus 系・Fable は `discipline-opus.md`、それ以外は `discipline-sonnet.md`) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (8K 閾値超過を避けるための分割、詳細は `inject-always.sh` ヘッダの配送マトリクス参照)。判定不能時は自己ゲート付きで暫定配送し、後続の `UserPromptSubmit` で transcript からモデルを確定したら (resolve-model-on-prompt.sh)、Opus 版の対象であれば分業規律確定版 (inject-discipline.sh) を 1 度だけ再注入する |
+| **モデル判定 / 分割配送** | `SessionStart` (inject-always.sh の fallback chain、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh / resolve-model-on-prompt.sh) | 常時 (各要素は at-most-once、判定不能セッションのみ one-shot 補正が追加発火) | stdin.model → transcript 解析 → state file → 判定不能、の順で決定論的にモデルを判定し、SessionStart で常時ルールの part 1 (`always-sonnet-1.md`、モデルに依らず共通) のみ注入する。残りの part (`always-sonnet-2.md` / `always-sonnet-3.md`) と分業規律 (Opus 系は `discipline-opus.md`、それ以外は `discipline-sonnet.md`) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (8K 閾値超過を避けるための分割、詳細は `inject-always.sh` ヘッダの配送マトリクス参照)。判定不能時は自己ゲート付きで暫定配送し、後続の `UserPromptSubmit` で transcript からモデルを確定したら (resolve-model-on-prompt.sh)、Opus 版の対象であれば分業規律確定版 (inject-discipline.sh) を 1 度だけ再注入する |
 | **検知系 (gh issue/pr body)** (v0.4.0、Closes 検証 Step は v0.7.0) | `PreToolUse` (hooks.json inline `type: agent` 4 entries) | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。claude-sonnet-5 pin |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、auto セッションで `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
 
-### Fable メインセッションでの挙動
+### モデル分業の前提
 
-メインセッションが Fable の場合も専用の規律は持たず、Opus 系メインセッションと同じ版を配送します。
+メインセッションは Opus 系 (Opus 5.5) で動かし、実装・調査・一括修正等のワーカーサブエージェントも model 未指定でメインセッションのモデルを継承して動かします。Fable は `cross-model-advisor:fable-advisor-runner` と `pre-merge-cross-review:fable-reviewer` の起動 (`model: "fable"` の明示) にだけ使い、`block-fable-subagent.sh` が Fable 週次枠の使用率で起動を判定します (詳細は「block-fable-subagent」参照)。Sonnet に pin するのは codex 系 runner と検知層の `type: agent` hook のような定型 runner に限ります。
 
-- 常時適用ルール: `always-sonnet-1.md` / `always-sonnet-2.md` / `always-sonnet-3.md` の 3 part
-- 分業規律: 見出し「# agent-discipline: 分業規律 (Opus)」付きの `discipline-opus.md`
-- 判定不能から Fable に確定した場合の分業規律の one-shot 補正は、Opus 系に確定した場合と同じ内容
-
-安全機構として、`block-fable-subagent.sh` が Fable メインセッションからの Fable サブエージェント起動 (model 未指定の継承・`model: "fable"` の明示) を deny します (詳細は「block-fable-subagent」参照)。
+Fable をメインセッションのモデルとする構成は想定していません。その場合は Opus 系以外のモデルとして Sonnet 版の分業規律を配送し、Fable サブエージェントの起動もメインセッションのモデルに依らず上記の判定だけで扱います。
 
 ## インストール
 
@@ -71,7 +67,7 @@ claude plugin install agent-discipline@natsuume-plugins
   2. transcript 解析: `.transcript_path` に対し `jq -r 'select(.type=="assistant" and .isSidechain != true) | .message.model // empty' | tail -n 1` で最後の main-chain assistant 行のモデル ID を取得 (セッション中の `/model` 切替後も最新の観測値が得られる、state file より常に新鮮な情報源)
   3. state file `${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>` (同一セッションの過去 SessionStart で確定した値のキャッシュ。transcript が空 (/clear 直後等) / 読めない場合の最後の砦で、`/model` 切替を跨ぐと stale になりうるため transcript より後に置く)
   4. いずれも空 → 判定不能
-- **適用規則**: モデル ID が非空 (fable / sonnet / opus / haiku 等) → `always-sonnet-1.md`。判定不能 → `preamble-self-gate.md` + `always-sonnet-1.md` を注入し、state file の代わりに pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を作成する (後続の `resolve-model-on-prompt.sh` / `inject-rules-part.sh` / `inject-discipline.sh` が判定不能セマンティクスで扱う)
+- **適用規則**: モデル ID が非空 (sonnet / opus / haiku 等) → `always-sonnet-1.md`。判定不能 → `preamble-self-gate.md` + `always-sonnet-1.md` を注入し、state file の代わりに pending マーカー `${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>` を作成する (後続の `resolve-model-on-prompt.sh` / `inject-rules-part.sh` / `inject-discipline.sh` が判定不能セマンティクスで扱う)
 - **state file の atomic 書込と成否確認**: state file は同一ディレクトリ内 temp file → `mv` で atomic に書き込み、成否を確認する。モデルが確定したのに書込に失敗した場合は pending マーカー作成にフォールバックし、判定不能セマンティクス (自己ゲート付き配送 + `resolve-model-on-prompt.sh` によるモデル確定と `inject-discipline.sh` による分業規律の one-shot 補正) に縮退する。pending の作成にも失敗した場合は state 変更なしで注入のみ継続する (既知の制約参照)。state 書込が成功した場合のみ、過去の判定不能 SessionStart が残した pending マーカーを削除する
 - **配送済みマーカーのリセット** (v0.15.0 で追加): UserPromptSubmit 側の配送済みマーカー (`delivered-rules-2-<sid>` / `delivered-rules-3-<sid>` / `delivered-discipline-<sid>`) を SessionStart のたびに無条件で削除する (`resume` / `clear` / `compact` でも全要素を再配送するセマンティクスを維持するため)
 - **8K ガード**: additionalContext を組み立てた後の全文文字数を計測し、8,000 字を超える場合は (i) 実パス行を落として再計測 → (ii) それでも超える場合は delivery-note 全体を落として再計測、の順で段階的に縮退する。self-gate 前置き (`preamble-self-gate.md`) とルール本文 (`always-sonnet-1.md`) はいかなる場合も落とさない
@@ -150,7 +146,7 @@ claude plugin install agent-discipline@natsuume-plugins
 
 **動作**:
 
-- 分業規律 (discipline-\*.md、モデル別) を独立要素として配送する。版はモデル ID (大文字小文字無視の部分一致) で 2 つに分類する: `opus` または `fable` を含む → Opus 版 (見出し「# agent-discipline: 分業規律 (Opus)」+ `discipline-opus.md`)、それ以外 (sonnet / haiku 等) → Sonnet 版 (見出し「# agent-discipline: 分業規律 (Sonnet)」+ `discipline-sonnet.md`)
+- 分業規律 (discipline-\*.md、モデル別) を独立要素として配送する。版はモデル ID (大文字小文字無視の部分一致) で 2 つに分類する: `opus` を含む → Opus 版 (見出し「# agent-discipline: 分業規律 (Opus)」+ `discipline-opus.md`)、それ以外 (sonnet / haiku / fable 等) → Sonnet 版 (見出し「# agent-discipline: 分業規律 (Sonnet)」+ `discipline-sonnet.md`)
 - マーカー `delivered-discipline-<session_id>` は内容として 3 状態を持つ: **無し** / `sonnet-gate` / `final`
 - **マーカー無し**: pending 優先・state 次点で分岐する:
   - pending あり → 見出し「# agent-discipline: 分業規律 (Sonnet)」+ `discipline-preamble-self-gate.md` + `discipline-sonnet.md` を注入し、マーカーを `sonnet-gate` にする
@@ -158,7 +154,7 @@ claude plugin install agent-discipline@natsuume-plugins
   - pending 無し + state が Sonnet 版の対象 → 分業規律 Sonnet 版を注入し、マーカーを `final` にする
   - pending も state も無い異常系 → pending 時と同じ自己ゲート付き配送、マーカーを `sonnet-gate` にする
 - **マーカー `sonnet-gate`** (判定不能時の自己ゲート付き分業規律を配送済み、one-shot 補正の対象):
-  - pending 無し + state が Opus 版の対象に確定していた → 補正前置き (自己ゲート付きで配送済みの Sonnet 版分業規律を破棄し本要素を優先する旨) + 分業規律 Opus 版を注入し、マーカーを `final` に更新する。Fable に確定した場合も Opus 系に確定した場合と同じ内容を注入する
+  - pending 無し + state が Opus 版の対象に確定していた → 補正前置き (自己ゲート付きで配送済みの Sonnet 版分業規律を破棄し本要素を優先する旨) + 分業規律 Opus 版を注入し、マーカーを `final` に更新する
   - pending 無し + state が Sonnet 版の対象に確定していた → 注入なしでマーカーを `final` に更新する (配送済みの Sonnet 版がそのまま確定内容のため)
   - pending あり、または state 無し → 何もしない (`resolve-model-on-prompt.sh` の state 書込 → pending 削除の完了待ち。同一 event 内の並列実行で本スクリプトが先に読んだ場合、最大 1 プロンプトの補正遅延が生じる。既知の制約参照)
 - **マーカー `final`**: 即 `exit 0`
@@ -195,7 +191,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **イベント**: `PreToolUse`
 **matcher**: `Bash`
 **`if` filter**: `Bash(gh issue create:*)` / `Bash(gh issue edit:*)` / `Bash(gh pr create:*)` / `Bash(gh pr edit:*)` の **4 entries に分割**
-**model**: `claude-sonnet-5` (= 実装系メインセッションおよび全 subagent と同系列に pin。v0.7.0 で `claude-opus-4-7` から変更、詳細は下記「SPOF 緩和の設計」参照)
+**model**: `claude-sonnet-5` に pin (メインセッションのモデルとは独立に、コストと応答時間を抑えるため。詳細は下記「SPOF 緩和の設計」参照)
 **timeout**: 60 秒 (公式 default)
 
 **動作**:
@@ -247,9 +243,9 @@ editor 経路 / `--body-file -` (stdin 経路) は既存 Step 1 の扱いのま�
 - 旧 `llm-default-branch-push-poc` 廃止教訓: 全 Bash 発火 prompt hook が暗黙の default model (haiku) ダウン時に全 Bash を PreToolUse error にする非対称 SPOF があった (memory: `reference_prompt_hook_model_spof.md`)
 - 今回はこれを 2 段で緩和:
   - **narrow scope (物理層 + Step 0)**: 個別 hook の `if: "Bash(gh <cmd>:*)"` filter で target command に反応するよう **hook config 段階で** prefilter する。 `if` filter は best-effort のため、 `$()` / `$VAR` を含む非対象 Bash でも agent subagent が起動しうるが、 その場合は Step 0 guard が semantic 検証をせず即終了する。 結果として LLM 不可用時の影響は「`gh issue/pr create/edit` に加えて、 `$()` / `$VAR` を含む Bash も PreToolUse error になりうる」 範囲に narrow され、 それ以外の通常の Bash 呼び出し (= `ls` / `git status` / `rg` 等) は影響を受けない
-  - **model pin**: `model` field を明示的に `claude-sonnet-5` に固定 (v0.7.0、#151/#174 V2 実測による変更。 従来は `claude-opus-4-7` に pin していた)。 #174 V2 の実測検証で、 hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず pin 値がそのまま dispatch されることが確認された (= 「env var が優先され pin は env 未設定環境向けの既定として機能する」 という当初の想定は誤りで、 pin は env 設定の有無に関わらず常に有効な確定値)。 sonnet 5 は実装系メインセッション (= Sonnet ベースの Claude Code session) およびこの環境の全 subagent (`CLAUDE_CODE_SUBAGENT_MODEL=sonnet` によりこの環境の Agent tool 経由の Task 委任は実質 sonnet 固定) と同系列のため、 Sonnet がダウンした場合は subagent への委任自体が同時に止まっており hook 単独の新規障害面にはならない (= 「hook だけが落ちて他は動く」 非対称を避ける従来方針を維持)。 ただし **Fable メインセッション時はこの対称性が崩れる** (= メインセッションは Fable で正常動作していても、 hook は Sonnet 側の障害時に落ちうる非対称が残る。 下記「既知の制約」参照)
+  - **model pin**: `model` field を明示的に `claude-sonnet-5` に固定する。hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず、pin 値がそのまま dispatch される確定値である。検知層は body の禁止表現を判定する定型作業のため、メインセッションのモデルとは独立に、コストと応答時間を抑えるため sonnet に pin する
 
-これにより SPOF は「実装系メインセッション (Sonnet) が動いている時は hook も動く」 という対称構造に閉じる (Fable メインセッション時のみ非対称が残存)。 個別 call の transient error (rate limit / network blip) は残るが、 これは Claude Code 通常使用の背景ノイズと同レベル
+これにより LLM 不可用の影響は「`gh issue/pr create|edit` (と `$()` / `$VAR` を含む Bash) が pin 先の Sonnet 障害時に PreToolUse error になる」範囲に閉じる。メインセッションは Sonnet 以外のモデルで動くため、Sonnet 側の障害時は hook だけが落ちうる。個別 call の transient error (rate limit / network blip) は残るが、これは Claude Code 通常使用の背景ノイズと同レベル
 
 **設計の変遷** (codex review からの修正):
 
@@ -268,9 +264,9 @@ v0.4.0 当初は単一 hook entry (matcher `Bash` のみ) + prompt 内で「`gh 
 **イベント**: `PreToolUse`
 **matcher**: `Agent|Task`
 
-Fable サブエージェントは、Fable 以外がメインのセッションで `model: "fable"` を明示し、かつ Fable 週次枠の使用率が閾値以下の場合に限り許可します (cross-model-advisor の fable-advisor-runner を Fable で起動するため)。用途を advisor に限る規律は分業規律 (discipline-\*.md) が担い、本 hook は許可 agent の一覧を持ちません。
+Fable サブエージェントは、`model: "fable"` を明示し、かつ Fable 週次枠の使用率が閾値以下の場合に限り許可します (cross-model-advisor の fable-advisor-runner と pre-merge-cross-review の fable-reviewer を Fable で起動するため)。用途を advisor と pre-merge review に限る規律は分業規律 (discipline-\*.md) が担い、本 hook は許可 agent の一覧を持ちません。メインセッションのモデル (session model state) は判定に使いません。
 
-fork サブエージェントを止める主防御は、利用者の settings (`~/.claude/settings.json` 等) に置く `permissions.deny` の rule です。本 hook はそれを補う二重防御で、permission rule が捕捉しない経路 (メインセッション継承・env による上書き) の検知と、deny メッセージによる自己修正誘導を担います。
+fork サブエージェントを止める主防御は、利用者の settings (`~/.claude/settings.json` 等) に置く `permissions.deny` の rule です。本 hook はそれを補う二重防御で、permission rule が捕捉しない経路 (サブエージェント内からの継承・env による上書き) の検知と、deny メッセージによる自己修正誘導を担います。
 
 ```json
 {
@@ -285,22 +281,18 @@ fork サブエージェントを止める主防御は、利用者の settings (`
 **動作**:
 
 - Claude Code のモデル解決順序は 明示 `model` > agent 定義の frontmatter > `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 で、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (`1` / `true`) が設定されている場合のみ env (未設定ならメインセッションのモデル) が全てを上書きする。`subagent_type` が `fork` のサブエージェントは model 指定にも env にも依らずメインセッションのモデルを継承する。本 hook はこの順序に沿って上から判定し、すべて deterministic な文字列判定で行う (LLM 評価は使わない)
-  1. `fork` → サブエージェント内 (入力に `agent_id` がある) からの起動なら deny (nested guard、下記)。メインセッションからの起動ならメインセッションのモデルで判定する (継承経路と同じ扱い)
-  2. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が有効 → 実効モデルは env (非空ならその値、空ならメインセッションのモデル)。fable なら model の明示に依らず deny し、model の明示では直せないことを deny 理由に書く。非 fable なら model が fable でも allow
-  3. `tool_input.model` に fable が明示指定されている (alias `fable` / full ID `claude-fable-5-1` 等、大文字小文字を無視した部分一致):
-     - 3a. session model state が fable → deny (Fable メインでは Fable サブエージェントを使わない)
-     - 3b. pending マーカーがある (state file の有無を問わない。state 書込に失敗した SessionStart は古い state file を残したまま pending マーカーを作るため)、または session model state が無い・空 → deny (fail-closed)。deny 理由で、会話を 1 turn 進めてモデル確定を待つよう案内する
-     - 3c. session model state が fable 以外 → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める
-     - いずれの deny 理由でも、fable-advisor-runner は再起動せずスキップし、それ以外の委任では非 Fable の model を明示するよう案内する
+  1. `fork` → サブエージェント内 (入力に `agent_id` がある) からの起動なら deny (nested guard、下記)。メインセッションからの起動なら allow
+  2. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が有効 → 実効モデルは env (非空ならその値、空ならメインセッションのモデル)。env が fable なら model の明示に依らず deny し、model の明示では直せないことを deny 理由に書く。それ以外 (env 空を含む) は allow
+  3. `tool_input.model` に fable が明示指定されている (alias `fable` / full ID `claude-fable-5-1` 等、大文字小文字を無視した部分一致) → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める。deny 理由では、fable-advisor-runner / fable-reviewer は再起動せずスキップし、それ以外の委任では非 Fable の model (例: `model: "opus"`) を明示するよう案内する
   4. `tool_input.model` が非 fable の具体指定 → allow (明示は env より優先されるため)
-  5. `tool_input.model` 未指定 (= メインセッション継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在なら session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`、`inject-always.sh` が SessionStart で記録し `update-model-on-switch.sh` が `/model` 切替で更新する) が fable の場合のみ deny。state file が読めず判定不能な場合は pending マーカー (`${TMPDIR:-/tmp}/agent-discipline-state/pending-model-<session_id>`) の存在を確認し、**存在すれば deny** (継承先が Fable になりうる判定不能期間のため)、存在しなければ真の情報ゼロとして fail-open (allow)。env 不在でサブエージェント内 (入力に `agent_id` がある) からの起動は deny する (nested guard、下記)
-- **nested guard**: サブエージェント内 (入力に `agent_id` がある) からの model 未指定 (`inherit` を含む)・`fork` の起動は deny し、model の明示を求める。継承先は起動元サブエージェントのモデルで session model state では判定できず、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承しうるため。`CLAUDE_CODE_SUBAGENT_MODEL` が非空なら子の実効モデルは env で決まるため env で判定する
-- **Fable 週次枠の使用率判定** (3c):
+  5. `tool_input.model` 未指定 (= 継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在でサブエージェント内 (入力に `agent_id` がある) からの起動は deny する (nested guard、下記)。それ以外 (env 不在のメインセッションからの起動) は allow
+- **nested guard**: サブエージェント内 (入力に `agent_id` がある) からの model 未指定 (`inherit` を含む)・`fork` の起動は deny し、model の明示を求める。継承先は起動元サブエージェントのモデルになり、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承しうるため。`CLAUDE_CODE_SUBAGENT_MODEL` が非空なら子の実効モデルは env で決まるため env で判定する
+- **Fable 週次枠の使用率判定** (3):
   - 入力は natsuume-statusline が書く `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json`。本 hook は読むだけで書き込まず、OAuth usage API も呼ばない
   - 閾値は env `FABLE_WEEKLY_MAX_PERCENT` (前後空白を trim した 0〜100 の 10 進整数)。未設定・空・範囲外・非整数は既定値 `80`
   - `weekly_scoped[]` のうち `display_name` が大文字小文字を無視して `fable` を含み `percent` が数値の entry の最大 `percent` で判定し、`percent <= 閾値` なら利用可 (ちょうど閾値は利用可)。比較は小数を扱えるよう jq で行う
   - cache が symlink / 通常ファイルでない / 存在しない / 読めない / JSON document が 1 つでない / `fetched_at` が欠落・非数値 / `now - fetched_at > 1800` (stale) / `weekly_scoped` が欠落・非配列・空 / Fable entry が無い / 現在時刻を取得できない場合は、使用率不明として deny する (fail-closed)。deny 理由では cache の producer (natsuume-statusline) の構成手順を案内する。`fetched_at` が未来時刻でも stale とはみなさない
-- `"inherit"` (case-insensitive) は「未指定」に正規化する。継承経路 (model 未指定) で session_id が特定できない場合や、state file・pending マーカーのいずれも無い場合は fail-open (allow)
+- `"inherit"` (case-insensitive) は「未指定」に正規化する
 - permission rule と本 hook のどちらでも捕捉できない経路 (agent 定義 frontmatter の `model` / Workflow 内部の `agent()`) は下記「既知の制約」セクション参照
 
 #### update-model-on-switch
@@ -310,10 +302,10 @@ fork サブエージェントを止める主防御は、利用者の settings (`
 
 **動作**:
 
-- `/model` によるセッション途中のモデル切替を session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`) に反映し、`block-fable-subagent.sh` の継承判定を切替後のモデルに追随させる
+- `/model` によるセッション途中のモデル切替を session model state (`${TMPDIR:-/tmp}/agent-discipline-state/model-<session_id>`) に反映し、state を読む分業規律の配送 (`inject-discipline.sh`) を切替後のモデルに追随させる
 - state file は同一ディレクトリ内 temp file → `mv` の atomic 書込で上書きし、成否を確認する。書込に成功した場合にのみ pending マーカーを削除する (書込失敗時は pending を残して無音終了し、pending 優先・state 次点の優先規則を守る)
 - `hook_event_name` が `PostModelSwitch` 以外、`session_id` が空、`to_model` が空・欠落のときは state も pending も触らず無音 `exit 0`
-- 通知 (`additionalContext`) は、pending マーカーを削除したとき (判定不能のまま自己ゲート付きの暫定版が配送されているため) にだけ出す。本文には prompts ディレクトリの絶対パスと、切替後のモデルに対応する常時適用ルール (モデルに依らず `always-sonnet-{1,2,3}.md`) / 分業規律 (Opus 系・Fable は `discipline-opus.md`、それ以外は `discipline-sonnet.md`) のファイル名を書き、Read による自己修復を促す。pending が無い切替 (Opus と Fable の間の切替を含む) では state のみ更新し通知しない
+- 通知 (`additionalContext`) は、pending マーカーを削除したとき (判定不能のまま自己ゲート付きの暫定版が配送されているため) にだけ出す。本文には prompts ディレクトリの絶対パスと、切替後のモデルに対応する常時適用ルール (モデルに依らず `always-sonnet-{1,2,3}.md`) / 分業規律 (Opus 系は `discipline-opus.md`、それ以外は `discipline-sonnet.md`) のファイル名を書き、Read による自己修復を促す。pending が無い切替では state のみ更新し通知しない
 
 #### check-uncommitted-on-session-start
 
@@ -399,7 +391,7 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 
 **動作**:
 
-- **対象と分岐**: 対象スクリプト × 分岐 × 期待 (出力あり / 出力なし) の対応表をスクリプト内定数 `CASE_TABLE` として持つ。対象は `inject-always.sh` / `inject-rules-part.sh` (part 2・part 3) / `inject-discipline.sh` / `inject-temporary.sh` / `inject-subagent-rules.sh` / `inject-auto.sh` / `check-uncommitted-on-session-start.sh` / `update-model-on-switch.sh`。additionalContext を出力しない `block-fable-subagent.sh` / `resolve-model-on-prompt.sh` は検査対象外リスト `EXCLUDED_SCRIPTS` に置く。モデル分岐 (fable / sonnet / opus / その他 / 判定不能) と one-shot 補正経路を含む、要素を出力しうる全分岐を検査する。`inject-temporary.sh` は `hooks/prompts/temporary/*.md` の実在ファイルを連結した現物を測り、temporary md が 0 件なら「出力なし」を期待する
+- **対象と分岐**: 対象スクリプト × 分岐 × 期待 (出力あり / 出力なし) の対応表をスクリプト内定数 `CASE_TABLE` として持つ。対象は `inject-always.sh` / `inject-rules-part.sh` (part 2・part 3) / `inject-discipline.sh` / `inject-temporary.sh` / `inject-subagent-rules.sh` / `inject-auto.sh` / `check-uncommitted-on-session-start.sh` / `update-model-on-switch.sh`。additionalContext を出力しない `block-fable-subagent.sh` / `resolve-model-on-prompt.sh` は検査対象外リスト `EXCLUDED_SCRIPTS` に置く。モデル分岐 (sonnet / opus / その他 / 判定不能) と one-shot 補正経路を含む、要素を出力しうる全分岐を検査する。`inject-temporary.sh` は `hooks/prompts/temporary/*.md` の実在ファイルを連結した現物を測り、temporary md が 0 件なら「出力なし」を期待する
 - **閾値 (2 段階)**: 要素が 8,000 字 (`PAYLOAD_LIMIT_CHARS`) を超えたら FAIL (exit 1)。7,800 字 (`PAYLOAD_WARN_CHARS`) を超え 8,000 字以下なら WARN を出すが exit code には影響しない。文字数は Unicode code point 数 (`wc -m` を UTF-8 ロケールで実行した値と同じ) で数える
 - **fail-closed**: 対応表で「出力あり」の分岐で出力が無い・JSON として parse できない・`additionalContext` が空、「出力なし」の分岐で出力がある、対象スクリプトが exit 0 以外で終わる、といった場合はサイズ 0 として pass させず FAIL にする。加えて、`hooks.json` の `type: command` エントリと対応表 (と検査対象外リスト `EXCLUDED_SCRIPTS`) を照合し、注入スクリプトの追加・登録解除に対応表が追従していない場合も FAIL にする
 - **隔離**: `mktemp -d` の隔離ディレクトリをケースごとの `TMPDIR` として対象スクリプトを実行し、実システムの `${TMPDIR:-/tmp}/agent-discipline-state` には読み書きしない。隔離ディレクトリは終了時に削除する
@@ -527,24 +519,23 @@ agent-discipline/
   - **command 置換内の起票**: shell が実際に実行する `$()` / バッククォートの内側で `gh issue create` 等を実行する形式と、 command 語の位置で引用符に literal を分断する形式 (`"gh" issue create` 等) は body を静的に判定できないため、 Step 0 が静的判定不能として `{"ok": false}` で拒否する。 single quote の内側や `<<'EOF'` heredoc 本文の中で command 名に言及しているだけの文字列 (commit message 本文等) は対象外
   - **PreToolUse の構造的 TOCTOU (`cat ... && gh ... -F body.md` 系)**: 同じ command 内で生成する body file (例: `cat > body.md <<'EOF' ... EOF && gh issue create -F body.md`) は、 PreToolUse hook が Bash 実行 **前** に発火するため hook 時点で存在しない。 検知層はこれを静的判定不能として `{"ok": false}` で拒否するため、 body file は別の Bash 呼び出しで先に生成するか、 `--body` の静的文字列で渡す。 相対 PATH は、 hook input の `cwd` に同じ command 内で先行する `cd <dir>` を先頭から順にすべて適用した dir を基準に解決してから存在を判定する
   - bypass する形式は誘導層 (section 2.1 / 3.1 の禁止表現規範) が上流防衛として catch する想定。 完全に塞ぐには parser-backed command hook (= 別 plugin として再設計) が必要だが、 v0.4.0 の小修正範囲を超えるため意図的に既知制約として残している
-- **検知層の SPOF**: 検知層は LLM 呼び出しに依存するため、 hook の model (`claude-sonnet-5`) が API 不可用な状況では `gh issue/pr create/edit` が PreToolUse error で失敗する。 narrow scope と model pin で「実装系メインセッションが動いている時は hook も動く」 対称構造に閉じているが、 個別 call の transient エラー (rate limit / network blip) は残る
+- **検知層の SPOF**: 検知層は LLM 呼び出しに依存するため、 hook の model (`claude-sonnet-5`) が API 不可用な状況では `gh issue/pr create/edit` が PreToolUse error で失敗する。 narrow scope で影響範囲を `gh issue/pr create|edit` (と `$()` / `$VAR` を含む Bash) に閉じているが、 pin 先の Sonnet 障害時はメインセッションが動いていても hook だけが落ちうる。 個別 call の transient エラー (rate limit / network blip) も残る
 - **model pin は env var の影響を受けない** (#151/#174 V2 実測、v0.7.0): `CLAUDE_CODE_SUBAGENT_MODEL` env var は hooks.json の `type: agent` hook の `model` field を上書きしない。 pin 値は env var の設定有無に関わらず常に dispatch される確定値であり、 「env 未設定環境向けの既定」 ではない。 実測の詳細は #174 のコメント参照
-- **Fable メインセッション時は model pin の対称性が崩れる** (#151、v0.7.0): 検知層の model pin (`claude-sonnet-5`) は実装系メインセッション (Sonnet) およびこの環境の全 subagent と同系列だが、 メインセッションが Fable の場合はこの対称性が成立しない (= メインセッションは Fable で正常動作していても、 hook は Sonnet 側の障害時に落ちうる)。 発生確率は Fable メインセッションでの `gh issue/pr create|edit` 実行頻度に依存するが、 構造的には未解消の非対称として残る
 - **検知層は公式ドキュメント上 experimental な type:agent hook に依存** (#153、v0.7.0): PreToolUse `type: agent` hook は Claude Code 公式ドキュメントで experimental (実験的機能) と位置付けられており、 将来の仕様変更で挙動が変わる、 または廃止される可能性がある。 検知層全体 (4 entries すべて) がこの機能に依存しているため、 仕様変更時は検知層が機能しなくなりうる (= その場合は誘導層のみが防衛する状態に自然縮退する。 fail-open 設計のため縮退時に semantic 誤 block が発生することはない)
-- **検知層の model pin は手動メンテナンス**: Claude Code 自体の session model を upgrade した場合 (例: sonnet-5 → sonnet-6)、 `hooks/hooks.json` の `model` field も手動同期しないと SPOF 構造が再来する (= 古い model のみダウン時に hook だけ落ちる経路が復活)
+- **検知層の model pin は手動メンテナンス**: pin 先の Sonnet を upgrade する場合 (例: sonnet-5 → sonnet-6)、 `hooks/hooks.json` の `model` field を手動で同期する
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **`model` フィールド欠落条件は compaction 後が公式未記載** (v0.5.0、#174 V3 実測調査): 公式ドキュメントは `/clear` 後と conversation recovery でセッションが復元された場合の 2 つを model 欠落条件として明記するが、`SessionStart (source=compact)` 時の扱いは明記していない (欠落しない保証も無い)。いずれの場合も fallback chain (transcript 解析 → state file) が source 非依存に欠落を吸収するため、実装上の場合分けは発生しない
-- **セッション途中の `/model` 切替は次の SessionStart まで反映されない** (#157 と同型の制約。v0.8.0 で統合した `block-fable-subagent.sh` も同種の制約を持つ、本セクション内の該当項目を参照): fallback chain の判定は `SessionStart` (startup / resume / clear / compact) でのみ行われるため、`/model` で切替えても注入済みプロンプトは次の SessionStart まで旧モデル向けのまま。次の SessionStart では、`.model` があればその値で、無くても transcript に切替後の main-chain assistant 行があれば transcript 解析 (fallback chain 2 段目) で新モデルが反映される。transcript も空 / 読めない場合に限り state file キャッシュに落ちるため、その経路でのみ旧モデル向け注入が継続しうる
+- **セッション途中の `/model` 切替は次の SessionStart まで反映されない** (#157 と同型の制約): fallback chain の判定は `SessionStart` (startup / resume / clear / compact) でのみ行われるため、`/model` で切替えても注入済みプロンプトは次の SessionStart まで旧モデル向けのまま。次の SessionStart では、`.model` があればその値で、無くても transcript に切替後の main-chain assistant 行があれば transcript 解析 (fallback chain 2 段目) で新モデルが反映される。transcript も空 / 読めない場合に限り state file キャッシュに落ちるため、その経路でのみ旧モデル向け注入が継続しうる
 - **one-shot 補正は判定不能セッションの最初の assistant 応答が生成されるまで暫定適用が続く**: pending マーカーが存在し transcript に main-chain assistant 行が現れて初めて確定するため、それまでの `UserPromptSubmit` では自己ゲート付きの `always-sonnet-1.md` + `always-sonnet-2.md`/`always-sonnet-3.md` (常時ルール、`inject-rules-part.sh` が判定) と `discipline-preamble-self-gate.md` + `discipline-sonnet.md` (分業規律、`inject-discipline.sh` が配送) が暫定適用され続ける
 - **state file / pending マーカーは OS の tmp cleanup による自然消去のみ**: `${TMPDIR:-/tmp}/agent-discipline-state/` 配下に明示的なリトジ (retention) 処理は無く、`check-uncommitted-on-session-start.sh` が使う `agent-discipline-markers/` とは別 namespace を使う
-- **permission rule と `block-fable-subagent.sh` の捕捉範囲**: `model: "fable"` の明示 (alias `fable` / full model ID `claude-fable-5-1` とも) は hook が部分一致で捕捉し、メインセッションのモデルと Fable 週次枠の使用率で判定する。permission rule の `Agent(model:fable)` はこの許可経路も止めるため置かない。`Agent(fork)` は fork サブエージェントの起動自体を止める (fork は model 指定にも env にも依らずメインセッションのモデルを継承するため、fork を許可する構成では hook が session model state で判定する)。agent 定義 frontmatter の `model` は `tool_input` に現れないため permission rule でも hook でも捕捉できず、frontmatter が fable を指す agent への model 未指定の委任は、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` の併用で実効モデルが env 側に固定される場合を除いて素通りする
+- **permission rule と `block-fable-subagent.sh` の捕捉範囲**: `model: "fable"` の明示 (alias `fable` / full model ID `claude-fable-5-1` とも) は hook が部分一致で捕捉し、Fable 週次枠の使用率で判定する。permission rule の `Agent(model:fable)` はこの許可経路も止めるため置かない。`Agent(fork)` は fork サブエージェントの起動自体を止める (fork は model 指定にも env にも依らず起動元のモデルを継承する。fork を許可する構成では、hook はサブエージェント内からの fork だけを deny する)。agent 定義 frontmatter の `model` は `tool_input` に現れないため permission rule でも hook でも捕捉できず、frontmatter が fable を指す agent への model 未指定の委任は、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` の併用で実効モデルが env 側に固定される場合を除いて素通りする
 - **`block-fable-subagent.sh` は Workflow ツール内部の `agent()` 呼び出しを PreToolUse で捕捉できない**: PreToolUse はメインループのツール呼び出しにのみ発火するため、Workflow スクリプト内部のサブエージェントスポーンは本 hook の対象外
-- **`/model` 切替の追随は `PostModelSwitch` hook が届く環境に限る**: `update-model-on-switch.sh` が session model state を切替後のモデルで上書きするため、切替直後から継承経路と `model: "fable"` 明示の判定に新しいモデルが使われる。hook が発火しない環境では state が次の `SessionStart` まで stale になり、fable への切替は素通り (旧 state で allow。`model: "fable"` の明示も、週次枠の使用率が閾値以下なら Fable メインのまま allow される)、fable からの切替は誤 deny になる (deny メッセージの model 明示誘導で自己修復可能)
+- **`/model` 切替の追随は `PostModelSwitch` hook が届く環境に限る**: `update-model-on-switch.sh` が session model state を切替後のモデルで上書きし、pending 解消時に切替後のモデルに対応する確定版の所在を通知する。hook が発火しない環境では state が次の `SessionStart` まで stale になる
 - **compact 直後のギャップ**: `SessionStart(source=compact)` 後、次のユーザプロンプトまでは part 1 要素 (delivery-note + `always-sonnet-1.md`) のみが再注入され、残りの要素 (part 2/3・分業規律) は再配送されない (`UserPromptSubmit` はユーザプロンプトでしか発火しないため)。compact 後に agentic loop が自動継続する経路では、この間の推論は part 1 の delivery-note (自己修復指示) と compact summary 内の痕跡に依存する。常時ルールと分業規律を単一要素に連結する構成でも同経路では persisted-output (2KB プレビュー) しか届かないため、分割配送による劣化ではない
-- **判定不能 → Fable / Opus 確定の補正遅延**: 分業規律の Opus 版補正 (Opus 系・Fable に確定した場合) は `resolve-model-on-prompt.sh` の state 書込と `inject-discipline.sh` の読み取りが同一 event 内で並列競合した場合、最大 1 プロンプト遅れて配送される (誤配送はしない)
+- **判定不能 → Opus 確定の補正遅延**: 分業規律の Opus 版補正 (Opus 系に確定した場合) は `resolve-model-on-prompt.sh` の state 書込と `inject-discipline.sh` の読み取りが同一 event 内で並列競合した場合、最大 1 プロンプト遅れて配送される (誤配送はしない)
 - **exactly-once は保証しない** (issue #236、v0.15.0): hook 出力に配送 ACK が無いため、マーカー書込後に配送が失われた場合の再送はできない (SessionStart での全マーカーリセットが回復手段)。逆に TMPDIR 掃除等でマーカーが消えた場合は再配送される (重複は無害)
 - **state / pending の両方が書けない持続障害下の床** (issue #236、v0.15.0): `inject-always.sh` で state 書込と pending 作成が両方失敗した場合 (TMPDIR が持続的に書込不能等)、後続スクリプトは旧 state (読めれば) または両不在フォールバックに基づいて配送する。`/model` 切替を跨いだ旧 state が残っていると誤ったモデル変種が配送されうるが、この露出は state 書込失敗を無視していた v0.14.0 以前にも存在する
-- **pending 削除失敗時の補正遅延**: `resolve-model-on-prompt.sh` が state 書込に成功した後の pending 削除に失敗した場合、優先規則 (pending 優先) により分業規律の Opus 版補正 (Opus 系・Fable に確定した場合) は次の SessionStart (マーカーリセット + pending 掃除) まで配送されない。常時ルールはモデルに依らず自己ゲート付きで配送済みの版が確定内容そのもののため、規律の主要部は欠落しない
+- **pending 削除失敗時の補正遅延**: `resolve-model-on-prompt.sh` が state 書込に成功した後の pending 削除に失敗した場合、優先規則 (pending 優先) により分業規律の Opus 版補正 (Opus 系に確定した場合) は次の SessionStart (マーカーリセット + pending 掃除) まで配送されない。常時ルールはモデルに依らず自己ゲート付きで配送済みの版が確定内容そのもののため、規律の主要部は欠落しない
 
 ## 関連情報
 

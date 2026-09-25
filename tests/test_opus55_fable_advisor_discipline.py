@@ -1,11 +1,17 @@
 """agent-discipline: Opus 5.5 メイン + Fable Advisor パターン向け分業規律・自走方針の契約テスト。
 
 背景:
-- メインセッションを Opus 5.5 にし、Fable は cross-model-advisor の fable-advisor-runner
-  でのみ使う。pre-push-review の reviewer 2 体は常に Opus で起動するため Fable の用途に含めない。
-- discipline-opus.md / discipline-sonnet.md の rule:delegation-rules 節は、「advisor の
-  起動に限り `model: "fable"` を明示して使い、週次枠ガードで deny されたら advisor は
-  スキップ」と記述し、pre-push-review の reviewer には言及しない。
+- メインセッションを Opus 5.5 にし、ワーカー (実装・調査・一括修正等) のサブエージェントも
+  model 未指定でメインセッションの Opus 5.5 を継承して動かす。Fable は cross-model-advisor の
+  fable-advisor-runner と pre-merge-cross-review の fable-reviewer の起動にのみ使う。
+  pre-push-review の reviewer 2 体は常に Opus で起動するため Fable の用途に含めない。
+- Fable をメインセッションで使う運用は無いため、分業規律に Fable メイン向けの記述を持たない。
+- discipline-opus.md / discipline-sonnet.md の rule:delegation-rules 節は、「advisor と
+  pre-merge review の起動に限り `model: "fable"` を明示して使い、週次枠ガードで deny
+  されたら再起動せずスキップ」と記述し、pre-push-review の reviewer には言及しない。
+- discipline-opus.md は、ワーカーをメインセッションと同じモデルで動かし Sonnet / Haiku へ
+  下げない旨を記述する。ヘッダコメントと冒頭文の対象は Opus 系のメインセッションのみで、
+  Fable を含めない。discipline-sonnet.md のヘッダコメントの対象読者は「Opus 系以外のモデル」。
 - discipline-opus.md の effort 規律は公式ガイド「Prompting Claude Opus 5.5」
   (prompting-claude-opus-5-5、既定 effort は medium) を基準に書き換える。Opus 5 向けの
   3 規律 (委任しない作業・スコープ制限の 1 文・汎用再確認指示の禁止) は Opus 5 /
@@ -48,24 +54,43 @@ FABLE_PROHIBITION_PHRASE = "Fable をサブエージェントに使わない"
 
 # rule:delegation-rules 節に必須の Fable 用途の記述 (opus / sonnet 共通の canonical 文言)。
 FABLE_USAGE_PHRASES = (
-    # 用途を fable-advisor-runner の起動に限る
-    "**Fable は advisor の起動に限る**",
-    "`cross-model-advisor:fable-advisor-runner`",
-    "ワーカー (実装・調査・一括修正等) や reviewer には使わない",
+    # 用途を fable-advisor-runner と fable-reviewer の起動に限る
+    (
+        "**Fable は advisor と pre-merge review の起動に限る**: Fable は "
+        "`cross-model-advisor:fable-advisor-runner` と "
+        "`pre-merge-cross-review:fable-reviewer` の起動にだけ使い、"
+        "ワーカー (実装・調査・一括修正等) やそれ以外の reviewer には使わない。"
+    ),
     # hook (PreToolUse の Agent|Task) が捕捉しない Workflow の agent() では使わない
     "Workflow の `agent()` では Fable を使わない",
     # model の明示 (未指定・frontmatter 経由の Fable 実行は使わない)
     'model を `"fable"` と明示する',
     "model 未指定・agent 定義 frontmatter による Fable 実行は使わない",
-    # 週次枠ガードによる deny と deny 後の振る舞い
+    # 週次枠ガードによる deny と deny 後の振る舞い (両 agent 共通)
     "Fable 週次枠の使用率が閾値を超えた場合・確認できない場合",
-    "fable-advisor-runner は再起動せずスキップする",
-    # Fable メインのセッション
-    (
-        "Fable メインのセッションでは Fable サブエージェントを使わず、"
-        "model を非 Fable で明示する (未指定の継承は block-fable-subagent.sh が deny する)。"
-    ),
+    "再起動せずスキップする",
 )
+
+# rule:delegation-rules 節から消えていること (旧方針の記述)。
+FABLE_REMOVED_PHRASES = (
+    # advisor のみに限定していた旧見出し
+    "**Fable は advisor の起動に限る**",
+    # スキップ対象を fable-advisor-runner だけに書いた旧文言
+    "fable-advisor-runner は再起動せずスキップする",
+    # Fable メインのセッション向けの記述
+    "Fable メインのセッション",
+)
+
+# discipline-opus.md に必須の委任先モデルの記述 (bullet の書き出し)。
+WORKER_MODEL_PHRASE = (
+    "**ワーカーはメインセッションと同じモデルで動かす**: 実装・調査・一括修正の"
+    "サブエージェントは model 未指定 (メインセッションの Opus 5.5 を継承) で起動し、"
+    "Sonnet / Haiku へ下げない"
+)
+
+# discipline-sonnet.md のヘッダコメントの対象読者の記述と、消えていること (旧記述)。
+SONNET_HEADER_AUDIENCE_PHRASE = "Opus 系以外のモデル"
+SONNET_HEADER_REMOVED_PHRASE = "Opus 系・Fable 以外"
 
 # rule:delegation-rules 節に含めない記述 (pre-push-review の reviewer は Fable の用途ではない)。
 FABLE_EXCLUDED_PHRASES = (
@@ -125,6 +150,13 @@ def header_comment(text: str) -> str:
     return text[: end + len("-->")] if end >= 0 else ""
 
 
+def intro_paragraph(text: str) -> str:
+    """ヘッダコメント直後の冒頭段落 (最初の rule ID マーカーより前の本文) を返す。"""
+    body = text[len(header_comment(text)) :]
+    end = body.find("<!-- rule:")
+    return (body[:end] if end >= 0 else body).strip()
+
+
 class FableUsageDelegationRulesTests(unittest.TestCase):
     """opus / sonnet 版の rule:delegation-rules 節が Fable の用途を限定して許可すること。"""
 
@@ -147,6 +179,17 @@ class FableUsageDelegationRulesTests(unittest.TestCase):
             [], missing, f"rule:delegation-rules 節に無い Fable 用途の記述: {missing}"
         )
 
+    def test_superseded_fable_phrases_absent_from_delegation_rules(self) -> None:
+        present = [
+            f"{name}: {phrase!r}"
+            for name, path in DISCIPLINES.items()
+            for phrase in FABLE_REMOVED_PHRASES
+            if phrase in delegation_rules_section(read(path))
+        ]
+        self.assertEqual(
+            [], present, f"rule:delegation-rules 節に残る旧方針の Fable 記述: {present}"
+        )
+
     def test_reviewers_are_not_fable_usage_in_delegation_rules(self) -> None:
         present = [
             f"{name}: {phrase!r}"
@@ -157,6 +200,30 @@ class FableUsageDelegationRulesTests(unittest.TestCase):
         self.assertEqual(
             [], present, f"rule:delegation-rules 節に残る reviewer の Fable 用途: {present}"
         )
+
+
+class WorkerModelTests(unittest.TestCase):
+    """ワーカーをメインセッションと同じモデルで動かす規律と、対象モデルの記述。"""
+
+    def test_opus_discipline_keeps_workers_on_the_main_session_model(self) -> None:
+        self.assertIn(WORKER_MODEL_PHRASE, read(DISCIPLINE_OPUS))
+
+    def test_opus_header_and_intro_do_not_target_fable(self) -> None:
+        text = read(DISCIPLINE_OPUS)
+        present = [
+            part
+            for part, body in (
+                ("ヘッダコメント", header_comment(text)),
+                ("冒頭文", intro_paragraph(text)),
+            )
+            if "Fable" in body
+        ]
+        self.assertEqual([], present, f"discipline-opus.md で Fable を対象に含む箇所: {present}")
+
+    def test_sonnet_header_audience_is_models_other_than_opus(self) -> None:
+        header = header_comment(read(DISCIPLINE_SONNET))
+        self.assertIn(SONNET_HEADER_AUDIENCE_PHRASE, header)
+        self.assertNotIn(SONNET_HEADER_REMOVED_PHRASE, header)
 
 
 class Opus55EffortTests(unittest.TestCase):

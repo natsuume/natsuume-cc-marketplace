@@ -180,8 +180,8 @@ EXPECTED_AGENT_HOOKS: dict[str, tuple[tuple[str, str], ...]] = {
 # 値は (文字数, UTF-8 本文の SHA-256)。差分が出た場合は git から元の本文を戻す。
 EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
     "agent-discipline": (
-        1538,
-        "92e49972b8b266cd6559b91b851945a6d1d689451ac753260b4e00c824a6f2cc",
+        1572,
+        "b9c4e206e327a0ebc4dec3e7747d57e26b9cafc7fd9ad9b5a719ad3f32356f61",
     ),
     "auto-lint-check": (
         122,
@@ -256,10 +256,10 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "pre-merge-codex-review": "2.2.4",
     "update-default-branch": "0.4.6",
     "natsuume-statusline": "0.11.4",
-    "agent-discipline": "1.0.2",
-    "ui-discipline": "0.4.6",
+    "agent-discipline": "2.0.0",
+    "ui-discipline": "0.4.7",
     "natsuume-writing": "0.8.2",
-    "cross-model-advisor": "5.0.4",
+    "cross-model-advisor": "5.0.5",
     "rate-limit": "0.5.4",
     "session-handoff": "0.5.2",
     "repo-analytics": "0.2.8",

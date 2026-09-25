@@ -1,7 +1,7 @@
 #!/bin/bash
 # update-model-on-switch.sh
 # PostModelSwitch hook。`/model` によるセッション途中のモデル切替を session model state に
-# 反映し、block-fable-subagent.sh の継承判定を切替後のモデルに追随させる。
+# 反映し、state を読む分業規律の配送 (inject-discipline.sh) を切替後のモデルに追随させる。
 #
 # I/O 契約:
 #   stdin  : PostModelSwitch hook input JSON
@@ -27,8 +27,8 @@
 #     確定版の所在を案内して自己修復させる
 #   - 通知本文には prompts ディレクトリの絶対パスと、切替後のモデルに対応する常時適用ルール /
 #     分業規律のファイル名を書く。版の対応は inject-always.sh / inject-discipline.sh と同じで、
-#     常時適用ルールはモデルに依らず always-sonnet-{1,2,3}.md、分業規律は opus 系・fable が
-#     discipline-opus.md、それ以外が discipline-sonnet.md
+#     常時適用ルールはモデルに依らず always-sonnet-{1,2,3}.md、分業規律は opus 系が
+#     discipline-opus.md、それ以外 (fable を含む) が discipline-sonnet.md
 #
 # 制約:
 #   - Linux (WSL2) / macOS の両方で動作すること
@@ -100,7 +100,7 @@ if [ "$NEED_NOTICE" -eq 1 ]; then
   fi
 
   ALWAYS_FILES="always-sonnet-1.md / always-sonnet-2.md / always-sonnet-3.md"
-  if printf '%s' "$TO_MODEL" | grep -qi -e 'opus' -e 'fable'; then
+  if printf '%s' "$TO_MODEL" | grep -qi 'opus'; then
     DISCIPLINE_FILE="discipline-opus.md"
   else
     DISCIPLINE_FILE="discipline-sonnet.md"

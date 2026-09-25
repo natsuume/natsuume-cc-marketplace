@@ -1,7 +1,7 @@
 """agent-discipline: 分業規律の Opus 版 / Sonnet 版 2-way 配送の契約テスト。
 
-分業規律はモデル ID で 2 版に分類して配送する: opus または fable を含む → Opus 版
-(discipline-opus.md)、それ以外 → Sonnet 版 (discipline-sonnet.md)。
+分業規律はモデル ID で 2 版に分類して配送する: opus を含む → Opus 版
+(discipline-opus.md)、それ以外 (fable・sonnet・haiku 等) → Sonnet 版 (discipline-sonnet.md)。
 
 - 静的契約 (``DisciplineOpusStaticContractTests``): discipline-opus.md と
   discipline-sonnet.md の rule ID セットが完全一致すること、discipline-opus.md が必須文言
@@ -52,15 +52,18 @@ OPUS_DISCIPLINE_PATH = "plugins/agent-discipline/hooks/prompts/discipline-opus.m
 # Opus 直接配送の見出し (heading + 空行 + discipline-opus.md 本文の構成で使われる)。
 OPUS_DISCIPLINE_HEADING = "# agent-discipline: 分業規律 (Opus)"
 
-# Opus one-shot 補正 prefix (Opus 系・Fable に確定した場合で共通)。補正 context は
+# Opus one-shot 補正 prefix (Opus 系に確定した場合)。補正 context は
 # prefix + 空行 + OPUS_DISCIPLINE_HEADING + 空行 + discipline-opus.md 本文の構成になる。
 OPUS_CORRECTION_PREFIX = (
     "(one-shot 補正) セッション開始時点ではモデルを判定できず、自己ゲート付きで SONNET 向けの分業規律を暫定配送していた。"
-    "会話の進行によりこのセッションのモデルが Opus 版分業規律の対象 (Opus 系・Fable) であると確定したため、"
+    "会話の進行によりこのセッションのモデルが Opus 版分業規律の対象 (Opus 系) であると確定したため、"
     "以後は本メッセージ以下の Opus 版分業規律を優先し、先に配送済みの Sonnet 版分業規律は破棄すること。"
 )
 OPUS_CORRECTION_PRIORITIZE_PHRASE = "以後は本メッセージ以下の Opus 版分業規律を優先し"
 OPUS_CORRECTION_DISCARD_SONNET_PHRASE = "先に配送済みの Sonnet 版分業規律は破棄すること"
+
+# Sonnet 版直接配送の見出し (heading + 空行 + discipline-sonnet.md 本文の構成で使われる)。
+SONNET_DISCIPLINE_HEADING = "# agent-discipline: 分業規律 (Sonnet)"
 
 
 def extract_rule_ids(text: str) -> set[str]:
@@ -207,7 +210,7 @@ class DisciplineOpusStaticContractTests(unittest.TestCase):
 class InjectDisciplineOpusBehaviorTests(unittest.TestCase):
     """挙動契約: inject-discipline.sh を TMPDIR 隔離で直接実行し、state (opus / fable /
     sonnet / haiku) と marker (無し・sonnet-gate) の組み合わせで出力とマーカー遷移を
-    固定する。分業規律は Opus 版 (opus・fable) と Sonnet 版 (それ以外) の 2 版で配送する。実リポジトリの ``${TMPDIR:-/tmp}/agent-discipline-state`` を
+    固定する。分業規律は Opus 版 (opus) と Sonnet 版 (fable を含むそれ以外) の 2 版で配送する。実リポジトリの ``${TMPDIR:-/tmp}/agent-discipline-state`` を
     汚さないよう、各テストは一意な ``tempfile.TemporaryDirectory()`` を TMPDIR
     として渡す。session_id もテストごとに一意な値を使う。
     """
@@ -242,20 +245,21 @@ class InjectDisciplineOpusBehaviorTests(unittest.TestCase):
             check=False,
         )
 
-    def test_a_fable_state_delivers_opus_version_and_marks_final(self) -> None:
-        """marker/pending 無し + state=claude-fable-5 は Opus 版を配送し
-        marker=final にする。
+    def test_a_fable_state_delivers_sonnet_version_and_marks_final(self) -> None:
+        """marker/pending 無し + state=claude-fable-5-1 は Opus 版の対象外 (その他の
+        モデル) として Sonnet 版を配送し marker=final にする。
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             session_id = "opus-pr2-behavior-a-fable"
             paths = self.make_state_paths(tmp_dir, session_id)
-            paths["state"].write_text("claude-fable-5", encoding="utf-8")
+            paths["state"].write_text("claude-fable-5-1", encoding="utf-8")
 
             result = self.run_inject_discipline(session_id, tmp_dir)
 
             self.assertEqual(0, result.returncode, result.stderr)
             context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-            self.assertIn(OPUS_DISCIPLINE_HEADING, context)
+            self.assertIn(SONNET_DISCIPLINE_HEADING, context)
+            self.assertNotIn(OPUS_DISCIPLINE_HEADING, context)
             self.assertEqual("final", paths["marker"].read_text(encoding="utf-8"))
 
     def test_b_opus_state_delivers_opus_version_and_marks_final(self) -> None:
@@ -354,8 +358,8 @@ class InjectDisciplineOpusBehaviorTests(unittest.TestCase):
             self.assertEqual("final", paths["marker"].read_text(encoding="utf-8"))
 
     def test_1_haiku_state_delivers_sonnet_version_and_marks_final(self) -> None:
-        """marker/pending 無し + state=claude-haiku-4-5 (fable でも opus でもない) は
-        Sonnet 版を配送し marker=final にする。Opus 版の対象 (opus・fable) 以外の
+        """marker/pending 無し + state=claude-haiku-4-5 (opus を含まない) は
+        Sonnet 版を配送し marker=final にする。Opus 版の対象 (opus) 以外の
         state の既定配送が Sonnet 版であることを固定する。
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -389,25 +393,23 @@ class InjectDisciplineOpusBehaviorTests(unittest.TestCase):
             self.assertIn(OPUS_DISCIPLINE_HEADING, context)
             self.assertEqual("final", paths["marker"].read_text(encoding="utf-8"))
 
-    def test_3_sonnet_gate_fable_confirmed_delivers_correction_and_marks_final(
+    def test_3_sonnet_gate_fable_confirmed_delivers_nothing_and_marks_final(
         self,
     ) -> None:
-        """marker=sonnet-gate + state=claude-fable-5 (pending 無し) は Opus 確定時と
-        同じ one-shot 補正 (補正 prefix + Opus 見出し + discipline-opus.md) を配送し
-        marker=final にする。
+        """marker=sonnet-gate + state=claude-fable-5-1 (pending 無し) は Sonnet 確定時と
+        同じく追加配送なし (stdout 空) で marker=final にする (暫定配送済みの Sonnet 版が
+        そのまま確定版になる)。
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             session_id = "opus-pr2-checkpoint-3-fable-gate"
             paths = self.make_state_paths(tmp_dir, session_id)
             paths["marker"].write_text("sonnet-gate", encoding="utf-8")
-            paths["state"].write_text("claude-fable-5", encoding="utf-8")
+            paths["state"].write_text("claude-fable-5-1", encoding="utf-8")
 
             result = self.run_inject_discipline(session_id, tmp_dir)
 
             self.assertEqual(0, result.returncode, result.stderr)
-            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-            self.assertIn(OPUS_CORRECTION_PREFIX, context)
-            self.assertIn(OPUS_DISCIPLINE_HEADING, context)
+            self.assertEqual("", result.stdout)
             self.assertEqual("final", paths["marker"].read_text(encoding="utf-8"))
 
     def test_4_opus_correction_context_places_opus_phrases_before_heading(

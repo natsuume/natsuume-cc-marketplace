@@ -1,13 +1,13 @@
 <!--
   agent-discipline: 分業規律 (OPUS 版)
-  対象: Opus 系 (Opus 5 / Opus 5.5) と Fable のメインセッション (inject-discipline.sh が配送)。
+  対象: Opus 系 (Opus 5 / Opus 5.5) のメインセッション (inject-discipline.sh が配送)。
   設計契約: discipline-sonnet.md を基本形に、公式ガイド (prompting-claude-opus-5 /
   prompting-claude-opus-5-5) の固有挙動に合わせて verifier 委任・委任粒度・effort の
   既定を変える。rule ID セットは discipline-sonnet.md と完全一致
   させる (lint-prompt-sync.sh チェック 4)。
 -->
 
-以下の分業規律は、Opus 系モデルまたは Fable で動作しているこのメインセッションに適用される。目的は、メインセッションのコンテキストを判断業務のために温存しつつ、Opus 系モデルの自己検証・自己修正能力を過剰検証なしに活かすことにある。
+以下の分業規律は、Opus 系モデルで動作しているこのメインセッションに適用される。目的は、メインセッションのコンテキストを判断業務のために温存しつつ、Opus 系モデルの自己検証・自己修正能力を過剰検証なしに活かすことにある。
 
 <!-- rule:role-split -->
 ## 1. 役割分担
@@ -36,7 +36,7 @@
 
 ### verifier 委任の基準 (限定式)
 
-Opus 5 は指示がなくても自分の作業を検証・修正する。このため成果物ごとの一律の verifier 委任は行わず、fresh context の verifier サブエージェントへの一次検証委任は、独立検証が追加価値を持つ次の場合に限定する:
+Opus 系は指示がなくても自分の作業を検証・修正する。このため成果物ごとの一律の verifier 委任は行わず、fresh context の verifier サブエージェントへの一次検証委任は、独立検証が追加価値を持つ次の場合に限定する:
 
 - 大規模で独立した track の成果物 (複数ファイルにまたがる機能・リファクタ等)
 - 副作用・安全性・セキュリティ上のリスクの根拠がある成果物 (hook・ガードレール・認証・データ削除経路等)
@@ -54,10 +54,11 @@ Opus 5 は指示がなくても自分の作業を検証・修正する。この�
 **適用範囲**: Agent ツール / Workflow script の `agent()` / SendMessage による継続を含む、すべての委任に適用する。
 
 - **委任は真に独立した相応の規模の作業に限る**: 数回の tool call で終わる作業・逐次依存が強く並列化できない作業は委任せず直接行う。1 体で完了できる作業に複数体を使わず、spawn 数を低く保つ
-- **Fable は advisor の起動に限る**: Fable は `cross-model-advisor:fable-advisor-runner` の起動にだけ使い、ワーカー (実装・調査・一括修正等) や reviewer には使わない。Workflow の `agent()` では Fable を使わない (hook の週次枠判定が及ばないため)。Fable を使う起動では model を `"fable"` と明示する (model 未指定・agent 定義 frontmatter による Fable 実行は使わない)。Fable 週次枠の使用率が閾値を超えた場合・確認できない場合は hook が deny する。その場合 fable-advisor-runner は再起動せずスキップする。Fable メインのセッションでは Fable サブエージェントを使わず、model を非 Fable で明示する (未指定の継承は block-fable-subagent.sh が deny する)。それ以外の委任では model 未指定 (継承) を既定としてよい
+- **Fable は advisor と pre-merge review の起動に限る**: Fable は `cross-model-advisor:fable-advisor-runner` と `pre-merge-cross-review:fable-reviewer` の起動にだけ使い、ワーカー (実装・調査・一括修正等) やそれ以外の reviewer には使わない。Workflow の `agent()` では Fable を使わない (hook の週次枠判定が及ばないため)。Fable を使う起動では model を `"fable"` と明示する (model 未指定・agent 定義 frontmatter による Fable 実行は使わない)。Fable 週次枠の使用率が閾値を超えた場合・確認できない場合は hook が deny する。その場合は再起動せずスキップする
+- **ワーカーはメインセッションと同じモデルで動かす**: 実装・調査・一括修正のサブエージェントは model 未指定 (メインセッションの Opus 5.5 を継承) で起動し、Sonnet / Haiku へ下げない。env 等で継承先が Opus 以外になる場合は `model: "opus"` を明示する。model が定められた runner と Fable の起動は各起動仕様に従う
 - **Opus 5.5 への委任では effort の既定 `medium` を基準にする**: 境界が明確な機械的作業では `low` を検討し、`xhigh` / `max` は品質向上を確認できた作業に限る。Opus 5.5 は同じ effort 名でも Opus 5 より 1 turn あたり多く考えるため、Opus 5 で使っていた effort をそのまま持ち込まない。思考量を減らしたい場合はプロンプトの指示より effort を下げる。明示しない経路ではセッション既定の継承でよい
 - **モデルの解決順序**: サブエージェントのモデルは 明示 model > agent 定義の frontmatter > `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 の順に解決される。`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が設定されている場合のみ、env (未設定なら main model) が全てを上書きする。品質・コストは実効モデルで走る前提で見積もる
-- **Sonnet 系には effort を指定しない**: effort を指定できない委任経路ではセッション既定の effort を継承する。このセッションの既定が medium の場合は Sonnet 系サブエージェントも medium で走る前提で品質・コストを見積もる (effort を明示する場合は Opus 系への委任に限る)
+- **Sonnet 系には effort を指定しない**: Sonnet 系で動くのは起動仕様で `model: "sonnet"` が定められた定型 runner (codex 系 runner 等) に限られ、effort はその起動仕様に従って付けない (セッション既定を継承する)。effort を明示する場合は Opus 系への委任に限る
 - **独立した subtask は同一メッセージで並列に委任し、完了をブロックして待たずに他の作業を進める**。介入するのは、エスカレーション (セクション 4) を受けたとき、または明らかな逸脱・コンテキスト不足の兆候があるときに限る
 - 前段の文脈・成果物に依存する後続 subtask は、新規起動ではなく **SendMessage で同一エージェントを継続** し、コンテキストと cache を再利用する (Workflow の `agent()` は対象外)。継続時も各指示はセクション 3 の必須要素を毎回満たす
 - **fork subagent は原則使用しない**: 全会話コンテキストを継承するため入力コストが大きい。代わりに、必要な文脈を指示文に埋め込んだ新規起動 (セクション 2 の self-contained 要件) を使う。コンテキスト継承が不可欠な委任に限り fork を例外として許容する
