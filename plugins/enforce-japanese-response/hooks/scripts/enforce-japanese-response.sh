@@ -153,12 +153,15 @@ is_japanese_language() {
 
 # extract_hook_fields の出力を stdin で受け取り、message が英語の応答なら block の
 # JSON を出力する。英語の応答でなければ何も出力しない。
+# URL 本体の文字クラス `[!#-'*-;=?-Z\\^-~]` は、0x21〜0x7E から `"` `(` `)` `<` `>`
+# `[` `]` を除いた範囲を表す。jq のプログラムを単一引用符で囲んでいるため、`'` は
+# jq の文字列リテラル内で ' と書き、`\` は \\\\ と書く。
 judge_message() {
   jq -c --arg reason "$BLOCK_REASON" '
     .message
     | gsub("```[\\s\\S]*?(```|\\z)"; "")
     | gsub("`[^`]*`"; "")
-    | gsub("https?://\\S+"; "")
+    | gsub("https?://[!#-\u0027*-;=?-Z\\\\^-~]+"; "")
     | ([scan("[A-Za-z]")] | length) as $letters
     | ([scan("[\\p{Hiragana}\\p{Katakana}\\p{Han}]")] | length) as $japanese
     | if $letters >= 40 and 20 * $japanese < $japanese + $letters
