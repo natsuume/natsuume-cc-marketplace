@@ -84,14 +84,14 @@ codex review wrapper (`run-pre-merge-codex-review.sh`) の起動を検証する 
 
 `tool.check` では下位の判定 (permissions ルール・classic PreToolUse hook を含む) を先に得て、次の **すべて** を満たすときだけ `allow` を返します。それ以外は下位の判定をそのまま返します。
 
-1. 下位の判定が `ask` である。`deny` (merge gate の deny・`permissions.deny` を含む) と `allow` は変更しません
+1. 下位の判定が `ask` で、settings のルールによるものではない。`deny` (merge gate の deny・`permissions.deny` を含む)、`allow`、`permissions.ask` ルールによる `ask` は変更しません
 2. 現在の permission mode が `auto` である。mode が分からないときは引き上げません
-3. Bash tool の command が、次のいずれかの単独呼び出しである
-   - `gh pr merge` (`--admin`・`--delete-branch`・`-d` と、`d` を含む短フラグの束ね形を含まないもの)
-   - `gh pr view`
-   - `gh pr checks`
+3. Bash tool の command が、次のいずれかの正規形の単独呼び出しである
+   - `gh pr merge [<番号>] <--squash|--merge|--rebase>` (戦略フラグはちょうど 1 つ。他の引数を含まない)
+   - `gh pr view [<番号>|<branch>]` に `--json <fields>` / `--jq <式>` / `-q <式>` / `--comments` / `-c` を付けたもの
+   - `gh pr checks [<番号>|<branch>]` に `--json <fields>` / `--jq <式>` / `-q <式>` / `--watch` / `--interval <秒>` / `-i <秒>` / `--required` / `--fail-fast` を付けたもの
 
-`;` `&` `|` `<` `>` バッククォート `$(` `${` 改行を含む command や、`gh` の前に env 代入・ラッパー (`env` / `bash -c` / `eval` / `xargs` 等) がある command は対象外です。quote の内側にある文字も区別しません。
+`<fields>` は英数字・`_`・`,`、`<秒>` は整数、`<式>` はシングルクォートで囲んだ 1 語か英数字・`_`・`.` だけの語、`<branch>` は英数字・`.`・`_`・`/`・`-` だけの語 (先頭は `-` 以外) に限ります。`-R` / `--repo`・URL・`:` を含む指定は、別ホストへの通信になりうるため対象外です。quote の内側を含めて `;` `&` `|` `<` `>` バッククォート `$(` `${` 改行を含む command、シングルクォートの外に `$` `"` `\` を含む command、`gh` の前に env 代入・ラッパー (`env` / `bash -c` / `eval` / `xargs` 等) がある command も対象外です。対象外の command は従来どおり classifier の審査を受けます。
 
 merge gate (`block-pre-merge.sh`) は classic PreToolUse として `tool.check` より先に評価され、その deny は `tool.check` の下位判定として渡されます。module は deny を上書きしないため、codex review の記録が無い merge は従来どおり gate の deny で止まります。module 自身は review 記録を検証しません。
 
@@ -195,7 +195,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 
 `gh pr merge` 自体や、merge 直後の `gh pr view` も classifier に `[Merge Without Review]` で拒否されることがあります。codex review の結果は subagent の report として届くため、classifier からは review 済みであることが見えません。hooks module (「Hooks module (Claude Mods)」節) を有効にすると、merge gate を通過した単独の `gh pr merge` と、単独の `gh pr view` / `gh pr checks` は classifier を経ずに実行されます。hooks module を有効にしていない環境では、ユーザ自身がマージを指示する発言をすると、次の実行は通ります。
 
-`--delete-branch` は remote branch の削除として組み込み soft_deny の対象になるため、merge は `gh pr merge <番号> --squash` 等の単独正規形で実行し、branch の掃除は merge 後に別コマンドで行ってください。hooks module も `--delete-branch` 付きの merge は allow に引き上げません。
+`--delete-branch` は remote branch の削除として組み込み soft_deny の対象になるため、merge は `gh pr merge <番号> --squash` 等の単独正規形で実行し、branch の掃除は merge 後に別コマンドで行ってください。hooks module も戦略フラグ以外の引数を含む merge は allow に引き上げません。
 
 ## 既知の制約
 

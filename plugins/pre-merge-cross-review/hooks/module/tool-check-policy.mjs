@@ -10,12 +10,6 @@
 // - 引き上げは permission mode が `auto` のときだけ行う。mode 不明 (undefined 等) は引き上げない
 // - `deny` を自ら返さない
 
-/** 対象コマンドの先頭 (`gh pr <subcommand>`)。 */
-export const TARGET_SUBCOMMANDS = Object.freeze(["merge", "view", "checks"]);
-
-/** `gh pr merge` で許可しないフラグ。 */
-export const FORBIDDEN_MERGE_FLAGS = Object.freeze(["--admin", "--delete-branch", "-d"]);
-
 // shell の連結・リダイレクト・置換・改行。quote の内側にあっても対象外とする (保守側に倒す)。
 const SHELL_METACHARACTERS = /[;&|<>`\n\r]|\$\(|\$\{/;
 
@@ -24,12 +18,107 @@ const MERGE_REASON =
 const READ_ONLY_REASON =
   "pre-merge-cross-review: auto mode で単独の gh pr view / gh pr checks を許可しました";
 
-const isForbiddenMergeFlag = (token) =>
-  FORBIDDEN_MERGE_FLAGS.some((flag) => token === flag || token.startsWith(`${flag}=`)) ||
-  // `-sd` のような短フラグの束ね形に d が含まれるもの
-  /^-[A-Za-z]*d[A-Za-z]*$/.test(token);
+const MERGE_STRATEGY_FLAGS = ["--squash", "--merge", "--rebase"];
 
-const tokenize = (command) => command.trim().split(/\s+/);
+const PR_NUMBER = /^[1-9][0-9]*$/;
+const BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
+const FIELDS = /^[A-Za-z0-9_,]+$/;
+const SECONDS = /^[0-9]+$/;
+const JQ_EXPRESSION = /^'[^']*'$|^[A-Za-z0-9_.]+$/;
+
+// サブコマンドごとの許可フラグ。値を取るフラグは値の形 (正規表現) を持つ。
+const READ_ONLY_FLAGS = {
+  view: {
+    values: { "--json": FIELDS, "--jq": JQ_EXPRESSION, "-q": JQ_EXPRESSION },
+    switches: ["--comments", "-c"],
+  },
+  checks: {
+    values: {
+      "--json": FIELDS,
+      "--jq": JQ_EXPRESSION,
+      "-q": JQ_EXPRESSION,
+      "--interval": SECONDS,
+      "-i": SECONDS,
+    },
+    switches: ["--watch", "--required", "--fail-fast"],
+  },
+};
+
+/**
+ * 空白で語に分ける。シングルクォートの内側の空白は語を区切らず、quote は語に残す。
+ * 閉じていないシングルクォートがある場合は null を返す。
+ */
+const splitWords = (command) => {
+  const words = [];
+  let current = "";
+  let inWord = false;
+  let inQuote = false;
+  for (const character of command) {
+    if (inQuote) {
+      current += character;
+      inQuote = character !== "'";
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (inWord) {
+        words.push(current);
+        current = "";
+        inWord = false;
+      }
+      continue;
+    }
+    current += character;
+    inWord = true;
+    inQuote = character === "'";
+  }
+  if (inQuote) {
+    return null;
+  }
+  if (inWord) {
+    words.push(current);
+  }
+  return words;
+};
+
+const isCanonicalMerge = (args) => {
+  const strategies = args.filter((arg) => MERGE_STRATEGY_FLAGS.includes(arg));
+  const positionals = args.filter((arg) => !MERGE_STRATEGY_FLAGS.includes(arg));
+  return (
+    strategies.length === 1 &&
+    positionals.length <= 1 &&
+    positionals.every((arg) => PR_NUMBER.test(arg))
+  );
+};
+
+const isCanonicalReadOnly = (subcommand, args) => {
+  const { values, switches } = READ_ONLY_FLAGS[subcommand];
+  let positionals = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith("-")) {
+      positionals += 1;
+      if (positionals > 1 || !(PR_NUMBER.test(arg) || BRANCH.test(arg))) {
+        return false;
+      }
+      continue;
+    }
+    // `=` で値を渡す形は長フラグ (`--`) に限る
+    const separator = arg.startsWith("--") ? arg.indexOf("=") : -1;
+    const name = separator === -1 ? arg : arg.slice(0, separator);
+    const valuePattern = Object.hasOwn(values, name) ? values[name] : undefined;
+    if (valuePattern !== undefined) {
+      const value = separator === -1 ? args[(index += 1)] : arg.slice(separator + 1);
+      if (value === undefined || !valuePattern.test(value)) {
+        return false;
+      }
+      continue;
+    }
+    if (separator !== -1 || !switches.includes(arg)) {
+      return false;
+    }
+  }
+  return true;
+};
 
 /**
  * command が次の正規形の単独呼び出しかを判定する。
@@ -61,11 +150,21 @@ export const isTargetCommand = (command) => {
   if (typeof command !== "string" || SHELL_METACHARACTERS.test(command)) {
     return false;
   }
-  const [program, group, subcommand, ...rest] = tokenize(command);
-  if (program !== "gh" || group !== "pr" || !TARGET_SUBCOMMANDS.includes(subcommand)) {
+  const words = splitWords(command.trim());
+  if (words === null) {
     return false;
   }
-  return subcommand !== "merge" || !rest.some(isForbiddenMergeFlag);
+  const [program, group, subcommand, ...args] = words;
+  if (program !== "gh" || group !== "pr") {
+    return false;
+  }
+  if (subcommand === "merge") {
+    return isCanonicalMerge(args);
+  }
+  if (subcommand === "view" || subcommand === "checks") {
+    return isCanonicalReadOnly(subcommand, args);
+  }
+  return false;
 };
 
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -83,9 +182,13 @@ export const decideToolCheck = ({ tool, input, beneath, permissionMode }) => {
   if (!isObject(beneath) || beneath.decision !== "ask" || permissionMode !== "auto") {
     return beneath;
   }
+  // permissions.ask ルールでユーザが明示した確認は残す
+  if (typeof beneath.rule === "string" && beneath.rule !== "") {
+    return beneath;
+  }
   if (tool !== "Bash" || !isObject(input) || !isTargetCommand(input.command)) {
     return beneath;
   }
-  const subcommand = tokenize(input.command)[2];
+  const subcommand = splitWords(input.command.trim())[2];
   return { decision: "allow", reason: subcommand === "merge" ? MERGE_REASON : READ_ONLY_REASON };
 };
