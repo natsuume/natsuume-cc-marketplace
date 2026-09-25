@@ -1,6 +1,6 @@
 {
   "name": "pre-push-codex-review",
-  "version": "3.0.2",
+  "version": "4.0.0",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "push 前に codex review の完了を強制する"
 }

@@ -4,11 +4,11 @@
 
 修正や commit 列の変更 (add→revert / amend / rebase 含む) により「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」のハッシュが変わると codex マーカーは自動失効し、Claude は `pre-push-codex-review:codex-reviewer` subagent を再走させる以外に push を通す手段がありません。
 
-本 plugin は Codex review の **review cadence** も enforcement します。`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 native / adversarial review (旧 `pre-push-review:codex-reviewer` は計数対象外) を session ごとに合算し、前回の根本方針 checkpoint から 5 回完了すると、次の review 起動と main session の停止を block します。checkpoint の実行 (`cross-model-advisor` の consult skill による `cross-model-advisor:codex-advisor-runner` の起動と attestation の発行) 自体は cross-model-advisor plugin が担います。詳細は [review cadence](#review-cadence) を参照してください。
+本 plugin は Codex review の **review cadence** も enforcement します。`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 native / adversarial review (旧 `pre-push-review:codex-reviewer` は計数対象外) を session ごとに合算し、前回の根本方針 checkpoint から 5 回完了すると、次の review 起動と main session の停止を block します。checkpoint の実行 (`cross-model-advisor` の consult skill による `cross-model-advisor:codex-advisor-runner` の起動と attestation の発行) 自体は cross-model-advisor plugin が担います。詳細は [review cadence](#review-cadence) を参照してください。
 
 ## バージョン
 
-v3.0.2
+v4.0.0
 
 ## インストール
 
@@ -84,9 +84,9 @@ session 開始のたびに `hooks/prompts/review-cadence-rules.md` の全文を 
 review cadence の state 管理と enforcement を担う node script です。詳細は [review cadence](#review-cadence) を参照してください。
 
 - **PreToolUse** (matcher: `Bash`): checkpoint 要求中 (完了 review が 5 回に達している間) に review 起動形 (`codex-companion.mjs review|adversarial-review`、`run-pre-push-codex-review.sh`、`run-codex-job.sh review`) を検出すると deny する
-- **SubagentStart** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer)$`): 起動した agent_id を review cadence state へ記録する
+- **SubagentStart** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-cross-review:codex-reviewer)$`): 起動した agent_id を review cadence state へ記録する
 - **PostToolUse** (matcher: `^SubagentHandback$`): 計数対象 2 reviewer・`cross-model-advisor:codex-review-runner`・`cross-model-advisor:codex-advisor-runner` が auto mode で hand-back した report (`tool_input.message`) を解析し、Status 行 / footer / attestation の解析値 (本文は保存しない) を agent_id ごとに state へ記録する。SubagentStop がそれを one-shot で消費する
-- **SubagentStop** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-codex-review:codex-reviewer|cross-model-advisor:codex-(review|advisor)-runner)$`): 計数対象 reviewer の成功 review を加算し、`cross-model-advisor:codex-advisor-runner` の checkpoint 充足 attestation でカウンターを reset する
+- **SubagentStop** (matcher: `^(pre-push-codex-review:codex-reviewer|pre-merge-cross-review:codex-reviewer|cross-model-advisor:codex-(review|advisor)-runner)$`): 計数対象 reviewer の成功 review を加算し、`cross-model-advisor:codex-advisor-runner` の checkpoint 充足 attestation でカウンターを reset する
 - **PostToolUseFailure** (matcher: `Agent|Task`): checkpoint 相談 (起動 request の `tool_input.prompt` に `<review_cycle_checkpoint>` を含む) の `cross-model-advisor:codex-advisor-runner` 起動失敗を fail-open で checkpoint 充足とみなし、checkpoint 要求中ならカウンターを reset する。同じ `cross-model-advisor:codex-advisor-runner` でも通常の advisor 相談の起動失敗は reset しない
 - **PermissionDenied** (matcher: `Agent|Task`): auto mode の classifier が checkpoint 相談 (条件は PostToolUseFailure と同じ) の起動を拒否したとき、1 回目は拒否回数を state に記録して `{"hookSpecificOutput": {"hookEventName": "PermissionDenied", "retry": true}}` を返し、ユーザ確認後の再起動を促す。同じ checkpoint 要求中の 2 回目の拒否で fail-open としてカウンターを reset する。条件に合わない拒否は state を変えず、拒否回数にも数えない
 - **Stop**: checkpoint 要求中は main session の停止を block し、`cross-model-advisor:codex-advisor-runner` の起動と、自動 reset が届かない場合の state ファイル削除による脱出手順を案内する
@@ -125,11 +125,13 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 ## review cadence
 
-`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の成功 review、`cross-model-advisor:codex-review-runner` の成功 native / adversarial review を 1 サイクルと数え、前回の根本方針 checkpoint から合計 5 サイクル完了すると、次の review 起動と main session の停止を block する enforcement です。旧 `pre-push-review:codex-reviewer` (codex gate 分離前の namespace) は計数対象に含まれません。
+`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review、`cross-model-advisor:codex-review-runner` の成功 native / adversarial review を 1 サイクルと数え、前回の根本方針 checkpoint から合計 5 サイクル完了すると、次の review 起動と main session の停止を block する enforcement です。旧 `pre-push-review:codex-reviewer` (codex gate 分離前の namespace) は計数対象に含まれません。
+
+`pre-merge-cross-review:fable-reviewer` (merge 前の Fable review) は codex review ではないため計数しません。
 
 ### 計数対象
 
-- `pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の SubagentStop で、report (auto mode では PostToolUse で記録した `SubagentHandback` の hand-back report、それ以外は `last_assistant_message`) に `Status: pass|findings` 行がちょうど 1 行ある場合
+- `pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の SubagentStop で、report (auto mode では PostToolUse で記録した `SubagentHandback` の hand-back report、それ以外は `last_assistant_message`) に `Status: pass|findings` 行がちょうど 1 行ある場合
 - `cross-model-advisor:codex-review-runner` の SubagentStop で、report (所在は上と同じ) の実質末尾 3 行の footer (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` / `Codex-Runner-Job-ID: <id>`) が揃っている場合。同一 agent_id は 1 回だけ計数する (resume 再 stop で footer 付きの報告が再び来ても加算しない)
 
 ### checkpoint
@@ -155,7 +157,7 @@ review cadence の state は session ごとに 1 ファイル (ファイル名�
 
 ### cross-model-advisor 連携
 
-checkpoint の実行には `cross-model-advisor` plugin の install が必要です。まず必ず `cross-model-advisor:codex-advisor-runner` の起動を試みてください。相談 request に `<review_cycle_checkpoint>` を含む起動であれば、起動失敗 (未認証・timeout 等) が PostToolUseFailure として本 script に到達したとき、または auto mode の classifier による起動拒否が PermissionDenied として 2 回到達したときに、fail-open としてカウンターを reset するため block は解除されて続行できます。PermissionDenied の 1 回目は `retry: true` が返るので、ユーザに起動の可否を確認したうえで同じ相談をもう一度起動してください。起動を試みた後も block が解除されない場合は、cross-model-advisor plugin の install が必要であることをユーザに報告したうえで、[state](#state) の手動 reset (state ファイル削除) で解除してください。`pre-merge-codex-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
+checkpoint の実行には `cross-model-advisor` plugin の install が必要です。まず必ず `cross-model-advisor:codex-advisor-runner` の起動を試みてください。相談 request に `<review_cycle_checkpoint>` を含む起動であれば、起動失敗 (未認証・timeout 等) が PostToolUseFailure として本 script に到達したとき、または auto mode の classifier による起動拒否が PermissionDenied として 2 回到達したときに、fail-open としてカウンターを reset するため block は解除されて続行できます。PermissionDenied の 1 回目は `retry: true` が返るので、ユーザに起動の可否を確認したうえで同じ相談をもう一度起動してください。起動を試みた後も block が解除されない場合は、cross-model-advisor plugin の install が必要であることをユーザに報告したうえで、[state](#state) の手動 reset (state ファイル削除) で解除してください。`pre-merge-cross-review` の `codex-reviewer` subagent も本 plugin の review cadence の計数対象です。
 
 ## pre-push-review core との併用設計
 

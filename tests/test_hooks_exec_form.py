@@ -200,8 +200,8 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
         "63c76f4494d06962cec7372e968340b865078f1e6c5e780543651fb169b0bbf2",
     ),
     "pre-merge-cross-review": (
-        735,
-        "380cba665caf3ad3af0b04186276cb02707333e4b357e45ff19a0cd2c98ff62d",
+        961,
+        "2e9690f199ba6838248729eca18ed59e4c57d75d719d4becc1494744d97036e4",
     ),
     "pre-push-codex-review": (
         1301,

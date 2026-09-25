@@ -1,8 +1,10 @@
 #!/bin/bash
 # auto-mark.sh
-# `pre-merge-codex-review:codex-reviewer` subagent の実行完了を subagent lifecycle hook
-# (SubagentStart / SubagentStop) で検知し、 codex review wrapper が書いた pending
-# attestation を final attestation へ昇格する。
+# `pre-merge-cross-review:codex-reviewer` / `pre-merge-cross-review:fable-reviewer` subagent の
+# 実行完了を subagent lifecycle hook (SubagentStart / SubagentStop) で検知する。
+# codex-reviewer については codex review wrapper が書いた pending attestation を final
+# attestation へ昇格し、 fable-reviewer については report から Fable review のローカル記録
+# (attestation と投稿用本文) を書く。
 #
 # ============================================================================
 # 設計契約 (本ヘッダが契約の正本)
@@ -41,8 +43,13 @@
 #
 # イベント別契約:
 #
-# - SubagentStart (hooks.json matcher: ^pre-merge-codex-review:codex-reviewer$):
-#   1. agent_type が `pre-merge-codex-review:codex-reviewer` の完全一致でなければ exit 0
+# 以下の SubagentStart / PostToolUse / SubagentStop / PostToolUseFailure の契約は
+# codex-reviewer についてのもの。 fable-reviewer との差分は後述の「fable-reviewer の分岐」に
+# まとめる。
+#
+# - SubagentStart (hooks.json matcher: ^pre-merge-cross-review:(codex|fable)-reviewer$):
+#   1. agent_type が `pre-merge-cross-review:codex-reviewer` または
+#      `pre-merge-cross-review:fable-reviewer` の完全一致でなければ exit 0
 #      (script 側でも再検証する。 matcher の regex 解釈には依存しない)
 #   2. agent_id が ^[A-Za-z0-9._-]{1,128}$ に一致しなければ exit 0 (path 混入防止。
 #      filesystem 操作は一切行わない)
@@ -134,10 +141,41 @@
 #
 # - PostToolUseFailure (hooks.json matcher: Agent|Task):
 #   tool_name が Agent または Task で、 `tool_input.subagent_type` が
-#   `pre-merge-codex-review:codex-reviewer` の場合に、 pending attestation を best-effort
+#   `pre-merge-cross-review:codex-reviewer` の場合に、 pending attestation を best-effort
 #   で破棄し、 本文ファイルも (final が無い場合に限り) 破棄する補助掃除経路。 async
 #   harness では tool call は起動受理で成功するため主経路にはならない (失敗した subagent は
 #   Status 行の無い stop として SubagentStop 側 3-5 で遮断される)
+#
+# fable-reviewer の分岐:
+#   fable-reviewer は wrapper を持たないため、 report 本文そのものを Fable review の投稿用
+#   本文にする。 codex 側の pending / final / 本文には一切触れない (codex-reviewer の処理も
+#   Fable 側の記録に触れない)。
+#   - SubagentStart: codex-reviewer と同一 (launch attestation / tombstone)。 6 の prune に
+#     1 日より古い hand-back 本文 (.claude-pre-merge-fable-body-*) を加える。 既存の Fable
+#     記録は削除しない
+#   - PostToolUse (SubagentHandback): handback record は codex-reviewer と同一規則で書く。
+#     加えて、 launch attestation があり tombstone が無く (= 3 を通過)、 tool_input.message
+#     が string で、 同一 agent_id の 1 回目の hand-back であるときに限り、 message を
+#     hand-back 本文 (.claude-pre-merge-fable-body-<agent_id>) へ同一ディレクトリ内 temp
+#     file + `mv` で保存する
+#   - SubagentStop: 1〜4 は codex-reviewer と同一。 ただし 3 の terminal な拒否経路で破棄する
+#     のは handback record と hand-back 本文だけである。 続けて:
+#     5. handback record が regular file として存在すればその内容を status とし、 本文は
+#        hand-back 本文とする (hand-back 本文が無い / symlink / 通常ファイルでない場合は
+#        invalid)。 record が無ければ last_assistant_message を status と本文の元にする
+#        (status の判定規則は codex-reviewer の 5 と同一)。 record と hand-back 本文は判定の
+#        成否に関わらず削除する (one-shot)
+#     6. status が pass / findings 以外なら記録しない
+#     7. 現在のローカル HEAD が launch attestation の HEAD と一致しなければ記録しない
+#     8. 投稿用本文 (.claude-pre-merge-fable-comment.md) を 1 行目
+#        `<!-- fable-review: head=<HEAD> status=pass|findings -->` + report で書き、 続けて
+#        attestation (.claude-pre-merge-fable-reviewed、 内容 `head=<HEAD>` の 1 行) を書く。
+#        report 中の `<!-- fable-review:` / `<!-- codex-review:` は `(quoted)` 付きに
+#        無害化し、 60000 字を超える本文は行単位で切り詰めて省略注記を付ける。 書き込みは
+#        umask 077 の subshell で git-dir 内 temp file + `mv -f` (既存の Fable 記録は上書き)。
+#        attestation の `mv` に失敗した場合は本文と attestation の両方を削除する。 6〜8 で
+#        記録しない場合、 既存の Fable 記録には触れない
+#   - PostToolUseFailure: 何もしない (hand-back 本文の残骸は SubagentStart の prune が消す)
 #
 # policy: environment errors are fail-open, review completion is fail-closed
 #   git / 環境の失敗は 2>/dev/null + exit 0 で silent skip する (正常完了後の処理を阻害
@@ -176,16 +214,17 @@
 #   いずれも exit 0 で抜ける silent skip 設計である。 想定外の非ゼロ終了が発生した場合のみ
 #   EXIT trap が stderr に診断ログを出してユーザに知らせる (trap は exit code を変更しない
 #   ため、 subagent の動作には影響しない)。 pre-push-codex-review の lib/exit-trap.sh と
-#   同等の機能を本 script 内にインラインで持つのは、 本 plugin が保持する pre-push からの
-#   コピーを codex companion 解決ロジックの 1 ファイルに限る契約のため。
+#   同等の機能を本 script 内にインラインで持つのは、 本 plugin が保持する他 plugin の lib の
+#   コピーを codex companion 解決ロジック (codex-companion-resolver.sh) と Fable 週次枠の
+#   使用率判定 (fable-weekly-usage.sh) の 2 ファイルに限る契約のため。
 
 # 予期せぬ非ゼロ終了をユーザの stderr に通知する EXIT trap。
 _pre_merge_auto_mark_exit_handler() {
   local exit_code=$?
   if [ "$exit_code" -ne 0 ]; then
-    printf '[pre-merge-codex-review/auto-mark] 予期せぬエラーで hook が exit %s で終了しました。\n' \
+    printf '[pre-merge-cross-review/auto-mark] 予期せぬエラーで hook が exit %s で終了しました。\n' \
       "$exit_code" >&2
-    printf '[pre-merge-codex-review/auto-mark] codex review の attestation 更新が skip された可能性があり、 次の `gh pr merge` 時に merge gate が「レビュー未実行」 で deny する経路があります。 marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' >&2
+    printf '[pre-merge-cross-review/auto-mark] codex review / Fable review の記録更新が skip された可能性があり、 次の `gh pr merge` 時に merge gate が「レビュー未実行」 で deny する経路があります。 marketplace https://github.com/natsuume/natsuume-cc-marketplace に hook 実装の bug として報告してください。\n' >&2
   fi
 }
 trap _pre_merge_auto_mark_exit_handler EXIT
@@ -210,7 +249,17 @@ _PRE_MERGE_AUTO_MARK_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$_PRE_MERGE_AUTO_MARK_SCRIPT_DIR/lib/markers.sh"
 
 # 対象 subagent の完全一致名 (hooks.json の matcher とは独立に script 側でも検証する)。
-REVIEWER_AGENT_TYPE="pre-merge-codex-review:codex-reviewer"
+CODEX_REVIEWER_AGENT_TYPE="pre-merge-cross-review:codex-reviewer"
+FABLE_REVIEWER_AGENT_TYPE="pre-merge-cross-review:fable-reviewer"
+
+# Fable review の投稿用本文の上限 (GitHub の PR コメント本文の上限 65536 文字に対する安全側の
+# 閾値)。 超える本文は行単位で切り詰める (byte 単位で切ると multibyte 文字が壊れるため)。
+FABLE_MAX_COMMENT_BODY_CHARS=60000
+
+# agent_type が対象 subagent (codex-reviewer / fable-reviewer) の完全一致かを判定する。
+is_reviewer_agent_type() {
+  [ "$1" = "$CODEX_REVIEWER_AGENT_TYPE" ] || [ "$1" = "$FABLE_REVIEWER_AGENT_TYPE" ]
+}
 
 # agent_id の validation 正規表現 (SubagentStart / SubagentStop 共通)。 path 混入防止の
 # ため、 マッチしない agent_id は filesystem 操作を一切行わずに exit 0 する。
@@ -267,6 +316,54 @@ write_handback_record() {
   return 0
 }
 
+# fable-reviewer の report 本文ファイル ($1) から Fable review の投稿用本文と attestation を
+# 書く (ヘッダの「fable-reviewer の分岐」 SubagentStop 8)。 引数: <report file> <head SHA>
+# <status> <git-dir>。 失敗は silent (戻り値 1) で、 中途半端な記録を残さない。
+write_fable_record() {
+  local report_file="$1"
+  local head_sha="$2"
+  local status="$3"
+  local git_dir="$4"
+  local final_path body_path
+
+  final_path=$(pre_merge_fable_final_marker_path "$git_dir") || return 1
+  body_path=$(pre_merge_fable_comment_body_path "$git_dir") || return 1
+
+  (
+    umask 077
+    body_tmp=$(mktemp "${body_path}.tmp.XXXXXX" 2>/dev/null) || exit 1
+    # report 中の header 形の文字列は無害化する。 gate は本文の先頭行だけを header として
+    # 扱うが、 引用された header 形をそのまま残すと別 SHA の記録に見える紛らわしい本文になる。
+    if ! {
+      printf '<!-- fable-review: head=%s status=%s -->\n' "$head_sha" "$status"
+      sed -e 's/<!-- fable-review:/<!-- fable-review (quoted):/g' \
+        -e 's/<!-- codex-review:/<!-- codex-review (quoted):/g' "$report_file"
+    } | awk -v budget="$FABLE_MAX_COMMENT_BODY_CHARS" '
+      { used += length($0) + 1 }
+      used > budget { print ""; print "(report が長いため以降を省略しました。)"; exit }
+      { print }
+    ' > "$body_tmp" 2>/dev/null; then
+      rm -f "$body_tmp" 2>/dev/null
+      exit 1
+    fi
+    if ! mv -f "$body_tmp" "$body_path" 2>/dev/null; then
+      rm -f "$body_tmp" 2>/dev/null
+      exit 1
+    fi
+
+    final_tmp=$(mktemp "${final_path}.tmp.XXXXXX" 2>/dev/null) || {
+      rm -f "$body_path" "$final_path" 2>/dev/null
+      exit 1
+    }
+    if ! printf 'head=%s\n' "$head_sha" > "$final_tmp" 2>/dev/null \
+      || ! mv -f "$final_tmp" "$final_path" 2>/dev/null; then
+      rm -f "$final_tmp" "$body_path" "$final_path" 2>/dev/null
+      exit 1
+    fi
+    exit 0
+  )
+}
+
 HOOK_EVENT_NAME=$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty')
 
 case "$HOOK_EVENT_NAME" in
@@ -275,7 +372,7 @@ case "$HOOK_EVENT_NAME" in
     # SubagentStart: 開始時のローカル HEAD を launch attestation として one-shot 記録する。
     # ------------------------------------------------------------------
     AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
-    if [ "$AGENT_TYPE" != "$REVIEWER_AGENT_TYPE" ]; then
+    if ! is_reviewer_agent_type "$AGENT_TYPE"; then
       exit 0
     fi
 
@@ -308,6 +405,7 @@ case "$HOOK_EVENT_NAME" in
     # (stale 掃除、 best-effort)。 find の失敗 (権限不足等) は無視する。
     find "$STORAGE_DIR" -maxdepth 1 -name "${LAUNCH_ATTESTATION_PREFIX}*" -type f -mmin +1440 -delete 2>/dev/null || true
     find "$STORAGE_DIR" -maxdepth 1 -name "${HANDBACK_REPORT_PREFIX}*" -type f -mmin +1440 -delete 2>/dev/null || true
+    find "$STORAGE_DIR" -maxdepth 1 -name "${FABLE_HANDBACK_BODY_PREFIX}*" -type f -mmin +1440 -delete 2>/dev/null || true
     # tombstone は prune せず無期限に保持する (理由は本ヘッダ SubagentStart 契約 6)。
 
     # 同一ディレクトリ内 temp file (mktemp) → 排他 `ln` (create-if-absent。 既存なら
@@ -355,7 +453,7 @@ case "$HOOK_EVENT_NAME" in
     fi
 
     AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
-    if [ "$AGENT_TYPE" != "$REVIEWER_AGENT_TYPE" ]; then
+    if ! is_reviewer_agent_type "$AGENT_TYPE"; then
       exit 0
     fi
 
@@ -385,10 +483,31 @@ case "$HOOK_EVENT_NAME" in
     esac
     # 同一 agent_id の 2 回目以降の hand-back は重複 report として invalid に落とす
     # (symlink や不正な既存 record も同様に invalid で置き換える)。
+    FIRST_HANDBACK="true"
     if [ -e "$HANDBACK_REPORT_PATH" ] || [ -L "$HANDBACK_REPORT_PATH" ]; then
       HANDBACK_STATUS="invalid"
+      FIRST_HANDBACK="false"
     fi
     write_handback_record "$HANDBACK_REPORT_PATH" "$HANDBACK_STATUS" || exit 0
+
+    # fable-reviewer は report 本文を SubagentStop へ運ぶ (1 回目の hand-back の string
+    # message のみ。 重複 hand-back は record が invalid になるため本文は使われない)。
+    if [ "$AGENT_TYPE" = "$FABLE_REVIEWER_AGENT_TYPE" ] && [ "$FIRST_HANDBACK" = "true" ]; then
+      MESSAGE_IS_STRING=$(printf '%s' "$INPUT" | jq -r '(.tool_input.message | type) == "string"')
+      if [ "$MESSAGE_IS_STRING" = "true" ]; then
+        FABLE_HANDBACK_BODY_PATH=$(fable_handback_body_path "$GIT_DIR" "$AGENT_ID") || exit 0
+        (
+          umask 077
+          body_tmp=$(mktemp "${FABLE_HANDBACK_BODY_PATH}.tmp.XXXXXX" 2>/dev/null) || exit 0
+          if printf '%s' "$INPUT" | jq -j '.tool_input.message' > "$body_tmp" 2>/dev/null \
+            && mv -f "$body_tmp" "$FABLE_HANDBACK_BODY_PATH" 2>/dev/null; then
+            exit 0
+          fi
+          rm -f "$body_tmp" 2>/dev/null
+          exit 0
+        )
+      fi
+    fi
     exit 0
     ;;
 
@@ -398,7 +517,7 @@ case "$HOOK_EVENT_NAME" in
     # 本文の検証を経て pending を final attestation へ昇格する。
     # ------------------------------------------------------------------
     AGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.agent_type // empty')
-    if [ "$AGENT_TYPE" != "$REVIEWER_AGENT_TYPE" ]; then
+    if ! is_reviewer_agent_type "$AGENT_TYPE"; then
       exit 0
     fi
 
@@ -421,10 +540,17 @@ case "$HOOK_EVENT_NAME" in
     BODY_PATH=$(pre_merge_comment_body_path "$GIT_DIR") || exit 0
     FINAL_PATH=$(pre_merge_final_marker_path "$GIT_DIR") || exit 0
 
-    # terminal な拒否経路と検証失敗経路で共有する掃除。 pending は常に破棄し、 本文
-    # ファイルは final attestation が無い場合にのみ破棄する (final と本文は gate が投稿に
-    # 使う対であり、 昇格済みの対を壊さないため)。
+    FABLE_HANDBACK_BODY_PATH=$(fable_handback_body_path "$GIT_DIR" "$AGENT_ID") || exit 0
+
+    # terminal な拒否経路と検証失敗経路で共有する掃除。 codex-reviewer では pending は常に
+    # 破棄し、 本文ファイルは final attestation が無い場合にのみ破棄する (final と本文は gate
+    # が投稿に使う対であり、 昇格済みの対を壊さないため)。 fable-reviewer では codex 側の
+    # 記録に触れず、 この agent_id の hand-back 本文だけを破棄する。
     discard_pending_and_orphan_body() {
+      if [ "$AGENT_TYPE" = "$FABLE_REVIEWER_AGENT_TYPE" ]; then
+        rm -f "$FABLE_HANDBACK_BODY_PATH" 2>/dev/null || true
+        return 0
+      fi
       rm -f "$PENDING_PATH" 2>/dev/null || true
       if [ ! -e "$FINAL_PATH" ]; then
         rm -f "$BODY_PATH" 2>/dev/null || true
@@ -484,6 +610,60 @@ case "$HOOK_EVENT_NAME" in
       exit 0
     fi
     rm -f "$ATTESTATION_PATH" 2>/dev/null || true
+
+    if [ "$AGENT_TYPE" = "$FABLE_REVIEWER_AGENT_TYPE" ]; then
+      # fable-reviewer: report の status と本文を決め、 Fable review の記録を書く (ヘッダの
+      # 「fable-reviewer の分岐」 SubagentStop 5〜8)。
+      FABLE_REPORT_TMP=""
+      cleanup_fable_inputs() {
+        rm -f "$HANDBACK_REPORT_PATH" "$FABLE_HANDBACK_BODY_PATH" 2>/dev/null || true
+        if [ -n "$FABLE_REPORT_TMP" ]; then
+          rm -f "$FABLE_REPORT_TMP" 2>/dev/null || true
+        fi
+      }
+      skip_fable_record() {
+        cleanup_fable_inputs
+        exit 0
+      }
+
+      if [ -L "$HANDBACK_REPORT_PATH" ]; then
+        skip_fable_record
+      elif [ -f "$HANDBACK_REPORT_PATH" ]; then
+        REPORT_STATUS=$(cat "$HANDBACK_REPORT_PATH" 2>/dev/null)
+        if [ -L "$FABLE_HANDBACK_BODY_PATH" ] || [ ! -f "$FABLE_HANDBACK_BODY_PATH" ]; then
+          skip_fable_record
+        fi
+        FABLE_REPORT_TMP=$(umask 077 && mktemp "${FABLE_HANDBACK_BODY_PATH}.report.XXXXXX" 2>/dev/null) || skip_fable_record
+        cat "$FABLE_HANDBACK_BODY_PATH" > "$FABLE_REPORT_TMP" 2>/dev/null || skip_fable_record
+      else
+        REPORT_STATUS=$(printf '%s' "$INPUT" | jq -r "$REPORT_STATUS_JQ"'
+          report_status(.last_assistant_message)
+        ')
+        case "$REPORT_STATUS" in
+          pass|findings) ;;
+          *) skip_fable_record ;;
+        esac
+        FABLE_REPORT_TMP=$(umask 077 && mktemp "${FABLE_HANDBACK_BODY_PATH}.report.XXXXXX" 2>/dev/null) || skip_fable_record
+        printf '%s' "$INPUT" | jq -j '.last_assistant_message' > "$FABLE_REPORT_TMP" 2>/dev/null || skip_fable_record
+      fi
+      # record と hand-back 本文は判定の成否に関わらず one-shot で消費する (本文は作業用
+      # temp file へ退避済み)。
+      rm -f "$HANDBACK_REPORT_PATH" "$FABLE_HANDBACK_BODY_PATH" 2>/dev/null || true
+
+      case "$REPORT_STATUS" in
+        pass|findings) ;;
+        *) skip_fable_record ;;
+      esac
+
+      CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null) || skip_fable_record
+      if [ -z "$CURRENT_HEAD" ] || [ "$ATTESTED_HEAD" != "$CURRENT_HEAD" ]; then
+        skip_fable_record
+      fi
+
+      write_fable_record "$FABLE_REPORT_TMP" "$CURRENT_HEAD" "$REPORT_STATUS" "$GIT_DIR" || true
+      cleanup_fable_inputs
+      exit 0
+    fi
 
     # report の Status を決める。 handback record (PostToolUse が SubagentHandback の
     # tool_input.message から判定して書いたもの) があればそれを one-shot で消費して
@@ -562,7 +742,7 @@ case "$HOOK_EVENT_NAME" in
       *) exit 0 ;;
     esac
     SUBAGENT_TYPE=$(printf '%s' "$INPUT" | jq -r '.tool_input.subagent_type // empty')
-    if [ "$SUBAGENT_TYPE" = "$REVIEWER_AGENT_TYPE" ]; then
+    if [ "$SUBAGENT_TYPE" = "$CODEX_REVIEWER_AGENT_TYPE" ]; then
       GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
       PENDING_PATH=$(pre_merge_pending_marker_path "$GIT_DIR") || exit 0
       BODY_PATH=$(pre_merge_comment_body_path "$GIT_DIR") || exit 0

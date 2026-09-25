@@ -45,7 +45,7 @@
 **指示**:
 
 - 設計 / 仕様レベルの決定はユーザの専権事項である。助言はユーザに提示する推奨案を練るための判断材料として使い、`AskUserQuestion` によるユーザ確認の代替にしない
-- コード差分の finding を得る用途には使わない (pre-push-codex-review / pre-merge-codex-review の codex review が担当する)。review cadence の checkpoint (enforcement は pre-push-codex-review が担う) は review findings を再判定せず、根本方針を問い直す course-correction 相談である
+- コード差分の finding を得る用途には使わない (pre-push-codex-review / pre-merge-cross-review の codex review が担当する)。review cadence の checkpoint (enforcement は pre-push-codex-review が担う) は review findings を再判定せず、根本方針を問い直す course-correction 相談である
 - subagent に相談させてよい場合は、委任指示に cross-model-advisor の使用許可を明示する (相談は課金・利用枠の消費を伴う呼び出しのため、許可の無い subagent は相談しない)
 - Codex が使えないとき (openai-codex plugin 未 install・codex CLI 未認証・タイムアウト・runner の terminal failure) は Fable の助言のみで、Fable をスキップしたとき (下記セクション 5) は Codex の助言のみで続行する。両方使えないときは相談なしで作業を続行してよい。片方または両方を欠いた場合は、スキップした側と理由を作業報告に含める
 

@@ -1,6 +1,0 @@
-{
-  "name": "pre-merge-codex-review",
-  "version": "2.2.4",
-  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
-  "description": "merge 前に codex review の完了を確認する"
-}

@@ -1,0 +1,38 @@
+#!/bin/bash
+# pre-merge-cross-review-fable-usage
+# merge 前の cross review で fable-reviewer を起動するかを、Fable 週次枠の使用率から判定して
+# 出力する判定コマンド。plugin の bin/ に置くため、plugin が有効な間は Bash の PATH に載り、
+# reviewer を起動する前に main session が 1 回実行する。
+#
+# 出力 (stdout、常に 2 行、exit 0):
+#   1 行目: available (fable-reviewer を起動する) / over / unknown (どちらも Fable review をスキップ)
+#   2 行目: 判定理由 (over は使用率と閾値、unknown は使用率を確認できない旨)
+#
+# 判定仕様は hooks/scripts/lib/fable-weekly-usage.sh を参照。lib を読み込めない場合も unknown
+# を出力する (fail-closed)。
+
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/hooks/scripts/lib/fable-weekly-usage.sh"
+
+# shellcheck source=../hooks/scripts/lib/fable-weekly-usage.sh
+if ! source "$LIB" 2>/dev/null; then
+  printf 'unknown\n'
+  printf 'Fable 週次枠の使用率を確認できないため Fable review をスキップします (判定処理 %s を読み込めません)。\n' "$LIB"
+  exit 0
+fi
+
+fable_weekly_usage
+case "$FABLE_USAGE_STATUS" in
+  available)
+    printf 'available\n'
+    printf 'Fable 週次枠の使用率 %s%% が閾値 %s%% 以下のため fable-reviewer を起動します。\n' "$FABLE_USAGE_PERCENT" "$FABLE_USAGE_THRESHOLD"
+    ;;
+  over)
+    printf 'over\n'
+    printf 'Fable 週次枠の使用率 %s%% が閾値 %s%% を超えているため Fable review をスキップします。\n' "$FABLE_USAGE_PERCENT" "$FABLE_USAGE_THRESHOLD"
+    ;;
+  *)
+    printf 'unknown\n'
+    printf 'Fable 週次枠の使用率を確認できないため Fable review をスキップします (%s 使用率 cache の producer は natsuume-statusline です)。\n' "$FABLE_USAGE_DETAIL"
+    ;;
+esac
+exit 0

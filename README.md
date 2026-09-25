@@ -41,14 +41,14 @@ Claude Code 側で fable-risk-labeler を install していた場合は、Claude
 | [enforce-draft-pr](#enforce-draft-pr) | 0.5.7 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.8.4 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
 | [pre-push-review](#pre-push-review) | 7.0.0 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
-| [pre-push-codex-review](#pre-push-codex-review) | 3.0.2 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
-| [pre-merge-codex-review](#pre-merge-codex-review) | 2.2.4 | `gh pr merge` 前に codex review 完了 (head SHA 付き PR レビューコメント) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
+| [pre-push-codex-review](#pre-push-codex-review) | 4.0.0 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
+| [pre-merge-cross-review](#pre-merge-cross-review) | 3.0.0 | `gh pr merge` 前に codex review 完了 (head SHA 付き PR レビューコメント) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させ、Fable 週次枠に余裕があれば Fable review も並列に実行して PR に残す |
 | [update-default-branch](#update-default-branch) | 0.4.6 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.11.4 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 1.0.2 | 作業規律を SessionStart / SubagentStart prompt で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [ui-discipline](#ui-discipline) | 0.4.6 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.8.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援するプラグイン |
-| [cross-model-advisor](#cross-model-advisor) | 5.0.4 | Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
+| [cross-model-advisor](#cross-model-advisor) | 5.0.5 | Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.4 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 0.5.2 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.8 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
@@ -191,7 +191,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 | `block-bg-codex-wrapper` | PreToolUse (`Bash`) | codex review wrapper (`run-pre-push-codex-review.sh`) の起動を検証し、`agent_type` が `pre-push-codex-review:codex-reviewer` (namespace 付き完全一致) でなければ deny する。background 起動では subagent が wrapper の stdout / stderr を完全に観察できないため、foreground 起動を強制する |
 | `auto-mark` | SubagentStart / PostToolUse (`SubagentHandback`) / SubagentStop (matcher: `^pre-push-codex-review:codex-reviewer$`) | `pre-push-codex-review:codex-reviewer` subagent の実行完了を検知し、開始時 hash の launch attestation・hand-back された report (auto mode) または `last_assistant_message` の Status・完了時の一致検証・wrapper が書いた pending attestation との一致をすべて満たした場合のみ codex マーカーを書く |
 | `inject-review-cadence-rules` | SessionStart | review cadence 規律 (`hooks/prompts/review-cadence-rules.md`) を `additionalContext` として常時注入する |
-| `manage-review-cadence` | PreToolUse (`Bash`) / SubagentStart / PostToolUse (`SubagentHandback`) / SubagentStop / PostToolUseFailure / Stop / SessionEnd | review cadence の state 管理と enforcement。`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 review を session ごとに合算し、5 サイクル完了で次の review 起動 (PreToolUse) と main session の停止 (Stop) を block する。reset は `cross-model-advisor:codex-advisor-runner` の checkpoint 充足 attestation、または checkpoint 相談の起動失敗 (PostToolUseFailure、fail-open) で行う。詳細は [plugin README](plugins/pre-push-codex-review/README.md#review-cadence) を参照 |
+| `manage-review-cadence` | PreToolUse (`Bash`) / SubagentStart / PostToolUse (`SubagentHandback`) / SubagentStop / PostToolUseFailure / Stop / SessionEnd | review cadence の state 管理と enforcement。`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 review を session ごとに合算し、5 サイクル完了で次の review 起動 (PreToolUse) と main session の停止 (Stop) を block する。reset は `cross-model-advisor:codex-advisor-runner` の checkpoint 充足 attestation、または checkpoint 相談の起動失敗 (PostToolUseFailure、fail-open) で行う。詳細は [plugin README](plugins/pre-push-codex-review/README.md#review-cadence) を参照 |
 
 #### Agents
 
@@ -211,15 +211,15 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ---
 
-## pre-merge-codex-review
+## pre-merge-cross-review
 
-`gh pr merge` を実行する前に codex review (OpenAI クロスモデルレビュー) の完了を確認するプラグインです。codex-reviewer subagent はレビュー結果をローカル記録として repo の git-dir 直下に保存し、merge gate がその記録を「レビュー時の head SHA を記録した機械可読 header 付きの PR レビュー」として投稿してから merge を通します。gate が検査するのは「PR に現在の head SHA と一致する codex review コメントが在るか」だけです (在れば通常の許可フローへ、無ければローカル記録を検証して投稿、記録も無ければ deny)。SessionStart では、auto mode の classifier に subagent 起動を拒否されないよう「`gh pr merge` の前に codex review を起動する」規律を注入します。個人環境 (ChatGPT Plus の codex CLI) 向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させます。push 毎の codex review を要求する [pre-push-codex-review](#pre-push-codex-review) との併用は前提としていません。
+`gh pr merge` を実行する前に codex review (OpenAI クロスモデルレビュー) の完了を確認するプラグインです。codex-reviewer subagent はレビュー結果をローカル記録として repo の git-dir 直下に保存し、merge gate がその記録を「レビュー時の head SHA を記録した機械可読 header 付きの PR レビュー」として投稿してから merge を通します。gate が検査するのは「PR に現在の head SHA と一致する codex review コメントが在るか」だけです (在れば通常の許可フローへ、無ければローカル記録を検証して投稿、記録も無ければ deny)。Fable 週次枠の使用率が閾値以下のときは、codex-reviewer と並列に fable-reviewer subagent (PR 説明・関連 issue の受入基準との整合と設計境界を見る read-only のレビュー) も起動し、merge gate が codex review の確認を通過した後にその記録も PR に投稿します (Fable review の欠落や投稿失敗では merge を止めません)。SessionStart では、auto mode の classifier に subagent 起動を拒否されないよう「`gh pr merge` の前に cross review を起動する」規律を注入します。個人環境 (ChatGPT Plus の codex CLI) 向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させます。push 毎の codex review を要求する [pre-push-codex-review](#pre-push-codex-review) との併用は前提としていません。
 
-詳細な gate 手順・レビューコメント仕様・既知の制約は [plugins/pre-merge-codex-review/README.md](plugins/pre-merge-codex-review/README.md) を参照してください。
+詳細な gate 手順・レビューコメント仕様・既知の制約・旧名からの移行手順は [plugins/pre-merge-cross-review/README.md](plugins/pre-merge-cross-review/README.md) を参照してください。
 
 ### キーワード
 
-`merge` `review` `quality` `codex` `openai` `subagent` `pr-diff` `gate`
+`merge` `review` `quality` `codex` `openai` `fable` `cross-review` `subagent` `pr-diff` `gate`
 
 ---
 
@@ -381,7 +381,7 @@ Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tool
 
 1 回の相談を Codex (別系統モデルの独立視点) と Fable (同系統の上位モデルの視点) に同じプロンプトで並列に渡します。相談の前に plugin 同梱の判定コマンド `cross-model-advisor-fable-usage` で Fable 週次枠の使用率 (natsuume-statusline の cache) を確認し、閾値 (env `FABLE_WEEKLY_MAX_PERCENT`、既定 80%) 以下のときだけ `cross-model-advisor:fable-advisor-runner` を `model: "fable"` で起動します。超過・不明時や hook に deny された場合は Fable をスキップして Codex だけに相談します。Codex は read-only sandbox で、Fable は read-only の runner として、リポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。Codex の reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコード差分の finding 取得へ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-codex-review](#pre-push-codex-review) が担当します。
 
-Codex review の review cadence (`pre-push-codex-review:codex-reviewer` / `pre-merge-codex-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 review を session ごとに合算し、5 サイクル完了後に main session の Stop と次の review 起動を block する enforcement) は [pre-push-codex-review](#pre-push-codex-review) plugin が担います。cross-model-advisor は checkpoint の実行主体として `cross-model-advisor:codex-advisor-runner` を提供し (checkpoint も Fable に並列で相談できるが、attestation を発行するのは codex-advisor-runner だけ)、元の Goal / 制約、直近 5 サイクルの review 履歴、現在の方針を材料に根本方針・問題設定・設計境界・検証戦略を問い直す助言を返して `Codex-Advisor-Review-Cadence` attestation を発行します。通常の advisor 相談ではカウンターを解除しません。
+Codex review の review cadence (`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 review を session ごとに合算し、5 サイクル完了後に main session の Stop と次の review 起動を block する enforcement) は [pre-push-codex-review](#pre-push-codex-review) plugin が担います。cross-model-advisor は checkpoint の実行主体として `cross-model-advisor:codex-advisor-runner` を提供し (checkpoint も Fable に並列で相談できるが、attestation を発行するのは codex-advisor-runner だけ)、元の Goal / 制約、直近 5 サイクルの review 履歴、現在の方針を材料に根本方針・問題設定・設計境界・検証戦略を問い直す助言を返して `Codex-Advisor-Review-Cadence` attestation を発行します。通常の advisor 相談ではカウンターを解除しません。
 
 rescue / review / advisor は `cross-model-advisor:codex-rescue-runner` / `codex-review-runner` / `codex-advisor-runner` の role 固有 runner subagent に閉じ込めます。main session や通常 subagent から companion / wrapper を直接実行すると PreToolUse hook が deny し、Stop hook が対応 runner への reroute、稼働中 runner の completion notification 待ち、1 回だけの retry を要求します。起動 mode は Claude Code が決めるため Agent call では指定せず、runner の report は completion notification (SubagentHandback / SubagentStop) 経由で後続ターンに届きます。
 

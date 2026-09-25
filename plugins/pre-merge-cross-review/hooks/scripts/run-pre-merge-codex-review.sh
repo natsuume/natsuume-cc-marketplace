@@ -1,6 +1,6 @@
 #!/bin/bash
 # run-pre-merge-codex-review.sh
-# **codex review の定型実行 wrapper**。 `pre-merge-codex-review:codex-reviewer` subagent が
+# **codex review の定型実行 wrapper**。 `pre-merge-cross-review:codex-reviewer` subagent が
 # 本 wrapper を foreground 起動する設計で、 block-bg-codex-wrapper.sh の agent_type gate に
 # より、 同 subagent 以外 (メインセッションの直接 Bash 実行等) からの起動は deny される。
 #
@@ -300,7 +300,7 @@ fi
 
 COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つかりません。 \`claude plugin install codex@openai-codex\` で導入してください (versioned cache / unversioned cache / marketplace clone のいずれにも codex-companion.mjs が見つかりませんでした。 詳細な探索 path は \`lib/codex-companion-resolver.sh\` のヘッダを参照)。"
 
-WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pre-merge-codex-review.XXXXXX") || fail "一時ディレクトリを作成できませんでした。"
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/pre-merge-cross-review.XXXXXX") || fail "一時ディレクトリを作成できませんでした。"
 REVIEW_OUT="$WORK_DIR/review.md"
 COMMENT_BODY="$WORK_DIR/comment.md"
 

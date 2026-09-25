@@ -9,6 +9,7 @@
   "renames": {
     "fable-risk-labeler": null,
     "codex-advisor": "cross-model-advisor",
+    "pre-merge-codex-review": "pre-merge-cross-review",
     "experimental-agent-discipline": null
   },
   "plugins": [
@@ -44,15 +45,15 @@
       "name": "pre-push-codex-review",
       "source": "./plugins/pre-push-codex-review",
       "description": "push 前に codex review の完了を強制する",
-      "version": "3.0.2",
+      "version": "4.0.0",
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
-      "name": "pre-merge-codex-review",
-      "source": "./plugins/pre-merge-codex-review",
-      "description": "merge 前に codex review の完了を確認する",
-      "version": "2.2.4",
-      "keywords": ["merge", "review", "quality", "codex", "openai", "subagent", "pr-diff", "gate"]
+      "name": "pre-merge-cross-review",
+      "source": "./plugins/pre-merge-cross-review",
+      "description": "merge 前に codex と Fable のレビューを確認する",
+      "version": "3.0.0",
+      "keywords": ["merge", "review", "quality", "codex", "openai", "fable", "cross-review", "subagent", "pr-diff", "gate"]
     },
     {
       "name": "update-default-branch",
@@ -93,7 +94,7 @@
       "name": "cross-model-advisor",
       "source": "./plugins/cross-model-advisor",
       "description": "Codex と Fable へ並列相談し runner を管理する",
-      "version": "5.0.4",
+      "version": "5.0.5",
       "keywords": ["codex", "fable", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {
