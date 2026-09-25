@@ -7,7 +7,8 @@ writing-rules.md の共通コアに、文章全体でのレトリック・論証
 検査する契約:
 - 通底原則に密度制御の原則 (5 番目) があり、通底原則 2 の「疑問の先回り」が
   網羅的な反論処理を求めない形に限定されている
-- 共通コアのセクション 10 が密度制御を扱い、典型例 (二項対立・概念命名・過剰な構造化・
+- 共通コアのセクション 10 が密度制御を扱い、その具体的な規則は文章作成一般のルール
+  (general-writing.md) に置かれる。general-writing.md は典型例 (二項対立・概念命名・過剰な構造化・
   決め台詞・比喩の使い回し・網羅的な反論処理・抽象概念の主語・断片文・予告・構造実況・
   発見や転回の演出・先回りの抽象命題・自己ヘッジ・太字の多用・直訳的な言い回し) を含む
 - たたき台生成時の特則はセクション 11 に移り、skill からの節番号参照が一致している
@@ -18,7 +19,7 @@ writing-rules.md の共通コアに、文章全体でのレトリック・論証
 - draft skill が同じ論証テンプレートの反復と、予告・本説明・再要約の重複を避ける
 - rules/expression-watchlist.md が、生成 AI の普及後に増えた直訳調・比喩的な語と
   抽象的な漢語・評価語を見直し候補 (使用禁止ではない) として列挙し、話題語を含まない。
-  writing-rules.md と draft / review skill がこの一覧を参照する
+  writing-rules.md・general-writing.md と draft / review skill がこの一覧を参照する
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ CORE_SUMMARY = PLUGIN_DIR / "rules" / "core-summary.md"
 DRAFT_SKILL = PLUGIN_DIR / "skills" / "draft" / "SKILL.md"
 REVIEW_SKILL = PLUGIN_DIR / "skills" / "review" / "SKILL.md"
 WATCHLIST = PLUGIN_DIR / "rules" / "expression-watchlist.md"
+GENERAL_RULES = PLUGIN_DIR / "rules" / "general-writing.md"
 
 DENSITY_PRINCIPLE = "読者の理解に必要な分だけ整える"
 DENSITY_SECTION_HEADING = "## 10. 構造化・レトリックの密度"
@@ -82,8 +84,22 @@ class WritingRulesDensitySectionTest(unittest.TestCase):
         )
         self.assertNotIn("## 10. たたき台生成時の特則", self.text)
 
-    def test_density_section_lists_typical_patterns(self) -> None:
+    def test_density_section_delegates_to_general_rules(self) -> None:
         body = section(self.text, DENSITY_SECTION_HEADING)
+        self.assertIn("general-writing.md", body)
+
+    def test_density_section_exempts_code_and_list_introductions(self) -> None:
+        body = section(self.text, DENSITY_SECTION_HEADING)
+        self.assertIn("セクション 8", body)
+
+
+class GeneralRulesDensityTest(unittest.TestCase):
+    """密度制御の具体的な規則は文章作成一般のルールに置く。"""
+
+    def setUp(self) -> None:
+        self.text = read(GENERAL_RULES)
+
+    def test_general_rules_list_typical_patterns(self) -> None:
         for keyword in (
             "二項対立",
             "命名",
@@ -102,26 +118,19 @@ class WritingRulesDensitySectionTest(unittest.TestCase):
             "直訳",
         ):
             with self.subTest(keyword=keyword):
-                self.assertIn(keyword, body)
+                self.assertIn(keyword, self.text)
 
-    def test_density_section_is_about_repetition_not_single_use(self) -> None:
-        body = section(self.text, DENSITY_SECTION_HEADING)
-        self.assertIn("記事全体", body)
-        self.assertIn("反復", body)
+    def test_general_rules_are_about_repetition_not_single_use(self) -> None:
+        self.assertIn("文章全体", self.text)
+        self.assertIn("反復", self.text)
 
-    def test_density_section_names_translationese_examples(self) -> None:
-        body = section(self.text, DENSITY_SECTION_HEADING)
-        for example in ("刺さる", "効く", "倒れる"):
+    def test_general_rules_name_translationese_examples(self) -> None:
+        for example in ("刺さる", "効く", "倒れる", "壊れる"):
             with self.subTest(example=example):
-                self.assertIn(example, body)
+                self.assertIn(example, self.text)
 
-    def test_density_section_exempts_code_and_list_introductions(self) -> None:
-        body = section(self.text, DENSITY_SECTION_HEADING)
-        self.assertIn("セクション 8", body)
-
-    def test_density_section_rationale_has_no_statistics(self) -> None:
-        body = section(self.text, DENSITY_SECTION_HEADING)
-        self.assertNotRegex(body, r"\d+(\.\d+)?\s*(倍|%)")
+    def test_general_rules_rationale_has_no_statistics(self) -> None:
+        self.assertNotRegex(self.text, r"\d+(\.\d+)?\s*(倍|%)")
 
 
 class WritingRulesStructuringTest(unittest.TestCase):
@@ -222,13 +231,9 @@ class ExpressionWatchlistTest(unittest.TestCase):
                 self.assertNotIn(required_phrase, entries)
 
     def test_rules_and_skills_reference_watchlist(self) -> None:
-        for path in (WRITING_RULES, DRAFT_SKILL, REVIEW_SKILL):
+        for path in (WRITING_RULES, GENERAL_RULES, DRAFT_SKILL, REVIEW_SKILL):
             with self.subTest(file=str(path.relative_to(PLUGIN_DIR))):
                 self.assertIn("expression-watchlist.md", read(path))
-
-    def test_density_section_names_data_backed_translationese(self) -> None:
-        body = section(read(WRITING_RULES), DENSITY_SECTION_HEADING)
-        self.assertIn("壊れる", body)
 
 
 class DraftSkillTest(unittest.TestCase):
@@ -257,12 +262,10 @@ class WatchlistSupplementTest(unittest.TestCase):
 class NegationLimitationVariantTest(unittest.TestCase):
     """否定と限定を組み合わせた論証 (二項対立の変形)。"""
 
-    def test_density_section_names_negation_limitation_variants(self) -> None:
+    def test_general_rules_name_negation_limitation_variants(self) -> None:
         dichotomy_line = next(
             line
-            for line in section(
-                read(WRITING_RULES), DENSITY_SECTION_HEADING
-            ).splitlines()
+            for line in read(GENERAL_RULES).splitlines()
             if line.startswith("- **二項対立**")
         )
         for variant in ("〜ではない。ただ〜だけ", "〜だけではない", "〜かではない"):
