@@ -5,7 +5,7 @@ description: 「issue を起票する」「issue に分解する」「sub-issue 
 
 # issue-plan
 
-issue 駆動開発における **起票・分解フェーズ** の詳細手順です。常時注入 (SessionStart) が配送する原則 (`rule:design-approval` / `rule:issue-body` / `rule:issue-granularity` / `rule:closing-keyword`) を前提に、本 skill はそれらを実行するための具体的な手順・body template・コマンド例を提供します。常時注入ルールの手順本体はここでは複製せず、参照するに留めます。
+issue 駆動開発における **起票・分解フェーズ** の詳細手順です。常時適用ルールとして配送される原則 (`rule:design-approval` / `rule:issue-body` / `rule:issue-granularity` / `rule:closing-keyword`) を前提に、本 skill はそれらを実行するための具体的な手順・body template・コマンド例を提供します。常時注入ルールの手順本体はここでは複製せず、参照するに留めます。
 
 ## 1. 起票前の壁打ち
 
