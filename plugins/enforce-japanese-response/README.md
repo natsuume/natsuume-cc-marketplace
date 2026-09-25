@@ -30,7 +30,7 @@ claude plugin install enforce-japanese-response@natsuume-plugins
 **ファイル**: `hooks/scripts/enforce-japanese-response.sh`
 **イベント**: Stop
 
-**入力**: Stop hook の stdin JSON のうち `last_assistant_message` (直前の応答本文)、`stop_hook_active`、`cwd` を使います。
+**入力**: Stop hook の stdin JSON のうち `last_assistant_message` (直前の応答本文)、`stop_hook_active`、`cwd` を使います。環境変数は `CLAUDE_PROJECT_DIR` (Claude Code が渡すプロジェクトのルート) と `HOME` を使います。
 
 **出力**: 英語の応答と判定した場合のみ、stdout に次の JSON を出します。それ以外は何も出力しません。exit code は常に 0 です。
 
@@ -65,11 +65,11 @@ reason には、直前の応答が英語で書かれていること、内容を�
 
 次の順に settings ファイルを探し、`language` キーを持つ最初のファイルの値を目標言語とします。
 
-1. `<cwd>/.claude/settings.local.json`
-2. `<cwd>/.claude/settings.json`
+1. `<project>/.claude/settings.local.json`
+2. `<project>/.claude/settings.json`
 3. `~/.claude/settings.json`
 
-`<cwd>` は hook 入力の `cwd` です。`cwd` が無い場合は 1 と 2 を飛ばします。ファイルが存在しない・JSON として解析できない・`language` キーを持たない場合は、そのファイルを無いものとして次を探します。
+`<project>` は、環境変数 `CLAUDE_PROJECT_DIR` が空でなければその値、空または未設定なら hook 入力の `cwd` です。セッションの作業ディレクトリがプロジェクトのサブディレクトリに移っても、プロジェクトのルートの settings を読みます。`CLAUDE_PROJECT_DIR` も `cwd` も無い場合は 1 と 2 を飛ばします。ファイルが存在しない・JSON として解析できない・`language` キーを持たない場合は、そのファイルを無いものとして次を探します。
 
 値が次のいずれかなら日本語とみなします (英字の大文字小文字は区別しません)。
 

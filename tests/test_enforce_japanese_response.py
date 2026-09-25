@@ -17,8 +17,10 @@ exit code を検証する。期待値は hook の公開契約であり、実装�
   以外の文字 (日本語など)・上記 7 文字のいずれかの直前で終わる
 - 判定: 除去後の本文の ASCII 英字数 L と、ひらがな・カタカナ・漢字の数 J について、
   `L >= 40` かつ `J / (J + L) < 0.05` なら英語の応答
-- 目標言語: `<cwd>/.claude/settings.local.json` → `<cwd>/.claude/settings.json` →
-  `$HOME/.claude/settings.json` の順に `language` キーを持つ最初のファイルの値を使う。
+- 目標言語: `<project>/.claude/settings.local.json` → `<project>/.claude/settings.json`
+  → `$HOME/.claude/settings.json` の順に `language` キーを持つ最初のファイルの値を使う。
+  `<project>` は env `CLAUDE_PROJECT_DIR` が空でなければその値、空または未設定なら入力の
+  `cwd`。どちらも無ければ project 側の 2 ファイルを飛ばす。
   存在しない・JSON object として解析できない・`language` を持たないファイルは飛ばす。
   `日本語` / `ja` / `ja-` 始まり / `japanese` (英字は大文字小文字を区別しない) を日本語と
   みなし、それ以外と未設定では判定しない
@@ -27,7 +29,9 @@ exit code を検証する。期待値は hook の公開契約であり、実装�
 ## 隔離
 
 各テストは一時ディレクトリに HOME とプロジェクト (`cwd`) を作り、`HOME` を env で、
-`cwd` を入力 JSON で渡す。実際の `~/.claude` は読まない。
+`cwd` を入力 JSON で渡す。実際の `~/.claude` は読まない。実行環境の
+`CLAUDE_CONFIG_DIR` と `CLAUDE_PROJECT_DIR` は引き継がず、`CLAUDE_PROJECT_DIR` は
+それを検査するテストだけが明示的に渡す。
 
 ## テストグループ
 
@@ -36,6 +40,7 @@ exit code を検証する。期待値は hook の公開契約であり、実装�
 - InputGuardTest: stop_hook_active・last_assistant_message・壊れた入力・jq 不在
 - LanguageValueTest: language の各表記と日本語以外の値・未設定
 - SettingsLookupTest: settings ファイルの探索順と解析できないファイルの扱い
+- ProjectDirEnvTest: env CLAUDE_PROJECT_DIR と cwd の優先関係
 - BlockOutputTest: block 時の出力形式と reason の内容
 - PluginWiringTest: hooks.json への登録と script の実行権限
 """
@@ -238,12 +243,23 @@ class HookTestCase(unittest.TestCase):
         return payload
 
     def run_hook(
-        self, payload: dict[str, Any] | str, *, path: str | None = None
+        self,
+        payload: dict[str, Any] | str,
+        *,
+        path: str | None = None,
+        project_dir_env: str | None = None,
     ) -> tuple[int, str]:
-        """hook を起動し (exit code, stdout) を返す。str の payload はそのまま stdin に渡す。"""
+        """hook を起動し (exit code, stdout) を返す。str の payload はそのまま stdin に渡す。
+
+        `project_dir_env` が None なら env `CLAUDE_PROJECT_DIR` を未設定にし、文字列なら
+        その値 (空文字列を含む) を設定する。
+        """
         env = dict(os.environ)
         env["HOME"] = str(self.home)
         env.pop("CLAUDE_CONFIG_DIR", None)
+        env.pop("CLAUDE_PROJECT_DIR", None)
+        if project_dir_env is not None:
+            env["CLAUDE_PROJECT_DIR"] = project_dir_env
         if path is not None:
             env["PATH"] = path
         stdin = (
@@ -642,6 +658,81 @@ class SettingsLookupTest(HookTestCase):
         self.write_settings("project", {"language": "English"})
         self.write_settings("user", {"language": "日本語"})
         self.assert_block(self.stop_input(ENGLISH_MESSAGE, cwd=MISSING))
+
+
+@unittest.skipUnless(JQ_AVAILABLE, "hook の判定には jq が必要")
+class ProjectDirEnvTest(HookTestCase):
+    """プロジェクトの settings の基準は env CLAUDE_PROJECT_DIR を cwd より優先する。"""
+
+    def make_directory(self, name: str) -> Path:
+        directory = Path(self._tmp.name) / name
+        directory.mkdir(parents=True)
+        return directory
+
+    def write_settings_under(
+        self, directory: Path, filename: str, content: dict[str, Any]
+    ) -> None:
+        settings_dir = directory / ".claude"
+        settings_dir.mkdir(parents=True, exist_ok=True)
+        (settings_dir / filename).write_text(
+            json.dumps(content, ensure_ascii=False), encoding="utf-8"
+        )
+
+    def test_project_dir_env_is_used_when_cwd_is_a_subdirectory(self) -> None:
+        # cwd がプロジェクトのサブディレクトリでも、ルートの settings を読む
+        subdirectory = self.project / "packages" / "app"
+        subdirectory.mkdir(parents=True)
+        self.write_settings("project", {"language": "日本語"})
+        self.write_settings("user", {"language": "English"})
+        self.assert_block(
+            self.stop_input(ENGLISH_MESSAGE, cwd=str(subdirectory)),
+            project_dir_env=str(self.project),
+        )
+
+    def test_project_dir_env_wins_over_cwd(self) -> None:
+        root = self.make_directory("env-project")
+        self.write_settings_under(root, "settings.json", {"language": "English"})
+        self.write_settings("local", {"language": "日本語"})
+        self.write_settings("user", {"language": "日本語"})
+        self.assert_no_output(
+            self.stop_input(ENGLISH_MESSAGE), project_dir_env=str(root)
+        )
+
+    def test_project_dir_env_local_wins_over_cwd(self) -> None:
+        root = self.make_directory("env-project")
+        self.write_settings_under(root, "settings.local.json", {"language": "ja"})
+        self.write_settings("project", {"language": "English"})
+        self.write_settings("user", {"language": "English"})
+        self.assert_block(self.stop_input(ENGLISH_MESSAGE), project_dir_env=str(root))
+
+    def test_empty_project_dir_env_falls_back_to_cwd(self) -> None:
+        self.write_settings("project", {"language": "日本語"})
+        self.write_settings("user", {"language": "English"})
+        self.assert_block(self.stop_input(ENGLISH_MESSAGE), project_dir_env="")
+
+    def test_empty_project_dir_env_falls_back_to_cwd_english(self) -> None:
+        self.write_settings("project", {"language": "English"})
+        self.write_settings("user", {"language": "日本語"})
+        self.assert_no_output(self.stop_input(ENGLISH_MESSAGE), project_dir_env="")
+
+    def test_unset_project_dir_env_falls_back_to_cwd(self) -> None:
+        self.write_settings("project", {"language": "日本語"})
+        self.write_settings("user", {"language": "English"})
+        self.assert_block(self.stop_input(ENGLISH_MESSAGE), project_dir_env=None)
+
+    def test_unset_project_dir_env_falls_back_to_cwd_english(self) -> None:
+        self.write_settings("project", {"language": "English"})
+        self.write_settings("user", {"language": "日本語"})
+        self.assert_no_output(self.stop_input(ENGLISH_MESSAGE), project_dir_env=None)
+
+    def test_project_dir_env_is_used_when_cwd_is_missing(self) -> None:
+        root = self.make_directory("env-project")
+        self.write_settings_under(root, "settings.json", {"language": "日本語"})
+        self.write_settings("user", {"language": "English"})
+        self.assert_block(
+            self.stop_input(ENGLISH_MESSAGE, cwd=MISSING),
+            project_dir_env=str(root),
+        )
 
 
 @unittest.skipUnless(JQ_AVAILABLE, "hook の判定には jq が必要")

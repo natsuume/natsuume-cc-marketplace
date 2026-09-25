@@ -10,7 +10,9 @@
 # - 入力: Stop hook の stdin JSON。使うキーは次の 3 つ
 #   - `last_assistant_message`: 直前の応答本文 (文字列)
 #   - `stop_hook_active`: この Stop hook の block によって継続した turn なら true
-#   - `cwd`: プロジェクトの settings を探す基準ディレクトリ
+#   - `cwd`: env `CLAUDE_PROJECT_DIR` が空のとき、プロジェクトの settings を探す
+#     基準ディレクトリ
+# - 環境変数: `CLAUDE_PROJECT_DIR` (Claude Code が渡すプロジェクトのルート) と `HOME`
 # - 出力: 英語の応答と判定した場合のみ、stdout に 1 つの JSON を出す
 #     {"decision": "block", "reason": "<日本語の reason>"}
 #   それ以外は何も出力しない
@@ -41,10 +43,13 @@
 # ## 目標言語の解決順
 #
 # 次の順に settings ファイルを探し、`language` キーを持つ最初のファイルの値を使う:
-#   1. `<cwd>/.claude/settings.local.json`
-#   2. `<cwd>/.claude/settings.json`
+#   1. `<project>/.claude/settings.local.json`
+#   2. `<project>/.claude/settings.json`
 #   3. `$HOME/.claude/settings.json`
-# - `<cwd>` は hook 入力の `cwd`。`cwd` が無い・空文字列なら 1 と 2 を飛ばす
+# - `<project>` は env `CLAUDE_PROJECT_DIR` が空でなければその値、空または未設定なら
+#   hook 入力の `cwd`。セッションの作業ディレクトリがプロジェクトのサブディレクトリに
+#   移っても、プロジェクトのルートの settings を読むため `CLAUDE_PROJECT_DIR` を優先する
+# - `CLAUDE_PROJECT_DIR` も `cwd` も無い・空文字列なら 1 と 2 を飛ばす
 # - ファイルが存在しない・JSON object として解析できない・`language` キーを持たない
 #   (値が null の場合を含む) ときは、そのファイルを無いものとして次を探す
 # - 値が次のいずれかなら日本語とみなす。英字の大文字小文字は区別しない:
@@ -155,7 +160,7 @@ is_japanese_language() {
 # JSON を出力する。英語の応答でなければ何も出力しない。
 # URL 本体の文字クラス `[!#-'*-;=?-Z\\^-~]` は、0x21〜0x7E から `"` `(` `)` `<` `>`
 # `[` `]` を除いた範囲を表す。jq のプログラムを単一引用符で囲んでいるため、`'` は
-# jq の文字列リテラル内で ' と書き、`\` は \\\\ と書く。
+# jq の文字列リテラル内で \u0027 と書き、`\` は \\\\ と書く。
 judge_message() {
   jq -c --arg reason "$BLOCK_REASON" '
     .message
@@ -184,7 +189,10 @@ main() {
   [ "$active" = "false" ] || return 0
   has_message=$(printf '%s' "$fields" | jq -r '.message != null' 2>/dev/null) || return 0
   [ "$has_message" = "true" ] || return 0
-  project_dir=$(printf '%s' "$fields" | jq -r '.cwd' 2>/dev/null) || return 0
+  project_dir=${CLAUDE_PROJECT_DIR:-}
+  if [ -z "$project_dir" ]; then
+    project_dir=$(printf '%s' "$fields" | jq -r '.cwd' 2>/dev/null) || return 0
+  fi
 
   local language_json is_japanese
   language_json=$(resolve_target_language "$project_dir")
