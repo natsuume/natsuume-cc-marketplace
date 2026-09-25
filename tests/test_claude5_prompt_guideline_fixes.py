@@ -4,9 +4,9 @@
 - Anthropic 公式ガイド (claude-prompting-best-practices / prompting-claude-fable-5 /
   prompting-claude-opus-5 / prompting-claude-sonnet-5 / context engineering blog) に
   照らした監査で確定した是正内容を、実行可能仕様として固定する。
-- agent-discipline: 分業規律 (opus / sonnet) 間の意味的 drift の修復。
-  lint-prompt-sync.sh は rule ID 集合の一致のみを検査し本文の表現差分を見ないため
-  (同スクリプトのスコープ注記参照)、共有 canonical 文の存在を本テストで固定する。
+- agent-discipline: 分業規律 (discipline.md) が持つ委任規律の canonical 文。
+  lint-prompt-sync.sh は rule ID 集合のみを検査し本文の表現を見ないため、canonical 文の
+  存在を本テストで固定する。
 - git-guardrails: rebase-workflow skill に残る bash-decompose 規律違反 (コマンド置換 +
   変数連結の一括スクリプト例) の除去と、origin/HEAD stale 対策の追加。
 - pre-push-review: Opus 5 が消費する reviewer report への長さ較正 (公式ガイドの
@@ -27,9 +27,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGINS = REPO_ROOT / "plugins"
 
-DISCIPLINE_OPUS = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline-opus.md"
-DISCIPLINE_SONNET = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline-sonnet.md"
-ALWAYS_SONNET_3 = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "always-sonnet-3.md"
+DISCIPLINE = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "discipline.md"
+ALWAYS_3 = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "always-3.md"
 SUBAGENT_RULES = PLUGINS / "agent-discipline" / "hooks" / "prompts" / "subagent-rules.md"
 REBASE_SKILL = PLUGINS / "git-guardrails" / "skills" / "rebase-workflow" / "SKILL.md"
 CODE_REVIEWER = PLUGINS / "pre-push-review" / "agents" / "code-reviewer.md"
@@ -43,11 +42,10 @@ UI_PATTERNS_SKILL = PLUGINS / "ui-discipline" / "skills" / "ui-patterns" / "SKIL
 DRAFT_SKILL = PLUGINS / "natsuume-writing" / "skills" / "draft" / "SKILL.md"
 
 DISCIPLINE_VARIANTS = {
-    "discipline-opus.md": DISCIPLINE_OPUS,
-    "discipline-sonnet.md": DISCIPLINE_SONNET,
+    "discipline.md": DISCIPLINE,
 }
 
-# 分業規律の全ファイルに存在すべき共有 canonical 文 (モデル固有差分ではない委任規律の本体)。
+# 分業規律に存在すべき canonical 文 (委任規律の本体)。
 SHARED_CANONICAL_PHRASES = (
     # 並列委任は単一メッセージ内の複数 Agent 呼び出しでのみ成立する
     "同一メッセージで並列に委任し",
@@ -69,7 +67,7 @@ def read(path: Path) -> str:
 
 
 class AgentDisciplineParityTest(unittest.TestCase):
-    """分業規律の各版で共有 canonical 文の存在と環境値ハードコードの不在を固定する。"""
+    """分業規律の canonical 文の存在と環境値ハードコードの不在を固定する。"""
 
     def test_shared_canonical_phrases_exist_in_all_discipline_files(self) -> None:
         for phrase in SHARED_CANONICAL_PHRASES:
@@ -77,16 +75,16 @@ class AgentDisciplineParityTest(unittest.TestCase):
                 name for name, path in DISCIPLINE_VARIANTS.items() if phrase not in read(path)
             ]
             self.assertEqual(
-                [], missing, f"共有 canonical 文 {phrase!r} を含まないファイル: {missing}"
+                [], missing, f"canonical 文 {phrase!r} を含まないファイル: {missing}"
             )
 
     def test_no_environment_effort_value_hardcode(self) -> None:
         """セッション既定 effort の環境固有値 (xhigh) をハードコードしない。
 
-        環境設定の変更でプロンプトが陳腐化し、opus 版の条件形記述と矛盾して
-        読めるため (公式ガイドの「矛盾する指示の併存は性能を下げる」)。
-        opus 版は委任先に選べる effort 値として xhigh を挙げる (「`xhigh` / `max`
-        は品質向上を確認できた作業に限る」) ため、値トークンの不在ではなく、
+        環境設定の変更でプロンプトが陳腐化し、条件形の記述と矛盾して読めるため
+        (公式ガイドの「矛盾する指示の併存は性能を下げる」)。分業規律は委任先に
+        選べる effort 値として xhigh を挙げる (「`xhigh` / `max` は品質向上を
+        確認できた作業に限る」) ため、値トークンの不在ではなく、
         「セッション既定」「セッションの既定」と xhigh を同じ文に置く記述
         (セッション既定の値としての言及) の不在を検査する。
         """
@@ -108,7 +106,7 @@ class AlwaysAskUserQuestionScopeTest(unittest.TestCase):
     """
 
     def test_always_rules_contain_question_scope_caveat(self) -> None:
-        text = read(ALWAYS_SONNET_3)
+        text = read(ALWAYS_3)
         self.assertIn("質問を作り出さない", text)
         self.assertIn("質問するかどうか」の判断そのものを変えない", text)
 
@@ -116,8 +114,8 @@ class AlwaysAskUserQuestionScopeTest(unittest.TestCase):
 class SubagentRulesPipeAllowanceTest(unittest.TestCase):
     """subagent-rules.md の bash-decompose に単一論理操作パイプの許容規定があること。
 
-    main session 側 (always-sonnet-1.md) には許容規定があるが subagent 版に無く、
-    literal に従う subagent が正当なパイプまで過剰分解する非対称があった。
+    main session 側 (always-1.md) と同じ許容規定を持ち、literal に従う subagent が
+    正当なパイプまで過剰分解しないようにする。
     """
 
     def test_subagent_rules_allow_single_logical_operation_pipes(self) -> None:

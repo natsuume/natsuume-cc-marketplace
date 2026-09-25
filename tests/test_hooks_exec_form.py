@@ -67,11 +67,9 @@ REVIEW_CADENCE_SCRIPT = script_path("manage-review-cadence.mjs")
 
 # agent-discipline の command hook。
 AGENT_DISCIPLINE_COMMAND_HOOKS = (
-    ("PostModelSwitch", script_path("update-model-on-switch.sh"), ()),
     ("SessionStart", script_path("inject-always.sh"), ()),
     ("SessionStart", script_path("inject-temporary.sh"), ()),
     ("SubagentStart", script_path("inject-subagent-rules.sh"), ()),
-    ("UserPromptSubmit", script_path("resolve-model-on-prompt.sh"), ()),
     ("UserPromptSubmit", script_path("inject-temporary.sh"), ()),
     ("UserPromptSubmit", script_path("inject-rules-part.sh"), ("2",)),
     ("UserPromptSubmit", script_path("inject-rules-part.sh"), ("3",)),
@@ -178,11 +176,10 @@ EXPECTED_AGENT_HOOKS: dict[str, tuple[tuple[str, str], ...]] = {
 
 # hooks.json top-level の `description` は起動形の変更で改変しない。
 # 値は (文字数, UTF-8 本文の SHA-256)。差分が出た場合は git から元の本文を戻す。
-EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str]] = {
-    "agent-discipline": (
-        1572,
-        "b9c4e206e327a0ebc4dec3e7747d57e26b9cafc7fd9ad9b5a719ad3f32356f61",
-    ),
+# 値が None の plugin は description を持つことだけを固定し、本文の契約は plugin 固有の
+# テスト (agent-discipline: tests/test_agent_discipline_unified_discipline.py) が検査する。
+EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str] | None] = {
+    "agent-discipline": None,
     "auto-lint-check": (
         122,
         "d5f67fa6168994de85a34b28699d61a42a03c318c77668f839c9ac58d2fd37cb",
@@ -251,12 +248,12 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "git-guardrails": "0.7.3",
     "enforce-draft-pr": "0.5.7",
     "auto-lint-check": "0.8.4",
-    "pre-push-review": "7.0.0",
-    "pre-push-codex-review": "4.0.0",
+    "pre-push-review": "7.0.1",
+    "pre-push-codex-review": "4.0.1",
     "pre-merge-cross-review": "3.0.0",
     "update-default-branch": "0.4.6",
     "natsuume-statusline": "0.11.4",
-    "agent-discipline": "2.0.0",
+    "agent-discipline": "3.0.0",
     "ui-discipline": "0.4.7",
     "natsuume-writing": "0.8.2",
     "cross-model-advisor": "5.0.6",
@@ -523,7 +520,10 @@ class HooksManifestDescriptionTest(unittest.TestCase):
         self.assertEqual(sorted(EXPECTED_DESCRIPTION_DIGESTS), with_description)
 
     def test_description_text_is_unchanged(self) -> None:
-        for plugin, (length, digest) in sorted(EXPECTED_DESCRIPTION_DIGESTS.items()):
+        for plugin, expected in sorted(EXPECTED_DESCRIPTION_DIGESTS.items()):
+            if expected is None:
+                continue
+            length, digest = expected
             with self.subTest(plugin=plugin):
                 description = load_json(hooks_manifest_path(plugin))["description"]
                 self.assertIsInstance(description, str)

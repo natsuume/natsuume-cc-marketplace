@@ -1,14 +1,12 @@
 """agent-discipline: `model: "fable"` 明示を週次枠判定だけで許可する契約テスト。
 
-背景 (spec-first Phase A):
 - メインセッションは Opus 5.5 で、Fable は cross-model-advisor の fable-advisor-runner と
   pre-merge-cross-review の fable-reviewer を `model: "fable"` の明示で起動するときだけ使う。
   Fable をメインセッションで使う運用は無い。
   block-fable-subagent.sh は許可 agent の一覧を持たず、「Fable 週次枠の使用率」だけで fable
-  明示を判定する (用途は規律 = prompt で縛る)。session model state と pending マーカーは
-  判定に使わない。
-- 判定表 (fable 明示の行): session model state (fable を含む) / pending マーカーの有無に
-  依らず、使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny
+  明示を判定する (用途は規律 = prompt で縛る)。メインセッションのモデルは判定に使わない。
+- 判定表 (fable 明示の行): 使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明)
+  なら deny
 - 使用率判定: ``${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json``
   の Fable entry (display_name が大文字小文字を無視して fable を含み percent が数値) の
   最大 percent を閾値 (env ``FABLE_WEEKLY_MAX_PERCENT``、0〜100 の整数、既定 80) と比べ、
@@ -51,13 +49,8 @@ PLUGIN = ROOT / "plugins" / "agent-discipline"
 BLOCK_FABLE = PLUGIN / "hooks" / "scripts" / "block-fable-subagent.sh"
 README = PLUGIN / "README.md"
 
-STATE_DIR_NAME = "agent-discipline-state"
 CACHE_RELATIVE = Path("natsuume-statusline") / "weekly-scoped.json"
 SESSION_ID = "fable-weekly-gate"
-
-FABLE_SESSION = "claude-fable-5-1"
-OPUS_SESSION = "claude-opus-5-5"
-SONNET_SESSION = "claude-sonnet-5"
 
 RESETS_AT = "2026-09-28T00:00:00Z"
 
@@ -131,8 +124,6 @@ def row(
     *,
     expect: str,
     model: object = "fable",
-    session_state: str | None = OPUS_SESSION,
-    pending: bool = False,
     cache_body: object = UNSET,
     cache_raw: str | None = None,
     cache_kind: str = "file",
@@ -158,8 +149,6 @@ def row(
         "label": label,
         "expect": expect,
         "model": model,
-        "session_state": session_state,
-        "pending": pending,
         "cache_body": cache_body,
         "cache_raw": cache_raw,
         "cache_kind": cache_kind,
@@ -177,51 +166,8 @@ USAGE_DENY = (EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR)
 UNKNOWN_DENY = (EXPLICIT_NON_FABLE_MODEL, SKIP_ADVISOR, NAMES_PRODUCER)
 
 DECISION_TABLE = (
-    # --- session model state / pending は判定に使わない: 使用率だけで決まる ---
-    row(
-        "state-independent/fable-session/usage-ok",
-        session_state=FABLE_SESSION,
-        expect="allow",
-    ),
-    row(
-        "state-independent/fable-session/full-id/usage-ok",
-        model="claude-fable-5-1",
-        session_state=FABLE_SESSION,
-        expect="allow",
-    ),
-    row(
-        "state-independent/fable-session/over-threshold",
-        session_state=FABLE_SESSION,
-        cache_body=cache([fable_entry(81)]),
-        expect="deny",
-        keywords=USAGE_DENY,
-    ),
-    row(
-        "state-independent/pending/usage-ok",
-        session_state=None,
-        pending=True,
-        expect="allow",
-    ),
-    row(
-        "state-independent/pending-with-stale-state/usage-ok",
-        pending=True,
-        expect="allow",
-    ),
-    row(
-        "state-independent/no-information/usage-ok",
-        session_state=None,
-        expect="allow",
-    ),
-    row(
-        "state-independent/no-information/cache-missing",
-        session_state=None,
-        cache_kind="missing",
-        expect="deny",
-        keywords=UNKNOWN_DENY,
-    ),
     # --- 使用率に余裕 → allow ---
-    row("usage/opus-session/usage-ok", expect="allow"),
-    row("usage/sonnet-session/usage-ok", session_state=SONNET_SESSION, expect="allow"),
+    row("usage/usage-ok", expect="allow"),
     row("usage/full-fable-id", model="claude-fable-5-1", expect="allow"),
     row("usage/uppercase-and-padded-model", model="  FABLE  ", expect="allow"),
     row("usage/exactly-at-threshold", cache_body=cache([fable_entry(80)]), expect="allow"),
@@ -409,7 +355,7 @@ DECISION_TABLE = (
     # 継承先は起動元サブエージェントのモデルで、週次枠判定を通った Fable サブエージェントの
     # 子が判定なしで Fable を継承しうるため、model の明示を求める。
     row(
-        "nested/model-unspecified/opus-session",
+        "nested/model-unspecified",
         model=UNSET,
         agent_id="parent-agent",
         subagent_type="general-purpose",
@@ -417,7 +363,7 @@ DECISION_TABLE = (
         keywords=(NESTED_EXPLICIT_MODEL,),
     ),
     row(
-        "nested/model-inherit/opus-session",
+        "nested/model-inherit",
         model="inherit",
         agent_id="parent-agent",
         subagent_type="general-purpose",
@@ -425,7 +371,7 @@ DECISION_TABLE = (
         keywords=(NESTED_EXPLICIT_MODEL,),
     ),
     row(
-        "nested/fork/opus-session",
+        "nested/fork",
         model=UNSET,
         agent_id="parent-agent",
         subagent_type="fork",
@@ -433,7 +379,7 @@ DECISION_TABLE = (
         keywords=(NESTED_EXPLICIT_MODEL,),
     ),
     row(
-        "nested/fork-with-explicit-model/opus-session",
+        "nested/fork-with-explicit-model",
         model="sonnet",
         agent_id="parent-agent",
         subagent_type="fork",
@@ -484,7 +430,7 @@ DECISION_TABLE = (
         keywords=(EXPLICIT_NON_FABLE_MODEL,),
     ),
     row(
-        "other-path/model-unspecified/opus-session",
+        "other-path/model-unspecified",
         model=UNSET,
         cache_kind="missing",
         expect="allow",
@@ -513,7 +459,7 @@ DECISION_TABLE = (
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class FableWeeklyGateDecisionTableTest(unittest.TestCase):
-    """block-fable-subagent.sh の fable 明示の判定を使用率 cache で固定する (メインモデルに依らない)。"""
+    """block-fable-subagent.sh の fable 明示の判定を使用率 cache で固定する。"""
 
     def isolated_env(self, temp: Path) -> dict[str, str]:
         home = temp / "home"
@@ -529,16 +475,7 @@ class FableWeeklyGateDecisionTableTest(unittest.TestCase):
         }
 
     def prepare(self, temp: Path, env: dict[str, str], case: dict[str, object]) -> Path:
-        """session state / pending / cache / date shim を用意し、cache の path を返す。"""
-        state_dir = Path(env["TMPDIR"]) / STATE_DIR_NAME
-        state_dir.mkdir(parents=True, exist_ok=True)
-        if case["session_state"] is not None:
-            (state_dir / f"model-{SESSION_ID}").write_text(
-                str(case["session_state"]), encoding="utf-8"
-            )
-        if case["pending"]:
-            (state_dir / f"pending-model-{SESSION_ID}").write_text("", encoding="utf-8")
-
+        """cache / date shim を用意し、cache の path を返す。"""
         cache_path = Path(env["XDG_CACHE_HOME"]) / CACHE_RELATIVE
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         kind = case["cache_kind"]
