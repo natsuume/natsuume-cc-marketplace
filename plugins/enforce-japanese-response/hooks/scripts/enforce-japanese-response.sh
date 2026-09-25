@@ -2,8 +2,8 @@
 # enforce-japanese-response.sh
 # turn 末尾の応答が英語で書かれていたら、日本語で書き直させる Stop hook。
 #
-# 現状の本体は判定を行わない骨格で、入力に依らず何も出力せず exit 0 する。
-# 以下は本体が満たす設計 (I/O 契約と判定規則) である。
+# 入力の検査・目標言語の解決・英語の応答の判定を順に行い、英語の応答と判定したときだけ
+# block を出力する。以下はこの実装が従う I/O 契約と判定規則である。
 #
 # ## I/O 契約
 #
@@ -79,4 +79,117 @@
 # ように書く。文字種の数え上げと除去処理は jq の中で行い、sed / grep / awk の GNU 拡張に
 # 依存しない。
 
+BLOCK_REASON='直前の応答が英語で書かれています。内容を変えずに日本語で書き直してください。ユーザが英語での出力 (翻訳・英文の文面等) を明示的に求めていた場合は書き直さず、その旨を日本語 1 文で添えて終えてください。'
+
+# stdin の JSON から判定に使う値を取り出し、1 行の JSON で出力する。
+#   {"active": <stop_hook_active が true か>, "message": <本文 or null>, "cwd": <文字列>}
+# message は空でない文字列のときだけ値を持ち、それ以外は null にする。
+# object として解析できなければ失敗 (非 0) を返す。
+extract_hook_fields() {
+  jq -c '
+    if type != "object" then error("hook input is not an object") else . end
+    | {
+        active: (.stop_hook_active == true),
+        message: (
+          .last_assistant_message
+          | if type == "string" and . != "" then . else null end
+        ),
+        cwd: (.cwd | if type == "string" then . else "" end)
+      }
+  '
+}
+
+# settings ファイル 1 つから language の値を JSON で出力する。
+# ファイルが無い・JSON object 1 つとして解析できない・language が無い (null を含む)
+# ときは何も出力しない。
+read_language_setting() {
+  local settings_file=$1
+  [ -f "$settings_file" ] || return 0
+  jq -c -s '
+    if length == 1 and (.[0] | type) == "object" and .[0].language != null
+    then .[0].language
+    else empty
+    end
+  ' "$settings_file" 2>/dev/null
+}
+
+# local → project → user の順に settings を探し、最初に見つかった language の値を
+# JSON で出力する。どこにも無ければ何も出力しない。
+resolve_target_language() {
+  local project_dir=$1
+  local settings_file value
+  for settings_file in \
+    "${project_dir:+$project_dir/.claude/settings.local.json}" \
+    "${project_dir:+$project_dir/.claude/settings.json}" \
+    "${HOME:+$HOME/.claude/settings.json}"; do
+    [ -n "$settings_file" ] || continue
+    value=$(read_language_setting "$settings_file")
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# language の値 (JSON) が日本語を表すなら true、それ以外なら false を出力する。
+is_japanese_language() {
+  local language_json=$1
+  jq -n --argjson language "$language_json" '
+    ($language | type) == "string"
+    and (
+      ($language | ascii_downcase) as $value
+      | $value == "日本語"
+        or $value == "ja"
+        or ($value | startswith("ja-"))
+        or $value == "japanese"
+    )
+  '
+}
+
+# extract_hook_fields の出力を stdin で受け取り、message が英語の応答なら block の
+# JSON を出力する。英語の応答でなければ何も出力しない。
+judge_message() {
+  jq -c --arg reason "$BLOCK_REASON" '
+    .message
+    | gsub("```[\\s\\S]*?(```|\\z)"; "")
+    | gsub("`[^`]*`"; "")
+    | gsub("https?://\\S+"; "")
+    | ([scan("[A-Za-z]")] | length) as $letters
+    | ([scan("[\\p{Hiragana}\\p{Katakana}\\p{Han}]")] | length) as $japanese
+    | if $letters >= 40 and 20 * $japanese < $japanese + $letters
+      then {decision: "block", reason: $reason}
+      else empty
+      end
+  '
+}
+
+main() {
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local hook_input fields
+  hook_input=$(cat) || return 0
+  fields=$(printf '%s' "$hook_input" | extract_hook_fields 2>/dev/null) || return 0
+  [ -n "$fields" ] || return 0
+
+  local active has_message project_dir
+  active=$(printf '%s' "$fields" | jq -r '.active' 2>/dev/null) || return 0
+  [ "$active" = "false" ] || return 0
+  has_message=$(printf '%s' "$fields" | jq -r '.message != null' 2>/dev/null) || return 0
+  [ "$has_message" = "true" ] || return 0
+  project_dir=$(printf '%s' "$fields" | jq -r '.cwd' 2>/dev/null) || return 0
+
+  local language_json is_japanese
+  language_json=$(resolve_target_language "$project_dir")
+  [ -n "$language_json" ] || return 0
+  is_japanese=$(is_japanese_language "$language_json" 2>/dev/null) || return 0
+  [ "$is_japanese" = "true" ] || return 0
+
+  local decision
+  decision=$(printf '%s' "$fields" | judge_message 2>/dev/null) || return 0
+  [ -n "$decision" ] || return 0
+  printf '%s\n' "$decision"
+}
+
+main
 exit 0
