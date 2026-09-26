@@ -71,7 +71,7 @@ REPO_README = ROOT / "README.md"
 PLUGIN_README = PLUGIN_DIR / "README.md"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "3.0.3"
+PLUGIN_VERSION = "3.0.4"
 
 INJECT_ALWAYS = "inject-always.sh"
 INJECT_RULES_PART = "inject-rules-part.sh"
@@ -210,7 +210,6 @@ EXPECTED_DISCIPLINE_RULE_IDS = {
 }
 DISCIPLINE_REQUIRED_PHRASES = (
     "cross-model-advisor:fable-advisor-runner",
-    "pre-merge-cross-review:fable-reviewer",
     "**ワーカーは Opus 5.5 で動かす**",
     "メインセッションが Opus 系以外のモデルで動いている場合",
     '`model: "opus"` を明示する',
@@ -227,6 +226,9 @@ DISCIPLINE_FORBIDDEN_PHRASES = (
     "Sonnet 版",
     "discipline-sonnet",
     "Opus 5 / Opus 5.5",
+    # 提供されていない merge 前の Fable review
+    "fable-reviewer",
+    "pre-merge review",
 )
 
 RULE_ID_PATTERN = re.compile(r"<!--\s*rule:([a-zA-Z0-9_-]+)\s*-->")

@@ -1,17 +1,7 @@
 #!/bin/bash
 # fable-weekly-usage.sh
-# Fable 週次枠の使用率判定を提供する。各 plugin の bin/ の判定コマンドが source し、Fable を
+# Fable 週次枠の使用率判定を提供する。bin/cross-model-advisor-fable-usage が source し、Fable を
 # 使う subagent を起動するかを決める。
-#
-# ## canonical とコピーの関係
-#
-# 本ファイルは cross-model-advisor plugin (`plugins/cross-model-advisor/scripts/lib/`、
-# bin/cross-model-advisor-fable-usage が source する) が canonical で、pre-merge-cross-review
-# plugin (`plugins/pre-merge-cross-review/hooks/scripts/lib/fable-weekly-usage.sh`、
-# bin/pre-merge-cross-review-fable-usage が source する) が byte-identical なコピーを保持して
-# 追従する。Claude Code plugin は他 plugin のファイルを参照できないため、判定を必要とする各
-# plugin が同一内容を自前で持つ。canonical 側を変更したらコピー側も同じ PR で更新する
-# (同一性は tests/test_pre_merge_lib_copies.py が検査する)。
 #
 # ## 判定仕様
 #

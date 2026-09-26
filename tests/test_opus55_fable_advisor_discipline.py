@@ -1,14 +1,13 @@
 """agent-discipline: Opus 5.5 メイン + Fable Advisor パターン向け分業規律・自走方針の契約テスト。
 
 - メインセッションとワーカー (実装・調査・一括修正等) のサブエージェントは Opus 5.5 で動かす。
-  Fable は cross-model-advisor の fable-advisor-runner と pre-merge-cross-review の
-  fable-reviewer の起動にのみ使う。pre-push-review の reviewer 2 体は常に Opus で起動するため
-  Fable の用途に含めない。
-- 分業規律 (discipline.md) の rule:delegation-rules 節は、「advisor と pre-merge review の
-  起動に限り `model: "fable"` を明示して使い、週次枠ガードで deny されたら再起動せず
-  スキップ」と記述し、pre-push-review の reviewer には言及しない。Fable をメインセッションで
-  使う運用は無いため、Fable メイン向けの記述を持たず、ヘッダコメントと冒頭文の対象に Fable を
-  含めない。
+  Fable は cross-model-advisor の fable-advisor-runner の起動にのみ使う。reviewer
+  (pre-push-review の reviewer 2 体を含む) は Fable の用途に含めない。
+- 分業規律 (discipline.md) の rule:delegation-rules 節は、「`cross-model-advisor:fable-advisor-runner`
+  の起動に限り `model: "fable"` を明示して使い、週次枠ガードで deny されたら再起動せず
+  スキップ」と記述し、pre-merge review・fable-reviewer・pre-push-review の reviewer には
+  言及しない。Fable をメインセッションで使う運用は無いため、Fable メイン向けの記述を持たず、
+  ヘッダコメントと冒頭文の対象に Fable を含めない。
 - discipline.md の effort 規律は公式ガイド「Prompting Claude Opus 5.5」
   (prompting-claude-opus-5-5、既定 effort は medium) を基準にし、rule:delegation-rules 節に
   置く。Opus 5 基準の effort 見出しは持たない。
@@ -51,13 +50,9 @@ FABLE_PROHIBITION_PHRASE = "Fable をサブエージェントに使わない"
 
 # rule:delegation-rules 節に必須の Fable 用途の記述 (canonical 文言)。
 FABLE_USAGE_PHRASES = (
-    # 用途を fable-advisor-runner と fable-reviewer の起動に限る
-    (
-        "**Fable は advisor と pre-merge review の起動に限る**: Fable は "
-        "`cross-model-advisor:fable-advisor-runner` と "
-        "`pre-merge-cross-review:fable-reviewer` の起動にだけ使い、"
-        "ワーカー (実装・調査・一括修正等) やそれ以外の reviewer には使わない。"
-    ),
+    # 用途を fable-advisor-runner の起動に限り、ワーカーには使わない
+    "Fable は `cross-model-advisor:fable-advisor-runner` の起動にだけ使い、",
+    "ワーカー (実装・調査・一括修正等)",
     # hook (PreToolUse の Agent|Task) が捕捉しない Workflow の agent() では使わない
     "Workflow の `agent()` では Fable を使わない",
     # model の明示 (未指定・frontmatter 経由の Fable 実行は使わない)
@@ -68,12 +63,11 @@ FABLE_USAGE_PHRASES = (
     "再起動せずスキップする",
 )
 
-# rule:delegation-rules 節に含めない記述 (Fable の用途を狭く・誤って書いたもの)。
+# rule:delegation-rules 節に含めない記述 (提供されていない用途・Fable メイン向けの記述)。
 FABLE_REMOVED_PHRASES = (
-    # 用途を advisor だけに限る見出し
-    "**Fable は advisor の起動に限る**",
-    # スキップ対象を fable-advisor-runner だけに書いた文言
-    "fable-advisor-runner は再起動せずスキップする",
+    # merge 前の Fable review (pre-merge-cross-review は Fable を使わない)
+    "pre-merge",
+    "fable-reviewer",
     # Fable メインのセッション向けの記述
     "Fable メインのセッション",
 )

@@ -176,7 +176,8 @@ EXPECTED_AGENT_HOOKS: dict[str, tuple[tuple[str, str], ...]] = {
 # hooks.json top-level の `description` は起動形の変更で改変しない。
 # 値は (文字数, UTF-8 本文の SHA-256)。差分が出た場合は git から元の本文を戻す。
 # 値が None の plugin は description を持つことだけを固定し、本文の契約は plugin 固有の
-# テスト (agent-discipline: tests/test_agent_discipline_unified_discipline.py) が検査する。
+# テスト (agent-discipline: tests/test_agent_discipline_unified_discipline.py、
+# pre-merge-cross-review: tests/test_pre_merge_fable_review_removed.py) が検査する。
 EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str] | None] = {
     "agent-discipline": None,
     "auto-lint-check": (
@@ -195,10 +196,7 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str] | None] = {
         224,
         "a24d5b1d023b9944ebdc03ab09d81cf3e0bd2936443587e45ceef5b27fce95f4",
     ),
-    "pre-merge-cross-review": (
-        1024,
-        "207988c00764b7f2f1a099840a822f72ca53e5eb13834e8b21ab95cc6a74cc64",
-    ),
+    "pre-merge-cross-review": None,
     "pre-push-codex-review": (
         1301,
         "c0403b715b459de50c507531408e401173a6ff8f936ddcf137c15ba9a38796dc",
@@ -244,14 +242,14 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "enforce-draft-pr": "0.5.8",
     "auto-lint-check": "0.8.4",
     "pre-push-review": "7.0.3",
-    "pre-push-codex-review": "4.0.3",
-    "pre-merge-cross-review": "3.1.0",
+    "pre-push-codex-review": "4.0.4",
+    "pre-merge-cross-review": "4.0.0",
     "update-default-branch": "0.4.7",
     "natsuume-statusline": "0.11.5",
-    "agent-discipline": "3.0.3",
+    "agent-discipline": "3.0.4",
     "ui-discipline": "0.4.8",
     "natsuume-writing": "0.9.1",
-    "cross-model-advisor": "5.0.8",
+    "cross-model-advisor": "5.0.9",
     "rate-limit": "0.5.4",
     "session-handoff": "0.5.3",
     "repo-analytics": "0.2.9",

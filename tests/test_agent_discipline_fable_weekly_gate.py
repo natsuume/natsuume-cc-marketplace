@@ -1,7 +1,7 @@
 """agent-discipline: `model: "fable"` 明示を週次枠判定だけで許可する契約テスト。
 
-- メインセッションは Opus 5.5 で、Fable は cross-model-advisor の fable-advisor-runner と
-  pre-merge-cross-review の fable-reviewer を `model: "fable"` の明示で起動するときだけ使う。
+- メインセッションは Opus 5.5 で、Fable は cross-model-advisor の fable-advisor-runner を
+  `model: "fable"` の明示で起動するときだけ使う。
   Fable をメインセッションで使う運用は無い。
   block-fable-subagent.sh は許可 agent の一覧を持たず、「Fable 週次枠の使用率」だけで fable
   明示を判定する (用途は規律 = prompt で縛る)。メインセッションのモデルは判定に使わない。
@@ -12,10 +12,10 @@
   最大 percent を閾値 (env ``FABLE_WEEKLY_MAX_PERCENT``、0〜100 の整数、既定 80) と比べ、
   ``percent <= 閾値`` で利用可。cache が読めない・壊れている・古い (1800 秒超) 等は
   すべて利用不可 (使用率不明)。``fetched_at`` が未来時刻でも stale とみなさない。
-- deny 理由では、fable-advisor-runner / fable-reviewer は再起動せずスキップし、それ以外の
+- deny 理由では、fable-advisor-runner は再起動せずスキップし、それ以外の
   委任では非 Fable の model (`model: "opus"`) を明示するよう案内する。Sonnet / Haiku の明示は
   案内しない。pre-push-review の reviewer は常に Opus で起動するため、deny 理由で reviewer の
-  再起動を案内しない。
+  再起動を案内しない。提供されていない fable-reviewer に言及しない (deny 理由と README)。
 - サブエージェント内 (入力に agent_id がある) からの model 未指定 (inherit を含む)・fork の
   起動は deny し、model の明示を求める (nested guard)。継承先が起動元サブエージェントの
   モデルになり、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承
@@ -56,11 +56,13 @@ RESETS_AT = "2026-09-28T00:00:00Z"
 
 # deny 理由に求めるキーワード (正規表現)。
 EXPLICIT_NON_FABLE_MODEL = r'model: "opus"'
-SKIP_ADVISOR = r"fable-advisor-runner[^。]*fable-reviewer[^。]*スキップ"
+SKIP_ADVISOR = r"fable-advisor-runner[^。]*スキップ"
 NAMES_PRODUCER = r"natsuume-statusline"
 NESTED_EXPLICIT_MODEL = r'model: "opus"'
 # deny 理由に含めない記述 (pre-push-review の reviewer は Fable で起動しない)。
 REVIEWER_RELAUNCH_GUIDE = "pre-push-review"
+# deny 理由と README に含めない、提供されていない agent の名前。
+REMOVED_FABLE_AGENT = "fable-reviewer"
 # deny 理由に含めない、ワーカーを Sonnet / Haiku へ下げる案内。
 DOWNGRADE_GUIDES = ("model に sonnet / opus", "機械的作業なら haiku")
 # Sonnet / Haiku を model として推奨する表現 (正規表現、大文字小文字を無視)。呼び出し側が指定した
@@ -574,6 +576,8 @@ class FableWeeklyGateDecisionTableTest(unittest.TestCase):
                 problems.append(f"{label}: deny 理由に {keyword!r} が無い ({reason})")
         if REVIEWER_RELAUNCH_GUIDE in reason:
             problems.append(f"{label}: deny 理由が pre-push-review の reviewer に言及する ({reason})")
+        if REMOVED_FABLE_AGENT in reason:
+            problems.append(f"{label}: deny 理由が {REMOVED_FABLE_AGENT} に言及する ({reason})")
         for guide in DOWNGRADE_GUIDES:
             if guide in reason:
                 problems.append(f"{label}: deny 理由に Sonnet / Haiku への案内 {guide!r} が残る ({reason})")
@@ -627,6 +631,9 @@ class ReadmePermissionRuleTest(unittest.TestCase):
             if phrase in text
         ]
         self.assertEqual([], present, f"reviewer を Fable の用途とする記述が残っている: {present}")
+
+    def test_readme_does_not_mention_fable_reviewer(self) -> None:
+        self.assertNotIn(REMOVED_FABLE_AGENT, README.read_text(encoding="utf-8"))
 
     def test_readme_asks_existing_users_to_remove_the_fable_rule(self) -> None:
         self.assertIn(
