@@ -17,12 +17,12 @@ git ls-remote --heads origin '*issue-<N>-*'
 gh pr list --head <branch>
 ```
 
-- issue に対応する branch / open PR が既に存在し、Phase A (テスト or 設計記述 commit) が完了済みの場合 → Phase B (本文実装) から再開します
-- 対応する branch / open PR が存在しない場合 → 新規着手として、セクション 2 の排他制御手順に進みます
+- ユーザのメッセージまたは handoff の文書が、issue 番号か branch 名を挙げてその issue の継続を指示している (明示指示) 場合 → `rule:issue-claim` の明示指示による再開に従い、step 6 で既存の branch に switch します。Phase A (テスト or 設計記述 commit) が完了済みなら Phase B (本文実装) から、未完了なら Phase A から再開します
+- 明示指示が無い場合 → 既存の branch / open PR の有無に依らず、セクション 2 の排他制御手順に進みます。確保できたら `rule:issue-claim` の step 6 で既存の branch があればそれに switch し、同じ基準で Phase A / Phase B から再開します
 
 ## 2. 排他制御の参照
 
-新規着手と判定した場合の排他制御 (claim comment → 3 秒待機 → 先着判定 → ラベル付与 → 作業 branch の作成) は、常時注入ルール `rule:issue-claim` の手順本体をそのまま実行してください。安全機構のため本 skill 側では手順を複製しません。
+明示指示が無い場合の排他制御 (claim comment → 3 秒待機 → 先着判定 → ラベル付与 → 作業 branch の用意) は、常時注入ルール `rule:issue-claim` の手順本体をそのまま実行してください。安全機構のため本 skill 側では手順を複製しません。
 
 本 skill が担当するのはセクション 1 の pick-up 分岐判定までで、判定後の排他制御の実施責任は `rule:issue-claim` 側にあります。
 

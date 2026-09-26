@@ -15,9 +15,11 @@
 
 **適用範囲**: `/goal` のように複数 issue を順次解決するフロー、もしくは同じ repo で他 session が並列稼働している可能性がある場面に適用する。
 
-`/goal` のように **複数 issue を順次解決するフロー**、もしくは同じ repo で **他 session が並列稼働している可能性がある場面** では、同 issue への重複着手と他 session の作業破壊を防ぐため以下の手順を必ず守る。
+同 issue への重複着手と他 session の作業破壊を防ぐため、以下の手順を必ず守る。
 
 GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-progress` ラベル単独運用では TOCTOU race が残る (= 「ラベル確認 → ラベル付与」の間に他 session が割り込む)。そこで **claim comment の先着判定** を排他の基盤とする: GitHub が server-side で付与する `created_at` + 数値 comment id は投稿順に決まる。step 3 の待機のあいだに先に投稿された claim が一覧に反映されることを前提に、全 session が同じ先着者を導く。
+
+**明示指示による再開**: ユーザのメッセージまたは handoff の文書が issue 番号か branch 名を挙げてその issue の継続を指示している場合 (明示指示) に限り、step 1-5 を経ずに step 6 から再開してよい。ラベルや他セッション ID の claim comment が残っていても撤退せず、削除もしない。明示指示が無ければ、既存の branch / draft PR があってもstep 1 から実行する。明示指示があっても対応する branch が無ければ、新規着手として step 1 から実行する。
 
 ### 着手手順
 
@@ -52,8 +54,10 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 5. **確保の確定 + ラベル付与**: 先着判定で自分が先着と確認できた時点で確保が確定する。人間向けの目印として `gh issue edit <N> --add-label ai:in-progress` を付与する
 
-6. **作業 branch を作成**し、通常の implementation フローへ移行する (= draft PR 作成 → 実装 → after 系の commit→push→PR→merge 自走)
-   - 中断した別 issue の branch の commit を引き継がないよう、`git fetch origin` の後に最新の default branch を起点に作る: `git switch -c <prefix>/issue-<N>-<slug> --no-track origin/<default-branch>` (`--no-track` は upstream を default branch に設定しないため。upstream は作業 branch を初めて push するときに設定する)
+6. **作業 branch を用意**し、通常の implementation フローへ移行する (`rule:tdd-two-phase` に従い、Phase A の commit を push した後に draft PR を作る。既存の draft PR があればそれを使う)。`git fetch origin` の後 (失敗したら停止してユーザに報告)、同名の branch の有無で分ける:
+   - 無い: 中断した別 issue の commit を引き継がないよう、最新の default branch を起点に作る: `git switch -c <prefix>/issue-<N>-<slug> --no-track origin/<default-branch>` (`--no-track` は upstream を default branch にしないため)
+   - remote だけにある: `git switch <branch>` で remote の branch から再開する
+   - local にある: `git switch <branch>` の後、remote の同名 branch と比べる。local が古ければ `git merge --ff-only origin/<branch>`、local が新しければそのまま再開し、分岐していれば local / remote のどちらも変更せず停止してユーザに報告する
 
 ### ラベル削除規律 (誤削除事故防止)
 

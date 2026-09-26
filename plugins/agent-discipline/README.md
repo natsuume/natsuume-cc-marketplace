@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v3.0.5
+v3.0.6
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
@@ -78,7 +78,7 @@ claude plugin install agent-discipline@natsuume-plugins
 4. **issue の粒度と関係性** (`rule:issue-granularity`): 独立して並列作業できる粒度で起票、大きい場合は sub-issues 分割。関係性は (a) sub-issue 親子リンク + (b) `#N` 相互参照を併用
 5. **PR 作成時の closing keyword** (`rule:closing-keyword`): 完全解決時のみ PR body に `Closes #N` を書く。closing keyword は default branch 向け PR でのみ機能する。部分対応では `Refs #N` / `Part of #N` に切替
 6. **自律作業中の判断境界** (`rule:autonomy-boundary`): 実装は自走、設計 / 仕様 (= issue で決まっているはずの内容) は再確認しない。ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる
-7. **連続 issue 解決時の排他制御** (`rule:issue-claim`): `/goal` 等の並列 session フロー向け。(a) `gh issue view` で `ai:in-progress` ラベル / claim comment 早期判定、(b) claim comment 投稿 (`session=<セッションID>` で自他判別)、(c) 3 秒待機 + REST issue comments の全ページ再取得 + `(created_at, 数値 id)` の辞書順比較による先着判定 (取得失敗・自分の claim が無い場合は停止する fail-closed)、(d) 先着と確認できた時点で確保を確定してラベル付与、(e) 作業 branch の作成。撤退時の後片付けは自分の claim comment の削除と 1 行報告だけで、確保後の着手中断では自分の claim comment だけを削除し、branch・draft PR・ラベルは再開のために残す。安全機構のため手順を省略せず全文記載する
+7. **連続 issue 解決時の排他制御** (`rule:issue-claim`): `/goal` 等の並列 session フロー向け。(a) `gh issue view` で `ai:in-progress` ラベル / claim comment 早期判定、(b) claim comment 投稿 (`session=<セッションID>` で自他判別)、(c) 3 秒待機 + REST issue comments の全ページ再取得 + `(created_at, 数値 id)` の辞書順比較による先着判定 (取得失敗・自分の claim が無い場合は停止する fail-closed)、(d) 先着と確認できた時点で確保を確定してラベル付与、(e) 作業 branch の用意 (同名 branch が無ければ最新の default branch から作成、あれば switch して再開し、local と remote が分岐していれば停止して報告)。ユーザのメッセージまたは handoff の文書が issue 番号か branch 名を挙げて継続を指示した場合 (明示指示) だけ、(a)〜(d) を経ずに (e) から再開する。撤退時の後片付けは自分の claim comment の削除と 1 行報告だけで、確保後の着手中断では自分の claim comment だけを削除し、branch・draft PR・ラベルは再開のために残す。安全機構のため手順を省略せず全文記載する
 8. **AskUserQuestion の必須化** (`rule:ask-user-question`): ユーザへの質問・確認・判断伺い・すり合わせは自由文で turn を終えず必ず `AskUserQuestion` を発行する
 9. **spec-first 2 段階の開発手順** (`rule:tdd-two-phase`): 軽微な修正を除き、実装は Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める。正典 TDD ではなく実行可能仕様の先行固定 (spec-first) であり、局所定義・評価基準の詳細は issue-start skill が持つ
 10. **説明は常に最新の内容のみ** (`rule:comment-currency`、part 2/3 に含まれる): コードコメント・docstring・README 等の説明文書には現在の内容のみを書き、版数・issue/PR 番号による過去の変更の記述や旧実装の説明を書かない。履歴は commit message・PR 説明・issue に置く。新規作成・意味変更した説明ブロックにだけ適用し (touch-time)、指示のない一括清掃は行わない
