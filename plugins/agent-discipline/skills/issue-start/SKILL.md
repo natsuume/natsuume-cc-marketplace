@@ -33,7 +33,7 @@ gh pr list --head '<branch>'
 3. 名前が `-phase-b-wip` で終わる branch (セクション 4.2 の補助 branch) は候補から除きます
 4. 残った候補の名前が命名規約 `<prefix>/issue-<N>-<slug>` (英小文字・数字・ハイフンのみ、正規表現 `^[a-z]+/issue-<N>-[a-z0-9]+(-[a-z0-9]+)*$`) に合わなければ、何も変更せず停止して、どう扱うかを `AskUserQuestion` でユーザに確認します。この検証は、名前を次の手順の gh コマンドに埋め込む前に行います
 5. 各候補について `gh pr list --head '<branch>' --state merged` を実行し、マージ済みの PR が見つかった branch は候補から除きます。gh が失敗したら停止してユーザに報告します
-6. 候補が 1 つならその名前を使います。候補が無ければ、命名規約で新しい名前を決めます。候補が複数なら、claim comment を投稿せず何も変更せず停止して、どの branch を使うかを `AskUserQuestion` でユーザに確認します
+6. 候補が 1 つならその名前を使います。候補が無ければ、命名規約で新しい名前を決めます。その名前の branch が既にある場合 (手順 3・5 で除外した branch 等) は、local / remote のどちらにも存在しない名前になるよう slug を変えます (例: 末尾に `-2` を付ける)。候補が複数なら、claim comment を投稿せず何も変更せず停止して、どの branch を使うかを `AskUserQuestion` でユーザに確認します
 
 見つけた branch 名をコマンドに埋め込むときは、single quote で囲みます (例: `git switch '<branch>'`)。
 
