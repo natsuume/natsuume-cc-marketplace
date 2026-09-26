@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v3.0.9
+v3.0.10
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
@@ -43,6 +43,10 @@ claude plugin install agent-discipline@natsuume-plugins
 
 ### Hooks
 
+#### prompt ファイルの先頭コメント
+
+注入スクリプトは、prompt ファイル (`hooks/prompts/` 配下の md と `temporary/*.md`) の先頭にある保守者向け HTML コメント (`<!-- … -->`) と、その直後の空行を除いてから配送する (`hooks/scripts/lib/prompt-body.sh`)。先頭にコメントが無いファイルと、先頭コメントが閉じていない (`-->` が無い) ファイルはそのまま配送する。本文の途中にある HTML コメント (`<!-- rule:<id> -->` マーカーを含む) は残す。
+
 #### inject-subagent-rules
 
 **ファイル**: `hooks/scripts/inject-subagent-rules.sh`
@@ -50,7 +54,7 @@ claude plugin install agent-discipline@natsuume-plugins
 
 **動作**:
 
-- 全 subagent の起動時に `hooks/prompts/subagent-rules.md` 全文を `additionalContext` として注入する。モデル判定・agent_type 分岐を持たない静的全文注入
+- 全 subagent の起動時に `hooks/prompts/subagent-rules.md` の本文を `additionalContext` として注入する。モデル判定・agent_type 分岐を持たない静的注入
 - 注入内容は 5 規律: bash-decompose (always-1.md と同一 rule ID。subagent の Bash もメインセッションと同じ PreToolUse hook を通るため) / 報告の事実性 / 副作用操作の default-deny / エスカレーション定型 (発動条件 4 点 + 返却フォーマット 5 点) / 説明は常に最新の内容のみ (always-2.md と同一 rule ID の comment-currency。subagent も説明文書を編集するため)
 - `jq` 不在 / prompt ファイル欠落・空の場合は無音 `exit 0` (フェイルセーフ)。subagent-rules.md の rule ID 整合は `lint-prompt-sync.sh` チェック 5 (サブセット検査) が CI で担保する
 
@@ -416,7 +420,8 @@ agent-discipline/
 │       ├── inject-subagent-rules.sh
 │       ├── inject-temporary.sh
 │       └── lib/
-│           └── permission-mode.sh
+│           ├── permission-mode.sh
+│           └── prompt-body.sh
 ├── skills/
 │   ├── issue-plan/
 │   │   └── SKILL.md

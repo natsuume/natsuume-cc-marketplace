@@ -18,6 +18,8 @@
 #   UserPromptSubmit では再送しないよう配送済み集合を記録する
 # - UserPromptSubmit: SessionStart 後に追加された未配送 md だけをファイル名の辞書順
 #   (LC_ALL=C で固定) に連結し、1 つの additionalContext として one-shot 配送する
+# - 各 md は先頭の保守者向け HTML コメントと直後の空行を除いた本文を連結する
+#   (lib/prompt-body.sh)
 # - 配送済み単位はファイル名の POSIX cksum (CRC + byte length)。本文変更ではなく
 #   temporary md の追加・削除を lifecycle とする既存の撤去契約に合わせる
 # - モデル判定・permission_mode 判定は行わない (暫定ルールはモデルに依らず全セッション共通)。
@@ -79,6 +81,13 @@ case "$HOOK_EVENT" in
     ;;
 esac
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+if [ -z "$SCRIPT_DIR" ] || [ ! -r "$SCRIPT_DIR/lib/prompt-body.sh" ]; then
+  exit 0
+fi
+# shellcheck source=plugins/agent-discipline/hooks/scripts/lib/prompt-body.sh
+source "$SCRIPT_DIR/lib/prompt-body.sh" || exit 0
+
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
 TEMPORARY_DIR="$PROMPTS_DIR/temporary"
 if [ ! -d "$TEMPORARY_DIR" ]; then
@@ -124,7 +133,7 @@ fi
 
 for f in "$TEMPORARY_DIR"/*.md; do
   [ -f "$f" ] || continue
-  BODY=$(cat "$f" 2>/dev/null)
+  BODY=$(read_agent_discipline_prompt "$f")
   [ -n "$BODY" ] || continue
 
   if [ "$MARKER_ENABLED" -eq 1 ]; then

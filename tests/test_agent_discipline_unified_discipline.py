@@ -15,11 +15,12 @@ agent-discipline はメインセッションのモデルを判定せず、全モ
   (``model-<sid>``) と pending マーカー (``pending-model-<sid>``) を作成も削除もしない。
   session_id が非空なら UserPromptSubmit 側の配送済みマーカー 3 種を削除する。
   additionalContext は ``SELF_HEAL`` + 空行 + delivery-note.md + 改行 + ``(参照パス) <prompts
-  dir>`` + 空行 + always-1.md である。jq 不在・hook_event_name が空・always-1.md が読めない
-  (空を含む) 場合は出力なしで exit 0 になる。
+  dir>`` + 空行 + always-1.md である (prompt ファイルは先頭の保守者向け HTML コメントを除いた
+  本文。以下同じ)。jq 不在・hook_event_name が空・always-1.md が読めない (空を含む) 場合は
+  出力なしで exit 0 になる。
 - inject-rules-part.sh <N> (``InjectRulesPartTest``、UserPromptSubmit): N が 2 / 3 のとき
-  だけ動く。マーカー ``delivered-rules-<N>-<sid>`` が無ければ always-<N>.md の本文そのものを
-  配送してマーカーを書き、マーカーがあれば出力しない。state file / pending マーカーは出力に
+  だけ動く。マーカー ``delivered-rules-<N>-<sid>`` が無ければ always-<N>.md の本文を配送して
+  マーカーを書き、マーカーがあれば出力しない。state file / pending マーカーは出力に
   影響しない。入力が不正・always-<N>.md が読めない場合は出力もマーカーも無い。
 - inject-discipline.sh (``InjectDisciplineTest``、UserPromptSubmit): マーカー
   ``delivered-discipline-<sid>`` が無ければ ``# agent-discipline: 分業規律`` + 空行 +
@@ -73,7 +74,7 @@ REPO_README = ROOT / "README.md"
 PLUGIN_README = PLUGIN_DIR / "README.md"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "3.0.9"
+PLUGIN_VERSION = "3.0.10"
 
 INJECT_ALWAYS = "inject-always.sh"
 INJECT_RULES_PART = "inject-rules-part.sh"
@@ -262,9 +263,28 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+LEADING_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
+LEADING_BLANK_LINES_PATTERN = re.compile(r"\A(?:[ \t]*\n)+")
+LEADING_RULE_MARKER_PATTERN = re.compile(r"<!--\s*(?:subagent-)?rule:[A-Za-z0-9_-]+\s*-->")
+
+
+def body_without_leading_comment(text: str) -> str:
+    """prompt ファイルの内容から、hook が配送する本文を求める。
+
+    ファイルが ``<!--`` で始まり ``-->`` で閉じる場合は、その先頭コメント (保守者向けメモ) と
+    直後に続く空行を除く。先頭がコメントでない・閉じていない場合は内容をそのまま使う。hook は
+    ``$(...)`` で読むため末尾の改行を落とす。先頭のコメントが rule マーカーの場合は除かない。
+    """
+    match = LEADING_COMMENT_PATTERN.match(text)
+    if match is None or LEADING_RULE_MARKER_PATTERN.fullmatch(match.group(0)):
+        return text.rstrip("\n")
+    rest = LEADING_BLANK_LINES_PATTERN.sub("", text[match.end() :], count=1)
+    return rest.rstrip("\n")
+
+
 def read_prompt(name: str) -> str:
-    """prompt ファイルを hook と同じ形で読む (``$(cat ...)`` は末尾の改行を落とす)。"""
-    return read(PROMPTS_DIR / name).rstrip("\n")
+    """prompt ファイルを hook が配送する形 (先頭コメントを除いた本文) で読む。"""
+    return body_without_leading_comment(read(PROMPTS_DIR / name))
 
 
 def rule_ids(text: str) -> list[str]:

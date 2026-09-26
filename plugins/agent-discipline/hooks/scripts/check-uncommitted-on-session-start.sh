@@ -90,7 +90,8 @@ DIRTY_SAFE=${DIRTY//\`/\'}
 CWD_SAFE=${CWD//\`/\'}
 
 # 注入本文のテンプレートは hooks/prompts/uncommitted-check.md に定義する (プロンプトを
-# sh に直接埋め込むと視認性・メンテナンス性が下がるため分離)。
+# sh に直接埋め込むと視認性・メンテナンス性が下がるため分離)。先頭の保守者向け HTML
+# コメントと直後の空行は除いて使う (lib/prompt-body.sh)。
 # {{CWD}} / {{DIRTY}} の穴埋めは ${var//pat/repl} を使わず、 プレースホルダ位置で
 # テンプレートを 3 分割してから連結する。 bash 5.2+ の patsub_replacement (既定 on) は
 # 置換文字列中の unquoted & をマッチ文字列へ展開するため、 & を含む path / status 行が
@@ -101,7 +102,12 @@ CWD_SAFE=${CWD//\`/\'}
 # 形状でない場合は fail-open で無音終了する (マーカーは設置済みだが、 対象は静的ファイル
 # なので同 session 内の再試行に意味は無い)。
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
-TEMPLATE=$(cat "$PROMPTS_DIR/uncommitted-check.md" 2>/dev/null)
+if [ ! -r "$SCRIPT_DIR/lib/prompt-body.sh" ]; then
+  exit 0
+fi
+# shellcheck source=plugins/agent-discipline/hooks/scripts/lib/prompt-body.sh
+source "$SCRIPT_DIR/lib/prompt-body.sh" || exit 0
+TEMPLATE=$(read_agent_discipline_prompt "$PROMPTS_DIR/uncommitted-check.md")
 case $TEMPLATE in
   *'{{CWD}}'*'{{DIRTY}}'*) ;;
   *) exit 0 ;;

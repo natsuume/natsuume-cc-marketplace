@@ -44,6 +44,9 @@
 #
 #   SELF_HEAL + 空行 + delivery-note.md + 改行 + `(参照パス) <prompts dir>` + 空行 + always-1.md
 #
+# delivery-note.md と always-1.md は、先頭の保守者向け HTML コメントと直後の空行を除いた本文を
+# 使う (lib/prompt-body.sh の read_agent_discipline_prompt)。
+#
 # delivery-note.md は常時ルール・分業規律が複数メッセージに分割配送される旨の短い前置き、
 # `(参照パス)` 行は実行時に解決した prompts ディレクトリの絶対パスである。実パスは実行環境
 # 依存で長さが非有界のため、組み立てた全文の文字数を計測し、8,000 を超える場合は
@@ -109,9 +112,16 @@ if [ -n "$SAFE_SESSION_ID" ]; then
     2>/dev/null
 fi
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+if [ -z "$SCRIPT_DIR" ] || [ ! -r "$SCRIPT_DIR/lib/prompt-body.sh" ]; then
+  exit 0
+fi
+# shellcheck source=plugins/agent-discipline/hooks/scripts/lib/prompt-body.sh
+source "$SCRIPT_DIR/lib/prompt-body.sh" || exit 0
+
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
 
-CORE=$(cat "$PROMPTS_DIR/always-1.md" 2>/dev/null)
+CORE=$(read_agent_discipline_prompt "$PROMPTS_DIR/always-1.md")
 if [ -z "$CORE" ]; then
   exit 0
 fi
@@ -119,7 +129,7 @@ fi
 # 自己修復指示 (ヘッダ「自己修復指示」節)。additionalContext の最先頭に必ず置く。
 SELF_HEAL='(自己修復) このメッセージが persisted-output として退避されている場合は、スタブに記載されたパスの退避ファイルを Read で全文読了してから作業を開始すること。'
 
-NOTE=$(cat "$PROMPTS_DIR/delivery-note.md" 2>/dev/null)
+NOTE=$(read_agent_discipline_prompt "$PROMPTS_DIR/delivery-note.md")
 PATH_LINE="(参照パス) $PROMPTS_DIR"
 
 # additionalContext を組み立てた後の全文文字数を計測し、8,000 字を超える場合は

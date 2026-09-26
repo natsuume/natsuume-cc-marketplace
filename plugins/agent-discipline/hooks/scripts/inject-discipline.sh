@@ -9,7 +9,8 @@
 #
 # マーカー `${TMPDIR:-/tmp}/agent-discipline-state/delivered-discipline-<session_id>` が
 # 存在すれば (内容は問わない) 即 exit 0。マーカー不在時は見出し
-# `# agent-discipline: 分業規律` + 空行 + discipline.md の本文を配送し、マーカー (内容
+# `# agent-discipline: 分業規律` + 空行 + discipline.md の本文 (先頭の保守者向け HTML コメントと
+# 直後の空行を除く。lib/prompt-body.sh) を配送し、マーカー (内容
 # `delivered`) を書く。マーカーは inject-always.sh が SessionStart のたびに削除する。
 #
 # マーカーの書き込みは注入本文と出力 JSON の生成に成功した後に行う (先にマーカーを書くと、
@@ -60,8 +61,15 @@ if [ -f "$MARKER" ]; then
   exit 0
 fi
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+if [ -z "$SCRIPT_DIR" ] || [ ! -r "$SCRIPT_DIR/lib/prompt-body.sh" ]; then
+  exit 0
+fi
+# shellcheck source=plugins/agent-discipline/hooks/scripts/lib/prompt-body.sh
+source "$SCRIPT_DIR/lib/prompt-body.sh" || exit 0
+
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
-BODY=$(cat "$PROMPTS_DIR/discipline.md" 2>/dev/null)
+BODY=$(read_agent_discipline_prompt "$PROMPTS_DIR/discipline.md")
 if [ -z "$BODY" ]; then
   exit 0
 fi
