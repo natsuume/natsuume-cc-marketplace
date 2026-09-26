@@ -52,7 +52,8 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 5. **確保の確定 + ラベル付与**: 先着判定で自分が先着と確認できた時点で確保が確定する。人間向けの目印として `gh issue edit <N> --add-label ai:in-progress` を付与する
 
-6. **作業 branch を作成**し (`git switch -c <prefix>/issue-<N>-<slug>`)、通常の implementation フローへ移行する (= draft PR 作成 → 実装 → after 系の commit→push→PR→merge 自走)
+6. **作業 branch を作成**し、通常の implementation フローへ移行する (= draft PR 作成 → 実装 → after 系の commit→push→PR→merge 自走)
+   - 中断した別 issue の branch の commit を引き継がないよう、`git fetch origin` の後に最新の default branch を起点に作る: `git switch -c <prefix>/issue-<N>-<slug> --no-track origin/<default-branch>` (`--no-track` は upstream を default branch に設定しないため。upstream は作業 branch を初めて push するときに設定する)
 
 ### ラベル削除規律 (誤削除事故防止)
 
