@@ -11,16 +11,13 @@
 本メッセージは常時適用ルールの part 3/3 (最終 part) であり、part 1/3・part 2/3 と合わせて 1 つのルールセットを構成する。到着順序に依らず、本 part 単独でも各ルールはそのまま適用される。
 
 <!-- rule:issue-claim -->
-## 7. 連続 issue 解決時の排他制御 (claim comment + branch push の二段排他)
+## 7. 連続 issue 解決時の排他制御 (claim comment の先着判定)
 
 **適用範囲**: `/goal` のように複数 issue を順次解決するフロー、もしくは同じ repo で他 session が並列稼働している可能性がある場面に適用する。
 
 `/goal` のように **複数 issue を順次解決するフロー**、もしくは同じ repo で **他 session が並列稼働している可能性がある場面** では、同 issue への重複着手と他 session の作業破壊を防ぐため以下の手順を必ず守る。
 
-GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-progress` ラベル単独運用では TOCTOU race が残る (= 「ラベル確認 → ラベル付与」の間に他 session が割り込む)。そこで以下 2 つの確定的な排他基盤を併用する:
-
-- **claim comment**: GitHub が server-side で付与する created_at + 数値 comment id で先着判定 (= 早期 detection)
-- **branch push**: git server-side で同名 branch は 1 つしか存在できず、並列 push の片方は確定的に fail する (= 最終確定)
+GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-progress` ラベル単独運用では TOCTOU race が残る (= 「ラベル確認 → ラベル付与」の間に他 session が割り込む)。そこで **claim comment の先着判定** を排他の基盤とする: GitHub が server-side で付与する `created_at` + 数値 comment id は投稿順に決まる。step 3 の待機のあいだに先に投稿された claim が一覧に反映されることを前提に、全 session が同じ先着者を導く。
 
 ### 着手手順
 
@@ -30,17 +27,17 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
    - `ai:in-progress` ラベル付与済 or 未削除の claim comment 存在 → **撤退** (= 別 issue 候補をユーザに提示するか、別 issue に切替え)
    - いずれも無ければ次のステップへ
 
-2. **claim comment を投稿** (排他基盤 1: comment 先着判定):
+2. **claim comment を投稿**:
    ```
    gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> session=<セッションID> ts=<UTC ISO 8601>"
    ```
-   - branch 名は次ステップで使う予定の名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)
+   - branch 名は step 6 で作る予定の名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)
    - branch 名規約: `<prefix>/issue-<N>-<slug>` (`<prefix>` = `feat` / `fix` / `chore` / `docs` / `refactor` 等、`<slug>` = issue タイトルから kebab-case で抽出した短縮形)
    - 例: `feat/issue-12-add-auth`, `fix/issue-25-null-deref`
    - `<セッションID>` は環境変数 `CLAUDE_CODE_SESSION_ID` の値 (Claude Code がセッション毎に付与する UUID)。未設定の場合のみ `uuidgen` で生成した値を代用し、同一セッション中は同じ値を使い続ける
    - `session=` は「自分の claim か」の判定キー。branch 名は issue 番号 + タイトル slug から決定的に導出され他 session と同名になりうるため、`branch=` / `ts=` (自己申告) / comment author (同一 GitHub アカウント) では自他判別できない
 
-3. **3 秒待機**: 他 session の claim comment が到着する余裕を確保 (`sleep 3`)
+3. **3 秒待機**: 他 session の claim comment が一覧に反映されるまでの遅れを吸収する (`sleep 3`)
 
 4. **comment 再取得 + 先着判定**: REST GET で comment 一覧を全ページ再取得:
    ```
@@ -49,32 +46,20 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
    - REST GET を使う理由: レスポンスが数値 `id`・`created_at`・`body` を 1 呼び出しで返す (`gh issue view <N> --json comments` の `id` は GraphQL node ID (`IC_...`) のため数値比較に使えない)。`{owner}` / `{repo}` placeholder は gh が current repository から解決する。一覧は id 昇順・既定 30 件/ページのため、`--paginate` + `per_page=100` で全ページを取得する (直近の自分の claim が第 1 ページに含まれない可能性がある)
    - 自分の claim は body の `session=` 値が自分のセッション ID と一致する comment として識別する
    - 先着判定: claim comment (body が `🔒 ai:claim ` で始まる comment) のうち **`(created_at, 数値 id)` の辞書順最小** を先着とする。`created_at` は server-side 付与値であり、`ts=` 自己申告値は判定に使わない
-   - 先着が自分でない → **競合発生**。自分の claim comment を削除して撤退:
-     ```
-     gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>
-     ```
-   - REST GET の失敗 (非ゼロ終了・ページ取得不能)、または取得結果に自分の claim が存在しない場合は「競合なし」と扱わず、branch push に進まず停止してユーザに報告する (fail-closed)
+   - 先着が自分でない → **競合発生**。撤退する (後片付けは「撤退と着手中断の後片付け」節)
+   - REST GET の失敗 (非ゼロ終了・ページ取得不能)、または取得結果に自分の claim が存在しない場合は「競合なし」と扱わず、確保を確定せず停止してユーザに報告する (fail-closed)
    - 先着が自分なら次のステップへ
 
-5. **作業 branch 作成 + 即 push** (排他基盤 2: branch 名 uniqueness の確定判定):
-   ```
-   git switch -c <prefix>/issue-<N>-<slug>
-   git commit --allow-empty -m "wip: claim issue #<N> session=<セッションID>"
-   git push -u origin <prefix>/issue-<N>-<slug>
-   ```
-   - commit message にセッション ID を埋め込む理由: 同一メッセージ・同一親・同一秒の空 commit は OID が一致し、後発の push が "already up to date" として成功扱いになる経路が理論上残る。ID 埋込で異なる session 間の OID 衝突を構造的に排除する (同一会話を `--fork-session` 無しで並列 resume した worker 同士は session ID を共有するため、この保証の対象外)
-   - push **失敗** (= 同名 branch 既存) → 他 session が先着していた (claim comment 経路では検知できなかったケース)。自分の claim comment を削除 + ローカル branch を削除して撤退
-   - push **成功** → **独占権確定**
+5. **確保の確定 + ラベル付与**: 先着判定で自分が先着と確認できた時点で確保が確定する。人間向けの目印として `gh issue edit <N> --add-label ai:in-progress` を付与する
 
-6. **ラベル付与** (人間向けの目印として補助運用): `gh issue edit <N> --add-label ai:in-progress`
-
-7. 通常の implementation フローへ移行 (= draft PR 作成 → 実装 → after 系の commit→push→PR→merge 自走)
+6. **作業 branch を作成**し、通常の implementation フローへ移行する (= draft PR 作成 → 実装 → after 系の commit→push→PR→merge 自走)
+   - 中断した別 issue の branch の commit を引き継がないよう、`git fetch origin` の後に最新の default branch を起点に作る: `git switch -c <prefix>/issue-<N>-<slug> --no-track origin/<default-branch>` (`--no-track` は upstream を default branch に設定しないため。upstream は作業 branch を初めて push するときに設定する)
 
 ### ラベル削除規律 (誤削除事故防止)
 
 - 対応 PR の merge により issue が close された後の**完了時クリーンアップ** (`ai:in-progress` ラベルと claim comment の削除) は**必須ではない** — issue の open/close 状態を完了管理の一次情報とする (別 session が Phase B から正規に引き継いで merge した場合、引き継ぎ session は `session=` 不一致で削除できないが、残置してよい)
 - 完了時クリーンアップを行う場合は、claim comment の `session=` 値が自分のセッション ID と一致する場合に限り、ラベルと claim comment を**一組として**削除する (片方だけ削除しない)
-- 着手中断 / 撤退時は完了時クリーンアップとは別に、ラベルを残し、自分の claim comment と branch のみ削除する
+- 撤退時・着手中断時のどちらも、自分の claim comment のみ削除する。どちらの場合もラベルは削除しない
   - ラベルを残す理由: 「中断したが復帰予定」の状態が人間に見える + 後続 session が `ai:in-progress` を見て撤退 → 二重着手の保険として機能
   - 古い stale なラベルは人間が判定して手動削除する運用に委ねる
 - **他 session の claim comment / branch / ラベルは絶対に削除しない**
@@ -82,19 +67,20 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
   - 一致 → 自分の claim、削除可
   - 不一致、または `session=` キーが無い → 他 session の claim として扱い、削除禁止 (`session=` の無い claim は自分のものと確認できないため)
 
-### 撤退時のクリーンアップ手順
+### 撤退と着手中断の後片付け
 
-撤退判定 (step 1, 4, 5 のいずれか) が出たら以下を実行:
+**撤退** (step 1 または 4 で撤退と判定した場合) は、作業 branch を作る前なので次の 2 つだけを行う:
 
-1. 自分の claim comment を削除: `gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>`
-2. 自分が作った branch があれば削除: default branch への switch (`git switch <default-branch>`)、`git push origin --delete <branch>`、`git branch -D <branch>` をこの順に独立した Bash 呼び出しで実行する。前段が失敗したら後段に進まない
-3. ユーザに撤退理由を **1 行で必ず報告** する (例: 「issue #12 は他 session が先着のため撤退しました」)。auto mode 中でもこの報告は省略しない (= ユーザが進捗状況を把握できなくなるため)
+1. 自分の claim comment があれば削除: `gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>`
+2. ユーザに撤退理由を **1 行で必ず報告** する (例: 「issue #12 は他 session が先着のため撤退しました」)。auto mode 中でもこの報告は省略しない (= ユーザが進捗状況を把握できなくなるため)
+
+**着手中断** (確保の確定後に作業をやめる場合) は、自分の claim comment だけを削除する。作業 branch (local / remote)・draft PR・ラベルは再開のために残す。確保の判定に branch を使わないため、branch を削除する必要は無い。
 
 ### よくある誤操作と回避
 
-- **誤着手**: 「ラベル確認 → ラベル付与」だけで判定したため race condition で同 issue に複数 session が着手 → step 2-5 の二段排他で防ぐ
+- **誤着手**: 「ラベル確認 → ラベル付与」だけで判定したため race condition で同 issue に複数 session が着手 → step 2-4 の claim comment 先着判定で防ぐ
 - **ラベル誤削除**: 「ラベル単独だと誰が付けたか不明」でつい削除 → claim comment の `session=` 値で持ち主を識別、自分のものでなければ触らない
-- **撤退時の clean-up 忘れ**: claim comment が残ったまま次の issue へ進む → ゴーストの claim が後続 session の撤退判定を誤らせる → step 1-3 を必ずセットで実行
+- **撤退時の clean-up 忘れ**: claim comment が残ったまま次の issue へ進む → ゴーストの claim が後続 session の撤退判定を誤らせる → 撤退の後片付けを必ずセットで実行
 
 <!-- rule:ask-user-question -->
 ## 8. AskUserQuestion の必須化

@@ -22,7 +22,7 @@ gh pr list --head <branch>
 
 ## 2. 排他制御の参照
 
-新規着手と判定した場合の排他制御 (claim comment → 3 秒待機 → 先着判定 → branch push による確定 → ラベル付与) は、常時注入ルール `rule:issue-claim` の手順本体をそのまま実行してください。安全機構のため本 skill 側では手順を複製しません。
+新規着手と判定した場合の排他制御 (claim comment → 3 秒待機 → 先着判定 → ラベル付与 → 作業 branch の作成) は、常時注入ルール `rule:issue-claim` の手順本体をそのまま実行してください。安全機構のため本 skill 側では手順を複製しません。
 
 本 skill が担当するのはセクション 1 の pick-up 分岐判定までで、判定後の排他制御の実施責任は `rule:issue-claim` 側にあります。
 

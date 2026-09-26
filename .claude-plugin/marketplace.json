@@ -73,7 +73,7 @@
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "作業規律を注入し issue / PR 本文の独断を検知する",
-      "version": "3.0.4",
+      "version": "3.0.5",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {

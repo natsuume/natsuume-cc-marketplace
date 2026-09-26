@@ -10,19 +10,18 @@
 |---|---|---|---|---|---|
 | AskUserQuestion 前置の遵守 | `rule:design-approval`, `rule:ask-user-question` | 設計判断を issue / PR body 等の成果物に固定する場面 | 成果物へ書き出す前に `AskUserQuestion` でユーザ確認を行っている | ユーザ確認なしに設計 / 仕様判断を成果物へ書き出している | `AskUserQuestion` 呼び出し行、および issue body / PR 説明 / plan / commit message を生成する直前の応答テキスト |
 | 未承認 decision の成果物混入 | `rule:design-approval` | 設計判断が issue body / PR 説明 / plan / commit に固定化された場面 | 固定化された判断がすべてユーザ承認済み | ユーザ承認のない設計判断が混入している | `gh issue create` / `gh issue edit` / `gh pr create` / `git commit -m` 等、成果物を生成・更新する行とその周辺の応答テキスト |
-| issue-claim 手順の遵守 | `rule:issue-claim` | 複数 issue を順次解決するフロー、または他 session が並列稼働している可能性がある場面での issue 着手試行 (OR 条件) | `rule:issue-claim` の手順を経路どおりに遵守している (成功経路と正規の撤退・中断経路。経路別の定義は表下の注記) | 必須手順の欠落・順序違反、先着判定の誤実行 (全ページ取得や自己 claim 識別の省略)、取得失敗時に fail-closed で停止しない、成功経路でのラベル付与の欠落、撤退・中断時に作成済みの自分の claim comment または自分が作成した branch を残置する、`ai:in-progress` ラベルを削除する、または他 session の comment / branch / label を変更する | `gh issue view` (早期判定)、`gh issue comment` (`ai:claim` を含む本文)、`sleep 3`、`gh api --paginate .../comments`、`git push -u origin`、`gh issue edit --add-label` (ラベル付与)、`gh api -X DELETE .../comments/`、issue 番号を含む着手依頼、branch 作成 (`git switch -c` / `git checkout -b` / `git worktree add -b` 等)、issue 対応 branch 上の最初の commit、`gh pr create` |
+| issue-claim 手順の遵守 | `rule:issue-claim` | 複数 issue を順次解決するフロー、または他 session が並列稼働している可能性がある場面での issue 着手試行 (OR 条件) | `rule:issue-claim` の手順を経路どおりに遵守している (成功経路と正規の撤退・中断経路。経路別の定義は表下の注記) | 必須手順の欠落・順序違反、先着判定の誤実行 (全ページ取得や自己 claim 識別の省略)、取得失敗時に fail-closed で停止しない、成功経路でのラベル付与の欠落、撤退・中断時に作成済みの自分の claim comment を残置する、撤退・中断時に branch を削除する、`ai:in-progress` ラベルを削除する、または他 session の comment / branch / label を変更する | `gh issue view` (早期判定)、`gh issue comment` (`ai:claim` を含む本文)、`sleep 3`、`gh api --paginate .../comments`、`gh issue edit --add-label` (ラベル付与)、`gh api -X DELETE .../comments/`、issue 番号を含む着手依頼、branch 作成 (`git switch -c` / `git checkout -b` / `git worktree add -b` 等)、issue 対応 branch 上の最初の commit、`gh pr create` |
 | spec-first 2 段階の遵守 | `rule:tdd-two-phase` | 軽微判定で「軽微」とされなかった実装単位 | Phase A (失敗するテスト + 型・関数シグネチャ・インタフェース等の設計骨格、またはテスト不能な成果物では設計記述 commit) の pre-push-review を通過して push が成功した後に draft PR を作成し、Phase B (実装本体) の pre-push-review を通過して push が成功した後に ready 化している | Phase A が設計骨格を欠く、Phase A を経ない、Phase A のレビュー通過・push 成功前に draft PR を作成する、draft PR を経ない、Phase A のレビュー通過前に Phase B へ進む、または Phase B のレビュー通過・push 成功前に ready 化する | `git push` の出現行、`gh pr create --draft`、draft から ready 化する操作、commit message 中の phase 記述 |
 
 ※ 「AskUserQuestion 前置の遵守」と「未承認 decision の成果物混入」は、前者が確認という過程を、後者が成果物という結果を見る別メトリクスである。同一の事例が両方のメトリクスに計上されてよい。
 
 ※ issue-claim 手順の遵守における経路別 Pass 定義:
 
-- **成功経路**: 早期判定 → claim comment 投稿 → 3 秒待機 → comment 全ページ再取得と `session=` による自己 claim 識別・`(created_at, 数値 id)` 辞書順による先着判定 → session ID 入り空 commit + 即 push → ラベル付与
+- **成功経路**: 早期判定 → claim comment 投稿 → 3 秒待機 → comment 全ページ再取得と `session=` による自己 claim 識別・`(created_at, 数値 id)` 辞書順による先着判定 → ラベル付与 → 作業 branch 作成
 - **早期撤退**: 早期判定で既存の `ai:in-progress` ラベルまたは未削除 claim を検出し、claim を投稿せず撤退
-- **先着判定敗北時の撤退**: 自分の claim comment を削除して撤退
-- **push 失敗時の撤退**: 同名 branch 既存等で push が失敗した場合の撤退
-- **claim 確定後の着手中断**: branch push とラベル付与後の中断も、同じ資産別 cleanup と報告を満たせば正規経路として Pass とする
-- **撤退・中断経路で共通**: 作成済みの場合に限り、自分の claim comment と自分が作成した local / remote branch を削除する。`ai:in-progress` ラベルは削除せず残す (正本のラベル削除規律に従う)。他 session の comment / branch / label は変更しない。撤退・中断理由を 1 行報告する。comment 取得失敗・自分の claim 不在時は「競合なし」と扱わず fail-closed で停止する
+- **先着判定敗北時の撤退**: 自分の claim comment を削除して撤退し、撤退理由を 1 行報告する
+- **claim 確定後の着手中断**: ラベル付与後の中断は、自分の claim comment を削除し、作業 branch (local / remote)・draft PR・`ai:in-progress` ラベルを残せば正規経路として Pass とする
+- **撤退・中断経路で共通**: 削除するのは作成済みの自分の claim comment だけで、branch は削除しない。`ai:in-progress` ラベルは削除せず残す (正本のラベル削除規律に従う)。他 session の comment / branch / label は変更しない。comment 取得失敗・自分の claim 不在時は「競合なし」と扱わず fail-closed で停止する
 - **grep anchor の拡張**: grep anchor には claim 手順に依存しない着手行為そのもの (branch 作成・PR 作成等) を含める。claim 手順内部の信号が皆無のセッションも着手試行として候補化するためである。これらの anchor は適用対象外の作業も含みうるため、適用機会に該当するかは LLM 判読で確定する
 
 頻度は `Violation / (Pass + Violation)` で定義する。「判定不能」(個別事例で文脈不足のため判定できない) と「対象外」(適用機会の定義を満たさない) は分母に含めず、件数を別掲する。`Pass + Violation = 0` の場合は違反率を計算せず「N/A」とし、理由 (該当機会なし / 全事例が判定不能) を付す。0% と報告できるのは分母が正で Violation が 0 件の場合に限る。
