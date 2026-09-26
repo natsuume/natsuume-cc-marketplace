@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v3.0.3
+v3.0.4
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
@@ -26,7 +26,7 @@ Claude Code に「個人の開発スタイル」を一括で適用するため�
 
 ### モデル分業の前提
 
-メインセッションと、実装・調査・一括修正等のワーカーサブエージェントは Opus 5.5 で動かします。メインセッションが Opus 5.5 なら、ワーカーは model 未指定でメインセッションのモデルを継承させます。メインセッションが Opus 系以外のモデルで動いている場合 (または env 等で継承先が Opus 以外になる場合) は、ワーカーの起動で `model: "opus"` を明示させます。Fable は `cross-model-advisor:fable-advisor-runner` と `pre-merge-cross-review:fable-reviewer` の起動 (`model: "fable"` の明示) にだけ使い、`block-fable-subagent.sh` が Fable 週次枠の使用率で起動を判定します (詳細は「block-fable-subagent」参照)。Sonnet に pin するのは codex 系 runner と検知層の `type: agent` hook のような定型 runner に限ります。
+メインセッションと、実装・調査・一括修正等のワーカーサブエージェントは Opus 5.5 で動かします。メインセッションが Opus 5.5 なら、ワーカーは model 未指定でメインセッションのモデルを継承させます。メインセッションが Opus 系以外のモデルで動いている場合 (または env 等で継承先が Opus 以外になる場合) は、ワーカーの起動で `model: "opus"` を明示させます。Fable は `cross-model-advisor:fable-advisor-runner` の起動 (`model: "fable"` の明示) にだけ使い、`block-fable-subagent.sh` が Fable 週次枠の使用率で起動を判定します (詳細は「block-fable-subagent」参照)。Sonnet に pin するのは codex 系 runner と検知層の `type: agent` hook のような定型 runner に限ります。
 
 配送する規律 (常時適用ルール・分業規律) は、メインセッションのモデルに依らず同一です。Fable をメインセッションのモデルとする構成は想定していません。その場合も同じ規律を配送し、Fable サブエージェントの起動はメインセッションのモデルに依らず上記の判定だけで扱います。
 
@@ -231,7 +231,7 @@ prompt 内の early return (「対象 command 以外は即 ok:true」) だけで
 **イベント**: `PreToolUse`
 **matcher**: `Agent|Task`
 
-Fable サブエージェントは、`model: "fable"` を明示し、かつ Fable 週次枠の使用率が閾値以下の場合に限り許可します (cross-model-advisor の fable-advisor-runner と pre-merge-cross-review の fable-reviewer を Fable で起動するため)。用途を advisor と pre-merge review に限る規律は分業規律 (`discipline.md`) が担い、本 hook は許可 agent の一覧を持ちません。メインセッションのモデルは判定に使いません。
+Fable サブエージェントは、`model: "fable"` を明示し、かつ Fable 週次枠の使用率が閾値以下の場合に限り許可します (cross-model-advisor の fable-advisor-runner を Fable で起動するため)。用途を advisor に限る規律は分業規律 (`discipline.md`) が担い、本 hook は許可 agent の一覧を持ちません。メインセッションのモデルは判定に使いません。
 
 fork サブエージェントを止める主防御は、利用者の settings (`~/.claude/settings.json` 等) に置く `permissions.deny` の rule です。本 hook はそれを補う二重防御で、permission rule が捕捉しない経路 (サブエージェント内からの継承・env による上書き) の検知と、deny メッセージによる自己修正誘導を担います。
 
@@ -250,7 +250,7 @@ fork サブエージェントを止める主防御は、利用者の settings (`
 - Claude Code のモデル解決順序は 明示 `model` > agent 定義の frontmatter > `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 で、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (`1` / `true`) が設定されている場合のみ env (未設定ならメインセッションのモデル) が全てを上書きする。`subagent_type` が `fork` のサブエージェントは model 指定にも env にも依らずメインセッションのモデルを継承する。本 hook はこの順序に沿って上から判定し、すべて deterministic な文字列判定で行う (LLM 評価は使わない)
   1. `fork` → サブエージェント内 (入力に `agent_id` がある) からの起動なら deny (nested guard、下記)。メインセッションからの起動なら allow
   2. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が有効 → 実効モデルは env (非空ならその値、空ならメインセッションのモデル)。env が fable なら model の明示に依らず deny し、model の明示では直せないことを deny 理由に書く。それ以外 (env 空を含む) は allow
-  3. `tool_input.model` に fable が明示指定されている (alias `fable` / full ID `claude-fable-5-1` 等、大文字小文字を無視した部分一致) → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める。deny 理由では、fable-advisor-runner / fable-reviewer は再起動せずスキップし、それ以外の委任では非 Fable の model (例: `model: "opus"`) を明示するよう案内する
+  3. `tool_input.model` に fable が明示指定されている (alias `fable` / full ID `claude-fable-5-1` 等、大文字小文字を無視した部分一致) → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める。deny 理由では、fable-advisor-runner は再起動せずスキップし、それ以外の委任では非 Fable の model (例: `model: "opus"`) を明示するよう案内する
   4. `tool_input.model` が非 fable の具体指定 → allow (明示は env より優先されるため)
   5. `tool_input.model` 未指定 (= 継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在でサブエージェント内 (入力に `agent_id` がある) からの起動は deny する (nested guard、下記)。それ以外 (env 不在のメインセッションからの起動) は allow
 - **nested guard**: サブエージェント内 (入力に `agent_id` がある) からの model 未指定 (`inherit` を含む)・`fork` の起動は deny し、model の明示を求める。継承先は起動元サブエージェントのモデルになり、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承しうるため。`CLAUDE_CODE_SUBAGENT_MODEL` が非空なら子の実効モデルは env で決まるため env で判定する

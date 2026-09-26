@@ -3,8 +3,7 @@
 # codex review 済みでない PR の `gh pr merge` をブロックする PreToolUse フック。 レビュー済みの
 # 証拠は merge 実行 repo の git-dir 直下にあるローカル記録 (final attestation) であり、 それが
 # PR 番号と現在の head SHA の両方に一致する場合だけ merge を通す。 GitHub には何も書かず、 gh は
-# PR 番号と head SHA の取得だけに使う。 Fable review は merge の前提条件ではなく、 本 gate は
-# Fable review を見ない。
+# PR 番号と head SHA の取得だけに使う。
 #
 # policy: fail-closed (関与したコマンドに限る)
 #   関与条件 (下記 1.) を満たさない Bash 呼び出しには一切関与しない (無出力で exit 0)。

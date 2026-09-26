@@ -14,9 +14,9 @@
 # (block-pre-merge.sh) は final attestation が PR 番号と現在の head SHA の両方に一致する
 # 場合だけ merge を通す。
 #
-# fable-reviewer (`pre-merge-cross-review:fable-reviewer`) の report は親 session に返る
-# だけで記録を作らないため、 本 hook の対象外である (hooks.json の matcher も codex-reviewer
-# だけに一致し、 script 側でも agent_type を完全一致で再検証する)。
+# 本 hook の対象は codex-reviewer (`pre-merge-cross-review:codex-reviewer`) だけである
+# (hooks.json の matcher も codex-reviewer だけに一致し、 script 側でも agent_type を完全一致で
+# 再検証する)。
 #
 # Claude Code の Agent tool は既定で background 起動になり、 PostToolUse は起動受理時
 # (tool_response.status="async_launched") に 1 回発火するのみで、 subagent 完了時には
@@ -173,8 +173,8 @@
 #   EXIT trap が stderr に診断ログを出してユーザに知らせる (trap は exit code を変更しない
 #   ため、 subagent の動作には影響しない)。 pre-push-codex-review の lib/exit-trap.sh と
 #   同等の機能を本 script 内にインラインで持つのは、 本 plugin が保持する他 plugin の lib の
-#   コピーを codex companion 解決ロジック (codex-companion-resolver.sh) と Fable 週次枠の
-#   使用率判定 (fable-weekly-usage.sh) の 2 ファイルに限る契約のため。
+#   コピーを codex companion 解決ロジック (codex-companion-resolver.sh) の 1 ファイルに限る
+#   契約のため。
 
 # 予期せぬ非ゼロ終了をユーザの stderr に通知する EXIT trap。
 _pre_merge_auto_mark_exit_handler() {

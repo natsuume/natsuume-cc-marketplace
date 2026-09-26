@@ -6,7 +6,7 @@
 # が launch attestation / tombstone を扱って pending を final attestation へ昇格する。 merge
 # gate は final attestation を読み、 PR 番号と現在の head SHA に一致すれば merge を通す。
 # これらの path が 1 文字でも乖離すると attestation は永遠に一致せず merge が通らなくなるため、
-# ここに集約する。 Fable review は記録を作らない (report は親 session に返るだけ)。
+# ここに集約する。
 #
 # ## 本 plugin が扱うファイル
 #

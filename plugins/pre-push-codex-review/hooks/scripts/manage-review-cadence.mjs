@@ -12,7 +12,6 @@
  * 計数対象 (1 サイクル = 成功 review 1 回。session ごとに合算する):
  *   - `pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer`
  *     の SubagentStop で、report に `Status: pass|findings` 行がちょうど 1 行ある場合
- *     (`pre-merge-cross-review:fable-reviewer` は codex review ではないため計数しない)
  *   - `cross-model-advisor:codex-review-runner` の SubagentStop で、report の実質末尾 3 行の footer
  *     (`Codex-Runner-Operation: review` / `Codex-Runner-Status: success` /
  *     `Codex-Runner-Job-ID: <id>`) が揃っている場合。同一 agent_id は 1 回だけ計数する

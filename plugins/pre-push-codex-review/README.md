@@ -8,7 +8,7 @@
 
 ## バージョン
 
-v4.0.3
+v4.0.4
 ## インストール
 
 ```bash
@@ -125,8 +125,6 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 ## review cadence
 
 `pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review、`cross-model-advisor:codex-review-runner` の成功 native / adversarial review を 1 サイクルと数え、前回の根本方針 checkpoint から合計 5 サイクル完了すると、次の review 起動と main session の停止を block する enforcement です。
-
-`pre-merge-cross-review:fable-reviewer` (merge 前の Fable review) は codex review ではないため計数しません。
 
 ### 計数対象
 
