@@ -5,7 +5,8 @@
 # UserPromptSubmit から呼ばれる。
 #
 # 注入する本文は hooks/prompts/auto-mode.md に定義する (プロンプトを sh に直接埋め込むと
-# 視認性・メンテナンス性が下がるため分離)。
+# 視認性・メンテナンス性が下がるため分離)。先頭の保守者向け HTML コメントと直後の空行は
+# 除いて配送する (lib/prompt-body.sh)。
 #
 # auto 以外では何もしない。during 系 (実装自走の判断境界) と他の常時適用ルール
 # (物理層 / before 系 / closing keyword) は inject-always.sh が SessionStart で配送する
@@ -54,7 +55,12 @@ fi
 # 注入本文を prompts/ から読み込む。読めない場合は fail-open で無音終了する
 # (jq 不在時と同じ方針。壊れた・欠けた注入で誤誘導するより注入しない方が安全)。
 PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
-CONTEXT=$(cat "$PROMPTS_DIR/auto-mode.md" 2>/dev/null)
+if [ ! -r "$SCRIPT_DIR/lib/prompt-body.sh" ]; then
+  exit 0
+fi
+# shellcheck source=plugins/agent-discipline/hooks/scripts/lib/prompt-body.sh
+source "$SCRIPT_DIR/lib/prompt-body.sh" || exit 0
+CONTEXT=$(read_agent_discipline_prompt "$PROMPTS_DIR/auto-mode.md")
 if [ -z "$CONTEXT" ]; then
   exit 0
 fi
