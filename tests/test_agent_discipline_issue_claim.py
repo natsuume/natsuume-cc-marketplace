@@ -313,6 +313,16 @@ class IssueClaimStartProcedureTest(IssueClaimTestCase):
             with self.subTest(phrase=phrase):
                 self.assert_phrase_present(label, item, phrase)
 
+    def test_work_branch_starts_from_the_latest_default_branch(self) -> None:
+        """作業 branch は最新の default branch を起点に作る。中断した別 issue の branch に
+        残る commit を、次の issue の branch が引き継がないようにするため。"""
+        item = top_level_list_item_containing(self.start_procedure(), "git switch -c")
+        label = self.label("作業 branch の作成の項目")
+        self.assert_scope_found(label, item, "「git switch -c」を含む項目が無い")
+        for phrase in ("git fetch origin", "origin/<default-branch>"):
+            with self.subTest(phrase=phrase):
+                self.assert_phrase_present(label, item, phrase)
+
     def test_no_branch_push_confirmation_stage(self) -> None:
         """branch push で確保を確定する段階 (空 commit・即 push) と、branch 名
         uniqueness を排他基盤とする説明が無い。"""
