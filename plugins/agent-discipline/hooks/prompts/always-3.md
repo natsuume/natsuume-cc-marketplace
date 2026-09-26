@@ -60,7 +60,6 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 - 完了時クリーンアップを行う場合は、claim comment の `session=` 値が自分のセッション ID と一致する場合に限り、ラベルと claim comment を**一組として**削除する (片方だけ削除しない)
 - 撤退時・着手中断時のどちらも、自分の claim comment のみ削除する。どちらの場合もラベルは削除しない
   - ラベルを残す理由: 「中断したが復帰予定」の状態が人間に見える + 後続 session が `ai:in-progress` を見て撤退 → 二重着手の保険として機能
-  - 人がラベルを外せば、次の session が claim を取り直し、残った branch から再開できる (issue-start skill の pick-up 分岐)
   - 古い stale なラベルは人間が判定して手動削除する運用に委ねる
 - **他 session の claim comment / branch / ラベルは絶対に削除しない**
 - 「自分の claim か」の判定基準: claim comment 本文の `session=` 値が **自分のセッション ID と一致するか**
