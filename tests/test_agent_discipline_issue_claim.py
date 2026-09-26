@@ -149,6 +149,13 @@ MULTIPLE_MATCH_REQUIREMENTS: tuple[Requirement, ...] = (
     "AskUserQuestion",
 )
 
+# local と remote の両方にある同名の branch を 1 つと数えることを示す要素 (空白を除去した文に
+# 照合する)。
+SAME_NAME_COUNTED_ONCE_REQUIREMENTS: tuple[Requirement, ...] = (
+    "同名",
+    re.compile(r"1つと数え"),
+)
+
 # 明示指示の定義を書く段落を識別する語 (両方を含む段落を定義の段落とする)。
 EXPLICIT_INSTRUCTION = "明示指示"
 EXPLICIT_DEFINITION_MARKERS = (EXPLICIT_INSTRUCTION, "handoff")
@@ -205,6 +212,10 @@ EXPLICIT_BRANCH_REQUIREMENTS: tuple[tuple[str, tuple[Requirement, ...]], ...] = 
     (
         "パターンに複数の branch が一致したら、何も変更せず停止してユーザに確認する",
         MULTIPLE_MATCH_REQUIREMENTS,
+    ),
+    (
+        "local と remote の両方にある同名の branch は 1 つと数える",
+        SAME_NAME_COUNTED_ONCE_REQUIREMENTS,
     ),
 )
 
@@ -748,6 +759,11 @@ class IssueClaimExistingBranchNameTest(IssueClaimTestCase):
     def test_no_match_follows_the_naming_convention(self) -> None:
         """既存の branch が無ければ、命名規約で branch 名を決める。"""
         self.assert_step_sentence((re.compile(r"無(?:け|い)"), "規約"))
+
+    def test_matches_are_counted_by_branch_name(self) -> None:
+        """local と remote の両方にある同名の branch は 1 つと数える (push 済みの branch で
+        再開する通常の経路を、複数一致として止めないため)。"""
+        self.assert_step_sentence(SAME_NAME_COUNTED_ONCE_REQUIREMENTS)
 
     def test_multiple_matches_stop_before_posting(self) -> None:
         """パターンに複数の branch が一致したら、claim comment を投稿する前に、何も変更
