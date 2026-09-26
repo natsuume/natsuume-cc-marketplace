@@ -37,7 +37,8 @@
   明示指示が無い場合と issue 番号だけの明示指示は、小節 1.1 を参照する。
 - 既存 branch の探し方 (``IssueStartBranchLookupTest``): issue-start skill の小節 1.1 は、
   `*/issue-<N>-*` で remote と local を探し (失敗したら投稿せず停止して報告)、同名を 1 つと
-  数え、`-phase-b-wip` の補助 branch を除き、命名規約に合わない名前で停止し、その後で
+  数え、`-phase-b-wip` の補助 branch を除き、命名規約 (使える文字を英小文字・数字・ハイフンに
+  限る) に合わない名前で停止し、その後で
   マージ済みの PR がある branch を除く。候補が 1 つならその名前を使い、無ければ命名規約で
   決め、複数なら投稿せず停止して確認する。見つけた名前は single quote で囲んで埋め込む。
 - 評価基準 (``IssueClaimEvaluationTest``): `docs/discipline-evaluation.md` の issue-claim の
@@ -159,6 +160,16 @@ MERGED_PR_CHECK_PHRASES = ("gh pr list --head", "--state merged")
 
 # 契約改訂手順が作る補助 branch の接尾辞。
 WIP_BRANCH_SUFFIX = "-phase-b-wip"
+
+# 命名規約に合わない名前で、何も変更せず停止してユーザに確認することを示す要素 (空白を
+# 除去した文に照合する)。
+CONVENTION_STOP_REQUIREMENTS: tuple[Requirement, ...] = (
+    "命名規約",
+    re.compile(r"合わな"),
+    re.compile(r"変更(?:せず|しない)"),
+    "停止",
+    "AskUserQuestion",
+)
 
 # パターンに複数の branch が一致したときに、何も変更せず停止してユーザに確認することを
 # 示す要素 (空白を除去した文に照合する)。
@@ -1089,7 +1100,13 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
         """探索コマンドが失敗したら「一致 0 件」と扱わず、claim comment を投稿せず停止して
         報告する。"""
         self.assert_lookup_sentence(
-            ("失敗", re.compile(r"投稿(?:せず|する前|の前)"), "停止", "報告")
+            (
+                "失敗",
+                re.compile(r"0件"),
+                re.compile(r"投稿(?:せず|する前|の前)"),
+                "停止",
+                "報告",
+            )
         )
 
     def test_matches_are_counted_by_branch_name(self) -> None:
@@ -1102,15 +1119,12 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
 
     def test_names_off_the_convention_stop(self) -> None:
         """命名規約に合わない名前が残ったら、何も変更せず停止してユーザに確認する。"""
-        self.assert_lookup_sentence(
-            (
-                "命名規約",
-                re.compile(r"合わな"),
-                re.compile(r"変更(?:せず|しない)"),
-                "停止",
-                "AskUserQuestion",
-            )
-        )
+        self.assert_lookup_sentence(CONVENTION_STOP_REQUIREMENTS)
+
+    def test_convention_defines_the_allowed_characters(self) -> None:
+        """検証に使う命名規約が、使える文字 (英小文字・数字・ハイフン) を定める (シェルの
+        メタ文字を含む名前を候補から外すため)。"""
+        self.assert_lookup_sentence(("命名規約", "英小文字", "数字", "ハイフン"))
 
     def test_merged_branches_are_excluded(self) -> None:
         """マージ済みの PR がある branch は候補から除く。"""
@@ -1121,15 +1135,29 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
         self.assert_lookup_sentence(("gh", "失敗", "停止", "報告"))
 
     def test_names_are_validated_before_the_merged_check(self) -> None:
-        """見つけた名前を gh のコマンドに埋め込む前に命名規約で検証する (命名規約の記述が
-        マージ済みの確認より前にある)。"""
-        section = strip_whitespace(self.lookup_section())
-        convention = section.find(strip_whitespace("命名規約"))
-        merged = section.find(strip_whitespace(MERGED_PR_CHECK_PHRASES[1]))
-        if convention < 0 or merged < 0 or convention > merged:
+        """見つけた名前を gh のコマンドに埋め込む前に命名規約で検証する (命名規約に合わない
+        名前で停止する文が、マージ済みの確認の文より前にある)。"""
+        items = sentences(self.lookup_section())
+        convention = next(
+            (
+                index
+                for index, sentence in enumerate(items)
+                if all(satisfies(sentence, r) for r in CONVENTION_STOP_REQUIREMENTS)
+            ),
+            None,
+        )
+        merged = next(
+            (
+                index
+                for index, sentence in enumerate(items)
+                if all(satisfies(sentence, phrase) for phrase in MERGED_PR_CHECK_PHRASES)
+            ),
+            None,
+        )
+        if convention is None or merged is None or convention > merged:
             self.fail(
-                f"{self.lookup_label()}: 命名規約の検証が、マージ済みの確認"
-                f" (`{MERGED_PR_CHECK_PHRASES[1]}`) より前に書かれていない"
+                f"{self.lookup_label()}: 命名規約に合わない名前で停止する文が、マージ済みの確認"
+                f" (`{' '.join(MERGED_PR_CHECK_PHRASES)}`) の文より前に無い"
             )
 
     def test_single_match_name_is_used(self) -> None:
@@ -1138,7 +1166,9 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
 
     def test_no_match_follows_the_naming_convention(self) -> None:
         """候補が無ければ、命名規約で新しい名前を決める。"""
-        self.assert_lookup_sentence((re.compile(r"(?:無|な)(?:け|い)"), "命名規約"))
+        self.assert_lookup_sentence(
+            (re.compile(r"候補が(?:無|な)(?:け|い)"), "命名規約", "新し")
+        )
 
     def test_multiple_matches_stop_before_posting(self) -> None:
         """候補が複数なら、claim comment を投稿せず、何も変更せず停止して確認する。"""
@@ -1185,7 +1215,14 @@ class IssueClaimEvaluationTest(IssueClaimTestCase):
         label = f"{display_path(self.evaluation_doc_path)} の「{EVALUATION_ISSUE_CLAIM_NOTE}」"
         notes = list_items_following(text, EVALUATION_ISSUE_CLAIM_NOTE)
         self.assert_scope_found(label, notes, "経路別 Pass 定義の箇条書きが無い")
-        requirements: tuple[Requirement, ...] = ("既存", "branch", "複数", "停止", "Pass")
+        requirements: tuple[Requirement, ...] = (
+            "既存",
+            "branch",
+            "複数",
+            "命名規約",
+            "失敗",
+            "停止",
+        )
         if not any(
             all(satisfies(item, requirement) for requirement in requirements)
             for item in top_level_list_items(notes)
