@@ -40,7 +40,8 @@
   数え、`-phase-b-wip` の補助 branch を除き、命名規約 (使える文字を英小文字・数字・ハイフンに
   限る) に合わない名前で停止し、その後で
   マージ済みの PR がある branch を除く。候補が 1 つならその名前を使い、無ければ命名規約で
-  決め、複数なら投稿せず停止して確認する。見つけた名前は single quote で囲んで埋め込む。
+  決め (既存の branch と同名なら、どちらにも存在しない名前になるよう slug を変える)、複数
+  なら投稿せず停止して確認する。見つけた名前は single quote で囲んで埋め込む。
 - 評価基準 (``IssueClaimEvaluationTest``): `docs/discipline-evaluation.md` の issue-claim の
   評価基準が、明示指示による再開と、既存 branch の探し方で停止する経路を Pass として扱う。
 
@@ -1168,6 +1169,14 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
         """候補が無ければ、命名規約で新しい名前を決める。"""
         self.assert_lookup_sentence(
             (re.compile(r"候補が(?:無|な)(?:け|い)"), "命名規約", "新し")
+        )
+
+    def test_new_name_avoids_existing_branches(self) -> None:
+        """候補が無くなって決めた新しい名前の branch が既にある場合 (除外したマージ済みの
+        branch 等) は、local / remote のどちらにも存在しない名前になるよう slug を変える
+        (step 6 の同名判定で、除外した branch に switch しないため)。"""
+        self.assert_lookup_sentence(
+            ("slug", re.compile(r"(?:どちら|いずれ)にも存在しない"))
         )
 
     def test_multiple_matches_stop_before_posting(self) -> None:
