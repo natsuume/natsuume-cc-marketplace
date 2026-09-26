@@ -29,7 +29,7 @@ v5.0.8
 | `rule:advisor-timing` | いつ相談するか: 実質的な作業前 (オリエンテーションは含まない) / 完了宣言前 (成果物を durable にしてから) / 行き詰まり / 方針転換の検討時。短い反応的タスクでは相談しない |
 | `rule:advisor-weight` | 助言はフラットに扱う (自分の証拠・推論・Codex の助言・Fable の助言を同じ土俵で突き合わせ、採否と理由を advisor ごとに明示する。黙って無視しない)。証拠と助言が衝突し自分で判断できないときは、衝突している advisor に reconcile call (衝突を明示した再相談) を 1 回行う |
 | `rule:advisor-boundary` | 設計/仕様の決定はユーザ専権 (助言は AskUserQuestion の代替でない)。差分 finding は pre-push-review が担当し、review cadence の checkpoint (enforcement は pre-push-codex-review が担う) は根本方針の course-correction だけを相談する。片方の advisor が使えないときはもう片方の助言だけで、両方使えないときは相談なしで続行し、スキップした側と理由をユーザ報告に含める |
-| `rule:rescue-thread` | `/codex:rescue` 起動時は `--resume` / `--fresh` を常に Claude が自律決定して付与し、thread 選択の AskUserQuestion を発行しない。`--resume` は「直前の rescue と同一論点の続き + 対象 rescue がセッション内で最新の再開可能 task (terminal 状態かつ threadId あり) と確実に分かる場合」のみで、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先 |
+| `rule:rescue-thread` | `cross-model-advisor:codex-rescue-runner` に rescue を依頼する際は `--resume` / `--fresh` を常に Claude が自律決定して request に含め、thread 選択の AskUserQuestion を発行しない。`--resume` は「直前の rescue と同一論点の続き + 対象 rescue がセッション内で最新の再開可能 task (terminal 状態かつ threadId あり) と確実に分かる場合」のみで、それ以外・迷ったら `--fresh`。ユーザのフラグ明示指定が最優先 |
 | `rule:codex-runner` | rescue / review / advisor は完全修飾 runner を起動し (Codex 側は `model: "sonnet"`)、起動 mode は指定しない (Claude Code が決める)。consult では相談前に `cross-model-advisor-fable-usage` を 1 回実行し、`available` なら codex-advisor-runner と fable-advisor-runner (`model: "fable"`) を同一メッセージで並列に起動する。fable-advisor-runner が hook に deny されたら再起動せずスキップする。runner の terminal report は completion notification 経由で後続ターンに届き、それを処理するまでタスクを完了扱いにしない。起動が classifier に拒否されたら同じ起動を繰り返さず `AskUserQuestion` で許可を得る |
 
 公式ドキュメントの推奨プロンプト (timing block / advice block) の移植ですが、次の 2 点は意図的に変えています: (1)「最初のファイル変更前に必ず advisor を呼ぶ」型の hard rule は採用していません (公式実測で、強い executor への hard rule 追加は過剰呼び出しを招き純効果がゼロ〜マイナスと報告されているため)。(2) advice block の「助言を重く扱う」も採用せず、フラットな扱いに変更しています (下記の差分参照)。
@@ -90,7 +90,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 
 ## 既知の制約
 
-- `rule:rescue-thread` は openai-codex plugin (v1.0.6 で確認) の rescue.md の「`--resume` / `--fresh` 指定時は thread 選択を質問しない」挙動を前提とします。外部 plugin の将来更新でこの前提が壊れた場合は規律の見直しが必要です
+- `rule:rescue-thread` は、codex-rescue-runner が request に含まれる thread flag に従って Codex task を継続または新規に開始する挙動を前提とします。runner の flag の扱いが変わった場合は規律の見直しが必要です
 - ユーザが `/codex:rescue` の本文を直接指定し、かつ対象の rescue がセッション内で最新の再開可能 task でなくなっている場合 (間に consult 等の Codex task が terminal 状態になった場合)、規律は安全側の degraded mode (`--fresh` + 本文無改変転送、thread 文脈の連続性なし) に倒れます。誤 thread 再開の防止と rescue.md の verbatim 転送契約を文脈の連続性より優先するためで、継続文脈が必要な場合は再依頼時に本文へ含めてください
 - fable-advisor-runner は判定後に使用率が閾値を超えた場合など、agent-discipline の hook に起動を deny される。この場合は再起動せず Codex の助言だけで続行する
 - Codex の 3 runner は model: sonnet を frontmatter で固定しているが、model 制限環境で sonnet が利用できない場合は runner の起動自体が失敗し、review cadence の `unavailable` 記録に到達できない。この場合は呼び出し側の Agent tool で利用可能な非 Fable モデルを `model` に明示して runner を再実行する (呼び出し側指定は frontmatter より優先される)
