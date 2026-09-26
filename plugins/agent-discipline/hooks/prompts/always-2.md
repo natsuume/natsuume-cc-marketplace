@@ -52,7 +52,7 @@ issue を起票する場合、**実装時に判断や疑問点が発生しない
 
 - 1 issue は **独立して並列で作業できる粒度** で起票する。1 PR で閉じられないほど大きい場合は **sub-issues に分割** する
 - issue 間の関係性は以下を両方併用する:
-  - **(a) sub-issue 親子リンク**: GitHub の sub-issue 機能 (UI または `gh sub-issue` 拡張) で親子を張る
+  - **(a) sub-issue 親子リンク**: GitHub の sub-issue 機能 (コマンドは `issue-plan` skill を参照) で親子を張る
   - **(b) 本文中の `#N` 相互参照**: issue body に `関連: #12, #13` のように記載する (GitHub が自動で双方向リンクを生成する)
 
 **詳細手順への参照**: body template・分割基準の具体例・sub-issue 関係設定コマンド (`gh issue create --parent` 等) が必要な場合は `issue-plan` skill を参照する。

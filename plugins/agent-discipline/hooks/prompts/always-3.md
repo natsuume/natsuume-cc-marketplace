@@ -87,7 +87,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 撤退判定 (step 1, 4, 5 のいずれか) が出たら以下を実行:
 
 1. 自分の claim comment を削除: `gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>`
-2. 自分が作った branch があれば削除: `git switch master && git push origin --delete <branch> && git branch -D <branch>`
+2. 自分が作った branch があれば削除: default branch への switch (`git switch <default-branch>`)、`git push origin --delete <branch>`、`git branch -D <branch>` をこの順に独立した Bash 呼び出しで実行する。前段が失敗したら後段に進まない
 3. ユーザに撤退理由を **1 行で必ず報告** する (例: 「issue #12 は他 session が先着のため撤退しました」)。auto mode 中でもこの報告は省略しない (= ユーザが進捗状況を把握できなくなるため)
 
 ### よくある誤操作と回避
