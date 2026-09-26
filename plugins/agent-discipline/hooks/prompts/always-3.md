@@ -33,7 +33,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
    ```
    gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> session=<セッションID> ts=<UTC ISO 8601>"
    ```
-   - branch 名は step 6 で作る予定の名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)
+   - branch 名は step 6 で使う名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)。`git ls-remote --heads origin '*issue-<N>-*'` と `git branch --list '*issue-<N>-*'` で既存の branch を探し (local と remote の同名は 1 つと数える)、1 つあればその名前を使い、無ければ次の規約で決める。複数あれば claim comment を投稿せず、何も変更せず停止して `AskUserQuestion` でユーザに確認する
    - branch 名規約: `<prefix>/issue-<N>-<slug>` (`<prefix>` = `feat` / `fix` / `chore` / `docs` / `refactor` 等、`<slug>` = issue タイトルから kebab-case で抽出した短縮形)
    - 例: `feat/issue-12-add-auth`, `fix/issue-25-null-deref`
    - `<セッションID>` は環境変数 `CLAUDE_CODE_SESSION_ID` の値 (Claude Code がセッション毎に付与する UUID)。未設定の場合のみ `uuidgen` で生成した値を代用し、同一セッション中は同じ値を使い続ける
@@ -56,8 +56,9 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 6. **作業 branch を用意**し、通常の implementation フローへ移行する (`rule:tdd-two-phase` に従い、Phase A の commit を push した後に draft PR を作る。既存の draft PR があればそれを使う)。`git fetch origin` の後 (失敗したら停止してユーザに報告)、同名の branch の有無で分ける:
    - 無い: 中断した別 issue の commit を引き継がないよう、最新の default branch を起点に作る: `git switch -c <prefix>/issue-<N>-<slug> --no-track origin/<default-branch>` (`--no-track` は upstream を default branch にしないため)
-   - remote だけにある: `git switch <branch>` で remote の branch から再開する
-   - local にある: `git switch <branch>` の後、remote の同名 branch と比べる。local が古ければ `git merge --ff-only origin/<branch>`、local が新しければそのまま再開し、分岐していれば local / remote のどちらも変更せず停止してユーザに報告する
+   - remote だけにある: `git switch -c <branch> --track origin/<branch>` で再開する
+   - local だけにある: `git switch <branch>` でそのまま再開する
+   - 両方にある: `git switch <branch>` の後、local が古ければ `git merge --ff-only origin/<branch>`、新しければそのまま再開し、分岐していれば local / remote のどちらも変更せず停止してユーザに報告する
 
 ### ラベル削除規律 (誤削除事故防止)
 
