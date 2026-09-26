@@ -17,8 +17,8 @@ pre-push-review は push 前の 2 レビューを標準 skill ではなく専用
 - 上記 3 点と両立しない説明語 (harness が nested subagent 起動を禁止している /
   標準 skill を呼ぶと turn が終了する / 標準 skill が degraded mode になる /
   存在しない `LS` tool の名指し / `CLAUDE_CODE_SUBAGENT_MODEL` が明示 model や
-  agent frontmatter より優先される) を、plugin の 5 ファイルとリポジトリ直下
-  README が含まないこと
+  agent frontmatter より優先される) を、plugin の 5 ファイル、リポジトリ直下
+  README、pre-push-codex-review の command と auto-mark.sh が含まないこと
 - 上記 3 点の説明が、agent description / agent body / command の理由節 /
   plugin README の `### Agents` 節 (3 点それぞれが同一の箇条書き項目・段落に
   共起する) / auto-mark.sh の Skill 検知コメントにあること
@@ -56,9 +56,19 @@ RATIONALE_FILES = (
     AUTO_MARK,
 )
 
+# pre-push-codex-review も標準 skill ではなく専用 subagent でレビューするため、
+# その command と auto-mark.sh のコメントも同じ禁止語の不在検査の対象にする。
+CODEX_PLUGIN = ROOT / "plugins" / "pre-push-codex-review"
+CODEX_REVIEW_COMMAND = CODEX_PLUGIN / "commands" / "review.md"
+CODEX_AUTO_MARK = CODEX_PLUGIN / "hooks" / "scripts" / "auto-mark.sh"
+
 # 禁止語の不在検査の対象。リポジトリ直下 README も pre-push-review の節で同じ理由を
 # 述べるため、失効した説明が残らないよう検査対象に含める。
-EXPIRED_RATIONALE_SCANNED_FILES = RATIONALE_FILES + (ROOT_README,)
+EXPIRED_RATIONALE_SCANNED_FILES = RATIONALE_FILES + (
+    ROOT_README,
+    CODEX_REVIEW_COMMAND,
+    CODEX_AUTO_MARK,
+)
 
 FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 SECTION_BOUNDARY_PATTERN = re.compile(r"^#{1,3} ")

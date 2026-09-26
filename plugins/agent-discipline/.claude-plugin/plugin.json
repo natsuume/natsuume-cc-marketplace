@@ -1,6 +1,6 @@
 {
   "name": "agent-discipline",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "作業規律を注入し issue / PR 本文の独断を検知する"
 }

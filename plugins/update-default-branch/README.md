@@ -4,8 +4,7 @@ PR がマージされた旨の報告をユーザーから受けた際に、デ�
 
 ## バージョン
 
-v0.4.6
-
+v0.4.7
 ## 概要
 
 このプラグインは Skill のみで構成されています。Claude が「PR をマージした」旨の発話を検知すると Skill 内の手順に従って以下を実行します:
@@ -58,7 +57,7 @@ claude plugin install update-default-branch@natsuume-plugins
 - **`origin/HEAD` は必ず remote から再検出**: local の symbolic ref は remote の default branch rename に自動追随しません。remote-tracking refs の fetch/prune と `git remote set-head origin --auto` が成功してからだけ `symbolic-ref` を読み、失敗時は stale 値で継続しません。
 - **埋め込むブランチ名は必ず single quote で囲む**: git のブランチ名には `$` / `;` / `&` 等のシェルメタ文字が合法に含まれうるため、クォートなし埋め込みは別コマンド実行や変数展開の事故経路になります。single quote で完全リテラル化し、ブランチ名自体に `'` が含まれる場合は実行を中止してユーザーに確認します。
 - **`[gone]` 削除に確認ステップなし**: 追跡先が消えている branch はリモート側で既に削除済み (PR マージ後の自動削除等) で、ローカル削除は安全な後始末でしかないため、確認ステップは挟みません。
-- **`[gone]` ≠ "merged"**: ただし `[gone]` には PR マージ以外の経路 (リモートでの force-delete / リネーム等) も含まれます。`git branch -D` は merge 検査を skip するため、ローカルにのみ存在するコミットを抱えた `[gone]` branch は誤削除されえます。削除前の SHA は `git branch -D` の出力に表示されるので、誤削除に気づいたら `git checkout -b '<name>' <sha>` で復活できます (約 30 日は `git reflog` でも遡れます)。「未マージなのに `[gone]` になっている」branch を温存したい場合、本 Skill 実行前に別 branch へ退避するか、Skill 自体を実行しないでください。
+- **`[gone]` ≠ "merged"**: ただし `[gone]` には PR マージ以外の経路 (リモートでの force-delete / リネーム等) も含まれます。`git branch -D` は merge 検査を skip するため、ローカルにのみ存在するコミットを抱えた `[gone]` branch は誤削除されえます。削除前の SHA は `git branch -D` の出力に表示されるので、誤削除に気づいたら `git switch -c '<name>' <sha>` で復活できます (約 30 日は `git reflog` でも遡れます)。「未マージなのに `[gone]` になっている」branch を温存したい場合、本 Skill 実行前に別 branch へ退避するか、Skill 自体を実行しないでください。
 - **デフォルトブランチに居着かない**: ユーザーの CLAUDE.md でデフォルトブランチでの作業が禁止されている場合に備え、開始時に元のブランチ名を Claude が記憶し、終了時に状況に応じて復帰させる手順になっています。
 - **未コミット変更がある場合は中断**: `git status --short` の出力が空でない場合、stash / commit のいずれかをユーザーに依頼してから再実行する設計です。
 

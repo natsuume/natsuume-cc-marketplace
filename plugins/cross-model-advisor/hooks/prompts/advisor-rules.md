@@ -8,7 +8,7 @@
 
 # cross-model-advisor: Codex / Fable 利用規律
 
-このセッションでは OpenAI Codex と Fable を助言役 (advisor) として並列に利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/cross-model-advisor:consult` skill が定義する。以下は相談規律 (セクション 1〜3)、`/codex:rescue` の thread 選択 (セクション 4)、Codex / Fable の実行を追跡可能な subagent に閉じ込める runner 規律と並列相談の手順 (セクション 5) である。
+このセッションでは OpenAI Codex と Fable を助言役 (advisor) として並列に利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/cross-model-advisor:consult` skill が定義する。以下は相談規律 (セクション 1〜3)、rescue の thread 選択 (セクション 4)、Codex / Fable の実行を追跡可能な subagent に閉じ込める runner 規律と並列相談の手順 (セクション 5) である。
 
 <!-- rule:advisor-timing -->
 ## 1. いつ相談するか
@@ -52,9 +52,9 @@
 <!-- rule:rescue-thread -->
 ## 4. rescue の thread 選択
 
-**なぜ**: openai-codex plugin の `/codex:rescue` は、`--resume` / `--fresh` のどちらも指定されず再開可能な thread があると、継続か新規かを AskUserQuestion で必ず 1 回質問する。この質問は auto mode の自走を毎回ブロックする一方、回答は高度に予測可能である (実測でほぼ常に新規、継続はいずれも直前の rescue と同一論点の続きだった)。フラグ指定時は質問しない設計のため、常に自分でフラグを決めて付与すれば、外部 plugin を変更せずに質問分岐へ到達させずに済む。
+**なぜ**: rescue はセクション 5 のとおり `cross-model-advisor:codex-rescue-runner` に依頼して実行し、runner は request に含まれる thread flag に従う。継続か新規かは依頼する側の会話の文脈から判断でき、ユーザに尋ねると auto mode の自走が止まるため、依頼する側が flag を決めて request に含める。
 
-**指示**: `/codex:rescue` (Skill / command / subagent 経由のいずれも) を起動する際は、`--resume` または `--fresh` を常に自分で決定して付与し、thread 選択の AskUserQuestion を発行しない。判定は以下に従う:
+**指示**: `cross-model-advisor:codex-rescue-runner` に rescue を依頼する際は、`--resume` または `--fresh` を常に自分で決定して request に含め、thread 選択の AskUserQuestion を発行しない。判定は以下に従う:
 
 - `--resume` は「直前の rescue と同一論点の続き (同じレビュー指摘への反復対応、同じ相談の深掘り等) であり、かつ継続対象の rescue が、このセッションで threadId を持つ terminal 状態 (完了・失敗・キャンセル) の Codex task のうち最新のものだと確実に分かる場合」に限る。resume は起動順ではなく更新順の最新 task を再開し、`/cross-model-advisor:consult` の Codex 相談も同じ task 履歴を共有し、失敗・キャンセルされた task も候補になる。他の Codex task が後から terminal 状態になった場合・並行 / background の task がある場合・迷う場合は `--fresh` とする
 - ユーザがフラグを文字どおり指定した場合はそれを尊重する。自然言語で継続を依頼された場合は継続の意図を尊重しつつ、対象 thread を安全に特定できなければ `--fresh` とする

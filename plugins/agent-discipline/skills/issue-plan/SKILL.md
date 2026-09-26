@@ -87,14 +87,21 @@ gh issue edit <N> --add-sub-issue <M>
 gh issue edit <M> --add-blocked-by <K>
 ```
 
-**fallback** (ネイティブコマンドが使えない gh v2.94 未満向け):
+**fallback** (ネイティブコマンドが使えない gh v2.94 未満向け): 次の 2 段を順に実行します。
 
-```bash
-# sub_issue_id は issue 番号ではなく issue の内部数値 ID (gh api の .id) である点に注意する。
-# issue 番号 (M) をそのまま渡すと別の issue に誤って紐付く事故になる。
-SUB_ID=$(gh api /repos/<owner>/<repo>/issues/<M> --jq .id)
-gh api -X POST /repos/<owner>/<repo>/issues/<N>/sub_issues -f sub_issue_id="$SUB_ID"
-```
+1. M の内部数値 ID を 1 回の Bash 呼び出しで取得します。
+
+   ```bash
+   gh api /repos/<owner>/<repo>/issues/<M> --jq .id
+   ```
+
+2. 出力された数値 ID を `<ID>` の位置に literal で埋め込み、次の Bash 呼び出しで N の sub-issue に追加します。
+
+   ```bash
+   gh api -X POST /repos/<owner>/<repo>/issues/<N>/sub_issues -f sub_issue_id=<ID>
+   ```
+
+`sub_issue_id` は issue 番号ではなく issue の内部数値 ID (gh api の `.id`) である点に注意します。issue 番号 (M) をそのまま渡すと、別の issue に誤って紐付く事故になります。
 
 ## 5. `#N` 相互参照と issue types 不使用
 

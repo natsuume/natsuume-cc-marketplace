@@ -1,6 +1,6 @@
 {
   "name": "update-default-branch",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "既定ブランチを最新化し gone ブランチを削除する"
 }

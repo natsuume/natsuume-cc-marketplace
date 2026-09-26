@@ -128,10 +128,10 @@
 #   ただし completion 証明は fail-closed: 上記 SubagentStop 契約の 1〜8 を
 #   すべて満たす場合だけ marker を書く。
 #
-# **subagent 内 Skill invoke の silent-pass 防止**: codex-reviewer subagent は tools から
-# `Skill` を外している。 subagent が標準 skill を invoke することを構造的に塞いでおり、
-# 「subagent → 標準 skill → sub-task が nested 制約で動かず degraded mode で完了 → でも
-# Agent 完了で marker は書かれる」 経路は発生しない。
+# **subagent 内 Skill invoke の silent-pass 防止**: codex-reviewer subagent は tools に
+# `Skill` / `Agent` を持たない (tools は `Bash, Read` のみ)。 subagent からの標準 skill の
+# invoke も nested subagent の起動も構造的に起きないため、 wrapper による codex review の
+# 実走を経ずに marker が書かれる経路は発生しない。
 #
 # 設計意図:
 #   - マーカー: 「Claude が手動で mark-reviewed を呼ぶ」 方式は修正後の状態を

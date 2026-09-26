@@ -19,7 +19,7 @@
 
 Bash コマンドは可能な限り分解し、それぞれを独立した Bash ツール呼び出しとして実行してください。
 
-**なぜ**: Claude Code の PreToolUse hook は Bash ツールの `command` 文字列に対するパターンマッチで判定されます。複数コマンドを合成すると 1 回の Bash 呼び出しとして扱われ、先頭以外の部分が hook 検知から外れる可能性があります。例えば `git add foo.txt && git commit -m "..." && git push` は、`git push` を deny したい hook が先頭の `git add` パターンしか見ずに通過させてしまう恐れがあります。各コマンドを独立した Bash 呼び出しに分解すれば、リポジトリのガードレール (git-guardrails / pre-push-review / auto-lint-check 等) が意図どおり機能します。
+**なぜ**: Claude Code の PreToolUse hook は Bash ツールの `command` 文字列を解析して判定します。リポジトリのガードレール (git-guardrails / pre-push-review / auto-lint-check 等) は `command` を `&&` / `||` / `;` / `|` / `&` で segment に分割して判定しますが、`$(...)` / バッククォートの内側は解析せず、保守的に deny します。ラッパー (`bash -c` 等) の内側も解析されず、hook によっては deny され、hook によっては判定されないまま通過します。また、`command` の先頭パターンで判定する hook もありえます。1 回の Bash 呼び出しで 1 コマンドを実行すれば、どの hook も意図どおりに判定できます。
 
 **分解すべきパターン**:
 

@@ -19,8 +19,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v7.0.2
-
+v7.0.3
 ## インストール
 
 ```bash
@@ -192,4 +191,4 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 ## 関連プラグイン
 
 - [git-guardrails](../git-guardrails/): default branch (master/main) への直接書き込みを deny。 本プラグインは default branch 上の push を git-guardrails に委譲します
-- [decompose-bash](../decompose-bash/): Bash コマンドを最小粒度に分解する SessionStart 注入。 本プラグインの PreToolUse hook が `&&` / `||` 等の合成で取りこぼされないよう、 Claude に各コマンドを独立 Bash 呼び出しに分けさせる
+- [agent-discipline](../agent-discipline/): 常時注入ルール `rule:bash-decompose` (Bash コマンド分解) で、 Claude に各コマンドを独立 Bash 呼び出しに分けさせる。 本プラグインの PreToolUse hook は `$(...)` / バッククォート / `bash -c` 等のラッパーの内側にある `git push` を解析せず保守的に deny するため、 1 呼び出し 1 コマンドにすると hook が意図どおり判定できる

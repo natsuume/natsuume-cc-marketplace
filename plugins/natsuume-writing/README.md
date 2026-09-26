@@ -13,8 +13,7 @@ Markdown の技術記事・技術書については、outline、draft、review �
 
 ## バージョン
 
-v0.9.0
-
+v0.9.1
 ## 構成
 
 | Skill | 役割 |
