@@ -14,10 +14,15 @@ issue に着手する前に、既存の作業状態を確認します。
 ```bash
 gh issue view <N>
 git ls-remote --heads origin '*issue-<N>-*'
+git branch --list '*issue-<N>-*'
 gh pr list --head <branch>
 ```
 
+明示指示で branch 名が挙げられている場合は、パターンの代わりにその branch 名で `git ls-remote --heads origin <branch>` と `git branch --list <branch>` を実行します。
+
 - ユーザのメッセージまたは handoff の文書が、issue 番号か branch 名を挙げてその issue の継続を指示している (明示指示) 場合 → `rule:issue-claim` の明示指示による再開に従い、step 6 で既存の branch に switch します。Phase A (テスト or 設計記述 commit) が完了済みなら Phase B (本文実装) から、未完了なら Phase A から再開します
+  - 明示指示で挙げられた branch 名は、`<prefix>/issue-<N>-<slug>` の命名規約に合わなくてもそのまま使います
+  - 対象の branch が local / remote のどちらにも無い場合に限り、新規着手として `rule:issue-claim` の step 1 から実行します
 - 明示指示が無い場合 → 既存の branch / open PR の有無に依らず、セクション 2 の排他制御手順に進みます。確保できたら `rule:issue-claim` の step 6 で既存の branch があればそれに switch し、同じ基準で Phase A / Phase B から再開します
 
 ## 2. 排他制御の参照
