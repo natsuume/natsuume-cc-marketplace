@@ -776,22 +776,41 @@ def delivery_part1(tmp_dir: str, locale: str | None = UTF8_LOCALE) -> str:
     return run_hook(INJECT_ALWAYS_SH, payload, tmp_dir, locale=locale)
 
 
+def body_without_leading_comment(text: str) -> str:
+    """prompt ファイルの内容から、hook が配送する本文を求める。
+
+    ファイルが ``<!--`` で始まり ``-->`` で閉じる場合は、その先頭コメント (保守者向け
+    ヘッダ) と直後に続く空行を除く。先頭がコメントでない・閉じていない場合は内容を
+    そのまま使う。先頭のコメントが rule マーカーの場合も除かない。hook は ``$(...)`` で
+    読むため末尾の改行を落とす。
+    """
+    match = re.match(r"<!--.*?-->", text, re.DOTALL)
+    if match is None or re.fullmatch(
+        r"<!--\s*(?:subagent-)?rule:[A-Za-z0-9_-]+\s*-->", match.group(0)
+    ):
+        return text.rstrip("\n")
+    rest = re.sub(r"\A(?:[ \t]*\n)+", "", text[match.end():], count=1)
+    return rest.rstrip("\n")
+
+
 def payload_content_missing(context: str, source_md: Path) -> list[str]:
-    """context (hook が生成した additionalContext) に、source_md の本文全体が
-    実際に含まれているかを検査する。
+    """context (hook が生成した additionalContext) に、source_md の配送本文
+    (先頭のヘッダコメントを除いた本文。body_without_leading_comment 参照) の
+    全体が実際に含まれているかを検査する。
 
     サイズ (UTF-16 code unit 数) のみの検査、あるいは先頭見出し行 1 行のみの
     照合では、見出しだけ含んで本文の大半を欠落させた payload や、別要素が同じ
-    見出しを引用しているだけの payload でも green になってしまう。各経路の実 payload を確認したところ、各 hook は
-    対応する md ファイル (冒頭のヘッダコメントを含む全文) を `$(cat ...)`
-    でそのまま埋め込んでおり、bash のコマンド置換が末尾の改行を除去する
-    以外は逐語一致する (空白・改行の変形は発生しない) ため、正規化なしの
-    単純な substring 包含で判定できる。ヘッダコメントを除外する必要もない
-    — 実 payload にヘッダコメントを含む全文がそのまま現れるため。
+    見出しを引用しているだけの payload でも green になってしまう。各 hook は
+    対応する md ファイルから先頭のヘッダコメントと直後の空行を除いた本文を
+    そのまま埋め込み、それ以外の空白・改行を変形しないため、正規化なしの
+    単純な substring 包含で判定できる。
     """
-    text = read(source_md)
-    if text.rstrip("\n") not in context:
-        return [f"{source_md.name} の本文全体が payload に含まれない"]
+    body = body_without_leading_comment(read(source_md))
+    if body not in context:
+        return [
+            f"{source_md.name} の配送本文 (先頭のヘッダコメントを除く) の全体が"
+            " payload に含まれない"
+        ]
     return []
 
 
@@ -853,7 +872,7 @@ def delivery_rules_part(part: str, tmp_dir: str) -> str:
 
 
 def delivery_subagent(tmp_dir: str) -> str:
-    """SubagentStart (inject-subagent-rules.sh) が配送する subagent-rules.md 全文。"""
+    """SubagentStart (inject-subagent-rules.sh) が配送する subagent-rules.md の本文。"""
     return run_hook(INJECT_SUBAGENT_RULES_SH, {}, tmp_dir)
 
 
@@ -1004,7 +1023,7 @@ class SizeBudgetTests(unittest.TestCase):
 
     def test_subagent_delivery_includes_source_file_content(self) -> None:
         """SubagentStart の配送 (inject-subagent-rules.sh) の additionalContext に
-        subagent-rules.md の本文全体が含まれること (payload_content_missing 参照)。
+        subagent-rules.md の配送本文の全体が含まれること (payload_content_missing 参照)。
 
         サイズ検査 (test_all_delivery_paths_within_budget) はサイズのみを見るため、
         hook が本文を欠落させた (それでいて長さだけは偶然予算内に収まる) 出力でも
@@ -1097,12 +1116,12 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
       (UTF-8 で 1 文字 3 バイト前後) で計上するため、現行 payload は必ず
       8,000 を超え、二段縮退 ((参照パス) 行の除去 → 配送メモ全体の除去) が
       発動して ESSENTIAL (自己修復指示 + CORE) だけが配送される。CORE は
-      always-1.md の全文である。検査は文言の逐語固定ではなく縮退機構の意味的
-      検証とする:
+      always-1.md の配送本文 (先頭のヘッダコメントを除いた本文) である。検査は
+      文言の逐語固定ではなく縮退機構の意味的検証とする:
       (a) hook が正常終了し additionalContext を持つ有効な JSON を返す
       (b) 配送メモ (delivery-note.md) 本文が payload に存在しない
       (c) (参照パス) 行が payload に存在しない
-      (d) CORE (always-1.md の全文) が payload に残存する (ESSENTIAL 不落)
+      (d) CORE (always-1.md の配送本文) が payload に残存する (ESSENTIAL 不落)
       (e) payload が自己修復指示 (「(自己修復)」) で始まる
     - 前提の明示: 本検査は「バイト計上では現行 payload が必ず予算を超える」
       という現行サイズを前提とする。payload がバイト計上でも 8,000 以下まで
@@ -1171,7 +1190,7 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
         self.assertEqual(
             [],
             payload_content_missing(context, ALWAYS_MD["always-1.md"]),
-            "ルール md 全文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
+            "ルール md の配送本文が縮退で欠落している (ESSENTIAL が不落単位になっていない疑い)",
         )
         self.assertTrue(
             context.startswith("(自己修復)"),
