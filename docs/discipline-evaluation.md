@@ -19,6 +19,7 @@
 
 - **成功経路**: 早期判定 → claim comment 投稿 (issue 番号で見つかった既存の branch があればその名前を使う) → 3 秒待機 → comment 全ページ再取得と `session=` による自己 claim 識別・`(created_at, 数値 id)` 辞書順による先着判定 → ラベル付与 → 作業 branch の用意 (同名 branch が無ければ作成、あれば switch。分岐時は停止して報告)
 - **明示指示による再開**: ユーザのメッセージまたは handoff の文書が issue 番号か branch 名を挙げて継続を指示し、対応する branch がある場合は、claim の手順 (早期判定〜ラベル付与) を経ずに既存 branch で再開しても Pass とする。残っているラベルや他セッション ID の claim comment を削除しないこと。明示指示が無いのに claim を経ずに既存 branch で再開した場合は違反とする
+- **既存 branch の探し方での停止**: issue-start skill セクション 1.1 の手順で、既存 branch の候補が複数ある・命名規約に合わない名前がある・探索コマンドや gh が失敗した、のいずれかにより、claim comment を投稿せず何も変更せず停止してユーザに確認・報告した場合は Pass とする
 - **早期撤退**: 早期判定で既存の `ai:in-progress` ラベルまたは未削除 claim を検出し、claim を投稿せず撤退
 - **先着判定敗北時の撤退**: 自分の claim comment を削除して撤退し、撤退理由を 1 行報告する
 - **claim 確定後の着手中断**: ラベル付与後の中断は、自分の claim comment を削除し、作業 branch (local / remote)・draft PR・`ai:in-progress` ラベルを残せば正規経路として Pass とする

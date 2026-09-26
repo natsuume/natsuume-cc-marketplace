@@ -13,18 +13,29 @@ issue に着手する前に、既存の作業状態を確認します。
 
 ```bash
 gh issue view <N>
-git ls-remote --heads origin '*issue-<N>-*'
-git branch --list '*issue-<N>-*'
-gh pr list --head <branch>
+gh pr list --head '<branch>'
 ```
 
-明示指示で branch 名が挙げられている場合は、パターンの代わりにその branch 名で `git ls-remote --heads origin <branch>` と `git branch --list <branch>` を実行します。
+既存の branch は、セクション 1.1 の手順で探します。明示指示で branch 名が挙げられている場合は、その branch 名で `git ls-remote --heads origin '<branch>'` と `git branch --list '<branch>'` を実行します。
 
 - ユーザのメッセージまたは handoff の文書が、issue 番号か branch 名を挙げてその issue の継続を指示している (明示指示) 場合 → `rule:issue-claim` の明示指示による再開に従い、step 6 で既存の branch に switch します。Phase A (テスト or 設計記述 commit) が完了済みなら Phase B (本文実装) から、未完了なら Phase A から再開します
   - 明示指示で挙げられた branch 名は、`<prefix>/issue-<N>-<slug>` の命名規約に合わなくてもそのまま使います
+  - issue 番号だけが挙げられた場合は、セクション 1.1 の手順で branch を決めます
   - 対象の branch が local / remote のどちらにも無い場合に限り、新規着手として `rule:issue-claim` の step 1 から実行します
-  - issue 番号だけが挙げられ、パターンに複数の branch が一致した場合 (local と remote の同名は 1 つと数える) は、何も変更せず停止して、どの branch で再開するかを `AskUserQuestion` でユーザに確認します
-- 明示指示が無い場合 → 既存の branch / open PR の有無に依らず、セクション 2 の排他制御手順に進みます。既存の branch があれば `rule:issue-claim` の step 2 でその名前を claim に使い、確保できたら step 6 でその branch に switch して、同じ基準で Phase A / Phase B から再開します
+- 明示指示が無い場合 → 既存の branch / open PR の有無に依らず、セクション 2 の排他制御手順に進みます。`rule:issue-claim` の step 2 でセクション 1.1 の手順で既存の branch を探し、見つかればその名前を claim に使い、確保できたら step 6 でその branch に switch して、同じ基準で Phase A / Phase B から再開します
+
+### 1.1 既存 branch の探し方
+
+`rule:issue-claim` の step 2 (claim 経路) と、issue 番号だけを挙げた明示指示では、次の手順で issue の既存 branch を決めます。明示指示でユーザが branch 名を挙げた場合は、この手順を使わずその名前をそのまま使います。
+
+1. `git ls-remote --heads origin '*/issue-<N>-*'` と `git branch --list '*/issue-<N>-*'` を実行します。パターンは branch 名の先頭の `<prefix>/issue-<N>-` に一致させ、slug に issue 番号を含む別 issue の branch を拾わないようにします。どちらかが失敗したら「一致 0 件」とは扱わず、claim comment を投稿せず停止してユーザに報告します
+2. 2 つの結果を branch 名でまとめます。local と remote の同名は 1 つと数えます
+3. 名前が `-phase-b-wip` で終わる branch (セクション 4.2 の補助 branch) は候補から除きます
+4. 残った候補の名前が命名規約 `<prefix>/issue-<N>-<slug>` (英小文字・数字・ハイフンのみ、正規表現 `^[a-z]+/issue-<N>-[a-z0-9]+(-[a-z0-9]+)*$`) に合わなければ、何も変更せず停止して、どう扱うかを `AskUserQuestion` でユーザに確認します。この検証は、名前を次の手順の gh コマンドに埋め込む前に行います
+5. 各候補について `gh pr list --head '<branch>' --state merged` を実行し、マージ済みの PR が見つかった branch は候補から除きます。gh が失敗したら停止してユーザに報告します
+6. 候補が 1 つならその名前を使います。候補が無ければ、命名規約で新しい名前を決めます。その名前の branch が既にある場合 (手順 3・5 で除外した branch 等) は、local / remote のどちらにも存在しない名前になるよう slug を変えます (例: 末尾に `-2` を付ける)。候補が複数なら、claim comment を投稿せず何も変更せず停止して、どの branch を使うかを `AskUserQuestion` でユーザに確認します
+
+見つけた branch 名をコマンドに埋め込むときは、single quote で囲みます (例: `git switch '<branch>'`)。
 
 ## 2. 排他制御の参照
 
