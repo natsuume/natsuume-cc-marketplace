@@ -1,6 +1,7 @@
 """agent-discipline: Fable をメインセッションで使う運用を前提にしない契約テスト。
 
-メインセッションは Opus 5.5 で、Fable は advisor と pre-merge review の起動にのみ使う。
+メインセッションは Opus 5.5 で、Fable は advisor (cross-model-advisor の fable-advisor-runner) の
+起動にのみ使う。
 agent-discipline は Fable 専用の規律 (常時適用ルール・分業規律) を持たない。これを、prompt
 ファイルの有無と plugins/ 配下・README の記述で観測して固定する。
 

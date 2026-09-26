@@ -5,7 +5,7 @@ GitHub には何も書かない。codex review wrapper (`run-pre-merge-codex-rev
 attestation を git-dir 直下に書くだけで終わり、`pre-merge-cross-review:codex-reviewer`
 subagent の lifecycle hook (SubagentStart / SubagentStop) が正規 report と head SHA 一致を
 確認して final attestation へ昇格する。merge gate は final attestation を PR 番号と現在の
-head SHA に照合する。fable-reviewer の report は記録しない (hook の対象外)。
+head SHA に照合する。
 
 契約 (auto-mark.sh):
 
@@ -63,10 +63,8 @@ HOOKS_CONFIG = PLUGIN_DIR / "hooks" / "hooks.json"
 
 CODEX_REVIEWER = "pre-merge-cross-review:codex-reviewer"
 PUSH_CODEX_REVIEWER = "pre-push-codex-review:codex-reviewer"
-# SubagentStart / SubagentStop の matcher は codex-reviewer だけに一致する (fable-reviewer の
-# report は記録しない)。
+# SubagentStart / SubagentStop の matcher は codex-reviewer だけに一致する。
 REVIEWER_LIFECYCLE_MATCHER = "^pre-merge-cross-review:codex-reviewer$"
-FABLE_REVIEWER = "pre-merge-cross-review:fable-reviewer"
 
 FINAL_MARKER = ".claude-pre-merge-codex-reviewed"
 PENDING_MARKER = ".claude-pre-merge-codex-reviewed.pending"
@@ -743,11 +741,10 @@ class PreMergeCodexAutoMarkTest(RepositoryFixture, unittest.TestCase):
         self.assertEqual(len(stop_groups), 1)
         self.assertIn("auto-mark.sh", stop_groups[0]["hooks"][0]["command"])
 
-        # matcher は codex-reviewer にだけ完全一致し、fable-reviewer・pre-push 側・類似
-        # namespace には一致しない。
+        # matcher は codex-reviewer にだけ完全一致し、pre-push 側・類似 namespace には
+        # 一致しない。
         self.assertIsNotNone(re.fullmatch(REVIEWER_LIFECYCLE_MATCHER, CODEX_REVIEWER))
         for agent_type in (
-            FABLE_REVIEWER,
             PUSH_CODEX_REVIEWER,
             "pre-merge-cross-review:code-reviewer",
             f"{CODEX_REVIEWER}-extra",

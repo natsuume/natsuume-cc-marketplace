@@ -158,7 +158,7 @@ class RenameTest(unittest.TestCase):
     def test_plugin_json_name_and_major_version(self) -> None:
         manifest = json.loads(read(PLUGIN_JSON))
         self.assertEqual("cross-model-advisor", manifest["name"])
-        self.assertEqual("5.0.8", manifest["version"])
+        self.assertEqual("5.0.9", manifest["version"])
 
     def test_agent_files_are_renamed(self) -> None:
         names = {path.name for path in AGENTS_DIR.glob("*.md")}

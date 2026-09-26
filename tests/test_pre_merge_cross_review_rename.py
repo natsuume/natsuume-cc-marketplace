@@ -1,10 +1,10 @@
 """pre-merge-codex-review から pre-merge-cross-review への改名の契約テスト。
 
 - plugin ディレクトリは `plugins/pre-merge-cross-review` にあり、旧ディレクトリは残らない
-- plugin.json の name は新名、version は 3.0.0
+- plugin.json の name は新名、version は 4.0.0
 - marketplace.json の entry は新名 (source・version を含む) で、top-level `renames` が
   旧名を新名に対応づける
-- agents は codex-reviewer と fable-reviewer の 2 つで、frontmatter の name がファイル名と一致する
+- agents は codex-reviewer の 1 つだけで、frontmatter の name がファイル名と一致する
 - 旧名はリポジトリ内 (git ls-files の全ファイル) に残らない。例外は codex 専用の動作名
   (wrapper basename `run-pre-merge-codex-review` と codex 記録ファイル名
   `.claude-pre-merge-codex-reviewed`)、marketplace.json の renames の 1 行、plugin README の
@@ -30,8 +30,8 @@ OLD_PLUGIN = ROOT / "plugins" / OLD_NAME
 PLUGIN_JSON = PLUGIN / ".claude-plugin" / "plugin.json"
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 AGENTS_DIR = PLUGIN / "agents"
-EXPECTED_VERSION = "3.1.0"
-EXPECTED_AGENTS = {"codex-reviewer.md", "fable-reviewer.md"}
+EXPECTED_VERSION = "4.0.0"
+EXPECTED_AGENTS = {"codex-reviewer.md"}
 
 # 旧名を含んでよい codex 専用の動作名 (wrapper basename と codex 記録ファイル名)。
 ALLOWED_OLD_NAME_TOKENS = ("run-pre-merge-codex-review", ".claude-pre-merge-codex-reviewed")
@@ -81,7 +81,7 @@ class PluginRenameTest(unittest.TestCase):
         self.assertEqual(EXPECTED_VERSION, entry["version"])
         self.assertEqual(NEW_NAME, marketplace.get("renames", {}).get(OLD_NAME))
 
-    def test_agents_are_codex_and_fable_reviewers(self) -> None:
+    def test_agents_are_codex_reviewer_only(self) -> None:
         names = {path.name for path in AGENTS_DIR.glob("*.md")}
         self.assertEqual(EXPECTED_AGENTS, names)
         wrong = [
