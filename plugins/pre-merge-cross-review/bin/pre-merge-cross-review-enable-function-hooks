@@ -1,0 +1,114 @@
+#!/bin/bash
+# pre-merge-cross-review-enable-function-hooks
+#
+# Claude Code の user settings (`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json`) の `env` に
+# `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1"` を書き込み、本 plugin の hooks module (Claude Mods) を
+# 読み込ませる。`/pre-merge-cross-review:setup` skill から実行する。
+#
+# 出力 (stdout、常に 2 行):
+#   1 行目: 結果。次のいずれか
+#     created      settings.json が無かったため {"env":{"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS":"1"}} で作成した
+#     updated      既存の settings.json に書き込んだ (値が "1" 以外だった場合の上書きを含む)
+#     already-set  既に "1" が設定済みのため書き込まなかった
+#     aborted      書き込まずに中止した
+#   2 行目: 理由・対象ファイルの説明 (日本語)
+# exit code: created / updated / already-set は 0、aborted は 1
+#
+# 中止する条件 (ファイルは変更しない):
+#   - jq が無い
+#   - settings.json が JSON として解析できない、または top-level が object でない
+#     (空ファイル・JSON 値が複数並んだファイルを含む)
+#   - `env` が存在し object でない
+#   - 書き込みに失敗した
+#
+# 既存の他のキー・`env` の他のキーは保持する。settings.json が symlink の場合も symlink を
+# 置き換えず、リンク先の内容を書き換える。既存ファイルの更新は一時ファイルからの rename で
+# 行い、権限を保つ。親ディレクトリが無い場合は作成する。
+
+set -u
+
+ENV_KEY="CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"
+CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SETTINGS="$CONFIG_DIR/settings.json"
+
+report() {
+  printf '%s\n%s\n' "$1" "$2"
+}
+
+abort() {
+  report aborted "$1"
+  exit 1
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  abort "jq が見つからないため ${SETTINGS} を安全に更新できません。jq をインストールしてから再実行してください。"
+fi
+
+if [ ! -e "$SETTINGS" ] && [ ! -L "$SETTINGS" ]; then
+  if ! mkdir -p "$CONFIG_DIR"; then
+    abort "${CONFIG_DIR} を作成できませんでした。"
+  fi
+  if ! jq -n --arg key "$ENV_KEY" '{env: {($key): "1"}}' >"$SETTINGS"; then
+    abort "${SETTINGS} を作成できませんでした。"
+  fi
+  report created "${SETTINGS} を作成し、env に ${ENV_KEY}=1 を設定しました。"
+  exit 0
+fi
+
+# リンク先が存在しない symlink と循環する symlink は、どちらも -e が偽になる。
+if [ -L "$SETTINGS" ] && [ ! -e "$SETTINGS" ]; then
+  abort "${SETTINGS} は symlink ですが、リンク先が存在しないか循環しているため中止しました。リンクを修正してから再実行してください。"
+fi
+
+# 現在の状態を 1 語で得る。解析できない JSON は jq が非 0 で終わる。空ファイルは無出力、
+# 複数の JSON 値は複数行になるため、下の case でいずれも中止に倒れる。
+if ! STATE=$(jq -r --arg key "$ENV_KEY" '
+  if type != "object" then "not-object"
+  elif has("env") and (.env | type) != "object" then "env-not-object"
+  elif .env[$key] == "1" then "already-set"
+  else "writable"
+  end' "$SETTINGS" 2>/dev/null); then
+  abort "${SETTINGS} を JSON として解析できないため中止しました。ファイルを修正してから再実行してください。"
+fi
+
+case "$STATE" in
+  already-set)
+    report already-set "${SETTINGS} の env には ${ENV_KEY}=1 が設定済みです。"
+    exit 0
+    ;;
+  writable) ;;
+  env-not-object)
+    abort "${SETTINGS} の env が object ではないため中止しました。env を object に直してから再実行してください。"
+    ;;
+  *)
+    abort "${SETTINGS} の top-level が 1 つの JSON object ではないため中止しました。ファイルを修正してから再実行してください。"
+    ;;
+esac
+
+if ! UPDATED=$(jq --arg key "$ENV_KEY" '.env = ((.env // {}) + {($key): "1"})' "$SETTINGS"); then
+  abort "${SETTINGS} の更新内容を作成できませんでした。"
+fi
+
+# symlink を置き換えないよう、リンクをたどった実体のファイルを書き換える対象にする。
+# (`readlink -f` は macOS の古い版に無いため、1 段ずつたどる)
+TARGET="$SETTINGS"
+while [ -L "$TARGET" ]; do
+  LINK=$(readlink "$TARGET") || abort "${SETTINGS} の symlink を解決できませんでした。"
+  case "$LINK" in
+    /*) TARGET="$LINK" ;;
+    *) TARGET="$(dirname "$TARGET")/$LINK" ;;
+  esac
+done
+
+# 実体と同じディレクトリに権限ごと複製した一時ファイルへ書き、rename で置き換える。
+# 途中で失敗しても元のファイルは変わらない。
+TMP_FILE="$(dirname "$TARGET")/.settings.json.pre-merge-cross-review.$$"
+if ! cp -p "$TARGET" "$TMP_FILE" 2>/dev/null; then
+  rm -f "$TMP_FILE"
+  abort "${SETTINGS} の一時ファイルを作成できませんでした。"
+fi
+if ! printf '%s\n' "$UPDATED" >"$TMP_FILE" || ! mv -f "$TMP_FILE" "$TARGET"; then
+  rm -f "$TMP_FILE"
+  abort "${SETTINGS} に書き込めませんでした。"
+fi
+report updated "${SETTINGS} の env に ${ENV_KEY}=1 を設定しました。"

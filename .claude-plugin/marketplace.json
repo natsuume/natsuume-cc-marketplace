@@ -52,7 +52,7 @@
       "name": "pre-merge-cross-review",
       "source": "./plugins/pre-merge-cross-review",
       "description": "merge 前の codex review を必須化し Fable review も行う",
-      "version": "3.0.1",
+      "version": "3.1.0",
       "keywords": ["merge", "review", "quality", "codex", "openai", "fable", "cross-review", "subagent", "pr-diff", "gate"]
     },
     {

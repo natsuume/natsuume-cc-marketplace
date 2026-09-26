@@ -8,7 +8,7 @@ Fable review は merge の前提条件ではありません。fable-reviewer sub
 
 ## バージョン
 
-v3.0.1
+v3.1.0
 
 ## インストール
 
@@ -75,6 +75,42 @@ codex review wrapper (`run-pre-merge-codex-review.sh`) の起動を検証する 
 **ファイル**: `hooks/scripts/inject-merge-order-rules.sh`
 
 `hooks/prompts/merge-order-rules.md` の全文を毎セッションの SessionStart で additionalContext として注入します。注入文は、PR のマージ前提条件を確認した後・`gh pr merge` を実行する前に、Fable 週次枠の判定コマンドを実行し、codex-reviewer subagent と (判定が `available` のとき) fable-reviewer subagent を同一メッセージで並列に起動する手順、各 reviewer の起動 prompt の定型文、`--delete-branch` を付けない merge の形、起動が classifier に拒否された場合に `AskUserQuestion` でユーザの許可を得る手順を定めます (背景は「auto mode での利用」節)。permission mode やモデルによる分岐はなく常に同一内容を注入します。`jq` 不在・prompt ファイルの欠落・空・読み取り不能のいずれでも無出力で exit 0 とし (fail-open)、セッションを壊しません。
+
+### Hooks module (Claude Mods)
+
+**ファイル**: `hooks/module/register.ts` (エントリ)、`hooks/module/tool-check-policy.mjs` (判定ロジック)
+
+`hooks/hooks.json` の `"modules"` で宣言する hooks module です。auto mode で、merge gate を通過した単独の `gh pr merge` と、単独の `gh pr view` / `gh pr checks` を `tool.check` イベントで allow に引き上げ、auto mode classifier の判定を経ずに実行させます。背景は「auto mode での利用」節を参照してください。
+
+`tool.check` では下位の判定 (permissions ルール・classic PreToolUse hook を含む) を先に得て、次の **すべて** を満たすときだけ `allow` を返します。それ以外は下位の判定をそのまま返します。
+
+1. 下位の判定が `ask` で、settings のルールによるものではない。`deny` (merge gate の deny・`permissions.deny` を含む)、`allow`、`permissions.ask` ルールによる `ask` は変更しません
+2. 現在の permission mode が `auto` である。mode が分からないときは引き上げません
+3. Bash tool の command が、次のいずれかの正規形の単独呼び出しである
+   - `gh pr merge [<番号>] <--squash|--merge|--rebase>` (戦略フラグはちょうど 1 つ。他の引数を含まない)
+   - `gh pr view [<番号>|<branch>]` に `--json <fields>` / `--jq <式>` / `-q <式>` / `--comments` / `-c` を付けたもの
+   - `gh pr checks [<番号>|<branch>]` に `--json <fields>` / `--jq <式>` / `-q <式>` / `--watch` / `--interval <秒>` / `-i <秒>` / `--required` / `--fail-fast` を付けたもの
+
+`<fields>` は英数字・`_`・`,`、`<秒>` は整数、`<式>` はシングルクォートで囲んだ 1 語か英数字・`_`・`.` だけの語、`<branch>` は英数字・`.`・`_`・`/`・`-` だけの語 (先頭は `-` 以外) に限ります。`<式>` に `$` や識別子としての `env` を含むものは、jq の `env` / `$ENV` で環境変数を読み出せるため対象外です。値付きフラグの `=` 形は長フラグだけで受け付け、タブと印字可能な ASCII 以外の文字を含む command も対象外です。`-R` / `--repo`・URL・`:` を含む指定は、別ホストへの通信になりうるため対象外です。quote の内側を含めて `;` `&` `|` `<` `>` バッククォート `$(` `${` 改行を含む command、シングルクォートの外に `$` `"` `\` を含む command、`gh` の前に env 代入・ラッパー (`env` / `bash -c` / `eval` / `xargs` 等) がある command も対象外です。対象外の command は従来どおり classifier の審査を受けます。
+
+merge gate (`block-pre-merge.sh`) は classic PreToolUse として `tool.check` より先に評価され、その deny は `tool.check` の下位判定として渡されます。module は deny を上書きしないため、codex review の記録が無い merge は従来どおり gate の deny で止まります。module 自身は review 記録を検証しません。
+
+`tool.check` の入力は permission mode も呼び出し元の agent も持たないため、次の 2 つを記録して引き当てます。
+
+- agent ごとの permission mode: permission mode を持つ classic イベント (SessionStart / UserPromptSubmit / PostToolUse / PostToolUseFailure) の入力から、メインと subagent を区別して記録します
+- 呼び出しごとの agent: `tool.call` イベントの入力から、呼び出しの id と呼び出し元の agent の対応を記録します
+
+呼び出し元の agent に mode の記録が無い間 (起動直後の subagent 等) は、mode 不明として引き上げません。
+
+`tool.call` と `tool.check` のハンドラは Bash の呼び出しに限って登録します。Claude Code は、`tool.call` のハンドラが登録されたツールの呼び出しを background へ切り離さないため、module が読み込まれている間は Bash の呼び出しが切り離されなくなります。Bash 以外のツールには関与しません。
+
+**読み込まれる条件**: Claude Code プロセスの env に `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` があり、workspace trust を承諾済みであることが必要です。managed settings の `disableAllHooks` / `allowManagedHooksOnly`、`--bare`、Safe mode では読み込まれません。読み込まれない環境でも、本 plugin の他の機能は従来どおり動作します。env は次の setup skill で設定できます。
+
+### Setup skill
+
+**ファイル**: `skills/setup/SKILL.md`、`bin/pre-merge-cross-review-enable-function-hooks`
+
+`/pre-merge-cross-review:setup` は、user settings (`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json`) の `env` に `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1"` を書き込みます。既存の他のキーは保持し、既に設定済みなら書き込みません。settings.json が JSON として解析できない・top-level が object でない・`env` が object でない場合は書き込まずに中止します。設定は次に起動する Claude Code から有効になります。
 
 ### Fable 週次枠の判定コマンド
 
@@ -164,7 +200,9 @@ auto mode (permission_mode = `auto`) では、Claude Code の classifier が各 
 
 classifier は project settings (`.claude/settings.json` / `.claude/settings.local.json`) の `autoMode` を読まないため、ユーザ設定 (`~/.claude/settings.json`) に書く必要があります。classifier は CLAUDE.md も読むため、プロジェクトの CLAUDE.md に同趣旨の 1 文を書く方法でも代替できます。設定なしで拒否された場合は、ユーザが「マージ前レビューとマージを実行してよい」と発言すれば次の起動は通ります (classifier は明示的なユーザ意図で soft block を解除します)。
 
-`gh pr merge` 自体が classifier に拒否されることもあります。`--delete-branch` は remote branch の削除として組み込み soft_deny の対象になるため、merge は `gh pr merge <番号> --squash` 等の単独正規形で実行し、branch の掃除は merge 後に別コマンドで行ってください。
+`gh pr merge` 自体や、merge 直後の `gh pr view` も classifier に `[Merge Without Review]` で拒否されることがあります。codex review の結果は subagent の report として届くため、classifier からは review 済みであることが見えません。hooks module (「Hooks module (Claude Mods)」節) を有効にすると、merge gate を通過した単独の `gh pr merge` と、単独の `gh pr view` / `gh pr checks` は classifier を経ずに実行されます。hooks module を有効にしていない環境では、ユーザ自身がマージを指示する発言をすると、次の実行は通ります。
+
+`--delete-branch` は remote branch の削除として組み込み soft_deny の対象になるため、merge は `gh pr merge <番号> --squash` 等の単独正規形で実行し、branch の掃除は merge 後に別コマンドで行ってください。hooks module も戦略フラグ以外の引数を含む merge は allow に引き上げません。
 
 ## 既知の制約
 
@@ -173,6 +211,10 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - **gate の観測範囲は Bash tool の `gh pr merge` (連続列を含む形) のみ**: `gh api` による直接 merge 呼び出し、gh alias、意図的な難読化、非 Bash の tool 経路、Web UI や他 client からの merge は観測できません
 - **TOCTOU 窓は防がない**: gate 確認後から実 merge までの間に head が更新される競合窓は防ぎません (ローカル記録の SHA は gate 確認時点の head と照合されます)
 - **`--auto` / `--admin` は常に deny**: 遅延 merge 予約 (gate 確認と実 merge の分離) と保護 bypass はサポート外です。必要な場合は plugin を無効化して実行してください
+- **hooks module は early access の API に依存する**: Claude Mods (function hooks) の API は Claude Code のリリース間で予告なく変わりえます。`tool.check` の allow が classifier の判定を省略する挙動は Claude Code 2.1.282 の実装で確認したもので、公式ドキュメントには記述がありません
+- **hooks module が参照する permission mode は直近の classic イベント時点の値**: 呼び出し元の agent ごとに記録していますが、ターンの途中で permission mode を切り替えた直後の 1 回のツール呼び出しには、その agent の切り替え前の mode が使われます
+- **hooks module は rule を持たない ask の由来を区別しない**: core の既定の ask だけでなく、他の PreToolUse hook が返した ask も、条件を満たせば allow に引き上げます。`permissions.ask` ルールによる ask は引き上げません
+- **hooks module の対象リポジトリは作業ディレクトリで決まる**: `-R` / URL の指定は対象外にしていますが、対象リポジトリは Bash の作業ディレクトリの git remote で決まります。merge の安全性は merge gate のレビュー記録の照合に委ねます
 - **粗い検出による誤爆**: `gh pr merge` の連続列を quoted な文字列として含むだけのコマンド (コミットメッセージへの言及等) も関与対象になります。誤 deny された場合はコマンドを言い換えて回避してください
 - **連続列判定はフラグ介在形に一致しない**: サブコマンドの語間にフラグが入る呼び出し形 (`gh -R owner/repo pr merge 123` 等) は `gh pr merge` の連続列を含まないため gate が関与せず、この形の merge は観測できません。別 repo の PR を merge する場合はその repo のディレクトリへ移動し、`gh pr merge` を先頭に置いた単独コマンドとして番号指定 (`gh pr merge 123`) か current branch 指定 (`gh pr merge --squash`) で実行してください (repo selector 付きの形は gate が deny します)
 - **レビュー記録は current branch の PR にのみ紐づく**: codex-reviewer subagent が実行する wrapper は current branch の PR を対象にレビューし、その PR 番号を記録に書きます。別 PR を番号指定した merge が deny されたときは、先にその PR のブランチへ `git switch` してから subagent を起動してください (別ブランチのまま起動すると、記録が current branch の PR のものになり、codex の利用枠だけを消費して目的の merge は deny のままになります)
@@ -216,6 +258,11 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 | `agents/codex-reviewer.md` | `pre-merge-cross-review:codex-reviewer` subagent 定義 |
 | `agents/fable-reviewer.md` | `pre-merge-cross-review:fable-reviewer` subagent 定義 |
 | `bin/pre-merge-cross-review-fable-usage` | Fable 週次枠の判定コマンド (fable-reviewer を起動するか) |
+| `hooks/module/register.ts` | hooks module のエントリ。permission mode と呼び出し元の agent を記録し、tool.check で判定ロジックを呼ぶ |
+| `hooks/module/permission-mode-tracker.mjs` | agent ごとの permission mode と、呼び出しごとの agent の記録 |
+| `hooks/module/tool-check-policy.mjs` | tool.check の判定ロジック (純関数) |
+| `skills/setup/SKILL.md` | hooks module を有効化する setup skill |
+| `bin/pre-merge-cross-review-enable-function-hooks` | user settings の env に `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` を書き込むコマンド |
 
 ## 関連プラグイン
 

@@ -196,8 +196,8 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str] | None] = {
         "a24d5b1d023b9944ebdc03ab09d81cf3e0bd2936443587e45ceef5b27fce95f4",
     ),
     "pre-merge-cross-review": (
-        832,
-        "a7ad837d3eb677482355bbb113a19438927e34ef2fe8232091a138c3cebe9e49",
+        1024,
+        "207988c00764b7f2f1a099840a822f72ca53e5eb13834e8b21ab95cc6a74cc64",
     ),
     "pre-push-codex-review": (
         1301,
@@ -245,7 +245,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "auto-lint-check": "0.8.4",
     "pre-push-review": "7.0.2",
     "pre-push-codex-review": "4.0.2",
-    "pre-merge-cross-review": "3.0.1",
+    "pre-merge-cross-review": "3.1.0",
     "update-default-branch": "0.4.6",
     "natsuume-statusline": "0.11.5",
     "agent-discipline": "3.0.2",
