@@ -779,7 +779,7 @@ linked worktree では marker / launch attestation は main \`.git\` 直下で�
 
 **\`/pre-push-review:review\`** (2 namespaced custom agent を並列起動) を使ってください。
 
-一部のマーカーのみ「未実行」 / 「失効」 の場合は、 該当レビューの subagent だけを Agent / Task tool で単独再起動してもかまいません (全 2 subagent の再走も可)。 マーカーと subagent_type の対応:
+一部のマーカーのみ「未実行」 / 「失効」 の場合は、 該当レビューの subagent だけを Agent tool で単独再起動してもかまいません (全 2 subagent の再走も可)。 マーカーと subagent_type の対応:
   - correctness review (code-reviewed)  → subagent_type="pre-push-review:code-reviewer", model="opus"
   - security review (security-reviewed) → subagent_type="pre-push-review:security-reviewer", model="opus"
 

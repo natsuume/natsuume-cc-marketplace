@@ -107,10 +107,10 @@ gh issue edit <M> --add-blocked-by <K>
 
 sub-issue 親子リンクに加えて、issue body 内に `#N` 形式の相互参照を必ず併記します (例:「関連: #12, #13」)。親子リンクは GitHub UI 上の階層表示に使われますが、body 本文を読むだけでも関係性が分かるようにするため `#N` 参照は省略しません (`rule:issue-granularity` を参照)。
 
-GitHub の issue types 機能は使いません。issue types は組織 (Organization) 配下の repository でのみ利用できるカタログ機能であり、個人アカウント配下の repository では利用できないためです。
+GitHub の issue types 機能は使いません。issue types は組織 (Organization) 配下の repository でのみ利用できるカタログ機能であり、個人アカウント配下の repository では利用できないためです (2026-09-27 確認)。
 
 ## 6. 親 issue の close 規約
 
-sub-issue が全て完了 (close) されても、親 issue は自動では close されません。GitHub の sub-issue 機能はあくまで進捗の可視化 (親 issue に完了率が表示される) のためのリンクであり、closing keyword のような自動 close 動作は持ちません。
+sub-issue が全て完了 (close) されても、親 issue は自動では close されません (2026-09-27 確認)。GitHub の sub-issue 機能はあくまで進捗の可視化 (親 issue に完了率が表示される) のためのリンクであり、closing keyword のような自動 close 動作は持ちません。
 
 親 issue を close するのは、親 issue が扱う内容を完全に解決する最終 PR のみです。その PR の body に親向けの closing keyword (`Closes #<親N>` 等、詳細は `rule:closing-keyword` を参照) を書くか、あるいは PR マージ後に手動で `gh issue close <親N>` を実行してください。sub-issue 個別の PR には親向け closing keyword を書かないでください (誤って親が早期 close される事故になります)。

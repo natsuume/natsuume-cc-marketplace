@@ -56,7 +56,7 @@ Opus 系は指示がなくても自分の作業を検証・修正する。この
 - **委任は真に独立した相応の規模の作業に限る**: 数回の tool call で終わる作業・逐次依存が強く並列化できない作業は委任せず直接行う。1 体で完了できる作業に複数体を使わず、spawn 数を低く保つ
 - **Fable は advisor の起動に限る**: Fable は `cross-model-advisor:fable-advisor-runner` の起動にだけ使い、ワーカー (実装・調査・一括修正等) や reviewer には使わない。Workflow の `agent()` では Fable を使わない (hook の週次枠判定が及ばないため)。Fable を使う起動では model を `"fable"` と明示する (model 未指定・agent 定義 frontmatter による Fable 実行は使わない)。Fable 週次枠の使用率が閾値を超えた場合・確認できない場合は hook が deny する。その場合は再起動せずスキップする
 - **ワーカーは Opus 5.5 で動かす**: 実装・調査・一括修正のサブエージェントは、メインセッションが Opus 5.5 なら model 未指定 (継承) で起動し、Opus 以外のモデルへ下げない。メインセッションが Opus 系以外のモデルで動いている場合、または env 等で継承先が Opus 以外になる場合は `model: "opus"` を明示する。model が定められた runner と Fable の起動は各起動仕様に従う
-- **Opus 5.5 への委任では effort の既定 `medium` を基準にする**: 境界が明確な機械的作業では `low` を検討し、`xhigh` / `max` は品質向上を確認できた作業に限る。Opus 5.5 は同じ effort 名でも Opus 5 より 1 turn あたり多く考えるため、Opus 5 で使っていた effort をそのまま持ち込まない。思考量を減らしたい場合はプロンプトの指示より effort を下げる。明示しない経路ではセッション既定の継承でよい
+- **Opus 5.5 への委任では effort の既定 `medium` を基準にする**: 境界が明確な機械的作業では `low` を検討し、`xhigh` / `max` は品質向上を確認できた作業に限る。Opus 5.5 は同じ effort 名でも 1 turn あたりの思考量が多い。思考量を減らしたい場合はプロンプトの指示より effort を下げる。明示しない経路ではセッション既定の継承でよい
 - **モデルの解決順序**: サブエージェントのモデルは 明示 model > agent 定義の frontmatter > `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 の順に解決される。`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が設定されている場合のみ、env (未設定なら main model) が全てを上書きする。品質・コストは実効モデルで走る前提で見積もる
 - **起動仕様で model が定められた runner には effort を指定しない**: codex 系 runner 等の定型 runner は起動仕様に従い、effort を付けずセッション既定を継承する。effort を明示する場合は Opus 系ワーカーへの委任に限る
 - **独立した subtask は同一メッセージで並列に委任し、完了をブロックして待たずに他の作業を進める**。介入するのは、エスカレーション (セクション 4) を受けたとき、または明らかな逸脱・コンテキスト不足の兆候があるときに限る

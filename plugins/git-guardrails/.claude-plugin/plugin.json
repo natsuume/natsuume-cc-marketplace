@@ -1,6 +1,6 @@
 {
   "name": "git-guardrails",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "既定ブランチへの直接 commit / push を禁止する"
 }

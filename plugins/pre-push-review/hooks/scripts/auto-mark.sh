@@ -141,7 +141,7 @@
 #     レビュー済みと偽装できる経路 (= ループが強制されない) を残す。 各 subagent の
 #     実走完了を hook が捕捉しハッシュを書き込むことで、 すべてが「現在のブランチ全差分」
 #     に対して直近で走ったことを保証する。
-#   - 「subagent の完了」は Task / Agent の tool call 成功だけでは証明にならない。
+#   - 「subagent の完了」は Agent の tool call 成功だけでは証明にならない。
 #     Claude Code の Agent は background 起動時にも `async_launched` で正常 return し、
 #     subagent が内部失敗を parent-safe report の `Status: execution-failed` として返した場合も
 #     外側の tool call 自体は成功する。そこで SubagentStop (subagent 自身の応答完了に

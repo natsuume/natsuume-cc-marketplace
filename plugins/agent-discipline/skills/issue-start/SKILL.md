@@ -123,6 +123,6 @@ Phase A で固定するもの: テストコード・型・関数シグネチャ�
 
 ## 5. closing keyword
 
-PR body には、issue を完全に解決する場合 `Closes #N`、部分対応の場合 `Refs #N` を書きます。詳細な規約 (有効なキーワード一覧・書式など) は常時注入ルール `rule:closing-keyword` を参照してください (本 skill では手順本体を複製しません)。
+PR body には、issue を完全に解決する場合 `Closes #N`、部分対応の場合 `Refs #N` を書きます。詳細な規約は常時注入ルール `rule:closing-keyword` を参照してください (本 skill では手順本体を複製しません)。
 
 closing keyword による auto-close は **default branch (master/main) 向けの PR でのみ機能**します。feature branch 向けの PR では効果がないため注意してください。

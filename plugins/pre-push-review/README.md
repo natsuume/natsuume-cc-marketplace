@@ -12,14 +12,14 @@ correctness バグ検出に security review を重ねた defense-in-depth です
 2 レビューをどちらも subagent 経由に統一していることの意味:
 
 - **context isolation**: reviewer は raw stdout / stderr、実行可能な command、具体的な再現手順を subagent context に留め、親 session には severity / location / impact / verification / fix direction / disposition を保持した parent-safe report だけを返します。これは agent prompt と contract test で固定する **instruction contract** であり、auto-mark が report 本文を機械検査して情報流出を遮断する **hard security boundary** ではありません。
-- **起動・marker 発行経路の単一化**: 親 session は 2 軸とも同じ `Agent` / `Task` tool で起動し、2 marker とも auto-mark.sh が SubagentStart の launch attestation、PostToolUse (`SubagentHandback`) での hand-back された report の記録、SubagentStop での parent-safe report 検証を経て発行します。
+- **起動・marker 発行経路の単一化**: 親 session は 2 軸とも同じ `Agent` tool で起動し、2 marker とも auto-mark.sh が SubagentStart の launch attestation、PostToolUse (`SubagentHandback`) での hand-back された report の記録、SubagentStop での parent-safe report 検証を経て発行します。
 - **`/pre-push-review:review` slash command が 2 subagent を並列発出**: deny メッセージとともに案内されます。 wall-clock は最遅レビュー 1 本の時間で完了します。
 
 Linked worktree では marker、launch attestation、tombstone を main `.git` 直下ではなく、`git rev-parse --absolute-git-dir` が返す worktree 専用 git-dir (`.git/worktrees/<name>/`) に保存します。`block-pre-push.sh` の deny メッセージは実際の marker storage を表示するため、main `.git` の同名ファイルを見てレビュー状態を判断しないでください。
 
 ## バージョン
 
-v7.0.3
+v7.0.4
 ## インストール
 
 ```bash
@@ -41,11 +41,11 @@ claude plugin install pre-push-review@natsuume-plugins
 
 **ファイル**: `commands/review.md`
 
-push 前 2 レビューを **同じアシスタントメッセージで並列に** 2 subagent として起動する確定的フローです。 deny メッセージから案内されたら、 Claude はこのコマンドを実行し、 2 subagent (`pre-push-review:code-reviewer` + `pre-push-review:security-reviewer`) を 1 つの assistant message 内で並列 `Agent` / `Task` tool call として発出します。 2 subagent はどちらも `model: "opus"` を明示して起動します。 順序や引数の自律判断は構造的に排除されています。
+push 前 2 レビューを **同じアシスタントメッセージで並列に** 2 subagent として起動する確定的フローです。 deny メッセージから案内されたら、 Claude はこのコマンドを実行し、 2 subagent (`pre-push-review:code-reviewer` + `pre-push-review:security-reviewer`) を 1 つの assistant message 内で並列 `Agent` tool call として発出します。 2 subagent はどちらも `model: "opus"` を明示して起動します。 順序や引数の自律判断は構造的に排除されています。
 
 並列発出が技術的に成立しない / 一部のレビューが失敗した場合は、 2 subagent を順次起動しても push gate の構造的保証は同じ (2 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。
 
-一部の marker のみ「未実行」 / 「失効」 の場合は、 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします。 完了は SubagentStop で検知されるため起動 mode は問いません)。 2 subagent 並列発出が既定であることは変わりません。
+一部の marker のみ「未実行」 / 「失効」 の場合は、 該当 subagent だけを Agent tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします。 完了は SubagentStop で検知されるため起動 mode は問いません)。 2 subagent 並列発出が既定であることは変わりません。
 
 ### Hooks
 
@@ -155,7 +155,7 @@ branch 全差分に対する correctness バグ検出を **self-contained に** 
 
 - tools は `Bash, Read, Glob, Grep` に制限 (Edit / Write / Skill / Agent はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/code-review` skill を invoke できないようにしている (理由は security-reviewer と同じ; 下記)。 `Agent` を外すことで nested subagent も起動せず、 reviewer を read-only に保つ (nested subagent は既定で起動できるが本 reviewer は使わない)
 - subagent body には logic errors / null/undefined / error handling / resource leaks / concurrency / API misuse / data corruption の各カテゴリと exclusion ルール (style / docs / perf / refactor / security / pre-existing bug 等) が prompt として含まれており、 単一 turn で review を完遂する
-- 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
+- 親 session は `Agent` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な failure scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して code-reviewed マーカーを更新する
 - model は `opus` (agent 定義 frontmatter と起動時の明示 `model: "opus"` の両方)、effort は指定せずセッション既定を継承
 
@@ -170,7 +170,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 - tools は `Bash, Read, Glob, Grep` に制限 (Edit / Write / Skill / Agent はすべて非許可)。 read-only でファイル改変を防ぎ、 `Skill` を外すことで標準 `/security-review` skill を invoke できないようにしている (理由は下記)。 `Agent` を外すことで nested subagent も起動せず、 reviewer を read-only に保つ (nested subagent は既定で起動できるが本 reviewer は使わない)
 - subagent body には input validation / authn-authz / crypto-secrets / injection / data-exposure の各カテゴリと exclusion ルール (DoS / 既存依存 CVE / テストファイル等) が prompt として含まれており、 単一 turn で review を完遂する
 - net diff に加えて `origin/HEAD..HEAD` の per-commit patch (`git log -p --cc`。merge commit で加えられた変更も含む) を読み、 後続 commit で削除・revert されて net diff に残らない中間 commit の秘匿情報・危険コードも検査する。 push すると branch の全 commit が remote 履歴に載るためである。 中間 commit の秘匿情報は、 削除 commit を積むのではなく履歴から除去し、 露出の可能性があればローテーションする修正方針で報告する。 code-reviewer は net diff のみを対象とする
-- 親 session は `Agent` / `Task` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
+- 親 session は `Agent` tool の result として parent-safe markdown report を受け取り、 後続フロー (`git push` 等) を継続できる。具体的な attack scenario は subagent context に留め、追加検証時は同じ subagent を resume する
 - SubagentStop hook (auto-mark.sh) は launch attestation の開始時 hash と現在 hash の一致、および final report (auto mode では PostToolUse が `SubagentHandback` から記録した report) の単一 `Status: pass|findings` 行を確認して security マーカーを更新する (`execution-failed` / 欠落 / 重複 / 未知値では書かず、silent-pass を防ぐ)
 - model は `opus` (agent 定義 frontmatter と起動時の明示 `model: "opus"` の両方)、effort は指定せずセッション既定を継承
 
@@ -181,7 +181,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 (3) `tools` から `Agent` を除外して reviewer を read-only に保つ (nested subagent は既定で起動できるが本 reviewer は使わない)。
 このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
 
-**呼び出しタイミング (2 subagent 共通)**: `/pre-push-review:review` slash command の指示で 2 並列 `Agent` / `Task` tool calls として起動する (完了は SubagentStop で検知されるため起動 mode は問わない)。 deny メッセージにも個別起動のフォールバック手順を案内している。
+**呼び出しタイミング (2 subagent 共通)**: `/pre-push-review:review` slash command の指示で 2 並列 `Agent` tool calls として起動する (完了は SubagentStop で検知されるため起動 mode は問わない)。 deny メッセージにも個別起動のフォールバック手順を案内している。
 
 ## 既知の制約
 

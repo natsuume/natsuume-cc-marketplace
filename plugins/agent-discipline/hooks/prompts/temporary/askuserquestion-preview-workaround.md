@@ -5,6 +5,8 @@
   撤去条件: Claude Code 側で preview のスクロール問題が修正されたら本ファイルを削除する
   (inject-temporary.sh は temporary/ 配下に md が無ければ何も注入しない)。
   撤去時も plugin version bump は必要。
+  確認方法: preview に 20 行以上の内容を載せた AskUserQuestion を発行し、「hidden XX lines」の
+  表示が出るかを見る。確認した Claude Code: 2.1.283 (hidden 表示が出る)。
 -->
 
 # agent-discipline: 暫定ルール — AskUserQuestion の preview 不使用

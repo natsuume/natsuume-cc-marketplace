@@ -23,4 +23,4 @@ Auto mode (permission_mode = "auto") が有効です。以下の方針で**自�
   - 秘匿情報を含むファイル (.env, credentials.json 等) のコミット
   - マージ前提条件 (上記 3 の bullet 群) を満たさない PR の独断マージ
 - すでに対象が commit / PR / マージ済みの場合、そのステップはスキップして次へ進む
-- このリポジトリの他プラグイン (pre-push-review 等) が要求するレビュー手順は引き続き従う
+- 導入済みの他プラグイン (pre-push-review 等) が要求するレビュー手順は引き続き従う

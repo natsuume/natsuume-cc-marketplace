@@ -26,7 +26,7 @@ description: OpenAI Codex と Fable を advisor として並列に相談し、�
 </question>
 
 <output_contract>
-推奨方針・理由・リスク・次の一手を簡潔に述べる。目安 500 語以内。
+推奨方針・理由・リスク・次の一手を、採否判断に必要な範囲で簡潔に述べる。
 </output_contract>
 
 <grounding_rules>

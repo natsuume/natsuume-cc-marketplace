@@ -1,4 +1,9 @@
 #!/bin/bash
+# Claude Code bug #52079
+#   現在の不具合: statusLine.command では ${CLAUDE_PLUGIN_ROOT} が展開されない
+#     (upstream は not planned で close 済み、2026-09-27 確認)。
+#   撤去条件: Claude Code が statusLine.command で ${CLAUDE_PLUGIN_ROOT} を展開するようになること。
+#   確認方法: statusLine.command に ${CLAUDE_PLUGIN_ROOT} を含むコマンドを設定し、展開されるかを見る。
 # setup.sh — 安定 launcher の設置と settings.json への登録 (/rate-limit:setup から実行)
 #
 # natsuume-statusline の scripts/setup.sh (issue #51) の launcher パターンを踏襲する:

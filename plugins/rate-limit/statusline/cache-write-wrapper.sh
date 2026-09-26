@@ -1,4 +1,9 @@
 #!/bin/bash
+# Claude Code bug #52079
+#   現在の不具合: statusLine.command では ${CLAUDE_PLUGIN_ROOT} が展開されない
+#     (upstream は not planned で close 済み、2026-09-27 確認)。
+#   撤去条件: Claude Code が statusLine.command で ${CLAUDE_PLUGIN_ROOT} を展開するようになること。
+#   確認方法: statusLine.command に ${CLAUDE_PLUGIN_ROOT} を含むコマンドを設定し、展開されるかを見る。
 # cache-write-wrapper.sh — statusLine 入力 JSON のキャッシュ書き出し + 内側 statusline への委譲
 #
 # setup.sh が生成する launcher (~/.claude/rate-limit-statusline-launcher.sh) から呼ばれる。

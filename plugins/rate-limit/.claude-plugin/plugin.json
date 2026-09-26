@@ -1,6 +1,6 @@
 {
   "name": "rate-limit",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "Claude / Codex の rate limit を取得する"
 }

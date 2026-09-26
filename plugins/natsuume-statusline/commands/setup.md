@@ -18,6 +18,8 @@ allowed-tools: Bash(bash:*)
 既存の `statusLine` 設定がある場合もバックアップに残るので、元に戻したいときはバックアップで `settings.json` を上書きしてください。
 
 > **なぜ wrapper を挟むか**: plugin cache は `~/.claude/plugins/cache/<marketplace>/<plugin>/<VERSION>/...` という version 固有パスに展開され、`statusLine.command` では `${CLAUDE_PLUGIN_ROOT}` 等が展開されません ([Claude Code bug #52079](https://github.com/anthropics/claude-code/issues/52079))。version 固有パスを直接焼き込むと `/plugin update` で旧 dir が消えた際に statusline が無言で壊れます。settings には不変の wrapper パスを書き、wrapper が実行時に最新版を解決することで update に自動追従させます。
+>
+> 現在の不具合: `statusLine.command` では `${CLAUDE_PLUGIN_ROOT}` が展開されない (upstream は not planned で close 済み、2026-09-27 確認)。撤去条件: Claude Code が `statusLine.command` で `${CLAUDE_PLUGIN_ROOT}` を展開するようになること。確認方法: `statusLine.command` に `${CLAUDE_PLUGIN_ROOT}` を含むコマンドを設定し、展開されるかを見る。
 
 ## 実行
 

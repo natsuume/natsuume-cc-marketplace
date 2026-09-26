@@ -1,6 +1,6 @@
 {
   "name": "session-handoff",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "context 閾値超過時に handoff を作成・引き継ぐ"
 }
