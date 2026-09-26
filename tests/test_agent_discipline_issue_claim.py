@@ -21,14 +21,19 @@
   文書が issue 番号か branch 名を挙げて継続を指示した場合 (明示指示) だけ step 6 から再開し、
   ラベルや他 session の claim comment があっても撤退も削除もしない。明示指示が無ければ、
   また明示指示があっても対応する branch が無ければ step 1 から実行する。
+- claim に埋め込む branch 名 (``IssueClaimExistingBranchNameTest``): step 2 は issue 番号の
+  パターンで remote と local の既存の branch を探し、1 つあればその名前を使い、無ければ命名
+  規約で決める。複数一致したら claim comment を投稿する前に停止してユーザに確認する。
 - 作業 branch の用意 (``IssueClaimWorkBranchTest``): step 6 は `git fetch origin` の後 (失敗
-  したら停止して報告)、同名 branch の有無で作成・switch・fast-forward・停止を分ける。draft PR
-  は `rule:tdd-two-phase` に合わせ、Phase A の commit を push した後に作る。
+  したら停止して報告)、同名 branch がどちらにも無い・remote だけ・local だけ・両方の 4 通りで
+  作成・`origin` からの switch・そのままの switch・fast-forward / 停止を分ける。draft PR は
+  `rule:tdd-two-phase` に合わせ、Phase A の commit を push した後に作る。
 - 関連文書 (``IssueClaimRelatedDocumentTest``): issue-start skill と README が branch push
   による確定・二段構成を説明しない。
 - issue-start skill の pick-up 分岐 (``IssueStartPickUpTest``): 明示指示の有無で 2 つに分け、
   明示指示が無ければ既存の branch / PR があっても排他制御に進む。確認コマンドは local に
   だけある branch も確認し、明示指示で挙げられた branch 名は命名規約に依らずそのまま使う。
+  パターンに複数の branch が一致したら停止してユーザに確認する。
 - 評価基準 (``IssueClaimEvaluationTest``): `docs/discipline-evaluation.md` の issue-claim の
   評価基準が、明示指示による再開を Pass として扱う。
 
@@ -124,8 +129,25 @@ README_BRANCH_PUSH_PHRASES = (
     "push 成功時のみラベル付与",
 )
 
-# 着手手順の step 6 (作業 branch の用意) の項目の先頭。下位項目を含めて 1 項目とする。
+# 着手手順の step 2 (claim comment の投稿) と step 6 (作業 branch の用意) の項目の先頭。
+# 下位項目を含めて 1 項目とする。
+CLAIM_STEP_MARKER = "2. **claim comment を投稿**"
 WORK_BRANCH_STEP_MARKER = "6. **作業 branch"
+
+# issue 番号のパターンで既存の branch を探すコマンド (remote と local)。
+EXISTING_BRANCH_SEARCH_COMMANDS = (
+    "git ls-remote --heads origin '*issue-<N>-*'",
+    "git branch --list '*issue-<N>-*'",
+)
+
+# パターンに複数の branch が一致したときに、何も変更せず停止してユーザに確認することを
+# 示す要素 (空白を除去した文に照合する)。
+MULTIPLE_MATCH_REQUIREMENTS: tuple[Requirement, ...] = (
+    "複数",
+    re.compile(r"変更(?:せず|しない)"),
+    "停止",
+    "AskUserQuestion",
+)
 
 # 明示指示の定義を書く段落を識別する語 (両方を含む段落を定義の段落とする)。
 EXPLICIT_INSTRUCTION = "明示指示"
@@ -179,6 +201,10 @@ EXPLICIT_BRANCH_REQUIREMENTS: tuple[tuple[str, tuple[Requirement, ...]], ...] = 
     (
         "local / remote のどちらにも無ければ step 1 から実行する",
         (re.compile(r"local.*remote.*(?:どちら|いずれ)にも(?:無|な)"), "step1"),
+    ),
+    (
+        "パターンに複数の branch が一致したら、何も変更せず停止してユーザに確認する",
+        MULTIPLE_MATCH_REQUIREMENTS,
     ),
 )
 
@@ -421,16 +447,24 @@ class IssueClaimTestCase(unittest.TestCase):
         wanted = "」「".join(describe(requirement) for requirement in requirements)
         self.fail(f"{label}: 「{wanted}」をすべて満たす文が無い")
 
-    def work_branch_step(self) -> str:
-        """着手手順の step 6 (作業 branch の用意) の項目を、下位項目を含めて返す。"""
+    def procedure_step(self, marker: str, scope: str) -> str:
+        """着手手順のうち `marker` で始まる項目を、下位項目を含めて返す。"""
         section = markdown_section(self.issue_claim_block(), START_PROCEDURE_HEADING)
-        item = top_level_list_item_containing(section, WORK_BRANCH_STEP_MARKER)
+        item = top_level_list_item_containing(section, marker)
         self.assert_scope_found(
-            self.label("step 6 の項目"),
+            self.label(scope),
             item,
-            f"`{START_PROCEDURE_HEADING}` 節に「{WORK_BRANCH_STEP_MARKER}」で始まる項目が無い",
+            f"`{START_PROCEDURE_HEADING}` 節に「{marker}」で始まる項目が無い",
         )
         return item
+
+    def claim_step(self) -> str:
+        """着手手順の step 2 (claim comment の投稿) の項目を、下位項目を含めて返す。"""
+        return self.procedure_step(CLAIM_STEP_MARKER, "step 2 の項目")
+
+    def work_branch_step(self) -> str:
+        """着手手順の step 6 (作業 branch の用意) の項目を、下位項目を含めて返す。"""
+        return self.procedure_step(WORK_BRANCH_STEP_MARKER, "step 6 の項目")
 
 
 class IssueClaimStartProcedureTest(IssueClaimTestCase):
@@ -690,6 +724,39 @@ class IssueClaimExplicitResumeTest(IssueClaimTestCase):
         )
 
 
+class IssueClaimExistingBranchNameTest(IssueClaimTestCase):
+    """step 2 で claim に埋め込む branch 名を、既存の branch から決める。"""
+
+    def assert_step_sentence(self, requirements: tuple[Requirement, ...]) -> None:
+        self.assert_some_sentence(
+            self.label("step 2 の項目"), self.claim_step(), requirements
+        )
+
+    def test_existing_branch_is_searched_by_issue_number(self) -> None:
+        """branch 名を決める前に、issue 番号のパターンで remote と local の既存の branch を
+        探す。"""
+        item = self.claim_step()
+        for command in EXISTING_BRANCH_SEARCH_COMMANDS:
+            with self.subTest(command=command):
+                self.assert_phrase_present(self.label("step 2 の項目"), item, command)
+
+    def test_single_match_name_is_used(self) -> None:
+        """既存の branch が 1 つ見つかれば、その名前を claim の `branch=` に使う (step 6 の
+        同名判定がその branch に switch するため)。"""
+        self.assert_step_sentence((re.compile(r"1つ(?:だけ)?(?:あれ|見つか)"), "その名前"))
+
+    def test_no_match_follows_the_naming_convention(self) -> None:
+        """既存の branch が無ければ、命名規約で branch 名を決める。"""
+        self.assert_step_sentence((re.compile(r"無(?:け|い)"), "規約"))
+
+    def test_multiple_matches_stop_before_posting(self) -> None:
+        """パターンに複数の branch が一致したら、claim comment を投稿する前に、何も変更
+        せず停止してユーザに確認する。"""
+        self.assert_step_sentence(
+            MULTIPLE_MATCH_REQUIREMENTS + (re.compile(r"投稿(?:せず|する前|の前)"),)
+        )
+
+
 class IssueClaimWorkBranchTest(IssueClaimTestCase):
     """step 6 の作業 branch の用意と draft PR の順序。"""
 
@@ -714,26 +781,45 @@ class IssueClaimWorkBranchTest(IssueClaimTestCase):
             )
         )
 
-    def test_remote_only_branch_is_switched(self) -> None:
-        """同名の branch が remote だけにあれば、`git switch <branch>` で再開する。"""
-        self.assert_step_sentence(("remote だけ", "git switch <branch>"))
+    def test_remote_only_branch_is_switched_from_origin(self) -> None:
+        """同名の branch が remote だけにあれば、`origin` の branch を起点に switch して
+        再開する (remote の推測に依存しない)。"""
+        self.assert_step_sentence(
+            ("remote だけ", "git switch -c <branch> --track origin/<branch>")
+        )
 
-    def test_local_branch_is_switched(self) -> None:
-        """同名の branch が local にあれば、`git switch <branch>` で再開する。"""
-        self.assert_step_sentence(("local にある", "git switch <branch>"))
+    def test_local_only_branch_is_switched_as_is(self) -> None:
+        """同名の branch が local だけにあれば (一度も push していない)、remote と比べずに
+        switch してそのまま再開する。"""
+        self.assert_step_sentence(("local だけ", "git switch <branch>", "そのまま"))
+
+    def test_local_branch_case_is_split_by_remote_presence(self) -> None:
+        """remote の有無を問わない「local にある」場合を置かない (remote が無いと比較先が
+        無いため、local だけ・両方の 2 つに分ける)。"""
+        self.assert_phrase_absent(
+            self.label("step 6 の項目"), self.work_branch_step(), "local にある"
+        )
+
+    def test_branch_on_both_sides_is_switched(self) -> None:
+        """同名の branch が local と remote の両方にあれば、`git switch <branch>` の後に
+        remote と比べる。"""
+        self.assert_step_sentence(("両方", "git switch <branch>"))
 
     def test_older_local_branch_is_fast_forwarded(self) -> None:
-        """local の branch が remote より古ければ、fast-forward で追いつく。"""
-        self.assert_step_sentence(("local が古", "git merge --ff-only"))
+        """両方にある場合に local の branch が remote より古ければ、fast-forward で追いつく。"""
+        self.assert_step_sentence(("両方", "local が古", "git merge --ff-only"))
 
     def test_newer_local_branch_is_kept(self) -> None:
-        """local の branch が remote より新しければ、未 push の commit を保ったまま再開する。"""
-        self.assert_step_sentence(("local が新し",))
+        """両方にある場合に local の branch が remote より新しければ、未 push の commit を
+        保ったまま再開する。"""
+        self.assert_step_sentence(("両方", "新し"))
 
     def test_diverged_branch_stops_without_changes(self) -> None:
-        """local と remote が分岐していれば、どちらも変更せずに停止してユーザに報告する。"""
+        """両方にある場合に local と remote が分岐していれば、どちらも変更せずに停止して
+        ユーザに報告する。"""
         self.assert_step_sentence(
             (
+                "両方",
                 "分岐",
                 "local",
                 "remote",
