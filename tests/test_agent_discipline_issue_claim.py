@@ -285,8 +285,14 @@ class IssueClaimStartProcedureTest(IssueClaimTestCase):
             positions.append((step, section.find(phrase)))
         for (earlier, earlier_at), (later, later_at) in zip(positions, positions[1:]):
             with self.subTest(earlier=earlier, later=later):
-                if earlier_at < 0 or later_at < 0:
-                    self.skipTest("段階を識別する語が無い (上の subTest で失敗済み)")
+                # 語が改行で分かれていると存在の検査は通り、位置は取れない。順序を判定
+                # できないまま skip すると誤った順序が見逃されるため、失敗させる。
+                missing = [step for step, at in ((earlier, earlier_at), (later, later_at)) if at < 0]
+                self.assertEqual(
+                    [],
+                    missing,
+                    f"{label}: 段階を識別する語がそのままの形で無く、順序を判定できない",
+                )
                 self.assertLess(
                     earlier_at,
                     later_at,
