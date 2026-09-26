@@ -10,12 +10,13 @@
   排他基盤としての branch 名 uniqueness の説明が無い。
 - 先着判定 (``IssueClaimArbitrationTest``): claim comment の書式、`(created_at, 数値 id)`
   の辞書順最小を先着とする規則、REST GET の取得失敗・自分の claim が無い場合の
-  fail-closed 停止。
+  fail-closed 停止とユーザーへの報告。
 - 後片付け (``IssueClaimCleanupTest``): 撤退は claim comment の削除とユーザーへの 1 行報告
-  だけで branch を操作しない。着手中断で自分の branch を削除するときは、remote 削除 →
-  default branch への switch → local 削除の順に独立した Bash 呼び出しで実行する。
+  だけ。着手中断は自分の claim comment の削除だけで、branch・draft PR・ラベルは残す。
+  節のどこにも branch を削除するコマンドを置かない。
 - 削除規律 (``IssueClaimDeletionDisciplineTest``): 他 session の claim comment / branch /
-  ラベルを削除しない規律と、`session=` による自他判別。
+  ラベルを削除しない規律、`session=` による自他判別、撤退・着手中断のどちらでもラベルを
+  削除しないこと、廃止した手順番号を参照しないこと、claim の反映を保証として書かないこと。
 - 関連文書 (``IssueClaimRelatedDocumentTest``): issue-start skill と README が branch push
   による確定・二段構成を説明しない。
 
@@ -73,13 +74,27 @@ BRANCH_PUSH_CONFIRMATION_PHRASES = (
 WITHDRAWAL_LABEL = "**撤退**"
 INTERRUPTION_LABEL = "**着手中断**"
 
-REMOTE_BRANCH_DELETE = "git push origin --delete"
-DEFAULT_BRANCH_SWITCH = "git switch"
-LOCAL_BRANCH_DELETE = "git branch -D"
-BRANCH_DELETE_COMMANDS = (REMOTE_BRANCH_DELETE, LOCAL_BRANCH_DELETE)
+# branch を削除するコマンド。撤退・着手中断のどちらの後片付けにも置かない。
+BRANCH_DELETE_COMMANDS = (
+    "git push origin --delete",
+    "git push origin :",
+    "git branch -D",
+)
 
-# 撤退と着手中断を区別せず「claim comment と branch を削除する」とした削除規律の語。
+# 着手中断で残すもの。
+INTERRUPTION_KEPT_ARTIFACTS = ("branch", "draft PR", "ラベル", "残す")
+
+# 削除規律で branch も削除対象に含めていた語。
 MERGED_CLEANUP_PHRASE = "自分の claim comment と branch のみ削除"
+
+# 撤退・着手中断のどちらでもラベルを削除しないことを示す語。
+LABEL_KEPT_PHRASE = "ラベルは削除しない"
+
+# 「よくある誤操作と回避」が参照してはならない、確定段階を含んでいた手順番号。
+STALE_STEP_REFERENCES = ("step 2-5", "step 1-3", "step 1, 4, 5")
+
+# 他 session の claim が一覧に反映されることを保証として書く語。
+VISIBILITY_GUARANTEE_PHRASE = "必ず観測できる"
 
 OTHER_SESSION_TARGETS = "他 session の claim comment / branch / ラベル"
 OWNERSHIP_CRITERION = "「自分の claim か」の判定基準"
@@ -207,16 +222,6 @@ def top_level_list_item_containing(text: str, marker: str) -> str:
     return "\n".join(lines[target:end])
 
 
-def occurrence_offsets(text: str, phrase: str) -> list[int]:
-    """`text` 中の `phrase` の出現位置 (先頭からの文字数) をすべて返す。"""
-    offsets = []
-    start = text.find(phrase)
-    while start >= 0:
-        offsets.append(start)
-        start = text.find(phrase, start + 1)
-    return offsets
-
-
 class IssueClaimTestCase(unittest.TestCase):
     """`rule:issue-claim` の節を取り出す helper と、失敗時に該当箇所を示す assert。"""
 
@@ -336,12 +341,12 @@ class IssueClaimArbitrationTest(IssueClaimTestCase):
                 self.assert_phrase_present(label, item, phrase)
 
     def test_refetch_failure_stops_fail_closed(self) -> None:
-        """REST GET の取得失敗と、取得結果に自分の claim が無い場合は停止する
-        (fail-closed)。"""
+        """REST GET の取得失敗と、取得結果に自分の claim が無い場合は停止してユーザーに
+        報告する (fail-closed)。"""
         item = list_item_containing(self.issue_claim_block(), "fail-closed")
         label = self.label("fail-closed の項目")
         self.assert_scope_found(label, item, "「fail-closed」を含む項目が無い")
-        for phrase in ("REST GET", "自分の claim", "停止"):
+        for phrase in ("REST GET", "自分の claim", "停止", "報告"):
             with self.subTest(phrase=phrase):
                 self.assert_phrase_present(label, item, phrase)
 
@@ -366,58 +371,22 @@ class IssueClaimCleanupTest(IssueClaimTestCase):
             with self.subTest(phrase=phrase):
                 self.assert_phrase_present(label, paragraph, phrase)
 
-    def test_withdrawal_does_not_delete_branches(self) -> None:
-        """撤退時点では branch を作っていないので、撤退の手順に branch 削除が無い。"""
-        paragraph = self.paragraph(WITHDRAWAL_LABEL)
-        label = self.label(f"{WITHDRAWAL_LABEL} の段落")
+    def test_block_has_no_branch_deletion(self) -> None:
+        """撤退・着手中断のどちらの後片付けでも branch を削除しない。確保の判定に
+        branch を使わないため、削除する理由が無い。"""
+        block = self.issue_claim_block()
         for phrase in BRANCH_DELETE_COMMANDS:
             with self.subTest(phrase=phrase):
-                self.assert_phrase_absent(label, paragraph, phrase)
+                self.assert_phrase_absent(self.label(), block, phrase)
 
-    def test_branch_deletion_appears_only_in_interruption(self) -> None:
-        """節の中の branch 削除コマンドは、すべて着手中断の段落にある。"""
-        block = self.issue_claim_block()
-        interruption = self.paragraph(INTERRUPTION_LABEL)
-        interruption_start = block.find(interruption)
-        interruption_end = interruption_start + len(interruption)
-        for phrase in BRANCH_DELETE_COMMANDS:
-            for offset in occurrence_offsets(block, phrase):
-                with self.subTest(phrase=phrase, offset=offset):
-                    line = block[: offset].count("\n") + 1
-                    self.assertTrue(
-                        interruption_start <= offset < interruption_end,
-                        f"{self.label()}: 「{phrase}」が着手中断の段落の外 "
-                        f"(節の {line} 行目) にある",
-                    )
-
-    def test_interruption_deletes_remote_then_switches_then_deletes_local(
-        self,
-    ) -> None:
-        """着手中断で自分の branch を削除するときは、remote 削除 → default branch への
-        switch → local 削除の順に、独立した Bash 呼び出しで実行する。"""
+    def test_interruption_deletes_only_the_claim_comment(self) -> None:
+        """着手中断の後片付けは自分の claim comment の削除だけで、branch・draft PR・
+        ラベルは残す。"""
         paragraph = self.paragraph(INTERRUPTION_LABEL)
         label = self.label(f"{INTERRUPTION_LABEL} の段落")
-        for phrase in (
-            "claim comment",
-            "default branch",
-            "独立した Bash 呼び出し",
-            "前段が失敗したら後段に進まない",
-        ):
+        for phrase in ("claim comment", "削除", *INTERRUPTION_KEPT_ARTIFACTS):
             with self.subTest(phrase=phrase):
                 self.assert_phrase_present(label, paragraph, phrase)
-        order = (REMOTE_BRANCH_DELETE, DEFAULT_BRANCH_SWITCH, LOCAL_BRANCH_DELETE)
-        for phrase in order:
-            with self.subTest(phrase=phrase):
-                self.assert_phrase_present(label, paragraph, phrase)
-        positions = [paragraph.find(phrase) for phrase in order]
-        if min(positions) < 0:
-            self.fail(f"{label}: branch 削除のコマンドが揃っていない")
-        self.assertEqual(
-            sorted(positions),
-            positions,
-            f"{label}: {' → '.join(order)} の順に書かれていない",
-        )
-        self.assertNotIn("&&", paragraph, f"{label}: コマンドを `&&` で連結している")
 
 
 class IssueClaimDeletionDisciplineTest(IssueClaimTestCase):
@@ -442,11 +411,24 @@ class IssueClaimDeletionDisciplineTest(IssueClaimTestCase):
             with self.subTest(phrase=phrase):
                 self.assert_phrase_present(label, item, phrase)
 
-    def test_withdrawal_and_interruption_are_not_merged(self) -> None:
-        """削除規律が撤退と着手中断をまとめて「claim comment と branch を削除する」と
-        書かない (撤退時は branch を削除しない)。"""
+    def test_cleanup_discipline_keeps_branches_and_labels(self) -> None:
+        """削除規律は branch を削除対象に含めず、撤退・着手中断のどちらでもラベルを
+        削除しない。"""
+        block = self.issue_claim_block()
+        self.assert_phrase_absent(self.label(), block, MERGED_CLEANUP_PHRASE)
+        self.assert_phrase_present(self.label(), block, LABEL_KEPT_PHRASE)
+
+    def test_pitfalls_do_not_reference_removed_steps(self) -> None:
+        """「よくある誤操作と回避」などが、確定段階を含んでいた手順番号を参照しない。"""
+        block = self.issue_claim_block()
+        for phrase in STALE_STEP_REFERENCES:
+            with self.subTest(phrase=phrase):
+                self.assert_phrase_absent(self.label(), block, phrase)
+
+    def test_visibility_is_written_as_a_premise(self) -> None:
+        """他 session の claim が一覧に反映されることを保証として書かない。"""
         self.assert_phrase_absent(
-            self.label(), self.issue_claim_block(), MERGED_CLEANUP_PHRASE
+            self.label(), self.issue_claim_block(), VISIBILITY_GUARANTEE_PHRASE
         )
 
 
