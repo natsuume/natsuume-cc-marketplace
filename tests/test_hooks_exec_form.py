@@ -246,7 +246,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "pre-merge-cross-review": "4.0.0",
     "update-default-branch": "0.4.7",
     "natsuume-statusline": "0.11.5",
-    "agent-discipline": "3.0.4",
+    "agent-discipline": "3.0.5",
     "ui-discipline": "0.4.8",
     "natsuume-writing": "0.9.1",
     "cross-model-advisor": "5.0.9",

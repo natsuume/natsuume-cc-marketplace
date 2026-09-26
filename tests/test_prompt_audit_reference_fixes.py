@@ -101,7 +101,7 @@ CURRENT_STANDARD_SKILL_REASON_KEYWORDS = (
 
 CODEX_REVIEW_RATIONALE_MARKER = "標準 skill を直接呼ばない理由"
 CODEX_REVIEW_FIX_FLOW_HEADING = "## レビュー指摘の修正フロー"
-CLEANUP_HEADING = "### 撤退時のクリーンアップ手順"
+ISSUE_CLAIM_MARKER = "<!-- rule:issue-claim -->"
 RESCUE_THREAD_MARKER = "<!-- rule:rescue-thread -->"
 RULE_MARKER_PREFIX = "<!-- rule:"
 
@@ -400,11 +400,12 @@ class AgentDisciplinePromptTest(ReferenceFixTestCase):
         )
 
     def test_cleanup_runs_each_command_separately_on_the_default_branch(self) -> None:
-        """A10: 撤退時のクリーンアップが `master` 固定と `&&` 連結を使わず、
-        default branch への switch・remote 削除・local 削除をこの順で書く。"""
-        section = markdown_section(read(ALWAYS_3), CLEANUP_HEADING)
-        label = f"{repo_relative(ALWAYS_3)} の {CLEANUP_HEADING}"
-        self.assert_scope_found(label, section, f"`{CLEANUP_HEADING}` 節が無い")
+        """A10: rule:issue-claim の branch 削除の後片付けが `master` 固定と `&&` 連結を
+        使わず、default branch・remote 削除・local 削除を書き、remote 削除を local 削除
+        より前に置く。"""
+        section = rule_block(read(ALWAYS_3), ISSUE_CLAIM_MARKER)
+        label = f"{repo_relative(ALWAYS_3)} の rule:issue-claim 節"
+        self.assert_scope_found(label, section, f"`{ISSUE_CLAIM_MARKER}` 節が無い")
         for phrase in ("git switch master", "<branch> &&"):
             with self.subTest(absent=phrase):
                 if phrase in section:
