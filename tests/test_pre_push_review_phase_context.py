@@ -9,6 +9,8 @@ core の `/pre-push-review:review` は code / security の 2 subagent を発出�
 codex 経路を持つ `/pre-push-codex-review:review` は core 併用時に codex-reviewer を
 加えた 3 subagent を発出する。Phase 文脈は両 command で code / security にのみ渡り、
 codex-reviewer の prompt には渡らない。
+
+起動指示の各行は ``N. **Agent tool**:`` で始まる (ツール名は Agent tool とだけ書く)。
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ class ReviewPhaseContextContractTest(unittest.TestCase):
 
     def prompt_line(self, body: str, subagent_type: str) -> str:
         match = re.search(
-            rf'^\d+\. \*\*Agent / Task tool\*\*:.*'
+            rf'^\d+\. \*\*Agent tool\*\*:.*'
             rf'subagent_type: "{re.escape(subagent_type)}".*$',
             body,
             flags=re.MULTILINE,

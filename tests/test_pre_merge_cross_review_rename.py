@@ -1,7 +1,7 @@
 """pre-merge-codex-review から pre-merge-cross-review への改名の契約テスト。
 
 - plugin ディレクトリは `plugins/pre-merge-cross-review` にあり、旧ディレクトリは残らない
-- plugin.json の name は新名、version は 4.0.0
+- plugin.json の name は新名、version は 4.0.1
 - marketplace.json の entry は新名 (source・version を含む) で、top-level `renames` が
   旧名を新名に対応づける
 - agents は codex-reviewer の 1 つだけで、frontmatter の name がファイル名と一致する
@@ -30,7 +30,7 @@ OLD_PLUGIN = ROOT / "plugins" / OLD_NAME
 PLUGIN_JSON = PLUGIN / ".claude-plugin" / "plugin.json"
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 AGENTS_DIR = PLUGIN / "agents"
-EXPECTED_VERSION = "4.0.0"
+EXPECTED_VERSION = "4.0.1"
 EXPECTED_AGENTS = {"codex-reviewer.md"}
 
 # 旧名を含んでよい codex 専用の動作名 (wrapper basename と codex 記録ファイル名)。
