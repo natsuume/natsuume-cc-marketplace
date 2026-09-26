@@ -27,7 +27,8 @@
 - 関連文書 (``IssueClaimRelatedDocumentTest``): issue-start skill と README が branch push
   による確定・二段構成を説明しない。
 - issue-start skill の pick-up 分岐 (``IssueStartPickUpTest``): 明示指示の有無で 2 つに分け、
-  明示指示が無ければ既存の branch / PR があっても排他制御に進む。
+  明示指示が無ければ既存の branch / PR があっても排他制御に進む。確認コマンドは local に
+  だけある branch も確認し、明示指示で挙げられた branch 名は命名規約に依らずそのまま使う。
 - 評価基準 (``IssueClaimEvaluationTest``): `docs/discipline-evaluation.md` の issue-claim の
   評価基準が、明示指示による再開を Pass として扱う。
 
@@ -161,6 +162,25 @@ DRAFT_PR_FIRST_PHRASE = "draft PR 作成 → 実装"
 
 ISSUE_START_PICK_UP_HEADING = "## 1. pick-up 分岐"
 ISSUE_START_CLAIM_HEADING = "## 2. 排他制御の参照"
+
+# pick-up 分岐で既存の作業状態を確認するコマンド。remote の branch と、local にだけある
+# branch の両方を確認する。
+PICK_UP_BRANCH_CHECK_COMMANDS = (
+    "git ls-remote --heads origin",
+    "git branch --list",
+)
+
+# 明示指示がある場合の分岐に書く要素 (空白を除去した文に照合する)。
+EXPLICIT_BRANCH_REQUIREMENTS: tuple[tuple[str, tuple[Requirement, ...]], ...] = (
+    (
+        "挙げられた branch 名を命名規約に依らずそのまま使う",
+        ("branch名", "命名規約", "そのまま"),
+    ),
+    (
+        "local / remote のどちらにも無ければ step 1 から実行する",
+        (re.compile(r"local.*remote.*(?:どちら|いずれ)にも(?:無|な)"), "step1"),
+    ),
+)
 
 # issue-start skill の pick-up 分岐にあった、明示指示に触れない再開の分岐の語。
 UNCONDITIONAL_RESUME_PHRASE = "branch / open PR が既に存在し"
@@ -832,6 +852,38 @@ class IssueStartPickUpTest(IssueClaimTestCase):
         ):
             wanted = "」「".join(describe(requirement) for requirement in requirements)
             self.fail(f"{label}: 「{wanted}」をすべて満たす分岐が無い")
+
+    def test_state_check_covers_local_and_remote_branches(self) -> None:
+        """既存の作業状態の確認コマンドが、remote の branch に加えて local にだけある
+        branch も確認する。"""
+        label = self.skill_label(ISSUE_START_PICK_UP_HEADING)
+        section = self.skill_section(ISSUE_START_PICK_UP_HEADING)
+        for command in PICK_UP_BRANCH_CHECK_COMMANDS:
+            with self.subTest(command=command):
+                self.assert_phrase_present(label, section, command)
+
+    def test_explicit_instruction_uses_the_named_branch_as_is(self) -> None:
+        """明示指示で branch 名が挙げられた場合は、命名規約を検証せずその branch を使い、
+        local / remote のどちらにも無い場合に限り step 1 から実行する。"""
+        label = self.skill_label(ISSUE_START_PICK_UP_HEADING)
+        explicit_items = [
+            item
+            for item in self.pick_up_items()
+            if satisfies(item, EXPLICIT_INSTRUCTION)
+            and not satisfies(item, NO_EXPLICIT_INSTRUCTION)
+        ]
+        for name, requirements in EXPLICIT_BRANCH_REQUIREMENTS:
+            with self.subTest(requirement=name):
+                if not any(
+                    all(satisfies(sentence, requirement) for requirement in requirements)
+                    for item in explicit_items
+                    for sentence in sentences(item)
+                ):
+                    wanted = "」「".join(describe(requirement) for requirement in requirements)
+                    self.fail(
+                        f"{label}: 明示指示がある場合の分岐に「{wanted}」をすべて含む文が無い"
+                        f" (明示指示がある場合の項目: {len(explicit_items)} 件)"
+                    )
 
     def test_every_branch_depends_on_explicit_instruction(self) -> None:
         """pick-up 分岐のどの項目も明示指示の有無を条件にし、既存の branch / PR だけを
