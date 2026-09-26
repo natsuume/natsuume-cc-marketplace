@@ -33,7 +33,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
    ```
    gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> session=<セッションID> ts=<UTC ISO 8601>"
    ```
-   - branch 名は step 6 で使う名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)。`git ls-remote --heads origin '*issue-<N>-*'` と `git branch --list '*issue-<N>-*'` で既存の branch を探し、1 つあればその名前を使い、無ければ次の規約で決める。複数あれば claim comment を投稿せず、何も変更せず停止して `AskUserQuestion` でユーザに確認する
+   - branch 名は step 6 で使う名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)。`git ls-remote --heads origin '*issue-<N>-*'` と `git branch --list '*issue-<N>-*'` で既存の branch を探し (local と remote の同名は 1 つと数える)、1 つあればその名前を使い、無ければ次の規約で決める。複数あれば claim comment を投稿せず、何も変更せず停止して `AskUserQuestion` でユーザに確認する
    - branch 名規約: `<prefix>/issue-<N>-<slug>` (`<prefix>` = `feat` / `fix` / `chore` / `docs` / `refactor` 等、`<slug>` = issue タイトルから kebab-case で抽出した短縮形)
    - 例: `feat/issue-12-add-auth`, `fix/issue-25-null-deref`
    - `<セッションID>` は環境変数 `CLAUDE_CODE_SESSION_ID` の値 (Claude Code がセッション毎に付与する UUID)。未設定の場合のみ `uuidgen` で生成した値を代用し、同一セッション中は同じ値を使い続ける
