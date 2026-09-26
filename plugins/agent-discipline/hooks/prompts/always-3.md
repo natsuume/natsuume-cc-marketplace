@@ -17,7 +17,7 @@
 
 `/goal` のように **複数 issue を順次解決するフロー**、もしくは同じ repo で **他 session が並列稼働している可能性がある場面** では、同 issue への重複着手と他 session の作業破壊を防ぐため以下の手順を必ず守る。
 
-GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-progress` ラベル単独運用では TOCTOU race が残る (= 「ラベル確認 → ラベル付与」の間に他 session が割り込む)。そこで **claim comment の先着判定** を排他の基盤とする: GitHub が server-side で付与する `created_at` + 数値 comment id は投稿順に決まり、後から投稿した session は先に投稿された claim を必ず観測できるため、全 session が同じ先着者を導く。
+GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-progress` ラベル単独運用では TOCTOU race が残る (= 「ラベル確認 → ラベル付与」の間に他 session が割り込む)。そこで **claim comment の先着判定** を排他の基盤とする: GitHub が server-side で付与する `created_at` + 数値 comment id は投稿順に決まる。step 3 の待機のあいだに先に投稿された claim が一覧に反映されることを前提に、全 session が同じ先着者を導く。
 
 ### 着手手順
 
@@ -58,8 +58,9 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 - 対応 PR の merge により issue が close された後の**完了時クリーンアップ** (`ai:in-progress` ラベルと claim comment の削除) は**必須ではない** — issue の open/close 状態を完了管理の一次情報とする (別 session が Phase B から正規に引き継いで merge した場合、引き継ぎ session は `session=` 不一致で削除できないが、残置してよい)
 - 完了時クリーンアップを行う場合は、claim comment の `session=` 値が自分のセッション ID と一致する場合に限り、ラベルと claim comment を**一組として**削除する (片方だけ削除しない)
-- 撤退時は自分の claim comment のみ削除する。着手中断時は自分の claim comment と自分の branch を削除する。どちらの場合もラベルは削除しない
+- 撤退時・着手中断時のどちらも、自分の claim comment のみ削除する。どちらの場合もラベルは削除しない
   - ラベルを残す理由: 「中断したが復帰予定」の状態が人間に見える + 後続 session が `ai:in-progress` を見て撤退 → 二重着手の保険として機能
+  - 人がラベルを外せば、次の session が claim を取り直し、残った branch から再開できる (issue-start skill の pick-up 分岐)
   - 古い stale なラベルは人間が判定して手動削除する運用に委ねる
 - **他 session の claim comment / branch / ラベルは絶対に削除しない**
 - 「自分の claim か」の判定基準: claim comment 本文の `session=` 値が **自分のセッション ID と一致するか**
@@ -73,11 +74,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 1. 自分の claim comment があれば削除: `gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>`
 2. ユーザに撤退理由を **1 行で必ず報告** する (例: 「issue #12 は他 session が先着のため撤退しました」)。auto mode 中でもこの報告は省略しない (= ユーザが進捗状況を把握できなくなるため)
 
-**着手中断** (確保の確定後に作業をやめる場合) は、自分の claim comment を削除し、自分が作成・push した branch を削除するときは次をこの順に独立した Bash 呼び出しで実行する。前段が失敗したら後段に進まない:
-
-1. 作業 branch 上で `git push origin --delete <branch>`
-2. default branch へ switch (`git switch <default-branch>`)
-3. `git branch -D <branch>`
+**着手中断** (確保の確定後に作業をやめる場合) は、自分の claim comment だけを削除する。作業 branch (local / remote)・draft PR・ラベルは再開のために残す。確保の判定に branch を使わないため、branch を削除する必要は無い。
 
 ### よくある誤操作と回避
 
