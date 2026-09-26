@@ -431,6 +431,14 @@ class CodexReviewerConstraintsTest(ContractTestCase):
 
     REVIEWERS = (PRE_MERGE_CODEX_REVIEWER, PRE_PUSH_CODEX_REVIEWER)
 
+    # 新しい終了の項目に置き換える、旧い終了の指示。
+    RETIRED_ENDING = "Return the parent-safe report as your final reply"
+
+    def test_codex_reviewers_do_not_keep_the_retired_ending(self) -> None:
+        for path in self.REVIEWERS:
+            with self.subTest(agent=display_path(path)):
+                self.assert_phrase_absent(display_path(path), read(path), self.RETIRED_ENDING)
+
     def test_codex_reviewers_do_not_name_the_task_tool(self) -> None:
         for path in self.REVIEWERS:
             with self.subTest(agent=display_path(path)):
@@ -712,7 +720,9 @@ class UiDisciplineAvoidDefaultsTest(ContractTestCase):
         "ピル",
         "紫",
         "グラデーション",
-        re.compile(r"\bInter\b"),
+        # 空白を除去した文に照合するため、`\b` ではなく英字だけを境界にする (日本語が
+        # 隣接しても検出する)。
+        re.compile(r"(?<![A-Za-z])Inter(?![A-Za-z])"),
         "Roboto",
         re.compile(r"0\d/0\d"),
     )
