@@ -21,12 +21,14 @@
   文書が issue 番号か branch 名を挙げて継続を指示した場合 (明示指示) だけ step 6 から再開し、
   ラベルや他 session の claim comment があっても撤退も削除もしない。明示指示が無ければ、
   また明示指示があっても対応する branch が無ければ step 1 から実行する。issue 番号だけの
-  明示指示では、issue-start skill の小節 1.1 の手順で branch を決める。
+  明示指示では、issue-start skill の小節 1.1 の手順で branch を決め、同手順で新しい名前を
+  決めた場合も step 1 から実行する。
 - claim に埋め込む branch 名 (``IssueClaimExistingBranchNameTest``): step 2 は issue-start
   skill の小節 1.1 の手順で見つけた既存の branch の名前を使い、無ければ命名規約で決める。
   探索コマンドは step 2 に書かず、branch 名のどこにでも一致する旧パターンを残さない。
-- 作業 branch の用意 (``IssueClaimWorkBranchTest``): step 6 は `git fetch origin` の後 (失敗
-  したら停止して報告)、同名 branch がどちらにも無い・remote だけ・local だけ・両方の 4 通りで
+- 作業 branch の用意 (``IssueClaimWorkBranchTest``): step 6 は `git fetch --prune origin` の後
+  (失敗したら停止して報告)、prune 後の remote-tracking ref で同名 branch の有無を判定し、
+  どちらにも無い・remote だけ・local だけ・両方の 4 通りで
   作成・`origin` からの switch・そのままの switch・fast-forward / 停止を分ける。draft PR は
   `rule:tdd-two-phase` に合わせ、Phase A の commit を push した後に作る。
 - 関連文書 (``IssueClaimRelatedDocumentTest``): issue-start skill と README が branch push
@@ -34,12 +36,16 @@
 - issue-start skill の pick-up 分岐 (``IssueStartPickUpTest``): 明示指示の有無で 2 つに分け、
   明示指示が無ければ既存の branch / PR があっても排他制御に進む。確認コマンドは local に
   だけある branch も確認し、明示指示で挙げられた branch 名は命名規約に依らずそのまま使う。
-  明示指示が無い場合と issue 番号だけの明示指示は、小節 1.1 を参照する。
+  明示指示が無い場合と issue 番号だけの明示指示は、小節 1.1 を参照する。明示指示で小節 1.1 が
+  新しい名前を決めた場合は step 1 から実行する。
 - 既存 branch の探し方 (``IssueStartBranchLookupTest``): issue-start skill の小節 1.1 は、
   `*/issue-<N>-*` で remote と local を探し (失敗したら投稿せず停止して報告)、同名を 1 つと
   数え、`-phase-b-wip` の補助 branch を除き、命名規約 (使える文字を英小文字・数字・ハイフンに
   限る) に合わない名前で停止し、その後で
-  マージ済みの PR がある branch を除く。候補が 1 つならその名前を使い、無ければ命名規約で
+  マージ済みの PR がある branch を除く。除くのは、branch が存在する側 (local / remote) の
+  現在の commit (remote は `git ls-remote` の出力、local は `git rev-parse`) がすべて
+  マージ済みの PR の head commit (`headRefOid`) のどれかと一致する場合だけで、どちらか一方でも
+  一致しなければ候補に残す。候補が 1 つならその名前を使い、無ければ命名規約で
   決め (既存の branch と同名なら、どちらにも存在しない名前になるよう slug を変える)、複数
   なら投稿せず停止して確認する。見つけた名前は single quote で囲んで埋め込む。
 - 評価基準 (``IssueClaimEvaluationTest``): `docs/discipline-evaluation.md` の issue-claim の
@@ -159,6 +165,13 @@ LOOKUP_SECTION_REFERENCE = "1.1"
 # マージ済みの PR がある branch を確かめるコマンドの要素。
 MERGED_PR_CHECK_PHRASES = ("gh pr list --head", "--state merged")
 
+# マージ済みの PR の head commit を取り出す gh の引数。
+MERGED_PR_HEAD_FIELD = "--json headRefOid"
+
+# マージ済みの PR の head commit と比べる、branch の現在の commit を得るコマンド (remote は
+# 手順 1 の `git ls-remote` の出力、local は `git rev-parse`)。
+CURRENT_COMMIT_SOURCES = ("git ls-remote", "git rev-parse")
+
 # 契約改訂手順が作る補助 branch の接尾辞。
 WIP_BRANCH_SUFFIX = "-phase-b-wip"
 
@@ -209,6 +222,10 @@ NO_EXPLICIT_INSTRUCTION = re.compile(r"明示指示が(?:無|な)(?:い|く|け�
 # 他 session の claim comment を指す表記 (空白を除去した文に照合する)。
 OTHER_SESSION = re.compile(r"他(?:セッション|session)")
 
+# step 6 で remote の状態を取り込むコマンド。remote で削除された branch の remote-tracking
+# ref を残さず、同名 branch の有無を remote の現状で判定するため prune する。
+WORK_BRANCH_FETCH_COMMAND = "git fetch --prune origin"
+
 # step 6 の分岐時の停止で使ってはならない、local / remote の branch を変更するコマンド。
 DIVERGENCE_FORBIDDEN_COMMANDS = (
     "git reset",
@@ -245,6 +262,15 @@ EXPLICIT_BRANCH_REQUIREMENTS: tuple[tuple[str, tuple[Requirement, ...]], ...] = 
         "issue 番号だけが挙げられた場合は、セクション 1.1 の手順で branch を決める",
         ("issue番号だけ", LOOKUP_SECTION_REFERENCE),
     ),
+)
+
+# 小節 1.1 の手順が新しい名前を決めた場合に step 1 から実行することを示す要素 (空白を除去
+# した文に照合する)。手順で除外した branch は存在し続けるため、「branch が無い」場合とは
+# 別に書く。
+NEW_NAME_STARTS_FROM_STEP_1_REQUIREMENTS: tuple[Requirement, ...] = (
+    LOOKUP_SECTION_REFERENCE,
+    "新しい名前",
+    "step 1",
 )
 
 # issue-start skill の pick-up 分岐にあった、明示指示に触れない再開の分岐の語。
@@ -582,7 +608,7 @@ class IssueClaimStartProcedureTest(IssueClaimTestCase):
         """
         item = self.work_branch_step()
         label = self.label("step 6 の項目")
-        for phrase in ("git fetch origin", "git switch -c", "origin/<default-branch>"):
+        for phrase in (WORK_BRANCH_FETCH_COMMAND, "git switch -c", "origin/<default-branch>"):
             with self.subTest(phrase=phrase):
                 self.assert_phrase_present(label, item, phrase)
 
@@ -782,6 +808,16 @@ class IssueClaimExplicitResumeTest(IssueClaimTestCase):
             ("issue 番号だけ", "issue-start", LOOKUP_SECTION_REFERENCE),
         )
 
+    def test_new_name_from_the_lookup_starts_from_step_1(self) -> None:
+        """issue 番号だけの明示指示で、セクション 1.1 の手順が新しい名前を決めた場合も
+        step 1 から実行する。手順で除外した branch は存在し続けるため、「branch が無い」
+        場合の規定だけでは claim を経ずに新しい branch を作りうる。"""
+        self.assert_some_sentence(
+            self.label("明示指示の段落"),
+            self.explicit_resume_paragraph(),
+            NEW_NAME_STARTS_FROM_STEP_1_REQUIREMENTS,
+        )
+
 
 class IssueClaimExistingBranchNameTest(IssueClaimTestCase):
     """step 2 で claim に埋め込む branch 名を、issue-start skill の手順で見つけた既存の
@@ -822,9 +858,22 @@ class IssueClaimWorkBranchTest(IssueClaimTestCase):
         )
 
     def test_fetch_failure_stops_and_reports(self) -> None:
-        """`git fetch origin` が失敗したら、remote の状態を判定できないので停止して
+        """`git fetch --prune origin` が失敗したら、remote の状態を判定できないので停止して
         ユーザに報告する。"""
-        self.assert_step_sentence(("git fetch origin", "失敗", "停止", "報告"))
+        self.assert_step_sentence((WORK_BRANCH_FETCH_COMMAND, "失敗", "停止", "報告"))
+
+    def test_branch_presence_is_judged_by_pruned_tracking_refs(self) -> None:
+        """同名の branch の有無は、prune した後の remote-tracking ref (`origin/<branch>`)
+        で判定する。remote で削除された branch の古い ref を「remote だけにある」と
+        判定し、マージ済みの branch を追跡しないため。"""
+        self.assert_step_sentence(
+            (
+                re.compile(r"prune(?:した)?後"),
+                "remote-tracking ref",
+                "origin/<branch>",
+                "判定",
+            )
+        )
 
     def test_missing_branch_is_created_from_the_default_branch(self) -> None:
         """同名の branch がどこにも無ければ、最新の default branch を起点に作る。"""
@@ -1030,6 +1079,33 @@ class IssueStartPickUpTest(IssueClaimTestCase):
                         f" (明示指示がある場合の項目: {len(explicit_items)} 件)"
                     )
 
+    def test_new_name_from_the_lookup_starts_from_step_1(self) -> None:
+        """明示指示がある場合の分岐で、セクション 1.1 の手順が新しい名前を決めたときは、
+        新規着手として step 1 から実行する (手順で除外した branch は存在し続けるため、
+        「branch が無い」場合とは別に書く)。"""
+        label = self.skill_label(ISSUE_START_PICK_UP_HEADING)
+        explicit_items = [
+            item
+            for item in self.pick_up_items()
+            if satisfies(item, EXPLICIT_INSTRUCTION)
+            and not satisfies(item, NO_EXPLICIT_INSTRUCTION)
+        ]
+        if not any(
+            all(
+                satisfies(sentence, requirement)
+                for requirement in NEW_NAME_STARTS_FROM_STEP_1_REQUIREMENTS
+            )
+            for item in explicit_items
+            for sentence in sentences(item)
+        ):
+            wanted = "」「".join(
+                describe(requirement) for requirement in NEW_NAME_STARTS_FROM_STEP_1_REQUIREMENTS
+            )
+            self.fail(
+                f"{label}: 明示指示がある場合の分岐に「{wanted}」をすべて含む文が無い"
+                f" (明示指示がある場合の項目: {len(explicit_items)} 件)"
+            )
+
     def test_every_branch_depends_on_explicit_instruction(self) -> None:
         """pick-up 分岐のどの項目も明示指示の有無を条件にし、既存の branch / PR だけを
         条件に Phase B から再開する分岐が無い。"""
@@ -1130,6 +1206,37 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
     def test_merged_branches_are_excluded(self) -> None:
         """マージ済みの PR がある branch は候補から除く。"""
         self.assert_lookup_sentence((*MERGED_PR_CHECK_PHRASES, re.compile(r"除")))
+
+    def test_merged_check_reads_the_head_commits(self) -> None:
+        """マージ済みの確認は、マージ済みの PR の head commit を `--json headRefOid` で
+        取り出す (branch 名だけで判定すると、同じ名前で作り直した branch も除くため)。"""
+        self.assert_lookup_sentence((*MERGED_PR_CHECK_PHRASES, MERGED_PR_HEAD_FIELD))
+
+    def test_current_commits_come_from_the_search_and_rev_parse(self) -> None:
+        """head commit と比べる branch の現在の commit は、remote は手順 1 の `git ls-remote`
+        の出力、local は `git rev-parse` で得る。"""
+        self.assert_lookup_sentence(("remote", "手順 1", "local", *CURRENT_COMMIT_SOURCES))
+
+    def test_merged_branch_is_excluded_only_when_every_commit_matches(self) -> None:
+        """branch が存在する側 (local / remote) の commit がすべて、マージ済みの PR の
+        head commit のどれかと一致する場合だけ候補から除く。"""
+        self.assert_lookup_sentence(
+            (
+                "存在する",
+                "すべて",
+                "head commit",
+                "一致",
+                re.compile(r"だけ|限り"),
+                re.compile(r"除"),
+            )
+        )
+
+    def test_unmatched_commit_keeps_the_candidate(self) -> None:
+        """local / remote のどちらか一方でも head commit と一致しなければ、未マージの
+        commit があるものとして候補に残す。"""
+        self.assert_lookup_sentence(
+            (re.compile(r"(?:どちらか|いずれか)一方でも"), "一致しなけれ", "未マージ", "候補に残")
+        )
 
     def test_merged_check_failure_stops(self) -> None:
         """マージ済みの確認 (gh) が失敗したら停止して報告する。"""
