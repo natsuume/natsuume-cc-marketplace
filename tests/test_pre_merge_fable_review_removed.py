@@ -53,6 +53,7 @@ MERGE_HOOKS_JSON = MERGE_PLUGIN / "hooks" / "hooks.json"
 
 DISCIPLINE = PLUGINS_DIR / "agent-discipline" / "hooks" / "prompts" / "discipline.md"
 BLOCK_FABLE = PLUGINS_DIR / "agent-discipline" / "hooks" / "scripts" / "block-fable-subagent.sh"
+AGENT_DISCIPLINE_README = PLUGINS_DIR / "agent-discipline" / "README.md"
 
 ADVISOR_PLUGIN = PLUGINS_DIR / "cross-model-advisor"
 ADVISOR_FABLE_RUNNER = ADVISOR_PLUGIN / "agents" / "fable-advisor-runner.md"
@@ -103,7 +104,6 @@ ADVISOR_RUNNER_TYPE = "cross-model-advisor:fable-advisor-runner"
 # リポジトリ直下 README の plugin 一覧表の行と、plugin 説明の節の見出し。
 REPO_README_TABLE_ROW_PREFIX = f"| [{MERGE_PLUGIN_NAME}](#{MERGE_PLUGIN_NAME}) |"
 REPO_README_SECTION_HEADING = f"## {MERGE_PLUGIN_NAME}"
-REPO_README_KEYWORDS_HEADING = "### キーワード"
 
 CACHE_RELATIVE = Path("natsuume-statusline") / "weekly-scoped.json"
 
@@ -116,19 +116,19 @@ def files_under(directory: Path) -> list[Path]:
     return sorted(path for path in directory.rglob("*") if path.is_file())
 
 
-def repo_readme_section_prose() -> str:
-    """直下 README の pre-merge-cross-review 節のうち、キーワード小節より前の本文。"""
+def repo_readme_section() -> str:
+    """直下 README の pre-merge-cross-review 節 (キーワード小節を含む) の本文。"""
     lines = read(REPO_README).splitlines()
     try:
         start = lines.index(REPO_README_SECTION_HEADING)
     except ValueError:
         return ""
-    prose = []
+    section = []
     for line in lines[start + 1 :]:
-        if line.startswith("## ") or line == REPO_README_KEYWORDS_HEADING:
+        if line.startswith("## "):
             break
-        prose.append(line)
-    return "\n".join(prose)
+        section.append(line)
+    return "\n".join(section)
 
 
 class RemovedFilesTest(unittest.TestCase):
@@ -171,13 +171,15 @@ class MergePluginHasNoFableTest(unittest.TestCase):
             )
         self.assertEqual([], offenders, "Fable への言及が残る箇所:\n" + "\n".join(offenders))
 
-    def test_marketplace_description_does_not_mention_fable(self) -> None:
+    def test_marketplace_entry_does_not_mention_fable(self) -> None:
+        """description と keywords を含むエントリ全体が Fable に言及しない。"""
         marketplace = json.loads(read(MARKETPLACE))
         entries = [
             plugin for plugin in marketplace["plugins"] if plugin["name"] == MERGE_PLUGIN_NAME
         ]
         self.assertEqual(1, len(entries))
-        self.assertIsNone(FABLE_PATTERN.search(entries[0]["description"]), entries[0])
+        entry_text = json.dumps(entries[0], ensure_ascii=False)
+        self.assertIsNone(FABLE_PATTERN.search(entry_text), entries[0])
 
     def test_repo_readme_table_row_does_not_mention_fable(self) -> None:
         rows = [
@@ -188,10 +190,11 @@ class MergePluginHasNoFableTest(unittest.TestCase):
         self.assertEqual(1, len(rows), rows)
         self.assertIsNone(FABLE_PATTERN.search(rows[0]), rows[0])
 
-    def test_repo_readme_section_prose_does_not_mention_fable(self) -> None:
-        prose = repo_readme_section_prose()
-        self.assertTrue(prose.strip(), f"直下 README に {REPO_README_SECTION_HEADING} 節が無い")
-        hits = [line for line in prose.splitlines() if FABLE_PATTERN.search(line)]
+    def test_repo_readme_section_does_not_mention_fable(self) -> None:
+        """plugin 説明の節 (キーワード小節を含む) が Fable に言及しない。"""
+        section = repo_readme_section()
+        self.assertTrue(section.strip(), f"直下 README に {REPO_README_SECTION_HEADING} 節が無い")
+        hits = [line for line in section.splitlines() if FABLE_PATTERN.search(line)]
         self.assertEqual([], hits, "直下 README の plugin 説明に Fable への言及が残っている")
 
     def test_hooks_description_names_the_delivery_scripts(self) -> None:
@@ -243,6 +246,16 @@ class DisciplineFableUsageTest(unittest.TestCase):
         self.assertEqual(1, len(bullets), f"Fable の用途の bullet: {bullets}")
         self.assertIn(ADVISOR_RUNNER_TYPE, bullets[0])
         self.assertNotIn("pre-merge", bullets[0])
+
+    def test_readme_and_hook_do_not_limit_fable_to_pre_merge(self) -> None:
+        """分業規律と同期する README・hook のコメントが Fable の用途に pre-merge を挙げない。"""
+        offenders = [
+            f"{path.relative_to(ROOT).as_posix()}:{number}"
+            for path in (AGENT_DISCIPLINE_README, BLOCK_FABLE)
+            for number, line in enumerate(read(path).splitlines(), start=1)
+            if "pre-merge" in line
+        ]
+        self.assertEqual([], offenders, "pre-merge への言及が残る箇所:\n" + "\n".join(offenders))
 
 
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
