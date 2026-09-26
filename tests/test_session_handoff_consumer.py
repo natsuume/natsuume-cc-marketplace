@@ -315,22 +315,57 @@ class SessionHandoffPendingConsumerTest(unittest.TestCase):
 
 
 class SessionHandoffInstructionContractTest(unittest.TestCase):
-    """handoff-instruction.md (handoff 執筆指示) の記述量の目安。"""
+    """handoff-instruction.md (handoff 執筆指示) が、本文の長さを目安で縛らずに注入の仕組みを
+    説明すること。
 
-    LENGTH_GUIDANCE = (
-        "本文は 6,000 文字以内を目安とし、"
-        "超える場合は参照ファイルパスの列挙を優先して残してください。"
+    - 自動注入の上限 (前置きを含めて約 8,000 文字) と、超えた場合に本文の代わりに
+      ファイルパスが渡され、新しいセッションが Read で読み直すことを、1 つの段落で説明する
+      (``INJECTION_LIMIT_REQUIREMENTS`` をすべて満たす段落がある)
+    - 本文の文字数の目安 (``RETIRED_LENGTH_GUIDANCE``) を持たない
+    """
+
+    # 注入の仕組みの説明を識別する語 (空白を除去した段落に照合する)。上限の値、
+    # 前置きを含むこと、縮退時に渡るファイルパス、新しいセッションの Read の 4 点。
+    INJECTION_LIMIT_REQUIREMENTS: tuple[str | re.Pattern[str], ...] = (
+        re.compile(r"8,?000"),
+        "前置き",
+        "パス",
+        "Read",
     )
+    RETIRED_LENGTH_GUIDANCE = "6,000 文字以内を目安"
 
     @staticmethod
     def without_whitespace(text: str) -> str:
         return re.sub(r"\s+", "", text)
 
-    def test_instruction_states_length_guidance(self) -> None:
+    def test_instruction_explains_the_injection_limit(self) -> None:
         instruction = HANDOFF_INSTRUCTION.read_text(encoding="utf-8")
-        self.assertIn(
-            self.without_whitespace(self.LENGTH_GUIDANCE),
+        paragraphs = [
+            self.without_whitespace(block)
+            for block in re.split(r"\n\s*\n", instruction)
+        ]
+
+        def satisfies(paragraph: str, requirement: str | re.Pattern[str]) -> bool:
+            if isinstance(requirement, str):
+                return requirement in paragraph
+            return requirement.search(paragraph) is not None
+
+        self.assertTrue(
+            any(
+                all(satisfies(paragraph, item) for item in self.INJECTION_LIMIT_REQUIREMENTS)
+                for paragraph in paragraphs
+            ),
+            f"{HANDOFF_INSTRUCTION}: 自動注入の上限 (前置きを含めて約 8,000 文字) と、"
+            "超えた場合にファイルパスが渡され新しいセッションが Read で読み直すことを "
+            "説明する段落が無い",
+        )
+
+    def test_instruction_has_no_length_target(self) -> None:
+        instruction = HANDOFF_INSTRUCTION.read_text(encoding="utf-8")
+        self.assertNotIn(
+            self.without_whitespace(self.RETIRED_LENGTH_GUIDANCE),
             self.without_whitespace(instruction),
+            f"{HANDOFF_INSTRUCTION}: 本文の文字数の目安が残っている",
         )
 
 

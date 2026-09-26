@@ -6,7 +6,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v5.0.9
+v5.0.10
 ## 機構
 
 | 構成要素 | 役割 |
@@ -91,7 +91,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 ## 既知の制約
 
 - `rule:rescue-thread` は、codex-rescue-runner が request に含まれる thread flag に従って Codex task を継続または新規に開始する挙動を前提とします。runner の flag の扱いが変わった場合は規律の見直しが必要です
-- ユーザが `/codex:rescue` の本文を直接指定し、かつ対象の rescue がセッション内で最新の再開可能 task でなくなっている場合 (間に consult 等の Codex task が terminal 状態になった場合)、規律は安全側の degraded mode (`--fresh` + 本文無改変転送、thread 文脈の連続性なし) に倒れます。誤 thread 再開の防止と rescue.md の verbatim 転送契約を文脈の連続性より優先するためで、継続文脈が必要な場合は再依頼時に本文へ含めてください
+- ユーザが `/codex:rescue` の本文を直接指定し、かつ対象の rescue がセッション内で最新の再開可能 task でなくなっている場合 (間に consult 等の Codex task が terminal 状態になった場合)、規律は安全側の degraded mode (`--fresh` + 本文無改変転送、thread 文脈の連続性なし) に倒れます。advisor-rules の「ユーザが本文を直接指定した場合は routing flag 以外を変更せず転送する」規定と、request の thread flag に従って task を継続または新規に開始する codex-rescue-runner の挙動により、誤 thread 再開の防止と本文の無改変転送を文脈の連続性より優先するためで、継続文脈が必要な場合は再依頼時に本文へ含めてください
 - fable-advisor-runner は判定後に使用率が閾値を超えた場合など、agent-discipline の hook に起動を deny される。この場合は再起動せず Codex の助言だけで続行する
 - Codex の 3 runner は model: sonnet を frontmatter で固定しているが、model 制限環境で sonnet が利用できない場合は runner の起動自体が失敗し、review cadence の `unavailable` 記録に到達できない。この場合は呼び出し側の Agent tool で利用可能な非 Fable モデルを `model` に明示して runner を再実行する (呼び出し側指定は frontmatter より優先される)
 - runner 以外からの直接起動を deny する PreToolUse gate は matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された companion / wrapper の起動を gate は観測しない。これらの tool を有効にした環境はサポート外

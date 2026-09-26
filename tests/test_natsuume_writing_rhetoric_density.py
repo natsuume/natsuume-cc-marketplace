@@ -14,8 +14,9 @@ writing-rules.md の共通コアに、文章全体でのレトリック・論証
 - たたき台生成時の特則はセクション 11 に移り、skill からの節番号参照が一致している
 - セクション 7 の構造化規則が無条件適用ではなく、読者の理解に必要な場合に限定されている
 - core-summary.md (SessionStart 注入) に密度制御の原則の要点がある
-- review skill が全文スコープの密度チェックと、削っても情報・論理が失われないメタ文の確認と、
-  見直しを促す目安を持つ
+- review skill が全文スコープの密度チェックと、削っても情報・論理が失われないメタ文の確認を
+  持ち、密度の判定を定性基準だけで行う (地の文あたりの個数による数値の目安と、それと対比
+  する「目安ではなく」の言い回しを持たない)
 - draft skill が同じ論証テンプレートの反復と、予告・本説明・再要約の重複を避ける
 - rules/expression-watchlist.md が、生成 AI の普及後に増えた直訳調・比喩的な語と
   抽象的な漢語・評価語を見直し候補 (使用禁止ではない) として列挙し、話題語を含まない。
@@ -176,9 +177,21 @@ class ReviewSkillTest(unittest.TestCase):
     def test_review_checks_removable_meta_sentences(self) -> None:
         self.assertIn("削っても情報・論理が失われない", self.text)
 
-    def test_review_has_rereading_thresholds_not_violations(self) -> None:
-        self.assertIn("見直しを促す目安", self.text)
+    def test_review_judges_density_without_numeric_thresholds(self) -> None:
+        """密度の判定は定性基準だけで行い、数値の目安 (表とその導入文) を持たない。
+
+        太字の扱いは定性基準 (general-writing.md セクション 4 の基準) に残し、締めの定型を
+        1 件ごとに指摘する規則も残す。
+        """
+        for phrase in ("見直しを促す目安", "1000 字あたり", "目安ではなく"):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(
+                    "".join(phrase.split()),
+                    "".join(self.text.split()),
+                    f"review skill に数値の目安の記述「{phrase}」が残っている",
+                )
         self.assertIn("太字", self.text)
+        self.assertIn("1件ごとに指摘", "".join(self.text.split()))
 
 
 class ExpressionWatchlistTest(unittest.TestCase):

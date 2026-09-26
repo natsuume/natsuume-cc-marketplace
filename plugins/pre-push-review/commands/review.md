@@ -4,7 +4,7 @@ description: pre-push gate を通すための 2 レビューを同じアシス�
 
 # /pre-push-review:review
 
-このコマンドは `git push` 前に必須となる **2 つのレビュー** を、 **同じアシスタントメッセージで並列に** 2 つの subagent として起動する確定的フローです。 順序入れ替えや引数指定は受け付けません — このコマンド本文に固定された 2 subagent 並列発出のみが正解です。
+このコマンドは `git push` 前に必須となる **2 つのレビュー** を、 **同じアシスタントメッセージで並列に** 2 つの subagent として起動する確定的フローです。 順序入れ替えや引数指定は受け付けません — このコマンド本文に固定された 2 subagent 並列発出が既定で、並列発出が技術的に成立しない場合だけ下記の節に従います。
 
 ## 必ず実行すること: 2 subagent の並列発出
 
@@ -18,10 +18,10 @@ description: pre-push gate を通すための 2 レビューを同じアシス�
 
 Phase 文脈は code-reviewer と security-reviewer の両方に渡します。
 
-次のアシスタントメッセージ (= このコマンドへの最初の応答) で、 **以下 2 つの Agent / Task tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
+次のアシスタントメッセージ (= このコマンドへの最初の応答) で、 **以下 2 つの Agent tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
 
-1. **Agent / Task tool**: `subagent_type: "pre-push-review:code-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review"
-2. **Agent / Task tool**: `subagent_type: "pre-push-review:security-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review"
+1. **Agent tool**: `subagent_type: "pre-push-review:code-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review"
+2. **Agent tool**: `subagent_type: "pre-push-review:security-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review"
 
 ## 確定的フローの理由
 
@@ -34,7 +34,7 @@ Phase 文脈は code-reviewer と security-reviewer の両方に渡します。
 
 - subagent (`pre-push-review:code-reviewer` / `pre-push-review:security-reviewer`) が見つからない → プラグインの install を確認してください (`claude plugin install pre-push-review@natsuume-plugins`)
 - 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ 2 subagent を順次起動しても push gate の構造的保証は同じ (= 2 マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。
-- 一部の marker のみ失効している場合は、 2 subagent 全部を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします)。 単独再起動時も上記 2 起動仕様と同じ model 指定を必ず添えてください。 2 subagent 並列発出が既定であることは変わりません (= 初回実行や両 marker が失効した場合は引き続き並列 2 起動を使う)。
+- 一部の marker のみ失効している場合は、 2 subagent 全部を再走させる必要はありません。 該当 subagent だけを Agent tool で単独再起動するのが正規経路です (block-pre-push.sh の deny メッセージも同じ案内をします)。 単独再起動時も上記 2 起動仕様と同じ model 指定を必ず添えてください。 2 subagent 並列発出が既定であることは変わりません (= 初回実行や両 marker が失効した場合は引き続き並列 2 起動を使う)。
 - code-reviewer / security-reviewer の起動が model 利用不可 (Opus を提供しないプラン等) で失敗する場合は `model: "sonnet"` の明示で該当 reviewer を単独再起動してよい (呼び出し側の model 指定は frontmatter より優先され、marker は subagent の agent_type に対して発行されるため fallback でも機能する)。fallback 使用時はレビューの実効モデルが既定と異なる
 
 ## レビュー指摘の修正フロー (2 subagent 完了後)

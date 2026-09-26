@@ -2,9 +2,9 @@
 
 pre-push-review は push 前の 2 レビューを標準 skill ではなく専用 subagent
 (`pre-push-review:code-reviewer` / `pre-push-review:security-reviewer`) で実行する。
-その理由は次の 3 点であり、両 agent の description / body、
-`/pre-push-review:review` command、plugin README、auto-mark.sh のコメントは
-この 3 点で説明を揃える:
+その理由は次の 3 点であり、両 agent の body、`/pre-push-review:review` command、
+plugin README、auto-mark.sh のコメントはこの 3 点で説明を揃える。agent の description は
+routing 情報だけを書き、理由を書かない:
 
 1. confidence 付きの parent-safe report 契約を reviewer 側に固定できる
 2. SubagentStart / SubagentHandback / SubagentStop の lifecycle hook が reviewer の
@@ -19,9 +19,10 @@ pre-push-review は push 前の 2 レビューを標準 skill ではなく専用
   存在しない `LS` tool の名指し / `CLAUDE_CODE_SUBAGENT_MODEL` が明示 model や
   agent frontmatter より優先される) を、plugin の 5 ファイル、リポジトリ直下
   README、pre-push-codex-review の command と auto-mark.sh が含まないこと
-- 上記 3 点の説明が、agent description / agent body / command の理由節 /
+- 上記 3 点の説明が、agent body (3 点それぞれが同一の箇条書き項目・段落に共起し、
+  3 点目は ``READ_ONLY_REASON_CLAUSE`` の文をそのまま含む) / command の理由節 /
   plugin README の `### Agents` 節 (3 点それぞれが同一の箇条書き項目・段落に
-  共起する) / auto-mark.sh の Skill 検知コメントにあること
+  共起する) / auto-mark.sh の Skill 検知コメントにあり、agent description に無いこと
 - README の `### マーカーファイル` 節末尾が subagent の model 解決順序
   (明示 model・agent frontmatter が env より優先され、
   `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` 設定時のみ env が全てを上書きする) を
@@ -115,10 +116,11 @@ PHRASES_NAMING_THE_NONEXISTENT_LS_TOOL = (
 # 形で書く。env が agent frontmatter より優先されるという向きの説明は README に置かない。
 PHRASE_CLAIMING_ENV_PRECEDES_AGENT_FRONTMATTER = "agent frontmatter より優先されるため"
 
-# reviewer が nested subagent を起動しない旨を agent body に書く一文 (完全一致)。
-NO_SPAWN_CLAUSE = (
-    "Do not spawn subagents; the `Agent` tool is intentionally omitted "
-    "from your tools."
+# 理由 3 点のうち 3 点目 (`Agent` 除外による read-only 維持) を agent body に書く文
+# (完全一致)。文頭の冠詞 (The / the) は含めず、理由を列挙する文の途中に置いても一致する。
+READ_ONLY_REASON_CLAUSE = (
+    "`Agent` tool is intentionally omitted from your tools to keep this "
+    "reviewer read-only"
 )
 
 RATIONALE_KEYWORDS_PARENT_SAFE_REPORT = ("parent-safe", "confidence")
@@ -421,18 +423,38 @@ class ExpiredRationaleAbsenceTest(ContractTestCase):
 class CurrentRationalePresenceTest(ContractTestCase):
     """自前 reviewer を使う現在の理由 3 点が所定の位置に書かれていること。"""
 
-    def test_reviewer_agent_bodies_state_the_no_spawn_clause(self) -> None:
-        """両 agent body が `Agent` 除外を理由とする一文をそのまま含む。"""
+    def test_reviewer_agent_bodies_state_the_read_only_reason_clause(self) -> None:
+        """両 agent body が `Agent` 除外を read-only 維持の理由とする文をそのまま含む。"""
         for path in REVIEWER_AGENTS:
             with self.subTest(agent=path.name):
-                if normalize(NO_SPAWN_CLAUSE) not in normalize(agent_body(read(path))):
+                if normalize(READ_ONLY_REASON_CLAUSE) not in normalize(
+                    agent_body(read(path))
+                ):
                     self.fail(
-                        f"{path}: 次の一文を (太字等を挿入せず) そのまま含めること: "
-                        f"{NO_SPAWN_CLAUSE}"
+                        f"{path}: 本文に次の文を (太字等を挿入せず) そのまま含めること: "
+                        f"{READ_ONLY_REASON_CLAUSE}"
                     )
 
-    def test_reviewer_agent_descriptions_state_the_three_reasons(self) -> None:
-        """両 agent の description 1 行に理由 3 点の語がそろう。"""
+    def test_reviewer_agent_bodies_state_the_three_reasons(self) -> None:
+        """両 agent body で理由 3 点が項目・段落単位にそろう。
+
+        3 点はそれぞれ 1 つの箇条書き項目 (または段落) の中で完結して書く。
+        3 点が別々の項目に分かれているのは構わない。
+        """
+        for path in REVIEWER_AGENTS:
+            units = cooccurrence_units(agent_body(read(path)))
+            for group, keywords in RATIONALE_KEYWORD_GROUPS:
+                with self.subTest(agent=path.name, group=group):
+                    self.assert_keywords_cooccur(
+                        f"{path} の本文", units, group, keywords
+                    )
+
+    def test_reviewer_agent_descriptions_omit_the_three_reasons(self) -> None:
+        """両 agent の description 1 行は routing 情報だけを書き、理由 3 点のどれも書かない。
+
+        理由 1 点を書けばその点の語の組がそろうため、どの組もそろわないことで
+        理由の不在を判定する。
+        """
         for path in REVIEWER_AGENTS:
             description = description_line(read(path))
             self.assert_scope_found(
@@ -440,9 +462,12 @@ class CurrentRationalePresenceTest(ContractTestCase):
             )
             for group, keywords in RATIONALE_KEYWORD_GROUPS:
                 with self.subTest(agent=path.name, group=group):
-                    self.assert_keywords_present(
-                        f"{path} の description", description, group, keywords
-                    )
+                    if all(keyword in description for keyword in keywords):
+                        self.fail(
+                            f"{path} の description: 「{group}」の理由が書かれている "
+                            f"({', '.join(keywords)} がそろう)。理由は本文に書き、"
+                            "description には routing 情報だけを残すこと"
+                        )
 
     def test_review_command_rationale_states_the_three_reasons(self) -> None:
         """command の「標準 skill を直接呼ばない理由」の項目に理由 3 点の語がそろう。"""

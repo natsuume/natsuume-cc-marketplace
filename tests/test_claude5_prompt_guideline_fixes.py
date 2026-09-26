@@ -9,8 +9,8 @@
   存在を本テストで固定する。
 - git-guardrails: rebase-workflow skill に残る bash-decompose 規律違反 (コマンド置換 +
   変数連結の一括スクリプト例) の除去と、origin/HEAD stale 対策の追加。
-- pre-push-review: Opus 5 が消費する reviewer report への長さ較正 (公式ガイドの
-  「Opus 5 の書く文書は長くなりがちで明示較正が必要」への対応)。
+- pre-push-review: reviewer report の自由記述フィールドを、数値の上限ではなく
+  「親が一目で triage できる長さ」という定性表現で較正する。
 - cross-model-advisor: 8,000 文字注入予算の advisor-rules.md と consult/SKILL.md 間の
   逐語重複の参照化 (checkpoint 4 項目・async_launched 回収手順)。
 - ui-discipline: 完了前チェックリストの位置づけ緩和 (Opus 5 の過剰検証誘発対策と
@@ -166,26 +166,66 @@ class RebaseWorkflowSkillTest(unittest.TestCase):
 
 
 class PrePushReviewerLengthCalibrationTest(unittest.TestCase):
-    """Opus 5 固定の reviewer 2 体の report contract に長さ較正があること。"""
+    """reviewer 2 体の report contract が、自由記述フィールドの長さを定性的に較正すること。
 
-    def test_reviewers_calibrate_report_length(self) -> None:
-        """report contract の自由記述フィールドに 1 文較正を課す文の存在を、
-        意図を特定できる長いフレーズで検査する (短い汎用句だと無関係な出現でも
-        green になるため)。subTest は使わない (runner による報告差異を避ける)。
-        """
-        phrase = (
-            "each free-text field (Cause class, Violated invariant, Impact, "
-            "Fix direction) as a single sentence"
-        )
+    - 自由記述フィールドの長さを、親が一目で triage できる長さに保つ文がある
+      (``TRIAGE_LENGTH_REQUIREMENTS`` の語をすべて含む 1 文)
+    - 自由記述フィールドを 1 文に限る数値的な上限 (``SINGLE_SENTENCE_LIMIT``) が無い
+    - 契約外の節・叙述を加えない指示 (``NO_EXTRA_NARRATIVE``) がある
+    """
+
+    REVIEWERS = (
+        ("code-reviewer.md", CODE_REVIEWER),
+        ("security-reviewer.md", SECURITY_REVIEWER),
+    )
+    # 定性的な長さ較正の文を識別する語 (大文字小文字を区別しない)。親 (parent) が
+    # triage できる長さ、という規則を、report 契約の別の文 (parent-safe 等) で偶然
+    # 満たさないよう、triage と parent を同じ 1 文に求める。
+    TRIAGE_LENGTH_REQUIREMENTS = ("free-text field", "parent", "triage")
+    SINGLE_SENTENCE_LIMIT = "as a single sentence"
+    NO_EXTRA_NARRATIVE = "do not add sections or narrative beyond this contract"
+
+    @staticmethod
+    def sentences(text: str) -> list[str]:
+        """空白を 1 つに詰めた本文を、英文の文末 (`. ` / 空行) と箇条書きの境目で区切る。"""
+        parts = re.split(r"(?<=\.)\s+(?=[A-Z`*])|\n\s*\n|\n(?=\s*[-*] )", text)
+        return [" ".join(part.split()) for part in parts if part.strip()]
+
+    def test_reviewers_calibrate_report_length_qualitatively(self) -> None:
         missing = [
             name
-            for name, path in (
-                ("code-reviewer.md", CODE_REVIEWER),
-                ("security-reviewer.md", SECURITY_REVIEWER),
+            for name, path in self.REVIEWERS
+            if not any(
+                all(word in sentence.lower() for word in self.TRIAGE_LENGTH_REQUIREMENTS)
+                for sentence in self.sentences(read(path))
             )
-            if phrase not in read(path)
         ]
-        self.assertEqual([], missing, f"長さ較正文を含まない reviewer: {missing}")
+        self.assertEqual(
+            [],
+            missing,
+            "自由記述フィールドを親が一目で triage できる長さに保つ文 "
+            f"({'・'.join(self.TRIAGE_LENGTH_REQUIREMENTS)} を含む 1 文) が無い reviewer: {missing}",
+        )
+
+    def test_reviewers_do_not_limit_fields_to_a_single_sentence(self) -> None:
+        present = [
+            name
+            for name, path in self.REVIEWERS
+            if self.SINGLE_SENTENCE_LIMIT in " ".join(read(path).split())
+        ]
+        self.assertEqual(
+            [], present, f"自由記述フィールドを 1 文に限る上限が残る reviewer: {present}"
+        )
+
+    def test_reviewers_keep_the_no_extra_narrative_rule(self) -> None:
+        missing = [
+            name
+            for name, path in self.REVIEWERS
+            if self.NO_EXTRA_NARRATIVE not in " ".join(read(path).split())
+        ]
+        self.assertEqual(
+            [], missing, f"契約外の節・叙述を加えない指示が無い reviewer: {missing}"
+        )
 
 
 class CodexAdvisorDeduplicationTest(unittest.TestCase):

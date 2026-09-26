@@ -39,7 +39,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
    - `<セッションID>` は環境変数 `CLAUDE_CODE_SESSION_ID` の値 (Claude Code がセッション毎に付与する UUID)。未設定の場合のみ `uuidgen` で生成した値を代用し、同一セッション中は同じ値を使い続ける
    - `session=` は「自分の claim か」の判定キー。branch 名は issue 番号 + タイトル slug から決定的に導出され他 session と同名になりうるため、`branch=` / `ts=` (自己申告) / comment author (同一 GitHub アカウント) では自他判別できない
 
-3. **3 秒待機**: 他 session の claim comment が一覧に反映されるまでの遅れを吸収する (`sleep 3`)
+3. **3 秒待機**: 他 session の claim comment が一覧に反映されるまでの遅れを吸収する (`sleep 3`)。harness が foreground の `sleep` を拒否する場合は、Bash の background 実行で `sleep 3` を走らせ、完了通知を待ってから step 4 に進む
 
 4. **comment 再取得 + 先着判定**: REST GET で comment 一覧を全ページ再取得:
    ```
@@ -133,4 +133,3 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 進捗・完了報告はこのセッションのツール結果で裏付けられた事実のみを書く。推測や希望的観測を完了として報告しない。
 
-本文書の規律は、単純な作業での思考量を増やす理由にはならない。

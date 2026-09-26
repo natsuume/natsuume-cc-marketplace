@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v3.0.8
+v3.0.9
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
@@ -85,7 +85,7 @@ claude plugin install agent-discipline@natsuume-plugins
 
 **常時適用ルールの書式**:
 
-- `always-1.md` / `always-2.md` / `always-3.md`: 各ルールに適用範囲を明示し、否定形の指示には具体的な代替行動を併記する。ルールごとに良い例 / 悪い例を最小 1 セット添える。禁止表現 8 カテゴリは列挙を維持する。part 3/3 (`always-3.md`) の末尾に「本文書の規律は、単純な作業での思考量を増やす理由にはならない」の steering 文を置く。1 つのルールセットを rule 境界で 3 part に分割したもので、part 間で rule ID は重複しない。各 part の見出しは `# agent-discipline: 常時適用ルール — part <N>/3` で、到着順序に依らず各 part を self-contained に適用する旨を part 1 の冒頭に置く
+- `always-1.md` / `always-2.md` / `always-3.md`: 各ルールに適用範囲を明示し、否定形の指示には具体的な代替行動を併記する。ルールごとに良い例 / 悪い例を最小 1 セット添える。禁止表現 8 カテゴリは列挙を維持する。1 つのルールセットを rule 境界で 3 part に分割したもので、part 間で rule ID は重複しない。各 part の見出しは `# agent-discipline: 常時適用ルール — part <N>/3` で、到着順序に依らず各 part を self-contained に適用する旨を part 1 の冒頭に置く
 - `rule:issue-claim` (連続 issue 解決時の排他制御、part 3/3 に含まれる) は、安全機構のため手順本体を省略せず完全記載する
 
 #### inject-temporary

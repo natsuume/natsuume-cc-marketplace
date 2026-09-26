@@ -4,7 +4,7 @@ description: push 前レビューを同じアシスタントメッセージで�
 
 # /pre-push-codex-review:review
 
-このコマンドは `git push` 前に必須となる **push 前レビュー** を、 **同じアシスタントメッセージで並列に** subagent として起動する確定的フローです。 順序入れ替えや引数指定は受け付けません — このコマンド本文に固定された並列発出のみが正解です。
+このコマンドは `git push` 前に必須となる **push 前レビュー** を、 **同じアシスタントメッセージで並列に** subagent として起動する確定的フローです。 順序入れ替えや引数指定は受け付けません — このコマンド本文に固定された並列発出が既定で、並列発出が技術的に成立しない場合だけ下記の節に従います。
 
 起動する subagent は install 構成で決まります:
 
@@ -25,11 +25,11 @@ subagent を発出する直前に、呼び出し側 (メインセッションの
 
 Phase 文脈を渡すのは code-reviewer と security-reviewer だけです。codex-reviewer が起動する通常の Codex review は branch target と custom focus text を同時に受け取れないため、codex-reviewer の prompt には `{{PHASE_CONTEXT}}` を含めません。本 plugin 単独 install の環境では Phase 文脈の置換結果を使う相手がいないため、判定自体を省略してかまいません。
 
-次のアシスタントメッセージ (= このコマンドへの最初の応答) で、 **以下の Agent / Task tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
+次のアシスタントメッセージ (= このコマンドへの最初の応答) で、 **以下の Agent tool を 1 つのメッセージ内に同時に含めて** 並列発出してください:
 
-1. **Agent / Task tool**: `subagent_type: "pre-push-review:code-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review" (core 併用時のみ)
-2. **Agent / Task tool**: `subagent_type: "pre-push-review:security-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review" (core 併用時のみ)
-3. **Agent / Task tool**: `subagent_type: "pre-push-codex-review:codex-reviewer"`、`model: "sonnet"`、 prompt: "codex review wrapper を foreground で 1 回起動し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "codex review wrapper の foreground 実行" (常に起動)
+1. **Agent tool**: `subagent_type: "pre-push-review:code-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に correctness バグ検出を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の code review" (core 併用時のみ)
+2. **Agent tool**: `subagent_type: "pre-push-review:security-reviewer"`、`model: "opus"`、 prompt: "{{PHASE_CONTEXT}} branch の差分に対して self-contained に security review を実行し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "branch 差分の security review" (core 併用時のみ)
+3. **Agent tool**: `subagent_type: "pre-push-codex-review:codex-reviewer"`、`model: "sonnet"`、 prompt: "codex review wrapper を foreground で 1 回起動し、 agent body の契約に従う parent-safe markdown report を返してください。実行可能な詳細を親 session に返さないでください。"、 description: "codex review wrapper の foreground 実行" (常に起動)
 
 ## 確定的フローの理由
 
@@ -44,7 +44,7 @@ Phase 文脈を渡すのは code-reviewer と security-reviewer だけです。c
 - `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` が見つからない → core が未 install の環境です。 3 レビュー構成にしたい場合は `claude plugin install pre-push-review@natsuume-plugins` で core を導入してください。 導入しない場合は codex-reviewer のみで push gate は成立します
 - codex review wrapper が「codex プラグインが見つかりません」 で失敗 → 公式 codex プラグインを install (`claude plugin install codex@openai-codex`) してから codex-reviewer subagent を再起動
 - 並列発出が技術的に困難な場合 (Claude Code の harness 都合等) は、 同じ subagent を順次起動しても push gate の構造的保証は同じ (= マーカーの hash 一致が成立すれば push 可)。 wall-clock が伸びるだけのトレードオフです。 順次起動する場合は **code-reviewer → security-reviewer → codex-reviewer** の順を推奨します (codex-reviewer は wrapper が codex CLI を foreground で hold するため最長になりやすく、 後段に置くと前段の review 結果を主 session が並行確認できる)。
-- 一部の marker のみ失効している場合は、 全 subagent を再走させる必要はありません。 該当 subagent だけを Agent / Task tool で単独再起動するのが正規経路です (各 plugin の push gate の deny メッセージも同じ案内をします)。 単独再起動時も上記の起動仕様と同じ model 指定を必ず添えてください。 並列発出が既定であることは変わりません (= 初回実行や複数 marker が失効した場合は引き続き並列起動を使う)。
+- 一部の marker のみ失効している場合は、 全 subagent を再走させる必要はありません。 該当 subagent だけを Agent tool で単独再起動するのが正規経路です (各 plugin の push gate の deny メッセージも同じ案内をします)。 単独再起動時も上記の起動仕様と同じ model 指定を必ず添えてください。 並列発出が既定であることは変わりません (= 初回実行や複数 marker が失効した場合は引き続き並列起動を使う)。
 - code-reviewer / security-reviewer の起動が model 利用不可 (Opus を提供しないプラン等) で失敗する場合は `model: "sonnet"` の明示で、codex-reviewer の起動が Sonnet 制限環境で失敗する場合は利用可能な非 Fable モデル (例: `model: "opus"`) の明示で、該当 reviewer を単独再起動してよい (呼び出し側の model 指定は frontmatter より優先され、marker は subagent の agent_type に対して発行されるため fallback でも機能する)。fallback 使用時はレビューの実効モデルが既定と異なる
 
 ## レビュー指摘の修正フロー (subagent 完了後)

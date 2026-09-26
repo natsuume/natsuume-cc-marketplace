@@ -32,7 +32,7 @@ exit 0 (および exit 2) のとき、stdout に `account/rateLimits/read` 応�
 | `rateLimits.primary.windowDurationMins` | 枠の窓幅 (分)。10080 = 週次 |
 | `rateLimits.primary.resetsAt` | reset 時刻 (**epoch 秒**。ISO 変換はしていない) |
 | `rateLimits.secondary` | 第 2 の枠 (plan によっては存在。無ければ欠損 / null)。構造は `primary` と同じ |
-| `rateLimitsByLimitId` | limitId 別の全枠。本体枠 `codex` のほか、独立枠 (例: `codex_bengalfox` = GPT-5.3-Codex-Spark) を含む |
+| `rateLimitsByLimitId` | limitId 別の全枠。本体枠 `codex` のほか、limitId が `codex` 以外の独立枠を含む |
 | `rateLimitResetCredits` | リセットクレジット一覧 (無ければ null) |
 
 ユーザへ報告するときは、`rateLimits.primary` (および存在すれば `secondary`) の `usedPercent` と reset 時刻 (`resetsAt` を人間可読に直す)、`planType`、および `rateLimitsByLimitId` にある独立枠の使用率を報告する。

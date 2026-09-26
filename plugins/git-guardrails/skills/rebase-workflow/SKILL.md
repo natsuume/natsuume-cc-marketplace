@@ -29,8 +29,10 @@ git remote set-head origin --auto
 そのうえでデフォルトブランチ名を取得します：
 
 ```bash
-git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'
+git symbolic-ref refs/remotes/origin/HEAD
 ```
+
+出力 `refs/remotes/origin/<name>` の `<name>` 部分がデフォルトブランチ名です (prefix の `refs/remotes/origin/` は出力を読み取って除きます)。
 
 ### 2. rebase で変更を取り込む
 
@@ -46,31 +48,7 @@ git rebase origin/master
 
 ### 3. コンフリクト発生時の対処
 
-rebase 中にコンフリクトが発生した場合：
-
-1. **状況確認**
-   ```bash
-   git status
-   ```
-   コンフリクトしているファイルが表示されます。
-
-2. **コンフリクトを解決**
-   - 各ファイルを開き、`<<<<<<<`, `=======`, `>>>>>>>` マーカーを探す
-   - 適切な内容に修正
-   - 修正後、ステージに追加：
-     ```bash
-     git add <file>
-     ```
-
-3. **rebase を継続**
-   ```bash
-   git rebase --continue
-   ```
-
-4. **rebase を中止する場合（元の状態に戻す）**
-   ```bash
-   git rebase --abort
-   ```
+rebase 中にコンフリクトが発生した場合は、各ファイルのコンフリクトを解決して `git add <file>` でステージし `git rebase --continue` で継続し、断念する場合は `git rebase --abort` で rebase 前の状態に戻します。
 
 ### 4. リモートへの push
 
@@ -94,10 +72,6 @@ git push --force-with-lease
 ```bash
 git remote show origin
 ```
-
-### rebase 中に大量のコンフリクトが発生
-
-小さな単位で rebase を行うか、`git rebase --abort` で中止してマージを検討してください。
 
 ### push が拒否された
 

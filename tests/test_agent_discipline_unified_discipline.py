@@ -29,8 +29,10 @@ agent-discipline はメインセッションのモデルを判定せず、全モ
 - 3 スクリプトの出力 JSON は ``{"hookSpecificOutput": {"hookEventName": <入力の
   hook_event_name>, "additionalContext": ...}}`` だけを持つ。
 - プロンプト本文 (``PromptBodyContractTest``): 配送するプロンプトは ``sonnet`` / ``haiku`` を
-  含まない。always-<N>.md の見出し・always-3.md の思考量の文・rule ID 集合・discipline.md の
-  必須 / 禁止文言と、見出し込みで 8,000 字以下のサイズを固定する。
+  含まない。always-<N>.md の見出し・always-3.md が思考量を文章で指示しないこと (思考を
+  増やす語 ``ALWAYS_THINKING_FORBIDDEN`` と、思考量に言及する文 ``ALWAYS_THINKING_SENTENCE``
+  を持たない)・rule ID 集合・discipline.md の必須 / 禁止文言と、見出し込みで 8,000 字以下の
+  サイズを固定する。
 - lint (``LintContractTest``): lint-prompt-sync.sh が現行ファイルを対象にし、分業規律の期待
   rule ID 集合を定数 ``EXPECTED_DISCIPLINE_RULE_IDS`` に持つ。lint-payload-size.sh の
   CASE_TABLE は state / pending を用意するケースと存在しないスクリプトのケースを持たず、
@@ -71,7 +73,7 @@ REPO_README = ROOT / "README.md"
 PLUGIN_README = PLUGIN_DIR / "README.md"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "3.0.8"
+PLUGIN_VERSION = "3.0.9"
 
 INJECT_ALWAYS = "inject-always.sh"
 INJECT_RULES_PART = "inject-rules-part.sh"
@@ -839,10 +841,14 @@ class PromptBodyContractTest(unittest.TestCase):
                     read(PROMPTS_DIR / name).splitlines(),
                 )
 
-    def test_always_part_three_does_not_add_thinking(self) -> None:
-        text = read(PROMPTS_DIR / "always-3.md")
+    def test_always_part_three_does_not_direct_thinking_amount(self) -> None:
+        """always-3.md は思考量を文章で指示しない (思考量は effort で制御する)。
+
+        行の折り返しで分断された出現も検出するため、空白を除去して照合する。
+        """
+        text = "".join(read(PROMPTS_DIR / "always-3.md").split())
         self.assertNotIn(ALWAYS_THINKING_FORBIDDEN, text)
-        self.assertIn(ALWAYS_THINKING_SENTENCE, text)
+        self.assertNotIn("".join(ALWAYS_THINKING_SENTENCE.split()), text)
 
     def test_always_rule_id_union_matches_the_lint_expectation(self) -> None:
         match = re.search(

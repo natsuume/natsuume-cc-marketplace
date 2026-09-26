@@ -10,7 +10,8 @@
   ヘッダコメントと冒頭文の対象に Fable を含めない。
 - discipline.md の effort 規律は公式ガイド「Prompting Claude Opus 5.5」
   (prompting-claude-opus-5-5、既定 effort は medium) を基準にし、rule:delegation-rules 節に
-  置く。Opus 5 基準の effort 見出しは持たない。
+  置く。Opus 5.5 の思考量は現在形の事実として書き、Opus 5 との比較と、Opus 5 の effort を
+  持ち込むことの禁止は書かない。Opus 5 基準の effort 見出しは持たない。
 - auto-mode.md (全モデル共通で配送) は、作業が残っている間の 4 種類の止まり方の禁止、
   止まってよい場合、既存の禁止 / 要確認事項を不要にしない旨を記述する。
 
@@ -83,7 +84,13 @@ OPUS55_EFFORT_PHRASES = (
     "Opus 5.5 への委任では effort の既定 `medium` を基準にする",
     "境界が明確な機械的作業では `low` を検討し",
     "`xhigh` / `max` は品質向上を確認できた作業に限る",
-    "Opus 5 で使っていた effort をそのまま持ち込まない",
+    "Opus 5.5 は同じ effort 名でも 1 turn あたりの思考量が多い",
+)
+# rule:delegation-rules 節に含めない、Opus 5 との比較と effort の持ち込みの禁止。
+OPUS5_COMPARISON_PHRASES = (
+    "Opus 5 より",
+    "Opus 5 で使っていた effort",
+    "持ち込まない",
 )
 # 分業規律に含めない Opus 5 基準の effort 見出し。
 OPUS5_EFFORT_PHRASE = "Opus 5 を使う委任では effort を固定しない"
@@ -198,6 +205,13 @@ class Opus55EffortTests(unittest.TestCase):
         section = delegation_rules_section(read(DISCIPLINE))
         missing = [phrase for phrase in OPUS55_EFFORT_PHRASES if phrase not in section]
         self.assertEqual([], missing, f"Opus 5.5 基準の effort 規律に無い文言: {missing}")
+
+    def test_opus5_comparison_absent_from_delegation_rules(self) -> None:
+        section = delegation_rules_section(read(DISCIPLINE))
+        present = [phrase for phrase in OPUS5_COMPARISON_PHRASES if phrase in section]
+        self.assertEqual(
+            [], present, f"rule:delegation-rules 節に残る Opus 5 との比較・持ち込みの禁止: {present}"
+        )
 
     def test_opus5_effort_heading_absent(self) -> None:
         self.assertNotIn(OPUS5_EFFORT_PHRASE, read(DISCIPLINE))

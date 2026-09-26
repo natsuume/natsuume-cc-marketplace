@@ -8,7 +8,7 @@
 
 ## バージョン
 
-v4.0.4
+v4.0.5
 ## インストール
 
 ```bash
@@ -133,7 +133,7 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 ### checkpoint
 
-5 サイクル完了後、次の review 起動は PreToolUse hook が deny し、main session の停止は Stop hook が block します。checkpoint の実行主体は本 plugin ではなく `cross-model-advisor` plugin です。`cross-model-advisor:consult` skill の review cadence mode が `cross-model-advisor:codex-advisor-runner` を `model: "sonnet"` で起動し、`<review_cycle_checkpoint>` (Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い) を材料に根本方針の壁打ちを行います。起動 mode は Claude Code が決める (対話セッションでは background が既定) ため指定せず、助言は completion notification (SubagentHandback / SubagentStop) 経由で届きます。
+5 サイクル完了後、次の review 起動は PreToolUse hook が deny し、main session の停止は Stop hook が block します。checkpoint の実行主体は本 plugin ではなく `cross-model-advisor` plugin です。`cross-model-advisor:consult` skill の「Codex review 5 サイクルごとの根本方針 checkpoint」節の手順が `cross-model-advisor:codex-advisor-runner` を `model: "sonnet"` で起動し、`<review_cycle_checkpoint>` (Goal と受入基準・制約 / 直近 5 サイクルの review 履歴 / 現在の方針と不確実性 / course-correction の問い) を材料に根本方針の壁打ちを行います。起動 mode は Claude Code が決める (対話セッションでは background が既定) ため指定せず、助言は completion notification (SubagentHandback / SubagentStop) 経由で届きます。
 
 カウンターの reset は次の 4 経路に限られます:
 

@@ -15,7 +15,7 @@
 
 **適用範囲**: `gh issue create` / `gh issue edit` で issue body を作成・編集する全ての場面に適用する。3.2 のとおり PR 説明・plan ファイル・commit message にも同じ規律が及ぶ。
 
-issue を起票する場合、**実装時に判断や疑問点が発生しないように** issue 起票前 / 起票時に `AskUserQuestion` で詳細化する。issue 駆動開発の前提として、issue body は後続 session の AI agent が実装する際の **唯一の信頼ソース** になるため、Claude の独断が最も強く固定化される局面である。**「issue body はユーザが承認した契約書」** と捉え、未承認の選択 / 暗黙の推奨を絶対に混入させない。
+issue を起票する場合、**実装時に判断や疑問点が発生しないように** issue 起票前 / 起票時に `AskUserQuestion` で詳細化する。issue 駆動開発の前提として、issue body は後続 session の AI agent が実装する際の **唯一の信頼ソース** になるため、Claude の独断が最も強く固定化される局面である。issue body はユーザが承認した契約書と捉え、未承認の選択 / 暗黙の推奨を混入させない。
 
 - 起票内容は **issue body に全埋め込み** する。補助 file (`.claude/issues/N.md` 等) には書かない
   - 目標: `gh issue view <N>` 1 発で、別 session の Claude が完全 self-contained に実装着手できる
@@ -36,7 +36,7 @@ issue を起票する場合、**実装時に判断や疑問点が発生しない
 
 ### 3.2 PR 説明 / plan / commit への適用
 
-本節の規律は issue body 限定ではない。PR 説明、plan ファイル (`.claude/plans/`)、commit message にもセクション 2.1 の禁止表現を持ち込まない:
+本節の規律は issue body 限定ではない。PR 説明、plan ファイル、commit message にもセクション 2.1 の禁止表現を持ち込まない:
 
 - PR 説明に「A 案で実装した。B 案も検討したが ... の理由で A にした」のような **未承認の独断正当化** を書かない (= 比較検討が必要なら PR を draft に戻して `AskUserQuestion` で詰め直す)
 - plan に「Option A / Option B」を併記したまま実装に進まない (= plan 確定時点で 1 案に絞る)
@@ -68,11 +68,8 @@ issue を起票する場合、**実装時に判断や疑問点が発生しない
 
 PR が issue を **完全に解決** する場合、PR body に closing keyword を書いて issue が auto-close されるようにする。
 
-- 有効なキーワード (9 種、case-insensitive): `close` / `closes` / `closed` / `fix` / `fixes` / `fixed` / `resolve` / `resolves` / `resolved`
-- 推奨形式: `Closes #<N>` (colon 有無は GitHub parser がどちらも受理するが、表記は `Closes #N` で統一)
-- **PR title では reference は作るが close 動作しない**。必ず PR body に書く
+- PR body (title ではない) に `Closes #N` と書く。表記は `Closes #N` で統一する
 - **部分対応** (issue 全体ではなく一部のみ解決する PR) では closing keyword を使わず、`Refs #N` / `Part of #N` と書いて issue は手動 close に残す
-- cross-repo の close は `owner/repo#N` 形式が必要
 
 **例**:
 - 悪い例: feature branch 向けの PR の body に `Closes #42` とだけ書いて auto-close を期待する

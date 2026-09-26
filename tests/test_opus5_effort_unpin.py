@@ -7,13 +7,13 @@
   再確認指示を加えない段落を置く (対で先に読ませる)。両段落の存在は
   tests/test_agent_discipline_unified_discipline.py が検査する。
 - pre-push-review の code-reviewer / security-reviewer は effort を指定せずセッション既定を
-  継承し、高 effort での自己修正ループを避ける較正文を本文に持つ。README はその構成を書く
+  継承する。確認済みの候補を再検証しないよう抑止する文
+  (``REVIEWER_REVERIFICATION_SUPPRESSION_PHRASES``) を持たない。README はその構成を書く
   (frontmatter の契約は tests/test_subagent_model_pins.py が検査する)。
 """
 
 from __future__ import annotations
 
-import re
 import unittest
 from pathlib import Path
 
@@ -51,31 +51,17 @@ RECHECK_BAN_PHRASE = "委任では汎用的な再確認指示を加えない"
 DELEGATION_INSTRUCTION_MARKER = "<!-- rule:delegation-instruction -->"
 ESCALATION_MARKER = "<!-- rule:escalation -->"
 
-# reviewer body の較正文 (effort 継承化に伴う高 effort 自己修正ループ対策)。
-REVIEWER_CALIBRATION_PHRASE = (
-    "do not loop back to re-verify findings you have already confirmed"
+# reviewer が持たない、確認済みの候補の再検証を抑止する文の断片 (冒頭段落の 2 文)。
+REVIEWER_REVERIFICATION_SUPPRESSION_PHRASES = (
+    "Verify each candidate once against the actual code",
+    "do not loop back to re-verify findings you have already confirmed",
+    "self-initiated re-checking",
 )
 
-
-FRONTMATTER_PATTERN = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
-
-
-def body_after_frontmatter(text: str) -> str:
-    """YAML frontmatter (先頭の --- ... ---) を除いた本文を返す。
-
-    reviewer 較正文は実行時に subagent へ配送される本文に存在しなければ意味が
-    無いため、frontmatter (description 等の metadata) への記載を green と誤認
-    しないよう検査対象から除く (tests/test_subagent_model_pins.py の同名
-    ヘルパーと同じ方式)。
-    """
-    match = FRONTMATTER_PATTERN.match(text)
-    if match is None:
-        return text
-    return text[match.end():]
 
 
 class DisciplineEffortUnpinTests(unittest.TestCase):
@@ -132,16 +118,21 @@ class DisciplineEffortUnpinTests(unittest.TestCase):
         self.assertEqual([], violations, f"隣接配置が不成立: {violations}")
 
 
-class ReviewerCalibrationTests(unittest.TestCase):
-    """effort を継承する reviewer の本文にある検証較正文。"""
+class ReviewerReverificationSuppressionTests(unittest.TestCase):
+    """effort を継承する reviewer が、再検証を抑止する文を持たないこと。"""
 
-    def test_reviewer_bodies_contain_verification_calibration(self) -> None:
-        missing = [
-            name
+    def test_reviewers_do_not_suppress_reverification(self) -> None:
+        """両 reviewer のファイルのどこにも、再検証を抑止する文の断片が無い。
+
+        行の折り返しで分断された出現も検出するため、空白を除去して照合する。
+        """
+        present = [
+            f"{name}: {phrase!r}"
             for name, path in REVIEWERS.items()
-            if REVIEWER_CALIBRATION_PHRASE not in body_after_frontmatter(read(path))
+            for phrase in REVIEWER_REVERIFICATION_SUPPRESSION_PHRASES
+            if "".join(phrase.split()) in "".join(read(path).split())
         ]
-        self.assertEqual([], missing, f"検証較正文が無い reviewer: {missing}")
+        self.assertEqual([], present, f"再検証を抑止する文が残る reviewer: {present}")
 
 
 class ReviewerDocConsistencyTests(unittest.TestCase):
