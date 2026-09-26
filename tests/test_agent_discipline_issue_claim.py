@@ -20,10 +20,11 @@
 - 明示指示による再開 (``IssueClaimExplicitResumeTest``): ユーザのメッセージまたは handoff の
   文書が issue 番号か branch 名を挙げて継続を指示した場合 (明示指示) だけ step 6 から再開し、
   ラベルや他 session の claim comment があっても撤退も削除もしない。明示指示が無ければ、
-  また明示指示があっても対応する branch が無ければ step 1 から実行する。
-- claim に埋め込む branch 名 (``IssueClaimExistingBranchNameTest``): step 2 は issue 番号の
-  パターンで remote と local の既存の branch を探し、1 つあればその名前を使い、無ければ命名
-  規約で決める。複数一致したら claim comment を投稿する前に停止してユーザに確認する。
+  また明示指示があっても対応する branch が無ければ step 1 から実行する。issue 番号だけの
+  明示指示では、issue-start skill の小節 1.1 の手順で branch を決める。
+- claim に埋め込む branch 名 (``IssueClaimExistingBranchNameTest``): step 2 は issue-start
+  skill の小節 1.1 の手順で見つけた既存の branch の名前を使い、無ければ命名規約で決める。
+  探索コマンドは step 2 に書かず、branch 名のどこにでも一致する旧パターンを残さない。
 - 作業 branch の用意 (``IssueClaimWorkBranchTest``): step 6 は `git fetch origin` の後 (失敗
   したら停止して報告)、同名 branch がどちらにも無い・remote だけ・local だけ・両方の 4 通りで
   作成・`origin` からの switch・そのままの switch・fast-forward / 停止を分ける。draft PR は
@@ -33,9 +34,14 @@
 - issue-start skill の pick-up 分岐 (``IssueStartPickUpTest``): 明示指示の有無で 2 つに分け、
   明示指示が無ければ既存の branch / PR があっても排他制御に進む。確認コマンドは local に
   だけある branch も確認し、明示指示で挙げられた branch 名は命名規約に依らずそのまま使う。
-  パターンに複数の branch が一致したら停止してユーザに確認する。
+  明示指示が無い場合と issue 番号だけの明示指示は、小節 1.1 を参照する。
+- 既存 branch の探し方 (``IssueStartBranchLookupTest``): issue-start skill の小節 1.1 は、
+  `*/issue-<N>-*` で remote と local を探し (失敗したら投稿せず停止して報告)、同名を 1 つと
+  数え、`-phase-b-wip` の補助 branch を除き、命名規約に合わない名前で停止し、その後で
+  マージ済みの PR がある branch を除く。候補が 1 つならその名前を使い、無ければ命名規約で
+  決め、複数なら投稿せず停止して確認する。見つけた名前は single quote で囲んで埋め込む。
 - 評価基準 (``IssueClaimEvaluationTest``): `docs/discipline-evaluation.md` の issue-claim の
-  評価基準が、明示指示による再開を Pass として扱う。
+  評価基準が、明示指示による再開と、既存 branch の探し方で停止する経路を Pass として扱う。
 
 文章全体の一致は検査しない。手順を識別するコマンド・識別子の有無と出現順序を検査し、
 言い回しは実装側で選べる。always-3.md・issue-start skill・評価手順書のパスは
@@ -134,11 +140,25 @@ README_BRANCH_PUSH_PHRASES = (
 CLAIM_STEP_MARKER = "2. **claim comment を投稿**"
 WORK_BRANCH_STEP_MARKER = "6. **作業 branch"
 
-# issue 番号のパターンで既存の branch を探すコマンド (remote と local)。
+# issue 番号のパターンで既存の branch を探すコマンド (remote と local)。パターンは branch 名の
+# 先頭の `<prefix>/issue-<N>-` に絞り、slug に issue 番号を含む別 issue の branch を除く。
 EXISTING_BRANCH_SEARCH_COMMANDS = (
-    "git ls-remote --heads origin '*issue-<N>-*'",
-    "git branch --list '*issue-<N>-*'",
+    "git ls-remote --heads origin '*/issue-<N>-*'",
+    "git branch --list '*/issue-<N>-*'",
 )
+
+# branch 名のどこにでも一致していた旧パターン。
+LOOSE_BRANCH_PATTERN = "'*issue-<N>-*'"
+
+# issue-start skill の既存 branch の探し方の小節と、それを参照するときの節番号。
+ISSUE_START_LOOKUP_HEADING = "### 1.1 既存 branch の探し方"
+LOOKUP_SECTION_REFERENCE = "1.1"
+
+# マージ済みの PR がある branch を確かめるコマンドの要素。
+MERGED_PR_CHECK_PHRASES = ("gh pr list --head", "--state merged")
+
+# 契約改訂手順が作る補助 branch の接尾辞。
+WIP_BRANCH_SUFFIX = "-phase-b-wip"
 
 # パターンに複数の branch が一致したときに、何も変更せず停止してユーザに確認することを
 # 示す要素 (空白を除去した文に照合する)。
@@ -210,12 +230,8 @@ EXPLICIT_BRANCH_REQUIREMENTS: tuple[tuple[str, tuple[Requirement, ...]], ...] = 
         (re.compile(r"local.*remote.*(?:どちら|いずれ)にも(?:無|な)"), "step1"),
     ),
     (
-        "パターンに複数の branch が一致したら、何も変更せず停止してユーザに確認する",
-        MULTIPLE_MATCH_REQUIREMENTS,
-    ),
-    (
-        "local と remote の両方にある同名の branch は 1 つと数える",
-        SAME_NAME_COUNTED_ONCE_REQUIREMENTS,
+        "issue 番号だけが挙げられた場合は、セクション 1.1 の手順で branch を決める",
+        ("issue番号だけ", LOOKUP_SECTION_REFERENCE),
     ),
 )
 
@@ -280,6 +296,16 @@ def markdown_section(text: str, heading: str) -> str:
     if start is None:
         return ""
     return "".join(lines[start + 1 :])
+
+
+def text_before_subheading(text: str) -> str:
+    """`text` のうち、最初の見出し行の手前までを返す (節の本文から小節を除くため)。"""
+    lines = text.splitlines(keepends=True)
+    end = next(
+        (index for index, line in enumerate(lines) if HEADING_PATTERN.match(line)),
+        len(lines),
+    )
+    return "".join(lines[:end])
 
 
 def labeled_paragraph(text: str, label: str) -> str:
@@ -735,42 +761,44 @@ class IssueClaimExplicitResumeTest(IssueClaimTestCase):
         )
 
 
+    def test_issue_number_only_refers_to_the_lookup_section(self) -> None:
+        """issue 番号だけの明示指示で branch を決める手順として、issue-start skill の
+        既存 branch の探し方 (セクション 1.1) を参照する。"""
+        self.assert_some_sentence(
+            self.label("明示指示の段落"),
+            self.explicit_resume_paragraph(),
+            ("issue 番号だけ", "issue-start", LOOKUP_SECTION_REFERENCE),
+        )
+
+
 class IssueClaimExistingBranchNameTest(IssueClaimTestCase):
-    """step 2 で claim に埋め込む branch 名を、既存の branch から決める。"""
+    """step 2 で claim に埋め込む branch 名を、issue-start skill の手順で見つけた既存の
+    branch から決める。"""
 
     def assert_step_sentence(self, requirements: tuple[Requirement, ...]) -> None:
         self.assert_some_sentence(
             self.label("step 2 の項目"), self.claim_step(), requirements
         )
 
-    def test_existing_branch_is_searched_by_issue_number(self) -> None:
-        """branch 名を決める前に、issue 番号のパターンで remote と local の既存の branch を
-        探す。"""
-        item = self.claim_step()
-        for command in EXISTING_BRANCH_SEARCH_COMMANDS:
-            with self.subTest(command=command):
-                self.assert_phrase_present(self.label("step 2 の項目"), item, command)
-
-    def test_single_match_name_is_used(self) -> None:
-        """既存の branch が 1 つ見つかれば、その名前を claim の `branch=` に使う (step 6 の
-        同名判定がその branch に switch するため)。"""
-        self.assert_step_sentence((re.compile(r"1つ(?:だけ)?(?:あれ|見つか)"), "その名前"))
+    def test_existing_branch_refers_to_the_lookup_section(self) -> None:
+        """既存の branch は issue-start skill のセクション 1.1 の手順で探し、見つかった
+        名前を使う。"""
+        self.assert_step_sentence(("issue-start", LOOKUP_SECTION_REFERENCE, "名前"))
 
     def test_no_match_follows_the_naming_convention(self) -> None:
         """既存の branch が無ければ、命名規約で branch 名を決める。"""
         self.assert_step_sentence((re.compile(r"無(?:け|い)"), "規約"))
 
-    def test_matches_are_counted_by_branch_name(self) -> None:
-        """local と remote の両方にある同名の branch は 1 つと数える (push 済みの branch で
-        再開する通常の経路を、複数一致として止めないため)。"""
-        self.assert_step_sentence(SAME_NAME_COUNTED_ONCE_REQUIREMENTS)
+    def test_search_commands_are_not_duplicated(self) -> None:
+        """探索コマンドは issue-start skill の 1 か所に置き、step 2 には書かない。"""
+        item = self.claim_step()
+        for phrase in ("git ls-remote", "git branch --list"):
+            with self.subTest(phrase=phrase):
+                self.assert_phrase_absent(self.label("step 2 の項目"), item, phrase)
 
-    def test_multiple_matches_stop_before_posting(self) -> None:
-        """パターンに複数の branch が一致したら、claim comment を投稿する前に、何も変更
-        せず停止してユーザに確認する。"""
-        self.assert_step_sentence(
-            MULTIPLE_MATCH_REQUIREMENTS + (re.compile(r"投稿(?:せず|する前|の前)"),)
-        )
+    def test_loose_pattern_is_absent(self) -> None:
+        """branch 名のどこにでも一致する旧パターンを rule:issue-claim の節に残さない。"""
+        self.assert_phrase_absent(self.label(), self.issue_claim_block(), LOOSE_BRANCH_PATTERN)
 
 
 class IssueClaimWorkBranchTest(IssueClaimTestCase):
@@ -909,7 +937,10 @@ class IssueStartPickUpTest(IssueClaimTestCase):
         return section
 
     def pick_up_items(self) -> list[str]:
-        items = top_level_list_items(self.skill_section(ISSUE_START_PICK_UP_HEADING))
+        """pick-up 分岐の箇条書き項目 (小節 1.1 の手順の箇条書きは含めない)。"""
+        items = top_level_list_items(
+            text_before_subheading(self.skill_section(ISSUE_START_PICK_UP_HEADING))
+        )
         if not items:
             self.fail(f"{self.skill_label(ISSUE_START_PICK_UP_HEADING)}: 分岐の箇条書きが無い")
         return items
@@ -1000,6 +1031,16 @@ class IssueStartPickUpTest(IssueClaimTestCase):
             with self.subTest(item=item.splitlines()[0][:60]):
                 self.assert_phrase_present(label, item, EXPLICIT_INSTRUCTION)
 
+    def test_no_explicit_instruction_branch_refers_to_the_lookup_section(self) -> None:
+        """明示指示が無い場合の分岐は、既存の branch を小節 1.1 の手順で探す。"""
+        label = self.skill_label(ISSUE_START_PICK_UP_HEADING)
+        if not any(
+            satisfies(item, NO_EXPLICIT_INSTRUCTION)
+            and satisfies(item, LOOKUP_SECTION_REFERENCE)
+            for item in self.pick_up_items()
+        ):
+            self.fail(f"{label}: 明示指示が無い場合の分岐が、小節 1.1 を参照していない")
+
     def test_claim_reference_is_not_limited_to_new_starts(self) -> None:
         """排他制御の参照が、排他制御を新規着手の場合だけに限らない (既存の branch / PR が
         あっても、明示指示が無ければ排他制御を実行するため)。"""
@@ -1008,6 +1049,106 @@ class IssueStartPickUpTest(IssueClaimTestCase):
             self.skill_section(ISSUE_START_CLAIM_HEADING),
             NEW_START_ONLY_PHRASE,
         )
+
+    def test_loose_pattern_is_absent(self) -> None:
+        """branch 名のどこにでも一致する旧パターンを issue-start skill に残さない。"""
+        self.assert_phrase_absent(
+            display_path(self.issue_start_skill_path),
+            read(self.issue_start_skill_path),
+            LOOSE_BRANCH_PATTERN,
+        )
+
+
+class IssueStartBranchLookupTest(IssueClaimTestCase):
+    """issue-start skill の既存 branch の探し方 (小節 1.1)。"""
+
+    def lookup_label(self) -> str:
+        return f"{display_path(self.issue_start_skill_path)} の {ISSUE_START_LOOKUP_HEADING} 節"
+
+    def lookup_section(self) -> str:
+        section = markdown_section(
+            read(self.issue_start_skill_path), ISSUE_START_LOOKUP_HEADING
+        )
+        self.assert_scope_found(
+            self.lookup_label(), section, f"`{ISSUE_START_LOOKUP_HEADING}` 節が無い"
+        )
+        return section
+
+    def assert_lookup_sentence(self, requirements: tuple[Requirement, ...]) -> None:
+        self.assert_some_sentence(self.lookup_label(), self.lookup_section(), requirements)
+
+    def test_search_commands_use_the_leading_issue_pattern(self) -> None:
+        """remote と local を、branch 名の先頭の `<prefix>/issue-<N>-` に絞ったパターンで
+        探す。"""
+        section = self.lookup_section()
+        for command in EXISTING_BRANCH_SEARCH_COMMANDS:
+            with self.subTest(command=command):
+                self.assert_phrase_present(self.lookup_label(), section, command)
+
+    def test_search_failure_stops_before_posting(self) -> None:
+        """探索コマンドが失敗したら「一致 0 件」と扱わず、claim comment を投稿せず停止して
+        報告する。"""
+        self.assert_lookup_sentence(
+            ("失敗", re.compile(r"投稿(?:せず|する前|の前)"), "停止", "報告")
+        )
+
+    def test_matches_are_counted_by_branch_name(self) -> None:
+        """local と remote の両方にある同名の branch は 1 つと数える。"""
+        self.assert_lookup_sentence(SAME_NAME_COUNTED_ONCE_REQUIREMENTS)
+
+    def test_wip_branches_are_excluded(self) -> None:
+        """契約改訂手順の補助 branch (`-phase-b-wip`) は候補から除く。"""
+        self.assert_lookup_sentence((WIP_BRANCH_SUFFIX, re.compile(r"除|数えない")))
+
+    def test_names_off_the_convention_stop(self) -> None:
+        """命名規約に合わない名前が残ったら、何も変更せず停止してユーザに確認する。"""
+        self.assert_lookup_sentence(
+            (
+                "命名規約",
+                re.compile(r"合わな"),
+                re.compile(r"変更(?:せず|しない)"),
+                "停止",
+                "AskUserQuestion",
+            )
+        )
+
+    def test_merged_branches_are_excluded(self) -> None:
+        """マージ済みの PR がある branch は候補から除く。"""
+        self.assert_lookup_sentence((*MERGED_PR_CHECK_PHRASES, re.compile(r"除")))
+
+    def test_merged_check_failure_stops(self) -> None:
+        """マージ済みの確認 (gh) が失敗したら停止して報告する。"""
+        self.assert_lookup_sentence(("gh", "失敗", "停止", "報告"))
+
+    def test_names_are_validated_before_the_merged_check(self) -> None:
+        """見つけた名前を gh のコマンドに埋め込む前に命名規約で検証する (命名規約の記述が
+        マージ済みの確認より前にある)。"""
+        section = strip_whitespace(self.lookup_section())
+        convention = section.find(strip_whitespace("命名規約"))
+        merged = section.find(strip_whitespace(MERGED_PR_CHECK_PHRASES[1]))
+        if convention < 0 or merged < 0 or convention > merged:
+            self.fail(
+                f"{self.lookup_label()}: 命名規約の検証が、マージ済みの確認"
+                f" (`{MERGED_PR_CHECK_PHRASES[1]}`) より前に書かれていない"
+            )
+
+    def test_single_match_name_is_used(self) -> None:
+        """候補が 1 つならその名前を使う。"""
+        self.assert_lookup_sentence((re.compile(r"1つ(?:だけ)?(?:な|あれ|見つか)"), "その名前"))
+
+    def test_no_match_follows_the_naming_convention(self) -> None:
+        """候補が無ければ、命名規約で新しい名前を決める。"""
+        self.assert_lookup_sentence((re.compile(r"(?:無|な)(?:け|い)"), "命名規約"))
+
+    def test_multiple_matches_stop_before_posting(self) -> None:
+        """候補が複数なら、claim comment を投稿せず、何も変更せず停止して確認する。"""
+        self.assert_lookup_sentence(
+            MULTIPLE_MATCH_REQUIREMENTS + (re.compile(r"投稿(?:せず|する前|の前)"),)
+        )
+
+    def test_found_names_are_single_quoted(self) -> None:
+        """見つけた branch 名をコマンドに埋め込むときは single quote で囲む。"""
+        self.assert_lookup_sentence(("コマンド", "single quote"))
 
 
 class IssueClaimEvaluationTest(IssueClaimTestCase):
@@ -1036,6 +1177,21 @@ class IssueClaimEvaluationTest(IssueClaimTestCase):
                 f"{label}: 明示指示による再開が、表の Pass 列にも「{EVALUATION_ISSUE_CLAIM_NOTE}」"
                 "の箇条書きにも無い"
             )
+
+    def test_branch_lookup_stop_is_a_pass(self) -> None:
+        """既存 branch の探し方で停止して確認・報告する経路 (複数一致・命名規約違反・
+        探索失敗) を、経路別 Pass 定義で Pass として扱う。"""
+        text = read(self.evaluation_doc_path)
+        label = f"{display_path(self.evaluation_doc_path)} の「{EVALUATION_ISSUE_CLAIM_NOTE}」"
+        notes = list_items_following(text, EVALUATION_ISSUE_CLAIM_NOTE)
+        self.assert_scope_found(label, notes, "経路別 Pass 定義の箇条書きが無い")
+        requirements: tuple[Requirement, ...] = ("既存", "branch", "複数", "停止", "Pass")
+        if not any(
+            all(satisfies(item, requirement) for requirement in requirements)
+            for item in top_level_list_items(notes)
+        ):
+            wanted = "」「".join(describe(requirement) for requirement in requirements)
+            self.fail(f"{label}: 「{wanted}」をすべて含む項目が無い")
 
 
 if __name__ == "__main__":
