@@ -10,7 +10,7 @@ session-handoff plugin の hook (`detect-context-threshold.sh`) は、natsuume-s
 を advisory 用途で読む consumer です。本 skill は、このキャッシュが書き出される状態を用意します。
 
 **必須ではありません。** 未実行でも hook 自体はエラーにならず動作しますが、cache が無い/古い間は
-閾値検知 (`SESSION_HANDOFF_THRESHOLD` 超過時の handoff 作成促進) が発火しません。
+閾値検知 (userConfig の `threshold` 以上になったときの handoff 作成促進) が発火しません。
 
 ## 1. 現在の状態を確認する
 

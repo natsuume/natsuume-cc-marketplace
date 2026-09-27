@@ -1,7 +1,9 @@
 """session-handoff の検知 hook (detect-context-threshold.sh) の契約。
 
-検知 hook は context 使用率キャッシュを読み、閾値 (既定 60%) を超えていれば handoff
-作成指示を additionalContext として 1 セッション 1 回だけ注入する。判定は
+検知 hook は context 使用率キャッシュを読み、閾値 (既定 75%) 以上であれば handoff
+作成指示を additionalContext として 1 セッション 1 回だけ注入する。閾値は plugin の
+userConfig `threshold` で変更でき、hook には環境変数 `CLAUDE_PLUGIN_OPTION_THRESHOLD`
+として渡る。1〜99 の範囲外・非数値の場合は既定値を使う。判定は
 `hook_event_name` に依らず同じであり、ツールが成功した `PostToolUse` でも失敗した
 `PostToolUseFailure` でも同じ閾値判定を行う (`tool_response` は参照しない)。出力の
 `hookSpecificOutput.hookEventName` は入力の `hook_event_name` と一致させる。
@@ -26,10 +28,15 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "session-handoff"
 HOOK = PLUGIN / "hooks" / "scripts" / "detect-context-threshold.sh"
 README = PLUGIN / "README.md"
+PLUGIN_MANIFEST = PLUGIN / ".claude-plugin" / "plugin.json"
 
 FAILURE_EVENT = "PostToolUseFailure"
 SESSION_ID = "session-handoff-producer"
-# 既定閾値 (60) を超える値と、下回る値。
+DEFAULT_THRESHOLD = 75
+THRESHOLD_OPTION_ENV = "CLAUDE_PLUGIN_OPTION_THRESHOLD"
+# userConfig に置き換えて受け付けなくなった環境変数。
+REMOVED_THRESHOLD_ENV = "SESSION_HANDOFF_THRESHOLD"
+# 既定閾値 (75) を超える値と、下回る値。
 USED_PERCENTAGE_ABOVE_THRESHOLD = 80
 USED_PERCENTAGE_BELOW_THRESHOLD = 10
 # PostToolUseFailure 入力の `error` (先頭行は `Exit code N`)。
@@ -59,8 +66,9 @@ class ContextThresholdDetectionTest(unittest.TestCase):
         self.env["TMPDIR"] = str(self.temporary_tmpdir)
         self.env["GIT_CONFIG_GLOBAL"] = str(empty_git_config)
         self.env["GIT_CONFIG_SYSTEM"] = str(empty_git_config)
-        # 閾値は既定値 (60) で検査する。
-        self.env.pop("SESSION_HANDOFF_THRESHOLD", None)
+        # 閾値は既定値 (75) で検査する。
+        self.env.pop(THRESHOLD_OPTION_ENV, None)
+        self.env.pop(REMOVED_THRESHOLD_ENV, None)
 
         subprocess.run(
             ["git", "-C", str(self.repo), "init", "-b", "main"],
@@ -89,6 +97,12 @@ class ContextThresholdDetectionTest(unittest.TestCase):
     def marker_path(self) -> Path:
         state_root = self.temporary_tmpdir / f"session-handoff-{os.getuid()}"
         return state_root / "markers" / f"{SESSION_ID}.notified"
+
+    def reset_marker(self) -> None:
+        """1 セッション 1 回の marker を消し、同じセッションで再び検知できるようにする。"""
+        marker = self.marker_path()
+        if marker.exists():
+            marker.rmdir()
 
     # -- hook 実行 ----------------------------------------------------------
 
@@ -186,6 +200,67 @@ class ContextThresholdDetectionTest(unittest.TestCase):
         self.write_context_cache(USED_PERCENTAGE_BELOW_THRESHOLD)
         self.assert_silent(self.failure_payload())
         self.assertFalse(self.marker_path().exists())
+
+    # -- 閾値 ---------------------------------------------------------------
+
+    def assert_threshold_boundary(self, below: float, at_or_above: float) -> None:
+        """`below` では検知せず、`at_or_above` では検知する。"""
+        self.write_context_cache(below)
+        self.assert_silent(self.failure_payload())
+        self.assertFalse(self.marker_path().exists())
+        self.write_context_cache(at_or_above)
+        self.assert_emits_handoff_instruction(self.failure_payload(), FAILURE_EVENT)
+
+    def test_default_threshold_is_75_percent(self) -> None:
+        self.assert_threshold_boundary(below=74.9, at_or_above=DEFAULT_THRESHOLD)
+
+    def test_threshold_option_lowers_the_threshold(self) -> None:
+        self.env[THRESHOLD_OPTION_ENV] = "50"
+        self.assert_threshold_boundary(below=49, at_or_above=50)
+
+    def test_threshold_option_raises_the_threshold(self) -> None:
+        self.env[THRESHOLD_OPTION_ENV] = "90"
+        self.assert_threshold_boundary(below=89, at_or_above=90)
+
+    def test_threshold_option_accepts_a_decimal(self) -> None:
+        """userConfig の number は小数も入力できるため、小数の閾値もそのまま使う。"""
+        self.env[THRESHOLD_OPTION_ENV] = "72.5"
+        self.assert_threshold_boundary(below=72.4, at_or_above=72.5)
+
+    def test_invalid_threshold_option_falls_back_to_the_default(self) -> None:
+        for value in ("", "abc", "0", "100", "-5", "75%", "1e2"):
+            with self.subTest(value=value):
+                self.reset_marker()
+                self.env[THRESHOLD_OPTION_ENV] = value
+                self.assert_threshold_boundary(
+                    below=74.9, at_or_above=DEFAULT_THRESHOLD
+                )
+
+    def test_removed_threshold_env_is_ignored(self) -> None:
+        self.env[REMOVED_THRESHOLD_ENV] = "10"
+        self.assert_threshold_boundary(below=74.9, at_or_above=DEFAULT_THRESHOLD)
+
+
+class ThresholdConfigurationTest(unittest.TestCase):
+    """閾値の設定経路は plugin の userConfig `threshold` に統一されている。"""
+
+    def test_manifest_declares_the_threshold_option(self) -> None:
+        manifest = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+        option = manifest["userConfig"]["threshold"]
+        self.assertEqual("number", option["type"])
+        self.assertEqual(DEFAULT_THRESHOLD, option["default"])
+        self.assertEqual(1, option["min"])
+        self.assertEqual(99, option["max"])
+        for field in ("title", "description"):
+            with self.subTest(field=field):
+                self.assertTrue(option[field].strip())
+
+    def test_plugin_files_do_not_mention_the_removed_env(self) -> None:
+        for path in sorted(p for p in PLUGIN.rglob("*") if p.is_file()):
+            with self.subTest(path=str(path.relative_to(ROOT))):
+                self.assertNotIn(
+                    REMOVED_THRESHOLD_ENV, path.read_text(encoding="utf-8")
+                )
 
 
 class ContextThresholdDocumentationTest(unittest.TestCase):

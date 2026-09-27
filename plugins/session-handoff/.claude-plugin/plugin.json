@@ -1,6 +1,16 @@
 {
   "name": "session-handoff",
-  "version": "0.5.4",
+  "version": "1.0.0",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
-  "description": "context 閾値超過時に handoff を作成・引き継ぐ"
+  "description": "context 閾値超過時に handoff を作成・引き継ぐ",
+  "userConfig": {
+    "threshold": {
+      "type": "number",
+      "title": "handoff 作成を促す context 使用率 (%)",
+      "description": "context 使用率がこの値以上になったとき、handoff ドキュメントの作成を促す (1〜99)",
+      "default": 75,
+      "min": 1,
+      "max": 99
+    }
+  }
 }

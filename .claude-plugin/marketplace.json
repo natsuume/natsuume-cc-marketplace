@@ -108,7 +108,7 @@
       "name": "session-handoff",
       "source": "./plugins/session-handoff",
       "description": "context 閾値超過時に handoff を作成・引き継ぐ",
-      "version": "0.5.4",
+      "version": "1.0.0",
       "keywords": ["session-handoff", "context-window", "handoff", "session-start", "statusline", "cache", "hook", "skill"]
     },
     {

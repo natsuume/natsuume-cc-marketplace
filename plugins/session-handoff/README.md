@@ -6,14 +6,14 @@ context 使用率が閾値を超えたときに handoff ドキュメントの作
 
 ## バージョン
 
-v0.5.4
+v1.0.0
 
 ## 機能概要
 
 producer と consumer で構成されます。
 
 1. **producer (`detect-context-threshold.sh`, PostToolUse / PostToolUseFailure)**: context
-   使用率が閾値 (既定 60%) を超えたことをツール実行のたびに検知し、超えていれば handoff
+   使用率が閾値 (既定 75%) を超えたことをツール実行のたびに検知し、超えていれば handoff
    ドキュメントの作成を Claude に促す指示を注入する
 2. **consumer (`inject-pending-handoff.sh`, SessionStart)**: 新しい context になる `clear` /
    `startup` で、直近 24 時間以内に作成された未消費の handoff があれば、その内容を前置き文とともに
@@ -111,11 +111,31 @@ decode に失敗し、かつ自 launcher が既に存在する場合は、循環
   含むコマンドでも壊れません)
 - dump の解決・書き込みに失敗しても、元の statusline への委譲は継続します (fail-open)
 
-## 環境変数
+## 設定
 
-| 変数 | 意味 | 既定値 |
+閾値は plugin の設定項目 (`userConfig`) で変更します。
+
+| 項目 | 意味 | 既定値 |
 |---|---|---|
-| `SESSION_HANDOFF_THRESHOLD` | 検知 hook が使う context 使用率の閾値 (1〜99 の整数)。不正値・未設定は既定値にフォールバック | `60` |
+| `threshold` | 検知 hook が handoff 作成を促す context 使用率 (%)。1〜99 の数値 (小数可)。範囲外・非数値の場合は既定値を使う | `75` |
+
+`/config` パネルの「handoff 作成を促す context 使用率 (%)」の行から変更できます (Claude Code v2.1.269 以降)。
+値は `~/.claude/settings.json` の `pluginConfigs` に保存されるため、次のように直接書いても設定できます。
+
+```json
+{
+  "pluginConfigs": {
+    "session-handoff@natsuume-plugins": {
+      "options": {
+        "threshold": 80
+      }
+    }
+  }
+}
+```
+
+Claude Code は `pluginConfigs` を user settings (`~/.claude/settings.json`) と managed settings からだけ
+読みます。project の `.claude/settings.json` や `.claude/settings.local.json` に書いた値は使われません。
 
 ## 検証テスト
 

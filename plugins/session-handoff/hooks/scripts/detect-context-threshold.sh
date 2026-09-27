@@ -22,7 +22,7 @@
 #   5. marker (1 セッション 1 回の通知済みガード) 存在
 #   6. git 管理下でない (cwd から絶対 git-dir が解決できない)
 #   7. context cache 不在 / 破損 / used_percentage 非数値
-#   8. SESSION_HANDOFF_THRESHOLD 不正値は 60 に fallback
+#   8. 閾値 (userConfig の threshold) の不正値・未設定は 75 に fallback
 #   9. used_percentage が閾値未満
 #   10. handoff ディレクトリの準備 (作成・symlink 拒否・所有確認・書き込み可能性の実地 probe)
 #   11. 保存パスの組み立てとテンプレート (__HANDOFF_PATH__ 差し込み) の展開
@@ -116,10 +116,14 @@ if [ $((NOW - CACHE_TS)) -gt "$CACHE_MAX_AGE_SECONDS" ]; then
   exit 0
 fi
 
-# 8. 閾値は 1-99 の整数のみ受け付ける。不正値・未設定は 60 に fallback する。
-THRESHOLD="${SESSION_HANDOFF_THRESHOLD:-}"
-if ! [[ "$THRESHOLD" =~ ^[0-9]+$ ]] || [ "$THRESHOLD" -lt 1 ] || [ "$THRESHOLD" -gt 99 ]; then
-  THRESHOLD=60
+# 8. 閾値は plugin の userConfig `threshold` から読む (Claude Code が hook に
+# CLAUDE_PLUGIN_OPTION_THRESHOLD として渡す)。userConfig の number は小数も入力できるため、
+# 1 以上 99 以下の数値 (小数可) を受け付ける。不正値・未設定は既定値に fallback する。
+DEFAULT_THRESHOLD=75
+THRESHOLD="${CLAUDE_PLUGIN_OPTION_THRESHOLD:-}"
+if ! [[ "$THRESHOLD" =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
+  ! awk -v threshold="$THRESHOLD" 'BEGIN { exit !(threshold >= 1 && threshold <= 99) }'; then
+  THRESHOLD=$DEFAULT_THRESHOLD
 fi
 
 # 9. 閾値未満なら何もしない。used_percentage は小数を取り得るため awk で比較する。
