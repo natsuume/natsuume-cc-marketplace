@@ -2,7 +2,7 @@
 # statusline 1 行目で使う git 情報の取得と、git status (porcelain v2) 出力の解析
 #
 # git の呼び出しは collect_git_info に集約し、描画 1 回あたり
-# rev-parse --show-toplevel / status --porcelain=v2 --branch / remote get-url の 3 回に抑える。
+# rev-parse --show-toplevel / status --porcelain=v2 --branch --no-ahead-behind / remote get-url の 3 回に抑える。
 # index.lock を取らないよう、呼び出し側 (main.sh) が GIT_OPTIONAL_LOCKS=0 を export しておく。
 
 # git status --porcelain=v2 --branch の出力からブランチ名を取り出す。
@@ -61,7 +61,9 @@ collect_git_info() {
   toplevel=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || return 0
   [ -n "$toplevel" ] || return 0
   is_git=1
-  status_v2=$(git -C "$cwd" status --porcelain=v2 --branch 2>/dev/null)
+  # --branch はブランチ名のために付ける。使わない upstream との ahead/behind の計算は
+  # 履歴をたどるため --no-ahead-behind で止める
+  status_v2=$(git -C "$cwd" status --porcelain=v2 --branch --no-ahead-behind 2>/dev/null)
   porcelain=$(parse_status_entries "$status_v2")
   branch=$(parse_status_branch "$status_v2")
   repo_url=$(git -C "$cwd" remote get-url origin 2>/dev/null)

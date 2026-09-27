@@ -207,6 +207,7 @@ class StatuslineGitIntegrationTest(unittest.TestCase):
         self.assertEqual(len(status_calls), 1, calls)
         self.assertIn("--porcelain=v2", status_calls[0])
         self.assertIn("--branch", status_calls[0])
+        self.assertIn("--no-ahead-behind", status_calls[0])
 
     def test_renders_branch_and_change_counts(self) -> None:
         (self.repo / "file0.txt").write_text("changed\n")
