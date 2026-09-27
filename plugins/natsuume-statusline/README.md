@@ -13,6 +13,7 @@ v0.11.7
 1. **1 行目**: カレントパス、GitHub リポジトリ名、ブランチ名、staged/modified 変更量、未コミット件数 (or `clean`)
    - リポジトリの owner が自分または所属 org の場合は `owner/repo` を `repo` に短縮
    - 全体がターミナル幅を超える場合は段階的に prefix → パス短縮の順でフォールバック
+   - git 情報は描画 1 回あたり 3 回の git 呼び出し (`rev-parse --show-toplevel` / `status --porcelain=v2 --branch` / `remote get-url origin`) で取得する。すべて `GIT_OPTIONAL_LOCKS=0` で実行するため、statusline が index を書き戻して `.git/index.lock` を取得し、同時に実行した `git commit` / `git add` と衝突することはない
 2. **2 行目**: モデル名 (`model.display_name`) + context 使用量 (`ctx`) + レートリミット (5h)
    - **モデル名**: 色付けせず先頭にそのまま表示。取得できない場合は非表示 (先頭セグメント無し)
    - **context 使用量**: `ctx: (45%) 75.1k/1M` 形式の数値表示 (バー無し)。使用率 (`context_window.used_percentage`)、使用トークン数 (`total_input_tokens`)、最大コンテキスト長 (`context_window_size`) を併記。取得できない初期/compact 直後は非表示。トークン数が取れない場合は `ctx: (45%)` に縮退

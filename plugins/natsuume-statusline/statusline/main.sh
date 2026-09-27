@@ -65,6 +65,7 @@ model_scoped_json=$(printf '%s' "$input" | jq -c '
 # 共通関数・各行のコンポーネントを読み込み
 source "$SCRIPT_DIR/lib.sh"
 source "$SCRIPT_DIR/gauges.sh"
+source "$SCRIPT_DIR/git-status.sh"
 source "$SCRIPT_DIR/line1.sh"
 source "$SCRIPT_DIR/line2.sh"
 source "$SCRIPT_DIR/line3.sh"
@@ -81,22 +82,18 @@ TERM_WIDTH=$(statusline_width)
 #   L3: prefix なし + パス短縮
 # 各段階で全幅がターミナル幅に収まるか確認し、収まる最も豊かな表示を採用する。
 
-is_git=0
-toplevel=""
-porcelain=""
-repo_url=""
-branch=""
 sep=" | "
 sep_w=${#sep}
 
-# git 由来の情報は描画あたり一度だけ取得して各レンダラへ渡す (#79: render 毎の git 再呼び出しを排除)。
-if git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  is_git=1
-  toplevel=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
-  porcelain=$(git -C "$cwd" status --porcelain 2>/dev/null)
-  repo_url=$(git -C "$cwd" remote get-url origin 2>/dev/null)
-  branch=$(git -C "$cwd" branch --show-current 2>/dev/null)
-fi
+# git status は stat 情報がずれた index を書き戻す際に .git/index.lock を取得し、同時に走る
+# git commit / git add を失敗させる。statusline は頻繁に実行されるため、この書き戻し
+# (optional lock) を無効にする。--no-optional-locks と違い、環境変数は git 2.15 未満では
+# 無視されるだけでエラーにならない。
+export GIT_OPTIONAL_LOCKS=0
+
+# git 由来の情報は描画あたり一度だけ取得して各レンダラへ渡す
+# (is_git / toplevel / porcelain / repo_url / branch を設定する)。
+collect_git_info "$cwd"
 
 # 与えられた prefix 設定で他セグメント（path以外）を組み立て、配列 OTHER に格納する
 # 引数: $1=repo_prefix, $2=branch_prefix
