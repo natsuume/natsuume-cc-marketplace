@@ -169,8 +169,13 @@ MERGED_PR_CHECK_PHRASES = ("gh pr list --head", "--state merged")
 MERGED_PR_HEAD_FIELD = "--json headRefOid"
 
 # マージ済みの PR の head commit と比べる、branch の現在の commit を得るコマンド (remote は
-# 手順 1 の `git ls-remote` の出力、local は `git rev-parse`)。
-CURRENT_COMMIT_SOURCES = ("git ls-remote", "git rev-parse")
+# 手順 1 の `git ls-remote` の出力、local は `git rev-parse`)。空白を除去した文に照合し、
+# 各側の語とコマンドが同じ読点区間の中でこの順に並ぶことを求める (`git ls-remote` の中の
+# 「remote」だけで remote 側の要件を満たさないようにするため)。
+CURRENT_COMMIT_SOURCE_REQUIREMENTS = (
+    re.compile(r"remote[^、。]*手順1[^、。]*gitls-remote"),
+    re.compile(r"local[^、。]*gitrev-parse"),
+)
 
 # 契約改訂手順が作る補助 branch の接尾辞。
 WIP_BRANCH_SUFFIX = "-phase-b-wip"
@@ -1214,8 +1219,9 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
 
     def test_current_commits_come_from_the_search_and_rev_parse(self) -> None:
         """head commit と比べる branch の現在の commit は、remote は手順 1 の `git ls-remote`
-        の出力、local は `git rev-parse` で得る。"""
-        self.assert_lookup_sentence(("remote", "手順 1", "local", *CURRENT_COMMIT_SOURCES))
+        の出力、local は `git rev-parse` で得る (側とコマンドの対応を、同じ読点区間の中の
+        並び順で検査する)。"""
+        self.assert_lookup_sentence(CURRENT_COMMIT_SOURCE_REQUIREMENTS)
 
     def test_merged_branch_is_excluded_only_when_every_commit_matches(self) -> None:
         """branch が存在する側 (local / remote) の commit がすべて、マージ済みの PR の
@@ -1232,10 +1238,16 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
         )
 
     def test_unmatched_commit_keeps_the_candidate(self) -> None:
-        """local / remote のどちらか一方でも head commit と一致しなければ、未マージの
-        commit があるものとして候補に残す。"""
+        """local / remote のどちらか一方でも head commit と一致しなければ、マージ済みと
+        確認できないので候補に残す (local が head より古いだけの場合も不一致になるため、
+        未マージの commit があるとは限らない)。"""
         self.assert_lookup_sentence(
-            (re.compile(r"(?:どちらか|いずれか)一方でも"), "一致しなけれ", "未マージ", "候補に残")
+            (
+                re.compile(r"(?:どちらか|いずれか)一方でも"),
+                "一致しなけれ",
+                re.compile(r"マージ済みと確認できな"),
+                "候補に残",
+            )
         )
 
     def test_merged_check_failure_stops(self) -> None:
