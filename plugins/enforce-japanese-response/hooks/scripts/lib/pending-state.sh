@@ -88,11 +88,13 @@
 # - mark_pending <session_id> <prompt_id>
 #     状態ディレクトリーを必要なら作り、`pending` の内容を <prompt_id> で置き換える
 #     (一時名に書いてから `mv`)。検査に通らなければ何も書かずに非 0 を返す
-# - read_pending <session_id>
-#     `pending` があればその内容を出力して終了ステータス 0、無い・検査に通らなければ
-#     何も出力せず非 0 を返す
 # - clear_pending <session_id>
 #     `pending` があれば削除する。無い・検査に通らないときは何もしない (失敗しない)
+# - take_pending <session_id>
+#     `pending` を一時名 `.pending.taken.<pid>` に `mv` してから内容を出力し、一時名の
+#     ファイルを削除して終了ステータス 0 を返す。無い・検査に通らなければ何も出力せず
+#     非 0 を返す。読んでから消すまでの間に書かれた `pending` を消さないよう、取り出しを
+#     `mv` 1 回で行う
 # - store_message_fragment <session_id> <message_id> <index> <delta> <is_final>
 #     メッセージディレクトリーを必要なら作り、断片 `<index>` の内容を <delta> で置き
 #     換える。<is_final> が `true` なら続けて `final` に <index> を書く。検査に通らない・
@@ -193,19 +195,22 @@ mark_pending() {
   write_state_file "$directory" pending "$prompt_id"
 }
 
-read_pending() {
-  local session_id=$1
-  local directory
-  directory=$(existing_session_state_dir "$session_id") || return 1
-  [ -f "$directory/pending" ] || return 1
-  cat "$directory/pending" 2>/dev/null
-}
-
 clear_pending() {
   local session_id=$1
   local directory
   directory=$(existing_session_state_dir "$session_id") || return 0
   rm -f "$directory/pending" 2>/dev/null
+  return 0
+}
+
+take_pending() {
+  local session_id=$1
+  local directory taken
+  directory=$(existing_session_state_dir "$session_id") || return 1
+  taken="$directory/.pending.taken.$$"
+  mv "$directory/pending" "$taken" 2>/dev/null || return 1
+  cat "$taken" 2>/dev/null
+  rm -f "$taken" 2>/dev/null
   return 0
 }
 

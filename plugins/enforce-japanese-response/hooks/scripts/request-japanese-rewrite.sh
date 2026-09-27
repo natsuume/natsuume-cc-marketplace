@@ -49,7 +49,8 @@
 #    ディレクトリー (未判定、または判定中のもの) がある間は、0.1 秒ずつ最大 2 秒まで
 #    待つ。tool がすぐに終わると、最後の batch の MessageDisplay hook が pending を書く
 #    前にこの hook が起動しうるためである。2 秒を過ぎたら待つのをやめて先に進む
-# 2. pending があれば削除する
+# 2. pending があれば取り出して削除する。取り出しは `mv` 1 回で行う (take_pending) ため、
+#    取り出した後に MessageDisplay hook が書いた pending は次の PostToolBatch まで残る
 # 3. pending の内容 (記録時の `prompt_id`) と入力の `prompt_id` がどちらも空でなく、
 #    かつ異なる場合は何も出力しない (前の turn の印を持ち越さない)
 # 4. それ以外は上記の JSON を出力する
@@ -104,8 +105,7 @@ main() {
 
   local recorded_prompt_id current_prompt_id
   wait_for_message_judgements "$session_id"
-  recorded_prompt_id=$(read_pending "$session_id") || return 0
-  clear_pending "$session_id"
+  recorded_prompt_id=$(take_pending "$session_id") || return 0
   current_prompt_id=$(printf '%s' "$hook_input" |
     jq -r '.prompt_id | if type == "string" then . else "" end' 2>/dev/null) || return 0
   # 前の turn で記録した印は持ち越さない

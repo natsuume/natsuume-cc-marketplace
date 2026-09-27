@@ -1228,6 +1228,13 @@ class PostToolBatchRewriteTest(MidTurnHookTestCase):
     def test_no_pending_means_no_output(self) -> None:
         self.assert_no_rewrite(self.batch_input())
 
+    def test_taken_pending_leaves_no_file_behind(self) -> None:
+        # pending は一時名に mv してから読むため、その一時名のファイルも残らない
+        self.write_pending(PROMPT_ID)
+        self.assert_rewrite_requested(self.batch_input())
+        session_dir = self.state_root / SESSION_ID
+        self.assertEqual(sorted(p.name for p in session_dir.iterdir()), [])
+
     def test_pending_leads_to_the_rewrite_request(self) -> None:
         self.write_pending(PROMPT_ID)
         output = self.assert_rewrite_requested(self.batch_input())
