@@ -139,9 +139,12 @@ main() {
     return 0
   claim_complete_message "$session_id" "$message_id" || return 0
 
+  # 読んでいる間に Stop hook がディレクトリーを消すと断片が欠けるため、そのときは
+  # 判定しない (欠けた本文で判定すると誤って pending を作りうる)
   local message
-  message=$(read_message_text "$session_id" "$message_id")
-  record_if_english "$hook_input" "$session_id" "$message"
+  if message=$(read_message_text "$session_id" "$message_id"); then
+    record_if_english "$hook_input" "$session_id" "$message"
+  fi
   # 判定と pending の作成を終えてから削除する (PostToolBatch hook はディレクトリーが
   # 残っている間 pending を読むのを待つ)
   remove_message "$session_id" "$message_id"
