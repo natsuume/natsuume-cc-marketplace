@@ -41,8 +41,8 @@ gh pr list --head '<branch>'
 
 明示指示があっても、対象の branch が local / remote のどちらにも無い場合と、セクション 1.1 の手順で新しい名前を決めた場合は、`rule:issue-claim` の step 1 から実行します。このとき step 1 で前の作業の `ai:in-progress` ラベルや claim comment が見つかることがあるため、次の手順で進めます。明示指示が無い場合は、この手順を使わず step 1 の早期判定に従います。
 
-1. step 1 で `ai:in-progress` ラベルか、`session=` の値が自分のセッション ID と一致しない claim comment が見つかったら、撤退せずに停止します。見つかったラベルと claim comment (数値 comment id と本文) を示して、前の作業の残りかどうかを `AskUserQuestion` でユーザに確認します
-2. ユーザが残りだと確認した場合は、step 2 で claim comment を投稿して step 3 以降に進みます。step 4 の先着判定では、ユーザが確認した claim comment を数値 comment id で特定して判定の対象から除きます。確認の後に投稿された claim comment は、除かずに通常どおり判定します
+1. step 1 で `ai:in-progress` ラベルか、`session=` の値が自分のセッション ID と一致しない claim comment が見つかったら、撤退せずに停止します。見つかったラベルと claim comment (数値 comment id と本文) を示して、前の作業の残りかどうかを `AskUserQuestion` でユーザに確認します。数値 comment id は、step 4 と同じ REST GET (`gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'`) の `id` から取ります (`gh issue view` の `id` は GraphQL node ID で、step 4 の id と一致しないため)
+2. ユーザが残りだと確認した場合は、step 2 で claim comment を投稿して step 3 以降に進みます。step 4 の先着判定では、ユーザが確認した claim comment を数値 comment id で特定して判定の対象から除きます。確認の後に投稿された claim comment を含め、確認した数値 comment id 以外の claim comment は、投稿された時刻に依らず除かずに通常どおり判定します。本文や `session=` の値で照合して除くことはしません
 3. ユーザが残りではない (稼働中の別 session のもの) と答えた場合は撤退します。後片付けは `rule:issue-claim` の「撤退と着手中断の後片付け」に従います
 4. 確認した残りのラベルと claim comment は削除しません (`rule:issue-claim` のラベル削除規律に従い、他 session の claim を削除しないため)
 
