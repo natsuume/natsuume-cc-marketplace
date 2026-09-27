@@ -432,7 +432,7 @@ Claude (エージェント自身) が、セッション内でサブスクリプ�
 
 ## session-handoff
 
-context 使用率が閾値 (既定 60%) を超えたら handoff ドキュメントの作成を Claude に促し、次のセッション (`/clear` または起動直後) にその内容を自動注入するプラグインです。長時間セッションが context 圧縮や `/clear` を挟んでも、直前までの背景・進行中の作業・残作業を新セッションへ引き継げるようにします。
+context 使用率が閾値 (既定 75%) を超えたら handoff ドキュメントの作成を Claude に促し、次のセッション (`/clear` または起動直後) にその内容を自動注入するプラグインです。長時間セッションが context 圧縮や `/clear` を挟んでも、直前までの背景・進行中の作業・残作業を新セッションへ引き継げるようにします。
 
 検知 (`detect-context-threshold`, PostToolUse) と注入 (`inject-pending-handoff`, SessionStart) を使います。検知は 1 セッション 1 回のみ通知し (marker は「通知発行済み」の意味で「handoff 保存済み」ではありません)、注入は rename の atomic 性で **at-most-once** を保証します (24 時間を超えた pending は注入せず、30 日を超えたファイルは削除します)。
 
@@ -453,11 +453,13 @@ context 使用率が閾値 (既定 60%) を超えたら handoff ドキュメン�
 |---------|---------|------|
 | setup | `/session-handoff:setup` | context 使用率キャッシュの producer (natsuume-statusline または安定 launcher) を構成する |
 
-### 環境変数
+### 設定
 
-| 変数 | 意味 | 既定値 |
+| 項目 | 意味 | 既定値 |
 |---|---|---|
-| `SESSION_HANDOFF_THRESHOLD` | 検知 hook が使う context 使用率の閾値 (1〜99 の整数) | `60` |
+| `threshold` | 検知 hook が handoff 作成を促す context 使用率 (%)。1〜99 の数値 (小数可) | `75` |
+
+`/config` パネル、または `~/.claude/settings.json` の `pluginConfigs["session-handoff@natsuume-plugins"].options.threshold` で変更します (project の settings.json では設定できません)。
 
 ### スコープ外
 
