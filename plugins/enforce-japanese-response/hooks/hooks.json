@@ -10,6 +10,28 @@
           }
         ]
       }
+    ],
+    "MessageDisplay": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/record-english-message.sh",
+            "args": []
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/request-japanese-rewrite.sh",
+            "args": []
+          }
+        ]
+      }
     ]
   }
 }
