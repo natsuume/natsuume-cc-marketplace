@@ -35,7 +35,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [natsuume-writing](#natsuume-writing) | 0.9.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
 | [cross-model-advisor](#cross-model-advisor) | 5.0.10 | Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.5 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
-| [session-handoff](#session-handoff) | 0.5.4 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
+| [session-handoff](#session-handoff) | 1.0.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.10 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
 | [enforce-japanese-response](#enforce-japanese-response) | 0.1.0 | settings の `language` が日本語のとき、turn 末尾の応答が英語で書かれていたら Stop hook で検知し、日本語で書き直させるプラグイン |
 
