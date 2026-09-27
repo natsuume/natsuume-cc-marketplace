@@ -30,15 +30,27 @@
 #
 # ## 処理
 #
-# 1. `index` が 0 (新しいメッセージの開始) なら、同じセッションの他の message_id の
-#    バッファー (`final` が届かなかったもの) を削除し、自分のバッファーの既存内容を
-#    捨てて `delta` だけを内容とする。それ以外なら、バッファーの末尾に `delta` を追記する
-# 2. `final` が true なら、バッファー全体をメッセージ本文として取り出し、バッファーを
-#    削除する。続けて目標言語を解決し、目標言語が日本語で、かつ本文が英語と判定されたら
-#    pending を作る (内容は `prompt_id`)。目標言語の解決は `final` が true のときだけ行う
+# 同じメッセージの hook は並行して走り、完了の順は index の順と限らない。そのため
+# batch ごとに断片を書き、断片が揃った時点で 1 つの hook だけが判定する (状態の構造と
+# 排他の方法は lib/pending-state.sh)。
+#
+# 1. `index` が 0 (新しいメッセージの開始) なら、同じセッションの `buffers/` 直下で
+#    最終更新から 10 分を超えたメッセージディレクトリー (最後の batch が届かなかった
+#    もの) を削除する
+# 2. メッセージディレクトリーに自分の断片 `<index>` (内容は `delta`) を書く。`final` が
+#    true なら続けて `final` に `index` を書く
+# 3. `final` があり、その値 N について 0..N の断片がすべて揃っていれば、`mkdir judged`
+#    で判定役を取る。揃っていない・判定役を取れなければ、ここで終える (後から完了した
+#    hook が判定する)
+# 4. 判定役になった hook は、0..N を index の順に連結して本文とし、目標言語を解決する。
+#    目標言語が日本語で、かつ本文が英語と判定されたら pending を作る (内容は
+#    `prompt_id`)。その後、メッセージディレクトリーを丸ごと削除する
+#
+# 判定の済んだメッセージディレクトリーは削除されているため、同じ message_id の batch が
+# 後から届くと、新しいメッセージの断片として扱う (0..N が揃わない限り判定しない)。
 #
 # 非対話の実行 (`claude -p`、Agent SDK) では、メッセージ全体が `index` 0・`final` true
-# の 1 回の呼び出しで届く。この場合も 1 と 2 を同じ順に行う。
+# の 1 回の呼び出しで届く。この場合も 1 から 4 を同じ順に行う。
 #
 # ## 何もしない条件 (いずれも無出力で exit 0。状態を読み書きしない)
 #
@@ -47,10 +59,10 @@
 # 3. `agent_id` が空でない文字列 → subagent のメッセージは対象外
 # 4. `session_id` または `message_id` が無い・文字列でない・`^[A-Za-z0-9_-]{1,128}$` に
 #    一致しない → パスに使えないため何もしない
-# 5. `delta` が文字列でない、`index` が 0 以上の整数でない、`final` が bool でない
-#    → 何もしない
-# 6. 目標言語が日本語でない・未設定、または本文が英語でない → バッファーの削除だけを
-#    行い、pending は作らない
+# 5. `delta` が文字列でない、`index` が 0 以上 100000 未満の整数でない、`final` が
+#    bool でない → 何もしない
+# 6. 目標言語が日本語でない・未設定、または本文が英語でない → メッセージディレクトリー
+#    の削除だけを行い、pending は作らない
 # 7. 状態ディレクトリーが所有者の検査 (lib/pending-state.sh) に通らない → 状態を
 #    読み書きしない (fail-open)
 # 8. 途中の jq 呼び出しやファイル操作が失敗した等、処理を完了できない → そこで終える
@@ -71,7 +83,7 @@ esac
 . "$SCRIPT_DIR/lib/pending-state.sh" || exit 0
 
 # stdin の JSON を検査し、処理に使う値を空白区切りの 1 行で出力する。
-#   <session_id> <message_id> <index が 0 か> <final>
+#   <session_id> <message_id> <index (10 進の整数)> <final>
 # 何もしない条件 (agent_id・id・delta・index・final) に当たれば何も出力しない。
 # object として解析できなければ失敗 (非 0) を返す。
 extract_display_fields() {
@@ -81,13 +93,27 @@ extract_display_fields() {
       elif (.session_id | is_valid_state_id | not)
         or (.message_id | is_valid_state_id | not) then empty
       elif (.delta | type) != "string" then empty
-      elif (.index | type) != "number" or .index < 0 or .index != (.index | floor)
-        then empty
+      elif (.index | type) != "number" or .index < 0 or .index >= 100000
+        or .index != (.index | floor) then empty
       elif (.final | type) != "boolean" then empty
-      else [.session_id, .message_id, (.index == 0 | tostring), (.final | tostring)]
+      else [.session_id, .message_id, (.index | floor | tostring), (.final | tostring)]
         | join(" ")
       end
   '
+}
+
+# 目標言語が日本語で、本文 <message> が英語なら pending を作る。
+record_if_english() {
+  local hook_input=$1 session_id=$2 message=$3
+  local cwd project_dir prompt_id
+  cwd=$(printf '%s' "$hook_input" |
+    jq -r '.cwd | if type == "string" then . else "" end' 2>/dev/null) || return 0
+  project_dir=$(resolve_project_dir "$cwd")
+  is_target_language_japanese "$project_dir" || return 0
+  printf '%s' "$message" | is_english_text || return 0
+  prompt_id=$(printf '%s' "$hook_input" |
+    jq -r '.prompt_id | if type == "string" then . else "" end' 2>/dev/null) || return 0
+  mark_pending "$session_id" "$prompt_id"
 }
 
 main() {
@@ -98,35 +124,27 @@ main() {
   fields=$(printf '%s' "$hook_input" | extract_display_fields 2>/dev/null) || return 0
   [ -n "$fields" ] || return 0
 
-  local session_id message_id is_first final
-  read -r session_id message_id is_first final <<<"$fields"
+  local session_id message_id index final
+  read -r session_id message_id index final <<<"$fields"
 
   # コマンド置換は末尾の改行を落とすため、番兵の `.` を付けて取り出してから外す
   local delta
   delta=$(printf '%s' "$hook_input" | jq -j '.delta + "."' 2>/dev/null) || return 0
   delta=${delta%.}
 
-  if [ "$is_first" = "true" ]; then
-    reset_message_buffer "$session_id" "$message_id" "$delta" || return 0
-  else
-    append_message_buffer "$session_id" "$message_id" "$delta" || return 0
+  if [ "$index" = "0" ]; then
+    remove_stale_messages "$session_id"
   fi
-  [ "$final" = "true" ] || return 0
+  store_message_fragment "$session_id" "$message_id" "$index" "$delta" "$final" ||
+    return 0
+  claim_complete_message "$session_id" "$message_id" || return 0
 
   local message
-  message=$(take_message_buffer "$session_id" "$message_id")
-
-  local cwd project_dir
-  cwd=$(printf '%s' "$hook_input" |
-    jq -r '.cwd | if type == "string" then . else "" end' 2>/dev/null) || return 0
-  project_dir=$(resolve_project_dir "$cwd")
-  is_target_language_japanese "$project_dir" || return 0
-  printf '%s' "$message" | is_english_text || return 0
-
-  local prompt_id
-  prompt_id=$(printf '%s' "$hook_input" |
-    jq -r '.prompt_id | if type == "string" then . else "" end' 2>/dev/null) || return 0
-  mark_pending "$session_id" "$prompt_id"
+  message=$(read_message_text "$session_id" "$message_id")
+  record_if_english "$hook_input" "$session_id" "$message"
+  # 判定と pending の作成を終えてから削除する (PostToolBatch hook はディレクトリーが
+  # 残っている間 pending を読むのを待つ)
+  remove_message "$session_id" "$message_id"
 }
 
 # 出力すると表示が置き換わるため、stdout には何も出さない

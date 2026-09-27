@@ -14,20 +14,27 @@ MessageDisplay hook (record-english-message.sh)・PostToolBatch hook
   (`<uid>` は `id -u` の値で、数字だけでなければ状態を扱わない)。
   `pending` は英語のメッセージを表示したがまだ書き直しを指示していない印で、内容は
   英語と判定したときの入力の `prompt_id` (文字列でなければ空)。`buffers/<message_id>`
-  はメッセージの `delta` を連結したバッファー。`session_id` と `message_id` が
+  はメッセージごとのディレクトリーで、batch ごとの断片・`final`・`judged/` を置く。`session_id` と `message_id` が
   `^[A-Za-z0-9_-]{1,128}$` に一致しなければ状態を読み書きしない。親・セッション
   ディレクトリー・`buffers` は、symlink でない・ディレクトリーである・現在のユーザーが
-  所有者である、を満たすものだけを使い、権限を 700 にする。満たさなければ状態を
+  所有者である、を満たすものだけを使い、権限を 700 にする (メッセージディレクトリーも
+  同じ)。満たさなければ状態を
   読み書きしない
-- MessageDisplay: stdout には何も出さず、exit code は常に 0。`index` 0 で同じセッション
-  の他の message_id のバッファーを消してから自分のバッファーを作り直し、それ以外は
-  追記する。`final` true でバッファー全体を本文として取り出して
-  バッファーを消し、目標言語が日本語で本文が英語なら `pending` を作る。`agent_id` が
+- MessageDisplay: stdout には何も出さず、exit code は常に 0。batch ごとに断片
+  `buffers/<message_id>/<index>` を書き、最後の batch なら `final` に index を書く。
+  `final` の値 N について 0..N の断片が揃ったら `mkdir judged` で判定役を取り、
+  断片を index の順に連結した本文で判定して、目標言語が日本語で本文が英語なら
+  `pending` を作り、メッセージディレクトリーを削除する。完了の順が index の順と
+  異なっても、並行して走っても判定は 1 回だけ行う。判定の済んだメッセージの batch が
+  後から届くと新しいメッセージの断片として扱う。`index` 0 のとき、最終更新から 10 分を
+  超えたメッセージディレクトリーを消す。`agent_id` が
   空でない文字列・`delta` が文字列でない・`index` が 0 以上の整数でない・`final` が
   bool でない・jq が無い・入力が JSON object でない場合は何もしない
 - PostToolBatch: `pending` があれば消し、`{"systemMessage": ..., "hookSpecificOutput":
   {"hookEventName": "PostToolBatch", "additionalContext": ...}}` を 1 つ出す。ただし
   `pending` の内容と入力の `prompt_id` がどちらも空でなく異なれば何も出さない。
+  `pending` を読む前に、最終更新から 10 分以内のメッセージディレクトリーがある間は
+  最大 2 秒待つ。
   `agent_id` が空でない文字列なら何もせず `pending` も残す。exit code は常に 0
 - Stop: 入力を JSON object として解析できたら、`stop_hook_active` や目標言語に依らず
   判定より前にその session の `pending` を消す。既存の block の契約は変えない
@@ -44,13 +51,15 @@ MessageDisplay hook (record-english-message.sh)・PostToolBatch hook
 ## テストグループ
 
 - MessageDisplayRecordTest: 1 回の呼び出しで届くメッセージの判定と pending の内容
-- MessageDisplayBufferTest: 複数 batch の連結・バッファーの作り直し・削除
+- MessageDisplayBufferTest: 複数 batch の連結・断片の保存・削除・古いメッセージの掃除
+- MessageDisplayOrderTest: batch の完了順の入れ替わり・判定の重複防止・並行実行
 - MessageDisplayGuardTest: agent_id・目標言語・不正な id / index / final / delta
 - MessageDisplayFailOpenTest: 壊れた入力・jq 不在
 - StateDirectoryOwnershipTest: 状態ディレクトリーのパス (uid)・権限 700・symlink の拒否・
   uid が数字でない場合
 - PostToolBatchRewriteTest: 書き直し指示の出力・pending の消費・prompt_id の照合・
   agent_id・session の分離
+- PostToolBatchWaitTest: 判定の終わっていないメッセージの待機とその上限
 - PostToolBatchFailOpenTest: 壊れた入力・jq 不在
 - StopClearsPendingTest: Stop hook による pending の削除
 - MidTurnFlowTest: MessageDisplay → PostToolBatch → Stop の一連の流れ
@@ -66,6 +75,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -119,6 +129,7 @@ SESSION_ID = "session-A_1"
 OTHER_SESSION_ID = "session-B_2"
 MESSAGE_ID = "5b2a9c8e-1f63-4d8a-b7c4-9e0d2a6f1c3b"
 OTHER_MESSAGE_ID = "0c9e6a2f-7d41-4f4e-9a15-3f4f7c2b8d10"
+THIRD_MESSAGE_ID = "9d1f3c5e-2a4b-4c6d-8e0f-1a2b3c4d5e6f"
 PROMPT_ID = "550e8400-e29b-41d4-a716-446655440000"
 OTHER_PROMPT_ID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
 
@@ -234,10 +245,25 @@ class MidTurnHookTestCase(unittest.TestCase):
     def pending_path(self, session_id: str = SESSION_ID) -> Path:
         return self.state_root / session_id / "pending"
 
-    def buffer_path(
+    def message_dir(
         self, message_id: str = MESSAGE_ID, session_id: str = SESSION_ID
     ) -> Path:
         return self.state_root / session_id / "buffers" / message_id
+
+    def age_message_dir(
+        self, minutes: float, message_id: str = MESSAGE_ID, session_id: str = SESSION_ID
+    ) -> None:
+        """メッセージディレクトリーの最終更新を <minutes> 分前にずらす。"""
+        past = time.time() - minutes * 60
+        os.utime(self.message_dir(message_id, session_id), (past, past))
+
+    def read_fragment(
+        self, index: int, message_id: str = MESSAGE_ID, session_id: str = SESSION_ID
+    ) -> str | None:
+        path = self.message_dir(message_id, session_id) / str(index)
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8")
 
     def write_pending(self, content: str, session_id: str = SESSION_ID) -> None:
         path = self.pending_path(session_id)
@@ -254,10 +280,16 @@ class MidTurnHookTestCase(unittest.TestCase):
     def read_buffer(
         self, message_id: str = MESSAGE_ID, session_id: str = SESSION_ID
     ) -> str | None:
-        path = self.buffer_path(message_id, session_id)
-        if not path.is_file():
+        """メッセージディレクトリーの断片を index の順に連結して返す。無ければ None。"""
+        directory = self.message_dir(message_id, session_id)
+        if not directory.is_dir():
             return None
-        return path.read_text(encoding="utf-8")
+        fragments = sorted(
+            (int(path.name), path)
+            for path in directory.iterdir()
+            if path.name.isdigit() and path.is_file()
+        )
+        return "".join(path.read_text(encoding="utf-8") for _, path in fragments)
 
     def snapshot(self) -> dict[str, str | None]:
         """一時ディレクトリ全体のパスと内容の一覧を返す。
@@ -395,6 +427,20 @@ class MidTurnHookTestCase(unittest.TestCase):
         project_dir_env: str | None = None,
     ) -> tuple[int, str]:
         """script を起動し (exit code, stdout) を返す。str の payload はそのまま渡す。"""
+        result = subprocess.run(
+            [BASH, str(script)],
+            input=self.encode_payload(payload),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.hook_env(path=path, project_dir_env=project_dir_env),
+            cwd=str(self.project),
+            timeout=30,
+        )
+        return result.returncode, result.stdout.decode("utf-8")
+
+    def hook_env(
+        self, *, path: str | None = None, project_dir_env: str | None = None
+    ) -> dict[str, str]:
         env = dict(os.environ)
         env["HOME"] = str(self.home)
         env["TMPDIR"] = str(self.tmpdir)
@@ -404,21 +450,50 @@ class MidTurnHookTestCase(unittest.TestCase):
             env["CLAUDE_PROJECT_DIR"] = project_dir_env
         if path is not None:
             env["PATH"] = path
+        return env
+
+    @staticmethod
+    def encode_payload(payload: dict[str, Any] | str) -> bytes:
         stdin = (
             payload
             if isinstance(payload, str)
             else json.dumps(payload, ensure_ascii=False)
         )
-        result = subprocess.run(
+        return stdin.encode("utf-8")
+
+    def start_script(
+        self, script: Path, payload: dict[str, Any] | str
+    ) -> subprocess.Popen[bytes]:
+        """script を起動し、stdin を渡して閉じる。終了は待たない。"""
+        process = subprocess.Popen(
             [BASH, str(script)],
-            input=stdin.encode("utf-8"),
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
+            stderr=subprocess.DEVNULL,
+            env=self.hook_env(),
             cwd=str(self.project),
-            timeout=30,
         )
-        return result.returncode, result.stdout.decode("utf-8")
+        self.addCleanup(self._finish_process, process)
+        assert process.stdin is not None
+        process.stdin.write(self.encode_payload(payload))
+        process.stdin.close()
+        return process
+
+    @staticmethod
+    def _finish_process(process: subprocess.Popen[bytes]) -> None:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        if process.stdout is not None:
+            process.stdout.close()
+
+    @staticmethod
+    def wait_process(process: subprocess.Popen[bytes]) -> tuple[int, str]:
+        """起動済みの script の終了を待ち、(exit code, stdout) を返す。"""
+        assert process.stdout is not None
+        stdout = process.stdout.read()
+        returncode = process.wait(timeout=30)
+        return returncode, stdout.decode("utf-8")
 
     def run_display(self, payload: dict[str, Any] | str, **kwargs: Any) -> None:
         """MessageDisplay hook を起動し、無出力かつ exit 0 で終わることを確認する。"""
@@ -598,11 +673,19 @@ class MessageDisplayBufferTest(MidTurnHookTestCase):
         self.run_display(self.display_input("third\n", index=2, final=False))
         self.assertEqual(self.read_buffer(), "first\nsecond\nthird\n")
 
-    def test_index_zero_recreates_the_buffer(self) -> None:
+    def test_same_index_replaces_its_fragment(self) -> None:
         self.run_display(self.display_input("old one\n", index=0, final=False))
         self.run_display(self.display_input("old two\n", index=1, final=False))
         self.run_display(self.display_input("new\n", index=0, final=False))
-        self.assertEqual(self.read_buffer(), "new\n")
+        self.assertEqual(self.read_fragment(0), "new\n")
+        self.assertEqual(self.read_fragment(1), "old two\n")
+
+    def test_fragments_are_stored_per_index(self) -> None:
+        self.run_display(self.display_input("first\n", index=0, final=False))
+        self.run_display(self.display_input("second\n", index=1, final=False))
+        self.assertEqual(self.read_fragment(0), "first\n")
+        self.assertEqual(self.read_fragment(1), "second\n")
+        self.assertFalse((self.message_dir() / "final").exists())
 
     def test_index_zero_discards_previous_english_text(self) -> None:
         self.run_display(
@@ -611,41 +694,52 @@ class MessageDisplayBufferTest(MidTurnHookTestCase):
         self.run_display(self.display_input(JAPANESE_MESSAGE, index=0, final=True))
         self.assertIsNone(self.read_pending())
 
-    def test_final_batch_removes_the_buffer(self) -> None:
+    def test_final_batch_removes_the_message_directory(self) -> None:
         for deltas in (
             self.SHORT_ENGLISH_BATCHES,
             [JAPANESE_MESSAGE + "\n", JAPANESE_MESSAGE],
         ):
             with self.subTest(deltas=deltas):
                 self.display_in_batches(deltas)
-                self.assertFalse(self.buffer_path().exists())
+                self.assertFalse(self.message_dir().exists())
 
-    def test_single_call_leaves_no_buffer(self) -> None:
+    def test_single_call_leaves_no_message_directory(self) -> None:
         self.display_message(ENGLISH_MESSAGE)
-        self.assertFalse(self.buffer_path().exists())
+        self.assertFalse(self.message_dir().exists())
 
-    def test_final_batch_removes_the_buffer_when_language_is_not_japanese(
+    def test_final_batch_removes_the_message_directory_when_language_is_not_japanese(
         self,
     ) -> None:
         self.write_settings("user", {"language": "English"})
         self.display_in_batches(self.SHORT_ENGLISH_BATCHES)
-        self.assertFalse(self.buffer_path().exists())
+        self.assertFalse(self.message_dir().exists())
         self.assertIsNone(self.read_pending())
 
-    def test_index_zero_removes_buffers_of_other_messages(self) -> None:
-        # final が届かなかったメッセージのバッファーは、次のメッセージの開始で消える
-        self.run_display(
-            self.display_input("a1\n", index=0, final=False, message_id=MESSAGE_ID)
-        )
-        self.run_display(
-            self.display_input(
-                "b1\n", index=0, final=False, message_id=OTHER_MESSAGE_ID
+    def test_index_zero_removes_only_stale_message_directories(self) -> None:
+        # 10 分を超えたメッセージディレクトリーは次のメッセージの開始で消え、
+        # 10 分以内のものは残る
+        for message_id in (MESSAGE_ID, OTHER_MESSAGE_ID):
+            self.run_display(
+                self.display_input("x\n", index=0, final=False, message_id=message_id)
             )
+        self.age_message_dir(11, MESSAGE_ID)
+        self.age_message_dir(9, OTHER_MESSAGE_ID)
+        self.run_display(
+            self.display_input("y\n", index=0, final=False, message_id=THIRD_MESSAGE_ID)
         )
-        self.assertIsNone(self.read_buffer(MESSAGE_ID))
-        self.assertEqual(self.read_buffer(OTHER_MESSAGE_ID), "b1\n")
+        self.assertFalse(self.message_dir(MESSAGE_ID).exists())
+        self.assertEqual(self.read_buffer(OTHER_MESSAGE_ID), "x\n")
+        self.assertEqual(self.read_buffer(THIRD_MESSAGE_ID), "y\n")
 
-    def test_later_batch_keeps_its_own_buffer_after_cleanup(self) -> None:
+    def test_later_batch_does_not_remove_stale_message_directories(self) -> None:
+        self.run_display(self.display_input("x\n", index=0, final=False))
+        self.age_message_dir(11)
+        self.run_display(
+            self.display_input("y\n", index=1, final=False, message_id=OTHER_MESSAGE_ID)
+        )
+        self.assertEqual(self.read_buffer(MESSAGE_ID), "x\n")
+
+    def test_recent_message_directories_are_kept(self) -> None:
         self.run_display(
             self.display_input("a1\n", index=0, final=False, message_id=MESSAGE_ID)
         )
@@ -659,9 +753,10 @@ class MessageDisplayBufferTest(MidTurnHookTestCase):
                 "b2\n", index=1, final=False, message_id=OTHER_MESSAGE_ID
             )
         )
+        self.assertEqual(self.read_buffer(MESSAGE_ID), "a1\n")
         self.assertEqual(self.read_buffer(OTHER_MESSAGE_ID), "b1\nb2\n")
 
-    def test_orphaned_english_buffer_does_not_affect_the_next_message(self) -> None:
+    def test_orphaned_english_fragment_does_not_affect_the_next_message(self) -> None:
         # final が届かなかった英語の断片は、次のメッセージの判定に混ざらない
         self.run_display(
             self.display_input(
@@ -670,7 +765,6 @@ class MessageDisplayBufferTest(MidTurnHookTestCase):
         )
         self.display_message(JAPANESE_MESSAGE, message_id=OTHER_MESSAGE_ID)
         self.assertIsNone(self.read_pending())
-        self.assertIsNone(self.read_buffer(MESSAGE_ID))
 
     def test_cleanup_does_not_touch_other_sessions(self) -> None:
         self.run_display(
@@ -678,6 +772,7 @@ class MessageDisplayBufferTest(MidTurnHookTestCase):
                 "a1\n", index=0, final=False, session_id=OTHER_SESSION_ID
             )
         )
+        self.age_message_dir(11, MESSAGE_ID, OTHER_SESSION_ID)
         self.run_display(
             self.display_input(
                 "b1\n",
@@ -688,6 +783,174 @@ class MessageDisplayBufferTest(MidTurnHookTestCase):
             )
         )
         self.assertEqual(self.read_buffer(MESSAGE_ID, OTHER_SESSION_ID), "a1\n")
+
+    def test_index_at_the_upper_bound_does_nothing(self) -> None:
+        before = self.snapshot()
+        self.run_display(self.display_input(ENGLISH_MESSAGE, index=100000, final=True))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_index_below_the_upper_bound_is_stored(self) -> None:
+        self.run_display(self.display_input("x\n", index=99999, final=False))
+        self.assertEqual(self.read_fragment(99999), "x\n")
+
+
+@unittest.skipUnless(JQ_AVAILABLE, "hook の判定には jq が必要")
+class MessageDisplayOrderTest(MidTurnHookTestCase):
+    """batch の hook の完了順が index の順と限らない場合と、並行実行。"""
+
+    def send_batches_in_order(self, deltas: list[str], order: list[int]) -> None:
+        """deltas の各 batch を order の順に送る (最後の index が final)。"""
+        last = len(deltas) - 1
+        for index in order:
+            self.run_display(
+                self.display_input(deltas[index], index=index, final=index == last)
+            )
+
+    def test_final_before_index_zero_still_judges(self) -> None:
+        deltas = [english_text(30) + "\n", english_text(30)]
+        self.send_batches_in_order(deltas, [1, 0])
+        self.assertIsNotNone(self.read_pending())
+        self.assertFalse(self.message_dir().exists())
+
+    def test_empty_final_before_index_zero_still_judges(self) -> None:
+        deltas = [english_text(30) + "\n", english_text(30) + "\n", ""]
+        self.send_batches_in_order(deltas, [2, 0, 1])
+        self.assertIsNotNone(self.read_pending())
+
+    def test_three_batches_in_2_0_1_order_are_judged_as_a_whole(self) -> None:
+        deltas = [english_text(25) + "\n", english_text(25) + "\n", english_text(20)]
+        self.send_batches_in_order(deltas, [2, 0, 1])
+        self.assertIsNotNone(self.read_pending())
+        self.assertFalse(self.message_dir().exists())
+
+    def test_out_of_order_batches_are_joined_in_index_order(self) -> None:
+        # J=10, L=40 (英語でない)。断片が欠けて判定されると英語になる
+        deltas = [english_text(30) + "\n", japanese_text(10) + "。\n", english_text(10)]
+        self.send_batches_in_order(deltas, [2, 0, 1])
+        self.assertIsNone(self.read_pending())
+        self.assertFalse(self.message_dir().exists())
+
+    def test_index_zero_does_not_discard_later_fragments(self) -> None:
+        self.run_display(self.display_input("second\n", index=1, final=False))
+        self.run_display(self.display_input("first\n", index=0, final=False))
+        self.assertEqual(self.read_buffer(), "first\nsecond\n")
+
+    def test_judged_message_is_not_judged_again(self) -> None:
+        # 判定の済んだメッセージディレクトリーは削除されるため、同じ final の再送は
+        # 新しいメッセージの断片として扱われ、0..N が揃わないので判定されない
+        deltas = [english_text(30) + "\n", english_text(30) + "\n", english_text(30)]
+        self.display_in_batches(deltas)
+        self.assert_rewrite_requested(self.batch_input())
+        self.run_display(self.display_input(deltas[2], index=2, final=True))
+        self.assertIsNone(self.read_pending())
+        self.assertFalse((self.message_dir() / "judged").exists())
+        self.assertEqual(self.read_fragment(2), deltas[2])
+        self.assert_no_rewrite(self.batch_input())
+
+    def test_concurrent_batches_create_pending(self) -> None:
+        deltas = [english_text(20) + "\n" for _ in range(4)] + [""]
+        for attempt in range(20):
+            with self.subTest(attempt=attempt):
+                message_id = f"concurrent-{attempt}"
+                order = list(range(len(deltas)))
+                if attempt % 2:
+                    order.reverse()
+                processes = [
+                    self.start_script(
+                        RECORD_HOOK,
+                        self.display_input(
+                            deltas[index],
+                            index=index,
+                            final=index == len(deltas) - 1,
+                            message_id=message_id,
+                        ),
+                    )
+                    for index in order
+                ]
+                for process in processes:
+                    returncode, stdout = self.wait_process(process)
+                    self.assertEqual(returncode, 0, stdout)
+                    self.assertEqual(stdout, "")
+                self.assertIsNotNone(self.read_pending(), "並行実行で pending が無い")
+                self.assertFalse(self.message_dir(message_id).exists())
+                self.pending_path().unlink()
+
+
+@unittest.skipUnless(JQ_AVAILABLE, "hook の判定には jq が必要")
+class PostToolBatchWaitTest(MidTurnHookTestCase):
+    """PostToolBatch は判定の終わっていないメッセージを最大 2 秒待つ。"""
+
+    def test_waits_for_the_final_batch(self) -> None:
+        self.run_display(
+            self.display_input(english_text(60) + "\n", index=0, final=False)
+        )
+        process = self.start_script(REWRITE_HOOK, self.batch_input())
+        time.sleep(0.5)
+        self.run_display(self.display_input(english_text(60), index=1, final=True))
+        returncode, stdout = self.wait_process(process)
+        self.assertEqual(returncode, 0, stdout)
+        self.assertNotEqual(stdout.strip(), "", "待機後に書き直しの指示が出なかった")
+        output = json.loads(stdout)
+        self.assertEqual(
+            output["hookSpecificOutput"]["additionalContext"], REWRITE_CONTEXT
+        )
+        self.assertIsNone(self.read_pending())
+
+    def test_waits_for_a_judgement_in_progress(self) -> None:
+        # judged/ があり、まだ削除されていないメッセージディレクトリーは判定中である
+        (self.message_dir() / "judged").mkdir(parents=True)
+        process = self.start_script(REWRITE_HOOK, self.batch_input())
+        time.sleep(0.5)
+        self.write_pending(PROMPT_ID)
+        shutil.rmtree(self.message_dir())
+        returncode, stdout = self.wait_process(process)
+        self.assertEqual(returncode, 0, stdout)
+        self.assertNotEqual(
+            stdout.strip(), "", "判定の終わりを待たずに pending を読んだ"
+        )
+
+    def test_wait_is_bounded(self) -> None:
+        self.run_display(
+            self.display_input(english_text(60) + "\n", index=0, final=False)
+        )
+        started = time.monotonic()
+        self.assert_no_rewrite(self.batch_input())
+        elapsed = time.monotonic() - started
+        self.assertGreaterEqual(elapsed, 1.5, "未判定のメッセージを待たなかった")
+        self.assertLess(elapsed, 5.0)
+
+    def test_pending_is_read_after_the_bounded_wait(self) -> None:
+        self.run_display(
+            self.display_input(english_text(60) + "\n", index=0, final=False)
+        )
+        self.write_pending(PROMPT_ID)
+        self.assert_rewrite_requested(self.batch_input())
+
+    def test_stale_message_directory_is_not_waited_for(self) -> None:
+        self.run_display(
+            self.display_input(english_text(60) + "\n", index=0, final=False)
+        )
+        self.age_message_dir(11)
+        started = time.monotonic()
+        self.assert_no_rewrite(self.batch_input())
+        self.assertLess(time.monotonic() - started, 1.5)
+
+    def test_message_directory_older_than_one_minute_is_not_waited_for(self) -> None:
+        # final が届かずに残ったメッセージで、後の batch ごとに待ち続けない
+        self.run_display(
+            self.display_input(english_text(60) + "\n", index=0, final=False)
+        )
+        self.age_message_dir(2)
+        self.write_pending(PROMPT_ID)
+        started = time.monotonic()
+        self.assert_rewrite_requested(self.batch_input())
+        self.assertLess(time.monotonic() - started, 1.5)
+
+    def test_no_message_directory_means_no_wait(self) -> None:
+        self.write_pending(PROMPT_ID)
+        started = time.monotonic()
+        self.assert_rewrite_requested(self.batch_input())
+        self.assertLess(time.monotonic() - started, 1.5)
 
 
 @unittest.skipUnless(JQ_AVAILABLE, "hook の判定には jq が必要")
@@ -866,6 +1129,7 @@ class StateDirectoryOwnershipTest(MidTurnHookTestCase):
             self.state_root,
             self.state_root / SESSION_ID,
             self.state_root / SESSION_ID / "buffers",
+            self.message_dir(),
         ):
             with self.subTest(directory=directory.name):
                 self.assert_private(directory)
@@ -927,6 +1191,16 @@ class StateDirectoryOwnershipTest(MidTurnHookTestCase):
         target = self.make_symlink_target()
         (session_dir / "buffers").symlink_to(target, target_is_directory=True)
         self.run_display(self.display_input("line\n", index=0, final=False))
+        self.display_message(ENGLISH_MESSAGE)
+        self.assertEqual(self.list_tree(target), [])
+        self.assertIsNone(self.read_pending())
+
+    def test_symlinked_message_directory_is_not_used(self) -> None:
+        buffers = self.state_root / SESSION_ID / "buffers"
+        buffers.mkdir(parents=True)
+        target = self.make_symlink_target()
+        self.message_dir().symlink_to(target, target_is_directory=True)
+        self.run_display(self.display_input("line\n", index=1, final=False))
         self.display_message(ENGLISH_MESSAGE)
         self.assertEqual(self.list_tree(target), [])
         self.assertIsNone(self.read_pending())
@@ -1153,18 +1427,25 @@ class StopClearsPendingTest(MidTurnHookTestCase):
 
     def test_empty_session_directory_is_removed(self) -> None:
         self.write_pending(PROMPT_ID)
-        self.buffer_path().parent.mkdir(parents=True)
+        self.message_dir().parent.mkdir(parents=True)
         self.run_stop(self.stop_input(JAPANESE_MESSAGE))
         self.assertFalse((self.state_root / SESSION_ID).exists())
 
-    def test_session_directory_with_a_buffer_remains(self) -> None:
+    def test_unjudged_message_directories_are_removed(self) -> None:
         self.write_pending(PROMPT_ID)
-        path = self.buffer_path()
+        path = self.message_dir() / "0"
         path.parent.mkdir(parents=True)
         path.write_text("partial", encoding="utf-8")
         self.run_stop(self.stop_input(JAPANESE_MESSAGE))
         self.assertIsNone(self.read_pending())
-        self.assertEqual(self.read_buffer(), "partial")
+        self.assertFalse((self.state_root / SESSION_ID).exists())
+
+    def test_message_directories_of_another_session_remain(self) -> None:
+        path = self.message_dir(session_id=OTHER_SESSION_ID) / "0"
+        path.parent.mkdir(parents=True)
+        path.write_text("partial", encoding="utf-8")
+        self.run_stop(self.stop_input(JAPANESE_MESSAGE, session_id=SESSION_ID))
+        self.assertTrue(path.is_file())
 
     def test_pending_of_another_session_remains(self) -> None:
         self.write_pending(PROMPT_ID, session_id=OTHER_SESSION_ID)
