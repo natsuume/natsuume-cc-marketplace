@@ -19,13 +19,15 @@
   削除しないこと、廃止した手順番号を参照しないこと、claim の反映を保証として書かないこと。
 - 明示指示による再開 (``IssueClaimExplicitResumeTest``): ユーザのメッセージまたは handoff の
   文書が issue 番号か branch 名を挙げて継続を指示した場合 (明示指示) だけ step 6 から再開し、
-  ラベルや他 session の claim comment があっても撤退も削除もしない。明示指示が無ければ、
-  また明示指示があっても対応する branch が無ければ step 1 から実行する。issue 番号だけの
-  明示指示では、issue-start skill の小節 1.1 の手順で branch を決め、同手順で新しい名前を
-  決めた場合も step 1 から実行する。
+  step 6 から再開する場合は、ラベルや他 session の claim comment があっても撤退も削除もしない。
+  明示指示が無ければ、また明示指示があっても対応する branch が無ければ step 1 から実行する。
+  issue 番号だけの明示指示では、issue-start skill の小節 1.1 の手順で branch を決め、同手順で
+  新しい名前を決めた場合も step 1 から実行する。明示指示で step 1 から実行する場合に、step 1 で
+  ラベルや他 session の claim comment が見つかったら、issue-start skill の小節 1.2 に従う。
 - claim に埋め込む branch 名 (``IssueClaimExistingBranchNameTest``): step 2 は issue-start
-  skill の小節 1.1 の手順で見つけた既存の branch の名前を使い、無ければ命名規約で決める。
-  探索コマンドは step 2 に書かず、branch 名のどこにでも一致する旧パターンを残さない。
+  skill の小節 1.1 の手順で見つけた既存の branch の名前を使い、無ければ同じ小節の手順 6 で
+  命名規約に沿って決める。探索コマンドは step 2 に書かず、branch 名のどこにでも一致する旧
+  パターンを残さない。
 - 作業 branch の用意 (``IssueClaimWorkBranchTest``): step 6 は `git fetch --prune origin` の後
   (失敗したら停止して報告)、prune 後の remote-tracking ref で同名 branch の有無を判定し、
   どちらにも無い・remote だけ・local だけ・両方の 4 通りで
@@ -37,7 +39,8 @@
   明示指示が無ければ既存の branch / PR があっても排他制御に進む。確認コマンドは local に
   だけある branch も確認し、明示指示で挙げられた branch 名は命名規約に依らずそのまま使う。
   明示指示が無い場合と issue 番号だけの明示指示は、小節 1.1 を参照する。明示指示で小節 1.1 が
-  新しい名前を決めた場合は step 1 から実行する。
+  新しい名前を決めた場合は step 1 から実行し、step 1 から実行する条件を「どちらにも無い場合に
+  限り」だけで書く文を残さない。
 - 既存 branch の探し方 (``IssueStartBranchLookupTest``): issue-start skill の小節 1.1 は、
   `*/issue-<N>-*` で remote と local を探し (失敗したら投稿せず停止して報告)、同名を 1 つと
   数え、`-phase-b-wip` の補助 branch を除き、命名規約 (使える文字を英小文字・数字・ハイフンに
@@ -48,6 +51,15 @@
   一致しなければ候補に残す。候補が 1 つならその名前を使い、無ければ命名規約で
   決め (既存の branch と同名なら、どちらにも存在しない名前になるよう slug を変える)、複数
   なら投稿せず停止して確認する。見つけた名前は single quote で囲んで埋め込む。
+- 明示指示で step 1 から実行するときの前の作業の残り (``IssueStartExplicitLeftoverTest``):
+  issue-start skill の小節 1.2 は、明示指示があっても branch が無い場合と小節 1.1 の手順で
+  新しい名前を決めた場合に、step 1 で `ai:in-progress` ラベルか `session=` が自分のセッション
+  ID と一致しない claim comment が見つかったら、撤退せずに停止し、見つかったラベルと claim
+  comment (数値 comment id と本文) を示して前の作業の残りかを `AskUserQuestion` で確認する。
+  残りと確認されたら claim comment を投稿して step 3 以降に進み、step 4 の先着判定では確認した
+  claim comment を数値 comment id で特定して除き、確認の後に投稿された claim comment は通常
+  どおり判定する。残りではないと答えたら撤退する。確認した残りは削除しない。明示指示が無い
+  場合は step 1 の早期判定に従う。
 - 評価基準 (``IssueClaimEvaluationTest``): `docs/discipline-evaluation.md` の issue-claim の
   評価基準が、明示指示による再開と、既存 branch の探し方で停止する経路を Pass として扱う。
 
@@ -162,6 +174,34 @@ LOOSE_BRANCH_PATTERN = "'*issue-<N>-*'"
 ISSUE_START_LOOKUP_HEADING = "### 1.1 既存 branch の探し方"
 LOOKUP_SECTION_REFERENCE = "1.1"
 
+# 既存の branch が無い場合に、小節 1.1 の手順 6 (命名規約と、local / remote のどちらにも存在
+# しない名前にする規定) で名前を決めることを示す表記 (空白を除去した文に照合する)。「無ければ」
+# と手順 6 が同じ読点区間の中でこの順に並ぶことを求める。
+NO_BRANCH_THEN_LOOKUP_STEP_6 = re.compile(r"無(?:け|い)[^、。]*手順6")
+
+# issue-start skill の、明示指示で step 1 から実行するときの前の作業の残りを確かめる小節と、
+# それを参照するときの節番号。
+ISSUE_START_LEFTOVER_HEADING = "### 1.2 明示指示で step 1 から実行するときの前の作業の残り"
+LEFTOVER_SECTION_REFERENCE = "1.2"
+
+# step 1 から実行することを示す表記 (空白を除去した文に照合する)。「step 1-5 を経ずに」の
+# ような範囲の表記では満たされないよう、「step 1 から実行」の並びを求める。
+STEP_1_START = re.compile(r"step1から実行")
+
+# step 6 から再開することを示す表記 (空白を除去した文に照合する)。
+STEP_6_RESUME = re.compile(r"step6から再開")
+
+# ラベルや他 session の claim comment が残っていても撤退も削除もしないことを示す要素 (空白を
+# 除去した文に照合する)。
+WITHDRAWAL_EXEMPTION_REQUIREMENTS: tuple[Requirement, ...] = (
+    re.compile(r"撤退(?:せず|しない)"),
+    re.compile(r"削除(?:も)?(?:せず|しない)"),
+)
+
+# step 1 から実行する条件を、branch が local / remote のどちらにも無い場合だけに限る表記
+# (空白を除去した文に照合する)。
+MISSING_BRANCH_ONLY = re.compile(r"(?:どちら|いずれ)にも(?:無|な)い(?:場合)?に限(?:り|って)")
+
 # マージ済みの PR がある branch を確かめるコマンドの要素。
 MERGED_PR_CHECK_PHRASES = ("gh pr list --head", "--state merged")
 
@@ -275,7 +315,7 @@ EXPLICIT_BRANCH_REQUIREMENTS: tuple[tuple[str, tuple[Requirement, ...]], ...] = 
 NEW_NAME_STARTS_FROM_STEP_1_REQUIREMENTS: tuple[Requirement, ...] = (
     LOOKUP_SECTION_REFERENCE,
     "新しい名前",
-    "step 1",
+    STEP_1_START,
 )
 
 # issue-start skill の pick-up 分岐にあった、明示指示に触れない再開の分岐の語。
@@ -823,6 +863,45 @@ class IssueClaimExplicitResumeTest(IssueClaimTestCase):
             NEW_NAME_STARTS_FROM_STEP_1_REQUIREMENTS,
         )
 
+    def test_withdrawal_exemption_is_for_the_step_6_resume(self) -> None:
+        """ラベルや他 session の claim comment が残っていても撤退も削除もしないと書く文は、
+        すべて step 6 から再開する場合を条件にする (明示指示で step 1 から実行する場合にも
+        及ぶと読めないようにするため)。"""
+        label = self.label("明示指示の段落")
+        exemptions = [
+            sentence
+            for sentence in sentences(self.explicit_resume_paragraph())
+            if all(
+                satisfies(sentence, requirement)
+                for requirement in WITHDRAWAL_EXEMPTION_REQUIREMENTS
+            )
+        ]
+        self.assert_scope_found(label, "\n".join(exemptions), "撤退も削除もしない文が無い")
+        for sentence in exemptions:
+            with self.subTest(sentence=sentence.strip()[:60]):
+                if not satisfies(sentence, STEP_6_RESUME):
+                    self.fail(
+                        f"{label}: 撤退も削除もしない文が、step 6 から再開する場合を条件に"
+                        f"していない: {sentence.strip()[:120]}"
+                    )
+
+    def test_leftovers_on_the_step_1_route_refer_to_the_skill(self) -> None:
+        """明示指示で step 1 から実行する場合に、step 1 でラベルや他 session の claim comment
+        が見つかったら、issue-start skill の小節 1.2 の手順に従う。"""
+        self.assert_some_sentence(
+            self.label("明示指示の段落"),
+            self.explicit_resume_paragraph(),
+            (
+                EXPLICIT_INSTRUCTION,
+                STEP_1_START,
+                "ラベル",
+                OTHER_SESSION,
+                "claim comment",
+                "issue-start",
+                LEFTOVER_SECTION_REFERENCE,
+            ),
+        )
+
 
 class IssueClaimExistingBranchNameTest(IssueClaimTestCase):
     """step 2 で claim に埋め込む branch 名を、issue-start skill の手順で見つけた既存の
@@ -841,6 +920,13 @@ class IssueClaimExistingBranchNameTest(IssueClaimTestCase):
     def test_no_match_follows_the_naming_convention(self) -> None:
         """既存の branch が無ければ、命名規約で branch 名を決める。"""
         self.assert_step_sentence((re.compile(r"無(?:け|い)"), "規約"))
+
+    def test_no_match_follows_step_6_of_the_lookup(self) -> None:
+        """既存の branch が無ければ、issue-start skill のセクション 1.1 の手順 6 で名前を
+        決める (命名規約だけで決めると、手順で除外したマージ済みの branch と同じ名前になり、
+        step 6 がその branch に switch しうるため。手順 6 は local / remote のどちらにも
+        存在しない名前になるよう slug を変える)。"""
+        self.assert_step_sentence((LOOKUP_SECTION_REFERENCE, NO_BRANCH_THEN_LOOKUP_STEP_6))
 
     def test_search_commands_are_not_duplicated(self) -> None:
         """探索コマンドは issue-start skill の 1 か所に置き、step 2 には書かない。"""
@@ -1063,7 +1149,8 @@ class IssueStartPickUpTest(IssueClaimTestCase):
 
     def test_explicit_instruction_uses_the_named_branch_as_is(self) -> None:
         """明示指示で branch 名が挙げられた場合は、命名規約を検証せずその branch を使い、
-        local / remote のどちらにも無い場合に限り step 1 から実行する。"""
+        local / remote のどちらにも無い場合は step 1 から実行する (step 1 から実行するのは、
+        この場合と、issue 番号だけの明示指示でセクション 1.1 の手順が新しい名前を決めた場合)。"""
         label = self.skill_label(ISSUE_START_PICK_UP_HEADING)
         explicit_items = [
             item
@@ -1110,6 +1197,21 @@ class IssueStartPickUpTest(IssueClaimTestCase):
                 f"{label}: 明示指示がある場合の分岐に「{wanted}」をすべて含む文が無い"
                 f" (明示指示がある場合の項目: {len(explicit_items)} 件)"
             )
+
+    def test_missing_branch_is_not_the_only_step_1_condition(self) -> None:
+        """step 1 から実行する条件を「local / remote のどちらにも無い場合に限り」だけで書く
+        文を、新しい名前の規定と別に残さない (セクション 1.1 の手順が新しい名前を決めた場合も
+        step 1 から実行するため)。"""
+        label = self.skill_label(ISSUE_START_PICK_UP_HEADING)
+        for sentence in sentences(self.skill_section(ISSUE_START_PICK_UP_HEADING)):
+            with self.subTest(sentence=sentence.strip()[:60]):
+                if satisfies(sentence, MISSING_BRANCH_ONLY) and not satisfies(
+                    sentence, "新しい名前"
+                ):
+                    self.fail(
+                        f"{label}: step 1 から実行する条件を branch が無い場合だけに限る文が"
+                        f"ある: {sentence.strip()[:120]}"
+                    )
 
     def test_every_branch_depends_on_explicit_instruction(self) -> None:
         """pick-up 分岐のどの項目も明示指示の有無を条件にし、既存の branch / PR だけを
@@ -1307,6 +1409,136 @@ class IssueStartBranchLookupTest(IssueClaimTestCase):
     def test_found_names_are_single_quoted(self) -> None:
         """見つけた branch 名をコマンドに埋め込むときは single quote で囲む。"""
         self.assert_lookup_sentence(("コマンド", "single quote"))
+
+
+class IssueStartExplicitLeftoverTest(IssueClaimTestCase):
+    """issue-start skill の、明示指示で step 1 から実行するときの前の作業の残り (小節 1.2)。"""
+
+    def leftover_label(self) -> str:
+        return (
+            f"{display_path(self.issue_start_skill_path)} の {ISSUE_START_LEFTOVER_HEADING} 節"
+        )
+
+    def leftover_section(self) -> str:
+        section = markdown_section(
+            read(self.issue_start_skill_path), ISSUE_START_LEFTOVER_HEADING
+        )
+        self.assert_scope_found(
+            self.leftover_label(), section, f"`{ISSUE_START_LEFTOVER_HEADING}` 節が無い"
+        )
+        return section
+
+    def assert_leftover_sentence(self, requirements: tuple[Requirement, ...]) -> None:
+        self.assert_some_sentence(
+            self.leftover_label(), self.leftover_section(), requirements
+        )
+
+    def test_section_is_under_the_pick_up_section(self) -> None:
+        """小節 1.2 は pick-up 分岐の節 (セクション 1) の配下に置く。"""
+        pick_up = markdown_section(
+            read(self.issue_start_skill_path), ISSUE_START_PICK_UP_HEADING
+        )
+        if ISSUE_START_LEFTOVER_HEADING not in pick_up.splitlines():
+            self.fail(
+                f"{self.leftover_label()}: `{ISSUE_START_PICK_UP_HEADING}` 節の配下に"
+                " 見出しが無い"
+            )
+
+    def test_applies_to_both_step_1_routes(self) -> None:
+        """明示指示があっても step 1 から実行する 2 つの場合 (対象の branch が無い場合と、
+        セクション 1.1 の手順で新しい名前を決めた場合) を対象にする。"""
+        self.assert_leftover_sentence(
+            (
+                EXPLICIT_INSTRUCTION,
+                re.compile(r"branchが[^、。]*(?:無|な)い"),
+                LOOKUP_SECTION_REFERENCE,
+                "新しい名前",
+                STEP_1_START,
+            )
+        )
+
+    def test_leftovers_stop_without_withdrawing(self) -> None:
+        """step 1 で `ai:in-progress` ラベルか、`session=` が自分のセッション ID と一致しない
+        claim comment が見つかったら、撤退せずに停止する。"""
+        self.assert_leftover_sentence(
+            (
+                "step 1",
+                "ai:in-progress",
+                "session=",
+                re.compile(r"一致しない"),
+                "claim comment",
+                re.compile(r"撤退(?:せず|しない)"),
+                "停止",
+            )
+        )
+
+    def test_leftovers_are_shown_and_confirmed(self) -> None:
+        """見つかったラベルと claim comment (数値 comment id と本文) を示し、前の作業の
+        残りかどうかを `AskUserQuestion` でユーザに確認する (claim comment と、示す数値
+        comment id・本文の対応を、同じ読点区間の中の並び順で検査する)。"""
+        self.assert_leftover_sentence(
+            (
+                "ラベル",
+                re.compile(r"claimcomment[^、。]*数値commentid[^、。]*本文"),
+                "残り",
+                "AskUserQuestion",
+            )
+        )
+
+    def test_confirmed_leftover_posts_the_claim(self) -> None:
+        """ユーザが残りだと確認した場合は、claim comment を投稿して step 3 以降に進む。"""
+        self.assert_leftover_sentence(
+            (
+                re.compile(r"残り(?:だ|である)?と確認"),
+                "claim comment",
+                "投稿",
+                re.compile(r"step3以降"),
+            )
+        )
+
+    def test_confirmed_claim_is_excluded_by_its_id(self) -> None:
+        """step 4 の先着判定では、ユーザが確認した claim comment を数値 comment id で特定して
+        判定の対象から除く (確認した claim comment と数値 comment id と除く操作の対応を、同じ
+        読点区間の中の並び順で検査する)。"""
+        self.assert_leftover_sentence(
+            (
+                "step 4",
+                "先着判定",
+                re.compile(r"確認したclaimcomment[^、。]*数値commentid[^、。]*除"),
+            )
+        )
+
+    def test_later_claims_are_judged_as_usual(self) -> None:
+        """確認の後に投稿された claim comment は、除かずに通常どおり判定する。"""
+        self.assert_leftover_sentence(
+            (
+                re.compile(r"確認(?:の|した)後に投稿"),
+                "claim comment",
+                re.compile(r"除かず|通常どおり"),
+            )
+        )
+
+    def test_not_a_leftover_withdraws(self) -> None:
+        """ユーザが残りではない (稼働中の別 session のもの) と答えた場合は撤退する。"""
+        self.assert_leftover_sentence((re.compile(r"残りでは(?:ない|なく)"), "撤退"))
+
+    def test_confirmed_leftovers_are_not_deleted(self) -> None:
+        """確認した残りのラベルと claim comment は削除しない (他 session の claim を削除
+        しない規律に従う)。"""
+        self.assert_leftover_sentence(
+            (
+                "確認した",
+                "残り",
+                "ラベル",
+                "claim comment",
+                re.compile(r"削除し(?:ない|ません)|削除せず"),
+            )
+        )
+
+    def test_without_explicit_instruction_keeps_the_early_check(self) -> None:
+        """明示指示が無い場合は、この手順を使わず step 1 の早期判定 (残りがあれば撤退) に
+        従う。"""
+        self.assert_leftover_sentence((NO_EXPLICIT_INSTRUCTION, "step 1", "早期判定"))
 
 
 class IssueClaimEvaluationTest(IssueClaimTestCase):
