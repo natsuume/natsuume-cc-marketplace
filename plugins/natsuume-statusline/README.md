@@ -4,7 +4,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.11.6
+v0.11.7
 
 ## 表示内容
 
@@ -85,6 +85,7 @@ plugin cache 配下から実行された場合は、`~/.claude/natsuume-statusli
 | `statusline/main.sh` | JSON 入力のパース、各行の組み立て、ターミナル幅へのフィット |
 | `statusline/lib.sh` | カラー定数、進捗バー、可視幅計算、所有 GitHub namespace のキャッシュ |
 | `statusline/gauges.sh` | ゲージ行 (context 使用量 / レートリミット) の共通レンダラ (`build_context_segment` / `build_ratelimit_segment` / `render_gauge_line`)。2 行目・3 行目はこれを呼ぶ薄い assembler |
+| `statusline/git-status.sh` | 1 行目で使う git 情報の取得 (`collect_git_info`) と、`git status --porcelain=v2 --branch` 出力の解析 (`parse_status_branch` / `parse_status_entries`) |
 | `statusline/line1.sh` | 1 行目 (パス / repo / branch / 変更量 / 未コミット) のレンダラ |
 | `statusline/line2.sh` | 2 行目 (モデル名 / context 使用量 / 5h レートリミット) のレンダラ |
 | `statusline/line3.sh` | 3 行目 (7d レートリミット / モデル別週次枠) のレンダラ |
