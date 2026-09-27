@@ -41,10 +41,11 @@ gh pr list --head '<branch>'
 
 明示指示があっても、対象の branch が local / remote のどちらにも無い場合と、セクション 1.1 の手順で新しい名前を決めた場合は、`rule:issue-claim` の step 1 から実行します。このとき step 1 で前の作業の `ai:in-progress` ラベルや claim comment が見つかることがあるため、次の手順で進めます。明示指示が無い場合は、この手順を使わず step 1 の早期判定に従います。
 
-1. step 1 で `ai:in-progress` ラベルか、`session=` の値が自分のセッション ID と一致しない claim comment が見つかったら、撤退せずに停止します。見つかったラベルと claim comment (数値 comment id と本文) を示して、前の作業の残りかどうかを `AskUserQuestion` でユーザに確認します。数値 comment id は、step 4 と同じ REST GET (`gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'`) の `id` から取ります (`gh issue view` の `id` は GraphQL node ID で、step 4 の id と一致しないため)
-2. ユーザが残りだと確認した場合は、step 2 で claim comment を投稿して step 3 以降に進みます。step 4 の先着判定では、ユーザが確認した claim comment を数値 comment id で特定して判定の対象から除きます。確認の後に投稿された claim comment を含め、確認した数値 comment id 以外の claim comment は、投稿された時刻に依らず除かずに通常どおり判定します。本文や `session=` の値で照合して除くことはしません
-3. ユーザが残りではない (稼働中の別 session のもの) と答えた場合は撤退します。後片付けは `rule:issue-claim` の「撤退と着手中断の後片付け」に従います
-4. 確認した残りのラベルと claim comment は削除しません (`rule:issue-claim` のラベル削除規律に従い、他 session の claim を削除しないため)
+1. step 1 の早期判定では、comment を step 4 と同じ REST GET (`gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'`) の 1 回で取得し、その結果から確認の対象と数値 comment id を決めます (`gh issue view` の `id` は GraphQL node ID で、step 4 の id と一致しないため)。ラベルは `gh issue view <N> --json labels` で確認します。この REST GET が失敗した場合 (非ゼロ終了・ページ取得不能) は、ユーザに確認せずに停止して報告します (step 4 と同じ fail-closed)
+2. step 1 で `ai:in-progress` ラベルか claim comment が見つかったら、撤退せずに停止します。確認の対象は、見つかったラベルと、すべての claim comment です (`session=` の無い claim comment と、`session=` の値が自分のセッション ID と一致する claim comment も含めます)。確認の対象のラベルと claim comment (数値 comment id と本文) を示して、前の作業の残りかどうかを `AskUserQuestion` でユーザに確認します。どちらも見つからなければ、step 2 に進みます
+3. 確認の対象のすべてが残りだと確認された場合に限り、step 2 で claim comment を投稿して step 3 以降に進みます。確認の対象のうち 1 件でも、ユーザが残りではない (稼働中の別 session のもの) と答えた場合は、全体を残りではないとして扱い、claim comment を投稿せずに撤退します
+4. step 4 の先着判定では、ユーザが確認した claim comment を数値 comment id で特定して判定の対象から除きます。step 4 で `session=` の値によって自分の claim を識別するときも、確認した claim comment は数値 comment id で特定して自分の claim として扱いません。確認の後に投稿された claim comment は確認の対象に入らないので、除かれません。確認した数値 comment id 以外の claim comment は、投稿された時刻に依らず通常どおり判定します。本文や `session=` の値で照合して除くことはしません
+5. この経路で撤退するときに削除するのは、この経路で自分が投稿した claim comment (数値 comment id で特定します) だけです。確認の対象にしたラベルと claim comment は、`session=` の値が自分のセッション ID と一致していても削除しません (`rule:issue-claim` のラベル削除規律に従い、他 session の claim を削除しないため)。撤退理由は、`rule:issue-claim` の「撤退と着手中断の後片付け」に従ってユーザに 1 行で報告します
 
 ## 2. 排他制御の参照
 
