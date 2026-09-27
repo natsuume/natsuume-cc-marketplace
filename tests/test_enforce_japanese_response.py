@@ -1,7 +1,9 @@
 """enforce-japanese-response hook (plugins/enforce-japanese-response) の受入テスト。
 
-hook script を subprocess で起動し、stdin に Stop hook の JSON を渡して stdout と
+Stop hook の script を subprocess で起動し、stdin に Stop hook の JSON を渡して stdout と
 exit code を検証する。期待値は hook の公開契約であり、実装都合で変更しない。
+tool 呼び出しの合間のメッセージを扱う MessageDisplay / PostToolBatch hook と、Stop hook
+による pending の削除は test_enforce_japanese_response_mid_turn.py で検証する。
 
 ## 対象 hook の契約
 
@@ -31,7 +33,8 @@ exit code を検証する。期待値は hook の公開契約であり、実装�
 各テストは一時ディレクトリに HOME とプロジェクト (`cwd`) を作り、`HOME` を env で、
 `cwd` を入力 JSON で渡す。実際の `~/.claude` は読まない。実行環境の
 `CLAUDE_CONFIG_DIR` と `CLAUDE_PROJECT_DIR` は引き継がず、`CLAUDE_PROJECT_DIR` は
-それを検査するテストだけが明示的に渡す。
+それを検査するテストだけが明示的に渡す。Stop hook が pending を消す状態ディレクトリーが
+実際の一時ディレクトリを指さないよう、env `TMPDIR` もテストの一時ディレクトリに向ける。
 
 ## テストグループ
 
@@ -42,7 +45,8 @@ exit code を検証する。期待値は hook の公開契約であり、実装�
 - SettingsLookupTest: settings ファイルの探索順と解析できないファイルの扱い
 - ProjectDirEnvTest: env CLAUDE_PROJECT_DIR と cwd の優先関係
 - BlockOutputTest: block 時の出力形式と reason の内容
-- PluginWiringTest: hooks.json への登録と script の実行権限
+- PluginWiringTest: hooks.json への 3 イベント (Stop / MessageDisplay / PostToolBatch)
+  の登録と 3 script の実行権限
 """
 
 from __future__ import annotations
@@ -58,8 +62,18 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "plugins" / "enforce-japanese-response"
-HOOK = PLUGIN_DIR / "hooks" / "scripts" / "enforce-japanese-response.sh"
+SCRIPTS_DIR = PLUGIN_DIR / "hooks" / "scripts"
+HOOK = SCRIPTS_DIR / "enforce-japanese-response.sh"
+RECORD_HOOK = SCRIPTS_DIR / "record-english-message.sh"
+REWRITE_HOOK = SCRIPTS_DIR / "request-japanese-rewrite.sh"
 HOOKS_JSON = PLUGIN_DIR / "hooks" / "hooks.json"
+
+# hooks.json に登録する (イベント, script) の組。
+REGISTERED_HOOKS = (
+    ("Stop", HOOK),
+    ("MessageDisplay", RECORD_HOOK),
+    ("PostToolBatch", REWRITE_HOOK),
+)
 
 BASH = shutil.which("bash") or "/bin/bash"
 JQ_AVAILABLE = shutil.which("jq") is not None
@@ -189,8 +203,10 @@ class HookTestCase(unittest.TestCase):
         base = Path(self._tmp.name)
         self.home = base / "home"
         self.project = base / "project"
+        self.tmpdir = base / "tmp"
         self.home.mkdir()
         self.project.mkdir()
+        self.tmpdir.mkdir()
         self.write_settings("user", {"language": "日本語"})
 
     # --- settings ---------------------------------------------------------
@@ -256,6 +272,7 @@ class HookTestCase(unittest.TestCase):
         """
         env = dict(os.environ)
         env["HOME"] = str(self.home)
+        env["TMPDIR"] = str(self.tmpdir)
         env.pop("CLAUDE_CONFIG_DIR", None)
         env.pop("CLAUDE_PROJECT_DIR", None)
         if project_dir_env is not None:
@@ -765,28 +782,40 @@ class BlockOutputTest(HookTestCase):
 
 
 class PluginWiringTest(unittest.TestCase):
-    """hooks.json が Stop に script を exec form で 1 つだけ登録している。"""
+    """hooks.json が Stop / MessageDisplay / PostToolBatch に script を exec form で
+    1 つずつ登録している (matcher なし)。"""
 
-    def test_stop_event_registers_the_script(self) -> None:
+    def test_registered_events_are_exactly_the_three(self) -> None:
         manifest = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
-        self.assertEqual(set(manifest["hooks"]), {"Stop"})
-        groups = manifest["hooks"]["Stop"]
-        self.assertEqual(len(groups), 1)
         self.assertEqual(
-            groups[0]["hooks"],
-            [
-                {
-                    "type": "command",
-                    "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/"
-                    "enforce-japanese-response.sh",
-                    "args": [],
-                }
-            ],
+            set(manifest["hooks"]), {event for event, _script in REGISTERED_HOOKS}
         )
 
-    def test_script_is_executable(self) -> None:
-        self.assertTrue(HOOK.is_file())
-        self.assertTrue(os.access(HOOK, os.X_OK))
+    def test_each_event_registers_its_script(self) -> None:
+        manifest = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
+        for event, script in REGISTERED_HOOKS:
+            with self.subTest(event=event):
+                groups = manifest["hooks"][event]
+                self.assertEqual(len(groups), 1)
+                self.assertEqual(
+                    groups[0],
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/"
+                                + script.name,
+                                "args": [],
+                            }
+                        ]
+                    },
+                )
+
+    def test_scripts_are_executable(self) -> None:
+        for _event, script in REGISTERED_HOOKS:
+            with self.subTest(script=script.name):
+                self.assertTrue(script.is_file())
+                self.assertTrue(os.access(script, os.X_OK))
 
 
 if __name__ == "__main__":

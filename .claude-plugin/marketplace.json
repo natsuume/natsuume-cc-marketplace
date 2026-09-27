@@ -122,7 +122,7 @@
       "name": "enforce-japanese-response",
       "source": "./plugins/enforce-japanese-response",
       "description": "英語の応答を検知し日本語で書き直させる",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "keywords": ["language", "japanese", "response", "stop", "hook"]
     }
   ]

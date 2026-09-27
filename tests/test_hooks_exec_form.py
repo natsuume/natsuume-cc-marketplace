@@ -103,7 +103,11 @@ EXPECTED_COMMAND_HOOKS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] 
     "enforce-draft-pr": (
         ("PreToolUse", script_path("enforce-draft-pr.sh"), ()),
     ),
-    "enforce-japanese-response": (("Stop", script_path("enforce-japanese-response.sh"), ()),),
+    "enforce-japanese-response": (
+        ("Stop", script_path("enforce-japanese-response.sh"), ()),
+        ("MessageDisplay", script_path("record-english-message.sh"), ()),
+        ("PostToolBatch", script_path("request-japanese-rewrite.sh"), ()),
+    ),
     "git-guardrails": (
         ("PreToolUse", script_path("block-default-branch-commit.sh"), ()),
         ("PreToolUse", script_path("block-default-branch-push.sh"), ()),
@@ -253,7 +257,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "rate-limit": "0.5.5",
     "session-handoff": "1.0.0",
     "repo-analytics": "0.2.10",
-    "enforce-japanese-response": "0.1.0",
+    "enforce-japanese-response": "0.2.0",
 }
 
 
