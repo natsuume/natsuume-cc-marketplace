@@ -19,7 +19,7 @@
 
 GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-progress` ラベル単独運用では TOCTOU race が残る (= 「ラベル確認 → ラベル付与」の間に他 session が割り込む)。そこで **claim comment の先着判定** を排他の基盤とする: GitHub が server-side で付与する `created_at` + 数値 comment id は投稿順に決まる。step 3 の待機のあいだに先に投稿された claim が一覧に反映されることを前提に、全 session が同じ先着者を導く。
 
-**明示指示による再開**: ユーザのメッセージまたは handoff の文書が issue 番号か branch 名を挙げてその issue の継続を指示している場合 (明示指示) に限り、step 1-5 を経ずに step 6 から再開してよい。ラベルや他セッション ID の claim comment が残っていても撤退せず、削除もしない。明示指示が無ければ、既存の branch / draft PR があってもstep 1 から実行する。明示指示があっても対応する branch が無ければ、新規着手として step 1 から実行する。issue 番号だけの明示指示では、branch を issue-start skill セクション 1.1 の手順で決め、同手順で新しい名前を決めた場合も step 1 から実行する。
+**明示指示による再開**: ユーザのメッセージまたは handoff の文書が issue 番号か branch 名を挙げてその issue の継続を指示している場合 (明示指示) に限り、step 1-5 を経ずに step 6 から再開してよい。step 6 から再開する場合は、ラベルや他セッション ID の claim comment が残っていても撤退せず、削除もしない。明示指示が無ければ、既存の branch / draft PR があってもstep 1 から実行する。明示指示があっても対応する branch が無ければ、新規着手として step 1 から実行する。issue 番号だけの明示指示では、branch を issue-start skill セクション 1.1 の手順で決め、同手順で新しい名前を決めた場合も step 1 から実行する。明示指示で step 1 から実行する場合に、step 1 でラベルや他セッション ID の claim comment が見つかったら、issue-start skill セクション 1.2 の手順に従う。
 
 ### 着手手順
 
@@ -33,7 +33,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
    ```
    gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> session=<セッションID> ts=<UTC ISO 8601>"
    ```
-   - branch 名は step 6 で使う名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)。issue-start skill セクション 1.1 の手順で既存の branch を探して見つかった名前を使い、無ければ次の規約で決める (同手順の停止条件では投稿せず停止する)
+   - branch 名は step 6 で使う名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)。issue-start skill セクション 1.1 の手順で既存の branch を探して見つかった名前を使い、無ければ同手順 6 で次の規約に沿って決める (同手順の停止条件では投稿せず停止する)
    - branch 名規約: `<prefix>/issue-<N>-<slug>` (`<prefix>` = `feat` / `fix` / `chore` / `docs` / `refactor` 等、`<slug>` = issue タイトルから kebab-case で抽出した短縮形)
    - 例: `feat/issue-12-add-auth`, `fix/issue-25-null-deref`
    - `<セッションID>` は環境変数 `CLAUDE_CODE_SESSION_ID` の値 (Claude Code がセッション毎に付与する UUID)。未設定の場合のみ `uuidgen` で生成した値を代用し、同一セッション中は同じ値を使い続ける
