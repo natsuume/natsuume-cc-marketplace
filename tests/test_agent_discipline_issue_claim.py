@@ -20,14 +20,15 @@
 - 明示指示による再開 (``IssueClaimExplicitResumeTest``): ユーザのメッセージまたは handoff の
   文書が issue 番号か branch 名を挙げて継続を指示した場合 (明示指示) だけ step 6 から再開し、
   step 6 から再開する場合は、ラベルや他 session の claim comment があっても撤退も削除もしない。
+  撤退しないこと・削除しないことを書く文は、すべて step 6 から再開する場合だけを条件にする。
   明示指示が無ければ、また明示指示があっても対応する branch が無ければ step 1 から実行する。
   issue 番号だけの明示指示では、issue-start skill の小節 1.1 の手順で branch を決め、同手順で
-  新しい名前を決めた場合も step 1 から実行する。明示指示で step 1 から実行する場合に、step 1 で
-  ラベルや他 session の claim comment が見つかったら、issue-start skill の小節 1.2 に従う。
+  新しい名前を決めた場合も step 1 から実行する。明示指示で step 1 から実行する場合は、step 1 の
+  早期判定から issue-start skill の小節 1.2 に従い、明示指示が無い場合には小節 1.2 を使わせない。
 - claim に埋め込む branch 名 (``IssueClaimExistingBranchNameTest``): step 2 は issue-start
   skill の小節 1.1 の手順で見つけた既存の branch の名前を使い、無ければ同じ小節の手順 6 で
-  命名規約に沿って決める。探索コマンドは step 2 に書かず、branch 名のどこにでも一致する旧
-  パターンを残さない。
+  命名規約に沿って決める (「無ければ」と「手順 6」の間に読点があってよい)。探索コマンドは
+  step 2 に書かず、branch 名のどこにでも一致する旧パターンを残さない。
 - 作業 branch の用意 (``IssueClaimWorkBranchTest``): step 6 は `git fetch --prune origin` の後
   (失敗したら停止して報告)、prune 後の remote-tracking ref で同名 branch の有無を判定し、
   どちらにも無い・remote だけ・local だけ・両方の 4 通りで
@@ -53,15 +54,25 @@
   なら投稿せず停止して確認する。見つけた名前は single quote で囲んで埋め込む。
 - 明示指示で step 1 から実行するときの前の作業の残り (``IssueStartExplicitLeftoverTest``):
   issue-start skill の小節 1.2 は、明示指示があっても branch が無い場合と小節 1.1 の手順で
-  新しい名前を決めた場合に、step 1 で `ai:in-progress` ラベルか `session=` が自分のセッション
-  ID と一致しない claim comment が見つかったら、撤退せずに停止し、見つかったラベルと claim
-  comment (数値 comment id と本文) を示して前の作業の残りかを `AskUserQuestion` で確認する。
-  残りと確認されたら claim comment を投稿して step 3 以降に進み、step 4 の先着判定では確認した
-  claim comment を数値 comment id で特定して除き、確認の後に投稿された claim comment は通常
-  どおり判定する。残りではないと答えたら撤退する。確認した残りは削除しない。明示指示が無い
-  場合は step 1 の早期判定に従う。
+  新しい名前を決めた場合に適用する。step 1 の早期判定の comment は step 4 と同じ REST GET の
+  1 回で取得してその結果から確認の対象と数値 comment id を決め、取得に失敗したらユーザに確認
+  せず停止して報告する。`ai:in-progress` ラベルか claim comment が見つかったら撤退せずに停止し、
+  見つかったラベルとすべての claim comment (`session=` の無いものと、自分のセッション ID と
+  一致するものを含む) を、数値 comment id と本文を示して前の作業の残りかを `AskUserQuestion`
+  で確認する。すべてが残りと確認された場合に限り claim comment を投稿して step 3 以降に進み、
+  1 件でも残りではないと答えたら、全体を残りではないとして claim comment を投稿せずに撤退する。
+  step 4 の先着判定では確認した claim comment を数値 comment id で特定して除き、自分の claim
+  としても扱わない。確認の後に投稿された claim comment は確認の対象に入らないので除かない。
+  この経路の撤退で削除するのは、この経路で自分が投稿した claim comment だけで、確認の対象に
+  したラベルと claim comment は `session=` が自分と一致していても削除しない。明示指示が無い
+  場合は step 1 の早期判定に従う。確認していない claim や確認の後の claim を除く文、削除を
+  許す文、明示指示が無い場合にこの手順を使わせる文を書かない。
+- 緩い文の検出: 明示指示の段落と小節 1.2 の、書いてはならない文の検査は文書の文字列を受け取る
+  関数にし、実ファイルと、緩い文を書き足した文書のコピーの両方に使う。コピーでは、書き足した
+  文を検出することを検査する。
 - 評価基準 (``IssueClaimEvaluationTest``): `docs/discipline-evaluation.md` の issue-claim の
-  評価基準が、明示指示による再開と、既存 branch の探し方で停止する経路を Pass として扱う。
+  評価基準が、明示指示による再開と、既存 branch の探し方で停止する経路を Pass として扱い、
+  明示指示で step 1 から実行した場合の Pass 定義が小節 1.2 の手順と一致する。
 
 文章全体の一致は検査しない。手順を識別するコマンド・識別子の有無と出現順序を検査し、
 言い回しは実装側で選べる。always-3.md・issue-start skill・評価手順書のパスは
@@ -72,6 +83,7 @@ from __future__ import annotations
 
 import re
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -176,13 +188,86 @@ LOOKUP_SECTION_REFERENCE = "1.1"
 
 # 既存の branch が無い場合に、小節 1.1 の手順 6 (命名規約と、local / remote のどちらにも存在
 # しない名前にする規定) で名前を決めることを示す表記 (空白を除去した文に照合する)。「無ければ」
-# と手順 6 が同じ読点区間の中でこの順に並ぶことを求める。
-NO_BRANCH_THEN_LOOKUP_STEP_6 = re.compile(r"無(?:け|い)[^、。]*手順6")
+# と手順 6 が同じ文の中でこの順に並ぶことを求める (「無ければ、同手順 6 で」のように間に読点を
+# 挟んでよい)。
+NO_BRANCH_THEN_LOOKUP_STEP_6 = re.compile(r"無(?:け|い)[^。]*手順6")
+
+# 読点の有無に依らず、step 2 の命名の検査が満たされるべき正しい文。
+STEP_2_NAMING_SENTENCES = (
+    "issue-start skill セクション 1.1 の手順で既存の branch を探して見つかった名前を使い、"
+    "無ければ同手順 6 で次の規約に沿って決める",
+    "issue-start skill セクション 1.1 の手順で既存の branch を探して見つかった名前を使い、"
+    "無ければ、同手順 6 で次の規約に沿って決める",
+)
 
 # issue-start skill の、明示指示で step 1 から実行するときの前の作業の残りを確かめる小節と、
 # それを参照するときの節番号。
 ISSUE_START_LEFTOVER_HEADING = "### 1.2 明示指示で step 1 から実行するときの前の作業の残り"
 LEFTOVER_SECTION_REFERENCE = "1.2"
+
+# 小節 1.2 の早期判定で comment を取得する REST GET (step 4 と同じコマンド)。
+COMMENTS_REST_GET = "gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'"
+
+# 除かないことを示す否定の表記 (空白を除去した文に照合する)。「通常どおり」だけでは満たさない。
+NOT_EXCLUDED = re.compile(
+    r"除(?:か(?:ず|ない|れない|れず|れません)|きません)"
+    r"|除外(?:せず|しない|しません|されない|されません)"
+)
+
+# 確認の後に投稿された claim comment を、除かずに判定することを示す要素 (空白を除去した文に
+# 照合する)。
+LATER_CLAIM_REQUIREMENTS: tuple[Requirement, ...] = (
+    re.compile(r"確認(?:の|した)後に投稿"),
+    "claim comment",
+    NOT_EXCLUDED,
+)
+
+# 「通常どおり」だけで、除かないことを書いていない文 (確認の後の claim の検査を満たさない)。
+USUAL_JUDGEMENT_ONLY_SENTENCE = "確認の後に投稿された claim comment は通常どおり判定します"
+
+# 確認していない claim comment、または確認の後に投稿された claim comment を指す表記 (空白を
+# 除去した文に照合する)。
+UNCONFIRMED_CLAIM = re.compile(
+    r"確認(?:していない|されていない|しなかった|の(?:対象に)?(?:入らない|ない))"
+    r"|確認(?:の|した)後に投稿"
+)
+
+# 除くことを肯定で書く表記 (空白を除去した文に照合する)。「除かず」「除かれません」「除きません」
+# は含めない。
+AFFIRMATIVE_EXCLUSION = re.compile(r"除(?:き(?!ません)|く|いて|外し(?!ない|ません)|外する)")
+
+# 削除することを肯定で書く表記 (空白を除去した文に照合する)。「削除しない」「削除しません」
+# 「削除せず」は含めない。
+AFFIRMATIVE_DELETION = re.compile(r"削除(?:します|して|する|でき|可|を許)")
+
+# 小節 1.2 の経路の撤退で削除してよい、この経路で自分が投稿した claim comment を指す表記
+# (空白を除去した文に照合する)。
+OWN_POSTED_CLAIM = re.compile(r"この経路で(?:自分が)?投稿したclaimcomment")
+
+# 削除の対象を限ることを示す表記 (空白を除去した文に照合する)。
+ONLY = re.compile(r"だけ|のみ")
+
+# 手順を使わないことを示す表記 (空白を除去した文に照合する)。
+NOT_USED = re.compile(r"使わ(?:ず|ない)|使いません")
+
+# 小節 1.2 に書き足すと、確認していない claim comment や確認の後に投稿された claim comment を
+# 除くことになる文。
+LOOSE_UNCONFIRMED_EXCLUSION_SENTENCES = (
+    "step 4 の先着判定では、確認していない claim comment も除きます。",
+    "確認の後に投稿された claim comment も、先着判定の対象から除きます。",
+)
+
+# 小節 1.2 に書き足すと、claim comment やラベルの削除を許すことになる文。
+LOOSE_DELETION_SENTENCES = (
+    "確認した残りのラベルと claim comment は削除します。",
+    "撤退するときは、確認の対象にした claim comment のうち、`session=` の値が自分のセッション"
+    " ID と一致するものも削除します。",
+)
+
+# 小節 1.2 に書き足すと、明示指示が無い場合にこの手順を使わせることになる文。
+LOOSE_NO_INSTRUCTION_SKILL_SENTENCES = (
+    "明示指示が無い場合も、ラベルや claim comment が見つかったらこの手順でユーザに確認します。",
+)
 
 # step 1 から実行することを示す表記 (空白を除去した文に照合する)。「step 1-5 を経ずに」の
 # ような範囲の表記では満たされないよう、「step 1 から実行」の並びを求める。
@@ -191,11 +276,33 @@ STEP_1_START = re.compile(r"step1から実行")
 # step 6 から再開することを示す表記 (空白を除去した文に照合する)。
 STEP_6_RESUME = re.compile(r"step6から再開")
 
-# ラベルや他 session の claim comment が残っていても撤退も削除もしないことを示す要素 (空白を
-# 除去した文に照合する)。
-WITHDRAWAL_EXEMPTION_REQUIREMENTS: tuple[Requirement, ...] = (
-    re.compile(r"撤退(?:せず|しない)"),
-    re.compile(r"削除(?:も)?(?:せず|しない)"),
+# 撤退しないこと・削除しないことを示す表記 (空白を除去した文に照合する)。「撤退も削除もしない」
+# の形と、撤退だけ・削除だけに触れる文も含める。
+WITHDRAWAL_OR_DELETION_EXEMPTION = re.compile(
+    r"(?:撤退|削除)(?:も|は)?(?:せず|しない|しません)"
+)
+
+# step 1 から実行する経路に触れる表記 (空白を除去した文に照合する)。「step 1-5 を経ずに」の
+# ような範囲の表記は含めない。
+STEP_1_MENTION = re.compile(r"step1(?![-0-9])")
+
+# 明示指示の段落の先頭に置く太字ラベル。書き足す文をこの直後に置いて、段落のコピーを作る。
+EXPLICIT_RESUME_LABEL = "**明示指示による再開**: "
+
+# 明示指示の段落に書き足すと、撤退しないこと・削除しないことを step 6 から再開する場合に
+# 限らずに書いたことになる文 (「撤退も削除もしない」の形、撤退だけに触れる文、step 1 の経路も
+# 併記した文)。
+LOOSE_EXEMPTION_SENTENCES = (
+    "明示指示がある場合は、ラベルや他セッション ID の claim comment が残っていても撤退も削除もしない。",
+    "明示指示がある場合は、ラベルや他セッション ID の claim comment が残っていても撤退しない。",
+    "step 6 から再開する場合と step 1 から実行する場合は、ラベルや他セッション ID の claim"
+    " comment が残っていても撤退せず、削除もしない。",
+)
+
+# 明示指示の段落に書き足すと、明示指示が無い場合に小節 1.2 を使わせることになる文。
+LOOSE_NO_INSTRUCTION_REFERENCE_SENTENCES = (
+    "明示指示が無い場合も、step 1 でラベルや claim comment が見つかったら issue-start skill"
+    " セクション 1.2 の手順に従う。",
 )
 
 # step 1 から実行する条件を、branch が local / remote のどちらにも無い場合だけに限る表記
@@ -521,6 +628,91 @@ def describe(requirement: Requirement) -> str:
     return requirement if isinstance(requirement, str) else requirement.pattern
 
 
+def satisfies_all(sentence: str, requirements: tuple[Requirement, ...]) -> bool:
+    """`sentence` が `requirements` (語または正規表現) をすべて満たすか。"""
+    return all(satisfies(sentence, requirement) for requirement in requirements)
+
+
+def explicit_resume_paragraph_of(always_3_text: str) -> str:
+    """always-3.md の文字列から、rule:issue-claim 節の明示指示の定義を書く段落を返す。"""
+    return paragraph_containing(
+        rule_block(always_3_text, ISSUE_CLAIM_MARKER), EXPLICIT_DEFINITION_MARKERS
+    )
+
+
+def leftover_section_of(skill_text: str) -> str:
+    """issue-start skill の文字列から、小節 1.2 の本文を返す。"""
+    return markdown_section(skill_text, ISSUE_START_LEFTOVER_HEADING)
+
+
+def unbounded_withdrawal_exemptions(always_3_text: str) -> list[str]:
+    """明示指示の段落のうち、撤退しないこと・削除しないことを、step 6 から再開する場合に
+    限らずに書いた文を返す (step 6 から再開する場合を条件にしない文と、step 1 の経路も
+    併記した文)。"""
+    return [
+        sentence
+        for sentence in sentences(explicit_resume_paragraph_of(always_3_text))
+        if satisfies(sentence, WITHDRAWAL_OR_DELETION_EXEMPTION)
+        and (
+            not satisfies(sentence, STEP_6_RESUME)
+            or satisfies(sentence, STEP_1_MENTION)
+        )
+    ]
+
+
+def leftover_references_without_explicit_instruction(always_3_text: str) -> list[str]:
+    """明示指示の段落のうち、明示指示が無い場合に小節 1.2 を使わせる文を返す。"""
+    return [
+        sentence
+        for sentence in sentences(explicit_resume_paragraph_of(always_3_text))
+        if satisfies(sentence, NO_EXPLICIT_INSTRUCTION)
+        and satisfies(sentence, LEFTOVER_SECTION_REFERENCE)
+    ]
+
+
+def unconfirmed_claim_exclusions(skill_text: str) -> list[str]:
+    """小節 1.2 のうち、確認していない claim comment や確認の後に投稿された claim comment を
+    除く文を返す。"""
+    return [
+        sentence
+        for sentence in sentences(leftover_section_of(skill_text))
+        if satisfies(sentence, UNCONFIRMED_CLAIM)
+        and satisfies(sentence, AFFIRMATIVE_EXCLUSION)
+    ]
+
+
+def leftover_deletion_permissions(skill_text: str) -> list[str]:
+    """小節 1.2 のうち、claim comment やラベルの削除を許す文を返す。この経路で自分が投稿した
+    claim comment だけを削除すると書く文 (ラベルに触れないもの) は除く。"""
+    return [
+        sentence
+        for sentence in sentences(leftover_section_of(skill_text))
+        if satisfies(sentence, AFFIRMATIVE_DELETION)
+        and not (
+            satisfies(sentence, OWN_POSTED_CLAIM)
+            and satisfies(sentence, ONLY)
+            and not satisfies(sentence, "ラベル")
+        )
+    ]
+
+
+def leftover_procedure_without_explicit_instruction(skill_text: str) -> list[str]:
+    """小節 1.2 のうち、明示指示が無い場合を書きながら、この手順を使わないと書いていない文を
+    返す (明示指示が無い場合にこの手順を使わせる文)。"""
+    return [
+        sentence
+        for sentence in sentences(leftover_section_of(skill_text))
+        if satisfies(sentence, NO_EXPLICIT_INSTRUCTION)
+        and not satisfies(sentence, NOT_USED)
+    ]
+
+
+def with_text_inserted(text: str, anchor: str, addition: str) -> str:
+    """`text` の `anchor` の最初の出現の直後に `addition` を足したコピーを返す。"""
+    index = text.index(anchor) + len(anchor)
+    return text[:index] + addition + text[index:]
+
+
 class IssueClaimTestCase(unittest.TestCase):
     """`rule:issue-claim` の節を取り出す helper と、失敗時に該当箇所を示す assert。"""
 
@@ -566,6 +758,32 @@ class IssueClaimTestCase(unittest.TestCase):
             return
         wanted = "」「".join(describe(requirement) for requirement in requirements)
         self.fail(f"{label}: 「{wanted}」をすべて満たす文が無い")
+
+    def assert_no_violations(self, label: str, violations: list[str], what: str) -> None:
+        """検査関数が返した文 (書いてはならない文) が無いことを確認する。"""
+        if violations:
+            joined = " / ".join(sentence.strip()[:120] for sentence in violations)
+            self.fail(f"{label}: {what}がある: {joined}")
+
+    def assert_loose_sentences_detected(
+        self,
+        label: str,
+        check: Callable[[str], list[str]],
+        text: str,
+        anchor: str,
+        addition_format: str,
+        loose_sentences: tuple[str, ...],
+    ) -> None:
+        """`text` の `anchor` の直後に緩い文を 1 つずつ足したコピーを作り、`check` がその文を
+        検出することを確認する (`addition_format` の `{}` に緩い文を入れて足す)。"""
+        if anchor not in text:
+            self.fail(f"{label}: 緩い文を足す位置の「{anchor.strip()}」が無い")
+        for loose in loose_sentences:
+            with self.subTest(loose=loose[:60]):
+                copy = with_text_inserted(text, anchor, addition_format.format(loose))
+                wanted = strip_whitespace(loose.rstrip("。"))
+                if not any(wanted in strip_whitespace(found) for found in check(copy)):
+                    self.fail(f"{label}: 緩い文を足したコピーを検査が拒否しない: {loose}")
 
     def procedure_step(self, marker: str, scope: str) -> str:
         """着手手順のうち `marker` で始まる項目を、下位項目を含めて返す。"""
@@ -864,42 +1082,76 @@ class IssueClaimExplicitResumeTest(IssueClaimTestCase):
         )
 
     def test_withdrawal_exemption_is_for_the_step_6_resume(self) -> None:
-        """ラベルや他 session の claim comment が残っていても撤退も削除もしないと書く文は、
-        すべて step 6 から再開する場合を条件にする (明示指示で step 1 から実行する場合にも
-        及ぶと読めないようにするため)。"""
-        label = self.label("明示指示の段落")
-        exemptions = [
-            sentence
-            for sentence in sentences(self.explicit_resume_paragraph())
-            if all(
-                satisfies(sentence, requirement)
-                for requirement in WITHDRAWAL_EXEMPTION_REQUIREMENTS
-            )
-        ]
-        self.assert_scope_found(label, "\n".join(exemptions), "撤退も削除もしない文が無い")
-        for sentence in exemptions:
-            with self.subTest(sentence=sentence.strip()[:60]):
-                if not satisfies(sentence, STEP_6_RESUME):
-                    self.fail(
-                        f"{label}: 撤退も削除もしない文が、step 6 から再開する場合を条件に"
-                        f"していない: {sentence.strip()[:120]}"
-                    )
-
-    def test_leftovers_on_the_step_1_route_refer_to_the_skill(self) -> None:
-        """明示指示で step 1 から実行する場合に、step 1 でラベルや他 session の claim comment
-        が見つかったら、issue-start skill の小節 1.2 の手順に従う。"""
-        self.assert_some_sentence(
+        """撤退しないこと・削除しないことを書く文は、すべて step 6 から再開する場合だけを条件に
+        する (「撤退も削除もしない」の形や撤退だけに触れる文も含め、step 6 から再開する場合を
+        条件にしない文と、step 1 の経路も併記した文を置かない。明示指示で step 1 から実行する
+        場合にも及ぶと読めないようにするため)。"""
+        self.assert_no_violations(
             self.label("明示指示の段落"),
-            self.explicit_resume_paragraph(),
+            unbounded_withdrawal_exemptions(read(self.always_3_path)),
+            "step 6 から再開する場合に限らずに撤退・削除をしないと書く文",
+        )
+
+    def test_loose_exemptions_are_detected(self) -> None:
+        """撤退しないこと・削除しないことを step 6 から再開する場合に限らずに書いた文
+        (「撤退も削除もしない」の形、撤退だけに触れる文、step 1 の経路も併記した文) を明示
+        指示の段落に足したコピーを、同じ検査が拒否する。"""
+        self.assert_loose_sentences_detected(
+            self.label("明示指示の段落のコピー"),
+            unbounded_withdrawal_exemptions,
+            read(self.always_3_path),
+            EXPLICIT_RESUME_LABEL,
+            "{}",
+            LOOSE_EXEMPTION_SENTENCES,
+        )
+
+    def test_step_1_route_follows_the_skill_from_the_early_check(self) -> None:
+        """明示指示で step 1 から実行する場合は、step 1 の早期判定から issue-start skill の
+        小節 1.2 の手順に従う。小節 1.2 を参照する文は、他 session の claim comment や、何かが
+        見つかった場合を条件にしない (自分と同じ session ID の claim comment だけが残っている
+        場合も小節 1.2 で確認し、早期判定の comment の取得も小節 1.2 に従うため)。"""
+        label = self.label("明示指示の段落")
+        paragraph = self.explicit_resume_paragraph()
+        self.assert_some_sentence(
+            label,
+            paragraph,
             (
                 EXPLICIT_INSTRUCTION,
                 STEP_1_START,
-                "ラベル",
-                OTHER_SESSION,
-                "claim comment",
+                "早期判定",
                 "issue-start",
                 LEFTOVER_SECTION_REFERENCE,
             ),
+        )
+        for sentence in sentences(paragraph):
+            if not satisfies(sentence, LEFTOVER_SECTION_REFERENCE):
+                continue
+            with self.subTest(sentence=sentence.strip()[:60]):
+                for condition in (OTHER_SESSION, re.compile(r"見つか")):
+                    if satisfies(sentence, condition):
+                        self.fail(
+                            f"{label}: 小節 1.2 を参照する文が「{describe(condition)}」を"
+                            f"条件にしている: {sentence.strip()[:120]}"
+                        )
+
+    def test_leftover_section_is_not_used_without_explicit_instruction(self) -> None:
+        """明示指示の段落に、明示指示が無い場合に小節 1.2 を使わせる文を置かない。"""
+        self.assert_no_violations(
+            self.label("明示指示の段落"),
+            leftover_references_without_explicit_instruction(read(self.always_3_path)),
+            "明示指示が無い場合に小節 1.2 を使わせる文",
+        )
+
+    def test_loose_no_instruction_references_are_detected(self) -> None:
+        """明示指示が無い場合に小節 1.2 を使わせる文を明示指示の段落に足したコピーを、同じ
+        検査が拒否する。"""
+        self.assert_loose_sentences_detected(
+            self.label("明示指示の段落のコピー"),
+            leftover_references_without_explicit_instruction,
+            read(self.always_3_path),
+            EXPLICIT_RESUME_LABEL,
+            "{}",
+            LOOSE_NO_INSTRUCTION_REFERENCE_SENTENCES,
         )
 
 
@@ -927,6 +1179,18 @@ class IssueClaimExistingBranchNameTest(IssueClaimTestCase):
         step 6 がその branch に switch しうるため。手順 6 は local / remote のどちらにも
         存在しない名前になるよう slug を変える)。"""
         self.assert_step_sentence((LOOKUP_SECTION_REFERENCE, NO_BRANCH_THEN_LOOKUP_STEP_6))
+
+    def test_step_6_naming_allows_a_comma(self) -> None:
+        """手順 6 で名前を決める検査は、「無ければ」と「手順 6」の間に読点がある正しい文でも
+        満たされる。"""
+        for sentence in STEP_2_NAMING_SENTENCES:
+            with self.subTest(sentence=sentence):
+                self.assertTrue(
+                    satisfies_all(
+                        sentence, (LOOKUP_SECTION_REFERENCE, NO_BRANCH_THEN_LOOKUP_STEP_6)
+                    ),
+                    f"step 2 の命名の検査が正しい文を拒否する: {sentence}",
+                )
 
     def test_search_commands_are_not_duplicated(self) -> None:
         """探索コマンドは issue-start skill の 1 か所に置き、step 2 には書かない。"""
@@ -1457,19 +1721,70 @@ class IssueStartExplicitLeftoverTest(IssueClaimTestCase):
             )
         )
 
+    def test_early_check_uses_one_rest_get(self) -> None:
+        """step 1 の早期判定の comment は、step 4 と同じ REST GET の 1 回で取得し、その結果
+        から確認の対象と数値 comment id を決める (取得を 2 回に分けると、その間に稼働中の別
+        session が投稿した claim comment も確認の対象に加わりうるため)。"""
+        self.assert_leftover_sentence(
+            (
+                "早期判定",
+                COMMENTS_REST_GET,
+                re.compile(r"1回"),
+                "確認の対象",
+                "数値 comment id",
+            )
+        )
+
+    def test_rest_get_failure_stops_without_asking(self) -> None:
+        """早期判定の REST GET が失敗したら、ユーザに確認せずに停止して報告する (step 4 と
+        同じ fail-closed)。"""
+        self.assert_leftover_sentence(
+            (
+                "REST GET",
+                "失敗",
+                re.compile(r"確認(?:せず|しない|しません)"),
+                "停止",
+                "報告",
+            )
+        )
+
     def test_leftovers_stop_without_withdrawing(self) -> None:
-        """step 1 で `ai:in-progress` ラベルか、`session=` が自分のセッション ID と一致しない
-        claim comment が見つかったら、撤退せずに停止する。"""
+        """step 1 で `ai:in-progress` ラベルか claim comment が見つかったら、撤退せずに停止する。"""
         self.assert_leftover_sentence(
             (
                 "step 1",
                 "ai:in-progress",
-                "session=",
-                re.compile(r"一致しない"),
                 "claim comment",
                 re.compile(r"撤退(?:せず|しない)"),
                 "停止",
             )
+        )
+
+    def test_every_found_claim_is_a_target(self) -> None:
+        """確認の対象は、step 1 で見つかったラベルとすべての claim comment で、`session=` の
+        無い claim comment と、`session=` が自分のセッション ID と一致する claim comment も
+        含める。"""
+        self.assert_leftover_sentence(
+            (
+                "確認の対象",
+                "ラベル",
+                re.compile(r"すべてのclaimcomment"),
+                re.compile(r"session=`?の(?:無|な)いclaimcomment"),
+                re.compile(r"自分のセッションIDと一致するclaimcomment"),
+            )
+        )
+
+    def test_targets_are_not_limited_to_other_sessions(self) -> None:
+        """確認の対象を、`session=` が自分のセッション ID と一致しない claim comment に限る文を
+        置かない。"""
+        self.assert_no_violations(
+            self.leftover_label(),
+            [
+                sentence
+                for sentence in sentences(self.leftover_section())
+                if satisfies(sentence, re.compile(r"一致しないclaimcomment"))
+            ],
+            "確認の対象を自分と一致しない claim comment に限る文",
         )
 
     def test_leftovers_are_shown_and_confirmed(self) -> None:
@@ -1496,6 +1811,31 @@ class IssueStartExplicitLeftoverTest(IssueClaimTestCase):
             )
         )
 
+    def test_only_all_confirmed_leftovers_post_the_claim(self) -> None:
+        """claim comment を投稿して step 3 以降に進むのは、確認の対象のすべてが残りだと確認
+        された場合に限る。"""
+        self.assert_leftover_sentence(
+            (
+                re.compile(r"すべて[^、。]*残り(?:だ|である)?と確認"),
+                re.compile(r"場合に限り|場合だけ"),
+                "claim comment",
+                "投稿",
+                re.compile(r"step3以降"),
+            )
+        )
+
+    def test_any_non_leftover_withdraws_without_posting(self) -> None:
+        """確認の対象のうち 1 件でも残りではないと答えられたら、全体を残りではないとして扱い、
+        claim comment を投稿せずに撤退する。"""
+        self.assert_leftover_sentence(
+            (
+                re.compile(r"1件でも[^。]*残りでは(?:ない|なく)"),
+                "全体",
+                re.compile(r"投稿(?:せず|しない)"),
+                "撤退",
+            )
+        )
+
     def test_confirmed_claim_is_excluded_by_its_id(self) -> None:
         """step 4 の先着判定では、ユーザが確認した claim comment を数値 comment id で特定して
         判定の対象から除く (確認した claim comment と数値 comment id と除く操作の対応を、同じ
@@ -1508,37 +1848,145 @@ class IssueStartExplicitLeftoverTest(IssueClaimTestCase):
             )
         )
 
+    def test_confirmed_claims_are_not_own_claims_at_step_4(self) -> None:
+        """step 4 で `session=` の値によって自分の claim を識別するとき、確認した claim
+        comment は数値 comment id で特定して自分の claim として扱わない (同じ session ID の
+        残りを自分の claim と取り違えないため)。"""
+        self.assert_leftover_sentence(
+            (
+                "step 4",
+                "session=",
+                "自分の claim",
+                re.compile(r"確認(?:した|の対象にした)claimcomment"),
+                "数値 comment id",
+                re.compile(r"扱(?:わず|わない|いません)"),
+            )
+        )
+
     def test_later_claims_are_judged_as_usual(self) -> None:
-        """確認の後に投稿された claim comment は、除かずに通常どおり判定する。"""
+        """確認の後に投稿された claim comment は、除かずに判定する (「通常どおり」だけでは
+        満たさず、「除かず」などの否定の語を求める)。"""
+        self.assert_leftover_sentence(LATER_CLAIM_REQUIREMENTS)
+
+    def test_usual_judgement_alone_does_not_satisfy_later_claims(self) -> None:
+        """確認の後の claim の検査は、「通常どおり」だけの文では満たされない。"""
+        self.assertFalse(
+            satisfies_all(USUAL_JUDGEMENT_ONLY_SENTENCE, LATER_CLAIM_REQUIREMENTS),
+            f"確認の後の claim の検査が「通常どおり」だけの文で満たされる: "
+            f"{USUAL_JUDGEMENT_ONLY_SENTENCE}",
+        )
+
+    def test_later_claims_are_not_targets(self) -> None:
+        """確認の後に投稿された claim comment は確認の対象に入らないので、除かれない。"""
         self.assert_leftover_sentence(
             (
                 re.compile(r"確認(?:の|した)後に投稿"),
                 "claim comment",
-                re.compile(r"除かず|通常どおり"),
+                re.compile(r"確認の対象に(?:入らない|ならない|含まれない)"),
+                NOT_EXCLUDED,
             )
+        )
+
+    def test_unconfirmed_claims_are_not_excluded(self) -> None:
+        """確認していない claim comment や、確認の後に投稿された claim comment を除く文を
+        置かない。"""
+        self.assert_no_violations(
+            self.leftover_label(),
+            unconfirmed_claim_exclusions(read(self.issue_start_skill_path)),
+            "確認していない claim comment や確認の後の claim comment を除く文",
+        )
+
+    def test_loose_unconfirmed_exclusions_are_detected(self) -> None:
+        """確認していない claim comment や確認の後に投稿された claim comment を除く文を
+        小節 1.2 に足したコピーを、同じ検査が拒否する。"""
+        self.assert_loose_sentences_detected(
+            f"{self.leftover_label()} のコピー",
+            unconfirmed_claim_exclusions,
+            read(self.issue_start_skill_path),
+            ISSUE_START_LEFTOVER_HEADING + "\n",
+            "\n{}\n",
+            LOOSE_UNCONFIRMED_EXCLUSION_SENTENCES,
         )
 
     def test_not_a_leftover_withdraws(self) -> None:
         """ユーザが残りではない (稼働中の別 session のもの) と答えた場合は撤退する。"""
         self.assert_leftover_sentence((re.compile(r"残りでは(?:ない|なく)"), "撤退"))
 
-    def test_confirmed_leftovers_are_not_deleted(self) -> None:
-        """確認した残りのラベルと claim comment は削除しない (他 session の claim を削除
-        しない規律に従う)。"""
+    def test_withdrawal_deletes_only_the_claim_posted_on_this_route(self) -> None:
+        """この経路で撤退するときに削除するのは、この経路で自分が投稿した claim comment
+        (数値 comment id で特定する) だけにする。"""
         self.assert_leftover_sentence(
             (
-                "確認した",
-                "残り",
+                "撤退",
+                AFFIRMATIVE_DELETION,
+                OWN_POSTED_CLAIM,
+                "数値 comment id",
+                ONLY,
+            )
+        )
+
+    def test_confirmed_leftovers_are_not_deleted(self) -> None:
+        """確認の対象にしたラベルと claim comment は、`session=` が自分のセッション ID と一致
+        していても削除しない (他 session の claim を削除しない規律に従う)。"""
+        self.assert_leftover_sentence(
+            (
+                "確認の対象にした",
                 "ラベル",
                 "claim comment",
+                "session=",
+                "一致していても",
                 re.compile(r"削除し(?:ない|ません)|削除せず"),
             )
+        )
+
+    def test_section_does_not_permit_deletion(self) -> None:
+        """小節 1.2 に、claim comment やラベルの削除を許す文を置かない (この経路で自分が
+        投稿した claim comment だけを削除すると書く文を除く)。"""
+        self.assert_no_violations(
+            self.leftover_label(),
+            leftover_deletion_permissions(read(self.issue_start_skill_path)),
+            "claim comment やラベルの削除を許す文",
+        )
+
+    def test_loose_deletion_permissions_are_detected(self) -> None:
+        """claim comment やラベルの削除を許す文を小節 1.2 に足したコピーを、同じ検査が
+        拒否する。"""
+        self.assert_loose_sentences_detected(
+            f"{self.leftover_label()} のコピー",
+            leftover_deletion_permissions,
+            read(self.issue_start_skill_path),
+            ISSUE_START_LEFTOVER_HEADING + "\n",
+            "\n{}\n",
+            LOOSE_DELETION_SENTENCES,
         )
 
     def test_without_explicit_instruction_keeps_the_early_check(self) -> None:
         """明示指示が無い場合は、この手順を使わず step 1 の早期判定 (残りがあれば撤退) に
         従う。"""
         self.assert_leftover_sentence((NO_EXPLICIT_INSTRUCTION, "step 1", "早期判定"))
+
+    def test_section_is_not_used_without_explicit_instruction(self) -> None:
+        """明示指示が無い場合を書く文は、この手順を使わないと書く (明示指示が無い場合に
+        この手順を使わせる文を置かない)。"""
+        self.assert_no_violations(
+            self.leftover_label(),
+            leftover_procedure_without_explicit_instruction(
+                read(self.issue_start_skill_path)
+            ),
+            "明示指示が無い場合にこの手順を使わせる文",
+        )
+
+    def test_loose_no_instruction_sentences_are_detected(self) -> None:
+        """明示指示が無い場合にこの手順を使わせる文を小節 1.2 に足したコピーを、同じ検査が
+        拒否する。"""
+        self.assert_loose_sentences_detected(
+            f"{self.leftover_label()} のコピー",
+            leftover_procedure_without_explicit_instruction,
+            read(self.issue_start_skill_path),
+            ISSUE_START_LEFTOVER_HEADING + "\n",
+            "\n{}\n",
+            LOOSE_NO_INSTRUCTION_SKILL_SENTENCES,
+        )
 
 
 class IssueClaimEvaluationTest(IssueClaimTestCase):
@@ -1589,6 +2037,42 @@ class IssueClaimEvaluationTest(IssueClaimTestCase):
         ):
             wanted = "」「".join(describe(requirement) for requirement in requirements)
             self.fail(f"{label}: 「{wanted}」をすべて含む項目が無い")
+
+    def test_explicit_step_1_route_matches_the_leftover_section(self) -> None:
+        """明示指示で step 1 から実行した場合の Pass 定義が、issue-start skill の小節 1.2 の
+        手順と一致する: 早期判定の comment を REST GET の 1 回で取得し (失敗したらユーザに
+        確認せず停止する)、すべての claim comment を確認の対象にし、1 件でも残りではないと
+        答えられたら投稿せずに撤退し、撤退で削除するのはこの経路で自分が投稿した claim
+        comment だけにする。"""
+        text = read(self.evaluation_doc_path)
+        label = f"{display_path(self.evaluation_doc_path)} の「{EVALUATION_ISSUE_CLAIM_NOTE}」"
+        notes = list_items_following(text, EVALUATION_ISSUE_CLAIM_NOTE)
+        item = next(
+            (
+                item
+                for item in top_level_list_items(notes)
+                if satisfies(item, EXPLICIT_INSTRUCTION)
+                and satisfies(item, LEFTOVER_SECTION_REFERENCE)
+            ),
+            "",
+        )
+        self.assert_scope_found(label, item, "明示指示と小節 1.2 を含む項目が無い")
+        requirements: tuple[Requirement, ...] = (
+            "REST GET",
+            re.compile(r"1回"),
+            re.compile(r"確認(?:せず|しない)"),
+            re.compile(r"すべてのclaimcomment"),
+            re.compile(r"1件でも"),
+            re.compile(r"投稿(?:せず|しない)"),
+            OWN_POSTED_CLAIM,
+        )
+        for requirement in requirements:
+            with self.subTest(requirement=describe(requirement)):
+                if not satisfies(item, requirement):
+                    self.fail(
+                        f"{label}: 明示指示で step 1 から実行した場合の項目に"
+                        f"「{describe(requirement)}」が無い"
+                    )
 
 
 if __name__ == "__main__":
