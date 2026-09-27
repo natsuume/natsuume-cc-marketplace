@@ -92,7 +92,7 @@ sep_w=${#sep}
 export GIT_OPTIONAL_LOCKS=0
 
 # git 由来の情報は描画あたり一度だけ取得して各レンダラへ渡す
-# (is_git / toplevel / porcelain / repo_url / branch を設定する)。
+# (is_git / toplevel / status_ok / porcelain / repo_url / branch を設定する)。
 collect_git_info "$cwd"
 
 # 与えられた prefix 設定で他セグメント（path以外）を組み立て、配列 OTHER に格納する
@@ -106,10 +106,13 @@ build_other_segments() {
     [ -n "$out" ] && OTHER+=("$out")
     out=$(render_branch "$branch" "$branch_prefix")
     [ -n "$out" ] && OTHER+=("$out")
-    out=$(render_changes "$porcelain")
-    [ -n "$out" ] && OTHER+=("$out")
-    out=$(render_uncommitted "$porcelain")
-    [ -n "$out" ] && OTHER+=("$out")
+    # git status が失敗した場合は変更量が不明なため、clean と表示しないよう両方省く
+    if [ "$status_ok" -eq 1 ]; then
+      out=$(render_changes "$porcelain")
+      [ -n "$out" ] && OTHER+=("$out")
+      out=$(render_uncommitted "$porcelain")
+      [ -n "$out" ] && OTHER+=("$out")
+    fi
   fi
 }
 

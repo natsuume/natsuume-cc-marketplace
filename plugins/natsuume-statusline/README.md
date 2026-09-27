@@ -110,7 +110,7 @@ cp ~/.claude/settings.natsuume-statusline-backup.<timestamp>.json ~/.claude/sett
 
 オプション (見つからなければ自動的に縮退):
 
-- `git` — 無いとリポジトリ情報セグメント全体がスキップ
+- `git` — 無いとリポジトリ情報セグメント全体がスキップ。変更量・未コミット件数・ブランチ名の表示には git 2.17 以降が必要で、それより古い git では `git status --no-ahead-behind` が失敗するため、これらを表示しない (パスとリポジトリ名は表示する)
 - `gh` — 無いと所有 namespace 判定が無効化され `owner/repo` 形式のまま表示
 - `tput` または `stty` — 無いと環境変数 `COLUMNS`、最終的に 80 桁にフォールバック
 - `python3` (3.7+) — `resets_at` が ISO 8601 形式で渡された場合の epoch 変換 fallback、および Bash がUTF-8 multibyte substringを提供しない環境 (macOS Bash 3.2等) のcell幅計算に使用。無い場合、前者はリセット残時間が空表示、後者はBash側の文字走査へ縮退する

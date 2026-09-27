@@ -183,20 +183,30 @@ class StatuslineGitIntegrationTest(unittest.TestCase):
         self.git("status", "--porcelain")
         self.assertNotEqual(self.index_identity(), before)
 
-    def test_git_invocations_disable_optional_locks(self) -> None:
+    def env_with_git_wrapper(self, fail_status: bool = False) -> dict[str, str]:
+        # 呼び出しを記録してから本物の git に委ねる wrapper を PATH の先頭に置く。
+        # fail_status=True では、status サブコマンドだけを古い git の unknown option と同じく失敗させる。
         real_git = shutil.which("git", path=self.env.get("PATH"))
         self.assertIsNotNone(real_git)
+        fail_line = (
+            'case " $* " in *" status "*) echo "error: unknown option" >&2; exit 129 ;; esac\n'
+            if fail_status
+            else ""
+        )
         wrapper = self.bin_dir / "git"
         wrapper.write_text(
             "#!/bin/bash\n"
             f'printf \'%s|%s\\n\' "${{GIT_OPTIONAL_LOCKS-unset}}" "$*" >> "{self.git_log}"\n'
+            f"{fail_line}"
             f'exec "{real_git}" "$@"\n'
         )
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
         env = dict(self.env)
         env["PATH"] = f"{self.bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        return env
 
-        self.run_main(env=env)
+    def test_git_invocations_disable_optional_locks(self) -> None:
+        self.run_main(env=self.env_with_git_wrapper())
 
         calls = self.git_log.read_text().splitlines()
         self.assertTrue(calls, "statusline が git を呼んでいない")
@@ -208,6 +218,17 @@ class StatuslineGitIntegrationTest(unittest.TestCase):
         self.assertIn("--porcelain=v2", status_calls[0])
         self.assertIn("--branch", status_calls[0])
         self.assertIn("--no-ahead-behind", status_calls[0])
+
+    def test_status_failure_hides_change_segments(self) -> None:
+        (self.repo / "file0.txt").write_text("changed\n")
+
+        first_line = self.run_main(env=self.env_with_git_wrapper(fail_status=True)).split("\n", 1)[0]
+
+        self.assertNotIn("clean", first_line)
+        self.assertNotIn("uncommitted", first_line)
+        self.assertNotIn("modified:", first_line)
+        self.assertNotIn("branch:", first_line)
+        self.assertIn("repo", first_line)
 
     def test_renders_branch_and_change_counts(self) -> None:
         (self.repo / "file0.txt").write_text("changed\n")

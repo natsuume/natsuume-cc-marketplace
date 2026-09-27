@@ -47,6 +47,7 @@ parse_status_entries() {
 # 設定する変数:
 #   is_git    — git の作業ツリー内なら 1、それ以外は 0
 #   toplevel  — 作業ツリーのルートの絶対パス
+#   status_ok — git status が成功したら 1、失敗したら 0 (0 のとき porcelain / branch は空)
 #   porcelain — parse_status_entries の出力 (porcelain v1 互換の XY ステータス行)
 #   repo_url  — origin の URL (未設定なら空)
 #   branch    — parse_status_branch の出力
@@ -54,6 +55,7 @@ collect_git_info() {
   local cwd="$1" status_v2
   is_git=0
   toplevel=""
+  status_ok=0
   porcelain=""
   repo_url=""
   branch=""
@@ -62,9 +64,12 @@ collect_git_info() {
   [ -n "$toplevel" ] || return 0
   is_git=1
   # --branch はブランチ名のために付ける。使わない upstream との ahead/behind の計算は
-  # 履歴をたどるため --no-ahead-behind で止める
-  status_v2=$(git -C "$cwd" status --porcelain=v2 --branch --no-ahead-behind 2>/dev/null)
-  porcelain=$(parse_status_entries "$status_v2")
-  branch=$(parse_status_branch "$status_v2")
+  # 履歴をたどるため --no-ahead-behind で止める (git 2.17 以降)。
+  # 失敗時 (古い git 等) は status_ok=0 のままにし、空の結果を clean として表示させない
+  if status_v2=$(git -C "$cwd" status --porcelain=v2 --branch --no-ahead-behind 2>/dev/null); then
+    status_ok=1
+    porcelain=$(parse_status_entries "$status_v2")
+    branch=$(parse_status_branch "$status_v2")
+  fi
   repo_url=$(git -C "$cwd" remote get-url origin 2>/dev/null)
 }
