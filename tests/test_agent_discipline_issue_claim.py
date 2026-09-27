@@ -244,8 +244,9 @@ AFFIRMATIVE_DELETION = re.compile(r"削除(?:します|して|する|でき|可|
 # (空白を除去した文に照合する)。
 OWN_POSTED_CLAIM = re.compile(r"この経路で(?:自分が)?投稿したclaimcomment")
 
-# 削除の対象を限ることを示す表記 (空白を除去した文に照合する)。
-ONLY = re.compile(r"だけ|のみ")
+# 削除の対象を限ることを示す表記 (空白を除去した文に照合する)。「だけでなく」「のみならず」は
+# 対象を広げる表記なので含めない。
+ONLY = re.compile(r"(?:だけ|のみ)(?!でなく|ならず)")
 
 # 手順を使わないことを示す表記 (空白を除去した文に照合する)。
 NOT_USED = re.compile(r"使わ(?:ず|ない)|使いません")
@@ -262,6 +263,8 @@ LOOSE_DELETION_SENTENCES = (
     "確認した残りのラベルと claim comment は削除します。",
     "撤退するときは、確認の対象にした claim comment のうち、`session=` の値が自分のセッション"
     " ID と一致するものも削除します。",
+    "撤退するときは、この経路で自分が投稿した claim comment だけでなく、確認した claim comment"
+    " も削除します。",
 )
 
 # 小節 1.2 に書き足すと、明示指示が無い場合にこの手順を使わせることになる文。
@@ -275,6 +278,9 @@ STEP_1_START = re.compile(r"step1から実行")
 
 # step 6 から再開することを示す表記 (空白を除去した文に照合する)。
 STEP_6_RESUME = re.compile(r"step6から再開")
+
+# step 6 から再開する場合に触れながら、条件を広げる表記 (空白を除去した文に照合する)。
+STEP_6_WIDENED = re.compile(r"step6から再開(?:する場合に限らず|しない場合)")
 
 # 撤退しないこと・削除しないことを示す表記 (空白を除去した文に照合する)。「撤退も削除もしない」
 # の形と、撤退だけ・削除だけに触れる文も含める。
@@ -297,6 +303,10 @@ LOOSE_EXEMPTION_SENTENCES = (
     "明示指示がある場合は、ラベルや他セッション ID の claim comment が残っていても撤退しない。",
     "step 6 から再開する場合と step 1 から実行する場合は、ラベルや他セッション ID の claim"
     " comment が残っていても撤退せず、削除もしない。",
+    "step 6 から再開する場合に限らず、ラベルや他セッション ID の claim comment が残っていても"
+    "撤退も削除もしない。",
+    "step 6 から再開しない場合も、ラベルや他セッション ID の claim comment が残っていても"
+    "撤退しない。",
 )
 
 # 明示指示の段落に書き足すと、明示指示が無い場合に小節 1.2 を使わせることになる文。
@@ -647,14 +657,15 @@ def leftover_section_of(skill_text: str) -> str:
 
 def unbounded_withdrawal_exemptions(always_3_text: str) -> list[str]:
     """明示指示の段落のうち、撤退しないこと・削除しないことを、step 6 から再開する場合に
-    限らずに書いた文を返す (step 6 から再開する場合を条件にしない文と、step 1 の経路も
-    併記した文)。"""
+    限らずに書いた文を返す (step 6 から再開する場合を条件にしない文、step 6 に触れながら
+    条件を広げる文、step 1 の経路も併記した文)。"""
     return [
         sentence
         for sentence in sentences(explicit_resume_paragraph_of(always_3_text))
         if satisfies(sentence, WITHDRAWAL_OR_DELETION_EXEMPTION)
         and (
             not satisfies(sentence, STEP_6_RESUME)
+            or satisfies(sentence, STEP_6_WIDENED)
             or satisfies(sentence, STEP_1_MENTION)
         )
     ]
