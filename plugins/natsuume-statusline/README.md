@@ -4,7 +4,7 @@ Claude Code の `statusLine` 表示 (パス / GitHub repo / branch / 変更量 /
 
 ## バージョン
 
-v0.11.6
+v0.11.7
 
 ## 表示内容
 
@@ -13,6 +13,7 @@ v0.11.6
 1. **1 行目**: カレントパス、GitHub リポジトリ名、ブランチ名、staged/modified 変更量、未コミット件数 (or `clean`)
    - リポジトリの owner が自分または所属 org の場合は `owner/repo` を `repo` に短縮
    - 全体がターミナル幅を超える場合は段階的に prefix → パス短縮の順でフォールバック
+   - git 情報は描画 1 回あたり 3 回の git 呼び出し (`rev-parse --show-toplevel` / `status --porcelain=v2 --branch --no-ahead-behind` / `remote get-url origin`) で取得する。すべて `GIT_OPTIONAL_LOCKS=0` で実行するため、statusline が index を書き戻して `.git/index.lock` を取得し、同時に実行した `git commit` / `git add` と衝突することはない
 2. **2 行目**: モデル名 (`model.display_name`) + context 使用量 (`ctx`) + レートリミット (5h)
    - **モデル名**: 色付けせず先頭にそのまま表示。取得できない場合は非表示 (先頭セグメント無し)
    - **context 使用量**: `ctx: (45%) 75.1k/1M` 形式の数値表示 (バー無し)。使用率 (`context_window.used_percentage`)、使用トークン数 (`total_input_tokens`)、最大コンテキスト長 (`context_window_size`) を併記。取得できない初期/compact 直後は非表示。トークン数が取れない場合は `ctx: (45%)` に縮退
@@ -85,6 +86,7 @@ plugin cache 配下から実行された場合は、`~/.claude/natsuume-statusli
 | `statusline/main.sh` | JSON 入力のパース、各行の組み立て、ターミナル幅へのフィット |
 | `statusline/lib.sh` | カラー定数、進捗バー、可視幅計算、所有 GitHub namespace のキャッシュ |
 | `statusline/gauges.sh` | ゲージ行 (context 使用量 / レートリミット) の共通レンダラ (`build_context_segment` / `build_ratelimit_segment` / `render_gauge_line`)。2 行目・3 行目はこれを呼ぶ薄い assembler |
+| `statusline/git-status.sh` | 1 行目で使う git 情報の取得 (`collect_git_info`) と、`git status --porcelain=v2 --branch` 出力の解析 (`parse_status_branch` / `parse_status_entries`) |
 | `statusline/line1.sh` | 1 行目 (パス / repo / branch / 変更量 / 未コミット) のレンダラ |
 | `statusline/line2.sh` | 2 行目 (モデル名 / context 使用量 / 5h レートリミット) のレンダラ |
 | `statusline/line3.sh` | 3 行目 (7d レートリミット / モデル別週次枠) のレンダラ |
@@ -108,7 +110,7 @@ cp ~/.claude/settings.natsuume-statusline-backup.<timestamp>.json ~/.claude/sett
 
 オプション (見つからなければ自動的に縮退):
 
-- `git` — 無いとリポジトリ情報セグメント全体がスキップ
+- `git` — 無いとリポジトリ情報セグメント全体がスキップ。変更量・未コミット件数・ブランチ名の表示には git 2.17 以降が必要で、それより古い git では `git status --no-ahead-behind` が失敗するため、これらを表示しない (パスとリポジトリ名は表示する)
 - `gh` — 無いと所有 namespace 判定が無効化され `owner/repo` 形式のまま表示
 - `tput` または `stty` — 無いと環境変数 `COLUMNS`、最終的に 80 桁にフォールバック
 - `python3` (3.7+) — `resets_at` が ISO 8601 形式で渡された場合の epoch 変換 fallback、および Bash がUTF-8 multibyte substringを提供しない環境 (macOS Bash 3.2等) のcell幅計算に使用。無い場合、前者はリセット残時間が空表示、後者はBash側の文字走査へ縮退する

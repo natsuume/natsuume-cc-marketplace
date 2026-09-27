@@ -29,7 +29,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [pre-push-codex-review](#pre-push-codex-review) | 4.0.5 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
 | [pre-merge-cross-review](#pre-merge-cross-review) | 4.0.1 | `gh pr merge` 前に codex review 完了 (PR 番号と head SHA を記録したローカル記録) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
 | [update-default-branch](#update-default-branch) | 0.4.7 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
-| [natsuume-statusline](#natsuume-statusline) | 0.11.6 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
+| [natsuume-statusline](#natsuume-statusline) | 0.11.7 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 3.0.13 | 作業規律を SessionStart / UserPromptSubmit / SubagentStart の hook で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [ui-discipline](#ui-discipline) | 0.4.9 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.9.2 | natsuume の文体規則でテックブログ・技術書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
