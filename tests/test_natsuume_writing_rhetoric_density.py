@@ -201,14 +201,14 @@ class ExpressionWatchlistTest(unittest.TestCase):
         self.text = read(WATCHLIST)
 
     def test_watchlist_has_translationese_and_abstract_sections(self) -> None:
-        self.assertIn("## 直訳調・比喩的な語", self.text)
-        self.assertIn("## 抽象的な漢語・評価語", self.text)
+        self.assertIn("### 直訳調・比喩的な語", self.text)
+        self.assertIn("### 抽象的な漢語・評価語", self.text)
 
     def test_watchlist_contains_data_backed_examples(self) -> None:
-        translationese = section(self.text, "## 直訳調・比喩的な語")
-        for example in ("効く", "壊れる", "瞬間"):
+        entries = [line[2:] for line in self.text.splitlines() if line.startswith("- ")]
+        for example in ("効く", "壊れる", "〜した瞬間"):
             with self.subTest(example=example):
-                self.assertIn(example, translationese)
+                self.assertIn(example, entries)
 
     def test_watchlist_entries_exclude_topic_words_and_digits(self) -> None:
         entries = [line[2:] for line in self.text.splitlines() if line.startswith("- ")]
@@ -267,9 +267,9 @@ class WatchlistSupplementTest(unittest.TestCase):
     """希少語と誤分類語の見直しで一覧に加えた語。"""
 
     def test_watchlist_contains_supplemented_entries(self) -> None:
-        text = read(WATCHLIST)
-        self.assertIn("- 黙って〜する", section(text, "## 直訳調・比喩的な語"))
-        self.assertIn("- 正本", section(text, "## 抽象的な漢語・評価語"))
+        lines = read(WATCHLIST).splitlines()
+        self.assertIn("- 黙って〜する", lines)
+        self.assertIn("- 正本", lines)
 
 
 class NegationLimitationVariantTest(unittest.TestCase):
