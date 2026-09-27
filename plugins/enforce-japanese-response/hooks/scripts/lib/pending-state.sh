@@ -67,6 +67,10 @@
 # - take_message_buffer <session_id> <message_id>
 #     `buffers/<message_id>` の内容をそのまま stdout に出力し、バッファーを削除する。
 #     バッファーが無い・検査に通らなければ何も出力しない
+# - remove_empty_session_state <session_id>
+#     turn の終わりに使う。`buffers` とセッションディレクトリーを、空の場合に限り
+#     `rmdir` で削除する。中身が残っていれば何もしない。検査に通らないときも何もしない
+#     (失敗しない)
 
 STATE_ID_JQ_DEF='def is_valid_state_id: type == "string" and test("\\A[A-Za-z0-9_-]{1,128}\\z");'
 
@@ -183,5 +187,16 @@ take_message_buffer() {
   [ -f "$buffer" ] || return 0
   cat "$buffer" 2>/dev/null
   rm -f "$buffer" 2>/dev/null
+  return 0
+}
+
+remove_empty_session_state() {
+  local session_id=$1
+  local directory
+  directory=$(existing_session_state_dir "$session_id") || return 0
+  if is_owned_directory "$directory/buffers"; then
+    rmdir "$directory/buffers" 2>/dev/null
+  fi
+  rmdir "$directory" 2>/dev/null
   return 0
 }

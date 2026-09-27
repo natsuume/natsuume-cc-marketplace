@@ -1151,6 +1151,21 @@ class StopClearsPendingTest(MidTurnHookTestCase):
         self.assertEqual(self.run_stop(self.stop_input(MISSING)), "")
         self.assertIsNone(self.read_pending())
 
+    def test_empty_session_directory_is_removed(self) -> None:
+        self.write_pending(PROMPT_ID)
+        self.buffer_path().parent.mkdir(parents=True)
+        self.run_stop(self.stop_input(JAPANESE_MESSAGE))
+        self.assertFalse((self.state_root / SESSION_ID).exists())
+
+    def test_session_directory_with_a_buffer_remains(self) -> None:
+        self.write_pending(PROMPT_ID)
+        path = self.buffer_path()
+        path.parent.mkdir(parents=True)
+        path.write_text("partial", encoding="utf-8")
+        self.run_stop(self.stop_input(JAPANESE_MESSAGE))
+        self.assertIsNone(self.read_pending())
+        self.assertEqual(self.read_buffer(), "partial")
+
     def test_pending_of_another_session_remains(self) -> None:
         self.write_pending(PROMPT_ID, session_id=OTHER_SESSION_ID)
         self.run_stop(self.stop_input(JAPANESE_MESSAGE, session_id=SESSION_ID))

@@ -104,6 +104,8 @@ ${TMPDIR:-/tmp}/enforce-japanese-response-<uid>/<session_id>/
 
 共有の一時ディレクトリーで他のユーザーが先回りして置いたディレクトリーや symlink を使わないよう、親 (`enforce-japanese-response-<uid>`)・session のディレクトリー・`buffers` のそれぞれについて、symlink でないこと・ディレクトリーであること・現在のユーザーが所有者であることを確かめてから、権限を 700 にして使います。1 つでも満たさなければ、その下の状態を読み書きしません。ファイルは所有者のみが読み書きできる権限で作ります。
 
+Stop hook は turn の終わりに `pending` を削除し、空になった `buffers` と session のディレクトリーも削除します。中身が残っている場合は削除しません。
+
 ## 判定基準
 
 turn 末尾の応答と tool 呼び出しの合間のメッセージに、同じ基準を使います。

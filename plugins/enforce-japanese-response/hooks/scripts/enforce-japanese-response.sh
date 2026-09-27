@@ -38,7 +38,8 @@
 # 表す印 `pending` を状態ディレクトリーに残す (場所と形式は lib/pending-state.sh)。
 # turn 末尾の応答はこの Stop hook 自身が判定するため、stdin を JSON object として
 # 解析できたら、`stop_hook_active` や目標言語に依らず、判定より前にその session の
-# `pending` を削除して次の turn に持ち越さない。`session_id` が無い・文字列でない・
+# `pending` を削除して次の turn に持ち越さない。続けて、空になった `buffers` と
+# セッションディレクトリーを削除する。`session_id` が無い・文字列でない・
 # `^[A-Za-z0-9_-]{1,128}$` に一致しない場合と、状態ディレクトリーが所有者の検査
 # (lib/pending-state.sh) に通らない場合は削除しない。
 #
@@ -121,6 +122,7 @@ main() {
   session_id=$(printf '%s' "$fields" | jq -r '.session_id' 2>/dev/null) || session_id=""
   if [ -n "$session_id" ]; then
     clear_pending "$session_id"
+    remove_empty_session_state "$session_id"
   fi
 
   local active has_message cwd project_dir
