@@ -87,9 +87,9 @@ class WatchlistTierStructureTest(unittest.TestCase):
     def test_words_are_placed_in_their_tiers(self) -> None:
         placements = {
             STRONG: ("壁打ち", "正本", "線引き", "暗黙知"),
-            MODERATE: ("効く", "壊れる", "土台"),
+            MODERATE: ("効く", "壊れる", "罠"),
             NARRATIVE: ("〜した瞬間", "黙って〜する"),
-            TECHNICAL: ("実務",),
+            TECHNICAL: ("実務", "土台"),
         }
         for heading, words in placements.items():
             tier_entries = entries(block(self.text, heading))
