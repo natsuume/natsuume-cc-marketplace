@@ -58,13 +58,14 @@ reason には、直前の応答が英語で書かれていること、内容を�
 
 **出力**: stdout には何も出力しません (出力すると表示が置き換わるため)。exit code は常に 0 です。
 
-**処理**: 1 つのメッセージは複数の batch に分かれて届くため、`delta` を `message_id` ごとのバッファーに連結します。`index` が 0 の batch でバッファーを作り直し、それ以外の batch では追記します。`final` が true の batch でバッファー全体をメッセージ本文として取り出してバッファーを消し、目標言語が日本語で、本文が英語と判定されたら `pending` を作ります。`pending` の内容はそのときの `prompt_id` です。`claude -p` などの非対話の実行では、メッセージ全体が `index` 0・`final` true の 1 回の呼び出しで届き、同じ処理で扱います。
+**処理**: 1 つのメッセージは複数の batch に分かれて届くため、`delta` を `message_id` ごとのバッファーに連結します。`index` が 0 の batch (新しいメッセージの開始) では、同じ session の他のメッセージのバッファー (最後の batch が届かなかったもの) を消してから自分のバッファーを作り直し、それ以外の batch では追記します。`final` が true の batch でバッファー全体をメッセージ本文として取り出してバッファーを消し、目標言語が日本語で、本文が英語と判定されたら `pending` を作ります。`pending` の内容はそのときの `prompt_id` です。`claude -p` などの非対話の実行では、メッセージ全体が `index` 0・`final` true の 1 回の呼び出しで届き、同じ処理で扱います。
 
 次の場合は状態を読み書きせずに終わります。
 
 - `agent_id` が空でない文字列 (subagent のメッセージ)
 - `session_id` または `message_id` が `^[A-Za-z0-9_-]{1,128}$` に一致しない
 - `delta` が文字列でない、`index` が 0 以上の整数でない、`final` が真偽値でない
+- 状態ディレクトリーが所有者の検査 (後述) に通らない (fail-open)
 - jq が無い・入力 JSON を解析できない (fail-open)
 
 #### request-japanese-rewrite
@@ -77,7 +78,7 @@ reason には、直前の応答が英語で書かれていること、内容を�
 **出力**: `pending` があれば消し、stdout に次の JSON を出します。`systemMessage` はユーザ向けの警告で、`additionalContext` が次のモデル呼び出しの前に Claude に渡されます。exit code は常に 0 です。
 
 ```json
-{"systemMessage": "enforce-japanese-response: 英語のメッセージを検知したため、日本語での書き直しを指示しました。", "hookSpecificOutput": {"hookEventName": "PostToolBatch", "additionalContext": "直前に表示したメッセージは英語で書かれていました (settings の language は日本語です)。そのメッセージを内容を変えずに日本語で書き直して再掲してから作業を続け、以降のメッセージも日本語で書いてください。ユーザが英語での出力 (翻訳・英文の文面等) を明示的に求めていた場合は、書き直さずにそのまま作業を続けてください。"}}
+{"systemMessage": "enforce-japanese-response: 英語のメッセージを検知したため、日本語での書き直しを指示しました。", "hookSpecificOutput": {"hookEventName": "PostToolBatch", "additionalContext": "直前に表示したメッセージは英語で書かれていました (settings の language は日本語です)。そのメッセージを内容を変えずに日本語で書き直して再掲してから作業を続け、以降のメッセージも日本語で書いてください。ユーザが英語での出力 (翻訳・英文の文面等) を明示的に求めていた場合は、書き直さずにそのまま作業を続けてください。すでにそのメッセージを日本語で書き直して再掲している場合は、再掲せずに作業を続けてください。"}}
 ```
 
 次の場合は何も出力しません。
@@ -86,6 +87,7 @@ reason には、直前の応答が英語で書かれていること、内容を�
 - `pending` の内容 (記録したときの `prompt_id`) と入力の `prompt_id` がどちらも空でなく、異なる (前の turn の印を持ち越さないため。`pending` は消します)
 - `agent_id` が空でない文字列 (subagent の tool batch。親 session の `pending` は消さずに残します)
 - `session_id` が `^[A-Za-z0-9_-]{1,128}$` に一致しない
+- 状態ディレクトリーが所有者の検査 (後述) に通らない (fail-open)
 - jq が無い・入力 JSON を解析できない (fail-open)
 
 ## 状態ディレクトリー
@@ -93,12 +95,14 @@ reason には、直前の応答が英語で書かれていること、内容を�
 MessageDisplay hook と PostToolBatch hook の間の受け渡しには、session ごとの状態ディレクトリーを使います。
 
 ```
-${TMPDIR:-/tmp}/enforce-japanese-response/<session_id>/
+${TMPDIR:-/tmp}/enforce-japanese-response-<uid>/<session_id>/
 ├── pending                # 英語のメッセージを表示したが、まだ書き直しを指示していない印 (内容は prompt_id)
 └── buffers/<message_id>   # メッセージの delta を連結するバッファー
 ```
 
-環境変数 `TMPDIR` が未設定または空文字列なら `/tmp` を使います。ディレクトリーとファイルは所有者のみが読み書きできる権限で作ります。
+環境変数 `TMPDIR` が未設定または空文字列なら `/tmp` を使います。`<uid>` は `id -u` の値で、数字だけでなければ状態を扱いません。
+
+共有の一時ディレクトリーで他のユーザーが先回りして置いたディレクトリーや symlink を使わないよう、親 (`enforce-japanese-response-<uid>`)・session のディレクトリー・`buffers` のそれぞれについて、symlink でないこと・ディレクトリーであること・現在のユーザーが所有者であることを確かめてから、権限を 700 にして使います。1 つでも満たさなければ、その下の状態を読み書きしません。ファイルは所有者のみが読み書きできる権限で作ります。
 
 ## 判定基準
 
@@ -152,6 +156,7 @@ turn 末尾の応答と tool 呼び出しの合間のメッセージに、同じ
 - `language` は Claude Code 本体と同じ settings の優先順位で解決しますが、managed settings・コマンドライン引数・`CLAUDE_CONFIG_DIR` による設定は参照しません
 - ユーザが英語での出力を明示的に求めている間も、tool 呼び出しの合間の英語のメッセージごとに書き直しの指示が注入されます。指示には「英語での出力を明示的に求められていた場合は書き直さずに作業を続ける」旨を含めていますが、指示そのものは止まりません
 - MessageDisplay hook は、メッセージが表示されるたび (対話モードでは確定した行の batch ごと) に起動します。英語の判定と目標言語の解決はメッセージの最後の batch でだけ行いますが、hook の起動そのものは batch ごとに発生します
+- Stop hook が `pending` を消した後に、turn 末尾のメッセージの MessageDisplay hook が `pending` を書いた場合、次の PostToolBatch で書き直しの指示が重複しえます (hook の起動順は Claude Code の仕様で保証されていません)。指示文は、書き直し済みなら再掲しないよう求めています
 - 書き直しの指示は tool 呼び出しの batch が終わった時点で出るため、英語のメッセージの後に tool 呼び出しが無く turn が終わった場合は、Stop hook が turn 末尾の応答として判定します
 
 ## ディレクトリ構成

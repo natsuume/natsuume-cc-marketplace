@@ -10,13 +10,18 @@ MessageDisplay hook (record-english-message.sh)・PostToolBatch hook
 
 ## 対象 hook の契約
 
-- 状態ディレクトリー: `${TMPDIR:-/tmp}/enforce-japanese-response/<session_id>/`。
+- 状態ディレクトリー: `${TMPDIR:-/tmp}/enforce-japanese-response-<uid>/<session_id>/`
+  (`<uid>` は `id -u` の値で、数字だけでなければ状態を扱わない)。
   `pending` は英語のメッセージを表示したがまだ書き直しを指示していない印で、内容は
   英語と判定したときの入力の `prompt_id` (文字列でなければ空)。`buffers/<message_id>`
   はメッセージの `delta` を連結したバッファー。`session_id` と `message_id` が
-  `^[A-Za-z0-9_-]{1,128}$` に一致しなければ状態を読み書きしない
-- MessageDisplay: stdout には何も出さず、exit code は常に 0。`index` 0 でバッファーを
-  作り直し、それ以外は追記する。`final` true でバッファー全体を本文として取り出して
+  `^[A-Za-z0-9_-]{1,128}$` に一致しなければ状態を読み書きしない。親・セッション
+  ディレクトリー・`buffers` は、symlink でない・ディレクトリーである・現在のユーザーが
+  所有者である、を満たすものだけを使い、権限を 700 にする。満たさなければ状態を
+  読み書きしない
+- MessageDisplay: stdout には何も出さず、exit code は常に 0。`index` 0 で同じセッション
+  の他の message_id のバッファーを消してから自分のバッファーを作り直し、それ以外は
+  追記する。`final` true でバッファー全体を本文として取り出して
   バッファーを消し、目標言語が日本語で本文が英語なら `pending` を作る。`agent_id` が
   空でない文字列・`delta` が文字列でない・`index` が 0 以上の整数でない・`final` が
   bool でない・jq が無い・入力が JSON object でない場合は何もしない
@@ -42,6 +47,8 @@ MessageDisplay hook (record-english-message.sh)・PostToolBatch hook
 - MessageDisplayBufferTest: 複数 batch の連結・バッファーの作り直し・削除
 - MessageDisplayGuardTest: agent_id・目標言語・不正な id / index / final / delta
 - MessageDisplayFailOpenTest: 壊れた入力・jq 不在
+- StateDirectoryOwnershipTest: 状態ディレクトリーのパス (uid)・権限 700・symlink の拒否・
+  uid が数字でない場合
 - PostToolBatchRewriteTest: 書き直し指示の出力・pending の消費・prompt_id の照合・
   agent_id・session の分離
 - PostToolBatchFailOpenTest: 壊れた入力・jq 不在
@@ -55,6 +62,7 @@ import importlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -104,7 +112,8 @@ PATH_TOOLS_FOR_STATE = (
     "chmod",
 )
 
-STATE_DIR_NAME = "enforce-japanese-response"
+# 状態ディレクトリーの親の名前 (uid ごとに分ける)。
+STATE_DIR_NAME = f"enforce-japanese-response-{os.getuid()}"
 
 SESSION_ID = "session-A_1"
 OTHER_SESSION_ID = "session-B_2"
@@ -114,7 +123,7 @@ PROMPT_ID = "550e8400-e29b-41d4-a716-446655440000"
 OTHER_PROMPT_ID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
 
 # `^[A-Za-z0-9_-]{1,128}$` に一致しない文字列の id。パス走査を含む値は、状態
-# ディレクトリー (TMPDIR/enforce-japanese-response/<id>/buffers/<id>) からどう解決しても
+# ディレクトリー (TMPDIR/enforce-japanese-response-<uid>/<id>/buffers/<id>) からどう解決しても
 # テストの一時ディレクトリの中に留まるものだけを使う。
 INVALID_STRING_IDS = (
     "../x",
@@ -146,11 +155,12 @@ REWRITE_CONTEXT = (
     "日本語です)。そのメッセージを内容を変えずに日本語で書き直して再掲してから"
     "作業を続け、以降のメッセージも日本語で書いてください。ユーザが英語での出力"
     " (翻訳・英文の文面等) を明示的に求めていた場合は、書き直さずにそのまま作業を"
-    "続けてください。"
+    "続けてください。すでにそのメッセージを日本語で書き直して再掲している場合は、"
+    "再掲せずに作業を続けてください。"
 )
 # additionalContext に含まれるべき趣旨 (直前のメッセージが英語であること / 内容を
 # 変えずに日本語で書き直して再掲すること / 以降も日本語で書くこと / 英語での出力を
-# 明示的に求められていた場合の扱い)。
+# 明示的に求められていた場合の扱い / 書き直し済みなら再掲しないこと)。
 REWRITE_REQUIRED_PHRASES = (
     "英語で書かれ",
     "内容を変えず",
@@ -160,6 +170,7 @@ REWRITE_REQUIRED_PHRASES = (
     "英語での出力",
     "明示的に求め",
     "書き直さず",
+    "再掲せず",
 )
 
 # 日本語の文に英語の用語が多く混ざる本文 (英字は 40 字以上だが英語ではない)。
@@ -621,7 +632,20 @@ class MessageDisplayBufferTest(MidTurnHookTestCase):
         self.assertFalse(self.buffer_path().exists())
         self.assertIsNone(self.read_pending())
 
-    def test_buffers_are_separate_per_message_id(self) -> None:
+    def test_index_zero_removes_buffers_of_other_messages(self) -> None:
+        # final が届かなかったメッセージのバッファーは、次のメッセージの開始で消える
+        self.run_display(
+            self.display_input("a1\n", index=0, final=False, message_id=MESSAGE_ID)
+        )
+        self.run_display(
+            self.display_input(
+                "b1\n", index=0, final=False, message_id=OTHER_MESSAGE_ID
+            )
+        )
+        self.assertIsNone(self.read_buffer(MESSAGE_ID))
+        self.assertEqual(self.read_buffer(OTHER_MESSAGE_ID), "b1\n")
+
+    def test_later_batch_keeps_its_own_buffer_after_cleanup(self) -> None:
         self.run_display(
             self.display_input("a1\n", index=0, final=False, message_id=MESSAGE_ID)
         )
@@ -631,29 +655,39 @@ class MessageDisplayBufferTest(MidTurnHookTestCase):
             )
         )
         self.run_display(
-            self.display_input("a2\n", index=1, final=False, message_id=MESSAGE_ID)
+            self.display_input(
+                "b2\n", index=1, final=False, message_id=OTHER_MESSAGE_ID
+            )
         )
-        self.assertEqual(self.read_buffer(MESSAGE_ID), "a1\na2\n")
-        self.assertEqual(self.read_buffer(OTHER_MESSAGE_ID), "b1\n")
+        self.assertEqual(self.read_buffer(OTHER_MESSAGE_ID), "b1\nb2\n")
 
-    def test_japanese_message_does_not_hide_english_in_another_message(self) -> None:
+    def test_orphaned_english_buffer_does_not_affect_the_next_message(self) -> None:
+        # final が届かなかった英語の断片は、次のメッセージの判定に混ざらない
         self.run_display(
             self.display_input(
-                english_text(30) + "\n", index=0, final=False, message_id=MESSAGE_ID
+                ENGLISH_MESSAGE + "\n", index=0, final=False, message_id=MESSAGE_ID
             )
         )
-        self.run_display(
-            self.display_input(
-                JAPANESE_MESSAGE, index=0, final=True, message_id=OTHER_MESSAGE_ID
-            )
-        )
+        self.display_message(JAPANESE_MESSAGE, message_id=OTHER_MESSAGE_ID)
         self.assertIsNone(self.read_pending())
+        self.assertIsNone(self.read_buffer(MESSAGE_ID))
+
+    def test_cleanup_does_not_touch_other_sessions(self) -> None:
         self.run_display(
             self.display_input(
-                english_text(30), index=1, final=True, message_id=MESSAGE_ID
+                "a1\n", index=0, final=False, session_id=OTHER_SESSION_ID
             )
         )
-        self.assertIsNotNone(self.read_pending())
+        self.run_display(
+            self.display_input(
+                "b1\n",
+                index=0,
+                final=False,
+                session_id=SESSION_ID,
+                message_id=OTHER_MESSAGE_ID,
+            )
+        )
+        self.assertEqual(self.read_buffer(MESSAGE_ID, OTHER_SESSION_ID), "a1\n")
 
 
 @unittest.skipUnless(JQ_AVAILABLE, "hook の判定には jq が必要")
@@ -783,6 +817,134 @@ class MessageDisplayFailOpenTest(MidTurnHookTestCase):
             self.display_input(ENGLISH_MESSAGE, index=0, final=False), path=path
         )
         self.assertEqual(self.snapshot(), before)
+
+
+@unittest.skipUnless(JQ_AVAILABLE, "hook の判定には jq が必要")
+class StateDirectoryOwnershipTest(MidTurnHookTestCase):
+    """状態ディレクトリーのパス・権限と、symlink や uid による拒否。"""
+
+    def make_symlink_target(self) -> Path:
+        target = self.base / "elsewhere"
+        target.mkdir()
+        return target
+
+    def list_tree(self, directory: Path) -> list[str]:
+        """directory の下のすべてのパス (相対) を返す。"""
+        return sorted(
+            os.path.relpath(os.path.join(parent, name), directory)
+            for parent, dirnames, filenames in os.walk(directory)
+            for name in dirnames + filenames
+        )
+
+    def assert_private(self, directory: Path) -> None:
+        self.assertFalse(directory.is_symlink(), directory)
+        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700, directory)
+
+    def fake_id_path(self, name: str, output: str) -> str:
+        """`id` が <output> を出力するように差し替えた PATH を返す。"""
+        bin_dir = self.base / f"fake-id-{name}"
+        bin_dir.mkdir()
+        script = bin_dir / "id"
+        script.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\n", encoding="utf-8")
+        script.chmod(0o755)
+        return str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+
+    def test_state_directory_path_contains_the_uid(self) -> None:
+        self.display_message(ENGLISH_MESSAGE)
+        expected = (
+            self.tmpdir
+            / f"enforce-japanese-response-{os.getuid()}"
+            / SESSION_ID
+            / "pending"
+        )
+        self.assertTrue(expected.is_file(), expected)
+        self.assertFalse((self.tmpdir / "enforce-japanese-response").exists())
+
+    def test_created_directories_are_private(self) -> None:
+        self.run_display(self.display_input("line\n", index=0, final=False))
+        for directory in (
+            self.state_root,
+            self.state_root / SESSION_ID,
+            self.state_root / SESSION_ID / "buffers",
+        ):
+            with self.subTest(directory=directory.name):
+                self.assert_private(directory)
+
+    def test_existing_directories_are_made_private(self) -> None:
+        session_dir = self.state_root / SESSION_ID
+        session_dir.mkdir(parents=True)
+        self.state_root.chmod(0o755)
+        session_dir.chmod(0o755)
+        self.display_message(ENGLISH_MESSAGE)
+        self.assertIsNotNone(self.read_pending())
+        self.assert_private(self.state_root)
+        self.assert_private(session_dir)
+
+    def test_symlinked_parent_is_not_written_by_message_display(self) -> None:
+        target = self.make_symlink_target()
+        self.state_root.symlink_to(target, target_is_directory=True)
+        for final in (False, True):
+            with self.subTest(final=final):
+                # run_display が無出力と exit 0 を確認する
+                self.run_display(
+                    self.display_input(ENGLISH_MESSAGE, index=0, final=final)
+                )
+                self.assertEqual(self.list_tree(target), [])
+
+    def test_symlinked_parent_is_not_read_by_post_tool_batch(self) -> None:
+        target = self.make_symlink_target()
+        (target / SESSION_ID).mkdir()
+        (target / SESSION_ID / "pending").write_text(PROMPT_ID, encoding="utf-8")
+        self.state_root.symlink_to(target, target_is_directory=True)
+        self.assert_no_rewrite(self.batch_input())
+        self.assertEqual(
+            (target / SESSION_ID / "pending").read_text(encoding="utf-8"), PROMPT_ID
+        )
+
+    def test_symlinked_parent_is_not_cleared_by_stop(self) -> None:
+        target = self.make_symlink_target()
+        (target / SESSION_ID).mkdir()
+        (target / SESSION_ID / "pending").write_text(PROMPT_ID, encoding="utf-8")
+        self.state_root.symlink_to(target, target_is_directory=True)
+        stdout = self.run_stop(self.stop_input(ENGLISH_MESSAGE))
+        self.assertEqual(json.loads(stdout)["decision"], "block")
+        self.assertTrue((target / SESSION_ID / "pending").is_file())
+
+    def test_symlinked_session_directory_is_not_used(self) -> None:
+        self.state_root.mkdir(mode=0o700)
+        target = self.make_symlink_target()
+        (self.state_root / SESSION_ID).symlink_to(target, target_is_directory=True)
+        self.run_display(self.display_input("line\n", index=0, final=False))
+        self.display_message(ENGLISH_MESSAGE)
+        self.assertEqual(self.list_tree(target), [])
+        (target / "pending").write_text(PROMPT_ID, encoding="utf-8")
+        self.assert_no_rewrite(self.batch_input())
+        self.assertTrue((target / "pending").is_file())
+
+    def test_symlinked_buffers_directory_is_not_used(self) -> None:
+        session_dir = self.state_root / SESSION_ID
+        session_dir.mkdir(parents=True)
+        target = self.make_symlink_target()
+        (session_dir / "buffers").symlink_to(target, target_is_directory=True)
+        self.run_display(self.display_input("line\n", index=0, final=False))
+        self.display_message(ENGLISH_MESSAGE)
+        self.assertEqual(self.list_tree(target), [])
+        self.assertIsNone(self.read_pending())
+
+    def test_non_numeric_uid_disables_the_state(self) -> None:
+        for number, output in enumerate(("abc", "", "10 01", "-1")):
+            with self.subTest(uid=output):
+                path = self.fake_id_path(str(number), output)
+                before = self.snapshot()
+                self.run_display(self.display_input(ENGLISH_MESSAGE), path=path)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_non_numeric_uid_does_not_read_pending(self) -> None:
+        self.write_pending(PROMPT_ID)
+        path = self.fake_id_path("abc", "abc")
+        self.assert_no_rewrite(self.batch_input(), path=path)
+        self.run_stop(self.stop_input(JAPANESE_MESSAGE), path=path)
+        self.assertEqual(self.read_pending(), PROMPT_ID)
 
 
 @unittest.skipUnless(JQ_AVAILABLE, "hook の出力には jq が必要")

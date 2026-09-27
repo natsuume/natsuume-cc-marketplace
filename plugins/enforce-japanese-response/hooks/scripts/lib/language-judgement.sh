@@ -58,25 +58,73 @@
 # 比率は浮動小数点の丸めを避けるため、同値な整数比較 `20 * J < J + L` で評価する。
 
 resolve_project_dir() {
-  :
+  local cwd=$1
+  printf '%s\n' "${CLAUDE_PROJECT_DIR:-$cwd}"
 }
 
 read_language_setting() {
-  :
+  local settings_file=$1
+  [ -f "$settings_file" ] || return 0
+  jq -c -s '
+    if length == 1 and (.[0] | type) == "object" and .[0].language != null
+    then .[0].language
+    else empty
+    end
+  ' "$settings_file" 2>/dev/null
 }
 
 resolve_target_language() {
-  :
+  local project_dir=$1
+  local settings_file value
+  for settings_file in \
+    "${project_dir:+$project_dir/.claude/settings.local.json}" \
+    "${project_dir:+$project_dir/.claude/settings.json}" \
+    "${HOME:+$HOME/.claude/settings.json}"; do
+    [ -n "$settings_file" ] || continue
+    value=$(read_language_setting "$settings_file")
+    if [ -n "$value" ]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done
+  return 0
 }
 
 is_japanese_language() {
-  :
+  local language_json=$1
+  jq -n --argjson language "$language_json" '
+    ($language | type) == "string"
+    and (
+      ($language | ascii_downcase) as $value
+      | $value == "日本語"
+        or $value == "ja"
+        or ($value | startswith("ja-"))
+        or $value == "japanese"
+    )
+  '
 }
 
 is_target_language_japanese() {
-  return 1
+  local project_dir=$1
+  local language_json is_japanese
+  language_json=$(resolve_target_language "$project_dir")
+  [ -n "$language_json" ] || return 1
+  is_japanese=$(is_japanese_language "$language_json" 2>/dev/null) || return 1
+  [ "$is_japanese" = "true" ]
 }
 
+# URL 本体の文字クラス `[!#-'*-;=?-Z\\^-~]` は、0x21〜0x7E から `"` `(` `)` `<` `>`
+# `[` `]` を除いた範囲を表す。jq のプログラムを単一引用符で囲んでいるため、`'` は
+# jq の文字列リテラル内で \u0027 と書き、`\` は \\\\ と書く。
 is_english_text() {
-  return 1
+  local verdict
+  verdict=$(jq -R -s '
+    gsub("```[\\s\\S]*?(```|\\z)"; "")
+    | gsub("`[^`]*`"; "")
+    | gsub("https?://[!#-\u0027*-;=?-Z\\\\^-~]+"; "")
+    | ([scan("[A-Za-z]")] | length) as $letters
+    | ([scan("[\\p{Hiragana}\\p{Katakana}\\p{Han}]")] | length) as $japanese
+    | $letters >= 40 and 20 * $japanese < $japanese + $letters
+  ' 2>/dev/null) || return 1
+  [ "$verdict" = "true" ]
 }
