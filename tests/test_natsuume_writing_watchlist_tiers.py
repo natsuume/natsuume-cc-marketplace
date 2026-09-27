@@ -86,8 +86,8 @@ class WatchlistTierStructureTest(unittest.TestCase):
 
     def test_words_are_placed_in_their_tiers(self) -> None:
         placements = {
-            STRONG: ("壁打ち", "正本", "線引き", "暗黙知"),
-            MODERATE: ("効く", "壊れる", "罠"),
+            STRONG: ("正本", "線引き", "暗黙知"),
+            MODERATE: ("効く", "壊れる", "罠", "壁打ち", "判断材料"),
             NARRATIVE: ("〜した瞬間", "黙って〜する"),
             TECHNICAL: ("実務", "土台"),
         }
@@ -108,8 +108,8 @@ class WatchlistTierStructureTest(unittest.TestCase):
         strong_words = entries(block(strong, TRANSLATIONESE)) + entries(
             block(strong, ABSTRACT)
         )
-        self.assertEqual(len(strong_words), 37)
-        self.assertEqual(len(entries(block(self.text, MODERATE))), 218)
+        self.assertEqual(len(strong_words), 35)
+        self.assertEqual(len(entries(block(self.text, MODERATE))), 220)
         self.assertEqual(len(entries(block(self.text, NARRATIVE))), 42)
         self.assertEqual(len(entries(block(self.text, TECHNICAL))), 56)
 
@@ -167,6 +167,20 @@ class TierReferenceTest(unittest.TestCase):
 
     def test_draft_avoids_strong_words(self) -> None:
         self.assertIn("強く抑制する語", read(DRAFT_SKILL))
+
+    def test_technical_tier_exempts_only_term_usage(self) -> None:
+        technical = block(read(WATCHLIST), TECHNICAL).split("\n### ", 1)[0]
+        self.assertIn("比喩的な用法", technical)
+        for path in (REVIEW_SKILL, DRAFT_SKILL):
+            with self.subTest(file=path.name):
+                self.assertIn("技術文書での用語としての用法", read(path))
+
+
+class PluginDocumentsAvoidStrongWordsTest(unittest.TestCase):
+    def test_readmes_do_not_use_seihon(self) -> None:
+        for path in (PLUGIN_DIR / "README.md", REPO_ROOT / "README.md"):
+            with self.subTest(file=str(path.relative_to(REPO_ROOT))):
+                self.assertNotIn("正本", read(path))
 
 
 if __name__ == "__main__":

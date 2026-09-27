@@ -329,7 +329,7 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## natsuume-writing
 
-テックブログ・技術書執筆を支援し、文章作成一般のルールを提供するプラグインです。成果物として書く日本語の文章すべて (チャットでの応答を除く) に適用する文章作成一般のルールを `rules/general-writing.md` に、natsuume の過去執筆物から抽象化した技術文書の執筆ルール (文体コア + 媒体プロファイル) を `rules/writing-rules.md` に配置します。2 層の要点をまとめた `rules/core-summary.md` を SessionStart で常時注入します。詳細ルールは共有 Skills が同じ正本から読みます。
+テックブログ・技術書執筆を支援し、文章作成一般のルールを提供するプラグインです。成果物として書く日本語の文章すべて (チャットでの応答を除く) に適用する文章作成一般のルールを `rules/general-writing.md` に、natsuume の過去執筆物から抽象化した技術文書の執筆ルール (文体コア + 媒体プロファイル) を `rules/writing-rules.md` に配置します。2 層の要点をまとめた `rules/core-summary.md` を SessionStart で常時注入します。詳細ルールは共有 Skills が同じルールファイルから読みます。
 
 現時点では rules 配置 + SessionStart コア注入 hook + outline skill (章立ての壁打ち + インファイルスケルトン書き込み) + draft skill (スケルトンからのたたき台一括生成 + 未検証事項の TODO 明示) + review skill (文体・構成・技術的/事実の正確さ・表記の 4 観点レビュー。技術文書以外の文章も対象) を提供します。
 
@@ -511,7 +511,7 @@ settings の `language` が日本語なのに turn 末尾の応答が英語で�
 
 ## Contributing
 
-このリポジトリは Claude Code 単一の plugin marketplace です。共有 metadata の正本は `.claude-plugin/marketplace.json` と各 `plugins/<plugin>/.claude-plugin/plugin.json` で、plugin 一覧・version は両ファイルと本 README の一覧テーブル、各 `plugins/<plugin>/README.md` の `## バージョン` の 4 箇所で常に一致させます。
+このリポジトリは Claude Code 単一の plugin marketplace です。共有 metadata の定義元は `.claude-plugin/marketplace.json` と各 `plugins/<plugin>/.claude-plugin/plugin.json` で、plugin 一覧・version は両ファイルと本 README の一覧テーブル、各 `plugins/<plugin>/README.md` の `## バージョン` の 4 箇所で常に一致させます。
 
 ```bash
 python3 scripts/check_plugin_versions.py <base_revision>
