@@ -3,39 +3,21 @@
 Claude Code はサブエージェントのモデルを
 `明示 model > agent 定義の frontmatter > CLAUDE_CODE_SUBAGENT_MODEL > メインセッション継承`
 の順に解決し、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が設定されているときだけ env
-(未設定なら main model) が全てを上書きする。`subagent_type: "fork"` のサブエージェントは
-model 指定にも env にも依らずメインセッションのモデルを継承する。本ファイルは、この前提に
-立つ 4 つの契約を固定する。
+(未設定なら main model) が全てを上書きする。本ファイルは、この前提に立つ 2 つの契約を固定する。
 
-- hook 判定表 (``BlockFableSubagentDecisionTableTest``): agent-discipline の
-  `block-fable-subagent.sh` を隔離環境の subprocess で実行し、FORCE の有無 × 明示 model ×
-  env × fork の組み合わせごとの deny / allow を ``DECISION_TABLE`` で固定する。deny
-  メッセージが「env は明示指定より優先される」という誤った説明を持たず、自己修復誘導
-  (`model: "opus"` の明示) を保ち、Sonnet / Haiku の明示を案内しないことも固定する。
-- 配送文言 (``DisciplinePromptResolutionOrderTest`` /
-  ``SubagentRulesInjectionPremiseTest``): 分業規律 (discipline.md) の
+- 配送文言 (``DisciplinePromptResolutionOrderTest``): 分業規律 (discipline.md) の
   `rule:delegation-rules` 節が ``MODEL_RESOLUTION_CANONICAL_SENTENCE`` を持ち、
-  ``FORBIDDEN_PROMPT_PHRASES`` を持たないこと。`inject-subagent-rules.sh` が
-  「subagent は Fable になり得ない」前提を持たないこと。
-- 文書 (``AgentDisciplineReadmeDefenseTest`` / ``HookCommentCurrencyTest``): 主防御が
-  `permissions.deny` の `Agent(fork)` であることと既知制約が agent-discipline README に
-  あること、hook の comment に誤った解決順序の説明が無いこと。
+  ``FORBIDDEN_PROMPT_PHRASES`` を持たないこと。
+- 文書 (``AgentDisciplineReadmeResolutionOrderTest`` / ``HookCommentCurrencyTest``):
+  agent-discipline README に誤った解決順序の説明が無いこと、分業規律と
+  `inject-subagent-rules.sh` に経緯記述が無いこと。
 
-観測点は public boundary (hook script の stdin / stdout / exit code、リポジトリ内の
-ファイル内容) に限る。hook を実行するテストは ``TMPDIR`` / ``HOME`` /
-``XDG_CACHE_HOME`` を一時ディレクトリへ向け、``CLAUDE_CODE_SUBAGENT_MODEL`` /
-``CLAUDE_CODE_SUBAGENT_MODEL_FORCE`` を明示的に設定または未設定にした最小の env で実行する
-ため、実リポジトリと利用者の state には触れない。
+観測点はリポジトリ内のファイル内容に限る。
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
-import shutil
-import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -45,12 +27,7 @@ BASE_PLUGIN = ROOT / "plugins" / "agent-discipline"
 
 BASE_README = BASE_PLUGIN / "README.md"
 
-BLOCK_FABLE = BASE_PLUGIN / "hooks" / "scripts" / "block-fable-subagent.sh"
-
 # plugin ごとの対応ファイル。
-BLOCK_FABLE_SCRIPTS = {
-    "agent-discipline": BLOCK_FABLE,
-}
 INJECT_SUBAGENT_RULES_SCRIPTS = {
     "agent-discipline": BASE_PLUGIN / "hooks" / "scripts" / "inject-subagent-rules.sh",
 }
@@ -75,24 +52,6 @@ FORBIDDEN_PROMPT_PHRASES = (
     "全サブエージェント (Workflow 内部の `agent()` 含む) がその値で実行される",
 )
 
-# inject-subagent-rules.sh から消えていること / 書かれていること。
-FORBIDDEN_SUBAGENT_RULES_PHRASE = "subagent は Fable になり得ず"
-REQUIRED_SUBAGENT_RULES_PHRASE = "fork / frontmatter 経路では Fable になりうる"
-
-# 利用者が user settings に置く主防御の permission rule。`Agent(model:fable)` は
-# 週次枠判定付きの fable 明示許可 (hook の判定) も止めるため推奨しない
-# (README の設定例に載らないことは tests/test_agent_discipline_fable_weekly_gate.py が検査する)。
-PERMISSION_DENY_RULES = ("Agent(fork)",)
-
-# agent-discipline README の「既知の制約」節に必要なキーワード。
-README_KNOWN_LIMITATION_KEYWORDS = (
-    "Agent(model:fable)",
-    "Agent(fork)",
-    "claude-fable-5-1",
-    "frontmatter",
-    "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
-)
-
 # agent-discipline README 全文から消えていること (空白を無視して照合)。
 FORBIDDEN_README_PHRASES = (
     "主防御はあくまで `CLAUDE_CODE_SUBAGENT_MODEL` env 設定",
@@ -100,35 +59,8 @@ FORBIDDEN_README_PHRASES = (
     "`CLAUDE_CODE_SUBAGENT_MODEL` env > `tool_input.model` 明示指定",
 )
 
-# block-fable-subagent.sh の comment から消えていること (空白を無視して照合)。
-# 判定ステップの番号付けにも `Step 0` の表記は使わない。
-FORBIDDEN_HOOK_COMMENT_PHRASES = (
-    "CLAUDE_CODE_SUBAGENT_MODEL env > tool_input.model",
-    "Step 0",
-    "主防御はあくまで",
-    "すべてより優先されることを実測検証済み",
-)
-
 # 説明文書に書かない経緯記述 (契約対象ファイル全体を対象に、空白を無視して照合)。
 FORBIDDEN_HISTORY_PHRASES = ("以前は", "かつては", "旧順序", "2.1.251 で反転")
-
-# deny メッセージに書かない旧解決順序の説明 (FORCE 無効時の deny を対象に照合)。
-FORBIDDEN_DENY_PHRASES = ("model の明示指定より優先されて", "env 値に上書きされ")
-
-# deny メッセージに書かない、ワーカーを Sonnet / Haiku へ下げる案内 (全 deny を対象に照合)。
-FORBIDDEN_DOWNGRADE_PHRASES = ("model に sonnet / opus", "機械的作業なら haiku")
-
-# Sonnet / Haiku を model として推奨する表現 (正規表現、大文字小文字を無視)。呼び出し側が指定した
-# model 値を理由中で繰り返す記述は推奨ではないため、推奨の言い回しに限定して照合する。
-DOWNGRADE_RECOMMENDATION_PATTERNS = (
-    r'(?i)model:\s*"(sonnet|haiku)',
-    r"(?i)model\s*に\s*(sonnet|haiku)",
-    r"(?i)(sonnet|haiku)[^。]{0,20}を明示",
-    r"(?i)(sonnet|haiku)\s*へ(下げ|切り替え|変更)",
-)
-
-# UNSET: 引数を「与えなかった」(env 未設定 / key 自体を書かない) ことを表す番兵。
-UNSET = object()
 
 
 def read(path: Path) -> str:
@@ -153,424 +85,6 @@ def delegation_rules_section(body: str) -> str:
         r"<!--\s*rule:delegation-rules\s*-->(.*?)(?=<!--\s*rule:|\Z)", body, re.DOTALL
     )
     return "" if match is None else match.group(1)
-
-
-def markdown_section(body: str, heading: str) -> str:
-    """`heading` 行から同レベル以上の次の見出し直前までを返す (見つからなければ空文字)。
-
-    コードフェンス (``` / ~~~) の内側は見出しとして扱わない (フェンス内の shell comment
-    `# ...` で節が途切れないようにする)。見出しは `#` の並びの直後に空白がある行だけ。
-    """
-    lines = body.splitlines()
-    level = len(heading) - len(heading.lstrip("#"))
-    collected: list[str] = []
-    inside = False
-    fence: str | None = None
-    for line in lines:
-        fence_match = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if fence_match:
-            marker = fence_match.group(1)[0]
-            if fence is None:
-                fence = marker
-            elif fence == marker:
-                fence = None
-        if not inside:
-            if fence is None and line.rstrip() == heading:
-                inside = True
-            continue
-        heading_match = re.match(r"^(#{1,6})\s", line)
-        if fence is None and heading_match and len(heading_match.group(1)) <= level:
-            break
-        collected.append(line)
-    return "\n".join(collected)
-
-
-def json_code_blocks(body: str) -> list[object]:
-    """markdown の ```json フェンス内を JSON として読めたものだけ返す。"""
-    parsed: list[object] = []
-    for block in re.findall(r"```json\n(.*?)```", body, re.DOTALL):
-        try:
-            parsed.append(json.loads(block))
-        except json.JSONDecodeError:
-            continue
-    return parsed
-
-
-def row(
-    label: str,
-    *,
-    expect: str,
-    force: object = UNSET,
-    env: object = UNSET,
-    model: object = UNSET,
-    subagent_type: object = UNSET,
-    session_id: str = "model-resolution-gate",
-    keywords: tuple[str, ...] = (),
-) -> dict[str, object]:
-    """判定表の 1 行。``expect`` は ``"deny"`` / ``"allow"``。
-
-    ``force`` は env ``CLAUDE_CODE_SUBAGENT_MODEL_FORCE``、``env`` は env
-    ``CLAUDE_CODE_SUBAGENT_MODEL``、``model`` / ``subagent_type`` は hook 入力の
-    ``tool_input`` の各フィールド (UNSET はいずれも未設定)。``keywords`` は deny 理由に
-    一致すべき正規表現。
-    """
-    return {
-        "label": label,
-        "expect": expect,
-        "force": force,
-        "env": env,
-        "model": model,
-        "subagent_type": subagent_type,
-        "session_id": session_id,
-        "keywords": keywords,
-    }
-
-
-# deny 理由に求めるキーワード (正規表現)。SELF_REPAIR は「model に opus を明示して起動し
-# 直す」自己修復誘導 (FORCE 無効時の代替手段として有効な誘導)、NAMES_ENV / NAMES_FORCE
-# は実効モデルを決めている env を名指しすること (FORCE 有効時は model の明示では直らないため)。
-# NAMES_ENV は `_FORCE` が続かない出現を要求する (FORCE 変数名の接頭辞として現れただけでは
-# env を名指ししたことにならない)。
-SELF_REPAIR = (r'model: "opus"',)
-NAMES_ENV = (r"CLAUDE_CODE_SUBAGENT_MODEL(?!_FORCE)",)
-NAMES_FORCE = (r"CLAUDE_CODE_SUBAGENT_MODEL_FORCE",)
-
-# 判定表。FORCE 有効 (Claude Code の boolean env と同じ `1` / `true` / `yes` / `on`、大文字
-# 小文字を区別しない) では実効モデルを env とみなし、env が fable なら deny、それ以外 (env 空を
-# 含む) は allow する。FORCE 無効 (`0` / `false` / 空 / 未設定) では 明示 model > env > 継承 の
-# 順に判定する。明示 fable は Fable 週次枠の使用率だけで決まる (この表の隔離環境には使用率
-# cache が無いため使用率不明で deny)。メインセッションからの `fork` と、env 不在の model 未指定
-# (継承) は allow する。
-DECISION_TABLE = (
-    # --- FORCE 有効: 実効モデルは env (非空) で決まり、明示 model は無視される ---
-    row(
-        "force-on/env-fable/model-unspecified",
-        force="1",
-        env="fable",
-        expect="deny",
-        keywords=NAMES_ENV,
-    ),
-    row(
-        "force-on/env-fable/model-sonnet-explicit",
-        force="1",
-        env="fable",
-        model="sonnet",
-        expect="deny",
-        keywords=NAMES_ENV,
-    ),
-    row(
-        "force-true/env-full-fable-id/model-opus-explicit",
-        force="true",
-        env="claude-fable-5-1",
-        model="opus",
-        expect="deny",
-        keywords=NAMES_ENV,
-    ),
-    row(
-        "force-TRUE-uppercase/env-Fable-mixed-case",
-        force="TRUE",
-        env="Fable",
-        expect="deny",
-        keywords=NAMES_ENV,
-    ),
-    row(
-        "force-on/env-sonnet/model-fable-explicit",
-        force="1",
-        env="sonnet",
-        model="fable",
-        expect="allow",
-    ),
-    row(
-        "force-on/env-sonnet/model-unspecified",
-        force="1",
-        env="sonnet",
-        expect="allow",
-    ),
-    row(
-        "force-on/env-opus/model-unspecified",
-        force="1",
-        env="opus",
-        expect="allow",
-    ),
-    # --- FORCE 有効 + env 空: 実効モデルはメインセッションのモデルで、allow ---
-    row(
-        "force-on/env-absent/model-sonnet-explicit",
-        force="1",
-        model="sonnet",
-        expect="allow",
-    ),
-    row(
-        "force-on/env-empty/model-unspecified",
-        force="1",
-        env="",
-        expect="allow",
-    ),
-    row(
-        "force-on/env-absent/model-fable-explicit",
-        force="1",
-        model="fable",
-        expect="allow",
-    ),
-    # --- FORCE 無効: 明示 fable は週次枠判定 (cache 無し = 使用率不明) で deny ---
-    row(
-        "force-absent/model-fable-alias",
-        model="fable",
-        expect="deny",
-        keywords=SELF_REPAIR,
-    ),
-    row(
-        "force-0/env-sonnet/model-full-fable-id",
-        force="0",
-        env="sonnet",
-        model="claude-fable-5-1",
-        expect="deny",
-        keywords=SELF_REPAIR,
-    ),
-    row(
-        "force-false/model-FABLE-uppercase",
-        force="false",
-        model="FABLE",
-        expect="deny",
-        keywords=SELF_REPAIR,
-    ),
-    row(
-        "force-empty/model-fable-padded",
-        force="",
-        model="  fable  ",
-        expect="deny",
-        keywords=SELF_REPAIR,
-    ),
-    # --- FORCE 無効: 明示非 fable は env が fable でも allow (明示が env に優先する) ---
-    row(
-        "force-absent/env-fable/model-sonnet-explicit",
-        env="fable",
-        model="sonnet",
-        expect="allow",
-    ),
-    row(
-        "force-0/env-full-fable-id/model-opus-explicit",
-        force="0",
-        env="claude-fable-5-1",
-        model="opus",
-        expect="allow",
-    ),
-    row(
-        "force-absent/env-fable/model-haiku-explicit",
-        env="fable",
-        model="haiku",
-        expect="allow",
-    ),
-    row(
-        "force-false/model-sonnet-explicit",
-        force="false",
-        model="sonnet",
-        expect="allow",
-    ),
-    # --- FORCE 無効: model 未指定 (継承経路) ---
-    row(
-        "force-absent/env-fable/model-unspecified",
-        env="fable",
-        expect="deny",
-        keywords=SELF_REPAIR,
-    ),
-    row(
-        "force-absent/env-full-fable-id/model-empty-string",
-        env="claude-fable-5-1",
-        model="",
-        expect="deny",
-        keywords=SELF_REPAIR,
-    ),
-    row(
-        "force-absent/env-fable/model-inherit",
-        env="fable",
-        model="inherit",
-        expect="deny",
-        keywords=SELF_REPAIR,
-    ),
-    row(
-        "force-absent/env-sonnet/model-unspecified",
-        env="sonnet",
-        expect="allow",
-    ),
-    row(
-        "force-absent/env-absent/model-unspecified",
-        expect="allow",
-    ),
-    # FORCE の真値は Claude Code の boolean env と同じ集合 (`yes` / `on` も有効)。狭く解釈すると
-    # host が FORCE している起動を非 FORCE の順序で判定し、明示非 fable を誤って allow する。
-    row(
-        "force-yes/env-fable/model-sonnet-explicit",
-        force="yes",
-        env="fable",
-        model="sonnet",
-        expect="deny",
-        keywords=NAMES_ENV,
-    ),
-    row(
-        "force-ON-uppercase/env-sonnet/model-fable-explicit",
-        force="ON",
-        env="sonnet",
-        model="fable",
-        expect="allow",
-    ),
-    # session_id が空に正規化される経路も、model 未指定 + env 不在のメインセッションからの
-    # 起動として allow する。
-    row(
-        "force-absent/unusable-session-id",
-        session_id="///",
-        expect="allow",
-    ),
-    # --- fork: メインセッションからの起動は allow する ---
-    row(
-        "fork/model-unspecified",
-        subagent_type="fork",
-        expect="allow",
-    ),
-    row(
-        "fork/model-sonnet-explicit",
-        subagent_type="fork",
-        model="sonnet",
-        expect="allow",
-    ),
-    row(
-        "fork/env-sonnet/model-unspecified",
-        subagent_type="fork",
-        env="sonnet",
-        expect="allow",
-    ),
-)
-
-
-class HookSubprocessTestBase(unittest.TestCase):
-    """hook を隔離した env / TMPDIR / HOME で実行する共通基盤。"""
-
-    def isolated_env(self, temp: Path, **extra: str) -> dict[str, str]:
-        """親プロセスの env を継承せず、PATH と隔離ディレクトリだけを渡す env を作る。"""
-        home = temp / "home"
-        tmpdir = temp / "tmp"
-        cache_home = temp / "cache"
-        for directory in (home, tmpdir, cache_home):
-            directory.mkdir(exist_ok=True)
-        env = {
-            "PATH": os.environ["PATH"],
-            "HOME": str(home),
-            "TMPDIR": str(tmpdir),
-            "XDG_CACHE_HOME": str(cache_home),
-        }
-        env.update(extra)
-        return env
-
-
-@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
-class BlockFableSubagentDecisionTableTest(HookSubprocessTestBase):
-    """block-fable-subagent.sh の deny / allow を FORCE × 明示 × env × 継承 × fork で固定する。"""
-
-    def run_gate(self, case: dict[str, object]) -> subprocess.CompletedProcess[str]:
-        """判定表の 1 行を隔離環境で実行して CompletedProcess を返す。"""
-        with tempfile.TemporaryDirectory() as temporary:
-            temp = Path(temporary)
-            env = self.isolated_env(temp)
-            if case["force"] is not UNSET:
-                env["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] = str(case["force"])
-            if case["env"] is not UNSET:
-                env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(case["env"])
-
-            tool_input: dict[str, object] = {}
-            if case["model"] is not UNSET:
-                tool_input["model"] = case["model"]
-            if case["subagent_type"] is not UNSET:
-                tool_input["subagent_type"] = case["subagent_type"]
-            payload = {
-                "hook_event_name": "PreToolUse",
-                "session_id": case["session_id"],
-                "tool_input": tool_input,
-            }
-
-            return subprocess.run(
-                ["/bin/bash", str(BLOCK_FABLE)],
-                cwd=ROOT,
-                env=env,
-                input=json.dumps(payload, ensure_ascii=False),
-                text=True,
-                capture_output=True,
-                timeout=10,
-                check=False,
-            )
-
-    def deny_reason(
-        self, result: subprocess.CompletedProcess[str], label: str
-    ) -> str:
-        self.assertEqual(0, result.returncode, f"{label}: {result.stderr}")
-        self.assertTrue(result.stdout.strip(), f"{label}: deny JSON が出力されていない")
-        output = json.loads(result.stdout)["hookSpecificOutput"]
-        self.assertEqual("PreToolUse", output["hookEventName"], label)
-        self.assertEqual("deny", output["permissionDecision"], label)
-        return output["permissionDecisionReason"]
-
-    def test_decision_table(self) -> None:
-        """判定表の全行が期待どおり deny / allow になる。"""
-        for case in DECISION_TABLE:
-            label = str(case["label"])
-            with self.subTest(case=label):
-                result = self.run_gate(case)
-                if case["expect"] == "allow":
-                    self.assertEqual(0, result.returncode, f"{label}: {result.stderr}")
-                    self.assertEqual(
-                        "", result.stdout, f"{label}: allow なのに出力がある"
-                    )
-                    continue
-                reason = self.deny_reason(result, label)
-                for keyword in case["keywords"]:  # type: ignore[union-attr]
-                    self.assertRegex(reason, keyword, label)
-
-    def test_deny_reasons_drop_the_superseded_priority_claim(self) -> None:
-        """FORCE 無効時の deny 理由に「env は明示指定より優先」の説明が残っていない。"""
-        for case in DECISION_TABLE:
-            if case["expect"] != "deny" or case["force"] not in (UNSET, "", "0", "false"):
-                continue
-            label = str(case["label"])
-            with self.subTest(case=label):
-                reason = self.deny_reason(self.run_gate(case), label)
-                for phrase in FORBIDDEN_DENY_PHRASES:
-                    self.assertNotIn(phrase, reason, f"{label}: {phrase}")
-
-    def test_deny_reasons_do_not_guide_downgrade_to_sonnet_or_haiku(self) -> None:
-        """deny 理由が model に sonnet / haiku を明示する案内を含まない。"""
-        for case in DECISION_TABLE:
-            if case["expect"] != "deny":
-                continue
-            label = str(case["label"])
-            with self.subTest(case=label):
-                reason = self.deny_reason(self.run_gate(case), label)
-                for phrase in FORBIDDEN_DOWNGRADE_PHRASES:
-                    self.assertNotIn(phrase, reason, f"{label}: {phrase}")
-                for pattern in DOWNGRADE_RECOMMENDATION_PATTERNS:
-                    self.assertNotRegex(reason, pattern, f"{label}: {pattern}")
-
-    def test_non_pretooluse_event_produces_no_output(self) -> None:
-        """`hook_event_name` が PreToolUse 以外なら無出力で exit 0 になる。"""
-        for event in ("PostToolUse", "SessionStart", ""):
-            with self.subTest(hook_event_name=event):
-                with tempfile.TemporaryDirectory() as temporary:
-                    env = self.isolated_env(Path(temporary))
-                    env["CLAUDE_CODE_SUBAGENT_MODEL"] = "fable"
-                    payload = {
-                        "hook_event_name": event,
-                        "session_id": "model-resolution-gate",
-                        "tool_input": {"model": "fable"},
-                    }
-                    result = subprocess.run(
-                        ["/bin/bash", str(BLOCK_FABLE)],
-                        cwd=ROOT,
-                        env=env,
-                        input=json.dumps(payload, ensure_ascii=False),
-                        text=True,
-                        capture_output=True,
-                        timeout=10,
-                        check=False,
-                    )
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual("", result.stdout)
 
 
 class DisciplinePromptResolutionOrderTest(unittest.TestCase):
@@ -598,64 +112,8 @@ class DisciplinePromptResolutionOrderTest(unittest.TestCase):
                     self.assertNotIn(squeeze(phrase), body, label)
 
 
-class SubagentRulesInjectionPremiseTest(unittest.TestCase):
-    """inject-subagent-rules.sh が Fable subagent の存在しうる経路を前提に書かれている。"""
-
-    def test_fable_is_described_as_reachable_through_fork_and_frontmatter(self) -> None:
-        """「fork / frontmatter 経路では Fable になりうる」旨が書かれている。"""
-        for plugin, path in INJECT_SUBAGENT_RULES_SCRIPTS.items():
-            with self.subTest(plugin=plugin):
-                self.assertIn(
-                    squeeze(REQUIRED_SUBAGENT_RULES_PHRASE), squeeze(read(path)), path
-                )
-
-    def test_unreachable_premise_is_absent(self) -> None:
-        """「subagent は Fable になり得ない」前提が残っていない。"""
-        for plugin, path in INJECT_SUBAGENT_RULES_SCRIPTS.items():
-            with self.subTest(plugin=plugin):
-                self.assertNotIn(
-                    squeeze(FORBIDDEN_SUBAGENT_RULES_PHRASE), squeeze(read(path)), path
-                )
-
-
-class AgentDisciplineReadmeDefenseTest(unittest.TestCase):
-    """agent-discipline README が主防御 (permission rule) と既知制約を書いている。"""
-
-    def test_readme_shows_the_permission_deny_settings_example(self) -> None:
-        """`permissions.deny` に主防御の rule を置く JSON の設定例がある。"""
-        denies = [
-            block["permissions"]["deny"]
-            for block in json_code_blocks(read(BASE_README))
-            if isinstance(block, dict)
-            and isinstance(block.get("permissions"), dict)
-            and isinstance(block["permissions"].get("deny"), list)
-        ]
-        self.assertTrue(denies, "permissions.deny を含む json コードブロックが無い")
-        self.assertTrue(
-            any(set(PERMISSION_DENY_RULES) <= set(deny) for deny in denies),
-            f"{PERMISSION_DENY_RULES} を並べた設定例が無い (検出: {denies})",
-        )
-
-    def test_primary_defense_paragraph_points_at_the_permission_rules(self) -> None:
-        """主防御を説明する段落が `permissions.deny` を指している。"""
-        paragraphs = [
-            paragraph
-            for paragraph in read(BASE_README).split("\n\n")
-            if "主防御" in paragraph
-        ]
-        self.assertTrue(paragraphs, "主防御を説明する段落が無い")
-        self.assertTrue(
-            any("permissions.deny" in paragraph for paragraph in paragraphs),
-            "主防御の段落が permissions.deny を指していない",
-        )
-
-    def test_known_limitations_cover_the_uncatchable_paths(self) -> None:
-        """「既知の制約」節が permission rule と hook の捕捉範囲を説明している。"""
-        section = markdown_section(read(BASE_README), "## 既知の制約")
-        self.assertTrue(section, "## 既知の制約 節が無い")
-        for keyword in README_KNOWN_LIMITATION_KEYWORDS:
-            with self.subTest(keyword=keyword):
-                self.assertIn(keyword, section)
+class AgentDisciplineReadmeResolutionOrderTest(unittest.TestCase):
+    """agent-discipline README が誤った解決順序の説明を持たない。"""
 
     def test_superseded_claims_are_absent(self) -> None:
         """誤った解決順序・「主防御は env」・「env 側でカバー」の記述が無い。"""
@@ -668,19 +126,10 @@ class AgentDisciplineReadmeDefenseTest(unittest.TestCase):
 class HookCommentCurrencyTest(unittest.TestCase):
     """契約対象ファイルの説明文が現在の解決順序だけを書いている。"""
 
-    def test_block_fable_comments_drop_the_superseded_order(self) -> None:
-        """block-fable-subagent.sh の comment に誤った解決順序の説明が無い。"""
-        for plugin, path in BLOCK_FABLE_SCRIPTS.items():
-            body = squeeze(read(path))
-            for phrase in FORBIDDEN_HOOK_COMMENT_PHRASES:
-                with self.subTest(plugin=plugin, phrase=phrase):
-                    self.assertNotIn(squeeze(phrase), body, path)
-
     def test_contract_files_have_no_history_notes(self) -> None:
         """契約対象ファイルに経緯記述が書かれていない。"""
         targets: dict[str, Path] = {
             **DISCIPLINE_PROMPTS,
-            **{f"block-fable/{k}": v for k, v in BLOCK_FABLE_SCRIPTS.items()},
             **{f"inject-subagent/{k}": v for k, v in INJECT_SUBAGENT_RULES_SCRIPTS.items()},
         }
         for label, path in targets.items():

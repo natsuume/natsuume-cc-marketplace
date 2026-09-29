@@ -74,7 +74,6 @@ AGENT_DISCIPLINE_COMMAND_HOOKS = (
     ("UserPromptSubmit", script_path("inject-discipline.sh"), ()),
     ("UserPromptSubmit", script_path("inject-auto.sh"), ()),
     ("UserPromptSubmit", script_path("check-uncommitted-on-session-start.sh"), ()),
-    ("PreToolUse", script_path("block-fable-subagent.sh"), ()),
 )
 
 # plugin ごとの command hook の多重集合 (event, command, args)。
@@ -246,14 +245,14 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "enforce-draft-pr": "0.5.8",
     "auto-lint-check": "0.8.4",
     "pre-push-review": "7.0.4",
-    "pre-push-codex-review": "4.0.5",
+    "pre-push-codex-review": "4.0.6",
     "pre-merge-cross-review": "4.0.1",
     "update-default-branch": "0.4.7",
-    "natsuume-statusline": "0.11.7",
-    "agent-discipline": "3.0.13",
+    "natsuume-statusline": "0.11.8",
+    "agent-discipline": "4.0.0",
     "ui-discipline": "0.4.9",
     "natsuume-writing": "0.10.0",
-    "cross-model-advisor": "5.0.10",
+    "cross-model-advisor": "6.0.0",
     "rate-limit": "0.5.5",
     "session-handoff": "1.0.0",
     "repo-analytics": "0.2.10",

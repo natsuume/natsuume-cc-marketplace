@@ -1,13 +1,6 @@
-"""agent-discipline: Opus 5.5 メイン + Fable Advisor パターン向け分業規律・自走方針の契約テスト。
+"""agent-discipline: Opus 5.5 メイン向け分業規律・自走方針の契約テスト。
 
-- メインセッションとワーカー (実装・調査・一括修正等) のサブエージェントは Opus 5.5 で動かす。
-  Fable は cross-model-advisor の fable-advisor-runner の起動にのみ使う。reviewer
-  (pre-push-review の reviewer 2 体を含む) は Fable の用途に含めない。
-- 分業規律 (discipline.md) の rule:delegation-rules 節は、「`cross-model-advisor:fable-advisor-runner`
-  の起動に限り `model: "fable"` を明示して使い、週次枠ガードで deny されたら再起動せず
-  スキップ」と記述し、pre-merge review・fable-reviewer・pre-push-review の reviewer には
-  言及しない。Fable をメインセッションで使う運用は無いため、Fable メイン向けの記述を持たず、
-  ヘッダコメントと冒頭文の対象に Fable を含めない。
+- 分業規律 (discipline.md) のヘッダコメントと冒頭文は、対象に Fable を含めない。
 - discipline.md の effort 規律は公式ガイド「Prompting Claude Opus 5.5」
   (prompting-claude-opus-5-5、既定 effort は medium) を基準にし、rule:delegation-rules 節に
   置く。Opus 5.5 の思考量は現在形の事実として書き、Opus 5 との比較と、Opus 5 の effort を
@@ -33,11 +26,6 @@ PROMPTS = REPO_ROOT / "plugins" / "agent-discipline" / "hooks" / "prompts"
 
 DISCIPLINE = PROMPTS / "discipline.md"
 
-# Fable の用途を限定して記述する分業規律。
-DISCIPLINES = {
-    "discipline.md": DISCIPLINE,
-}
-
 AUTO_MODE_FILES = {
     "agent-discipline/auto-mode.md": PROMPTS / "auto-mode.md",
 }
@@ -45,39 +33,6 @@ AUTO_MODE_FILES = {
 # 節スコープ検査で切り出すセクション境界 (rule ID マーカー)。
 DELEGATION_RULES_MARKER = "<!-- rule:delegation-rules -->"
 DELEGATION_INSTRUCTION_MARKER = "<!-- rule:delegation-instruction -->"
-
-# 全面禁止の bullet 見出し (分業規律に含めない)。
-FABLE_PROHIBITION_PHRASE = "Fable をサブエージェントに使わない"
-
-# rule:delegation-rules 節に必須の Fable 用途の記述 (canonical 文言)。
-FABLE_USAGE_PHRASES = (
-    # 用途を fable-advisor-runner の起動に限り、ワーカーには使わない
-    "Fable は `cross-model-advisor:fable-advisor-runner` の起動にだけ使い、",
-    "ワーカー (実装・調査・一括修正等)",
-    # hook (PreToolUse の Agent|Task) が捕捉しない Workflow の agent() では使わない
-    "Workflow の `agent()` では Fable を使わない",
-    # model の明示 (未指定・frontmatter 経由の Fable 実行は使わない)
-    'model を `"fable"` と明示する',
-    "model 未指定・agent 定義 frontmatter による Fable 実行は使わない",
-    # 週次枠ガードによる deny と deny 後の振る舞い (両 agent 共通)
-    "Fable 週次枠の使用率が閾値を超えた場合・確認できない場合",
-    "再起動せずスキップする",
-)
-
-# rule:delegation-rules 節に含めない記述 (提供されていない用途・Fable メイン向けの記述)。
-FABLE_REMOVED_PHRASES = (
-    # merge 前の Fable review (pre-merge-cross-review は Fable を使わない)
-    "pre-merge",
-    "fable-reviewer",
-    # Fable メインのセッション向けの記述
-    "Fable メインのセッション",
-)
-
-# rule:delegation-rules 節に含めない記述 (pre-push-review の reviewer は Fable の用途ではない)。
-FABLE_EXCLUDED_PHRASES = (
-    "pre-push-review:",
-    "reviewer / advisor",
-)
 
 # discipline.md の effort 規律 (Opus 5.5 基準)。
 OPUS55_EFFORT_PHRASES = (
@@ -135,51 +90,6 @@ def intro_paragraph(text: str) -> str:
     body = text[len(header_comment(text)) :]
     end = body.find("<!-- rule:")
     return (body[:end] if end >= 0 else body).strip()
-
-
-class FableUsageDelegationRulesTests(unittest.TestCase):
-    """分業規律の rule:delegation-rules 節が Fable の用途を限定して許可すること。"""
-
-    def test_prohibition_phrase_absent_from_disciplines(self) -> None:
-        offenders = [
-            name
-            for name, path in DISCIPLINES.items()
-            if FABLE_PROHIBITION_PHRASE in read(path)
-        ]
-        self.assertEqual([], offenders, f"Fable の全面禁止の記述を含むファイル: {offenders}")
-
-    def test_fable_usage_phrases_present_in_delegation_rules(self) -> None:
-        missing = [
-            f"{name}: {phrase!r}"
-            for name, path in DISCIPLINES.items()
-            for phrase in FABLE_USAGE_PHRASES
-            if phrase not in delegation_rules_section(read(path))
-        ]
-        self.assertEqual(
-            [], missing, f"rule:delegation-rules 節に無い Fable 用途の記述: {missing}"
-        )
-
-    def test_superseded_fable_phrases_absent_from_delegation_rules(self) -> None:
-        present = [
-            f"{name}: {phrase!r}"
-            for name, path in DISCIPLINES.items()
-            for phrase in FABLE_REMOVED_PHRASES
-            if phrase in delegation_rules_section(read(path))
-        ]
-        self.assertEqual(
-            [], present, f"rule:delegation-rules 節に含めない Fable 記述: {present}"
-        )
-
-    def test_reviewers_are_not_fable_usage_in_delegation_rules(self) -> None:
-        present = [
-            f"{name}: {phrase!r}"
-            for name, path in DISCIPLINES.items()
-            for phrase in FABLE_EXCLUDED_PHRASES
-            if phrase in delegation_rules_section(read(path))
-        ]
-        self.assertEqual(
-            [], present, f"rule:delegation-rules 節に残る reviewer の Fable 用途: {present}"
-        )
 
 
 class DisciplineAudienceTests(unittest.TestCase):
