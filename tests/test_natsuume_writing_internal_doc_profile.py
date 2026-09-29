@@ -102,6 +102,7 @@ class InternalDocProfileTest(unittest.TestCase):
     def test_existing_conventions_override_profile_style(self) -> None:
         self.assertIn("構成・文体 (です・ます調など) を定めている場合", self.profile)
         self.assertIn("規約が無いときの既定", self.profile)
+        self.assertIn("outline コメントの `文体=`", self.profile)
 
     def test_qa_questions_may_use_question_mark(self) -> None:
         self.assertIn("Q&A の問いの項目では「？」を使ってよい", self.profile)
@@ -122,6 +123,7 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
         self.assertIn("社内技術文書プロファイル", tech)
         self.assertIn("常体", tech)
         self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
+        self.assertIn("Q&A の問いには「？」を使ってよい", tech)
         self.assertIn(
             "「何でも分類・列挙する構成を重ねない」は、社内技術文書の箇条書きの項目には適用しません",
             tech,
@@ -136,7 +138,11 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         text = read(OUTLINE_SKILL)
         self.assertIn(f"媒体: {MEDIA_CHOICES}", text)
         self.assertIn("媒体 = 書籍 / 社内技術文書 のときは省略可", text)
-        self.assertIn("媒体=社内技術文書 / 想定読者=", text)
+        self.assertIn("媒体=社内技術文書 / 文体=プロファイル / 想定読者=", text)
+        self.assertIn("文体 (媒体 = 社内技術文書 のときのみ)", text)
+        self.assertIn(
+            "文体 = 社内規約 のときは、その規約やテンプレートに合わせた構成案", text
+        )
         description = next(
             line for line in text.splitlines() if line.startswith("description:")
         )
@@ -147,8 +153,11 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn(f"媒体 ({MEDIA_CHOICES})", text)
         self.assertIn("社内技術文書プロファイル", text)
         self.assertIn("で確認済み", text)
+        self.assertIn("同じく TODO コメントとプレースホルダーを伴う形で残します", text)
+        self.assertIn("文体 (媒体 = 社内技術文書 のときのみ。", text)
+        self.assertIn("判断できない場合にだけユーザーに確認します", text)
         self.assertIn(
-            "媒体 = 社内技術文書 で、既存文書のテンプレートや社内の規約が構成・文体を定めていないときは、社内技術文書プロファイルに従って箇条書きの項目で書き",
+            "媒体 = 社内技術文書 で文体 = プロファイル のときは、社内技術文書プロファイルに従って箇条書きの項目で書き",
             text,
         )
         self.assertIn("箇条書き中心に従い、この項目を適用しない", text)
@@ -167,10 +176,9 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
             "箇条書きの項目と体言止めの文を「分類・対称化」「演出的な断片文」として指摘しない",
             text,
         )
-        self.assertIn(
-            "既存文書のテンプレートや社内の規約が構成・文体を定めていないときは",
-            text,
-        )
+        self.assertIn("媒体 = 社内技術文書 で文体 = プロファイル のときは", text)
+        self.assertIn("文体 (媒体 = 社内技術文書 のときのみ。", text)
+        self.assertIn("文体 = 社内規約 のときは、社内技術文書プロファイルの", text)
 
 
 if __name__ == "__main__":
