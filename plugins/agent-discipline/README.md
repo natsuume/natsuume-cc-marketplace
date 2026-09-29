@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v3.0.13
+v4.0.0
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
@@ -26,9 +26,9 @@ Claude Code に「個人の開発スタイル」を一括で適用するため�
 
 ### モデル分業の前提
 
-メインセッションと、実装・調査・一括修正等のワーカーサブエージェントは Opus 5.5 で動かします。メインセッションが Opus 5.5 なら、ワーカーは model 未指定でメインセッションのモデルを継承させます。メインセッションが Opus 系以外のモデルで動いている場合 (または env 等で継承先が Opus 以外になる場合) は、ワーカーの起動で `model: "opus"` を明示させます。Fable は `cross-model-advisor:fable-advisor-runner` の起動 (`model: "fable"` の明示) にだけ使い、`block-fable-subagent.sh` が Fable 週次枠の使用率で起動を判定します (詳細は「block-fable-subagent」参照)。Sonnet に pin するのは codex 系 runner と検知層の `type: agent` hook のような定型 runner に限ります。
+メインセッションと、実装・調査・一括修正等のワーカーサブエージェントは Opus 5.5 で動かします。メインセッションが Opus 5.5 なら、ワーカーは model 未指定でメインセッションのモデルを継承させます。メインセッションが Opus 系以外のモデルで動いている場合 (または env 等で継承先が Opus 以外になる場合) は、ワーカーの起動で `model: "opus"` を明示させます。Sonnet に pin するのは codex 系 runner と検知層の `type: agent` hook のような定型 runner に限ります。
 
-配送する規律 (常時適用ルール・分業規律) は、メインセッションのモデルに依らず同一です。Fable をメインセッションのモデルとする構成は想定していません。その場合も同じ規律を配送し、Fable サブエージェントの起動はメインセッションのモデルに依らず上記の判定だけで扱います。
+配送する規律 (常時適用ルール・分業規律) は、メインセッションのモデルに依らず同一です。
 
 ## インストール
 
@@ -229,43 +229,6 @@ prompt 内の early return (「対象 command 以外は即 ok:true」) だけで
 - 違反疑い検出時は `{"ok": false}` で block を返す。 silent pass は構造的に不可逆 (= 後続 session が既決事項として読む leak が成立) なため、 false positive (= 正当な記述を誤って block) の方が recovery 可能であり、 fail-closed が論理的に正しい
 - block された Claude は reason を読み、 AskUserQuestion でユーザの decision を取り、 確定した 1 案だけを body に残して再試行する
 
-#### block-fable-subagent
-
-**ファイル**: `hooks/scripts/block-fable-subagent.sh`
-**イベント**: `PreToolUse`
-**matcher**: `Agent|Task`
-
-Fable サブエージェントは、`model: "fable"` を明示し、かつ Fable 週次枠の使用率が閾値以下の場合に限り許可します (cross-model-advisor の fable-advisor-runner を Fable で起動するため)。用途を advisor に限る規律は分業規律 (`discipline.md`) が担い、本 hook は許可 agent の一覧を持ちません。メインセッションのモデルは判定に使いません。
-
-fork サブエージェントを止める主防御は、利用者の settings (`~/.claude/settings.json` 等) に置く `permissions.deny` の rule です。本 hook はそれを補う二重防御で、permission rule が捕捉しない経路 (サブエージェント内からの継承・env による上書き) の検知と、deny メッセージによる自己修正誘導を担います。
-
-```json
-{
-  "permissions": {
-    "deny": ["Agent(fork)"]
-  }
-}
-```
-
-`Agent(model:fable)` は permission rule に置かないでください。置くと `model: "fable"` の明示がすべて止まり、週次枠判定付きの許可経路も使えなくなります。`Agent(model:fable)` を設定済みの場合は削除してください。
-
-**動作**:
-
-- Claude Code のモデル解決順序は 明示 `model` > agent 定義の frontmatter > `CLAUDE_CODE_SUBAGENT_MODEL` > メインセッション継承 で、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (`1` / `true`) が設定されている場合のみ env (未設定ならメインセッションのモデル) が全てを上書きする。`subagent_type` が `fork` のサブエージェントは model 指定にも env にも依らずメインセッションのモデルを継承する。本 hook はこの順序に沿って上から判定し、すべて deterministic な文字列判定で行う (LLM 評価は使わない)
-  1. `fork` → サブエージェント内 (入力に `agent_id` がある) からの起動なら deny (nested guard、下記)。メインセッションからの起動なら allow
-  2. `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` が有効 → 実効モデルは env (非空ならその値、空ならメインセッションのモデル)。env が fable なら model の明示に依らず deny し、model の明示では直せないことを deny 理由に書く。それ以外 (env 空を含む) は allow
-  3. `tool_input.model` に fable が明示指定されている (alias `fable` / full ID `claude-fable-5-1` 等、大文字小文字を無視した部分一致) → 下記の使用率判定で利用可なら allow、利用不可 (閾値超過・使用率不明) なら deny。超過時の deny 理由には使用率・閾値・reset 時刻 (cache にあれば) を含める。deny 理由では、fable-advisor-runner は再起動せずスキップし、それ以外の委任では非 Fable の model (例: `model: "opus"`) を明示するよう案内する
-  4. `tool_input.model` が非 fable の具体指定 → allow (明示は env より優先されるため)
-  5. `tool_input.model` 未指定 (= 継承経路): env が非空なら fable のとき deny・それ以外は allow。env 不在でサブエージェント内 (入力に `agent_id` がある) からの起動は deny する (nested guard、下記)。それ以外 (env 不在のメインセッションからの起動) は allow
-- **nested guard**: サブエージェント内 (入力に `agent_id` がある) からの model 未指定 (`inherit` を含む)・`fork` の起動は deny し、model の明示を求める。継承先は起動元サブエージェントのモデルになり、週次枠判定を通った Fable サブエージェントの子が判定なしで Fable を継承しうるため。`CLAUDE_CODE_SUBAGENT_MODEL` が非空なら子の実効モデルは env で決まるため env で判定する
-- **Fable 週次枠の使用率判定** (3):
-  - 入力は natsuume-statusline が書く `${XDG_CACHE_HOME:-$HOME/.cache}/natsuume-statusline/weekly-scoped.json`。本 hook は読むだけで書き込まず、OAuth usage API も呼ばない
-  - 閾値は env `FABLE_WEEKLY_MAX_PERCENT` (前後空白を trim した 0〜100 の 10 進整数)。未設定・空・範囲外・非整数は既定値 `80`
-  - `weekly_scoped[]` のうち `display_name` が大文字小文字を無視して `fable` を含み `percent` が数値の entry の最大 `percent` で判定し、`percent <= 閾値` なら利用可 (ちょうど閾値は利用可)。比較は小数を扱えるよう jq で行う
-  - cache が symlink / 通常ファイルでない / 存在しない / 読めない / JSON document が 1 つでない / `fetched_at` が欠落・非数値 / `now - fetched_at > 1800` (stale) / `weekly_scoped` が欠落・非配列・空 / Fable entry が無い / 現在時刻を取得できない場合は、使用率不明として deny する (fail-closed)。deny 理由では cache の producer (natsuume-statusline) の構成手順を案内する。`fetched_at` が未来時刻でも stale とはみなさない
-- `"inherit"` (case-insensitive) は「未指定」に正規化する
-- permission rule と本 hook のどちらでも捕捉できない経路 (agent 定義 frontmatter の `model` / Workflow 内部の `agent()`) は下記「既知の制約」セクション参照
-
 #### check-uncommitted-on-session-start
 
 **ファイル**: `hooks/scripts/check-uncommitted-on-session-start.sh`
@@ -350,7 +313,7 @@ issue の着手・実装開始フェーズの手順をガイドします: pick-u
 
 **動作**:
 
-- **対象と分岐**: 対象スクリプト × 分岐 × 期待 (出力あり / 出力なし) の対応表をスクリプト内定数 `CASE_TABLE` として持つ。対象は `inject-always.sh` / `inject-rules-part.sh` (part 2・part 3) / `inject-discipline.sh` / `inject-temporary.sh` / `inject-subagent-rules.sh` / `inject-auto.sh` / `check-uncommitted-on-session-start.sh`。additionalContext を出力しない `block-fable-subagent.sh` は検査対象外リスト `EXCLUDED_SCRIPTS` に置く。`inject-rules-part.sh` / `inject-discipline.sh` は初回配送 (出力あり) と配送済みマーカー存在時 (出力なし) の分岐を検査する。`inject-temporary.sh` は `hooks/prompts/temporary/*.md` の実在ファイルを連結した現物を測り、temporary md が 0 件なら「出力なし」を期待する
+- **対象と分岐**: 対象スクリプト × 分岐 × 期待 (出力あり / 出力なし) の対応表をスクリプト内定数 `CASE_TABLE` として持つ。対象は `inject-always.sh` / `inject-rules-part.sh` (part 2・part 3) / `inject-discipline.sh` / `inject-temporary.sh` / `inject-subagent-rules.sh` / `inject-auto.sh` / `check-uncommitted-on-session-start.sh`。additionalContext を出力しない hook script は検査対象外リスト `EXCLUDED_SCRIPTS` に置く (現在は該当なし)。`inject-rules-part.sh` / `inject-discipline.sh` は初回配送 (出力あり) と配送済みマーカー存在時 (出力なし) の分岐を検査する。`inject-temporary.sh` は `hooks/prompts/temporary/*.md` の実在ファイルを連結した現物を測り、temporary md が 0 件なら「出力なし」を期待する
 - **閾値 (2 段階)**: 要素が 8,000 字 (`PAYLOAD_LIMIT_CHARS`) を超えたら FAIL (exit 1)。7,800 字 (`PAYLOAD_WARN_CHARS`) を超え 8,000 字以下なら WARN を出すが exit code には影響しない。文字数は Unicode code point 数 (`wc -m` を UTF-8 ロケールで実行した値と同じ) で数える
 - **fail-closed**: 対応表で「出力あり」の分岐で出力が無い・JSON として parse できない・`additionalContext` が空、「出力なし」の分岐で出力がある、対象スクリプトが exit 0 以外で終わる、といった場合はサイズ 0 として pass させず FAIL にする。加えて、`hooks.json` の `type: command` エントリと対応表 (と検査対象外リスト `EXCLUDED_SCRIPTS`) を照合し、注入スクリプトの追加・登録解除に対応表が追従していない場合も FAIL にする
 - **隔離**: `mktemp -d` の隔離ディレクトリをケースごとの `TMPDIR` として対象スクリプトを実行し、実システムの `${TMPDIR:-/tmp}/agent-discipline-state` には読み書きしない。隔離ディレクトリは終了時に削除する
@@ -411,7 +374,6 @@ agent-discipline/
 │   │   │   └── askuserquestion-preview-workaround.md
 │   │   └── uncommitted-check.md
 │   └── scripts/
-│       ├── block-fable-subagent.sh
 │       ├── check-uncommitted-on-session-start.sh
 │       ├── inject-always.sh
 │       ├── inject-auto.sh
@@ -466,8 +428,6 @@ agent-discipline/
 - **検知層の model pin は手動メンテナンス**: pin 先の Sonnet を upgrade する場合 (例: sonnet-5 → sonnet-6)、 `hooks/hooks.json` の `model` field を手動で同期する
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **配送済みマーカーは OS の tmp cleanup による自然消去のみ**: `${TMPDIR:-/tmp}/agent-discipline-state/` 配下の配送済みマーカーに明示的な保持期間 (retention) 処理は無く、`check-uncommitted-on-session-start.sh` が使う `agent-discipline-markers/` とは別 namespace を使う
-- **permission rule と `block-fable-subagent.sh` の捕捉範囲**: `model: "fable"` の明示 (alias `fable` / full model ID `claude-fable-5-1` とも) は hook が部分一致で捕捉し、Fable 週次枠の使用率で判定する。permission rule の `Agent(model:fable)` はこの許可経路も止めるため置かない。`Agent(fork)` は fork サブエージェントの起動自体を止める (fork は model 指定にも env にも依らず起動元のモデルを継承する。fork を許可する構成では、hook はサブエージェント内からの fork だけを deny する)。agent 定義 frontmatter の `model` は `tool_input` に現れないため permission rule でも hook でも捕捉できず、frontmatter が fable を指す agent への model 未指定の委任は、`CLAUDE_CODE_SUBAGENT_MODEL_FORCE` の併用で実効モデルが env 側に固定される場合を除いて素通りする
-- **`block-fable-subagent.sh` は Workflow ツール内部の `agent()` 呼び出しを PreToolUse で捕捉できない**: PreToolUse はメインループのツール呼び出しにのみ発火するため、Workflow スクリプト内部のサブエージェントスポーンは本 hook の対象外
 - **compact 直後のギャップ**: `SessionStart(source=compact)` 後、次のユーザプロンプトまでは part 1 要素 (delivery-note + `always-1.md`) のみが再注入され、残りの要素 (part 2/3・分業規律) は再配送されない (`UserPromptSubmit` はユーザプロンプトでしか発火しないため)。compact 後に agentic loop が自動継続する経路では、この間の推論は part 1 の delivery-note (自己修復指示) と compact summary 内の痕跡に依存する。常時ルールと分業規律を単一要素に連結する構成でも同経路では persisted-output (2KB プレビュー) しか届かないため、分割配送による劣化ではない
 - **exactly-once は保証しない**: hook 出力に配送 ACK が無いため、マーカー書込後に配送が失われた場合の再送はできない (SessionStart での全マーカーリセットが回復手段)。逆に TMPDIR 掃除等でマーカーが消えた場合は再配送される (重複は無害)
 

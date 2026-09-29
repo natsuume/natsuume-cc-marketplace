@@ -45,7 +45,7 @@
       "name": "pre-push-codex-review",
       "source": "./plugins/pre-push-codex-review",
       "description": "push 前に codex review の完了を強制する",
-      "version": "4.0.5",
+      "version": "4.0.6",
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
@@ -66,14 +66,14 @@
       "name": "natsuume-statusline",
       "source": "./plugins/natsuume-statusline",
       "description": "git 状態と使用量を表示する statusLine",
-      "version": "0.11.7",
+      "version": "0.11.8",
       "keywords": ["statusline", "ui", "git", "ratelimit", "github"]
     },
     {
       "name": "agent-discipline",
       "source": "./plugins/agent-discipline",
       "description": "作業規律を注入し issue / PR 本文の独断を検知する",
-      "version": "3.0.13",
+      "version": "4.0.0",
       "keywords": ["system-prompt", "discipline", "auto", "issue-driven", "bash", "decompose", "askuserquestion", "permission-mode", "hook", "guardrail", "exclusive-claim", "race-condition", "semantic-validation", "pre-tool-use", "agent-hook"]
     },
     {
@@ -93,9 +93,9 @@
     {
       "name": "cross-model-advisor",
       "source": "./plugins/cross-model-advisor",
-      "description": "Codex と Fable へ並列相談し runner を管理する",
-      "version": "5.0.10",
-      "keywords": ["codex", "fable", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
+      "description": "Codex へ相談し runner を管理する",
+      "version": "6.0.0",
+      "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {
       "name": "rate-limit",

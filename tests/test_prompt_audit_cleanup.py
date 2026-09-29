@@ -18,8 +18,8 @@
   同じ形である。
 - ``AgentToolNameTest`` (pre-push-review 全体と pre-push-codex-review の review command):
   旧ツール名 Task を書かない。
-- ``CrossModelAdvisorOutputLengthTest`` (cross-model-advisor): 助言と不足の報告に語数・
-  行数の上限を置かず、定性的な長さの指示を置く。advisor-rules は相談回数の目安を持たない。
+- ``CrossModelAdvisorOutputLengthTest`` (cross-model-advisor): consult skill の助言に語数の
+  上限を置かず、定性的な長さの指示を置く。advisor-rules は相談回数の目安を持たない。
   README の既知の制約は、ユーザが rescue の本文を直接指定した場合の扱いを、外部 plugin の
   rescue.md ではなく routing flag の規定と codex-rescue-runner を根拠に説明する。
 - ``LeadtimeSummaryTest`` (repo-analytics): ターミナルサマリの結論に文数の上限を置かず、
@@ -87,7 +87,6 @@ PRE_MERGE_CODEX_REVIEWER = (
 
 # cross-model-advisor
 CROSS_MODEL_ADVISOR = PLUGINS / "cross-model-advisor"
-FABLE_ADVISOR_RUNNER = CROSS_MODEL_ADVISOR / "agents" / "fable-advisor-runner.md"
 CONSULT_SKILL = CROSS_MODEL_ADVISOR / "skills" / "consult" / "SKILL.md"
 ADVISOR_RULES = CROSS_MODEL_ADVISOR / "hooks" / "prompts" / "advisor-rules.md"
 CROSS_MODEL_ADVISOR_README = CROSS_MODEL_ADVISOR / "README.md"
@@ -482,7 +481,7 @@ class AgentToolNameTest(ContractTestCase):
 class CrossModelAdvisorOutputLengthTest(ContractTestCase):
     """cross-model-advisor の出力の長さの指示・相談回数・既知の制約の根拠。"""
 
-    ADVICE_LENGTH_FILES = (FABLE_ADVISOR_RUNNER, CONSULT_SKILL)
+    ADVICE_LENGTH_FILES = (CONSULT_SKILL,)
 
     def test_advice_has_no_word_limit(self) -> None:
         for path in self.ADVICE_LENGTH_FILES:
@@ -497,12 +496,6 @@ class CrossModelAdvisorOutputLengthTest(ContractTestCase):
                     read(path),
                     "採否判断に必要な範囲で簡潔に",
                 )
-
-    def test_insufficient_request_reply_has_no_line_limit(self) -> None:
-        label = display_path(FABLE_ADVISOR_RUNNER)
-        text = read(FABLE_ADVISOR_RUNNER)
-        self.assert_phrase_absent(label, text, "1〜3 行")
-        self.assert_phrase_present(f"{label} の不足の報告", text, "簡潔に返して終了")
 
     def test_advisor_rules_have_no_consultation_count_target(self) -> None:
         label = display_path(ADVISOR_RULES)

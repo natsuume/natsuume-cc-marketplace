@@ -4,8 +4,8 @@ agent-discipline はメインセッションのモデルを判定せず、全モ
 
 - ファイル構成 (``FileLayoutTest`` / ``HooksJsonTest`` / ``RemovedNameReferenceTest``):
   常時適用ルールは always-{1,2,3}.md、分業規律は discipline.md の 1 版である。モデル別の版・
-  自己ゲート前置き・モデル判定スクリプトは存在せず、hooks.json は ``PostModelSwitch`` を登録
-  しない。``UserPromptSubmit`` は ``USER_PROMPT_SUBMIT_COMMANDS`` の順に command hook を
+  自己ゲート前置き・モデル判定スクリプト・サブエージェントの Fable 実行経路の判定スクリプトは
+  存在せず、hooks.json は ``PostModelSwitch`` を登録しない。``UserPromptSubmit`` は ``USER_PROMPT_SUBMIT_COMMANDS`` の順に command hook を
   実行する。hooks.json の ``description`` は現行のファイル名だけを書き、モデル判定の仕組みに
   言及しない。リポジトリのファイル (git の追跡対象と、.gitignore に該当しない未追跡ファイル。
   本ファイルを除く) に、存在しないファイル・hook event の名前 (``REMOVED_NAME_FRAGMENTS``)
@@ -74,7 +74,7 @@ REPO_README = ROOT / "README.md"
 PLUGIN_README = PLUGIN_DIR / "README.md"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "3.0.13"
+PLUGIN_VERSION = "4.0.0"
 
 INJECT_ALWAYS = "inject-always.sh"
 INJECT_RULES_PART = "inject-rules-part.sh"
@@ -92,7 +92,6 @@ PRESENT_PROMPTS = (
     "uncommitted-check.md",
 )
 PRESENT_SCRIPTS = (
-    "block-fable-subagent.sh",
     "check-uncommitted-on-session-start.sh",
     INJECT_ALWAYS,
     "inject-auto.sh",
@@ -103,7 +102,8 @@ PRESENT_SCRIPTS = (
     "lib/permission-mode.sh",
 )
 
-# 存在してはならないファイル (モデル別の版・自己ゲート前置き・モデル判定スクリプト)。
+# 存在してはならないファイル (モデル別の版・自己ゲート前置き・モデル判定スクリプト・
+# サブエージェントの Fable 実行経路の判定スクリプト)。
 ABSENT_PROMPTS = (
     "always-sonnet-1.md",
     "always-sonnet-2.md",
@@ -114,7 +114,11 @@ ABSENT_PROMPTS = (
     "preamble-self-gate.md",
     "part-self-gate.md",
 )
-ABSENT_SCRIPTS = ("resolve-model-on-prompt.sh", "update-model-on-switch.sh")
+ABSENT_SCRIPTS = (
+    "resolve-model-on-prompt.sh",
+    "update-model-on-switch.sh",
+    "block-fable-subagent.sh",
+)
 
 # リポジトリ内のどのファイルも参照してはならない名前 (部分文字列で照合する)。
 REMOVED_NAME_FRAGMENTS = (
@@ -212,7 +216,6 @@ EXPECTED_DISCIPLINE_RULE_IDS = {
     "escalation",
 }
 DISCIPLINE_REQUIRED_PHRASES = (
-    "cross-model-advisor:fable-advisor-runner",
     "**ワーカーは Opus 5.5 で動かす**",
     "メインセッションが Opus 系以外のモデルで動いている場合",
     '`model: "opus"` を明示する',

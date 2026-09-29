@@ -1,9 +1,8 @@
 """pre-merge-cross-review が merge 前の cross review を codex review だけで行う契約テスト。
 
 pre-merge-cross-review は merge 前に `pre-merge-cross-review:codex-reviewer` だけを起動し、
-Fable review の agent・判定コマンド・判定 lib を提供しない。Fable の利用は
-cross-model-advisor の Fable advisor (`fable-advisor-runner` と `cross-model-advisor-fable-usage`)
-に限る。これを、ファイルの有無・注入文と説明文の記述・hook の出力で観測して固定する。
+Fable review の agent・判定コマンド・判定 lib を提供しない。これを、ファイルの有無と
+注入文・説明文の記述で観測して固定する。
 
 - pre-merge-cross-review の Fable review 一式 (`agents/fable-reviewer.md`、
   `bin/pre-merge-cross-review-fable-usage`、`hooks/scripts/lib/fable-weekly-usage.sh`) が存在しない
@@ -16,27 +15,12 @@ cross-model-advisor の Fable advisor (`fable-advisor-runner` と `cross-model-a
 - 注入文 `hooks/prompts/merge-order-rules.md` は 3 つの rule ID マーカー、codex-reviewer を
   `model: "sonnet"` で起動する指示、codex-reviewer の起動 prompt の定型文、merge コマンドの
   単独正規形と `--delete-branch` を付けない規律を持つ
-- agent-discipline の分業規律 (discipline.md) の Fable の用途の記述は
-  `cross-model-advisor:fable-advisor-runner` の起動だけを挙げ、pre-merge に言及しない
-- agent-discipline の block-fable-subagent.sh は、fable 明示を deny したときの案内で
-  fable-advisor-runner のスキップを案内し、fable-reviewer に言及しない
-- cross-model-advisor の Fable advisor (`agents/fable-advisor-runner.md` と
-  `bin/cross-model-advisor-fable-usage`) は存在し、判定 lib のコメントは
-  pre-merge-cross-review を共有先として挙げない
-
-hook を実行するテストは ``HOME`` / ``TMPDIR`` / ``XDG_CACHE_HOME`` を一時ディレクトリへ向け、
-親プロセスの env を継承しない。
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import shutil
-import subprocess
-import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -50,15 +34,6 @@ MERGE_PLUGIN_NAME = "pre-merge-cross-review"
 MERGE_PLUGIN = PLUGINS_DIR / MERGE_PLUGIN_NAME
 MERGE_ORDER_RULES = MERGE_PLUGIN / "hooks" / "prompts" / "merge-order-rules.md"
 MERGE_HOOKS_JSON = MERGE_PLUGIN / "hooks" / "hooks.json"
-
-DISCIPLINE = PLUGINS_DIR / "agent-discipline" / "hooks" / "prompts" / "discipline.md"
-BLOCK_FABLE = PLUGINS_DIR / "agent-discipline" / "hooks" / "scripts" / "block-fable-subagent.sh"
-AGENT_DISCIPLINE_README = PLUGINS_DIR / "agent-discipline" / "README.md"
-
-ADVISOR_PLUGIN = PLUGINS_DIR / "cross-model-advisor"
-ADVISOR_FABLE_RUNNER = ADVISOR_PLUGIN / "agents" / "fable-advisor-runner.md"
-ADVISOR_FABLE_USAGE = ADVISOR_PLUGIN / "bin" / "cross-model-advisor-fable-usage"
-ADVISOR_FABLE_LIB = ADVISOR_PLUGIN / "scripts" / "lib" / "fable-weekly-usage.sh"
 
 # 提供しなくなった Fable review 一式。
 REMOVED_FILES = (
@@ -97,15 +72,9 @@ HOOKS_DESCRIPTION_REQUIRED = (
     "module/register.ts",
 )
 
-# discipline.md の Fable の用途を述べる bullet の書き出し。
-FABLE_USAGE_BULLET_PREFIX = "- **Fable は"
-ADVISOR_RUNNER_TYPE = "cross-model-advisor:fable-advisor-runner"
-
 # リポジトリ直下 README の plugin 一覧表の行と、plugin 説明の節の見出し。
 REPO_README_TABLE_ROW_PREFIX = f"| [{MERGE_PLUGIN_NAME}](#{MERGE_PLUGIN_NAME}) |"
 REPO_README_SECTION_HEADING = f"## {MERGE_PLUGIN_NAME}"
-
-CACHE_RELATIVE = Path("natsuume-statusline") / "weekly-scoped.json"
 
 
 def read(path: Path) -> str:
@@ -229,112 +198,6 @@ class MergeOrderRulesTest(unittest.TestCase):
         text = read(MERGE_ORDER_RULES)
         missing = [phrase for phrase in MERGE_COMMAND_FORM_PHRASES if phrase not in text]
         self.assertEqual([], missing, f"merge-order-rules.md に無い記述: {missing}")
-
-
-class DisciplineFableUsageTest(unittest.TestCase):
-    """分業規律の Fable の用途は fable-advisor-runner の起動だけである。"""
-
-    def fable_usage_bullets(self) -> list[str]:
-        return [
-            line
-            for line in read(DISCIPLINE).splitlines()
-            if line.startswith(FABLE_USAGE_BULLET_PREFIX)
-        ]
-
-    def test_fable_usage_names_advisor_runner_only(self) -> None:
-        bullets = self.fable_usage_bullets()
-        self.assertEqual(1, len(bullets), f"Fable の用途の bullet: {bullets}")
-        self.assertIn(ADVISOR_RUNNER_TYPE, bullets[0])
-        self.assertNotIn("pre-merge", bullets[0])
-
-    def test_readme_and_hook_do_not_limit_fable_to_pre_merge(self) -> None:
-        """分業規律と同期する README・hook のコメントが Fable の用途に pre-merge を挙げない。"""
-        offenders = [
-            f"{path.relative_to(ROOT).as_posix()}:{number}"
-            for path in (AGENT_DISCIPLINE_README, BLOCK_FABLE)
-            for number, line in enumerate(read(path).splitlines(), start=1)
-            if "pre-merge" in line
-        ]
-        self.assertEqual([], offenders, "pre-merge への言及が残る箇所:\n" + "\n".join(offenders))
-
-
-@unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
-class BlockFableSubagentGuideTest(unittest.TestCase):
-    """fable 明示の deny 理由が fable-advisor-runner のスキップだけを案内する。"""
-
-    def deny_reason(self, cache_body: dict[str, object] | None) -> str:
-        with tempfile.TemporaryDirectory() as temporary:
-            temp = Path(temporary)
-            home = temp / "home"
-            tmpdir = temp / "tmp"
-            cache_home = temp / "cache"
-            for directory in (home, tmpdir, cache_home):
-                directory.mkdir()
-            env = {
-                "PATH": os.environ["PATH"],
-                "HOME": str(home),
-                "TMPDIR": str(tmpdir),
-                "XDG_CACHE_HOME": str(cache_home),
-            }
-            if cache_body is not None:
-                cache_path = cache_home / CACHE_RELATIVE
-                cache_path.parent.mkdir(parents=True)
-                cache_path.write_text(json.dumps(cache_body), encoding="utf-8")
-            payload = {
-                "hook_event_name": "PreToolUse",
-                "session_id": "fable-review-removed",
-                "tool_input": {
-                    "subagent_type": "cross-model-advisor:fable-advisor-runner",
-                    "model": "fable",
-                },
-            }
-            result = subprocess.run(
-                ["/bin/bash", str(BLOCK_FABLE)],
-                cwd=ROOT,
-                env=env,
-                input=json.dumps(payload),
-                text=True,
-                capture_output=True,
-                timeout=10,
-                check=False,
-            )
-        self.assertEqual(0, result.returncode, result.stderr)
-        output = json.loads(result.stdout)["hookSpecificOutput"]
-        self.assertEqual("deny", output["permissionDecision"])
-        return str(output["permissionDecisionReason"])
-
-    def assert_guides_advisor_skip_only(self, reason: str) -> None:
-        self.assertRegex(reason, r"fable-advisor-runner[^。]*スキップ")
-        self.assertNotIn("fable-reviewer", reason)
-
-    def test_usage_over_threshold_guide(self) -> None:
-        over_threshold_cache = {
-            "consecutive_failures": 0,
-            "next_attempt_at": 0,
-            "fetched_at": int(time.time()),
-            "weekly_scoped": [
-                {"display_name": "Fable", "percent": 95, "resets_at": "2026-09-28T00:00:00Z"}
-            ],
-        }
-        self.assert_guides_advisor_skip_only(self.deny_reason(over_threshold_cache))
-
-    def test_usage_unknown_guide(self) -> None:
-        self.assert_guides_advisor_skip_only(self.deny_reason(None))
-
-
-class FableAdvisorKeptTest(unittest.TestCase):
-    """cross-model-advisor の Fable advisor は残り、判定 lib は pre-merge と共有しない。"""
-
-    def test_fable_advisor_files_exist(self) -> None:
-        missing = [
-            path.relative_to(ROOT).as_posix()
-            for path in (ADVISOR_FABLE_RUNNER, ADVISOR_FABLE_USAGE)
-            if not path.is_file()
-        ]
-        self.assertEqual([], missing, f"Fable advisor のファイルが無い: {missing}")
-
-    def test_fable_usage_lib_does_not_name_merge_plugin_as_a_copy_holder(self) -> None:
-        self.assertNotIn(MERGE_PLUGIN_NAME, read(ADVISOR_FABLE_LIB))
 
 
 if __name__ == "__main__":

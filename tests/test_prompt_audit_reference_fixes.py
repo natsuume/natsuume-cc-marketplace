@@ -464,16 +464,16 @@ class CrossModelAdvisorPromptTest(ReferenceFixTestCase):
                 self.assert_phrase_present(label, block, phrase)
 
     def test_subagent_rules_delegate_to_the_parent_consult_procedure(self) -> None:
-        """A13: subagent の相談 request を親の consult 手順 (Codex / Fable 並列相談) に委ねる。"""
+        """A13: subagent の相談 request を親の consult 手順に委ねる。"""
         text = read(ADVISOR_RULES_SUBAGENT)
-        if "Fable" not in text and "consult" not in text:
+        if "consult" not in text:
             self.fail(
-                f"{repo_relative(ADVISOR_RULES_SUBAGENT)}: 親の consult 手順 "
-                "(Fable を含む並列相談) への委任を示す「Fable」「consult」のいずれも無い"
+                f"{repo_relative(ADVISOR_RULES_SUBAGENT)}: 親の consult 手順への委任を示す"
+                "「consult」が無い"
             )
 
     def test_subagent_rules_do_not_request_the_codex_runner_only(self) -> None:
-        """A13: Codex の advisor runner だけを名指しして起動を親に依頼する文が無い。"""
+        """A13: 親への依頼で advisor runner の起動仕様を直接指定せず、consult 手順に委ねる。"""
         self.assert_phrase_absent(
             ADVISOR_RULES_SUBAGENT,
             '`cross-model-advisor:codex-advisor-runner` の Agent (`model: "sonnet"` '

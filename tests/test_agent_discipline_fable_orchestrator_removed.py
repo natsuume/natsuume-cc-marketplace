@@ -1,18 +1,15 @@
 """agent-discipline: Fable をメインセッションで使う運用を前提にしない契約テスト。
 
-メインセッションは Opus 5.5 で、Fable は advisor (cross-model-advisor の fable-advisor-runner) の
-起動にのみ使う。
-agent-discipline は Fable 専用の規律 (常時適用ルール・分業規律) を持たない。これを、prompt
-ファイルの有無と plugins/ 配下・README の記述で観測して固定する。
+メインセッションは Opus 5.5 で、agent-discipline は Fable 専用の規律 (常時適用ルール・
+分業規律) を持たない。これを、prompt ファイルの有無と plugins/ 配下・README の記述で観測して
+固定する。
 
 - Fable 専用の prompt ファイル (常時適用ルール・分業規律・分業規律前置き) が存在せず、
   plugin 配下と CI workflow のどのファイルもその名前を参照しない
 - plugins/ 配下に Fable メインセッション向けの記述が残らない (lint-payload-size.sh の
   Fable メイン専用ケース、README の Fable メイン前提の記述と sonnet pin の根拠を含む)
 
-配送内容がモデルに依らないことは tests/test_agent_discipline_unified_discipline.py、
-block-fable-subagent.sh の判定は tests/test_agent_discipline_model_resolution.py と
-tests/test_agent_discipline_fable_weekly_gate.py が検査する。
+配送内容がモデルに依らないことは tests/test_agent_discipline_unified_discipline.py が検査する。
 """
 
 from __future__ import annotations

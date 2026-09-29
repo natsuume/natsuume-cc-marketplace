@@ -146,9 +146,8 @@ LINT_SESSION_ID="lint-payload-size"
 # ============================================================================
 #
 # hooks.json に type: command で登録されているが additionalContext を出力しないスクリプト。
-# 1 行 1 スクリプト (basename)。整合検査 8・9 で使う。
-#   - block-fable-subagent.sh: PreToolUse (Agent|Task) で permissionDecision (deny) のみを返す
-EXCLUDED_SCRIPTS="block-fable-subagent.sh"
+# 1 行 1 スクリプト (basename)。整合検査 8・9 で使う。現在は該当するスクリプトが無いため空。
+EXCLUDED_SCRIPTS=""
 
 # ============================================================================
 # 対象スクリプト × 分岐 × 期待の対応表

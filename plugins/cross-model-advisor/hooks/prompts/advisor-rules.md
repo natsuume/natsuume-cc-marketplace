@@ -6,9 +6,9 @@
   を超えないこと。超えると persisted-output 化され注入が 2KB プレビューに劣化する。
 -->
 
-# cross-model-advisor: Codex / Fable 利用規律
+# cross-model-advisor: Codex 利用規律
 
-このセッションでは OpenAI Codex と Fable を助言役 (advisor) として並列に利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/cross-model-advisor:consult` skill が定義する。以下は相談規律 (セクション 1〜3)、rescue の thread 選択 (セクション 4)、Codex / Fable の実行を追跡可能な subagent に閉じ込める runner 規律と並列相談の手順 (セクション 5) である。
+このセッションでは OpenAI Codex を助言役 (advisor) として利用できる。advisor は read-only でリポジトリを読んで裏取りしたうえで plan / course-correction の助言を返す。実行はしない。相談の実行手順は `/cross-model-advisor:consult` skill が定義する。以下は相談規律 (セクション 1〜3)、rescue の thread 選択 (セクション 4)、Codex の実行を追跡可能な subagent に閉じ込める runner 規律 (セクション 5) である。
 
 <!-- rule:advisor-timing -->
 ## 1. いつ相談するか
@@ -27,13 +27,13 @@
 <!-- rule:advisor-weight -->
 ## 2. 助言の扱い
 
-**なぜ**: Codex の価値は別系統モデルの独立視点にあり、自分と同じ盲点を共有しにくい。Fable の価値は同系統の上位モデルの視点にあり、同じ前提のまま推論をより深く検証できる。どちらも知能差を根拠に盲従する対象ではない。盲従すれば自分が集めた一次証拠と推論を捨てることになり、軽視すれば相談のコストが無駄になる。
+**なぜ**: Codex の価値は別系統モデルの独立視点にあり、自分と同じ盲点を共有しにくい。知能差を根拠に盲従する対象ではない。盲従すれば自分が集めた一次証拠と推論を捨てることになり、軽視すれば相談のコストが無駄になる。
 
-**指示**: 助言はフラットに扱う — 独立した同僚のセカンドオピニオンとして、自分の証拠・推論・Codex の助言・Fable の助言の 3 者を同じ土俵で突き合わせて採否を判断する。従う義務はないが、黙って無視もしない: 採否とその理由を advisor ごとに明示する。self-test が通ったことだけを根拠に助言を棄却しない — そのテストが助言の指摘する観点を検査していない可能性がある。
+**指示**: 助言はフラットに扱う — 独立した同僚のセカンドオピニオンとして、自分の証拠・推論と Codex の助言を同じ土俵で突き合わせて採否を判断する。従う義務はないが、黙って無視もしない: 採否とその理由を明示する。self-test が通ったことだけを根拠に助言を棄却しない — そのテストが助言の指摘する観点を検査していない可能性がある。
 
-自分の証拠と助言が別の方向を指し、どちらが正しいか自分で判断できないときは、「X という証拠を得たが、あなたは Y を提案している。どの制約が決め手か」と衝突を明示した再相談 (reconcile call) を、衝突している advisor に 1 回行う (両方と衝突する場合は両方に並列で行う)。自分で判断できる場合は再相談せず、判断と理由を記録すれば足りる。
+自分の証拠と助言が別の方向を指し、どちらが正しいか自分で判断できないときは、「X という証拠を得たが、あなたは Y を提案している。どの制約が決め手か」と衝突を明示した再相談 (reconcile call) を Codex に 1 回行う。自分で判断できる場合は再相談せず、判断と理由を記録すれば足りる。
 
-**境界**: reconcile call は同じ論点につき 1 回とする。それでも解消しない場合は、両論 (または三論) とそれぞれの根拠を添えてユーザに判断を仰ぐ。
+**境界**: reconcile call は同じ論点につき 1 回とする。それでも解消しない場合は、両論とそれぞれの根拠を添えてユーザに判断を仰ぐ。
 
 <!-- rule:advisor-boundary -->
 ## 3. 境界
@@ -45,7 +45,7 @@
 - 設計 / 仕様レベルの決定はユーザの専権事項である。助言はユーザに提示する推奨案を練るための判断材料として使い、`AskUserQuestion` によるユーザ確認の代替にしない
 - コード差分の finding を得る用途には使わない (pre-push-codex-review / pre-merge-cross-review の codex review が担当する)。review cadence の checkpoint (enforcement は pre-push-codex-review が担う) は review findings を再判定せず、根本方針を問い直す course-correction 相談である
 - subagent に相談させてよい場合は、委任指示に cross-model-advisor の使用許可を明示する (相談は課金・利用枠の消費を伴う呼び出しのため、許可の無い subagent は相談しない)
-- Codex が使えないとき (openai-codex plugin 未 install・codex CLI 未認証・タイムアウト・runner の terminal failure) は Fable の助言のみで、Fable をスキップしたとき (下記セクション 5) は Codex の助言のみで続行する。両方使えないときは相談なしで作業を続行してよい。片方または両方を欠いた場合は、スキップした側と理由を作業報告に含める
+- Codex が使えないとき (openai-codex plugin 未 install・codex CLI 未認証・タイムアウト・runner の terminal failure) は相談なしで作業を続行してよい。その場合は理由を作業報告に含める
 
 <!-- rule:rescue-thread -->
 ## 4. rescue の thread 選択
@@ -80,7 +80,7 @@
 - runner の terminal report が返るまでタスクを完了扱いにしない (「起動した」とだけユーザへ報告して打ち切らない)
 - runner の起動が classifier に拒否された場合は、同じ起動を繰り返さず、`AskUserQuestion` でユーザの許可を得てから再起動する
 
-相談 (consult) では、相談の前に Bash で `cross-model-advisor-fable-usage` を 1 回実行する (Fable 週次枠の判定コマンド。1 行目が `available` / `over` / `unknown`)。`available` なら `cross-model-advisor:codex-advisor-runner` と `cross-model-advisor:fable-advisor-runner` を同一メッセージで並列に起動する。fable-advisor-runner は `model: "fable"` を明示する。`over` / `unknown` なら Fable をスキップする。fable-advisor-runner の起動が agent-discipline の hook に deny された場合 (判定後に使用率が閾値を超えた等) は、Opus 等で再起動せずスキップする。
+相談 (consult) では `cross-model-advisor:codex-advisor-runner` を起動する。
 
 request 本文・thread flag・review scope 等は self-contained に渡す。回収手順の詳細は `/cross-model-advisor:consult` の Claude Code host 節に従う。自律的に rescue / review を使うときは `/codex:rescue` / `/codex:review` を再入せず、上記 runner を直接起動する。
 

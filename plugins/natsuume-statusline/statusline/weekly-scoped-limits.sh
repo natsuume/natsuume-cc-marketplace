@@ -15,7 +15,7 @@
 #      stdin に含まれていればこちらを優先し、
 #      本ファイルの cache 経路は読まず background fetch も起動しない。代わりに
 #      write_weekly_scoped_from_stdin で stdin の値を cache へ書き出す (cache を読む
-#      他 plugin の週次枠ガードが、公式経路の利用中も最新の使用率を参照できるようにするため)。
+#      他の plugin やスクリプトが、公式経路の利用中も最新の使用率を参照できるようにするため)。
 #   2. 本ファイルの cache (OAuth usage API 由来)。
 #
 # ■ cache ファイル

@@ -16,7 +16,6 @@ INJECT_AUTO = PLUGIN_DIR / "hooks" / "scripts" / "inject-auto.sh"
 CHECK_UNCOMMITTED = (
     PLUGIN_DIR / "hooks" / "scripts" / "check-uncommitted-on-session-start.sh"
 )
-BLOCK_FABLE = PLUGIN_DIR / "hooks" / "scripts" / "block-fable-subagent.sh"
 INJECT_TEMPORARY = PLUGIN_DIR / "hooks" / "scripts" / "inject-temporary.sh"
 
 
@@ -212,38 +211,6 @@ class AgentDisciplineTemporaryRulesTest(unittest.TestCase):
             with self.subTest(mode=mode):
                 result = self.run_hook(INJECT_AUTO, {**base_payload, "permission_mode": mode})
                 self.assertEqual(should_emit, bool(result.stdout.strip()), result.stderr)
-
-    def test_fable_guard_denies_bash_agent_with_fable_model_in_claude_hooks(self) -> None:
-        hooks = json.loads(HOOKS_PATH.read_text(encoding="utf-8"))
-        fable_group = next(
-            group
-            for group in hooks["hooks"]["PreToolUse"]
-            if group["matcher"] == "Agent|Task"
-        )
-        self.assertEqual(1, len(fable_group["hooks"]))
-        self.assertTrue(
-            fable_group["hooks"][0]["command"].endswith("/block-fable-subagent.sh")
-        )
-
-        payload = {
-            "hook_event_name": "PreToolUse",
-            "session_id": "claude-fable-deny",
-            "tool_input": {"model": "fable"},
-        }
-        # fable 明示の判定は Fable 週次枠の使用率 cache だけで決まるため、cache を置かない
-        # 隔離ディレクトリを XDG_CACHE_HOME / TMPDIR に向け、使用率不明の deny を固定する。
-        with tempfile.TemporaryDirectory() as isolated:
-            claude_result = self.run_hook(
-                BLOCK_FABLE,
-                payload,
-                env={
-                    "CLAUDE_CODE_SUBAGENT_MODEL": "fable",
-                    "XDG_CACHE_HOME": isolated,
-                    "TMPDIR": isolated,
-                },
-            )
-        decision = json.loads(claude_result.stdout)["hookSpecificOutput"]
-        self.assertEqual("deny", decision["permissionDecision"])
 
     def test_uncommitted_check_emits_only_for_claude_auto(self) -> None:
         with tempfile.TemporaryDirectory() as repository, tempfile.TemporaryDirectory() as tempdir:
