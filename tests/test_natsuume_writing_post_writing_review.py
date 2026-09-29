@@ -4,13 +4,15 @@
 指摘を反映してから完了とする。
 
 検査する契約:
-- general-writing.md セクション 5 が、対象 (文書ファイル・PR・issue の本文)、対象外
-  (コードコメント・コミットメッセージ)、review の 1 回実行と指摘の反映、PR・issue の本文を
-  投稿前の下書きファイルでレビューすることを定める
+- general-writing.md セクション 5 が、対象 (文書ファイル・PR・issue の本文の地の文)、対象外
+  (コードコメント・コミットメッセージ・地の文を変えない編集・作業用のファイル)、
+  review の 1 回実行と指摘の反映、PR・issue の本文を投稿前の下書きファイルでレビューすること、
+  Codex による独立調査をリポジトリの外の事実を述べた主張がある場合に限ることを定める
 - core-summary.md (SessionStart 注入) の文章作成一般の層が同じ指示を持ち、
   general-writing.md セクション 5 を参照する
 - review skill が PR・issue の本文の下書きファイルを対象に含め、セクション 5 に従った
-  レビューでは書いた側が指摘を反映し、それ以外ではユーザーの指示を待つ
+  レビューでは書いた側が指摘を反映し、それ以外ではユーザーの指示を待つ。セクション 5 に
+  従ったレビューでは、観点 3 の独立調査をリポジトリの外の事実を述べた主張がある場合に限る
 """
 
 from __future__ import annotations
@@ -68,6 +70,18 @@ class GeneralRulesPostWritingReviewTest(unittest.TestCase):
     def test_section_reports_unapplied_findings(self) -> None:
         self.assertIn("反映しなかった指摘", self.section)
 
+    def test_section_targets_body_text(self) -> None:
+        self.assertIn("地の文を書いたとき", self.section)
+
+    def test_section_excludes_mechanical_edits_and_working_files(self) -> None:
+        for excluded in ("地の文を変えない編集", "作業用のファイル"):
+            with self.subTest(excluded=excluded):
+                self.assertIn(excluded, self.section)
+
+    def test_section_limits_codex_investigation_to_external_facts(self) -> None:
+        self.assertIn("Codex による独立調査", self.section)
+        self.assertIn("リポジトリの外の事実", self.section)
+
 
 class CoreSummaryPostWritingReviewTest(unittest.TestCase):
     def test_general_layer_instructs_review_after_writing(self) -> None:
@@ -79,7 +93,14 @@ class CoreSummaryPostWritingReviewTest(unittest.TestCase):
         self.assertIn("1 回", general)
         self.assertIn("general-writing.md` セクション 5", general)
         self.assertIn("PR・issue の本文", general)
-        self.assertIn("コードコメントとコミットメッセージは対象外", general)
+        for excluded in (
+            "コードコメントとコミットメッセージ",
+            "地の文を変えない編集",
+            "作業用のファイル",
+        ):
+            with self.subTest(excluded=excluded):
+                self.assertIn(excluded, general)
+        self.assertIn("は対象外です", general)
 
 
 class ReviewSkillPostWritingReviewTest(unittest.TestCase):
@@ -98,6 +119,12 @@ class ReviewSkillPostWritingReviewTest(unittest.TestCase):
 
     def test_other_reviews_wait_for_user_instruction(self) -> None:
         self.assertIn("ユーザーから明示的な指示があってから修正", self.text)
+
+    def test_section_five_review_runs_codex_only_for_external_facts(self) -> None:
+        factual = self.text[self.text.index("### 2-3.") : self.text.index("### 2-4.")]
+        self.assertIn("general-writing.md` セクション 5", factual)
+        self.assertIn("リポジトリの外の事実", factual)
+        self.assertIn("メインセッションの調査だけで行ったこと", factual)
 
 
 if __name__ == "__main__":
