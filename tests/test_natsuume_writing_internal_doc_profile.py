@@ -94,6 +94,13 @@ class InternalDocProfileTest(unittest.TestCase):
     def test_profile_drops_signature_expressions(self) -> None:
         self.assertIn("**シグネチャ表現を使わない**", self.profile)
 
+    def test_existing_conventions_override_profile_style(self) -> None:
+        self.assertIn("構成・文体 (です・ます調など) を定めている場合", self.profile)
+        self.assertIn("規約が無いときの既定", self.profile)
+
+    def test_qa_questions_may_use_question_mark(self) -> None:
+        self.assertIn("Q&A の問いの項目では「？」を使ってよい", self.profile)
+
     def test_profile_keeps_notation_rules(self) -> None:
         self.assertNotIn("共通コア 5", self.profile)
         self.assertNotIn("表記", self.profile)
@@ -110,6 +117,7 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
         self.assertIn("社内技術文書プロファイル", tech)
         self.assertIn("常体", tech)
         self.assertIn("文末表現の要点より優先", tech)
+        self.assertIn("社内の規約が文体を定めている場合は、そちらに従います", tech)
         self.assertIn("書籍/ブログ/社内技術文書の媒体プロファイル", tech)
 
 
