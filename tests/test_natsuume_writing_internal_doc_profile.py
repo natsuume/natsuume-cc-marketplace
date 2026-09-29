@@ -86,6 +86,31 @@ class InternalDocProfileTest(unittest.TestCase):
             self.profile,
         )
 
+    def test_profile_nominalizes_verb_and_adjective_endings(self) -> None:
+        self.assertIn("**動詞・形容詞で終わる文の名詞化**", self.profile)
+        for phrase in (
+            "元の語と意味 (強さや評価を含む) が同じ",
+            "「難しい」→「困難」",
+            "「〜する」「〜した」が消えても実質的な意味を失わない",
+            "予定と完了のどちらとも読めるようになる場合は置き換えない",
+            "補助的な動詞を外して終える",
+            "推量の「〜と考えられる」と許可の「〜してよい」は",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.profile)
+
+    def test_profile_ends_negation_and_existence_with_zu_and_nashi(self) -> None:
+        self.assertIn("**否定と存在**", self.profile)
+        for phrase in (
+            "「〜しない」→「〜せず」、「〜ない」→「〜ず」",
+            "過去の否定 (「〜しなかった」「〜なかった」) も同じ形にする",
+            "「〜がない」→「〜なし」、「〜がある」→「〜あり」",
+            "否定の文には、名詞化より否定の形を優先する",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.profile)
+        self.assertIn("推測: 「〜と考えられる」「〜の可能性あり」", self.profile)
+
     def test_profile_prefers_bullet_points(self) -> None:
         self.assertIn("**箇条書き中心**", self.profile)
         self.assertIn("1 項目に 1 つの事実", self.profile)
@@ -139,6 +164,12 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
             "名詞で終わる文には「〜だ」「〜だった」を付けず体言止めにします", tech
         )
         self.assertNotIn("「〜する」「〜した」「〜だった」", tech)
+        self.assertIn(
+            "動詞・形容詞で終わる文も、意味が同じ平易な名詞に置き換えられ", tech
+        )
+        self.assertIn(
+            "否定は「〜せず」「〜ず」、存在は「〜なし」「〜あり」の形で終えます", tech
+        )
         self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
         self.assertIn("構成とコードの定型", tech)
         self.assertIn("は求めません", tech)
