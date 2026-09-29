@@ -125,6 +125,9 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
         self.assertIn("社内技術文書プロファイル", tech)
         self.assertIn("常体", tech)
         self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
+        self.assertIn("構成とコードの定型", tech)
+        self.assertIn("は求めません", tech)
+        self.assertNotIn("構成とコードの定型・シグネチャ表現は使いません", tech)
         self.assertIn("Q&A の問いには「？」を使ってよい", tech)
         self.assertIn(
             "「何でも分類・列挙する構成を重ねない」は箇条書きの項目には適用しません",
@@ -185,6 +188,11 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
             "媒体 = 社内技術文書 で、規約が箇条書きの使い方を定めていないときは", text
         )
         self.assertIn("文体 (媒体 = 社内技術文書 のときのみ。", text)
+        notation = text[text.index("### 2-4.") : text.index("## 3. 指摘一覧の提示")]
+        self.assertIn(
+            "媒体 = 社内技術文書 で文体 = 社内規約 のときは、規約が表記を定めていればその規約で判定します",
+            notation,
+        )
         style_rules = text[text.index("### 2-1.") : text.index("### 2-2.")]
         self.assertIn(
             "媒体 = 社内技術文書 で文体 = 社内規約 のときは、規約が定める事項はその規約",
