@@ -6,7 +6,7 @@ natsuume が社内向けに書く技術文書を、書籍・ブログと並ぶ�
 - writing-rules.md の適用範囲と構成が社内技術文書を含み、社内技術文書プロファイルが
   ブログプロファイルの後にある
 - プロファイルが、文末 (常体と体言止め、です・ます調と「〜である」を使わない)、
-  箇条書き主体、人称と読者への働きかけを使わないこと、構成・コードの定型を求めないこと、
+  箇条書き中心、人称と読者への働きかけを使わないこと、構成・コードの定型を求めないこと、
   シグネチャ表現を使わないことを定め、表記の商業版基準 (共通コア 5) は上書きしない
 - core-summary.md (SessionStart 注入) の技術文書の層が、社内技術文書の文末と
   プロファイルの優先を伝える
@@ -76,7 +76,7 @@ class InternalDocProfileTest(unittest.TestCase):
         self.assertIn("「〜である」「〜のである」は使わず", self.profile)
 
     def test_profile_prefers_bullet_points(self) -> None:
-        self.assertIn("**箇条書き主体**", self.profile)
+        self.assertIn("**箇条書き中心**", self.profile)
         self.assertIn("1 項目に 1 つの事実", self.profile)
 
     def test_profile_drops_person_and_reader_address(self) -> None:
