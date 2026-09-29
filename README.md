@@ -32,7 +32,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [natsuume-statusline](#natsuume-statusline) | 0.11.8 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 4.0.0 | 作業規律を SessionStart / UserPromptSubmit / SubagentStart の hook で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [ui-discipline](#ui-discipline) | 0.4.9 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
-| [natsuume-writing](#natsuume-writing) | 0.11.0 | natsuume の文体規則でテックブログ・技術書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
+| [natsuume-writing](#natsuume-writing) | 0.12.0 | natsuume の文体規則でテックブログ・技術書・社内技術文書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
 | [cross-model-advisor](#cross-model-advisor) | 6.0.0 | Codex を advisor として相談し、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.5 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 1.0.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
@@ -328,7 +328,7 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## natsuume-writing
 
-テックブログ・技術書執筆を支援し、文章作成一般のルールを提供するプラグインです。成果物として書く日本語の文章すべて (チャットでの応答を除く) に適用する文章作成一般のルールを `rules/general-writing.md` に、natsuume の過去執筆物から抽象化した技術文書の執筆ルール (文体コア + 媒体プロファイル) を `rules/writing-rules.md` に配置します。2 層の要点をまとめた `rules/core-summary.md` を SessionStart で常時注入します。詳細ルールは共有 Skills が同じルールファイルから読みます。
+テックブログ・技術書・社内技術文書の執筆を支援し、文章作成一般のルールを提供するプラグインです。成果物として書く日本語の文章すべて (チャットでの応答を除く) に適用する文章作成一般のルールを `rules/general-writing.md` に、natsuume の過去執筆物から抽象化した技術文書の執筆ルール (文体コア + 書籍・ブログ・社内技術文書の媒体プロファイル) を `rules/writing-rules.md` に配置します。2 層の要点をまとめた `rules/core-summary.md` を SessionStart で常時注入します。詳細ルールは共有 Skills が同じルールファイルから読みます。
 
 現時点では rules 配置 + SessionStart コア注入 hook + outline skill (章立ての壁打ち + インファイルスケルトン書き込み) + draft skill (スケルトンからのたたき台一括生成 + 未検証事項の TODO 明示) + review skill (文体・構成・技術的/事実の正確さ・表記の 4 観点レビュー。技術文書以外の文章も対象) を提供します。文書ファイルと PR・issue の本文の地の文を書いた・書き換えたときは、完了とする前に review を 1 回実行し、指摘を反映するよう文章作成一般のルールで定めています。
 
