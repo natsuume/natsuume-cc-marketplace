@@ -95,6 +95,7 @@ class InternalDocProfileTest(unittest.TestCase):
             "予定と完了のどちらとも読めるようになる場合は置き換えない",
             "補助的な動詞を外して終える",
             "推量の「〜と考えられる」と許可の「〜してよい」は",
+            "手順の指示や仕様・事実を述べる文にも適用し",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.profile)
@@ -168,7 +169,8 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
             "動詞・形容詞で終わる文も、意味が同じ平易な名詞に置き換えられ", tech
         )
         self.assertIn(
-            "否定は「〜せず」「〜ず」、存在は「〜なし」「〜あり」の形で終えます", tech
+            "否定は「〜せず」「〜ず」、存在は「〜なし」「〜あり」の形で終えます（どちらも時が文脈から明らかな場合に限る）",
+            tech,
         )
         self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
         self.assertIn("構成とコードの定型", tech)
