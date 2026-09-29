@@ -126,6 +126,13 @@ class ReviewSkillPostWritingReviewTest(unittest.TestCase):
         self.assertIn("リポジトリの外の事実", factual)
         self.assertIn("メインセッションの調査だけで行ったこと", factual)
 
+    def test_codex_condition_gates_step_before_request_items(self) -> None:
+        factual = self.text[self.text.index("### 2-3.") : self.text.index("### 2-4.")]
+        condition = factual.index("リポジトリの外の事実")
+        request_items = factual.index("runner に渡す request には次を含めます")
+        self.assertLess(condition, request_items)
+        self.assertNotIn("\n   - **境界: `general-writing.md` セクション 5", factual)
+
 
 if __name__ == "__main__":
     unittest.main()
