@@ -122,6 +122,10 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
         self.assertIn("社内技術文書プロファイル", tech)
         self.assertIn("常体", tech)
         self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
+        self.assertIn(
+            "「何でも分類・列挙する構成を重ねない」は、社内技術文書の箇条書きの項目には適用しません",
+            tech,
+        )
         self.assertIn("「筆者」ではなく「＜環境・バージョン・日付＞で確認済み」", tech)
         self.assertIn("社内の規約が文体を定めている場合は、そちらに従います", tech)
         self.assertIn("書籍/ブログ/社内技術文書の媒体プロファイル", tech)
@@ -144,7 +148,7 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn("社内技術文書プロファイル", text)
         self.assertIn("で確認済み", text)
         self.assertIn(
-            "媒体 = 社内技術文書 のときは、社内技術文書プロファイルに従って箇条書きの項目で書き",
+            "媒体 = 社内技術文書 で、既存文書のテンプレートや社内の規約が構成・文体を定めていないときは、社内技術文書プロファイルに従って箇条書きの項目で書き",
             text,
         )
         self.assertIn("箇条書き中心に従い、この項目を適用しない", text)
@@ -161,6 +165,10 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn(MEDIUM, text[: text.index("## 1. 入力の確認")])
         self.assertIn(
             "箇条書きの項目と体言止めの文を「分類・対称化」「演出的な断片文」として指摘しない",
+            text,
+        )
+        self.assertIn(
+            "既存文書のテンプレートや社内の規約が構成・文体を定めていないときは",
             text,
         )
 
