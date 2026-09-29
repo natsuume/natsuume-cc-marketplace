@@ -79,8 +79,8 @@ class InternalDocProfileTest(unittest.TestCase):
         self.assertIn("**箇条書き中心**", self.profile)
         self.assertIn("1 項目に 1 つの事実", self.profile)
         self.assertIn(
-            "`general-writing.md` セクション 2 の「分類・対称化」「演出的な断片文」は、"
-            "箇条書きの項目と体言止めの文には適用しない",
+            "`general-writing.md` セクション 2 の「分類・対称化」は箇条書きの項目に、"
+            "「演出的な断片文」は文末の規則による体言止めの文に適用しない",
             self.profile,
         )
 
@@ -181,11 +181,13 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn("(書籍 / ブログ / 社内技術文書、", text)
         self.assertIn(MEDIUM, text[: text.index("## 1. 入力の確認")])
         self.assertIn(
-            "箇条書きの項目と体言止めの文を「分類・対称化」「演出的な断片文」として指摘しない",
+            "規約が箇条書きの使い方を定めていなければ箇条書きの項目を「分類・対称化」として、"
+            "規約が文末を定めていなければ体言止めの文を「演出的な断片文」として指摘しない",
             text,
         )
+        outline = read(OUTLINE_SKILL)
         self.assertIn(
-            "媒体 = 社内技術文書 で、規約が箇条書きの使い方を定めていないときは", text
+            "(構成・文末・表記・箇条書きの使い方など) が 1 つでもあれば", outline
         )
         self.assertIn("文体 (媒体 = 社内技術文書 のときのみ。", text)
         notation = text[text.index("### 2-4.") : text.index("## 3. 指摘一覧の提示")]
