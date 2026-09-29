@@ -9,7 +9,7 @@ description: 日本語の文章 (技術記事・技術書の原稿、ドキュ�
 
 以下の「ユーザーに確認」は `AskUserQuestion` を使い、未確定事項を推測で埋めない。
 
-このセッション (メインセッション) 自身がレビューを行います。文体判断を伴う観点 (1・2・4) は subagent へ委任しません。観点 3 (技術的・事実の正確さ) に限り、自身の調査に加えて独立した read-only 調査 subagent を併用します。cross-model-advisor plugin の `cross-model-advisor:codex-rescue-runner` agent を使います。
+このセッション (メインセッション) 自身がレビューを行います。文体判断を伴う観点 (1・2・4) は subagent へ委任しません。観点 3 (技術的・事実の正確さ) に限り、自身の調査に加えて独立した read-only 調査 subagent を併用します。cross-model-advisor plugin の `cross-model-advisor:codex-rescue-runner` agent を使います。ただし、`general-writing.md` セクション 5 (書いた後のレビュー) に従ったレビューでは、リポジトリの外の事実を述べた主張がある場合だけ併用します (手順 2-3 の 3)。
 
 対象は Markdown またはプレーンテキストのファイルです (ReVIEW 形式の技術書原稿はスコープ外のため扱いません)。PR・issue の本文は、投稿前の下書きを一時ディレクトリのファイルに書き出したものを対象にします。
 
