@@ -67,13 +67,24 @@ class InternalDocProfileTest(unittest.TestCase):
         self.assertNotIn("\n## ", self.profile[len(PROFILE_HEADING) :])
 
     def test_profile_uses_plain_form_and_noun_endings(self) -> None:
-        for phrase in ("「〜する」「〜した」「〜だった」", "体言止め"):
+        for phrase in ("「〜する」「〜した」「〜ない」", "体言止め"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.profile)
+        self.assertNotIn("「〜する」「〜だった」と断定する", self.profile)
 
     def test_profile_rejects_desu_masu_and_dearu(self) -> None:
         self.assertIn("です・ます調は使わない", self.profile)
-        self.assertIn("「〜である」「〜のである」は使わず", self.profile)
+        self.assertIn(
+            "名詞で終わる文は「〜だ」「〜だった」「〜である」を付けずに体言止めにする",
+            self.profile,
+        )
+        self.assertIn("「〜のである」も使わない", self.profile)
+
+    def test_profile_allows_datta_only_for_past_state(self) -> None:
+        self.assertIn(
+            "過去の状態を現在と区別する必要がある文に限り「〜だった」を使ってよい",
+            self.profile,
+        )
 
     def test_profile_prefers_bullet_points(self) -> None:
         self.assertIn("**箇条書き中心**", self.profile)
@@ -124,6 +135,10 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
         self.assertIn("テックブログ・技術書・社内技術文書", tech)
         self.assertIn("社内技術文書プロファイル", tech)
         self.assertIn("常体", tech)
+        self.assertIn(
+            "名詞で終わる文には「〜だ」「〜だった」を付けず体言止めにします", tech
+        )
+        self.assertNotIn("「〜する」「〜した」「〜だった」", tech)
         self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
         self.assertIn("構成とコードの定型", tech)
         self.assertIn("は求めません", tech)
