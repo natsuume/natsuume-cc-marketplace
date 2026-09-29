@@ -251,7 +251,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "natsuume-statusline": "0.11.8",
     "agent-discipline": "4.0.0",
     "ui-discipline": "0.4.9",
-    "natsuume-writing": "0.10.0",
+    "natsuume-writing": "0.11.0",
     "cross-model-advisor": "6.0.0",
     "rate-limit": "0.5.5",
     "session-handoff": "1.0.0",
