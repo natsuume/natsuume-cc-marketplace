@@ -165,10 +165,14 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn("文体 (媒体 = 社内技術文書 のときのみ。", text)
         self.assertIn("判断できない場合にだけユーザーに確認します", text)
         self.assertIn(
-            "媒体 = 社内技術文書 で、規約が箇条書きの使い方を定めていないときは、社内技術文書プロファイルに従って箇条書きの項目で書き",
+            "媒体 = 社内技術文書 で、適用する規則 (規約またはプロファイル) が箇条書き中心を求めるときは、箇条書きの項目で書き",
             text,
         )
-        self.assertIn("箇条書き中心に従い、この項目を適用しない", text)
+        self.assertIn(
+            "適用する規則 (規約またはプロファイル) が箇条書き中心を求めるときは、この項目を適用しない",
+            text,
+        )
+        self.assertIn("outline skill と同じ基準", text)
         description = next(
             line for line in text.splitlines() if line.startswith("description:")
         )
@@ -181,10 +185,11 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn("(書籍 / ブログ / 社内技術文書、", text)
         self.assertIn(MEDIUM, text[: text.index("## 1. 入力の確認")])
         self.assertIn(
-            "規約が箇条書きの使い方を定めていなければ箇条書きの項目を「分類・対称化」として、"
-            "規約が文末を定めていなければ体言止めの文を「演出的な断片文」として指摘しない",
+            "が箇条書き中心を求める範囲で箇条書きの項目を「分類・対称化」として、"
+            "体言止めを求める・認める範囲で体言止めの文を「演出的な断片文」として指摘しない",
             text,
         )
+        self.assertIn("outline skill と同じ基準", text)
         outline = read(OUTLINE_SKILL)
         self.assertIn(
             "(構成・文末・表記・箇条書きの使い方など) が 1 つでもあれば", outline
