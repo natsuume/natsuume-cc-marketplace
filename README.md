@@ -26,14 +26,14 @@ claude plugin install git-guardrails@natsuume-plugins
 | [enforce-draft-pr](#enforce-draft-pr) | 0.5.8 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.8.4 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
 | [pre-push-review](#pre-push-review) | 7.0.4 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
-| [pre-push-codex-review](#pre-push-codex-review) | 4.0.5 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
+| [pre-push-codex-review](#pre-push-codex-review) | 4.0.6 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
 | [pre-merge-cross-review](#pre-merge-cross-review) | 4.0.1 | `gh pr merge` 前に codex review 完了 (PR 番号と head SHA を記録したローカル記録) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
 | [update-default-branch](#update-default-branch) | 0.4.7 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
-| [natsuume-statusline](#natsuume-statusline) | 0.11.7 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
-| [agent-discipline](#agent-discipline) | 3.0.13 | 作業規律を SessionStart / UserPromptSubmit / SubagentStart の hook で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
+| [natsuume-statusline](#natsuume-statusline) | 0.11.8 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
+| [agent-discipline](#agent-discipline) | 4.0.0 | 作業規律を SessionStart / UserPromptSubmit / SubagentStart の hook で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
 | [ui-discipline](#ui-discipline) | 0.4.9 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
 | [natsuume-writing](#natsuume-writing) | 0.10.0 | natsuume の文体規則でテックブログ・技術書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
-| [cross-model-advisor](#cross-model-advisor) | 5.0.10 | Codex と Fable を advisor として並列に相談し (Fable は週次枠の使用率が閾値以下のときのみ)、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
+| [cross-model-advisor](#cross-model-advisor) | 6.0.0 | Codex を advisor として相談し、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.5 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 1.0.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.10 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
@@ -292,7 +292,6 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 | `inject-auto` | UserPromptSubmit | `permission_mode == "auto"` 時だけ after 系を注入する |
 | `check-uncommitted-on-session-start` | UserPromptSubmit (session 内初回のみ) | auto で未コミット変更を4分類する |
 | `inject-discipline` | UserPromptSubmit | 分業規律を配送する |
-| `block-fable-subagent` | PreToolUse (`Agent\|Task`) | サブエージェントの Fable 実行を防止する (`model: "fable"` を明示し、Fable 週次枠の使用率が閾値以下の場合に限り許可する) |
 
 ### キーワード
 
@@ -357,11 +356,11 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## cross-model-advisor
 
-Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) パターン (実行役のモデルが戦略的な岐路で別の高知能モデルに相談し、plan / course-correction の助言を受け取って続行する構成) を Claude Code に移植し、OpenAI Codex と Fable を助言役として並列に利用するプラグインです。本家は Anthropic API のサーバーサイド機能で advisor が Claude モデル限定のため、hook + skill + wrapper script として再構成しています。
+Anthropic の [Advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool) パターン (実行役のモデルが戦略的な岐路で別の高知能モデルに相談し、plan / course-correction の助言を受け取って続行する構成) を Claude Code に移植し、OpenAI Codex を助言役として利用するプラグインです。本家は Anthropic API のサーバーサイド機能で advisor が Claude モデル限定のため、hook + skill + wrapper script として再構成しています。
 
-1 回の相談を Codex (別系統モデルの独立視点) と Fable (同系統の上位モデルの視点) に同じプロンプトで並列に渡します。相談の前に plugin 同梱の判定コマンド `cross-model-advisor-fable-usage` で Fable 週次枠の使用率 (natsuume-statusline の cache) を確認し、閾値 (env `FABLE_WEEKLY_MAX_PERCENT`、既定 80%) 以下のときだけ `cross-model-advisor:fable-advisor-runner` を `model: "fable"` で起動します。超過・不明時や hook に deny された場合は Fable をスキップして Codex だけに相談します。Codex は read-only sandbox で、Fable は read-only の runner として、リポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。Codex の reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコード差分の finding 取得へ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-codex-review](#pre-push-codex-review) が担当します。
+相談は Codex (別系統モデルの独立視点) に渡します。Codex は read-only sandbox で、リポジトリを自分で読んで裏取りしたうえで助言を返します (ファイル変更は行いません)。Codex の reasoning effort は `xhigh` 固定です。助言と手元の証拠が衝突したときは、衝突を明示した再相談 (reconcile call) で解消する規律を含みます。設計/仕様の決定はユーザ専権のままで、助言は AskUserQuestion の代替にしません。advisor 相談自体をコード差分の finding 取得へ転用せず、一般の `/codex:review` は review runner、push gate は [pre-push-codex-review](#pre-push-codex-review) が担当します。
 
-Codex review の review cadence (`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 review を session ごとに合算し、5 サイクル完了後に main session の Stop と次の review 起動を block する enforcement) は [pre-push-codex-review](#pre-push-codex-review) plugin が担います。cross-model-advisor は checkpoint の実行主体として `cross-model-advisor:codex-advisor-runner` を提供し (checkpoint も Fable に並列で相談できるが、attestation を発行するのは codex-advisor-runner だけ)、元の Goal / 制約、直近 5 サイクルの review 履歴、現在の方針を材料に根本方針・問題設定・設計境界・検証戦略を問い直す助言を返して `Codex-Advisor-Review-Cadence` attestation を発行します。通常の advisor 相談ではカウンターを解除しません。
+Codex review の review cadence (`pre-push-codex-review:codex-reviewer` / `pre-merge-cross-review:codex-reviewer` の成功 review と `cross-model-advisor:codex-review-runner` の成功 review を session ごとに合算し、5 サイクル完了後に main session の Stop と次の review 起動を block する enforcement) は [pre-push-codex-review](#pre-push-codex-review) plugin が担います。cross-model-advisor は checkpoint の実行主体として `cross-model-advisor:codex-advisor-runner` を提供し、元の Goal / 制約、直近 5 サイクルの review 履歴、現在の方針を材料に根本方針・問題設定・設計境界・検証戦略を問い直す助言を返して `Codex-Advisor-Review-Cadence` attestation を発行します。通常の advisor 相談ではカウンターを解除しません。
 
 rescue / review / advisor は `cross-model-advisor:codex-rescue-runner` / `codex-review-runner` / `codex-advisor-runner` の role 固有 runner subagent に閉じ込めます。main session や通常 subagent から companion / wrapper を直接実行すると PreToolUse hook が deny し、Stop hook が対応 runner への reroute、稼働中 runner の completion notification 待ち、1 回だけの retry を要求します。起動 mode は Claude Code が決めるため Agent call では指定せず、runner の report は completion notification (SubagentHandback / SubagentStop) 経由で後続ターンに届きます。
 
@@ -387,11 +386,11 @@ Claude Code からの利用には [公式 codex plugin](https://github.com/opena
 
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
-| consult | Claude: `/cross-model-advisor:consult` | self-contained な相談プロンプトを組み立て、`cross-model-advisor:codex-advisor-runner` と (Fable 週次枠に余裕があれば) `cross-model-advisor:fable-advisor-runner` を並列に起動して助言を回収する |
+| consult | Claude: `/cross-model-advisor:consult` | self-contained な相談プロンプトを組み立て、`cross-model-advisor:codex-advisor-runner` を起動して助言を回収する |
 
 ### キーワード
 
-`codex` `fable` `advisor` `second-opinion` `system-prompt` `hook` `skill` `openai`
+`codex` `advisor` `second-opinion` `system-prompt` `hook` `skill` `openai`
 
 ---
 
