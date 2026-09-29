@@ -78,6 +78,11 @@ class InternalDocProfileTest(unittest.TestCase):
     def test_profile_prefers_bullet_points(self) -> None:
         self.assertIn("**箇条書き中心**", self.profile)
         self.assertIn("1 項目に 1 つの事実", self.profile)
+        self.assertIn(
+            "`general-writing.md` セクション 2 の「分類・対称化」「演出的な断片文」は、"
+            "箇条書きの項目と体言止めの文には適用しない",
+            self.profile,
+        )
 
     def test_profile_drops_person_and_reader_address(self) -> None:
         self.assertIn("**人称と読者への働きかけ**", self.profile)
@@ -116,7 +121,8 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
         self.assertIn("テックブログ・技術書・社内技術文書", tech)
         self.assertIn("社内技術文書プロファイル", tech)
         self.assertIn("常体", tech)
-        self.assertIn("文末表現の要点より優先", tech)
+        self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
+        self.assertIn("「筆者」ではなく「＜環境・バージョン・日付＞で確認済み」", tech)
         self.assertIn("社内の規約が文体を定めている場合は、そちらに従います", tech)
         self.assertIn("書籍/ブログ/社内技術文書の媒体プロファイル", tech)
 
@@ -127,6 +133,10 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn(f"媒体: {MEDIA_CHOICES}", text)
         self.assertIn("媒体 = 書籍 / 社内技術文書 のときは省略可", text)
         self.assertIn("媒体=社内技術文書 / 想定読者=", text)
+        description = next(
+            line for line in text.splitlines() if line.startswith("description:")
+        )
+        self.assertIn(MEDIUM, description)
 
     def test_draft_offers_internal_doc_medium(self) -> None:
         text = read(DRAFT_SKILL)
@@ -137,6 +147,11 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
             "媒体 = 社内技術文書 のときは、社内技術文書プロファイルに従って箇条書きの項目で書き",
             text,
         )
+        self.assertIn("箇条書き中心に従い、この項目を適用しない", text)
+        description = next(
+            line for line in text.splitlines() if line.startswith("description:")
+        )
+        self.assertIn(MEDIUM, description)
 
     def test_review_offers_internal_doc_medium(self) -> None:
         text = read(REVIEW_SKILL)
@@ -144,6 +159,10 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn(TYPE_OPTIONAL_MEDIA, text)
         self.assertIn("(書籍 / ブログ / 社内技術文書、", text)
         self.assertIn(MEDIUM, text[: text.index("## 1. 入力の確認")])
+        self.assertIn(
+            "箇条書きの項目と体言止めの文を「分類・対称化」「演出的な断片文」として指摘しない",
+            text,
+        )
 
 
 if __name__ == "__main__":

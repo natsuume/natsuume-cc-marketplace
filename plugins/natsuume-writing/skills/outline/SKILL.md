@@ -1,6 +1,6 @@
 ---
 name: outline
-description: 壁打ちで技術記事・技術書の章立て・section構成を決め、記事ファイルに見出しとHTML commentのスケルトンを書き込む。「記事構成・章立てを決める」「執筆の壁打ち」「outline作成」で使う
+description: 壁打ちで技術記事・技術書・社内技術文書の章立て・section構成を決め、記事ファイルに見出しとHTML commentのスケルトンを書き込む。「記事構成・章立てを決める」「執筆の壁打ち」「outline作成」で使う
 ---
 
 # outline
