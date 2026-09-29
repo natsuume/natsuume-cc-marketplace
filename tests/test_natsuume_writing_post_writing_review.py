@@ -126,6 +126,11 @@ class ReviewSkillPostWritingReviewTest(unittest.TestCase):
         self.assertIn("リポジトリの外の事実", factual)
         self.assertIn("メインセッションの調査だけで行ったこと", factual)
 
+    def test_later_steps_handle_skipped_investigation(self) -> None:
+        self.assertIn("独立調査を行わなかった場合**。突き合わせは行わず", self.text)
+        report = self.text[self.text.index("## 3. 指摘一覧の提示") :]
+        self.assertIn("メインセッションの結論だけを主張ごとに並べ", report)
+
     def test_codex_condition_gates_step_before_request_items(self) -> None:
         factual = self.text[self.text.index("### 2-3.") : self.text.index("### 2-4.")]
         condition = factual.index("リポジトリの外の事実")
