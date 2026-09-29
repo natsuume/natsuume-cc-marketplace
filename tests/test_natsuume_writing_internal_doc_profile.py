@@ -133,6 +133,10 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         self.assertIn(f"媒体 ({MEDIA_CHOICES})", text)
         self.assertIn("社内技術文書プロファイル", text)
         self.assertIn("で確認済み", text)
+        self.assertIn(
+            "媒体 = 社内技術文書 のときは、社内技術文書プロファイルに従って箇条書きの項目で書き",
+            text,
+        )
 
     def test_review_offers_internal_doc_medium(self) -> None:
         text = read(REVIEW_SKILL)
