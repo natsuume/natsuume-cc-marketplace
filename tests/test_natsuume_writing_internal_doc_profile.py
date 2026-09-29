@@ -107,6 +107,7 @@ class InternalDocProfileTest(unittest.TestCase):
             "過去の否定 (「〜しなかった」「〜なかった」) も同じ形にする",
             "「〜がない」→「〜なし」、「〜がある」→「〜あり」",
             "否定の文には、名詞化より否定の形を優先する",
+            "この規則は「文末」で挙げた「〜ない」の形より優先する",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.profile)
@@ -169,7 +170,7 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
             "動詞・形容詞で終わる文も、意味が同じ平易な名詞に置き換えられ", tech
         )
         self.assertIn(
-            "否定は「〜せず」「〜ず」、存在は「〜なし」「〜あり」の形で終えます（どちらも時が文脈から明らかな場合に限る）",
+            "動詞の否定は「〜せず」「〜ず」、存在は「〜なし」「〜あり」の形で終えます（どちらも時が文脈から明らかな場合に限る）",
             tech,
         )
         self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
