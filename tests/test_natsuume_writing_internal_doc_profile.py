@@ -178,7 +178,21 @@ class SkillsInternalDocMediumTest(unittest.TestCase):
         )
         self.assertIn("媒体 = 社内技術文書 で文体 = プロファイル のときは", text)
         self.assertIn("文体 (媒体 = 社内技術文書 のときのみ。", text)
-        self.assertIn("文体 = 社内規約 のときは、社内技術文書プロファイルの", text)
+        style_rules = text[text.index("### 2-1.") : text.index("### 2-2.")]
+        self.assertIn(
+            "媒体 = 社内技術文書 で文体 = 社内規約 のときは、社内技術文書プロファイルの",
+            style_rules,
+        )
+
+    def test_draft_applies_convention_when_loading_rules(self) -> None:
+        text = read(DRAFT_SKILL)
+        rules_step = text[
+            text.index("## 2. 執筆ルールの読み込み") : text.index("## 3.")
+        ]
+        self.assertIn(
+            "媒体 = 社内技術文書 で文体 = 社内規約 のときは、社内技術文書プロファイルの",
+            rules_step,
+        )
 
 
 if __name__ == "__main__":
