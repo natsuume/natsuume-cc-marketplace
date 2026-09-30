@@ -349,6 +349,17 @@ class FindAppServerExecutablesTest(unittest.TestCase):
             self.find(output),
         )
 
+    def test_ignores_codex_app_server_in_the_middle_of_a_shell_command(self) -> None:
+        # codex が実行ファイルそのもの (先頭) かインタープリタの直後 (2 番目) にあるときだけ
+        # app-server とみなす。シェルのコマンド文字列の途中にある組は数えない。
+        output = ps_lines(
+            "  100     1 node /opt/companion/scripts/app-server-broker.mjs serve",
+            "  101   100 /opt/codex/vendor/bin/codex app-server",
+            "  102   101 /bin/bash -lc node /tmp/fake/bin/codex app-server",
+            "  103   102 node /tmp/fake/bin/codex app-server",
+        )
+        self.assertEqual(["/opt/codex/vendor/bin/codex"], self.find(output))
+
     def test_only_non_codex_tokens_yield_empty_list(self) -> None:
         output = ps_lines(
             "  100     1 node /opt/companion/scripts/app-server-broker.mjs serve",
@@ -790,6 +801,19 @@ class GuardCliTest(unittest.TestCase):
     def test_fresh_broker_is_left_running(self) -> None:
         self.install_lifecycle()
         broker = self.start_fresh_broker()
+        self.write_session(broker.pid)
+        self.assert_silent_without_shutdown(self.run_guard())
+        self.assert_broker_alive(broker)
+
+    def test_future_mtime_does_not_make_fresh_broker_stale(self) -> None:
+        # 現在時刻より後の mtime は使わず ctime で判定する (未来の mtime で毎回止めないため)。
+        self.install_lifecycle()
+        self.write_fake_app_server()
+        future = time.time() + 86400
+        os.utime(self.fake_app_server, (future, future))
+        time.sleep(TIMESTAMP_GAP_SECONDS)
+        broker = self.start_broker()
+        self.wait_for_app_server_child(broker.pid)
         self.write_session(broker.pid)
         self.assert_silent_without_shutdown(self.run_guard())
         self.assert_broker_alive(broker)
