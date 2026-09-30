@@ -187,6 +187,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - **gate の観測範囲は Bash tool の `gh pr merge` (連続列を含む形) のみ**: `gh api` による直接 merge 呼び出し、gh alias、意図的な難読化、非 Bash の tool 経路、Web UI や他 client からの merge は観測できません
 - **TOCTOU 窓は防がない**: gate 確認後から実 merge までの間に head が更新される競合窓は防ぎません (ローカル記録の SHA は gate 確認時点の head と照合されます)
 - **`--auto` / `--admin` は常に deny**: 遅延 merge 予約 (gate 確認と実 merge の分離) と保護 bypass はサポート外です。必要な場合は plugin を無効化して実行してください
+- **古い broker の判定は `PATH` と引数列に依存する**: guard はコマンド名だけの `codex` を guard 自身の `PATH` で解決します。codex を複数の場所にインストールしていて、broker を起動した環境と guard を実行する環境で `PATH` の順序が違うと、broker が使っているものとは別の実行ファイルの時刻を見ます。また、実行ファイルのパスに空白が含まれると codex の app-server を特定できず、警告を出して続行します
 - **hooks module は early access の API に依存する**: Claude Mods (function hooks) の API は Claude Code のリリース間で予告なく変わりえます。`tool.check` の allow が classifier の判定を省略する挙動は Claude Code 2.1.282 の実装で確認したもので、公式ドキュメントには記述がありません
 - **hooks module が参照する permission mode は直近の classic イベント時点の値**: 呼び出し元の agent ごとに記録していますが、ターンの途中で permission mode を切り替えた直後の 1 回のツール呼び出しには、その agent の切り替え前の mode が使われます
 - **hooks module は rule を持たない ask の由来を区別しない**: core の既定の ask だけでなく、他の PreToolUse hook が返した ask も、条件を満たせば allow に引き上げます。`permissions.ask` ルールによる ask は引き上げません

@@ -100,6 +100,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - ユーザが `/codex:rescue` の本文を直接指定し、かつ対象の rescue がセッション内で最新の再開可能 task でなくなっている場合 (間に consult 等の Codex task が terminal 状態になった場合)、規律は安全側の degraded mode (`--fresh` + 本文無改変転送、thread 文脈の連続性なし) に倒れます。advisor-rules の「ユーザが本文を直接指定した場合は routing flag 以外を変更せず転送する」規定と、request の thread flag に従って task を継続または新規に開始する codex-rescue-runner の挙動により、誤 thread 再開の防止と本文の無改変転送を文脈の連続性より優先するためで、継続文脈が必要な場合は再依頼時に本文へ含めてください
 - Codex の 3 runner は model: sonnet を frontmatter で固定しているが、model 制限環境で sonnet が利用できない場合は runner の起動自体が失敗し、review cadence の `unavailable` 記録に到達できない。この場合は呼び出し側の Agent tool で利用可能な別のモデルを `model` に明示して runner を再実行する (呼び出し側指定は frontmatter より優先される)
 - runner 以外からの直接起動を deny する PreToolUse gate は matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された companion / wrapper の起動を gate は観測しない。これらの tool を有効にした環境はサポート外
+- `scripts/lib/stale-broker-guard.mjs` はコマンド名だけの `codex` を guard 自身の `PATH` で解決する。codex を複数の場所にインストールしていて、broker を起動した環境と guard を実行する環境で `PATH` の順序が違うと、broker が使っているものとは別の実行ファイルの時刻を見る。また、実行ファイルのパスに空白が含まれると codex の app-server を特定できず、警告を出して続行する
 
 ## Codex 代替の保証差と検証テスト
 

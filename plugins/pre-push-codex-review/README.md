@@ -207,6 +207,7 @@ wrapper (`run-pre-push-codex-review.sh`) は companion の `review` を起動す
 ## 既知の制約
 
 - **gate の観測範囲は Bash tool のみ**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `git push` を gate は観測しない。これらの tool を有効にした環境はサポート外
+- **古い broker の判定は `PATH` と引数列に依存する**: guard はコマンド名だけの `codex` を guard 自身の `PATH` で解決する。codex を複数の場所にインストールしていて、broker を起動した環境と guard を実行する環境で `PATH` の順序が違うと、broker が使っているものとは別の実行ファイルの時刻を見る。また、実行ファイルのパスに空白が含まれると codex の app-server を特定できず、警告を出して続行する
 
 ## 関連プラグイン
 

@@ -38,8 +38,9 @@
 // 1. companion と同じディレクトリの `lib/broker-lifecycle.mjs` を動的 import する。import の
 //    直後に `loadBrokerSession` / `sendBrokerShutdown` / `clearBrokerSession` の 3 つが関数として
 //    存在することを確認する (環境変数の確認や broker の記録の読み込みより前に行う)
-// 2. 環境変数 `CODEX_COMPANION_APP_SERVER_ENDPOINT` が設定されていれば何もせず終える
-//    (companion はその endpoint に直接接続し、broker の記録を参照しないため)
+// 2. 環境変数 `CODEX_COMPANION_APP_SERVER_ENDPOINT` に空でない値が設定されていれば何もせず終える
+//    (companion はその endpoint に直接接続し、broker の記録を参照しないため。空文字列は
+//    companion と同じく未設定として扱う)
 // 3. `loadBrokerSession(cwd)` が null (記録なし) なら何もせず終える
 // 4. 記録の `pid` のプロセスが生きていなければ何もせず終える
 // 5. `ps -A -o pid= -o ppid= -o args=` を 1 回実行し、その出力で記録の `pid` のプロセスが
@@ -88,6 +89,14 @@
 // - 停止を試みた後も broker の pid が残っている
 //
 // `runStaleBrokerGuard` は例外を外に投げない。
+//
+// ## 既知の制約
+//
+// - コマンド名だけのトークン (`codex`) は guard 自身の `PATH` で解決する。codex を複数の場所に
+//   インストールしていて、broker を起動した環境と guard を実行する環境で `PATH` の順序が違うと、
+//   broker が実際に使っているものとは別の実行ファイルの時刻を見る
+// - 引数列を空白で区切ってトークンにするため、実行ファイルのパスに空白が含まれると codex の
+//   app-server を特定できず、警告を出して続行する
 
 
 import { spawnSync } from "node:child_process";
@@ -421,11 +430,14 @@ const waitForProcessExit = async (pid, timeoutMs) => {
 /**
  * `ps` を shell を経由せずに実行し、stdout を返す。失敗したら GuardWarning を投げる。
  *
+ * `-ww` を付けて列の幅の制限をなくす。procps の ps は環境変数 `COLUMNS` があると、出力が
+ * パイプでも args の列をその幅で切るため。
+ *
  * @param {string[]} args
  * @returns {string}
  */
 const runPs = (args) => {
-  const result = spawnSync("ps", args, {
+  const result = spawnSync("ps", ["-ww", ...args], {
     encoding: "utf8",
     maxBuffer: PS_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
@@ -642,7 +654,7 @@ const clearStoppedBrokerRecord = (lifecycle, cwd, stoppedSession) => {
 export const runStaleBrokerGuard = async ({ companionPath, cwd, env }) => {
   try {
     const lifecycle = await importBrokerLifecycle(companionPath);
-    if (env[ENDPOINT_ENV] !== undefined) {
+    if (typeof env[ENDPOINT_ENV] === "string" && env[ENDPOINT_ENV] !== "") {
       return;
     }
 
