@@ -5,11 +5,12 @@
 検査する)。次の 3 つを固定する。
 
 - 判定に使う純粋関数 (`parseElapsedSeconds` / `findAppServerExecutables` /
-  `resolveExecutablePath` / `isBrokerStale`)。`node --input-type=module -e` で module を import
-  し、結果を JSON で受け取って検査する
+  `isCompanionBrokerProcess` / `resolveExecutablePath` / `isBrokerStale`)。
+  `node --input-type=module -e` で module を import し、結果を JSON で受け取って検査する
 - CLI の動作。一時ディレクトリに偽の companion (`scripts/codex-companion.mjs` と
-  `scripts/lib/broker-lifecycle.mjs`) を置き、偽の broker (`sh` の配下で偽の app-server を
-  動かすプロセス) を相手に、shutdown・後片付け・記録の削除の有無と順序、stderr、stdout が空で
+  `scripts/lib/broker-lifecycle.mjs`) を置き、偽の broker (`app-server-broker.mjs` という名前の
+  node スクリプト。偽の codex を `node <tmp>/bin/codex app-server` として子プロセスで動かす) を
+  相手に、shutdown・後片付け・記録の削除の有無と順序、stderr、stdout が空で
   あること、終了コード 0 を検査する。偽の broker-lifecycle は、環境変数で渡したファイルから
   broker の記録を読み、呼び出された関数名と引数を別のログファイルに追記する
 - 4 本の wrapper が companion の `review` / `adversarial-review` / `task` を起動する前に guard を
@@ -170,6 +171,21 @@ export function loadBrokerSession(cwd) {
 FAKE_APP_SERVER_SOURCE = "setInterval(() => {}, 1000);\n"
 FAKE_APP_SERVER_UPDATED_SOURCE = "// updated\nsetInterval(() => {}, 1000);\n"
 
+# 偽の broker (および broker でないプロセス) の本体。環境変数 FAKE_BROKER_CHILD_EXECUTABLE の
+# JS ファイルを `node <path> app-server` として子プロセスで起動し、自分も動き続ける。
+FAKE_CHILD_EXECUTABLE_ENV = "FAKE_BROKER_CHILD_EXECUTABLE"
+FAKE_BROKER_SCRIPT_SOURCE = """
+import { spawn } from "node:child_process";
+import process from "node:process";
+
+spawn(process.execPath, [process.env.FAKE_BROKER_CHILD_EXECUTABLE, "app-server"], {
+  stdio: "ignore",
+});
+setInterval(() => {}, 1000);
+"""
+BROKER_SCRIPT_NAME = "app-server-broker.mjs"
+NON_BROKER_SCRIPT_NAME = "worker.mjs"
+
 
 def call_guard_function(name: str, *args: object) -> tuple[str, object]:
     """guard module の公開関数 `name` を呼び、(JSON 化する前の戻り値の型, 戻り値) を返す。
@@ -307,6 +323,75 @@ class FindAppServerExecutablesTest(unittest.TestCase):
             self.find(output),
         )
 
+    def test_ignores_tokens_whose_basename_is_not_codex(self) -> None:
+        output = ps_lines(
+            "  100     1 node /opt/companion/scripts/app-server-broker.mjs serve",
+            "  101   100 node /opt/codex/bin/codex app-server",
+            "  102   101 grep -rn app-server src",
+            "  103   101 /usr/bin/node app-server",
+            "  104   101 /opt/tools/codex-helper app-server",
+        )
+        self.assertEqual(["/opt/codex/bin/codex"], self.find(output))
+
+    def test_only_non_codex_tokens_yield_empty_list(self) -> None:
+        output = ps_lines(
+            "  100     1 node /opt/companion/scripts/app-server-broker.mjs serve",
+            "  101   100 node /opt/tools/other app-server",
+            "  102   100 grep app-server file",
+        )
+        self.assertEqual([], self.find(output))
+
+    def test_node_script_token_is_the_codex_path(self) -> None:
+        output = ps_lines(
+            "  100     1 node /x/scripts/app-server-broker.mjs serve",
+            "  101   100 node /x/bin/codex app-server",
+        )
+        self.assertEqual(["/x/bin/codex"], self.find(output))
+
+    def test_bare_codex_command_token_is_returned_as_is(self) -> None:
+        output = ps_lines(
+            "  100     1 node /x/scripts/app-server-broker.mjs serve",
+            "  101   100 codex app-server",
+        )
+        self.assertEqual(["codex"], self.find(output))
+
+
+class IsCompanionBrokerProcessTest(unittest.TestCase):
+    BROKER_PID = 100
+
+    def check(self, ps_output: str) -> bool:
+        value_type, value = call_guard_function(
+            "isCompanionBrokerProcess", ps_output, self.BROKER_PID
+        )
+        self.assertEqual("boolean", value_type, "戻り値の型")
+        return value
+
+    def test_broker_script_in_args_is_true(self) -> None:
+        output = ps_lines(
+            "    1     0 /sbin/init",
+            "  100     1 /usr/bin/node /x/scripts/app-server-broker.mjs serve",
+        )
+        self.assertIs(True, self.check(output))
+
+    def test_args_without_broker_script_is_false(self) -> None:
+        output = ps_lines(
+            "  100     1 node /x/bin/codex app-server",
+            "  101   100 node /x/scripts/app-server-broker.mjs serve",
+        )
+        self.assertIs(False, self.check(output))
+
+    def test_missing_pid_line_is_false(self) -> None:
+        output = ps_lines(
+            "  101     1 node /x/scripts/app-server-broker.mjs serve",
+        )
+        self.assertIs(False, self.check(output))
+
+    def test_partial_match_of_broker_script_is_false(self) -> None:
+        output = ps_lines(
+            "  100     1 node /x/scripts/my-app-server-broker.mjs serve",
+        )
+        self.assertIs(False, self.check(output))
+
 
 class ResolveExecutablePathTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -438,6 +523,9 @@ class GuardCliTest(unittest.TestCase):
         self.call_log = base / "calls.log"
         self.fake_app_server = base / "bin" / "codex"
         self.fake_app_server.parent.mkdir()
+        self.fake_other_executable = base / "bin" / "other"
+        self.broker_scripts = base / "broker-scripts"
+        self.broker_scripts.mkdir()
 
     # --- 偽の companion ---
 
@@ -478,15 +566,26 @@ class GuardCliTest(unittest.TestCase):
     def write_fake_app_server(self, source: str = FAKE_APP_SERVER_SOURCE) -> None:
         self.fake_app_server.write_text(source, encoding="utf-8")
 
-    def start_broker(self) -> subprocess.Popen[bytes]:
-        """`sh` の配下で偽の app-server を動かす偽の broker を新しい session で起動する。
+    def start_broker(
+        self,
+        script_name: str = BROKER_SCRIPT_NAME,
+        child_executable: Path | None = None,
+    ) -> subprocess.Popen[bytes]:
+        """`node <tmp>/broker-scripts/<script_name>` を新しい session で起動する。
 
-        broker が終了したらすぐ回収されるよう、wait する thread を付ける (回収されない
-        zombie は `kill -0` で生きているように見えるため)。
+        script は `node <child_executable> app-server` を子プロセスで起動して動き続ける。
+        child_executable の既定は偽の codex (`<tmp>/bin/codex`)。broker が終了したらすぐ
+        回収されるよう、wait する thread を付ける (回収されない zombie は `kill -0` で生きて
+        いるように見えるため)。後始末は process group ごと行う。
         """
+        script = self.broker_scripts / script_name
+        script.write_text(FAKE_BROKER_SCRIPT_SOURCE, encoding="utf-8")
+        executable = child_executable or self.fake_app_server
+        env = os.environ.copy()
+        env[FAKE_CHILD_EXECUTABLE_ENV] = str(executable)
         broker = subprocess.Popen(
-            ["sh", "-c", 'node "$1" app-server & wait', "fake-broker",
-             str(self.fake_app_server)],
+            ["node", str(script), "serve"],
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -506,7 +605,10 @@ class GuardCliTest(unittest.TestCase):
             pass
         reaper.join(timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
 
-    def wait_for_app_server_child(self, broker_pid: int) -> None:
+    def wait_for_app_server_child(
+        self, broker_pid: int, child_executable: Path | None = None
+    ) -> None:
+        executable = str(child_executable or self.fake_app_server)
         deadline = time.monotonic() + PROCESS_WAIT_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             listing = subprocess.run(
@@ -520,7 +622,7 @@ class GuardCliTest(unittest.TestCase):
                 if len(fields) < 3 or fields[1] != str(broker_pid):
                     continue
                 tokens = fields[2].split()
-                if "app-server" in tokens and str(self.fake_app_server) in tokens:
+                if "app-server" in tokens and executable in tokens:
                     return
             time.sleep(0.1)
         self.fail(f"偽の broker (pid={broker_pid}) の app-server 子プロセスが現れません")
@@ -533,10 +635,12 @@ class GuardCliTest(unittest.TestCase):
         self.wait_for_app_server_child(broker.pid)
         return broker
 
-    def start_stale_broker(self) -> subprocess.Popen[bytes]:
+    def start_stale_broker(
+        self, script_name: str = BROKER_SCRIPT_NAME
+    ) -> subprocess.Popen[bytes]:
         """起動後に実行ファイルが書き直された (古い) broker。"""
         self.write_fake_app_server()
-        broker = self.start_broker()
+        broker = self.start_broker(script_name)
         self.wait_for_app_server_child(broker.pid)
         time.sleep(TIMESTAMP_GAP_SECONDS)
         self.write_fake_app_server(FAKE_APP_SERVER_UPDATED_SOURCE)
@@ -739,6 +843,24 @@ class GuardCliTest(unittest.TestCase):
         self.assertFalse(self.session_file.exists(), "記録が消えていません")
         self.assert_single_stop_notice(completed, broker.pid)
 
+    def test_broker_whose_executable_was_removed_is_stopped(self) -> None:
+        self.install_lifecycle()
+        self.write_fake_app_server()
+        time.sleep(TIMESTAMP_GAP_SECONDS)
+        broker = self.start_broker()
+        self.wait_for_app_server_child(broker.pid)
+        self.fake_app_server.unlink()
+        self.write_session(broker.pid)
+        completed = self.run_guard()
+        self.assert_common_contract(completed)
+
+        names = self.called_names()
+        self.assertIn("sendBrokerShutdown", names)
+        self.assertIn("clearBrokerSession", names)
+        self.assert_broker_ended(broker)
+        self.assertFalse(self.session_file.exists(), "記録が消えていません")
+        self.assert_single_stop_notice(completed, broker.pid)
+
     # --- 失敗した場合 (fail-open) ---
 
     def test_missing_lifecycle_module_warns_once(self) -> None:
@@ -747,6 +869,28 @@ class GuardCliTest(unittest.TestCase):
     def test_lifecycle_without_required_functions_warns_once(self) -> None:
         self.install_lifecycle(FAKE_LIFECYCLE_LOAD_ONLY_SOURCE)
         self.assert_single_warning(self.run_guard())
+
+    def test_recorded_pid_that_is_not_a_broker_warns_without_signal(self) -> None:
+        self.install_lifecycle()
+        not_broker = self.start_stale_broker(NON_BROKER_SCRIPT_NAME)
+        self.write_session(not_broker.pid)
+        completed = self.run_guard()
+        self.assert_single_warning(completed)
+        self.assertNotIn("clearBrokerSession", self.called_names())
+        self.assert_broker_alive(not_broker)
+
+    def test_broker_with_only_non_codex_descendants_warns(self) -> None:
+        self.install_lifecycle()
+        self.fake_other_executable.write_text(
+            FAKE_APP_SERVER_SOURCE, encoding="utf-8"
+        )
+        broker = self.start_broker(child_executable=self.fake_other_executable)
+        self.wait_for_app_server_child(broker.pid, self.fake_other_executable)
+        self.write_session(broker.pid)
+        completed = self.run_guard()
+        self.assert_single_warning(completed)
+        self.assertNotIn("clearBrokerSession", self.called_names())
+        self.assert_broker_alive(broker)
 
 
 # --- wrapper の静的検査 ---
