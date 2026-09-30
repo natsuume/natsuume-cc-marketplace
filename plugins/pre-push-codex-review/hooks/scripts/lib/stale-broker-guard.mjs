@@ -48,16 +48,19 @@
 //    あること) を確かめる (`isCompanionBrokerProcess`)。broker でなければ、pid の再利用や記録の
 //    改ざんで無関係なプロセスを指しているとみなし、シグナルを送らずに fail-open する
 // 6. 同じ ps 出力から、broker から codex の app-server のプロセスだけを通ってたどれる子孫を
-//    集め (`findAppServerExecutables`)、引数列の `app-server` トークンの直前のトークンのうち、
-//    basename が `codex` のものを codex の実行ファイルのトークンとして集める。basename が `codex`
-//    でないもの (codex が job の中で実行するツールのコマンド、例えば `grep app-server file`) と、
-//    job のコマンドの配下にある `codex app-server` は数えない。トークンは絶対パスとは限らない
+//    集め (`findAppServerExecutables`)、codex の実行ファイルのトークンを集める。codex の app-server
+//    とみなすのは、basename が `codex` のトークンが引数列の先頭 (`codex app-server`) かインタープ
+//    リタの直後 (`node /x/bin/codex app-server`) にあり、その次が `app-server` のプロセスだけ。
+//    codex が job の中で実行するツールのコマンド (例えば `grep app-server file` や
+//    `bash -lc node /x/codex app-server`) と、job のコマンドの配下にある `codex app-server` は
+//    数えない。トークンは絶対パスとは限らない
 //    (companion は app-server をコマンド名 `codex` で起動するため、ネイティブバイナリの
 //    インストールでは `codex app-server` となり、トークンは `codex` だけになる)
 // 7. `ps -o etime= -p <pid>` の `[[dd-]hh:]mm:ss` を秒に直し (`parseElapsedSeconds`)、現在時刻から
 //    引いて broker の起動時刻を求める。GNU と BSD の ps の両方にある項目だけを使う
 // 8. 各トークンを `resolveExecutablePath(token, env.PATH)` で実行ファイルのパスに解決し、
-//    `fs.statSync` (symlink の先を見る) の `mtimeMs` と `ctimeMs` の大きい方を求める。stat が
+//    `fs.statSync` (symlink の先を見る) の `mtimeMs` と `ctimeMs` の大きい方を求める (現在時刻より
+//    後の mtime は使わず ctime だけを見る。未来の mtime で毎回古いと判定しないため)。stat が
 //    `ENOENT` で失敗した (実行ファイルが無くなった) 場合は、その実行ファイルを broker の起動より後に
 //    更新されたものとみなす (時刻を `Infinity` とする)。1 つでも broker の起動時刻より後であれば
 //    古いと判定する (`isBrokerStale`)。ctime も使うのは、展開時に tarball の mtime を残す配布方法
@@ -215,34 +218,34 @@ const collectDescendantPids = (processes, rootPid, canEnter) => {
 const splitArgs = (args) => args.split(/\s+/).filter((token) => token !== "");
 
 /**
- * 引数列の `app-server` トークンの直前にある、basename が `codex` のトークン (出現順)。
- * `app-server` が先頭トークンの引数列からは何も取らない。
+ * 引数列が codex の app-server のものなら、その codex のトークンを 1 つ含む配列。そうでなければ
+ * 空配列。basename が `codex` のトークンが先頭にあり次が `app-server` の場合 (`codex app-server`)
+ * と、2 番目にあり次が `app-server` の場合 (`node /x/bin/codex app-server`) だけを対象にする。
+ * `app-server` が先頭トークンの引数列と、組が 3 番目以降にある引数列からは何も取らない。
  *
  * @param {string} args
  * @returns {string[]}
  */
 const codexTokensBeforeAppServer = (args) => {
   const tokens = splitArgs(args);
-  if (tokens[0] === APP_SERVER_TOKEN) {
-    return [];
-  }
-  const codexTokens = [];
-  for (let index = 1; index < tokens.length; index += 1) {
-    const previous = tokens[index - 1];
+  // codex が実行ファイルそのもの (`codex app-server`) か、インタープリタの直後
+  // (`node /x/bin/codex app-server`) にある場合だけを app-server とみなす。シェルのコマンド
+  // 文字列の途中にある組 (`bash -lc node /x/codex app-server`) は数えない。
+  for (const codexIndex of [0, 1]) {
     if (
-      tokens[index] === APP_SERVER_TOKEN &&
-      path.basename(previous) === CODEX_EXECUTABLE_NAME
+      tokens[codexIndex + 1] === APP_SERVER_TOKEN &&
+      path.basename(tokens[codexIndex] ?? "") === CODEX_EXECUTABLE_NAME
     ) {
-      codexTokens.push(previous);
+      return [tokens[codexIndex]];
     }
   }
-  return codexTokens;
+  return [];
 };
 
 /**
  * `ps -A -o pid= -o ppid= -o args=` の出力から brokerPid の子孫プロセス (broker 自身は含めない) を
- * たどり、引数列を空白で区切ったトークンのうち `app-server` と完全一致するトークンの直前の
- * トークンで、basename が `codex` のものを codex の実行ファイルのトークンとして集める。
+ * たどり、codex の app-server のプロセス (`codexTokensBeforeAppServer` が空でないもの) から
+ * codex の実行ファイルのトークンを集める。
  *
  * たどるのは、broker から codex の app-server のプロセス (そのようなトークンを持つプロセス) だけを
  * 通って到達できるものに限る。codex の app-server が job の中で実行したコマンド (bash や python3
@@ -558,8 +561,10 @@ const collectAppServerExecutablePaths = (psOutput, brokerPid, pathEnv) => {
 };
 
 /**
- * 実行ファイルの `max(mtimeMs, ctimeMs)` (symlink の先を見る)。実行ファイルが無くなって
- * いれば (`ENOENT`)、broker の起動より後に更新されたものとして `Infinity` を返す。
+ * 実行ファイルの `max(mtimeMs, ctimeMs)` (symlink の先を見る)。現在時刻より後の mtime は
+ * 使わず ctime だけを見る (未来の mtime を持つファイルで、起動し直した broker まで毎回古いと
+ * 判定しないため)。実行ファイルが無くなっていれば (`ENOENT`)、broker の起動より後に更新された
+ * ものとして `Infinity` を返す。
  *
  * @param {string} executablePath
  * @returns {number}
@@ -567,7 +572,8 @@ const collectAppServerExecutablePaths = (psOutput, brokerPid, pathEnv) => {
 const readExecutableUpdateTimeMs = (executablePath) => {
   try {
     const stats = fs.statSync(executablePath);
-    return Math.max(stats.mtimeMs, stats.ctimeMs);
+    const mtimeMs = stats.mtimeMs > Date.now() ? 0 : stats.mtimeMs;
+    return Math.max(mtimeMs, stats.ctimeMs);
   } catch (error) {
     if (error?.code === "ENOENT") {
       return Number.POSITIVE_INFINITY;
