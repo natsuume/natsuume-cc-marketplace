@@ -57,7 +57,9 @@
 //    (companion は app-server をコマンド名 `codex` で起動するため、ネイティブバイナリの
 //    インストールでは `codex app-server` となり、トークンは `codex` だけになる)
 // 7. `ps -o etime= -p <pid>` の `[[dd-]hh:]mm:ss` を秒に直し (`parseElapsedSeconds`)、現在時刻から
-//    引いて broker の起動時刻を求める。GNU と BSD の ps の両方にある項目だけを使う
+//    引いて broker の起動時刻を求める。GNU と BSD の ps の両方にある項目だけを使う。etime の
+//    分解能 (1 秒) のぶん、起動時刻を遅い側に寄せる (更新直後に起動した broker を古いと判定しない
+//    ため)
 // 8. 各トークンを `resolveExecutablePath(token, env.PATH)` で実行ファイルのパスに解決し、
 //    `fs.statSync` (symlink の先を見る) の `mtimeMs` と `ctimeMs` の大きい方を求める (現在時刻より
 //    後の時刻は使わない。未来の時刻で毎回古いと判定しないため)。stat が
@@ -125,6 +127,8 @@ const TERM_WAIT_MS = 5000;
 const EXIT_POLL_INTERVAL_MS = 100;
 // `ps -A` の出力は process 数に比例して長くなるため、既定の上限 (1 MiB) より大きく取る。
 const PS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+// `ps -o etime=` の分解能。
+const ETIME_RESOLUTION_MS = 1000;
 
 // ---------------------------------------------------------------------------
 // 判定に使う純粋関数
@@ -589,6 +593,10 @@ const readExecutableUpdateTimeMs = (executablePath) => {
 /**
  * `ps -o etime=` から broker の起動時刻 (epoch ミリ秒) を求める。
  *
+ * etime は秒単位で、macOS の ps は現在時刻と起動時刻をそれぞれ秒に切り捨ててから差を取るため、
+ * 経過時間を最大 1 秒多く出すことがある。そのまま引くと起動時刻が実際より早くなり、codex の
+ * 更新直後に起動した broker を古いと判定しうるので、分解能の 1 秒を足して遅い側に寄せる。
+ *
  * @param {number} brokerPid
  * @returns {number}
  */
@@ -600,7 +608,7 @@ const readBrokerStartMs = (brokerPid) => {
       `ps -o etime= の出力を解釈できません: ${JSON.stringify(elapsedText)}`,
     );
   }
-  return Date.now() - elapsedSeconds * 1000;
+  return Date.now() - elapsedSeconds * 1000 + ETIME_RESOLUTION_MS;
 };
 
 /**
