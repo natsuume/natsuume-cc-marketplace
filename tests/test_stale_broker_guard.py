@@ -333,6 +333,22 @@ class FindAppServerExecutablesTest(unittest.TestCase):
         )
         self.assertEqual(["/opt/codex/bin/codex"], self.find(output))
 
+    def test_ignores_codex_app_server_started_by_a_job_command(self) -> None:
+        # codex の app-server が job で実行したコマンド (bash → python3) の配下にある
+        # codex app-server は、broker が起動したものではないので数えない。
+        output = ps_lines(
+            "  100     1 node /opt/companion/scripts/app-server-broker.mjs serve",
+            "  101   100 node /opt/codex/bin/codex app-server",
+            "  102   101 /opt/codex/vendor/bin/codex app-server",
+            "  103   102 /bin/bash -lc python3 -m unittest",
+            "  104   103 python3 -m unittest",
+            "  105   104 node /tmp/fake/bin/codex app-server",
+        )
+        self.assertEqual(
+            ["/opt/codex/bin/codex", "/opt/codex/vendor/bin/codex"],
+            self.find(output),
+        )
+
     def test_only_non_codex_tokens_yield_empty_list(self) -> None:
         output = ps_lines(
             "  100     1 node /opt/companion/scripts/app-server-broker.mjs serve",
