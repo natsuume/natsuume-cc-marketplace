@@ -103,14 +103,23 @@ class InternalDocProfileTest(unittest.TestCase):
     def test_profile_ends_negation_and_existence_with_zu_and_nashi(self) -> None:
         self.assertIn("**否定と存在**", self.profile)
         for phrase in (
-            "「〜しない」→「〜せず」、「〜ない」→「〜ず」",
-            "過去の否定 (「〜しなかった」「〜なかった」) も同じ形にする",
+            "動詞の否定で終わる文は、文の役割で形を決める",
+            "観察・検証・作業の結果の報告と、決定事項の記録は「〜せず」「〜ず」の形で終える",
+            "過去の否定 (「〜しなかった」「〜なかった」) と、観察した現在の現象も同じ形にする",
+            "手順の指示・禁止、読み手に伝える制約、仕様・挙動の説明、今後の方針は「〜しない」「〜できない」の形で終える",
+            "「〜ていない」は「〜ておらず」にしない",
+            "「〜なく」で文を終えない",
             "「〜がない」→「〜なし」、「〜がある」→「〜あり」",
-            "否定の文には、名詞化より否定の形を優先する",
-            "この規則は「文末」で挙げた「〜ない」の形より優先する",
+            "この規則を優先する",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, self.profile)
+        for phrase in (
+            "否定の文には、名詞化より否定の形を優先する",
+            "「Windows では動かない」→「Windows では動かず」",
+        ):
+            with self.subTest(absent=phrase):
+                self.assertNotIn(phrase, self.profile)
         self.assertIn("推測: 「〜と考えられる」「〜の可能性あり」", self.profile)
 
     def test_profile_prefers_bullet_points(self) -> None:
@@ -170,7 +179,7 @@ class CoreSummaryInternalDocTest(unittest.TestCase):
             "動詞・形容詞で終わる文も、意味が同じ平易な名詞に置き換えられ", tech
         )
         self.assertIn(
-            "動詞の否定は「〜せず」「〜ず」、存在は「〜なし」「〜あり」の形で終えます（どちらも時が文脈から明らかな場合に限る）",
+            "動詞の否定は、結果の報告と決定事項の記録では「〜せず」「〜ず」で終え、手順の指示・仕様の説明・今後の方針では「〜しない」の形で終えます。「〜ておらず」「〜なく」では終えません。存在は「〜なし」「〜あり」の形で終えます（時が文脈から明らかな場合に限る）",
             tech,
         )
         self.assertIn("通底原則 1・2 と文末表現の要点より優先", tech)
