@@ -47,10 +47,11 @@
 //    companion の broker であること (引数列に basename が `app-server-broker.mjs` のトークンが
 //    あること) を確かめる (`isCompanionBrokerProcess`)。broker でなければ、pid の再利用や記録の
 //    改ざんで無関係なプロセスを指しているとみなし、シグナルを送らずに fail-open する
-// 6. 同じ ps 出力から broker の子孫プロセスを再帰的にたどり (`findAppServerExecutables`)、引数列の
-//    `app-server` トークンの直前のトークンのうち、basename が `codex` のものを codex の実行ファイルの
-//    トークンとして集める。basename が `codex` でないもの (codex が job の中で実行するツールの
-//    コマンド、例えば `grep app-server file`) は無視する。トークンは絶対パスとは限らない
+// 6. 同じ ps 出力から、broker から codex の app-server のプロセスだけを通ってたどれる子孫を
+//    集め (`findAppServerExecutables`)、引数列の `app-server` トークンの直前のトークンのうち、
+//    basename が `codex` のものを codex の実行ファイルのトークンとして集める。basename が `codex`
+//    でないもの (codex が job の中で実行するツールのコマンド、例えば `grep app-server file`) と、
+//    job のコマンドの配下にある `codex app-server` は数えない。トークンは絶対パスとは限らない
 //    (companion は app-server をコマンド名 `codex` で起動するため、ネイティブバイナリの
 //    インストールでは `codex app-server` となり、トークンは `codex` だけになる)
 // 7. `ps -o etime= -p <pid>` の `[[dd-]hh:]mm:ss` を秒に直し (`parseElapsedSeconds`)、現在時刻から
@@ -173,13 +174,15 @@ const parsePsOutput = (psOutput) =>
     .filter((processInfo) => processInfo !== null);
 
 /**
- * rootPid の子孫の pid の集合 (rootPid 自身は含めない)。
+ * rootPid の子孫のうち、rootPid から canEnter を満たすプロセスだけを通ってたどれるものの pid の
+ * 集合 (rootPid 自身は含めない)。canEnter を満たさないプロセスとその配下はたどらない。
  *
  * @param {{ pid: number, ppid: number }[]} processes
  * @param {number} rootPid
+ * @param {(pid: number) => boolean} canEnter
  * @returns {Set<number>}
  */
-const collectDescendantPids = (processes, rootPid) => {
+const collectDescendantPids = (processes, rootPid, canEnter) => {
   const childrenByParent = new Map();
   for (const { pid, ppid } of processes) {
     if (!childrenByParent.has(ppid)) {
@@ -193,7 +196,7 @@ const collectDescendantPids = (processes, rootPid) => {
   while (pending.length > 0) {
     const parent = pending.shift();
     for (const child of childrenByParent.get(parent) ?? []) {
-      if (child === rootPid || descendants.has(child)) {
+      if (child === rootPid || descendants.has(child) || !canEnter(child)) {
         continue;
       }
       descendants.add(child);
@@ -237,10 +240,13 @@ const codexTokensBeforeAppServer = (args) => {
 };
 
 /**
- * `ps -A -o pid= -o ppid= -o args=` の出力から brokerPid の子孫プロセス (子・孫・それ以下。broker
- * 自身は含めない) をたどり、引数列を空白で区切ったトークンのうち `app-server` と完全一致する
- * トークンの直前のトークンで、basename が `codex` のものを codex の実行ファイルのトークンとして
- * 集める。
+ * `ps -A -o pid= -o ppid= -o args=` の出力から brokerPid の子孫プロセス (broker 自身は含めない) を
+ * たどり、引数列を空白で区切ったトークンのうち `app-server` と完全一致するトークンの直前の
+ * トークンで、basename が `codex` のものを codex の実行ファイルのトークンとして集める。
+ *
+ * たどるのは、broker から codex の app-server のプロセス (そのようなトークンを持つプロセス) だけを
+ * 通って到達できるものに限る。codex の app-server が job の中で実行したコマンド (bash や python3
+ * 等) の配下にある `codex app-server` は、broker が起動したものではないので数えない。
  *
  * トークンは加工せずに返す。絶対パスとは限らず、`codex` のようなコマンド名だけのこともある
  * (パスへの解決は `resolveExecutablePath` が行う)。
@@ -257,13 +263,20 @@ const codexTokensBeforeAppServer = (args) => {
  */
 export const findAppServerExecutables = (psOutput, brokerPid) => {
   const processes = parsePsOutput(psOutput);
-  const descendants = collectDescendantPids(processes, brokerPid);
+  const codexTokensByPid = new Map(
+    processes.map(({ pid, args }) => [pid, codexTokensBeforeAppServer(args)]),
+  );
+  const chainPids = collectDescendantPids(
+    processes,
+    brokerPid,
+    (pid) => (codexTokensByPid.get(pid) ?? []).length > 0,
+  );
   const executables = [];
-  for (const { pid, args } of processes) {
-    if (!descendants.has(pid)) {
+  for (const { pid } of processes) {
+    if (!chainPids.has(pid)) {
       continue;
     }
-    for (const token of codexTokensBeforeAppServer(args)) {
+    for (const token of codexTokensByPid.get(pid)) {
       if (!executables.includes(token)) {
         executables.push(token);
       }
