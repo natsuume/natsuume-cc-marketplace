@@ -49,7 +49,7 @@
 //    改ざんで無関係なプロセスを指しているとみなし、シグナルを送らずに fail-open する
 // 6. 同じ ps 出力から、broker から codex の app-server のプロセスだけを通ってたどれる子孫を
 //    集め (`findAppServerExecutables`)、codex の実行ファイルのトークンを集める。codex の app-server
-//    とみなすのは、basename が `codex` のトークンが引数列の先頭 (`codex app-server`) かインタープ
+//    とみなすのは、basename が `codex` か `codex.js` のトークンが引数列の先頭 (`codex app-server`) かインタープ
 //    リタの直後 (`node /x/bin/codex app-server`) にあり、その次が `app-server` のプロセスだけ。
 //    codex が job の中で実行するツールのコマンド (例えば `grep app-server file` や
 //    `bash -lc node /x/codex app-server`) と、job のコマンドの配下にある `codex app-server` は
@@ -60,7 +60,7 @@
 //    引いて broker の起動時刻を求める。GNU と BSD の ps の両方にある項目だけを使う
 // 8. 各トークンを `resolveExecutablePath(token, env.PATH)` で実行ファイルのパスに解決し、
 //    `fs.statSync` (symlink の先を見る) の `mtimeMs` と `ctimeMs` の大きい方を求める (現在時刻より
-//    後の mtime は使わず ctime だけを見る。未来の mtime で毎回古いと判定しないため)。stat が
+//    後の時刻は使わない。未来の時刻で毎回古いと判定しないため)。stat が
 //    `ENOENT` で失敗した (実行ファイルが無くなった) 場合は、その実行ファイルを broker の起動より後に
 //    更新されたものとみなす (時刻を `Infinity` とする)。1 つでも broker の起動時刻より後であれば
 //    古いと判定する (`isBrokerStale`)。ctime も使うのは、展開時に tarball の mtime を残す配布方法
@@ -117,7 +117,8 @@ const REQUIRED_LIFECYCLE_FUNCTIONS = [
   "clearBrokerSession",
 ];
 const APP_SERVER_TOKEN = "app-server";
-const CODEX_EXECUTABLE_NAME = "codex";
+// codex の実行ファイルの basename。`codex.js` は npm package の入口で、shim によっては引数列に直接現れる。
+const CODEX_EXECUTABLE_NAMES = ["codex", "codex.js"];
 const BROKER_SCRIPT_NAME = "app-server-broker.mjs";
 const SHUTDOWN_WAIT_MS = 5000;
 const TERM_WAIT_MS = 5000;
@@ -219,7 +220,7 @@ const splitArgs = (args) => args.split(/\s+/).filter((token) => token !== "");
 
 /**
  * 引数列が codex の app-server のものなら、その codex のトークンを 1 つ含む配列。そうでなければ
- * 空配列。basename が `codex` のトークンが先頭にあり次が `app-server` の場合 (`codex app-server`)
+ * 空配列。basename が `codex` か `codex.js` のトークンが先頭にあり次が `app-server` の場合 (`codex app-server`)
  * と、2 番目にあり次が `app-server` の場合 (`node /x/bin/codex app-server`) だけを対象にする。
  * `app-server` が先頭トークンの引数列と、組が 3 番目以降にある引数列からは何も取らない。
  *
@@ -234,7 +235,7 @@ const codexTokensBeforeAppServer = (args) => {
   for (const codexIndex of [0, 1]) {
     if (
       tokens[codexIndex + 1] === APP_SERVER_TOKEN &&
-      path.basename(tokens[codexIndex] ?? "") === CODEX_EXECUTABLE_NAME
+      CODEX_EXECUTABLE_NAMES.includes(path.basename(tokens[codexIndex] ?? ""))
     ) {
       return [tokens[codexIndex]];
     }
@@ -254,7 +255,7 @@ const codexTokensBeforeAppServer = (args) => {
  * トークンは加工せずに返す。絶対パスとは限らず、`codex` のようなコマンド名だけのこともある
  * (パスへの解決は `resolveExecutablePath` が行う)。
  *
- * - basename が `codex` でないトークン (codex が job の中で実行するツールのコマンド、例えば
+ * - basename が `codex` / `codex.js` でないトークン (codex が job の中で実行するツールのコマンド、例えば
  *   `grep app-server file` の `grep`) は無視する
  * - `app-server` が先頭トークンのプロセスは除く
  * - `app-server-broker.mjs` のような部分一致は対象外
@@ -561,10 +562,10 @@ const collectAppServerExecutablePaths = (psOutput, brokerPid, pathEnv) => {
 };
 
 /**
- * 実行ファイルの `max(mtimeMs, ctimeMs)` (symlink の先を見る)。現在時刻より後の mtime は
- * 使わず ctime だけを見る (未来の mtime を持つファイルで、起動し直した broker まで毎回古いと
- * 判定しないため)。実行ファイルが無くなっていれば (`ENOENT`)、broker の起動より後に更新された
- * ものとして `Infinity` を返す。
+ * 実行ファイルの `max(mtimeMs, ctimeMs)` (symlink の先を見る)。現在時刻より後の時刻 (mtime・
+ * ctime) は使わない (未来の時刻を持つファイルで、起動し直した broker まで毎回古いと判定しない
+ * ため)。実行ファイルが無くなっていれば (`ENOENT`)、broker の起動より後に更新されたものとして
+ * `Infinity` を返す。
  *
  * @param {string} executablePath
  * @returns {number}
@@ -572,8 +573,9 @@ const collectAppServerExecutablePaths = (psOutput, brokerPid, pathEnv) => {
 const readExecutableUpdateTimeMs = (executablePath) => {
   try {
     const stats = fs.statSync(executablePath);
-    const mtimeMs = stats.mtimeMs > Date.now() ? 0 : stats.mtimeMs;
-    return Math.max(mtimeMs, stats.ctimeMs);
+    const nowMs = Date.now();
+    const pastOnly = (timeMs) => (timeMs > nowMs ? 0 : timeMs);
+    return Math.max(pastOnly(stats.mtimeMs), pastOnly(stats.ctimeMs));
   } catch (error) {
     if (error?.code === "ENOENT") {
       return Number.POSITIVE_INFINITY;
