@@ -44,15 +44,28 @@
 // 4. 記録の `pid` のプロセスが生きていなければ何もせず終える
 // 5. `ps -A -o pid=,ppid=,args=` の出力から broker の子孫プロセスを再帰的にたどり
 //    (`findAppServerExecutables`)、引数列の `app-server` トークンの直前のトークンを app-server の
-//    実行ファイルのパスとして集める
+//    実行ファイルのトークンとして集める。トークンは絶対パスとは限らない (companion は app-server を
+//    コマンド名 `codex` で起動するため、ネイティブバイナリのインストールでは `codex app-server`
+//    となり、トークンは `codex` だけになる)
 // 6. `ps -o etime= -p <pid>` の `[[dd-]hh:]mm:ss` を秒に直し (`parseElapsedSeconds`)、現在時刻から
 //    引いて broker の起動時刻を求める。GNU と BSD の ps の両方にある項目だけを使う
-// 7. 各実行ファイルの `fs.statSync` の `mtimeMs` と `ctimeMs` の大きい方を求め、1 つでも broker の
-//    起動時刻より後であれば古いと判定する (`isBrokerStale`)。ctime も使うのは、展開時に tarball の
-//    mtime を残す配布方法でも更新を検出するため。古くなければ何もせず終える
+// 7. 各トークンを `resolveExecutablePath(token, env.PATH)` で実行ファイルのパスに解決し、
+//    `fs.statSync` (symlink の先を見る) の `mtimeMs` と `ctimeMs` の大きい方を求める。1 つでも
+//    broker の起動時刻より後であれば古いと判定する (`isBrokerStale`)。ctime も使うのは、展開時に
+//    tarball の mtime を残す配布方法でも更新を検出するため。古くなければ何もせず終える。解決
+//    できないトークンが 1 つでもあれば、実行ファイルのパスが存在しない場合と同じく fail-open する
 // 8. 古い broker には `sendBrokerShutdown(endpoint)` を送る。5 秒以内に pid が終了しなければ
 //    SIGTERM を送り、さらに 5 秒待つ
-// 9. 終了を確認できたら `clearBrokerSession(cwd)` で記録を消し、stderr に 1 行出す
+// 9. 終了を確認できたら、`loadBrokerSession(cwd)` で記録を読み直す。同じ workspace で並行して
+//    動く companion が、その間に新しい broker を起動して記録を書き直していることがあるため。
+//    - 記録の `pid` と `endpoint` が止めた broker のものと一致する場合だけ後片付けをする。
+//      `teardownBrokerSession` が関数として export されていれば、記録の `endpoint` / `pidFile` /
+//      `logFile` / `sessionDir` / `pid` と `killProcess: null` (プロセスには触れない) で呼び、
+//      ソケット・pid ファイル・ログファイルと空の session ディレクトリを消す。続けて
+//      `clearBrokerSession(cwd)` で記録を消す。`teardownBrokerSession` は必須ではなく、無ければ
+//      この後片付けを省く (警告は出さない)
+//    - 一致しない場合と記録が無い場合は、記録にも後片付けにも触れない
+//    - どちらの場合も、broker を止めたことを知らせる 1 行を stderr に出す
 //
 // ## fail-open の方針
 //
@@ -62,7 +75,7 @@
 // - `lib/broker-lifecycle.mjs` の import に失敗した、または 3 つの関数のいずれかが存在しない
 // - `ps` が非ゼロで終了した、または出力を解釈できない
 // - 生きている broker の子孫に `app-server` のプロセスが見つからない、または実行ファイルのパスが
-//   存在しない
+//   存在しない (`resolveExecutablePath` で解決できないトークンがある場合を含む)
 // - 停止を試みた後も broker の pid が残っている
 //
 // `runStaleBrokerGuard` は例外を外に投げない。
@@ -84,7 +97,10 @@ export const parseElapsedSeconds = (text) => {
 /**
  * `ps -A -o pid=,ppid=,args=` の出力から brokerPid の子孫プロセス (子・孫・それ以下。broker
  * 自身は含めない) をたどり、引数列を空白で区切ったトークンのうち `app-server` と完全一致する
- * トークンの直前のトークンを実行ファイルのパスとして集める。
+ * トークンの直前のトークンを実行ファイルのトークンとして集める。
+ *
+ * トークンは加工せずに返す。絶対パスとは限らず、`codex` のようなコマンド名だけのこともある
+ * (パスへの解決は `resolveExecutablePath` が行う)。
  *
  * - `app-server` が先頭トークンのプロセスは除く
  * - `app-server-broker.mjs` のような部分一致は対象外
@@ -95,6 +111,24 @@ export const parseElapsedSeconds = (text) => {
  * @returns {string[]} 重複なし、出現順
  */
 export const findAppServerExecutables = (psOutput, brokerPid) => {
+  throw new Error("not implemented");
+};
+
+/**
+ * `findAppServerExecutables` が返したトークンを実行ファイルのパスに解決する。
+ *
+ * - token に `/` が含まれる: 絶対パスならそのまま返し、相対パスなら null
+ * - token に `/` が含まれない: pathEnv (`PATH` の値。区切りは `path.delimiter`) の各ディレクトリを
+ *   先頭から順に見て、`<dir>/<token>` が存在する通常ファイル (symlink は解決した先で判定) で
+ *   実行権限があれば、その `<dir>/<token>` を返す (symlink の先のパスではない)。見つからなければ
+ *   null
+ * - pathEnv が空文字列や undefined なら null
+ *
+ * @param {string} token
+ * @param {string | undefined} pathEnv
+ * @returns {string | null}
+ */
+export const resolveExecutablePath = (token, pathEnv) => {
   throw new Error("not implemented");
 };
 

@@ -4,13 +4,14 @@
 (コピーとの byte-identical は `test_shared_lib_copies.py` / `test_pre_merge_lib_copies.py` が
 検査する)。次の 3 つを固定する。
 
-- 判定に使う純粋関数 (`parseElapsedSeconds` / `findAppServerExecutables` / `isBrokerStale`)。
-  `node --input-type=module -e` で module を import し、結果を JSON で受け取って検査する
+- 判定に使う純粋関数 (`parseElapsedSeconds` / `findAppServerExecutables` /
+  `resolveExecutablePath` / `isBrokerStale`)。`node --input-type=module -e` で module を import
+  し、結果を JSON で受け取って検査する
 - CLI の動作。一時ディレクトリに偽の companion (`scripts/codex-companion.mjs` と
   `scripts/lib/broker-lifecycle.mjs`) を置き、偽の broker (`sh` の配下で偽の app-server を
-  動かすプロセス) を相手に、shutdown の有無・stderr・stdout が空であること・終了コード 0 を
-  検査する。偽の broker-lifecycle は、環境変数で渡したファイルから broker の記録を読み、
-  呼び出された関数名と引数を別のログファイルに追記する
+  動かすプロセス) を相手に、shutdown・後片付け・記録の削除の有無と順序、stderr、stdout が空で
+  あること、終了コード 0 を検査する。偽の broker-lifecycle は、環境変数で渡したファイルから
+  broker の記録を読み、呼び出された関数名と引数を別のログファイルに追記する
 - 4 本の wrapper が companion の `review` / `adversarial-review` / `task` を起動する前に guard を
   呼ぶこと (静的検査)。行の前後関係と `run-codex-job.sh` の分岐の範囲だけを見て、呼び出し方の
   書式 (直接呼ぶか、shell 関数や変数を経由するか) には結合しない
@@ -57,6 +58,7 @@ WRAPPER_CODEX_ADVISOR = (
 ENDPOINT_ENV = "CODEX_COMPANION_APP_SERVER_ENDPOINT"
 FAKE_SESSION_FILE_ENV = "FAKE_BROKER_SESSION_FILE"
 FAKE_CALL_LOG_ENV = "FAKE_BROKER_CALL_LOG"
+FAKE_REPLACEMENT_SESSION_ENV = "FAKE_BROKER_REPLACEMENT_SESSION"
 
 STDERR_PREFIX = "[stale-broker-guard] "
 WARNING_PREFIX = "[stale-broker-guard] warning: "
@@ -80,10 +82,12 @@ const type = value === null ? "null" : Number.isNaN(value) ? "NaN" : typeof valu
 process.stdout.write(JSON.stringify({ type, value: value ?? null }));
 """
 
-# 偽の broker-lifecycle。broker の記録は FAKE_BROKER_SESSION_FILE から読み、呼び出しは
-# FAKE_BROKER_CALL_LOG に「関数名<TAB>引数」の形で 1 行ずつ追記する。
-# sendBrokerShutdown は記録の pid に SIGTERM を送る。
-FAKE_LIFECYCLE_SOURCE = """
+# 偽の broker-lifecycle (teardownBrokerSession を除く部分)。broker の記録は
+# FAKE_BROKER_SESSION_FILE から読み、呼び出しは FAKE_BROKER_CALL_LOG に「関数名<TAB>引数」の
+# 形で 1 行ずつ追記する。sendBrokerShutdown は記録の pid に SIGTERM を送る。
+# FAKE_BROKER_REPLACEMENT_SESSION が設定されていれば、SIGTERM を送った直後にその JSON で記録を
+# 書き換える (並行する companion が新しい broker を記録した状態を再現する)。
+FAKE_LIFECYCLE_WITHOUT_TEARDOWN_SOURCE = """
 import fs from "node:fs";
 import process from "node:process";
 
@@ -117,6 +121,11 @@ export async function sendBrokerShutdown(endpoint) {
       // 既に終了している broker は無視する。
     }
   }
+  const replacement = process.env.FAKE_BROKER_REPLACEMENT_SESSION;
+  const sessionFile = process.env.FAKE_BROKER_SESSION_FILE;
+  if (replacement && sessionFile) {
+    fs.writeFileSync(sessionFile, replacement);
+  }
 }
 
 export function clearBrokerSession(cwd) {
@@ -127,6 +136,18 @@ export function clearBrokerSession(cwd) {
   }
 }
 """
+
+# teardownBrokerSession は受け取った引数を JSON にして記録する (関数の値は JSON に現れない
+# ため、`killProcess` が null で渡されたことをキーの有無と値で確かめられる)。
+FAKE_TEARDOWN_EXPORT_SOURCE = """
+export function teardownBrokerSession(options) {
+  record("teardownBrokerSession", JSON.stringify(options));
+}
+"""
+
+FAKE_LIFECYCLE_SOURCE = (
+    FAKE_LIFECYCLE_WITHOUT_TEARDOWN_SOURCE + FAKE_TEARDOWN_EXPORT_SOURCE
+)
 
 # loadBrokerSession だけを export する偽の broker-lifecycle。
 FAKE_LIFECYCLE_LOAD_ONLY_SOURCE = """
@@ -287,6 +308,96 @@ class FindAppServerExecutablesTest(unittest.TestCase):
         )
 
 
+class ResolveExecutablePathTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(os.path.realpath(temporary.name))
+
+    def make_dir(self, name: str) -> Path:
+        directory = self.base / name
+        directory.mkdir()
+        return directory
+
+    def make_file(self, path: Path, executable: bool) -> Path:
+        path.write_text("#!/bin/sh\n", encoding="utf-8")
+        path.chmod(0o755 if executable else 0o644)
+        return path
+
+    def resolve(self, token: str, path_env: str) -> str | None:
+        value_type, value = call_guard_function(
+            "resolveExecutablePath", token, path_env
+        )
+        self.assertIn(value_type, ("string", "null"), "戻り値の型")
+        return value
+
+    def path_env(self, *directories: Path) -> str:
+        return os.pathsep.join(str(directory) for directory in directories)
+
+    def test_absolute_path_is_returned_as_is(self) -> None:
+        directory = self.make_dir("bin")
+        executable = self.make_file(directory / "codex", executable=True)
+        self.assertEqual(
+            str(executable), self.resolve(str(executable), self.path_env(directory))
+        )
+
+    def test_relative_path_returns_null(self) -> None:
+        directory = self.make_dir("bin")
+        self.make_file(directory / "x", executable=True)
+        (directory / "a").mkdir()
+        self.make_file(directory / "a" / "b", executable=True)
+        for token in ("./x", "a/b"):
+            with self.subTest(token=token):
+                self.assertIsNone(self.resolve(token, self.path_env(directory)))
+
+    def test_finds_executable_on_path(self) -> None:
+        empty = self.make_dir("empty")
+        directory = self.make_dir("bin")
+        executable = self.make_file(directory / "codex", executable=True)
+        self.assertEqual(
+            str(executable), self.resolve("codex", self.path_env(empty, directory))
+        )
+
+    def test_first_directory_on_path_wins(self) -> None:
+        first = self.make_dir("first")
+        second = self.make_dir("second")
+        preferred = self.make_file(first / "codex", executable=True)
+        self.make_file(second / "codex", executable=True)
+        self.assertEqual(
+            str(preferred), self.resolve("codex", self.path_env(first, second))
+        )
+
+    def test_skips_non_executable_file_and_directory(self) -> None:
+        not_executable = self.make_dir("not-executable")
+        self.make_file(not_executable / "codex", executable=False)
+        is_directory = self.make_dir("is-directory")
+        (is_directory / "codex").mkdir()
+        usable = self.make_dir("usable")
+        executable = self.make_file(usable / "codex", executable=True)
+        self.assertEqual(
+            str(executable),
+            self.resolve(
+                "codex", self.path_env(not_executable, is_directory, usable)
+            ),
+        )
+
+    def test_symlink_is_judged_by_its_target(self) -> None:
+        targets = self.make_dir("targets")
+        target = self.make_file(targets / "codex-real", executable=True)
+        links = self.make_dir("links")
+        link = links / "codex"
+        link.symlink_to(target)
+        self.assertEqual(str(link), self.resolve("codex", self.path_env(links)))
+
+    def test_not_found_returns_null(self) -> None:
+        directory = self.make_dir("bin")
+        self.make_file(directory / "other", executable=True)
+        self.assertIsNone(self.resolve("codex", self.path_env(directory)))
+
+    def test_empty_path_returns_null(self) -> None:
+        self.assertIsNone(self.resolve("codex", ""))
+
+
 class IsBrokerStaleTest(unittest.TestCase):
     def assert_stale(
         self, broker_start_ms: int, times_ms: list[int], expected: bool
@@ -335,12 +446,20 @@ class GuardCliTest(unittest.TestCase):
         lib.mkdir(exist_ok=True)
         (lib / "broker-lifecycle.mjs").write_text(source, encoding="utf-8")
 
-    def write_session(self, pid: int) -> None:
-        session = {
-            "endpoint": f"unix:{self.workspace / 'fake-broker.sock'}",
+    def session_record(self, pid: int, name: str = "fake-broker") -> dict[str, object]:
+        session_dir = self.workspace / f"{name}-session"
+        return {
+            "endpoint": f"unix:{session_dir / 'broker.sock'}",
+            "pidFile": str(session_dir / "broker.pid"),
+            "logFile": str(session_dir / "broker.log"),
+            "sessionDir": str(session_dir),
             "pid": pid,
         }
+
+    def write_session(self, pid: int) -> dict[str, object]:
+        session = self.session_record(pid)
         self.session_file.write_text(json.dumps(session), encoding="utf-8")
+        return session
 
     def recorded_calls(self) -> list[tuple[str, str]]:
         if not self.call_log.exists():
@@ -484,6 +603,40 @@ class GuardCliTest(unittest.TestCase):
     def assert_broker_alive(self, broker: subprocess.Popen[bytes]) -> None:
         self.assertIsNone(broker.poll(), "broker が終了しています")
 
+    def assert_broker_ended(self, broker: subprocess.Popen[bytes]) -> None:
+        try:
+            broker.wait(timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            self.fail(f"broker (pid={broker.pid}) が終了していません")
+
+    def assert_single_stop_notice(
+        self, completed: subprocess.CompletedProcess[str], pid: int
+    ) -> None:
+        """stderr が broker を止めた旨の 1 行 (警告ではなく `pid=<pid>` を含む) だけであること。"""
+        self.assert_common_contract(completed)
+        lines = completed.stderr.splitlines()
+        self.assertEqual(1, len(lines), f"stderr: {completed.stderr!r}")
+        self.assertFalse(lines[0].startswith(WARNING_PREFIX), lines[0])
+        pid_pattern = re.compile(rf"\bpid={pid}\b")
+        self.assertEqual(
+            1,
+            sum(1 for line in lines if pid_pattern.search(line)),
+            f"stderr: {completed.stderr!r}",
+        )
+
+    def assert_cwd_arguments(self) -> None:
+        workspace = str(self.workspace)
+        for name, arg in self.recorded_calls():
+            if name in ("loadBrokerSession", "clearBrokerSession"):
+                self.assertEqual(workspace, arg, f"{name} に渡された cwd")
+
+    def teardown_arguments(self) -> list[dict[str, object]]:
+        return [
+            json.loads(arg)
+            for name, arg in self.recorded_calls()
+            if name == "teardownBrokerSession"
+        ]
+
     # --- 何もしない場合 ---
 
     def test_no_broker_record_does_nothing(self) -> None:
@@ -517,6 +670,60 @@ class GuardCliTest(unittest.TestCase):
     def test_stale_broker_is_stopped_and_record_cleared(self) -> None:
         self.install_lifecycle()
         broker = self.start_stale_broker()
+        session = self.write_session(broker.pid)
+        completed = self.run_guard()
+        self.assert_common_contract(completed)
+
+        names = self.called_names()
+        for name in (
+            "sendBrokerShutdown", "teardownBrokerSession", "clearBrokerSession"
+        ):
+            self.assertIn(name, names)
+        self.assertLess(
+            names.index("sendBrokerShutdown"), names.index("teardownBrokerSession")
+        )
+        self.assertLess(
+            names.index("teardownBrokerSession"), names.index("clearBrokerSession")
+        )
+        self.assert_cwd_arguments()
+
+        teardowns = self.teardown_arguments()
+        self.assertEqual(1, len(teardowns), "teardownBrokerSession の呼び出し回数")
+        teardown = teardowns[0]
+        self.assertIn("killProcess", teardown, "killProcess が渡されていません")
+        self.assertIsNone(teardown["killProcess"], "killProcess は null で渡す")
+        for key in ("endpoint", "pidFile", "logFile", "sessionDir", "pid"):
+            self.assertEqual(session[key], teardown.get(key), f"teardown の {key}")
+
+        self.assert_broker_ended(broker)
+        self.assertFalse(self.session_file.exists(), "記録が消えていません")
+        self.assert_single_stop_notice(completed, broker.pid)
+
+    def test_record_rewritten_during_shutdown_is_left_untouched(self) -> None:
+        self.install_lifecycle()
+        broker = self.start_stale_broker()
+        self.write_session(broker.pid)
+        replacement = self.session_record(os.getpid(), name="replacement-broker")
+        completed = self.run_guard(
+            {FAKE_REPLACEMENT_SESSION_ENV: json.dumps(replacement)}
+        )
+        self.assert_common_contract(completed)
+
+        names = self.called_names()
+        self.assertIn("sendBrokerShutdown", names)
+        self.assertNotIn("teardownBrokerSession", names)
+        self.assertNotIn("clearBrokerSession", names)
+        self.assertEqual(
+            replacement,
+            json.loads(self.session_file.read_text(encoding="utf-8")),
+            "書き直された記録が変更されています",
+        )
+        self.assert_broker_ended(broker)
+        self.assert_single_stop_notice(completed, broker.pid)
+
+    def test_stale_broker_is_stopped_without_teardown_export(self) -> None:
+        self.install_lifecycle(FAKE_LIFECYCLE_WITHOUT_TEARDOWN_SOURCE)
+        broker = self.start_stale_broker()
         self.write_session(broker.pid)
         completed = self.run_guard()
         self.assert_common_contract(completed)
@@ -527,25 +734,10 @@ class GuardCliTest(unittest.TestCase):
         self.assertLess(
             names.index("sendBrokerShutdown"), names.index("clearBrokerSession")
         )
-        workspace = str(self.workspace)
-        for name, arg in self.recorded_calls():
-            if name in ("loadBrokerSession", "clearBrokerSession"):
-                self.assertEqual(workspace, arg, f"{name} に渡された cwd")
-
-        try:
-            broker.wait(timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            self.fail(f"broker (pid={broker.pid}) が終了していません")
-
-        lines = completed.stderr.splitlines()
-        self.assertEqual(1, len(lines), f"stderr: {completed.stderr!r}")
-        self.assertFalse(lines[0].startswith(WARNING_PREFIX), lines[0])
-        pid_pattern = re.compile(rf"\bpid={broker.pid}\b")
-        self.assertEqual(
-            1,
-            sum(1 for line in lines if pid_pattern.search(line)),
-            f"stderr: {completed.stderr!r}",
-        )
+        self.assert_cwd_arguments()
+        self.assert_broker_ended(broker)
+        self.assertFalse(self.session_file.exists(), "記録が消えていません")
+        self.assert_single_stop_notice(completed, broker.pid)
 
     # --- 失敗した場合 (fail-open) ---
 
