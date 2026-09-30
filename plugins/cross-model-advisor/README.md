@@ -6,7 +6,7 @@ Advisor パターンは「実行役 (executor) のモデルが、戦略的な岐
 
 ## バージョン
 
-v6.0.0
+v6.0.1
 ## 機構
 
 | 構成要素 | 役割 |
@@ -18,6 +18,16 @@ v6.0.0
 | `/cross-model-advisor:consult` skill | self-contained な XML 相談 prompt を組み立て、Claude Code では `cross-model-advisor:codex-advisor-runner` (`model: "sonnet"`) を起動する。Codex host では PTY stdin wrapper を使う |
 | `scripts/run-codex-job.sh` | official companion v1.0.6 の task / review / status / result / cancel を runner 向けの path-only command に限定して公開する。status wait は単発 status の短い poll で構成する |
 | `scripts/run-codex-advisor.sh` | PTY / file-stdin adapter 契約と Codex host source を提供する wrapper。Claude Code の通常 Skill は直接呼ばず advisor runner を使う。Codex host では PTY stdin から direct read-only / ephemeral `codex exec` を foreground 起動し、既定 10 分の watchdog で process group を回収する |
+
+### codex CLI 更新前の broker の停止
+
+openai-codex plugin の companion は workspace ごとに常駐 broker を起動して再利用します。broker は起動時の `codex app-server` を抱え続けるため、codex CLI を更新しても、更新前に起動した broker は古いバイナリのまま task / review を実行します。
+
+`scripts/run-codex-job.sh` の `rescue` / `advisor` / `review` と、`scripts/run-codex-advisor.sh` の companion 経路は、companion を起動する直前に `scripts/lib/stale-broker-guard.mjs` を実行します (`snapshot` / `status` / `result` / `cancel` と、direct `codex exec` の経路では実行しません)。guard は broker 配下の app-server の実行ファイルが broker の起動より後に更新されていれば、その broker を止め、止めた broker の記録が残っていれば消して、止めた旨を stderr に 1 行出します。その後に起動する companion は、現行のバイナリで新しい broker を起動します。同じ broker で実行中の別の job は中断されます。
+
+検出や停止に失敗した場合 (companion の内部 module を読み込めない、`ps` が失敗する、broker が停止しない等) は stderr に警告を 1 行出し、companion をそのまま起動します。guard は stdout に何も書かないため、companion の `--json` 出力や助言テキストには影響しません。
+
+`scripts/lib/stale-broker-guard.mjs` は `pre-push-codex-review` の `hooks/scripts/lib/stale-broker-guard.mjs` の byte-identical なコピーです (同一性は `tests/test_shared_lib_copies.py` が検査します)。
 
 ### 注入される規律 (hooks/prompts/advisor-rules.md)
 

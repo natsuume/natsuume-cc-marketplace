@@ -292,6 +292,13 @@ COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つか�
 # 正常完了 (exit 0) のときだけ pending attestation を書く設計。失敗時はエラーメッセージを
 # 出して attestation を書かずに非ゼロ exit する (fail() が exit 1 する)。
 printf '[run-pre-push-codex-review] codex companion: %s\n' "$COMPANION" >&2
+
+# codex CLI の更新前に起動した companion の broker が残っていれば、review の前に止める
+# (判定と停止の手順は lib/stale-broker-guard.mjs のヘッダを参照)。guard は検出や停止に失敗
+# しても警告を出して exit 0 で終わるが、node 自体の起動失敗でも review を止めないよう
+# `|| true` で受ける。stdout は review の出力と混ざらないよう stderr へ回す。
+node "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/stale-broker-guard.mjs" "$COMPANION" >&2 || true
+
 printf '[run-pre-push-codex-review] running: node %s review --wait --scope branch\n' "$COMPANION" >&2
 
 # `if !` で node の成否を直接捕捉する。 set +e / set -e の dance や exit code 変数を使わない:

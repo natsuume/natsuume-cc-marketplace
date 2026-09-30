@@ -292,6 +292,13 @@ REVIEW_OUT="$WORK_DIR/review.md"
 
 note "PR #${PR_NUMBER} (head ${HEAD_SHA}) を base ${BASE_REF} との merge-base からレビューします。"
 note "codex companion: ${COMPANION}"
+
+# codex CLI の更新前に起動した companion の broker が残っていれば、review の前に止める
+# (判定と停止の手順は lib/stale-broker-guard.mjs のヘッダを参照)。guard は検出や停止に失敗
+# しても警告を出して exit 0 で終わるが、node 自体の起動失敗でも review を止めないよう
+# `|| true` で受ける。stdout は review report と混ざらないよう stderr へ回す。
+node "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/stale-broker-guard.mjs" "$COMPANION" >&2 || true
+
 note "running: node ${COMPANION} review --wait --base ${BASE_REF}"
 
 # codex review を foreground 実行する。 `--wait` を hardcode することで、 呼び出し側からの

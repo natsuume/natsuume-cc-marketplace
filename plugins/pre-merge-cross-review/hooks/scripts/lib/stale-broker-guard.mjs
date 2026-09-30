@@ -42,7 +42,7 @@
 //    (companion はその endpoint に直接接続し、broker の記録を参照しないため)
 // 3. `loadBrokerSession(cwd)` が null (記録なし) なら何もせず終える
 // 4. 記録の `pid` のプロセスが生きていなければ何もせず終える
-// 5. `ps -A -o pid=,ppid=,args=` の出力から broker の子孫プロセスを再帰的にたどり
+// 5. `ps -A -o pid= -o ppid= -o args=` の出力から broker の子孫プロセスを再帰的にたどり
 //    (`findAppServerExecutables`)、引数列の `app-server` トークンの直前のトークンを app-server の
 //    実行ファイルのトークンとして集める。トークンは絶対パスとは限らない (companion は app-server を
 //    コマンド名 `codex` で起動するため、ネイティブバイナリのインストールでは `codex app-server`
@@ -80,9 +80,30 @@
 //
 // `runStaleBrokerGuard` は例外を外に投げない。
 
+
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+
+const STDERR_PREFIX = "[stale-broker-guard] ";
+const ENDPOINT_ENV = "CODEX_COMPANION_APP_SERVER_ENDPOINT";
+const REQUIRED_LIFECYCLE_FUNCTIONS = [
+  "loadBrokerSession",
+  "sendBrokerShutdown",
+  "clearBrokerSession",
+];
+const APP_SERVER_TOKEN = "app-server";
+const SHUTDOWN_WAIT_MS = 5000;
+const TERM_WAIT_MS = 5000;
+const EXIT_POLL_INTERVAL_MS = 100;
+// `ps -A` の出力は process 数に比例して長くなるため、既定の上限 (1 MiB) より大きく取る。
+const PS_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// 判定に使う純粋関数
+// ---------------------------------------------------------------------------
 
 /**
  * `ps -o etime=` の出力 (`[[dd-]hh:]mm:ss`、前後の空白・改行を許容) を秒数にする。
@@ -91,11 +112,91 @@ import { pathToFileURL } from "node:url";
  * @returns {number | null} 解釈できなければ null
  */
 export const parseElapsedSeconds = (text) => {
-  throw new Error("not implemented");
+  if (typeof text !== "string") {
+    return null;
+  }
+  const match = text.trim().match(/^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/);
+  if (match === null) {
+    return null;
+  }
+  const [, days = "0", hours = "0", minutes, seconds] = match;
+  return (
+    Number(days) * 86400 +
+    Number(hours) * 3600 +
+    Number(minutes) * 60 +
+    Number(seconds)
+  );
 };
 
 /**
- * `ps -A -o pid=,ppid=,args=` の出力から brokerPid の子孫プロセス (子・孫・それ以下。broker
+ * `ps -A -o pid= -o ppid= -o args=` の 1 行を { pid, ppid, args } にする。解釈できなければ null。
+ *
+ * @param {string} line
+ * @returns {{ pid: number, ppid: number, args: string } | null}
+ */
+const parsePsLine = (line) => {
+  const match = line.trim().match(/^(\d+)\s+(\d+)(?:\s+(.*))?$/);
+  if (match === null) {
+    return null;
+  }
+  return { pid: Number(match[1]), ppid: Number(match[2]), args: match[3] ?? "" };
+};
+
+/**
+ * @param {string} psOutput
+ * @returns {{ pid: number, ppid: number, args: string }[]} 解釈できた行だけ (出現順)
+ */
+const parsePsOutput = (psOutput) =>
+  psOutput
+    .split("\n")
+    .map(parsePsLine)
+    .filter((processInfo) => processInfo !== null);
+
+/**
+ * rootPid の子孫の pid の集合 (rootPid 自身は含めない)。
+ *
+ * @param {{ pid: number, ppid: number }[]} processes
+ * @param {number} rootPid
+ * @returns {Set<number>}
+ */
+const collectDescendantPids = (processes, rootPid) => {
+  const childrenByParent = new Map();
+  for (const { pid, ppid } of processes) {
+    if (!childrenByParent.has(ppid)) {
+      childrenByParent.set(ppid, []);
+    }
+    childrenByParent.get(ppid).push(pid);
+  }
+
+  const descendants = new Set();
+  const pending = [rootPid];
+  while (pending.length > 0) {
+    const parent = pending.shift();
+    for (const child of childrenByParent.get(parent) ?? []) {
+      if (child === rootPid || descendants.has(child)) {
+        continue;
+      }
+      descendants.add(child);
+      pending.push(child);
+    }
+  }
+  return descendants;
+};
+
+/**
+ * 引数列の `app-server` トークンの直前のトークン。該当しなければ null。
+ *
+ * @param {string} args
+ * @returns {string | null}
+ */
+const executableTokenBeforeAppServer = (args) => {
+  const tokens = args.split(/\s+/).filter((token) => token !== "");
+  const index = tokens.indexOf(APP_SERVER_TOKEN);
+  return index > 0 ? tokens[index - 1] : null;
+};
+
+/**
+ * `ps -A -o pid= -o ppid= -o args=` の出力から brokerPid の子孫プロセス (子・孫・それ以下。broker
  * 自身は含めない) をたどり、引数列を空白で区切ったトークンのうち `app-server` と完全一致する
  * トークンの直前のトークンを実行ファイルのトークンとして集める。
  *
@@ -111,7 +212,37 @@ export const parseElapsedSeconds = (text) => {
  * @returns {string[]} 重複なし、出現順
  */
 export const findAppServerExecutables = (psOutput, brokerPid) => {
-  throw new Error("not implemented");
+  const processes = parsePsOutput(psOutput);
+  const descendants = collectDescendantPids(processes, brokerPid);
+  const executables = [];
+  for (const { pid, args } of processes) {
+    if (!descendants.has(pid)) {
+      continue;
+    }
+    const token = executableTokenBeforeAppServer(args);
+    if (token !== null && !executables.includes(token)) {
+      executables.push(token);
+    }
+  }
+  return executables;
+};
+
+/**
+ * candidate が存在する通常ファイル (symlink は解決した先で判定) で実行権限を持つか。
+ *
+ * @param {string} candidate
+ * @returns {boolean}
+ */
+const isExecutableFile = (candidate) => {
+  try {
+    if (!fs.statSync(candidate).isFile()) {
+      return false;
+    }
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 /**
@@ -129,7 +260,25 @@ export const findAppServerExecutables = (psOutput, brokerPid) => {
  * @returns {string | null}
  */
 export const resolveExecutablePath = (token, pathEnv) => {
-  throw new Error("not implemented");
+  if (typeof token !== "string" || token === "") {
+    return null;
+  }
+  if (token.includes("/")) {
+    return path.isAbsolute(token) ? token : null;
+  }
+  if (typeof pathEnv !== "string" || pathEnv === "") {
+    return null;
+  }
+  for (const directory of pathEnv.split(path.delimiter)) {
+    if (directory === "") {
+      continue;
+    }
+    const candidate = path.join(directory, token);
+    if (isExecutableFile(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 };
 
 /**
@@ -140,9 +289,263 @@ export const resolveExecutablePath = (token, pathEnv) => {
  * @param {number[]} executableTimesMs 各実行ファイルの `max(mtimeMs, ctimeMs)`
  * @returns {boolean}
  */
-export const isBrokerStale = (brokerStartMs, executableTimesMs) => {
-  throw new Error("not implemented");
+export const isBrokerStale = (brokerStartMs, executableTimesMs) =>
+  executableTimesMs.some((timeMs) => timeMs > brokerStartMs);
+
+// ---------------------------------------------------------------------------
+// 外部とのやり取り (stderr・プロセス・ファイル)
+// ---------------------------------------------------------------------------
+
+/**
+ * guard の失敗を表す。message は警告 1 行として stderr に出す。
+ */
+class GuardWarning extends Error {}
+
+/**
+ * stderr に 1 行書く。プロセスを終える直前でも出力が欠けないよう同期書き込みにする。
+ * 改行を含む message は 1 行にまとめる。
+ *
+ * @param {string} message
+ */
+const writeStderrLine = (message) => {
+  const singleLine = message.replace(/\s*\n\s*/g, " ").trim();
+  try {
+    fs.writeSync(2, `${STDERR_PREFIX}${singleLine}\n`);
+  } catch {
+    // stderr が閉じていても guard の結果は変えない。
+  }
 };
+
+const writeWarning = (message) => {
+  writeStderrLine(`warning: ${message}`);
+};
+
+const describeError = (error) =>
+  error instanceof Error ? error.message : String(error);
+
+const sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+/**
+ * pid のプロセスが存在するか (権限が無くても存在すれば true)。
+ *
+ * @param {number} pid
+ * @returns {boolean}
+ */
+const isProcessAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+};
+
+/**
+ * pid のプロセスが終了するまで最大 timeoutMs 待つ。終了していれば true。
+ *
+ * @param {number} pid
+ * @param {number} timeoutMs
+ * @returns {Promise<boolean>}
+ */
+const waitForProcessExit = async (pid, timeoutMs) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return true;
+    }
+    await sleep(EXIT_POLL_INTERVAL_MS);
+  }
+  return !isProcessAlive(pid);
+};
+
+/**
+ * `ps` を shell を経由せずに実行し、stdout を返す。失敗したら GuardWarning を投げる。
+ *
+ * @param {string[]} args
+ * @returns {string}
+ */
+const runPs = (args) => {
+  const result = spawnSync("ps", args, {
+    encoding: "utf8",
+    maxBuffer: PS_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) {
+    throw new GuardWarning(
+      `ps ${args.join(" ")} を実行できません: ${describeError(result.error)}`,
+    );
+  }
+  if (result.status !== 0) {
+    throw new GuardWarning(
+      `ps ${args.join(" ")} が終了コード ${result.status} で失敗しました`,
+    );
+  }
+  return result.stdout;
+};
+
+/**
+ * companion と同じディレクトリの `lib/broker-lifecycle.mjs` を読み込み、必須の関数が揃って
+ * いることを確認する。
+ *
+ * @param {string} companionPath
+ * @returns {Promise<Record<string, unknown>>}
+ */
+const importBrokerLifecycle = async (companionPath) => {
+  if (typeof companionPath !== "string" || companionPath === "") {
+    throw new GuardWarning("codex-companion.mjs のパスが指定されていません");
+  }
+  const lifecyclePath = path.join(
+    path.dirname(companionPath),
+    "lib",
+    "broker-lifecycle.mjs",
+  );
+  let lifecycle;
+  try {
+    lifecycle = await import(pathToFileURL(lifecyclePath).href);
+  } catch (error) {
+    throw new GuardWarning(
+      `${lifecyclePath} を読み込めません: ${describeError(error)}`,
+    );
+  }
+  const missing = REQUIRED_LIFECYCLE_FUNCTIONS.filter(
+    (name) => typeof lifecycle[name] !== "function",
+  );
+  if (missing.length > 0) {
+    throw new GuardWarning(
+      `${lifecyclePath} に関数 ${missing.join(" / ")} がありません`,
+    );
+  }
+  return lifecycle;
+};
+
+/**
+ * broker 配下の app-server の実行ファイルのパスを集める。
+ *
+ * @param {number} brokerPid
+ * @param {string | undefined} pathEnv
+ * @returns {string[]}
+ */
+const collectAppServerExecutablePaths = (brokerPid, pathEnv) => {
+  const psOutput = runPs(["-A", "-o", "pid=", "-o", "ppid=", "-o", "args="]);
+  if (parsePsOutput(psOutput).length === 0) {
+    throw new GuardWarning("ps -A の出力を解釈できません");
+  }
+  const tokens = findAppServerExecutables(psOutput, brokerPid);
+  if (tokens.length === 0) {
+    throw new GuardWarning(
+      `broker (pid=${brokerPid}) の子孫に app-server のプロセスが見つかりません`,
+    );
+  }
+  return tokens.map((token) => {
+    const resolved = resolveExecutablePath(token, pathEnv);
+    if (resolved === null) {
+      throw new GuardWarning(
+        `app-server の実行ファイル ${token} のパスを解決できません`,
+      );
+    }
+    return resolved;
+  });
+};
+
+/**
+ * 実行ファイルの `max(mtimeMs, ctimeMs)` (symlink の先を見る)。
+ *
+ * @param {string} executablePath
+ * @returns {number}
+ */
+const readExecutableUpdateTimeMs = (executablePath) => {
+  try {
+    const stats = fs.statSync(executablePath);
+    return Math.max(stats.mtimeMs, stats.ctimeMs);
+  } catch (error) {
+    throw new GuardWarning(
+      `app-server の実行ファイル ${executablePath} を参照できません: ${describeError(error)}`,
+    );
+  }
+};
+
+/**
+ * `ps -o etime=` から broker の起動時刻 (epoch ミリ秒) を求める。
+ *
+ * @param {number} brokerPid
+ * @returns {number}
+ */
+const readBrokerStartMs = (brokerPid) => {
+  const elapsedText = runPs(["-o", "etime=", "-p", String(brokerPid)]);
+  const elapsedSeconds = parseElapsedSeconds(elapsedText);
+  if (elapsedSeconds === null) {
+    throw new GuardWarning(
+      `ps -o etime= の出力を解釈できません: ${JSON.stringify(elapsedText)}`,
+    );
+  }
+  return Date.now() - elapsedSeconds * 1000;
+};
+
+/**
+ * broker に shutdown を送り、終了しなければ SIGTERM を送る。終了を確認できなければ
+ * GuardWarning を投げる。
+ *
+ * @param {Record<string, Function>} lifecycle
+ * @param {{ pid: number, endpoint?: unknown }} session
+ */
+const stopBroker = async (lifecycle, session) => {
+  // shutdown 要求の完了は待たず、pid の終了で判定する (要求が応答を返さない場合も
+  // 待ち続けないため)。要求の失敗は SIGTERM で補う。
+  Promise.resolve()
+    .then(() => lifecycle.sendBrokerShutdown(session.endpoint))
+    .catch(() => {});
+  if (await waitForProcessExit(session.pid, SHUTDOWN_WAIT_MS)) {
+    return;
+  }
+  try {
+    process.kill(session.pid, "SIGTERM");
+  } catch {
+    // 直前に終了した場合は次の確認で分かる。
+  }
+  if (!(await waitForProcessExit(session.pid, TERM_WAIT_MS))) {
+    throw new GuardWarning(
+      `broker (pid=${session.pid}) を止めようとしましたが、プロセスが残っています`,
+    );
+  }
+};
+
+/**
+ * 記録が止めた broker のものと一致すれば、後片付けをして記録を消す。一致しない場合と記録が
+ * 無い場合は何もしない (並行する companion が新しい broker を記録していることがあるため)。
+ *
+ * @param {Record<string, Function>} lifecycle
+ * @param {string} cwd
+ * @param {{ pid: number, endpoint?: unknown }} stoppedSession
+ */
+const clearStoppedBrokerRecord = (lifecycle, cwd, stoppedSession) => {
+  const current = lifecycle.loadBrokerSession(cwd);
+  if (
+    current === null ||
+    typeof current !== "object" ||
+    current.pid !== stoppedSession.pid ||
+    current.endpoint !== stoppedSession.endpoint
+  ) {
+    return;
+  }
+  if (typeof lifecycle.teardownBrokerSession === "function") {
+    lifecycle.teardownBrokerSession({
+      endpoint: current.endpoint ?? null,
+      pidFile: current.pidFile ?? null,
+      logFile: current.logFile ?? null,
+      sessionDir: current.sessionDir ?? null,
+      pid: current.pid ?? null,
+      killProcess: null,
+    });
+  }
+  lifecycle.clearBrokerSession(cwd);
+};
+
+// ---------------------------------------------------------------------------
+// guard 全体の処理
+// ---------------------------------------------------------------------------
 
 /**
  * guard 全体の処理 (ファイル先頭の判定手順)。例外を外に投げない。
@@ -151,8 +554,53 @@ export const isBrokerStale = (brokerStartMs, executableTimesMs) => {
  * @returns {Promise<void>}
  */
 export const runStaleBrokerGuard = async ({ companionPath, cwd, env }) => {
-  throw new Error("not implemented");
+  try {
+    const lifecycle = await importBrokerLifecycle(companionPath);
+    if (env[ENDPOINT_ENV] !== undefined) {
+      return;
+    }
+
+    const session = lifecycle.loadBrokerSession(cwd);
+    const brokerPid = session?.pid;
+    if (!Number.isInteger(brokerPid) || brokerPid <= 0) {
+      return;
+    }
+    if (!isProcessAlive(brokerPid)) {
+      return;
+    }
+
+    const executablePaths = collectAppServerExecutablePaths(brokerPid, env.PATH);
+    const brokerStartMs = readBrokerStartMs(brokerPid);
+    const updateTimesMs = executablePaths.map(readExecutableUpdateTimeMs);
+    if (!isBrokerStale(brokerStartMs, updateTimesMs)) {
+      return;
+    }
+
+    await stopBroker(lifecycle, session);
+    let cleanupError = null;
+    try {
+      clearStoppedBrokerRecord(lifecycle, cwd, session);
+    } catch (error) {
+      cleanupError = error;
+    }
+    writeStderrLine(
+      `codex CLI の更新前に起動した companion の broker を止めました (pid=${brokerPid})`,
+    );
+    if (cleanupError !== null) {
+      writeWarning(`broker の記録を片付けられません: ${describeError(cleanupError)}`);
+    }
+  } catch (error) {
+    writeWarning(
+      error instanceof GuardWarning
+        ? error.message
+        : `予期しないエラーで guard を中断しました: ${describeError(error)}`,
+    );
+  }
 };
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
 
 const isInvokedAsCli = () => {
   const entryPath = process.argv[1];
@@ -167,5 +615,11 @@ const isInvokedAsCli = () => {
 };
 
 if (isInvokedAsCli()) {
-  process.exitCode = 0;
+  await runStaleBrokerGuard({
+    companionPath: process.argv[2],
+    cwd: process.cwd(),
+    env: process.env,
+  });
+  // shutdown 要求の socket などが残っていても待たずに終える。終了コードは常に 0。
+  process.exit(0);
 }

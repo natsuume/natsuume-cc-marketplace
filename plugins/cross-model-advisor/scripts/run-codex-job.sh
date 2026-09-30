@@ -44,6 +44,15 @@ resolve_companion_or_fail() {
     || fail "codex companion が見つかりません。/codex:setup で install と認証を確認してください。"
 }
 
+# codex CLI の更新前に起動した companion の broker が残っていれば止める (判定と停止の手順は
+# lib/stale-broker-guard.mjs のヘッダを参照)。companion の task / review / adversarial-review を
+# 起動する直前にだけ呼び、status / result / cancel / snapshot の管理操作では呼ばない。guard は
+# 検出や停止に失敗しても警告を出して exit 0 で終わるが、node 自体の起動失敗でも job を止めない
+# よう `|| true` で受ける。stdout は companion の --json 出力と混ざらないよう stderr へ回す。
+run_stale_broker_guard() {
+  node "$_CODEX_JOB_SCRIPT_DIR/lib/stale-broker-guard.mjs" "$COMPANION" >&2 || true
+}
+
 # cancel は job が既に消えている / companion が応答しない場合に無期限ブロックしうるため、
 # wrapper 自身が deadline を監視する。`timeout` コマンドは macOS の標準環境に無いので、
 # bash の monitor mode で子を独立 process group に置き、期限超過時は group ごと
@@ -136,6 +145,7 @@ case "$MODE" in
         *) fail "rescue の未知 option: $1" ;;
       esac
     done
+    run_stale_broker_guard
     exec node "$COMPANION" task --background --json --prompt-file "$PROMPT_FILE" "$THREAD_MODE" "${RESCUE_ARGS[@]}"
     ;;
 
@@ -145,6 +155,7 @@ case "$MODE" in
       exit 1
     }
     validate_prompt_file "$1"
+    run_stale_broker_guard
     exec node "$COMPANION" task --background --json --fresh --effort xhigh --prompt-file "$1"
     ;;
 
@@ -191,11 +202,14 @@ case "$MODE" in
         FOCUS_TEXT=$(cat "$FOCUS_FILE")
         [ -n "$(printf '%s' "$FOCUS_TEXT" | tr -d '[:space:]')" ] \
           || fail "focus file が空白だけです。"
+        run_stale_broker_guard
         exec node "$COMPANION" adversarial-review --wait "${REVIEW_ARGS[@]}" "$FOCUS_TEXT"
       fi
+      run_stale_broker_guard
       exec node "$COMPANION" adversarial-review --wait "${REVIEW_ARGS[@]}"
     fi
     [ -z "$FOCUS_FILE" ] || fail "native review は focus text を受け付けません。--adversarial を指定してください。"
+    run_stale_broker_guard
     exec node "$COMPANION" review --wait "${REVIEW_ARGS[@]}"
     ;;
 

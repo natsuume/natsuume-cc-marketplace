@@ -198,7 +198,7 @@ def call_guard_function(name: str, *args: object) -> tuple[str, object]:
 
 
 def ps_lines(*rows: str) -> str:
-    """`ps -A -o pid=,ppid=,args=` の出力を模した文字列 (pid を右寄せした行) を作る。"""
+    """`ps -A -o pid= -o ppid= -o args=` の出力を模した文字列 (pid を右寄せした行) を作る。"""
     return "".join(f"{row}\n" for row in rows)
 
 
@@ -510,7 +510,7 @@ class GuardCliTest(unittest.TestCase):
         deadline = time.monotonic() + PROCESS_WAIT_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             listing = subprocess.run(
-                ["ps", "-A", "-o", "pid=,ppid=,args="],
+                ["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "args="],
                 capture_output=True,
                 text=True,
                 check=True,
