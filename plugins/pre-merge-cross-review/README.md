@@ -211,9 +211,9 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 
 openai-codex plugin の companion は workspace ごとに常駐 broker を起動して再利用します。broker は起動時の `codex app-server` を抱え続けるため、codex CLI を更新しても、更新前に起動した broker は古いバイナリのまま review を実行します。
 
-wrapper (`run-pre-merge-codex-review.sh`) は companion の `review` を起動する直前に `hooks/scripts/lib/stale-broker-guard.mjs` を実行します。guard は broker 配下の app-server の実行ファイルが broker の起動より後に更新されていれば、その broker を止め、止めた broker の記録が残っていれば消して、止めた旨を stderr に 1 行出します。その後に起動する companion は、現行のバイナリで新しい broker を起動します。同じ broker で実行中の別の job は中断されます。
+wrapper (`run-pre-merge-codex-review.sh`) は companion の `review` を起動する直前に `hooks/scripts/lib/stale-broker-guard.mjs` を実行します。guard は broker 配下で動く codex app-server の実行ファイルが broker の起動より後に更新されているか、実行ファイルが無くなっていれば、その broker を止め、止めた broker の記録が残っていれば消して、止めた旨を stderr に 1 行出します。その後に起動する companion は、現行のバイナリで新しい broker を起動します。同じ broker で実行中の別の job は中断されます。
 
-検出や停止に失敗した場合 (companion の内部 module を読み込めない、`ps` が失敗する、broker が停止しない等) は stderr に警告を 1 行出し、review をそのまま続行します。guard は stdout に何も書かないため、review report の出力には影響しません。
+検出や停止に失敗した場合 (companion の内部 module を読み込めない、`ps` が失敗する、記録の pid が companion の broker でない、broker が停止しない等) は stderr に警告を 1 行出し、review をそのまま続行します。guard は stdout に何も書かないため、review report の出力には影響しません。
 
 ## 共有 lib の同一性
 

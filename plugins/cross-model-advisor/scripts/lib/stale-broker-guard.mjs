@@ -12,8 +12,8 @@
 //
 // broker は `initialize` を自分で処理し固定の userAgent を返すため、broker 経由で app-server の
 // バージョンを知る方法は無い。そこで本 guard は、broker 配下の app-server の実行ファイルが broker
-// の起動より後に更新されていれば、その broker を「古い」と判定して止める。止めた後に wrapper が
-// companion を起動すると、companion は現行のバイナリで新しい broker を起動する。
+// の起動より後に更新されている、または無くなっていれば、その broker を「古い」と判定して止める。
+// 止めた後に wrapper が companion を起動すると、companion は現行のバイナリで新しい broker を起動する。
 //
 // wrapper (pre-push / pre-merge の codex review wrapper、cross-model-advisor の job / advisor
 // wrapper) は companion の `review` / `adversarial-review` / `task` を起動する直前に本 guard を
@@ -42,21 +42,28 @@
 //    (companion はその endpoint に直接接続し、broker の記録を参照しないため)
 // 3. `loadBrokerSession(cwd)` が null (記録なし) なら何もせず終える
 // 4. 記録の `pid` のプロセスが生きていなければ何もせず終える
-// 5. `ps -A -o pid= -o ppid= -o args=` の出力から broker の子孫プロセスを再帰的にたどり
-//    (`findAppServerExecutables`)、引数列の `app-server` トークンの直前のトークンを app-server の
-//    実行ファイルのトークンとして集める。トークンは絶対パスとは限らない (companion は app-server を
-//    コマンド名 `codex` で起動するため、ネイティブバイナリのインストールでは `codex app-server`
-//    となり、トークンは `codex` だけになる)
-// 6. `ps -o etime= -p <pid>` の `[[dd-]hh:]mm:ss` を秒に直し (`parseElapsedSeconds`)、現在時刻から
+// 5. `ps -A -o pid= -o ppid= -o args=` を 1 回実行し、その出力で記録の `pid` のプロセスが
+//    companion の broker であること (引数列に basename が `app-server-broker.mjs` のトークンが
+//    あること) を確かめる (`isCompanionBrokerProcess`)。broker でなければ、pid の再利用や記録の
+//    改ざんで無関係なプロセスを指しているとみなし、シグナルを送らずに fail-open する
+// 6. 同じ ps 出力から broker の子孫プロセスを再帰的にたどり (`findAppServerExecutables`)、引数列の
+//    `app-server` トークンの直前のトークンのうち、basename が `codex` のものを codex の実行ファイルの
+//    トークンとして集める。basename が `codex` でないもの (codex が job の中で実行するツールの
+//    コマンド、例えば `grep app-server file`) は無視する。トークンは絶対パスとは限らない
+//    (companion は app-server をコマンド名 `codex` で起動するため、ネイティブバイナリの
+//    インストールでは `codex app-server` となり、トークンは `codex` だけになる)
+// 7. `ps -o etime= -p <pid>` の `[[dd-]hh:]mm:ss` を秒に直し (`parseElapsedSeconds`)、現在時刻から
 //    引いて broker の起動時刻を求める。GNU と BSD の ps の両方にある項目だけを使う
-// 7. 各トークンを `resolveExecutablePath(token, env.PATH)` で実行ファイルのパスに解決し、
-//    `fs.statSync` (symlink の先を見る) の `mtimeMs` と `ctimeMs` の大きい方を求める。1 つでも
-//    broker の起動時刻より後であれば古いと判定する (`isBrokerStale`)。ctime も使うのは、展開時に
-//    tarball の mtime を残す配布方法でも更新を検出するため。古くなければ何もせず終える。解決
-//    できないトークンが 1 つでもあれば、実行ファイルのパスが存在しない場合と同じく fail-open する
-// 8. 古い broker には `sendBrokerShutdown(endpoint)` を送る。5 秒以内に pid が終了しなければ
+// 8. 各トークンを `resolveExecutablePath(token, env.PATH)` で実行ファイルのパスに解決し、
+//    `fs.statSync` (symlink の先を見る) の `mtimeMs` と `ctimeMs` の大きい方を求める。stat が
+//    `ENOENT` で失敗した (実行ファイルが無くなった) 場合は、その実行ファイルを broker の起動より後に
+//    更新されたものとみなす (時刻を `Infinity` とする)。1 つでも broker の起動時刻より後であれば
+//    古いと判定する (`isBrokerStale`)。ctime も使うのは、展開時に tarball の mtime を残す配布方法
+//    でも更新を検出するため。古くなければ何もせず終える。PATH で解決できないトークンが 1 つでも
+//    あるか、`ENOENT` 以外の理由で stat に失敗した場合は fail-open する
+// 9. 古い broker には `sendBrokerShutdown(endpoint)` を送る。5 秒以内に pid が終了しなければ
 //    SIGTERM を送り、さらに 5 秒待つ
-// 9. 終了を確認できたら、`loadBrokerSession(cwd)` で記録を読み直す。同じ workspace で並行して
+// 10. 終了を確認できたら、`loadBrokerSession(cwd)` で記録を読み直す。同じ workspace で並行して
 //    動く companion が、その間に新しい broker を起動して記録を書き直していることがあるため。
 //    - 記録の `pid` と `endpoint` が止めた broker のものと一致する場合だけ後片付けをする。
 //      `teardownBrokerSession` が関数として export されていれば、記録の `endpoint` / `pidFile` /
@@ -74,8 +81,10 @@
 //
 // - `lib/broker-lifecycle.mjs` の import に失敗した、または 3 つの関数のいずれかが存在しない
 // - `ps` が非ゼロで終了した、または出力を解釈できない
-// - 生きている broker の子孫に `app-server` のプロセスが見つからない、または実行ファイルのパスが
-//   存在しない (`resolveExecutablePath` で解決できないトークンがある場合を含む)
+// - 記録の `pid` のプロセスが companion の broker でない
+// - 生きている broker の子孫に codex の `app-server` のプロセスが見つからない
+// - `resolveExecutablePath` で解決できないトークンがある、または実行ファイルの stat が `ENOENT`
+//   以外の理由 (権限など) で失敗した
 // - 停止を試みた後も broker の pid が残っている
 //
 // `runStaleBrokerGuard` は例外を外に投げない。
@@ -95,6 +104,8 @@ const REQUIRED_LIFECYCLE_FUNCTIONS = [
   "clearBrokerSession",
 ];
 const APP_SERVER_TOKEN = "app-server";
+const CODEX_EXECUTABLE_NAME = "codex";
+const BROKER_SCRIPT_NAME = "app-server-broker.mjs";
 const SHUTDOWN_WAIT_MS = 5000;
 const TERM_WAIT_MS = 5000;
 const EXIT_POLL_INTERVAL_MS = 100;
@@ -184,25 +195,49 @@ const collectDescendantPids = (processes, rootPid) => {
 };
 
 /**
- * 引数列の `app-server` トークンの直前のトークン。該当しなければ null。
+ * 引数列を空白で区切ったトークンの配列。
  *
  * @param {string} args
- * @returns {string | null}
+ * @returns {string[]}
  */
-const executableTokenBeforeAppServer = (args) => {
-  const tokens = args.split(/\s+/).filter((token) => token !== "");
-  const index = tokens.indexOf(APP_SERVER_TOKEN);
-  return index > 0 ? tokens[index - 1] : null;
+const splitArgs = (args) => args.split(/\s+/).filter((token) => token !== "");
+
+/**
+ * 引数列の `app-server` トークンの直前にある、basename が `codex` のトークン (出現順)。
+ * `app-server` が先頭トークンの引数列からは何も取らない。
+ *
+ * @param {string} args
+ * @returns {string[]}
+ */
+const codexTokensBeforeAppServer = (args) => {
+  const tokens = splitArgs(args);
+  if (tokens[0] === APP_SERVER_TOKEN) {
+    return [];
+  }
+  const codexTokens = [];
+  for (let index = 1; index < tokens.length; index += 1) {
+    const previous = tokens[index - 1];
+    if (
+      tokens[index] === APP_SERVER_TOKEN &&
+      path.basename(previous) === CODEX_EXECUTABLE_NAME
+    ) {
+      codexTokens.push(previous);
+    }
+  }
+  return codexTokens;
 };
 
 /**
  * `ps -A -o pid= -o ppid= -o args=` の出力から brokerPid の子孫プロセス (子・孫・それ以下。broker
  * 自身は含めない) をたどり、引数列を空白で区切ったトークンのうち `app-server` と完全一致する
- * トークンの直前のトークンを実行ファイルのトークンとして集める。
+ * トークンの直前のトークンで、basename が `codex` のものを codex の実行ファイルのトークンとして
+ * 集める。
  *
  * トークンは加工せずに返す。絶対パスとは限らず、`codex` のようなコマンド名だけのこともある
  * (パスへの解決は `resolveExecutablePath` が行う)。
  *
+ * - basename が `codex` でないトークン (codex が job の中で実行するツールのコマンド、例えば
+ *   `grep app-server file` の `grep`) は無視する
  * - `app-server` が先頭トークンのプロセスは除く
  * - `app-server-broker.mjs` のような部分一致は対象外
  * - 解釈できない行 (空行、pid / ppid が数値でない行等) は無視する
@@ -219,12 +254,34 @@ export const findAppServerExecutables = (psOutput, brokerPid) => {
     if (!descendants.has(pid)) {
       continue;
     }
-    const token = executableTokenBeforeAppServer(args);
-    if (token !== null && !executables.includes(token)) {
-      executables.push(token);
+    for (const token of codexTokensBeforeAppServer(args)) {
+      if (!executables.includes(token)) {
+        executables.push(token);
+      }
     }
   }
   return executables;
+};
+
+/**
+ * `ps -A -o pid= -o ppid= -o args=` の出力で、pid のプロセスが companion の broker かどうか。
+ * pid の行の引数列に、basename が `app-server-broker.mjs` のトークンがあれば true。
+ * pid の行が無い場合と、`my-app-server-broker.mjs` のような部分一致は false。
+ *
+ * @param {string} psOutput
+ * @param {number} pid
+ * @returns {boolean}
+ */
+export const isCompanionBrokerProcess = (psOutput, pid) => {
+  const processInfo = parsePsOutput(psOutput).find(
+    (candidate) => candidate.pid === pid,
+  );
+  if (processInfo === undefined) {
+    return false;
+  }
+  return splitArgs(processInfo.args).some(
+    (token) => path.basename(token) === BROKER_SCRIPT_NAME,
+  );
 };
 
 /**
@@ -422,21 +479,46 @@ const importBrokerLifecycle = async (companionPath) => {
 };
 
 /**
- * broker 配下の app-server の実行ファイルのパスを集める。
+ * 全プロセスの一覧 (`ps -A -o pid= -o ppid= -o args=` の出力) を取る。
  *
- * @param {number} brokerPid
- * @param {string | undefined} pathEnv
- * @returns {string[]}
+ * @returns {string}
  */
-const collectAppServerExecutablePaths = (brokerPid, pathEnv) => {
+const readProcessTable = () => {
   const psOutput = runPs(["-A", "-o", "pid=", "-o", "ppid=", "-o", "args="]);
   if (parsePsOutput(psOutput).length === 0) {
     throw new GuardWarning("ps -A の出力を解釈できません");
   }
+  return psOutput;
+};
+
+/**
+ * 記録の pid が companion の broker であることを確かめる。broker でなければ、無関係な
+ * プロセスにシグナルを送らないよう GuardWarning を投げる。
+ *
+ * @param {string} psOutput
+ * @param {number} brokerPid
+ */
+const ensureCompanionBroker = (psOutput, brokerPid) => {
+  if (!isCompanionBrokerProcess(psOutput, brokerPid)) {
+    throw new GuardWarning(
+      `記録の pid=${brokerPid} のプロセスは companion の broker (${BROKER_SCRIPT_NAME}) ではありません`,
+    );
+  }
+};
+
+/**
+ * broker 配下の codex の app-server の実行ファイルのパスを集める。
+ *
+ * @param {string} psOutput
+ * @param {number} brokerPid
+ * @param {string | undefined} pathEnv
+ * @returns {string[]}
+ */
+const collectAppServerExecutablePaths = (psOutput, brokerPid, pathEnv) => {
   const tokens = findAppServerExecutables(psOutput, brokerPid);
   if (tokens.length === 0) {
     throw new GuardWarning(
-      `broker (pid=${brokerPid}) の子孫に app-server のプロセスが見つかりません`,
+      `broker (pid=${brokerPid}) の子孫に codex の app-server のプロセスが見つかりません`,
     );
   }
   return tokens.map((token) => {
@@ -451,7 +533,8 @@ const collectAppServerExecutablePaths = (brokerPid, pathEnv) => {
 };
 
 /**
- * 実行ファイルの `max(mtimeMs, ctimeMs)` (symlink の先を見る)。
+ * 実行ファイルの `max(mtimeMs, ctimeMs)` (symlink の先を見る)。実行ファイルが無くなって
+ * いれば (`ENOENT`)、broker の起動より後に更新されたものとして `Infinity` を返す。
  *
  * @param {string} executablePath
  * @returns {number}
@@ -461,6 +544,9 @@ const readExecutableUpdateTimeMs = (executablePath) => {
     const stats = fs.statSync(executablePath);
     return Math.max(stats.mtimeMs, stats.ctimeMs);
   } catch (error) {
+    if (error?.code === "ENOENT") {
+      return Number.POSITIVE_INFINITY;
+    }
     throw new GuardWarning(
       `app-server の実行ファイル ${executablePath} を参照できません: ${describeError(error)}`,
     );
@@ -569,7 +655,13 @@ export const runStaleBrokerGuard = async ({ companionPath, cwd, env }) => {
       return;
     }
 
-    const executablePaths = collectAppServerExecutablePaths(brokerPid, env.PATH);
+    const psOutput = readProcessTable();
+    ensureCompanionBroker(psOutput, brokerPid);
+    const executablePaths = collectAppServerExecutablePaths(
+      psOutput,
+      brokerPid,
+      env.PATH,
+    );
     const brokerStartMs = readBrokerStartMs(brokerPid);
     const updateTimesMs = executablePaths.map(readExecutableUpdateTimeMs);
     if (!isBrokerStale(brokerStartMs, updateTimesMs)) {

@@ -23,9 +23,9 @@ v6.0.1
 
 openai-codex plugin の companion は workspace ごとに常駐 broker を起動して再利用します。broker は起動時の `codex app-server` を抱え続けるため、codex CLI を更新しても、更新前に起動した broker は古いバイナリのまま task / review を実行します。
 
-`scripts/run-codex-job.sh` の `rescue` / `advisor` / `review` と、`scripts/run-codex-advisor.sh` の companion 経路は、companion を起動する直前に `scripts/lib/stale-broker-guard.mjs` を実行します (`snapshot` / `status` / `result` / `cancel` と、direct `codex exec` の経路では実行しません)。guard は broker 配下の app-server の実行ファイルが broker の起動より後に更新されていれば、その broker を止め、止めた broker の記録が残っていれば消して、止めた旨を stderr に 1 行出します。その後に起動する companion は、現行のバイナリで新しい broker を起動します。同じ broker で実行中の別の job は中断されます。
+`scripts/run-codex-job.sh` の `rescue` / `advisor` / `review` と、`scripts/run-codex-advisor.sh` の companion 経路は、companion を起動する直前に `scripts/lib/stale-broker-guard.mjs` を実行します (`snapshot` / `status` / `result` / `cancel` と、direct `codex exec` の経路では実行しません)。guard は broker 配下で動く codex app-server の実行ファイルが broker の起動より後に更新されているか、実行ファイルが無くなっていれば、その broker を止め、止めた broker の記録が残っていれば消して、止めた旨を stderr に 1 行出します。その後に起動する companion は、現行のバイナリで新しい broker を起動します。同じ broker で実行中の別の job は中断されます。
 
-検出や停止に失敗した場合 (companion の内部 module を読み込めない、`ps` が失敗する、broker が停止しない等) は stderr に警告を 1 行出し、companion をそのまま起動します。guard は stdout に何も書かないため、companion の `--json` 出力や助言テキストには影響しません。
+検出や停止に失敗した場合 (companion の内部 module を読み込めない、`ps` が失敗する、記録の pid が companion の broker でない、broker が停止しない等) は stderr に警告を 1 行出し、companion をそのまま起動します。guard は stdout に何も書かないため、companion の `--json` 出力や助言テキストには影響しません。
 
 `scripts/lib/stale-broker-guard.mjs` は `pre-push-codex-review` の `hooks/scripts/lib/stale-broker-guard.mjs` の byte-identical なコピーです (同一性は `tests/test_shared_lib_copies.py` が検査します)。
 
