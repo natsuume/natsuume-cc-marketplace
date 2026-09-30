@@ -1,6 +1,6 @@
 {
   "name": "pre-merge-cross-review",
-  "version": "4.0.1",
+  "version": "4.0.2",
   "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
   "description": "merge 前の codex review を必須化する"
 }

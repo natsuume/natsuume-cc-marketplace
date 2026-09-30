@@ -1,10 +1,10 @@
 """pre-merge-cross-review が保持する共有 lib の同一性契約。
 
-pre-merge-cross-review は `codex-companion-resolver.sh` だけを、canonical の byte-identical な
-コピーとして `hooks/scripts/lib/` に保つ。canonical は `pre-push-codex-review`
-(`plugins/pre-push-codex-review/hooks/scripts/lib/`) で、codex review の実行機構が両 plugin で
-同一のため。それ以外の lib コピーは持たない (`lib/` に置く共有 lib 以外のファイルは、pre-merge
-専用の `markers.sh` だけ)。
+pre-merge-cross-review は `codex-companion-resolver.sh` と `stale-broker-guard.mjs` の 2 つを、
+canonical の byte-identical なコピーとして `hooks/scripts/lib/` に保つ。canonical は
+`pre-push-codex-review` (`plugins/pre-push-codex-review/hooks/scripts/lib/`) で、codex review の
+実行機構が両 plugin で同一のため。この 2 つ以外の lib コピーは持たない (`lib/` に置く共有 lib
+以外のファイルは、pre-merge 専用の `markers.sh` だけ)。
 
 reviewer 一式 (wrapper / subagent 定義 / hook script 群) は pre-merge 専用の
 実装であり、pre-push 系との文字列同一性契約は設けない。
@@ -26,7 +26,11 @@ MERGE_LIB = (
 )
 
 # pre-merge-cross-review の lib/ に置くファイルの全集合 (共有 lib のコピー + pre-merge 専用 lib)。
-EXPECTED_MERGE_LIB_FILES = {"codex-companion-resolver.sh", "markers.sh"}
+EXPECTED_MERGE_LIB_FILES = {
+    "codex-companion-resolver.sh",
+    "stale-broker-guard.mjs",
+    "markers.sh",
+}
 
 
 class SharedLibCopiesTest(unittest.TestCase):
@@ -48,6 +52,14 @@ class SharedLibCopiesTest(unittest.TestCase):
         self.assert_byte_identical_copy(
             PUSH_CODEX_LIB / "codex-companion-resolver.sh",
             MERGE_LIB / "codex-companion-resolver.sh",
+        )
+
+    def test_stale_broker_guard_is_byte_identical_in_merge_plugin(
+        self,
+    ) -> None:
+        self.assert_byte_identical_copy(
+            PUSH_CODEX_LIB / "stale-broker-guard.mjs",
+            MERGE_LIB / "stale-broker-guard.mjs",
         )
 
     def test_merge_lib_holds_no_other_copies(self) -> None:

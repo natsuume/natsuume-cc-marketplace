@@ -294,6 +294,11 @@ trap 'cleanup_advisor_process; exit 130' HUP INT TERM
 if [ -n "$COMPANION" ] && command -v node >/dev/null 2>&1; then
   printf '[run-codex-advisor] codex companion: %s\n' "$COMPANION" >&2
   printf '[run-codex-advisor] running: node %s task --effort xhigh\n' "$COMPANION" >&2
+  # codex CLI の更新前に起動した companion の broker が残っていれば、相談の前に止める
+  # (判定と停止の手順は lib/stale-broker-guard.mjs のヘッダを参照)。guard は検出や停止に
+  # 失敗しても警告を出して exit 0 で終わるが、node 自体の起動失敗でも相談を止めないよう
+  # `|| true` で受ける。stdout は助言テキストと混ざらないよう stderr へ回す。
+  node "$_RUN_CODEX_ADVISOR_SCRIPT_DIR/lib/stale-broker-guard.mjs" "$COMPANION" >&2 || true
   begin_advisor_process_group
   (
     printf '%s' "$PROMPT" | node "$COMPANION" task --effort xhigh

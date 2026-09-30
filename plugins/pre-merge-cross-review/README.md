@@ -6,7 +6,7 @@
 
 ## バージョン
 
-v4.0.1
+v4.0.2
 
 ## インストール
 
@@ -187,6 +187,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - **gate の観測範囲は Bash tool の `gh pr merge` (連続列を含む形) のみ**: `gh api` による直接 merge 呼び出し、gh alias、意図的な難読化、非 Bash の tool 経路、Web UI や他 client からの merge は観測できません
 - **TOCTOU 窓は防がない**: gate 確認後から実 merge までの間に head が更新される競合窓は防ぎません (ローカル記録の SHA は gate 確認時点の head と照合されます)
 - **`--auto` / `--admin` は常に deny**: 遅延 merge 予約 (gate 確認と実 merge の分離) と保護 bypass はサポート外です。必要な場合は plugin を無効化して実行してください
+- **古い broker の判定は `PATH` と引数列に依存する**: guard はコマンド名だけの `codex` を guard 自身の `PATH` で解決します。codex を複数の場所にインストールしていて、broker を起動した環境と guard を実行する環境で `PATH` の順序が違うと、broker が使っているものとは別の実行ファイルの時刻を見ます。また、実行ファイルのパスに空白が含まれると codex の app-server を特定できず、警告を出して続行します
 - **hooks module は early access の API に依存する**: Claude Mods (function hooks) の API は Claude Code のリリース間で予告なく変わりえます。`tool.check` の allow が classifier の判定を省略する挙動は Claude Code 2.1.282 の実装で確認したもので、公式ドキュメントには記述がありません
 - **hooks module が参照する permission mode は直近の classic イベント時点の値**: 呼び出し元の agent ごとに記録していますが、ターンの途中で permission mode を切り替えた直後の 1 回のツール呼び出しには、その agent の切り替え前の mode が使われます
 - **hooks module は rule を持たない ask の由来を区別しない**: core の既定の ask だけでなく、他の PreToolUse hook が返した ask も、条件を満たせば allow に引き上げます。`permissions.ask` ルールによる ask は引き上げません
@@ -207,11 +208,20 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 
 本 plugin は個人環境 (ChatGPT Plus の codex CLI) 向けに「merge 前に 1 回だけ codex review」を運用する設計です。push の都度 codex review を要求する会社環境向け `pre-push-codex-review` との併用は前提としていません。会社環境では codex 系 2 plugin のうち `pre-push-codex-review` の側を install し、本 plugin は install しないでください (`pre-push-review` core は会社環境でもそのまま併用します)。
 
+## codex CLI 更新前の broker の停止
+
+openai-codex plugin の companion は workspace ごとに常駐 broker を起動して再利用します。broker は起動時の `codex app-server` を抱え続けるため、codex CLI を更新しても、更新前に起動した broker は古いバイナリのまま review を実行します。
+
+wrapper (`run-pre-merge-codex-review.sh`) は companion の `review` を起動する直前に `hooks/scripts/lib/stale-broker-guard.mjs` を実行します。guard は broker 配下で動く codex app-server の実行ファイルが broker の起動より後に更新されているか、実行ファイルが無くなっていれば、その broker を止め、止めた broker の記録が残っていれば消して、止めた旨を stderr に 1 行出します。その後に起動する companion は、現行のバイナリで新しい broker を起動します。同じ broker で実行中の別の job は中断されます。
+
+検出や停止に失敗した場合 (companion の内部 module を読み込めない、`ps` が失敗する、記録の pid が companion の broker でない、broker が停止しない等) は stderr に警告を 1 行出し、review をそのまま続行します。guard は stdout に何も書かないため、review report の出力には影響しません。
+
 ## 共有 lib の同一性
 
 本 plugin は次の lib を、canonical の byte-identical なコピーとして保持します。この同一性は `tests/test_pre_merge_lib_copies.py` の契約テストが検査します。
 
 - `hooks/scripts/lib/codex-companion-resolver.sh`: `pre-push-codex-review` (`plugins/pre-push-codex-review/hooks/scripts/lib/`) が canonical (codex review の実行機構は両 plugin で同一のため)
+- `hooks/scripts/lib/stale-broker-guard.mjs`: 同じく `pre-push-codex-review` が canonical
 
 それ以外の lib コピーは持ちません。reviewer 一式 (wrapper / subagent 定義 / hook script 群) は pre-merge 専用の実装であり、pre-push 系との文字列同一性契約は設けません。`lib/markers.sh` (レビュー記録のファイル名と内容契約) も pre-merge 専用の lib であり、この同一性契約の対象外です (`lib/markers.sh` は pre-push 系の同名 lib とは別の名前空間・別の束縛キーを扱います)。
 
@@ -227,6 +237,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 | `hooks/prompts/merge-order-rules.md` | 注入する起動順規律の本文 |
 | `hooks/scripts/run-pre-merge-codex-review.sh` | codex review wrapper 本体 (レビュー実行 + ローカル記録の書き込み。basename は `pre-push-codex-review` の wrapper と別名) |
 | `hooks/scripts/lib/codex-companion-resolver.sh` | codex companion 解決ロジック (`pre-push-codex-review` からの byte-identical コピー) |
+| `hooks/scripts/lib/stale-broker-guard.mjs` | codex CLI 更新前に起動した companion の broker を検出して止める guard (`pre-push-codex-review` からの byte-identical コピー) |
 | `hooks/scripts/lib/markers.sh` | レビュー記録のファイル名と内容契約の単一ソース |
 | `agents/codex-reviewer.md` | `pre-merge-cross-review:codex-reviewer` subagent 定義 |
 | `hooks/module/register.ts` | hooks module のエントリ。permission mode と呼び出し元の agent を記録し、tool.check で判定ロジックを呼ぶ |

@@ -6,8 +6,8 @@ pre-push-review core と pre-push-codex-review は、それぞれ単独 install 
 `diff-hash.sh`) を独立に保持する。正本 (canonical) は pre-push-review 側で、
 pre-push-codex-review 側は byte-identical なコピーを保つ契約とする。
 
-`codex-companion-resolver.sh` は逆方向で、pre-push-codex-review 側が正本、
-cross-model-advisor 側がそのコピーを保つ。
+`codex-companion-resolver.sh` と `stale-broker-guard.mjs` は逆方向で、
+pre-push-codex-review 側が正本、cross-model-advisor 側がそのコピーを保つ。
 
 `isolated-commit-template.sh` (隔離ルート免除の判定器) は git-guardrails 側が正本、
 auto-lint-check 側がそのコピーを保つ。
@@ -35,6 +35,10 @@ SPLIT_LIB = (
 CODEX_ADVISOR_RESOLVER = (
     ROOT / "plugins" / "cross-model-advisor" / "scripts" / "lib"
     / "codex-companion-resolver.sh"
+)
+CODEX_ADVISOR_STALE_BROKER_GUARD = (
+    ROOT / "plugins" / "cross-model-advisor" / "scripts" / "lib"
+    / "stale-broker-guard.mjs"
 )
 # 隔離ルート免除の判定器。git-guardrails 側が正本で、auto-lint-check 側が
 # byte-identical なコピーを保つ。
@@ -81,6 +85,14 @@ class SharedLibCopiesTest(unittest.TestCase):
     ) -> None:
         self.assert_byte_identical(
             SPLIT_LIB / "codex-companion-resolver.sh", CODEX_ADVISOR_RESOLVER
+        )
+
+    def test_stale_broker_guard_is_byte_identical_in_codex_advisor(
+        self,
+    ) -> None:
+        self.assert_byte_identical(
+            SPLIT_LIB / "stale-broker-guard.mjs",
+            CODEX_ADVISOR_STALE_BROKER_GUARD,
         )
 
     def test_isolated_commit_template_is_byte_identical_in_auto_lint_check(

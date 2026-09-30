@@ -8,7 +8,7 @@
 
 ## バージョン
 
-v4.0.6
+v4.0.7
 ## インストール
 
 ```bash
@@ -164,11 +164,21 @@ checkpoint の実行には `cross-model-advisor` plugin の install が必要で
 - **deny 文の独立性**: 各 plugin の deny メッセージは自分が検証するマーカーのみに言及します。本 plugin の deny 文は codex マーカーの状態と `pre-push-codex-review:codex-reviewer` への案内のみを含み、core の code / security マーカーには言及しません。core の deny 文も同様に codex マーカーには言及しません
 - **AND 合成**: 両 plugin を併用した場合、`git push` を含む Bash 呼び出しは両方の PreToolUse hook を通過します。どちらか一方でも deny を返せば push は成立しません。3 レビューすべてのマーカーが最新の差分と一致して初めて push が通ります
 
+## codex CLI 更新前の broker の停止
+
+openai-codex plugin の companion は workspace ごとに常駐 broker を起動して再利用します。broker は起動時の `codex app-server` を抱え続けるため、codex CLI を更新しても、更新前に起動した broker は古いバイナリのまま review を実行します。
+
+wrapper (`run-pre-push-codex-review.sh`) は companion の `review` を起動する直前に `hooks/scripts/lib/stale-broker-guard.mjs` を実行します。guard は broker 配下で動く codex app-server の実行ファイルが broker の起動より後に更新されているか、実行ファイルが無くなっていれば、その broker を止め、止めた broker の記録が残っていれば消して、止めた旨を stderr に 1 行出します。その後に起動する companion は、現行のバイナリで新しい broker を起動します。同じ broker で実行中の別の job は中断されます。
+
+検出や停止に失敗した場合 (companion の内部 module を読み込めない、`ps` が失敗する、記録の pid が companion の broker でない、broker が停止しない等) は stderr に警告を 1 行出し、review をそのまま続行します。
+
 ## 共有 lib の同一性
 
 `hooks/scripts/lib/cmd-parser.sh` / `target-resolver.sh` / `diff-hash.sh` は `pre-push-review` core (`plugins/pre-push-review/hooks/scripts/lib/`) が canonical で、本 plugin はその byte-identical なコピーを保持します。同一性は `tests/test_shared_lib_copies.py` の契約テストと `.github/workflows/sync-shared-libs.yml` が検査します。
 
 逆に `hooks/scripts/lib/codex-companion-resolver.sh` は本 plugin が canonical で、`cross-model-advisor` (`plugins/cross-model-advisor/scripts/lib/codex-companion-resolver.sh`) がそのコピーを保持し追従します。
+
+`hooks/scripts/lib/stale-broker-guard.mjs` も本 plugin が canonical で、`pre-merge-cross-review` (`plugins/pre-merge-cross-review/hooks/scripts/lib/stale-broker-guard.mjs`) と `cross-model-advisor` (`plugins/cross-model-advisor/scripts/lib/stale-broker-guard.mjs`) が byte-identical なコピーを保持します。同一性は `tests/test_shared_lib_copies.py` と `tests/test_pre_merge_lib_copies.py` が検査します。
 
 `hooks/scripts/lib/markers.sh` は plugin ごとにマーカー集合が異なる (本 plugin は codex マーカーのみ、core は code / security マーカーのみ) ため、同一性検査の対象外です。
 
@@ -190,12 +200,14 @@ checkpoint の実行には `cross-model-advisor` plugin の install が必要で
 | `hooks/scripts/lib/markers.sh` | 本 plugin のマーカーファイル名の単一ソース |
 | `hooks/scripts/lib/exit-trap.sh` | 予期せぬエラー時の診断 trap |
 | `hooks/scripts/lib/codex-companion-resolver.sh` | codex companion 解決ロジック (本 plugin が canonical) |
+| `hooks/scripts/lib/stale-broker-guard.mjs` | codex CLI 更新前に起動した companion の broker を検出して止める guard (本 plugin が canonical) |
 | `agents/codex-reviewer.md` | `pre-push-codex-review:codex-reviewer` subagent 定義 |
 | `commands/review.md` | `/pre-push-codex-review:review` コマンド定義 |
 
 ## 既知の制約
 
 - **gate の観測範囲は Bash tool のみ**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `git push` を gate は観測しない。これらの tool を有効にした環境はサポート外
+- **古い broker の判定は `PATH` と引数列に依存する**: guard はコマンド名だけの `codex` を guard 自身の `PATH` で解決する。codex を複数の場所にインストールしていて、broker を起動した環境と guard を実行する環境で `PATH` の順序が違うと、broker が使っているものとは別の実行ファイルの時刻を見る。また、実行ファイルのパスに空白が含まれると codex の app-server を特定できず、警告を出して続行する
 
 ## 関連プラグイン
 
