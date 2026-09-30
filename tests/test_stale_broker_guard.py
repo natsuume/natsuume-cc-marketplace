@@ -375,6 +375,16 @@ class FindAppServerExecutablesTest(unittest.TestCase):
         )
         self.assertEqual(["/x/bin/codex"], self.find(output))
 
+    def test_codex_js_entry_of_npm_package_is_accepted(self) -> None:
+        # npm package の入口 (bin/codex.js) が引数列に直接現れる shim の形も codex とみなす。
+        output = ps_lines(
+            "  100     1 node /x/scripts/app-server-broker.mjs serve",
+            "  101   100 node /x/lib/node_modules/@openai/codex/bin/codex.js app-server",
+        )
+        self.assertEqual(
+            ["/x/lib/node_modules/@openai/codex/bin/codex.js"], self.find(output)
+        )
+
     def test_bare_codex_command_token_is_returned_as_is(self) -> None:
         output = ps_lines(
             "  100     1 node /x/scripts/app-server-broker.mjs serve",
@@ -806,7 +816,7 @@ class GuardCliTest(unittest.TestCase):
         self.assert_broker_alive(broker)
 
     def test_future_mtime_does_not_make_fresh_broker_stale(self) -> None:
-        # 現在時刻より後の mtime は使わず ctime で判定する (未来の mtime で毎回止めないため)。
+        # 現在時刻より後の時刻 (mtime・ctime) は判定に使わない (未来の時刻で毎回止めないため)。
         self.install_lifecycle()
         self.write_fake_app_server()
         future = time.time() + 86400
