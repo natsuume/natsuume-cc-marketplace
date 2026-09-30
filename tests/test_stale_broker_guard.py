@@ -762,6 +762,15 @@ class GuardCliTest(unittest.TestCase):
         self.assert_silent_without_shutdown(completed)
         self.assert_broker_alive(broker)
 
+    def test_empty_endpoint_env_does_not_skip_stale_broker(self) -> None:
+        # companion は空文字列の endpoint を未設定と同じに扱い、broker の記録を使う。
+        self.install_lifecycle()
+        broker = self.start_stale_broker()
+        self.write_session(broker.pid)
+        completed = self.run_guard({ENDPOINT_ENV: ""})
+        self.assert_common_contract(completed)
+        self.assertIn("sendBrokerShutdown", self.called_names())
+
     def test_fresh_broker_is_left_running(self) -> None:
         self.install_lifecycle()
         broker = self.start_fresh_broker()
