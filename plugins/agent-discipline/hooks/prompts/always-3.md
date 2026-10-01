@@ -28,7 +28,7 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 - **branch 名を決める**: step 6 で使う名前を先に決めてスクリプトに渡す (= claim と branch を 1:1 で対応させる)。issue-start skill セクション 1.1 の手順で既存の branch を探して見つかった名前を使い、無ければ同手順 6 で次の規約に沿って決める (同手順の停止条件ではスクリプトを実行せず停止する)
   - branch 名規約: `<prefix>/issue-<N>-<slug>` (`<prefix>` = `feat` / `fix` / `chore` / `docs` / `refactor` 等、`<slug>` = issue タイトルから kebab-case で抽出した短縮形)
   - 例: `feat/issue-12-add-auth`, `fix/issue-25-null-deref`
-- **step 1〜5 (claim 用のスクリプト)**: `'{{CLAIM_ISSUE_SCRIPT_PATH}}' <N> '<branch>'` を実行する。スクリプトは早期判定 (step 1)・claim comment の投稿 (step 2)・3 秒待機 (step 3)・先着判定 (step 4)・ラベル付与 (step 5) を行い、結果を stdout の 1 行と exit code で返す
+- **step 1〜5 (claim 用のスクリプト)**: `'{{CLAIM_ISSUE_SCRIPT_PATH}}' <N> '<branch>'` を実行する。スクリプトは早期判定 (step 1)・claim comment の投稿 (step 2)・3 秒待機 (step 3)・先着判定 (step 4)・ラベル付与 (step 5) を行い、結果を stdout の 1 行と exit code で返す。このファイルを直接 Read したなどでパスがプレースホルダのままの場合は、配送メモの参照パス (prompts ディレクトリ) から見た `../../skills/issue-start/scripts/claim-issue.sh` を使う
   - セッション ID は環境変数 `CLAUDE_CODE_SESSION_ID` の値をスクリプトが使う。未設定の場合は `uuidgen` で生成した値を `--session-id` で渡し、同一セッション中は同じ値を使い続ける
   - 自分の claim は claim comment の `session=` の値で識別する。先着は `ts=` (自己申告) ではなく GitHub が付ける順序 (`created_at` と数値 comment id) で決まる
   - exit 0 なら確保として step 6 へ進む。stdout に `label=failed` があれば、ラベル付与の失敗をユーザに 1 行で報告する
