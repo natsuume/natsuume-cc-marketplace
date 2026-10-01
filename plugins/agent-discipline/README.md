@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v4.0.0
+v4.1.0
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
@@ -16,7 +16,7 @@ Claude Code に「個人の開発スタイル」を一括で適用するため�
 | **物理層 (Bash 分解)** | `SessionStart` (inject-always.sh、`always-1.md` の part 1/3) | 常時 | Bash コマンドを最小粒度に分解して PreToolUse hook の取りこぼしを防ぐ |
 | **before 系** | `SessionStart` (inject-always.sh、part 1/3: 設計 / 仕様の事前壁打ち) + `UserPromptSubmit` (inject-rules-part.sh 2、part 2/3: issue / PR 関連) | 常時 (part 2/3 は session 内初回のプロンプト処理時) | 設計 / 仕様の事前壁打ち + 「思考は自由、 成果物への固定化は要承認」 非対称ルール (2.1) + 自己検知トリガー / 名指し禁止表現、 issue 起票時の `AskUserQuestion` 詳細化 + 起票直前 / pick up 時の self-check + 過去 session 独断の遡及検出 (3.1 / 3.2 で PR / plan / commit にも適用)、 並列粒度 + sub-issue + `#N` 相互参照、 PR closing keyword 規約 |
 | **during 系** | `UserPromptSubmit` (inject-rules-part.sh 2、part 2/3) | 常時 (`permission_mode` 非依存、session 内初回のプロンプト処理時) | 実装は自走、 設計 / 仕様 (= issue 起票時の壁打ちで決まっているはずの内容) の再確認では止まらない。 ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる |
-| **排他系** | `UserPromptSubmit` (inject-rules-part.sh 3、part 3/3) | 常時 (`permission_mode` 非依存、session 内初回のプロンプト処理時) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim comment の先着判定 (GitHub が付与する `created_at` + 数値 comment id の辞書順) で確保を確定し、 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` を持たない claim は自分のものと確認できないため他 session 扱いで削除禁止) |
+| **排他系** | `UserPromptSubmit` (inject-rules-part.sh 3、part 3/3) | 常時 (`permission_mode` 非依存、session 内初回のプロンプト処理時) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim 用のスクリプト (`skills/issue-start/scripts/claim-issue.sh`) が claim comment の先着判定 (GitHub が付与する `created_at` + 数値 comment id の辞書順) で確保を確定し、 常時注入ルールはスクリプトの呼び出し方と exit code ごとの対応を配送する。 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` を持たない claim は自分のものと確認できないため他 session 扱いで削除禁止) |
 | **作業手順系** | `UserPromptSubmit` (inject-rules-part.sh 2 / inject-rules-part.sh 3) | 常時 (session 内初回のプロンプト処理時) | ユーザへの質問は `AskUserQuestion` で行う (part 3/3)、 軽微な修正を除き spec-first 2 段階 (Phase A: テスト / 設計骨格 → Phase B: 実装本体) で進める (part 3/3)、 説明文書には現在の内容のみを書き経緯を書かない (part 2/3) |
 | **分割配送** | `SessionStart` (inject-always.sh、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh) | 常時 (UserPromptSubmit 側の各要素は session ごとに at-most-once) | 常時ルールと分業規律は、メインセッションのモデルに依らず同じ 1 版を配送する。SessionStart で常時ルールの part 1 (`always-1.md`) のみ注入し、残りの part (`always-2.md` / `always-3.md`) と分業規律 (`discipline.md`) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (1 要素の `additionalContext` を 8K 字以下に保つための分割)。UserPromptSubmit 側の各要素は配送済みマーカーで 1 度だけ配送し、SessionStart のたびにマーカーをリセットして再配送する |
 | **検知系 (gh issue/pr body)** | `PreToolUse` (hooks.json inline `type: agent` 4 entries) | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。claude-sonnet-5 pin |
@@ -82,7 +82,7 @@ claude plugin install agent-discipline@natsuume-plugins
 4. **issue の粒度と関係性** (`rule:issue-granularity`): 独立して並列作業できる粒度で起票、大きい場合は sub-issues 分割。関係性は (a) sub-issue 親子リンク + (b) `#N` 相互参照を併用
 5. **PR 作成時の closing keyword** (`rule:closing-keyword`): 完全解決時のみ PR body に `Closes #N` を書く。closing keyword は default branch 向け PR でのみ機能する。部分対応では `Refs #N` / `Part of #N` に切替
 6. **自律作業中の判断境界** (`rule:autonomy-boundary`): 実装は自走、設計 / 仕様 (= issue で決まっているはずの内容) は再確認しない。ただし issue 未明記の要件発見 / 大きな後戻り判断では止まる
-7. **連続 issue 解決時の排他制御** (`rule:issue-claim`): `/goal` 等の並列 session フロー向け。(a) `gh issue view` で `ai:in-progress` ラベル / claim comment 早期判定、(b) claim comment 投稿 (issue-start skill セクション 1.1 の手順で既存の branch を探し、見つかればその名前を使う。候補が複数・命名規約違反・探索失敗なら投稿せず停止する。`session=<セッションID>` で自他判別)、(c) 3 秒待機 + REST issue comments の全ページ再取得 + `(created_at, 数値 id)` の辞書順比較による先着判定 (取得失敗・自分の claim が無い場合は停止する fail-closed)、(d) 先着と確認できた時点で確保を確定してラベル付与、(e) 作業 branch の用意 (同名 branch が無ければ最新の default branch から作成、あれば switch して再開し、local と remote が分岐していれば停止して報告)。ユーザのメッセージまたは handoff の文書が issue 番号か branch 名を挙げて継続を指示した場合 (明示指示) だけ、(a)〜(d) を経ずに (e) から再開する。撤退時の後片付けは自分の claim comment の削除と 1 行報告だけで、確保後の着手中断では自分の claim comment だけを削除し、branch・draft PR・ラベルは再開のために残す。安全機構のため手順を省略せず全文記載する
+7. **連続 issue 解決時の排他制御** (`rule:issue-claim`): `/goal` 等の並列 session フロー向け。issue-start skill セクション 1.1 の手順で branch 名を決め (既存の branch があればその名前を使う。候補が複数・命名規約違反・探索失敗ならスクリプトを実行せず停止する)、claim 用のスクリプト `claim-issue.sh` を実行する。スクリプトは (a) `ai:in-progress` ラベル / claim comment の早期判定、(b) claim comment 投稿 (`session=<セッションID>` で自他判別)、(c) 3 秒待機 + REST issue comments の全ページ再取得 + `(created_at, 数値 id)` の辞書順比較による先着判定 (負けたら自分の claim を削除、取得失敗・自分の claim が無い場合は停止する fail-closed)、(d) 先着と確認できた時点で確保を確定してラベル付与、を行い、exit code (0 = 確保 / 1 = 撤退 / 2 = 停止) を返す。exit 0 なら (e) 作業 branch の用意 (同名 branch が無ければ最新の default branch から作成、あれば switch して再開し、local と remote が分岐していれば停止して報告) に進み、exit 1 なら撤退して 1 行報告し、exit 2 なら停止して報告する。ユーザのメッセージまたは handoff の文書が issue 番号か branch 名を挙げて継続を指示した場合 (明示指示) だけ、(a)〜(d) を経ずに (e) から再開する。確保後の着手中断では自分の claim comment だけを削除し、branch・draft PR・ラベルは再開のために残す
 8. **AskUserQuestion の必須化** (`rule:ask-user-question`): ユーザへの質問・確認・判断伺い・すり合わせは自由文で turn を終えず必ず `AskUserQuestion` を発行する
 9. **spec-first 2 段階の開発手順** (`rule:tdd-two-phase`): 軽微な修正を除き、実装は Phase A (テストがある場合は失敗するテスト + 設計骨格、テスト不能な成果物では設計記述 commit に置換) → pre-push-review のレビュー通過 → draft PR → Phase B (実装本体) → ready 化、の 2 段階で進める。正典 TDD ではなく実行可能仕様の先行固定 (spec-first) であり、局所定義・評価基準の詳細は issue-start skill が持つ
 10. **説明は常に最新の内容のみ** (`rule:comment-currency`、part 2/3 に含まれる): コードコメント・docstring・README 等の説明文書には現在の内容のみを書き、版数・issue/PR 番号による過去の変更の記述や旧実装の説明を書かない。履歴は commit message・PR 説明・issue に置く。新規作成・意味変更した説明ブロックにだけ適用し (touch-time)、指示のない一括清掃は行わない
@@ -90,7 +90,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **常時適用ルールの書式**:
 
 - `always-1.md` / `always-2.md` / `always-3.md`: 各ルールに適用範囲を明示し、否定形の指示には具体的な代替行動を併記する。ルールごとに良い例 / 悪い例を最小 1 セット添える。禁止表現 8 カテゴリは列挙を維持する。1 つのルールセットを rule 境界で 3 part に分割したもので、part 間で rule ID は重複しない。各 part の見出しは `# agent-discipline: 常時適用ルール — part <N>/3` で、到着順序に依らず各 part を self-contained に適用する旨を part 1 の冒頭に置く
-- `rule:issue-claim` (連続 issue 解決時の排他制御、part 3/3 に含まれる) は、安全機構のため手順本体を省略せず完全記載する
+- `rule:issue-claim` (連続 issue 解決時の排他制御、part 3/3 に含まれる) は、step 1〜5 を claim 用のスクリプトに任せ、スクリプトの呼び出し方・exit code ごとの対応と、スクリプトに含めない規律 (明示指示による再開・作業 branch の用意・ラベル削除規律・撤退と着手中断の後片付け) を記載する。スクリプトのパスはプレースホルダ `{{CLAIM_ISSUE_SCRIPT_PATH}}` で書き、配送時に絶対パスへ置き換わる
 
 #### inject-temporary
 
@@ -117,8 +117,9 @@ claude plugin install agent-discipline@natsuume-plugins
 
 - 常時ルールの part 2/3 または part 3/3 (`always-2.md` / `always-3.md`) の本文そのものを、at-most-once で個別要素の `additionalContext` として配送する。注入内容はメインセッションのモデルに依らず同一である
 - マーカー `${TMPDIR:-/tmp}/agent-discipline-state/delivered-rules-<n>-<session_id>` が存在すれば即 `exit 0` (毎プロンプトのオーバーヘッドをファイル存在チェックのみに抑える)
+- part 3 の配送時だけ、本文の `{{CLAIM_ISSUE_SCRIPT_PATH}}` を `skills/issue-start/scripts/claim-issue.sh` の正規化した絶対パス (`..` を含まない) に置き換える。スクリプトが無い場合は、プレースホルダを含む行全体を「claim 用のスクリプトが見つからないため、issue への着手をせずユーザーに報告する。」に置き換え、part 3 の他の rule はそのまま配送する。パスに awk・正規表現のメタ文字が含まれてもそのまま埋め込む
 - マーカー不在時は `always-<n>.md` を注入し、出力 JSON の生成に成功した後でマーカーを書く (先にマーカーを書くと、本文読取失敗時に当該要素が session 中永久欠落する)。マーカーの書込は同一ディレクトリ内 temp file → `mv` の atomic 書込にする
-- `jq` 不在 / 不正 JSON 入力 / `hook_event_name` か `session_id` が空の場合は無音 `exit 0`。`always-<n>.md` が読めない・空の場合も無音 `exit 0` でマーカーは書かない (次プロンプトで再試行)
+- `jq` 不在 / 不正 JSON 入力 / `hook_event_name` か `session_id` が空の場合は無音 `exit 0`。`always-<n>.md` が読めない・空の場合と、part 3 のプレースホルダの置き換えが失敗した場合も無音 `exit 0` でマーカーは書かない (次プロンプトで再試行)
 
 #### inject-discipline
 
@@ -273,7 +274,9 @@ issue の起票・分解フェーズの手順をガイドします: 起票前の
 
 **ファイル**: `skills/issue-start/SKILL.md`
 
-issue の着手・実装開始フェーズの手順をガイドします: pick-up 分岐 (既存の branch / PR 状態確認)、排他制御 (`rule:issue-claim` への参照)、軽微判定 (2 段構え)、spec-first 2 段階の具体コマンド手順 (局所定義・provisional 契約と契約改訂時のレビュー入力の隔離・Phase A 評価基準・成果物粒度・Phase B 内の進め方の 4.1〜4.5 を含む)、closing keyword。
+issue の着手・実装開始フェーズの手順をガイドします: pick-up 分岐 (既存の branch / PR 状態確認)、排他制御 (`rule:issue-claim` への参照と claim 用のスクリプト)、軽微判定 (2 段構え)、spec-first 2 段階の具体コマンド手順 (局所定義・provisional 契約と契約改訂時のレビュー入力の隔離・Phase A 評価基準・成果物粒度・Phase B 内の進め方の 4.1〜4.5 を含む)、closing keyword。
+
+**claim 用のスクリプト** (`skills/issue-start/scripts/claim-issue.sh`): `rule:issue-claim` の step 1〜5 (早期判定・claim comment の投稿・3 秒待機・先着判定・ラベル付与) を行う bash スクリプト。`claim-issue.sh <issue 番号> <branch 名> [--session-id <id>] [--ignore-comment-id <id>]... [--confirmed-leftover]` で実行し、結果を stdout の 1 行 (`claimed comment_id=<id>` / `claimed comment_id=<id> label=failed` / `retreat reason=label|existing-claim|lost-race` / `error reason=<内容>`) と exit code (0 = 確保 / 1 = 撤退 / 2 = 停止) で返す。`--ignore-comment-id` / `--confirmed-leftover` は、明示指示で step 1 から実行するときに前の作業の残りと確認した claim comment とラベルを判定から除くために使う (セクション 1.2)。`gh` と `jq` を使い、Linux と macOS の bash 3.2 で動く。入出力契約と境界の挙動はスクリプト先頭のコメントにある
 
 **使用シーン**:
 
@@ -388,7 +391,9 @@ agent-discipline/
 │   ├── issue-plan/
 │   │   └── SKILL.md
 │   └── issue-start/
-│       └── SKILL.md
+│       ├── SKILL.md
+│       └── scripts/
+│           └── claim-issue.sh
 ├── scripts/
 │   ├── lint-payload-size.sh
 │   └── lint-prompt-sync.sh

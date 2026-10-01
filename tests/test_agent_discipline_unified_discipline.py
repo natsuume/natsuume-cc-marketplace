@@ -74,7 +74,7 @@ REPO_README = ROOT / "README.md"
 PLUGIN_README = PLUGIN_DIR / "README.md"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "4.0.0"
+PLUGIN_VERSION = "4.1.0"
 
 INJECT_ALWAYS = "inject-always.sh"
 INJECT_RULES_PART = "inject-rules-part.sh"
@@ -288,6 +288,15 @@ def body_without_leading_comment(text: str) -> str:
 def read_prompt(name: str) -> str:
     """prompt ファイルを hook が配送する形 (先頭コメントを除いた本文) で読む。"""
     return body_without_leading_comment(read(PROMPTS_DIR / name))
+
+
+def delivered_part(part: str) -> str:
+    """inject-rules-part.sh <part> が配送する本文 (part 3 は claim 用のスクリプトのパスを埋め込む)。"""
+    body = read_prompt(f"always-{part}.md")
+    if part != "3":
+        return body
+    script = PROMPTS_DIR.parent.parent / "skills" / "issue-start" / "scripts" / "claim-issue.sh"
+    return body.replace("{{CLAIM_ISSUE_SCRIPT_PATH}}", str(script))
 
 
 def rule_ids(text: str) -> list[str]:
@@ -687,12 +696,12 @@ class InjectRulesPartTest(HookTestCase):
             with self.subTest(part=part):
                 result, state = self.run_part(payload("UserPromptSubmit"), part)
                 context = self.context_of(result, "UserPromptSubmit")
-                self.assertEqual(read_prompt(f"always-{part}.md"), context)
+                self.assertEqual(delivered_part(part), context)
                 self.assertEqual([self.marker(part)], sorted(state))
 
     def test_output_does_not_depend_on_state_or_pending_files(self) -> None:
         for part in self.PARTS:
-            expected = read_prompt(f"always-{part}.md")
+            expected = delivered_part(part)
             for label, model, pending in STATE_VARIANTS:
                 with self.subTest(part=part, state=label):
                     result, state = self.run_part(
