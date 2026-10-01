@@ -164,7 +164,7 @@ COMMAND_HOOK_KEYS = {"type", "command", "args"}
 
 # agent entry のキー集合と値。`args` は command hook 専用のため持たない。
 AGENT_HOOK_KEYS = {"type", "if", "model", "prompt", "timeout"}
-AGENT_HOOK_MODEL = "claude-sonnet-5"
+AGENT_HOOK_MODEL = "claude-sonnet-5-5"
 AGENT_HOOK_TIMEOUT = 60
 EXPECTED_AGENT_HOOKS: dict[str, tuple[tuple[str, str], ...]] = {
     # plugin -> (event, `if` 条件) の多重集合

@@ -174,7 +174,7 @@ STATE_DIR_NAME = "agent-discipline-state"
 SESSION_ID = "unified-discipline-session"
 
 OPUS_MODEL = "claude-opus-5-5"
-SONNET_MODEL = "claude-sonnet-5"
+SONNET_MODEL = "claude-sonnet-5-5"
 FABLE_MODEL = "claude-fable-5-1"
 
 # stdin の .model の値の組 (UNSET は .model キー自体を書かない)。
