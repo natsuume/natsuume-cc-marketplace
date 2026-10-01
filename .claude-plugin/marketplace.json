@@ -80,7 +80,7 @@
       "name": "ui-discipline",
       "source": "./plugins/ui-discipline",
       "description": "UI 実装規律の常時注入と実装パターンを提供する",
-      "version": "0.4.9",
+      "version": "0.4.10",
       "keywords": ["ui", "frontend", "discipline", "system-prompt", "component", "accessibility", "layout-shift", "design-tokens", "hook", "skill"]
     },
     {

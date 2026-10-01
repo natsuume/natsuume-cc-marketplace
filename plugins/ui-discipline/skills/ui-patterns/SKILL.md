@@ -66,21 +66,26 @@ UI 実装前に以下を確認します:
 <label>
   <input
     type="checkbox"
+    checked={verboseLog}
     aria-disabled={!parentEnabled}
     aria-describedby="verbose-log-hint"
     onChange={(e) => {
-      if (!parentEnabled) return; // aria-disabled はクリック抑止しないため自前で行う
-      onChange(e);
+      if (!parentEnabled) return; // aria-disabled は操作を止めないため、無効のときは状態を変えない
+      setVerboseLog(e.target.checked);
     }}
   />
   詳細ログを出力する
 </label>
-{!parentEnabled && (
-  <p id="verbose-log-hint">「ログ出力」を有効にすると設定できます</p>
-)}
+<p id="verbose-log-hint">
+  {parentEnabled
+    ? "障害の調査用に、詳細なログを出力します"
+    : "「ログ出力」を有効にすると設定できます"}
+</p>
 ```
 
 native `disabled` はフォーカス不可・タブ順除外になり、キーボード / スクリーンリーダー利用者には要素の存在も無効化理由も伝わりません。`aria-disabled` はフォーカス可能なまま「操作不可」を伝えます。
+
+`aria-disabled` はクリックやキー操作を止めないため、checkbox は `checked` で状態を制御し、無効のときは `onChange` で状態を変えません (`checked` を持たない checkbox では、ブラウザが表示を切り替えてしまいます)。ヒントの要素は常に描画して文言だけを切り替えるので、`aria-describedby` の参照先が常に存在し、レイアウトも動きません。
 
 アクションボタンの入力不備 (常時有効 + エラー提示):
 
