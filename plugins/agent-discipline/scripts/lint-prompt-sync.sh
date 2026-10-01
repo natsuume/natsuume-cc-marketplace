@@ -18,7 +18,7 @@
 #   場合や、 参照先ファイルが見つからない場合は fail-closed (exit 1) とし、 チェックを
 #   silent skip しない。
 # - exit code: 全チェック (1〜5) が pass のとき 0。 いずれかのチェックが fail、
-#   チェック 2 冒頭の前提検証 (#186) が不成立、 または前提ファイルが読めない等の実行時
+#   チェック 2 冒頭の前提検証が不成立、 または前提ファイルが読めない等の実行時
 #   エラーのときは 1。
 # - 動作環境: CI (ubuntu-latest) 上での動作を必須要件とするが、 macOS 互換は要件外
 #   (CI 専用ツールのため)。 ただし POSIX 準拠のシェル記法のみを用い、 bash 依存の記法
@@ -114,8 +114,8 @@
 #       正規化 (norm_b) はこのブロックを除去する前に、 対象の gh pr create prompt 内に
 #       `## Step 3: Closes 検証` 見出しから `## Step 4: 返り値` 見出しまでのブロックが
 #       実在することを検証し、 存在しない場合は除去処理を silent no-op にせず fail する
-#       (#187 の「除去対象の実在性未検証」パターンをこの除去にも適用する統一方針。
-#       #185 のチェック 3 の対象ブロックと同一のブロックである)。
+#       (除去対象が消えたまま除去が空振りし、 比較が pass してしまうことを防ぐ。 (c) の
+#       除去と同じ方針。 このブロックはチェック 3 の対象ブロックと同一である)。
 #
 #   (c) PR 固有の判定原則 (gh pr create と gh pr edit の両方が持つ):
 #       判定原則セクション 1 つ目の箇条書き末尾に付く以下の追加文言:
@@ -124,10 +124,10 @@
 #       は issue create / issue edit には存在せず、 pr create / pr edit にのみ存在する。
 #       正規化 (norm_c) はこの文言を除去する前に、 PR 系 2 entries (`gh pr create` /
 #       `gh pr edit`) それぞれの prompt 内に当該文言が実在することを検証し、 存在しない
-#       場合は除去処理を silent no-op にせず fail する (#187)。
+#       場合は除去処理を silent no-op にせず fail する。
 #
 # 契約:
-#   0. 前提検証 (#186、 チェック 2 の他の処理より前に実行する): `.hooks.PreToolUse[0].hooks[]`
+#   0. 前提検証 (チェック 2 の他の処理より前に実行する): `.hooks.PreToolUse[0].hooks[]`
 #      のうち type == "agent" である entry の数が、 本ファイル内で定義する定数
 #      `EXPECTED_AGENT_ENTRIES` (= 4) と一致することを検証する。 かつ、 既知の 4 つの `if`
 #      値に対応する各 entry の `.prompt` フィールドが非空文字列であることを検証する。
@@ -139,20 +139,20 @@
 #      入れ替わっても追従できる)。
 #   2. 各 entry について (a)(b)(c) の正規化を適用し、 entry 固有部分を共通ブロックから除去する。
 #      (b)(c) はいずれも除去前に除去対象の文言が実在することを検証し、 実在しなければ fail
-#      する (#187、 詳細は上記 (b)(c) の各定義を参照)。
+#      する (詳細は上記 (b)(c) の各定義を参照)。
 #   3. 正規化後の 4 entries のテキストが byte-identical であれば pass。
 #   4. 一致しない場合は fail し、 どの entry がどこで基準 (issue create を基準とする)
 #      から乖離しているかを diff 形式で報告する。
 #
 # ============================================================================
-# チェック 3 (新設, #185): gh pr create entry の Step 3 (Closes 検証) ブロック構造チェック
+# チェック 3: gh pr create entry の Step 3 (Closes 検証) ブロック構造チェック
 # ============================================================================
 #
 # 背景:
 #   チェック 2 の正規化 (norm_b) は gh pr create 固有の Step 3 (Closes 検証) ブロックを、
 #   共通ブロック比較の対象から除外するために丸ごと除去する。 そのため Step 3 ブロックの
 #   中身自体 (判定手順の記述) がどのように破損しても、 除去後の共通ブロック比較 (チェック 2)
-#   では検出できない (#185 の false pass 事例: 判定手順が丸ごと別の文言に置き換わっても、
+#   では検出できない (例: 判定手順が丸ごと別の文言に置き換わっても、
 #   開始・終了の見出しパターンさえ残っていれば norm_b はブロックを除去でき、 共通ブロック
 #   比較は pass してしまう)。 チェック 3 はこの盲点を埋めるため、 除去される前の Step 3
 #   ブロックの中身を独立に検証する。
@@ -164,10 +164,10 @@
 #     除去する対象と同一のブロックを、 除去前の raw prompt から抽出して用いる)。
 #
 # 契約:
-#   1. 期待構造のソース・オブ・トゥルースは本スクリプト内の定数とする (#185 の合意事項)。
+#   1. 期待構造のソース・オブ・トゥルースは本スクリプト内の定数とする。
 #      README 等の外部文書は解析しない。 この定数は、 Step 3 の判定手順のうち以下の要素を
-#      代表する文字列のリストとして持つ (具体的な文字列は Phase B で現物の Step 3 本文
-#      から選定する):
+#      代表する文字列のリストとして持つ (具体的な文字列は実装本体のチェック 3 にある
+#      step3_required_keywords.txt の heredoc で定義する):
 #        - `.git` を Read tool で読む記述
 #        - `gitdir:` 形式 (worktree) の解決に関する記述
 #        - `ref: refs/heads/<branch>` 形式の判定に関する記述
@@ -287,7 +287,7 @@ delegation-rules
 delegation-instruction
 escalation"
 
-# チェック 2 前提検証 (#186) で使う、 期待される type:agent entry 数。
+# チェック 2 前提検証で使う、 期待される type:agent entry 数。
 EXPECTED_AGENT_ENTRIES=4
 
 overall_fail=0
@@ -422,7 +422,7 @@ fi
 echo ""
 echo "== check 2: hooks.json 4 type:agent entries common block =="
 
-# --- 前提検証 (#186): type:agent entry 数と prompt 非空を、抽出・正規化・比較より前に検証する ---
+# --- 前提検証: type:agent entry 数と prompt 非空を、抽出・正規化・比較より前に検証する ---
 #     jq が非 0 で終了した場合 (.hooks.PreToolUse 欠落など)、 $(...) はその exit status を
 #     引き継ぐ (代入のみの simple command の $? は最後に実行した command substitution の
 #     exit status になる、 POSIX 規定) ため、 ここで明示的に検査する。 検査を怠ると jq 失敗時に
@@ -495,10 +495,10 @@ for name in raw_issue_create raw_issue_edit raw_pr_create raw_pr_edit; do
   fi
 done
 
-# --- 除去系の実在検証 (#187、 #185 のチェック 3 と対象ブロックを共有) ---
+# --- 除去系の実在検証 (チェック 3 と対象ブロックを共有) ---
 #     norm_b (Closes 検証 Step の除去) が対象とするブロックそのものを、 除去 (norm_b_pr_create_only
 #     の呼び出し) より前に抽出し、 実在を確認する。 このブロックはチェック 3 の入力としても
-#     再利用する (#185 のチェック 3 の対象ブロックと同一であるため)。
+#     再利用する (チェック 3 の対象ブロックと同一であるため)。
 sed -n '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!p;}' "$WORKDIR/raw_pr_create.txt" > "$WORKDIR/step3_block.txt"
 if [ ! -s "$WORKDIR/step3_block.txt" ]; then
   echo "ERROR: gh pr create entry の prompt から '## Step 3: Closes 検証' ブロックが抽出できませんでした (norm_b の除去対象が実在しません)。見出しの変更または削除の可能性があります。" >&2
@@ -527,7 +527,7 @@ norm_a() {
 #     除去後に Step 4 (返り値) を Step 3 に読み替え、 Step 番号参照の文言も他 3 entries と
 #     揃える (Closes Step 追加に伴う不可避な繰り下がりであり、 意図的なドリフトではないため)。
 #     除去対象の実在検証は上記 (raw 抽出直後の step3_block.txt 抽出 + 非空チェック) で
-#     完了済みのため、 ここでは除去のみを行う (#187)。
+#     完了済みのため、 ここでは除去のみを行う。
 norm_b_pr_create_only() {
   sed -e '/^## Step 3: Closes 検証/,/^## Step 4: 返り値/{/^## Step 4: 返り値/!d;}' \
     -e 's/^## Step 4: 返り値/## Step 3: 返り値/' \
@@ -570,7 +570,7 @@ fi
 echo ""
 echo "== check 3: gh pr create Step 3 (Closes 検証) block structure =="
 
-# 期待構造のソース・オブ・トゥルース (#185): Step 3 の判定手順のうち 7 要素を代表する
+# 期待構造のソース・オブ・トゥルース: Step 3 の判定手順のうち 7 要素を代表する
 # 文字列のリスト。 README 等の外部文書は参照しない。 このスモークチェックは Step 3 ブロックが
 # これらの文字列を含むかどうかのみを見る (判定ロジックの意味的な等価性は検証しない)。
 cat > "$WORKDIR/step3_required_keywords.txt" <<'KEYWORDS_EOF'

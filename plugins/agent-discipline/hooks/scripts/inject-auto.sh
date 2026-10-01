@@ -8,12 +8,15 @@
 # 視認性・メンテナンス性が下がるため分離)。先頭の保守者向け HTML コメントと直後の空行は
 # 除いて配送する (lib/prompt-body.sh)。
 #
-# auto 以外では何もしない。during 系 (実装自走の判断境界) と他の常時適用ルール
-# (物理層 / before 系 / closing keyword) は inject-always.sh が SessionStart で配送する
-# (v0.1.1 で during 系を inject-always 側に移動)。
+# auto 以外では何もしない。auto では配送済みマーカーを持たず、long-running session で
+# 方針が薄れないよう UserPromptSubmit のたびに注入する。
 #
-# v0.1.1 で旧来の PostToolBatch 経路 (+ once-per-turn dedup logic) を撤去。 per-turn 2 回
-# inject (UserPromptSubmit + PostToolBatch) が 1 回 (UserPromptSubmit のみ) に削減された。
+# permission_mode に依らない常時適用ルールと分業規律は、本スクリプトではなく次の
+# スクリプトが配送する:
+#   - 常時適用ルールの part 1 (always-1.md) … inject-always.sh (SessionStart)
+#   - 常時適用ルールの part 2 / part 3 (always-2.md / always-3.md) … inject-rules-part.sh
+#     (UserPromptSubmit)
+#   - 分業規律 (discipline.md) … inject-discipline.sh (UserPromptSubmit)
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0

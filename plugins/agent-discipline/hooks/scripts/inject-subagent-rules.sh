@@ -1,5 +1,5 @@
 #!/bin/sh
-# inject-subagent-rules.sh — agent-discipline plugin の SubagentStart hook スクリプト (issue #221)
+# inject-subagent-rules.sh — agent-discipline plugin の SubagentStart hook スクリプト
 #
 # I/O 契約:
 #   stdin  : SubagentStart hook input JSON (本 plugin では内容を使用しない)
