@@ -18,6 +18,41 @@
 # POSIX sh と POSIX awk だけを使い、bash 3.2 (macOS)・dash・BSD awk・GNU awk で動かす。
 
 read_ui_discipline_prompt() {
-  # 未実装。上記の規則で本文を書く処理に置き換える。
-  return 1
+  _ui_discipline_prompt_file=$1
+
+  [ -r "$_ui_discipline_prompt_file" ] || return 1
+
+  awk '
+    { lines[NR] = $0 }
+    END {
+      start = 1
+      if (NR > 0 && substr(lines[1], 1, 4) == "<!--" && lines[1] !~ /^<!-- (rule|subagent-rule):/) {
+        close_line = 0
+        rest = ""
+        for (i = 1; i <= NR; i++) {
+          text = (i == 1) ? substr(lines[i], 5) : lines[i]
+          pos = index(text, "-->")
+          if (pos > 0) {
+            close_line = i
+            rest = substr(text, pos + 3)
+            break
+          }
+        }
+        if (close_line > 0) {
+          if (rest ~ /^[ \t]*$/) {
+            start = close_line + 1
+          } else {
+            lines[close_line] = rest
+            start = close_line
+          }
+          while (start <= NR && lines[start] ~ /^[ \t]*$/) {
+            start++
+          }
+        }
+      }
+      for (i = start; i <= NR; i++) {
+        print lines[i]
+      }
+    }
+  ' "$_ui_discipline_prompt_file" 2>/dev/null
 }

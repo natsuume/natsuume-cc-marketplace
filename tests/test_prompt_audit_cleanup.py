@@ -812,9 +812,18 @@ class UiDisciplineAvoidDefaultsTest(ContractTestCase):
                 if satisfies(example, word):
                     self.fail(f"{label}: 避ける既定に該当する「{describe(word)}」を含む")
 
+    @staticmethod
+    def ui_rules_body() -> str:
+        """ui-rules.md のうち注入される本文 (先頭の保守者向けコメントを除いたもの)。
+
+        注入スクリプトは先頭コメントと直後の空行を除き、`$(...)` で読むため末尾の改行も
+        注入しない。
+        """
+        text = read(UI_RULES)
+        return text[len(header_comment(text)) :].strip("\n")
+
     def test_session_start_injection_fits_the_limit(self) -> None:
-        # inject-ui-rules.sh は `$(cat ...)` で読むため、末尾の改行は注入されない。
-        injected = read(UI_RULES).rstrip("\n")
+        injected = self.ui_rules_body()
         self.assertLessEqual(
             utf16_length(injected),
             self.INJECTION_LIMIT,
@@ -823,7 +832,8 @@ class UiDisciplineAvoidDefaultsTest(ContractTestCase):
 
     @unittest.skipUnless(shutil.which("jq"), "SubagentStart の注入文の生成には jq が必要")
     def test_subagent_start_injection_fits_the_limit(self) -> None:
-        """SubagentStart の注入文 (前置き注記 + 空行 + ui-rules.md) を hook を実行して計測する。"""
+        """SubagentStart の注入文 (前置き注記 + 空行 + ui-rules.md の本文) を hook を実行して
+        計測する。"""
         result = subprocess.run(
             ["/bin/sh", str(UI_SUBAGENT_INJECTOR)],
             input="{}",
@@ -839,7 +849,7 @@ class UiDisciplineAvoidDefaultsTest(ContractTestCase):
         )
         context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
         self.assertIn(
-            strip_whitespace(read(UI_RULES)),
+            strip_whitespace(self.ui_rules_body()),
             strip_whitespace(context),
             "SubagentStart の注入文に ui-rules.md の本文が含まれない",
         )

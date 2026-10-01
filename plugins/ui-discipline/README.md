@@ -4,7 +4,7 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## バージョン
 
-v0.4.10
+v0.5.0
 
 ## 概要
 
@@ -15,17 +15,31 @@ UI 実装は「共通化すべきか」「表示/非表示をどう決めるか�
 | 層 | 配送経路 | 内容 |
 |---|---|---|
 | メインセッション | `SessionStart` (`inject-ui-rules.sh`) | `hooks/prompts/ui-rules.md` の 10 ルールを `additionalContext` として注入 |
-| subagent | `SubagentStart` (`inject-ui-rules-subagent.sh`) | 同一の `ui-rules.md` に `ui-rules-subagent-preamble.md` を連結して注入 (Claude Code 2.0.43+) |
+| subagent | `SubagentStart` (`inject-ui-rules-subagent.sh`) | 同一の `ui-rules.md` に `ui-rules-subagent-preamble.md` を連結して注入。UI を実装しない agent は除外する (Claude Code 2.0.43+) |
 | ui-patterns Skill | `skills/ui-patterns/SKILL.md` | 10 ルールそれぞれに対応する具体的なコード例・チェックリストを提供 |
 
-常時注入層はルールの「意図・指示・境界」のみを圧縮して伝え、コード例やチェックリストの詳細実装パターンは ui-patterns skill 側が担当することで、常時消費されるトークン量を抑えています。
+常時注入層はルールの「意図・指示・境界」のみを圧縮して伝え、コード例やチェックリストの詳細実装パターンは ui-patterns skill 側が担当することで、常時消費されるトークン量を抑えています。prompt ファイル先頭の保守者向け HTML コメントは、注入時に除きます (`hooks/scripts/lib/prompt-body.sh`)。
 
 ## インストール
 
+UI のある project でだけ有効にします。marketplace を追加し、UI のある project のディレクトリで project scope にインストールします。
+
 ```bash
 claude plugin marketplace add natsuume/natsuume-cc-marketplace
-claude plugin install ui-discipline@natsuume-plugins
+claude plugin install ui-discipline@natsuume-plugins --scope project
 ```
+
+project scope のインストールは、その project の `.claude/settings.json` の `enabledPlugins` に次の設定を書きます。手で書く場合も同じ形です。この設定をコミットすると、その project で作業する全員に有効になります。
+
+```json
+{
+  "enabledPlugins": {
+    "ui-discipline@natsuume-plugins": true
+  }
+}
+```
+
+user settings (`~/.claude/settings.json`) で有効にすると (`--scope` を省いた `claude plugin install` は user scope にインストールします)、UI の無い project を含むすべての project のセッションと subagent に UI 実装規律が注入されます。UI の無い project で注入を止めるには、user scope の有効化を外してください。
 
 本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
@@ -52,8 +66,8 @@ claude plugin install ui-discipline@natsuume-plugins
 
 | Hook 名 | イベント | 説明 |
 |---|---|---|
-| `inject-ui-rules` | SessionStart | `hooks/prompts/ui-rules.md` の全文を `additionalContext` として常時注入する。モデル判定・permission_mode 判定等の条件分岐は持たない |
-| `inject-ui-rules-subagent` | SubagentStart | 同一の `ui-rules.md` に subagent 向け前置き注記 (`ui-rules-subagent-preamble.md`) を連結して全 subagent 起動時に注入する。注記中の ui-patterns SKILL.md への参照は注入時に絶対パスへ解決する。Claude Code 2.0.43 以降で有効 |
+| `inject-ui-rules` | SessionStart | `hooks/prompts/ui-rules.md` の本文 (先頭の保守者向けコメントを除く) を `additionalContext` として常時注入する。モデル判定・permission_mode 判定等の条件分岐は持たない |
+| `inject-ui-rules-subagent` | SubagentStart | 同一の `ui-rules.md` に subagent 向け前置き注記 (`ui-rules-subagent-preamble.md`) を連結して subagent 起動時に注入する。hook 入力の `agent_type` が除外リストにある場合は注入しない。注記中の ui-patterns SKILL.md への参照は注入時に絶対パスへ解決する。Claude Code 2.0.43 以降で有効 |
 
 ### Skills
 
@@ -74,6 +88,25 @@ UI 実装規律は UI を持つプロジェクトでのみ意味を持ち、バ�
 ### なぜ SubagentStart でも注入するか
 
 agent-discipline の分業規律では、明確化された仕様に基づく実装は subagent へ委任するのが既定です。つまり UI 実装の実作業者は多くの場合 subagent であり、SessionStart 注入だけでは規律が実装しないメインセッションにしか届きません。SubagentStart 注入により、実作業者に規律が構造的に届きます (委任指示への埋め込みというメインセッション側の遵守に依存しない配送)。
+
+### なぜ一部の agent を SubagentStart の注入から除外するか
+
+UI 実装規律は UI を実装する agent にだけ意味があります。レビュー・外部モデルの実行・読み取り専用の調査・設定変更を担う agent は UI を実装しないため、注入しても規律は使われず、context を消費するだけです。`inject-ui-rules-subagent.sh` は、hook 入力の `agent_type` が次の除外リストと完全一致 (大文字・小文字を区別する) するとき、何も出力せずに終了します。
+
+| agent_type | 定義元 |
+|---|---|
+| `pre-push-review:code-reviewer` | pre-push-review plugin |
+| `pre-push-review:security-reviewer` | pre-push-review plugin |
+| `pre-push-codex-review:codex-reviewer` | pre-push-codex-review plugin |
+| `pre-merge-cross-review:codex-reviewer` | pre-merge-cross-review plugin |
+| `cross-model-advisor:codex-advisor-runner` | cross-model-advisor plugin |
+| `cross-model-advisor:codex-rescue-runner` | cross-model-advisor plugin |
+| `cross-model-advisor:codex-review-runner` | cross-model-advisor plugin |
+| `Explore` | Claude Code 組み込み |
+| `claude-code-guide` | Claude Code 組み込み |
+| `statusline-setup` | Claude Code 組み込み |
+
+除外リストは `inject-ui-rules-subagent.sh` の `is_excluded_agent_type` の 1 箇所で定義しています。除外リストに無い agent (general-purpose、Plan、他の plugin の agent など) には注入します。`agent_type` が無い・空の入力と、JSON として読めない入力では、除外を判定できないため注入します。
 
 ### なぜ subagent 専用テンプレートを複製しないか
 
@@ -98,7 +131,9 @@ ui-discipline/
 │   │   └── ui-rules-subagent-preamble.md
 │   └── scripts/
 │       ├── inject-ui-rules.sh
-│       └── inject-ui-rules-subagent.sh
+│       ├── inject-ui-rules-subagent.sh
+│       └── lib/
+│           └── prompt-body.sh
 ├── skills/
 │   └── ui-patterns/
 │       └── SKILL.md

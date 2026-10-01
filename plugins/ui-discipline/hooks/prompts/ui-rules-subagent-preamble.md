@@ -1,12 +1,14 @@
 <!--
   ui-discipline: subagent 向け前置き注記
-  SubagentStart hook (inject-ui-rules-subagent.sh) が ui-rules.md の直前に連結して全 subagent に注入する。
+  SubagentStart hook (inject-ui-rules-subagent.sh) が ui-rules.md の直前に連結して subagent に注入する
+  (UI を実装しない agent は除外する。除外リストは inject-ui-rules-subagent.sh に定義する)。
   本体ルールは SessionStart と単一ソース (ui-rules.md) を共有し、subagent 向けの差分は本注記のみに閉じる
   (2 ファイル間の rule 同期・drift を構造的に排除するため)。
   本文中のプレースホルダ (波括弧 2 重の UI_PATTERNS_SKILL_PATH) は injector が ui-patterns skill の
   SKILL.md 絶対パスへ置換する (subagent の実行環境では ${CLAUDE_PLUGIN_ROOT} が空になりうるため、
-  注入時に解決済みパスを埋め込む)。このヘッダコメントも注入本文に含まれて配送されるため、
-  ここには置換対象のリテラル表記を書かない。
+  注入時に解決済みパスを埋め込む)。
+  このヘッダコメントは保守者向けのメモで、注入時に除かれる
+  (hooks/scripts/lib/prompt-body.sh の read_ui_discipline_prompt)。
 -->
 
 # ui-discipline: subagent 向け注記
