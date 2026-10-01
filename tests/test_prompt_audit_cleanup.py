@@ -28,8 +28,8 @@
   プラグイン」を参照する。always-2 は issue body を契約書とみなす文を太字・「絶対に」なしの
   平叙で書き、節番号 3.1 を保つ。plan ファイルの置き場所を固定しない。closing keyword の
   節は作者の規約 3 点・適用範囲・例だけを書き、GitHub の一般知識を書かない。always-3 の
-  3 秒待機は、harness が foreground の sleep を拒否する場合に background 実行で待つ手順を
-  持つ。
+  rule:issue-claim は、claim 用のスクリプトが行う 3 秒待機を手作業の `sleep 3` (background
+  実行による待機を含む) として指示しない。
 - ``AgentDisciplineDocumentTest`` (agent-discipline の skill・README・暫定ルール):
   issue-start は closing keyword の詳細として有効なキーワード一覧を挙げない。issue-plan の
   GitHub 仕様の記述 2 箇所に確認日がある。README は always-3 の思考量の文を説明しない。
@@ -608,25 +608,23 @@ class AgentDisciplinePromptTest(ContractTestCase):
             with self.subTest(rule=rule):
                 self.assert_requirements(label, block, requirement, rule)
 
-    def test_claim_wait_has_a_background_fallback(self) -> None:
-        """3 秒待機は残し、harness が foreground の sleep を拒否する場合に Bash の background
-        実行で `sleep 3` を走らせ、完了通知を待つ手順を同じ手順項目に書く。"""
-        label = f"{display_path(ALWAYS_3)} の rule:issue-claim 節の 3 秒待機の項目"
-        section = markdown_section(rule_block(read(ALWAYS_3), "issue-claim"), "### 着手手順")
-        item = top_level_list_item_containing(section, "sleep 3")
-        self.assert_scope_found(label, item, "`sleep 3` を含む手順項目が無い")
-        self.assert_requirements(
-            label,
-            item,
-            (
-                "3 秒",
-                re.compile(r"(?i)foreground|フォアグラウンド"),
-                re.compile(r"拒否|拒ま|拒む"),
-                re.compile(r"(?i)background|バックグラウンド"),
-                "通知",
-            ),
-            "foreground の sleep が拒否された場合に background 実行で待つ手順",
-        )
+    def test_claim_wait_is_not_a_manual_step(self) -> None:
+        """3 秒待機は claim 用のスクリプトの中の `sleep 3` で行うため、rule:issue-claim の節は
+        手作業の `sleep 3` と、foreground の sleep が拒否された場合の background 実行による
+        待機を指示しない。`sleep` に触れる文は、スクリプトが行う待機の説明 (「スクリプト」を
+        含む文) に限る。"""
+        label = f"{display_path(ALWAYS_3)} の rule:issue-claim 節"
+        block = rule_block(read(ALWAYS_3), "issue-claim")
+        self.assert_scope_found(label, block, "`<!-- rule:issue-claim -->` が無い")
+        background_wait = re.compile(r"(?i)background|バックグラウンド|foreground|フォアグラウンド")
+        manual_waits = [
+            sentence.strip()[:120]
+            for sentence in japanese_sentences(block)
+            if (satisfies(sentence, "sleep") and not satisfies(sentence, "スクリプト"))
+            or satisfies(sentence, background_wait)
+        ]
+        if manual_waits:
+            self.fail(f"{label}: 手作業の待機を指示する文がある: {' / '.join(manual_waits)}")
 
 
 class AgentDisciplineDocumentTest(ContractTestCase):

@@ -23,36 +23,17 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 ### 着手手順
 
-以下を上から順に実行する:
+以下を上から順に実行する。step 1〜5 は claim 用のスクリプトが行う:
 
-1. **早期判定**: `gh issue view <N> --json labels,comments` で確認
-   - `ai:in-progress` ラベル付与済 or 未削除の claim comment 存在 → **撤退** (= 別 issue 候補をユーザに提示するか、別 issue に切替え)
-   - いずれも無ければ次のステップへ
-
-2. **claim comment を投稿**:
-   ```
-   gh issue comment <N> --body "🔒 ai:claim branch=<prefix>/issue-<N>-<slug> session=<セッションID> ts=<UTC ISO 8601>"
-   ```
-   - branch 名は step 6 で使う名前を先に決めてここに埋め込む (= claim と branch を 1:1 で対応させる)。issue-start skill セクション 1.1 の手順で既存の branch を探して見つかった名前を使い、無ければ同手順 6 で次の規約に沿って決める (同手順の停止条件では投稿せず停止する)
-   - branch 名規約: `<prefix>/issue-<N>-<slug>` (`<prefix>` = `feat` / `fix` / `chore` / `docs` / `refactor` 等、`<slug>` = issue タイトルから kebab-case で抽出した短縮形)
-   - 例: `feat/issue-12-add-auth`, `fix/issue-25-null-deref`
-   - `<セッションID>` は環境変数 `CLAUDE_CODE_SESSION_ID` の値 (Claude Code がセッション毎に付与する UUID)。未設定の場合のみ `uuidgen` で生成した値を代用し、同一セッション中は同じ値を使い続ける
-   - `session=` は「自分の claim か」の判定キー。branch 名は issue 番号 + タイトル slug から決定的に導出され他 session と同名になりうるため、`branch=` / `ts=` (自己申告) / comment author (同一 GitHub アカウント) では自他判別できない
-
-3. **3 秒待機**: 他 session の claim comment が一覧に反映されるまでの遅れを吸収する (`sleep 3`)。harness が foreground の `sleep` を拒否する場合は、Bash の background 実行で `sleep 3` を走らせ、完了通知を待ってから step 4 に進む
-
-4. **comment 再取得 + 先着判定**: REST GET で comment 一覧を全ページ再取得:
-   ```
-   gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'
-   ```
-   - REST GET を使う理由: レスポンスが数値 `id`・`created_at`・`body` を 1 呼び出しで返す (`gh issue view <N> --json comments` の `id` は GraphQL node ID (`IC_...`) のため数値比較に使えない)。`{owner}` / `{repo}` placeholder は gh が current repository から解決する。一覧は id 昇順・既定 30 件/ページのため、`--paginate` + `per_page=100` で全ページを取得する (直近の自分の claim が第 1 ページに含まれない可能性がある)
-   - 自分の claim は body の `session=` 値が自分のセッション ID と一致する comment として識別する
-   - 先着判定: claim comment (body が `🔒 ai:claim ` で始まる comment) のうち **`(created_at, 数値 id)` の辞書順最小** を先着とする。`created_at` は server-side 付与値であり、`ts=` 自己申告値は判定に使わない
-   - 先着が自分でない → **競合発生**。撤退する (後片付けは「撤退と着手中断の後片付け」節)
-   - REST GET の失敗 (非ゼロ終了・ページ取得不能)、または取得結果に自分の claim が存在しない場合は「競合なし」と扱わず、確保を確定せず停止してユーザに報告する (fail-closed)
-   - 先着が自分なら次のステップへ
-
-5. **確保の確定 + ラベル付与**: 先着判定で自分が先着と確認できた時点で確保が確定する。人間向けの目印として `gh issue edit <N> --add-label ai:in-progress` を付与する
+- **branch 名を決める**: step 6 で使う名前を先に決めてスクリプトに渡す (= claim と branch を 1:1 で対応させる)。issue-start skill セクション 1.1 の手順で既存の branch を探して見つかった名前を使い、無ければ同手順 6 で次の規約に沿って決める (同手順の停止条件ではスクリプトを実行せず停止する)
+  - branch 名規約: `<prefix>/issue-<N>-<slug>` (`<prefix>` = `feat` / `fix` / `chore` / `docs` / `refactor` 等、`<slug>` = issue タイトルから kebab-case で抽出した短縮形)
+  - 例: `feat/issue-12-add-auth`, `fix/issue-25-null-deref`
+- **step 1〜5 (claim 用のスクリプト)**: `'{{CLAIM_ISSUE_SCRIPT_PATH}}' <N> '<branch>'` を実行する。スクリプトは早期判定 (step 1)・claim comment の投稿 (step 2)・3 秒待機 (step 3)・先着判定 (step 4)・ラベル付与 (step 5) を行い、結果を stdout の 1 行と exit code で返す。このファイルを直接 Read したなどでパスがプレースホルダのままの場合は、配送メモの参照パス (prompts ディレクトリ) から見た `../../skills/issue-start/scripts/claim-issue.sh` を使う
+  - セッション ID は環境変数 `CLAUDE_CODE_SESSION_ID` の値をスクリプトが使う。未設定の場合は `uuidgen` で生成した値を `--session-id` で渡し、同一セッション中は同じ値を使い続ける
+  - 自分の claim は claim comment の `session=` の値で識別する。先着は `ts=` (自己申告) ではなく GitHub が付ける順序 (`created_at` と数値 comment id) で決まる
+  - exit 0 なら確保として step 6 へ進む。stdout に `label=failed` があれば、ラベル付与の失敗をユーザに 1 行で報告する
+  - exit 1 なら撤退し、撤退理由 (stdout の `reason=`) をユーザに 1 行で報告する
+  - exit 2 なら停止し (投稿済みの自分の claim は残す)、stdout の `reason=` をユーザに報告する (「競合なし」と扱わない)
 
 6. **作業 branch を用意**し、通常の implementation フローへ移行する (`rule:tdd-two-phase` に従い、Phase A の commit を push した後に draft PR を作る。既存の draft PR があればそれを使う)。`git fetch --prune origin` の後 (失敗したら停止してユーザに報告)、同名の branch の有無で分ける (remote 側は prune 後の remote-tracking ref `origin/<branch>` で判定する):
    - 無い: 中断した別 issue の commit を引き継がないよう、最新の default branch を起点に作る: `git switch -c <prefix>/issue-<N>-<slug> --no-track origin/<default-branch>` (`--no-track` は upstream を default branch にしないため)
@@ -74,12 +55,9 @@ GitHub API には真の atomic compare-and-swap がほぼ無いため、`ai:in-p
 
 ### 撤退と着手中断の後片付け
 
-**撤退** (step 1 または 4 で撤退と判定した場合) は、作業 branch を作る前なので次の 2 つだけを行う:
+**撤退** (スクリプトが exit 1 を返した場合) は作業 branch を作る前で、自分で削除するものは無い: 早期判定の撤退ではまだ claim comment を投稿しておらず、先着判定で負けた (lost-race) 場合の自分の claim comment はスクリプトが削除済みである。ユーザに撤退理由を **1 行で必ず報告** する (例: 「issue #12 は他 session が先着のため撤退しました」)。auto mode 中でもこの報告は省略しない (= ユーザが進捗状況を把握できなくなるため)
 
-1. 自分の claim comment があれば削除: `gh api -X DELETE /repos/<owner>/<repo>/issues/comments/<comment-id>`
-2. ユーザに撤退理由を **1 行で必ず報告** する (例: 「issue #12 は他 session が先着のため撤退しました」)。auto mode 中でもこの報告は省略しない (= ユーザが進捗状況を把握できなくなるため)
-
-**着手中断** (確保の確定後に作業をやめる場合) は、自分の claim comment だけを削除する。作業 branch (local / remote)・draft PR・ラベルは再開のために残す。確保の判定に branch を使わないため、branch を削除する必要は無い。
+**着手中断** (確保の確定後に作業をやめる場合) は、自分の claim comment だけを削除する (`gh api -X DELETE 'repos/{owner}/{repo}/issues/comments/<comment-id>'`。id はスクリプトの stdout の `comment_id=`)。作業 branch (local / remote)・draft PR・ラベルは再開のために残す。確保の判定に branch を使わないため、branch を削除する必要は無い。
 
 ### よくある誤操作と回避
 

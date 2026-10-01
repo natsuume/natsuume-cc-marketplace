@@ -5,7 +5,7 @@ description: 「issue に着手する」「issue の実装を始める」「issu
 
 # issue-start
 
-issue 駆動開発における **着手・実装開始フェーズ** の詳細手順です。常時適用ルールとして配送される原則 (`rule:issue-claim` / `rule:tdd-two-phase` / `rule:closing-keyword`) を前提に、本 skill はそれらを実行するための分岐判定・具体的な手順を提供します。常時注入ルールの手順本体、特に安全機構である `rule:issue-claim` の排他制御はここでは複製せず、参照するに留めます。
+issue 駆動開発における **着手・実装開始フェーズ** の詳細手順です。常時適用ルールとして配送される原則 (`rule:issue-claim` / `rule:tdd-two-phase` / `rule:closing-keyword`) を前提に、本 skill はそれらを実行するための分岐判定・具体的な手順を提供します。常時注入ルールの手順本体はここでは複製せず、参照するに留めます。`rule:issue-claim` の step 1〜5 は、本 skill の `scripts/claim-issue.sh` が行います。
 
 ## 1. pick-up 分岐
 
@@ -22,11 +22,11 @@ gh pr list --head '<branch>'
   - 明示指示で挙げられた branch 名は、`<prefix>/issue-<N>-<slug>` の命名規約に合わなくてもそのまま使います
   - issue 番号だけが挙げられた場合は、セクション 1.1 の手順で branch を決めます
   - 対象の branch が local / remote のどちらにも無い場合と、セクション 1.1 の手順で新しい名前を決めた場合に限り、新規着手として `rule:issue-claim` の step 1 から実行します
-- 明示指示が無い場合 → 既存の branch / open PR の有無に依らず、セクション 2 の排他制御手順に進みます。`rule:issue-claim` の step 2 でセクション 1.1 の手順で既存の branch を探し、見つかればその名前を claim に使い、確保できたら step 6 でその branch に switch して、同じ基準で Phase A / Phase B から再開します
+- 明示指示が無い場合 → 既存の branch / open PR の有無に依らず、セクション 2 の排他制御手順に進みます。`rule:issue-claim` の着手手順でスクリプトを実行する前に、セクション 1.1 の手順で既存の branch を探し、見つかればその名前を claim に使い、確保できたら step 6 でその branch に switch して、同じ基準で Phase A / Phase B から再開します
 
 ### 1.1 既存 branch の探し方
 
-`rule:issue-claim` の step 2 (claim 経路) と、issue 番号だけを挙げた明示指示では、次の手順で issue の既存 branch を決めます。明示指示でユーザが branch 名を挙げた場合は、この手順を使わずその名前をそのまま使います。
+`rule:issue-claim` の着手手順の branch 名を決める段階 (claim 経路) と、issue 番号だけを挙げた明示指示では、次の手順で issue の既存 branch を決めます。明示指示でユーザが branch 名を挙げた場合は、この手順を使わずその名前をそのまま使います。
 
 1. `git ls-remote --heads origin '*/issue-<N>-*'` と `git branch --list '*/issue-<N>-*'` を実行します。パターンは branch 名の先頭の `<prefix>/issue-<N>-` に一致させ、slug に issue 番号を含む別 issue の branch を拾わないようにします。どちらかが失敗したら「一致 0 件」とは扱わず、claim comment を投稿せず停止してユーザに報告します
 2. 2 つの結果を branch 名でまとめます。local と remote の同名は 1 つと数えます
@@ -39,17 +39,26 @@ gh pr list --head '<branch>'
 
 ### 1.2 明示指示で step 1 から実行するときの前の作業の残り
 
-明示指示があっても、対象の branch が local / remote のどちらにも無い場合と、セクション 1.1 の手順で新しい名前を決めた場合は、`rule:issue-claim` の step 1 から実行します。このとき step 1 で前の作業の `ai:in-progress` ラベルや claim comment が見つかることがあるため、次の手順で進めます。明示指示が無い場合は、この手順を使わず step 1 の早期判定に従います。
+明示指示があっても、対象の branch が local / remote のどちらにも無い場合と、セクション 1.1 の手順で新しい名前を決めた場合は、`rule:issue-claim` の step 1 から実行します。このとき claim 用のスクリプトが、前の作業の `ai:in-progress` ラベルや claim comment を早期判定で見つけることがあるため、次の手順で進めます。明示指示が無い場合は、この手順を使わず、スクリプトの exit 1 に従って撤退します。
 
-1. step 1 の早期判定では、comment を step 4 と同じ REST GET (`gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'`) の 1 回で取得し、その結果から確認の対象と数値 comment id を決めます (`gh issue view` の `id` は GraphQL node ID で、step 4 の id と一致しないため)。ラベルは `gh issue view <N> --json labels` で確認します。この REST GET が失敗した場合 (非ゼロ終了・ページ取得不能) は、ユーザに確認せずに停止して報告します (step 4 と同じ fail-closed)
-2. step 1 で `ai:in-progress` ラベルか claim comment が見つかったら、撤退せずに停止します。確認の対象は、見つかったラベルと、すべての claim comment です (`session=` の無い claim comment と、`session=` の値が自分のセッション ID と一致する claim comment も含めます)。確認の対象のラベルと claim comment (数値 comment id と本文) を示して、前の作業の残りかどうかを `AskUserQuestion` でユーザに確認します。どちらも見つからなければ、step 2 に進みます
-3. 確認の対象のすべてが残りだと確認された場合に限り、step 2 で claim comment を投稿して step 3 以降に進みます。確認の対象のうち 1 件でも、ユーザが残りではない (稼働中の別 session のもの) と答えた場合は、全体を残りではないとして扱い、claim comment を投稿せずに撤退します
-4. step 4 の先着判定では、ユーザが確認した claim comment を数値 comment id で特定して判定の対象から除きます。step 4 で `session=` の値によって自分の claim を識別するときも、確認した claim comment は数値 comment id で特定して自分の claim として扱いません。確認の後に投稿された claim comment は確認の対象に入らないので、除かれません。確認した数値 comment id 以外の claim comment は、投稿された時刻に依らず通常どおり判定します。本文や `session=` の値で照合して除くことはしません
-5. この経路で撤退するときに削除するのは、この経路で自分が投稿した claim comment (数値 comment id で特定します) だけです。確認の対象にしたラベルと claim comment は、`session=` の値が自分のセッション ID と一致していても削除しません (`rule:issue-claim` のラベル削除規律に従い、他 session の claim を削除しないため)。撤退理由は、`rule:issue-claim` の「撤退と着手中断の後片付け」に従ってユーザに 1 行で報告します
+1. スクリプトが exit 1 の `reason=label` か `reason=existing-claim` を返したら、撤退せずに停止します
+2. comment を REST GET (`gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'`) の 1 回で取得し、その結果から確認の対象と数値 comment id を決めます (`gh issue view` の `id` は GraphQL node ID で、スクリプトが使う数値 comment id と一致しないため)。ラベルは `gh issue view <N> --json labels` で確認します。この REST GET が失敗した場合 (非ゼロ終了・ページ取得不能) は、ユーザに確認せずに停止して報告します
+3. 確認の対象は、見つかったラベルと、すべての claim comment (本文が `🔒 ai:claim ` で始まる comment) です (`session=` の無い claim comment と、`session=` の値が自分のセッション ID と一致する claim comment も含めます)。確認の対象のラベルと claim comment (数値 comment id と本文) を示して、前の作業の残りかどうかを `AskUserQuestion` でユーザに確認します
+4. 確認の対象のすべてが残りだと確認された場合に限り、確認した数値 comment id をそれぞれ `--ignore-comment-id` で渡してスクリプトを再実行します。確認したラベルがあれば `--confirmed-leftover` も付けます。確認の対象のうち 1 件でも、ユーザが残りではない (稼働中の別 session のもの) と答えた場合は、全体を残りではないとして扱い、claim comment を投稿せず (スクリプトを再実行せず) に撤退します
+5. 確認の後に投稿された claim comment は確認の対象に入らないので、`--ignore-comment-id` に渡さず、除かれません。確認した数値 comment id 以外の claim comment は、投稿された時刻に依らず通常どおり判定されます。本文や `session=` の値で照合して除くことはしません
+6. 確認の対象にしたラベルと claim comment は、`session=` の値が自分のセッション ID と一致していても削除しません (`rule:issue-claim` のラベル削除規律に従い、他 session の claim を削除しないため)。撤退理由は、`rule:issue-claim` の「撤退と着手中断の後片付け」に従ってユーザに 1 行で報告します
 
 ## 2. 排他制御の参照
 
-明示指示が無い場合の排他制御 (claim comment → 3 秒待機 → 先着判定 → ラベル付与 → 作業 branch の用意) は、常時注入ルール `rule:issue-claim` の手順本体をそのまま実行してください。安全機構のため本 skill 側では手順を複製しません。
+明示指示が無い場合の排他制御は、常時注入ルール `rule:issue-claim` の着手手順に従って実行してください。早期判定・claim comment の投稿・3 秒待機・先着判定・ラベル付与 (step 1〜5) は、本 skill の `scripts/claim-issue.sh` が行います。
+
+```bash
+'<claim-issue.sh の絶対パス>' <N> '<branch>' [--session-id <id>] [--ignore-comment-id <id>]... [--confirmed-leftover]
+```
+
+- スクリプトの絶対パスは、`rule:issue-claim` の配送時に埋め込まれます
+- 結果は stdout の 1 行 (`claimed comment_id=<id>` / `retreat reason=<理由>` / `error reason=<内容>`) と exit code (0 = 確保 / 1 = 撤退 / 2 = 停止) で返ります。exit code ごとの対応は `rule:issue-claim` に従います
+- 入出力契約と境界の挙動の詳細は、スクリプト先頭のコメントにあります
 
 本 skill が担当するのはセクション 1 の pick-up 分岐判定までで、判定後の排他制御の実施責任は `rule:issue-claim` 側にあります。
 

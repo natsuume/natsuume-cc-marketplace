@@ -28,6 +28,21 @@
 # 本文読取失敗時に当該要素が session 中永久欠落する)。マーカー自体の書込も同一ディレクトリ内
 # temp file → mv の atomic 書込にする。
 #
+# ## part 3 のプレースホルダ
+#
+# part 3 を配送するときだけ、本文の `{{CLAIM_ISSUE_SCRIPT_PATH}}` を claim 用のスクリプト
+# (plugin の skills/issue-start/scripts/claim-issue.sh) の絶対パスに置き換える。パスは
+# `cd … && pwd` で得た正規化した形 (`..` を含まない) にする。
+#
+# - スクリプトがある: プレースホルダだけをパスに置き換える (1 行に複数あればすべて)。パスに
+#   awk・正規表現のメタ文字 (`\` `&` 等) が含まれてもそのまま埋め込む。プレースホルダは本文で
+#   single quote に囲まれているため、パスの `'` は `'\''` に置き換えて埋め込む
+# - スクリプトが無い: プレースホルダを含む行全体を「claim 用のスクリプトが見つからないため、
+#   issue への着手をせずユーザーに報告する。」の 1 行に置き換える。part 3 の他の行と rule は
+#   そのまま配送する
+#
+# part 2 は置き換えない。
+#
 # ## 出力 JSON 形状 (配送する場合のみ)
 #
 #   {
@@ -41,6 +56,7 @@
 #
 # - jq 不在 / 不正 stdin / hook_event_name・session_id が空
 # - always-<n>.md が読めない (空文字列を含む)
+# - part 3 のプレースホルダの置き換え (awk) が失敗した、または結果が空文字列
 # - 上記いずれも「無音 exit 0、マーカーは書かない」= 次プロンプトで再試行する
 
 PART="$1"
@@ -91,6 +107,53 @@ PROMPTS_DIR=$(cd "$(dirname "$0")/../prompts" 2>/dev/null && pwd)
 CONTEXT=$(read_agent_discipline_prompt "$PROMPTS_DIR/always-$PART.md")
 if [ -z "$CONTEXT" ]; then
   exit 0
+fi
+
+if [ "$PART" = "3" ]; then
+  # claim 用のスクリプトの正規化した絶対パス。スクリプトが無ければ空文字列。
+  CLAIM_SCRIPT_PATH=""
+  CLAIM_SCRIPT_DIR=$(cd "$SCRIPT_DIR/../../skills/issue-start/scripts" 2>/dev/null && pwd)
+  if [ -n "$CLAIM_SCRIPT_DIR" ] && [ -f "$CLAIM_SCRIPT_DIR/claim-issue.sh" ]; then
+    CLAIM_SCRIPT_PATH="$CLAIM_SCRIPT_DIR/claim-issue.sh"
+  fi
+  # パスは awk の -v (バックスラッシュを解釈する) ではなく ENVIRON で渡し、置換は sub/gsub
+  # (`&` を解釈する) ではなく index/substr で行う (パスのメタ文字をそのまま埋め込むため)。
+  CONTEXT=$(printf '%s\n' "$CONTEXT" | CLAIM_SCRIPT_PATH="$CLAIM_SCRIPT_PATH" awk '
+    BEGIN {
+      placeholder = "{{CLAIM_ISSUE_SCRIPT_PATH}}"
+      raw = ENVIRON["CLAIM_SCRIPT_PATH"]
+      missing = "claim 用のスクリプトが見つからないため、issue への着手をせずユーザーに報告する。"
+      # プレースホルダは single quote の中にあるため、パスの single quote (\047) を
+      # quote を閉じて escape し直す形 (\047 \\ \047 \047) に置き換える。
+      quote = "\047"
+      path = ""
+      while ((position = index(raw, quote)) > 0) {
+        path = path substr(raw, 1, position - 1) quote "\\" quote quote
+        raw = substr(raw, position + 1)
+      }
+      path = path raw
+    }
+    {
+      if (index($0, placeholder) == 0) {
+        print
+        next
+      }
+      if (path == "") {
+        print missing
+        next
+      }
+      line = $0
+      out = ""
+      while ((position = index(line, placeholder)) > 0) {
+        out = out substr(line, 1, position - 1) path
+        line = substr(line, position + length(placeholder))
+      }
+      print out line
+    }
+  ') || exit 0
+  if [ -z "$CONTEXT" ]; then
+    exit 0
+  fi
 fi
 
 OUTPUT=$(jq -n --arg evt "$HOOK_EVENT" --arg ctx "$CONTEXT" '{

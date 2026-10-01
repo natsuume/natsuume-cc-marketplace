@@ -30,7 +30,8 @@
   (1) 出力 JSON は ``{"hookSpecificOutput": {"hookEventName": <event>, "additionalContext":
   <文字列>}}`` だけを持ち、(2) additionalContext に prompt ファイルの先頭コメントが含まれず、
   (3) additionalContext は先頭コメントを除いた本文を各スクリプトの組み立て方で並べたものに
-  一致し、(4) prompt ファイルの rule マーカー (``<!-- rule:<id> -->`` /
+  一致し (inject-rules-part.sh 3 は、プレースホルダ ``{{CLAIM_ISSUE_SCRIPT_PATH}}`` を
+  claim-issue.sh の絶対パスに置き換えたもの)、(4) prompt ファイルの rule マーカー (``<!-- rule:<id> -->`` /
   ``<!-- subagent-rule:<id> -->``) が同じ順序ですべて残る。
 - ``BoundaryCaseDeliveryTest``: plugin の hooks/ を一時ディレクトリへ複製し、対象の prompt
   ファイルを境界ケースの fixture に差し替えて各スクリプトを実行すると、additionalContext は
@@ -76,6 +77,11 @@ DISCIPLINE_HEADING = "# agent-discipline: 分業規律"
 # check-uncommitted-on-session-start.sh が穴埋めするプレースホルダ。
 CWD_PLACEHOLDER = "{{CWD}}"
 DIRTY_PLACEHOLDER = "{{DIRTY}}"
+
+# inject-rules-part.sh 3 が claim 用のスクリプトの絶対パスに置き換えるプレースホルダと、
+# prompts ディレクトリから見たスクリプトの位置 (plugin ディレクトリからの相対パス)。
+CLAIM_SCRIPT_PLACEHOLDER = "{{CLAIM_ISSUE_SCRIPT_PATH}}"
+CLAIM_SCRIPT_RELATIVE = Path("skills") / "issue-start" / "scripts" / "claim-issue.sh"
 
 LEADING_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
 LEADING_BLANK_LINES_PATTERN = re.compile(r"\A(?:[ \t]*\n)+")
@@ -176,6 +182,14 @@ def assemble_single(bodies: list[str], _prompts_dir: Path) -> str:
     return body
 
 
+def assemble_rules_part_3(bodies: list[str], prompts_dir: Path) -> str:
+    """always-3.md の本文のうち、プレースホルダを含む行を、プレースホルダを claim-issue.sh の
+    絶対パス (prompts ディレクトリの plugin 内のもの) に置き換えた行にする。"""
+    (body,) = bodies
+    script_path = prompts_dir.parent.parent / CLAIM_SCRIPT_RELATIVE
+    return body.replace(CLAIM_SCRIPT_PLACEHOLDER, str(script_path))
+
+
 def assemble_discipline(bodies: list[str], _prompts_dir: Path) -> str:
     (body,) = bodies
     return f"{DISCIPLINE_HEADING}\n\n{body}"
@@ -210,7 +224,7 @@ DELIVERIES = (
         args=("3",),
         event="UserPromptSubmit",
         targets=("always-3.md",),
-        assemble=assemble_single,
+        assemble=assemble_rules_part_3,
     ),
     Delivery(
         label="inject-discipline.sh (discipline.md)",
