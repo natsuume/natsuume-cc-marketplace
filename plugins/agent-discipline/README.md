@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v4.1.1
+v4.1.2
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
@@ -19,7 +19,7 @@ Claude Code に「個人の開発スタイル」を一括で適用するため�
 | **排他系** | `UserPromptSubmit` (inject-rules-part.sh 3、part 3/3) | 常時 (`permission_mode` 非依存、session 内初回のプロンプト処理時) | 連続 issue 解決フロー (例: `/goal`) や並列 session 下で同 issue への重複着手を防ぐ。 claim 用のスクリプト (`skills/issue-start/scripts/claim-issue.sh`) が claim comment の先着判定 (GitHub が付与する `created_at` + 数値 comment id の辞書順) で確保を確定し、 常時注入ルールはスクリプトの呼び出し方と exit code ごとの対応を配送する。 claim comment 本文の `session=<セッションID>` により誰の claim かを識別する (`session=` を持たない claim は自分のものと確認できないため他 session 扱いで削除禁止) |
 | **作業手順系** | `UserPromptSubmit` (inject-rules-part.sh 2 / inject-rules-part.sh 3) | 常時 (session 内初回のプロンプト処理時) | ユーザへの質問は `AskUserQuestion` で行う (part 3/3)、 軽微な修正を除き spec-first 2 段階 (Phase A: テスト / 設計骨格 → Phase B: 実装本体) で進める (part 3/3)、 説明文書には現在の内容のみを書き経緯を書かない (part 2/3) |
 | **分割配送** | `SessionStart` (inject-always.sh、part 1 のみ) + `UserPromptSubmit` (inject-rules-part.sh × 2 / inject-discipline.sh) | 常時 (UserPromptSubmit 側の各要素は session ごとに at-most-once) | 常時ルールと分業規律は、メインセッションのモデルに依らず同じ 1 版を配送する。SessionStart で常時ルールの part 1 (`always-1.md`) のみ注入し、残りの part (`always-2.md` / `always-3.md`) と分業規律 (`discipline.md`) は UserPromptSubmit の最初のプロンプト処理時に別要素として個別配送する (1 要素の `additionalContext` を 8K 字以下に保つための分割)。UserPromptSubmit 側の各要素は配送済みマーカーで 1 度だけ配送し、SessionStart のたびにマーカーをリセットして再配送する |
-| **検知系 (gh issue/pr body)** | `PreToolUse` (hooks.json inline `type: agent` 4 entries) | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。claude-sonnet-5 pin |
+| **検知系 (gh issue/pr body)** | `PreToolUse` (hooks.json inline `type: agent` 4 entries) | `gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit` の literal head にだけ反応し、非該当 Bash では model を起動しない | 誘導層 (before 系 2.1 / 3.1) の禁止表現を semantic 判定し違反時 block。`gh pr create` だけ closing keyword も検証する。claude-sonnet-5-5 pin |
 | **after 系** | `UserPromptSubmit` (inject-auto.sh) | `permission_mode == "auto"` | 変更が一段落したら commit → push → PR 作成 → (4 条件 hard gate を満たしたら) マージまで自走 |
 
 加えて、auto セッションで `UserPromptSubmit` 初回発火時に cwd の未コミット変更を分類確認する独立 hook (`check-uncommitted-on-session-start.sh`) を併走させます。
@@ -163,7 +163,7 @@ claude plugin install agent-discipline@natsuume-plugins
 **イベント**: `PreToolUse`
 **matcher**: `Bash`
 **`if` filter**: `Bash(gh issue create:*)` / `Bash(gh issue edit:*)` / `Bash(gh pr create:*)` / `Bash(gh pr edit:*)` の **4 entries に分割**
-**model**: `claude-sonnet-5` に pin (メインセッションのモデルとは独立に、コストと応答時間を抑えるため。詳細は下記「SPOF 緩和の設計」参照)
+**model**: `claude-sonnet-5-5` に pin (メインセッションのモデルとは独立に、コストと応答時間を抑えるため。詳細は下記「SPOF 緩和の設計」参照)
 **timeout**: 60 秒 (公式 default)
 
 **動作**:
@@ -215,9 +215,9 @@ editor 経路 / `--body-file -` (stdin 経路) は Step 1 の扱いのまま判�
 - 全 Bash で発火する LLM hook は、 hook の model が不可用になると全 Bash を PreToolUse error にする非対称 SPOF を持つ
 - 検知層はこれを 2 段で緩和する:
   - **narrow scope (物理層 + Step 0)**: 個別 hook の `if: "Bash(gh <cmd>:*)"` filter で target command に反応するよう **hook config 段階で** prefilter する。 `if` filter は best-effort のため、 `$()` / `$VAR` を含む非対象 Bash でも agent subagent が起動しうるが、 その場合は Step 0 guard が semantic 検証をせず即終了する。 結果として LLM 不可用時の影響は「`gh issue/pr create/edit` に加えて、 `$()` / `$VAR` を含む Bash も PreToolUse error になりうる」 範囲に narrow され、 それ以外の通常の Bash 呼び出し (= `ls` / `git status` / `rg` 等) は影響を受けない
-  - **model pin**: `model` field を明示的に `claude-sonnet-5` に固定する。hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず、pin 値がそのまま dispatch される確定値である。検知層は body の禁止表現を判定する定型作業のため、メインセッションのモデルとは独立に、コストと応答時間を抑えるため sonnet に pin する
+  - **model pin**: `model` field を明示的に `claude-sonnet-5-5` に固定する。hooks.json の `type: agent` hook の `model` field は `CLAUDE_CODE_SUBAGENT_MODEL` env var の影響を受けず、pin 値がそのまま dispatch される確定値である。検知層は body の禁止表現を判定する定型作業のため、メインセッションのモデルとは独立に、コストと応答時間を抑えるため sonnet に pin する
 
-これにより LLM 不可用の影響は「`gh issue/pr create|edit` (と `$()` / `$VAR` を含む Bash) が pin 先の Sonnet 障害時に PreToolUse error になる」範囲に閉じる。メインセッションは Sonnet 以外のモデルで動くため、Sonnet 側の障害時は hook だけが落ちうる。個別 call の transient error (rate limit / network blip) は残るが、これは Claude Code 通常使用の背景ノイズと同レベル
+これにより LLM 不可用の影響は「`gh issue/pr create|edit` (と `$()` / `$VAR` を含む Bash) の hook が pin 先の Sonnet 障害時に止まる」範囲に閉じる (止まり方は「既知の制約」の「検知層の SPOF」参照)。メインセッションは Sonnet 以外のモデルで動くため、Sonnet 側の障害時は hook だけが落ちうる。個別 call の transient error (rate limit / network blip) は残るが、これは Claude Code 通常使用の背景ノイズと同レベル
 
 **`if` filter と prompt 内 guard の分担**:
 
@@ -427,10 +427,11 @@ agent-discipline/
   - **command 置換内の起票**: shell が実際に実行する `$()` / バッククォートの内側で `gh issue create` 等を実行する形式と、 command 語の位置で引用符に literal を分断する形式 (`"gh" issue create` 等) は body を静的に判定できないため、 Step 0 が静的判定不能として `{"ok": false}` で拒否する。 single quote の内側や `<<'EOF'` heredoc 本文の中で command 名に言及しているだけの文字列 (commit message 本文等) は対象外
   - **PreToolUse の構造的 TOCTOU (`cat ... && gh ... -F body.md` 系)**: 同じ command 内で生成する body file (例: `cat > body.md <<'EOF' ... EOF && gh issue create -F body.md`) は、 PreToolUse hook が Bash 実行 **前** に発火するため hook 時点で存在しない。 検知層はこれを静的判定不能として `{"ok": false}` で拒否するため、 body file は別の Bash 呼び出しで先に生成するか、 `--body` の静的文字列で渡す。 相対 PATH は、 hook input の `cwd` に同じ command 内で先行する `cd <dir>` を先頭から順にすべて適用した dir を基準に解決してから存在を判定する
   - bypass する形式は誘導層 (section 2.1 / 3.1 の禁止表現規範) が上流防衛として catch する想定。 完全に塞ぐには parser-backed command hook (= 別 plugin としての再設計) が必要なため、 既知制約としている
-- **検知層の SPOF**: 検知層は LLM 呼び出しに依存するため、 hook の model (`claude-sonnet-5`) が API 不可用な状況では `gh issue/pr create/edit` が PreToolUse error で失敗する。 narrow scope で影響範囲を `gh issue/pr create|edit` (と `$()` / `$VAR` を含む Bash) に閉じているが、 pin 先の Sonnet 障害時はメインセッションが動いていても hook だけが落ちうる。 個別 call の transient エラー (rate limit / network blip) も残る
+- **検知層の SPOF**: 検知層は LLM 呼び出しに依存する。 hook の `model` に存在しないモデル名を指定すると、 API が 404 を返し、 hook はエラーにならずに通過扱いになる (Bash はそのまま実行され、 検知層が警告なしに止まる。 Claude Code 2.1.287 で確認)。 pin 先 (`claude-sonnet-5-5`) が rate limit (429) や過負荷 (529) を返す場合に、 通過扱いになるか PreToolUse error で失敗するかは未確認である。 narrow scope で影響範囲を `gh issue/pr create|edit` (と `$()` / `$VAR` を含む Bash) に閉じているが、 pin 先の Sonnet 障害時はメインセッションが動いていても hook だけが止まりうる
 - **model pin は env var の影響を受けない** (実測で確認): `CLAUDE_CODE_SUBAGENT_MODEL` env var は hooks.json の `type: agent` hook の `model` field を上書きしない。 pin 値は env var の設定有無に関わらず常に dispatch される確定値であり、 「env 未設定環境向けの既定」 ではない
 - **検知層は公式ドキュメント上 experimental な type:agent hook に依存**: PreToolUse `type: agent` hook は Claude Code 公式ドキュメントで experimental (実験的機能) と位置付けられており、 将来の仕様変更で挙動が変わる、 または廃止される可能性がある。 検知層全体 (4 entries すべて) がこの機能に依存しているため、 仕様変更時は検知層が機能しなくなりうる (= その場合は誘導層のみが防衛する状態に自然縮退する。 fail-open 設計のため縮退時に semantic 誤 block が発生することはない)
-- **検知層の model pin は手動メンテナンス**: pin 先の Sonnet を upgrade する場合 (例: sonnet-5 → sonnet-6)、 `hooks/hooks.json` の `model` field を手動で同期する
+- **検知層の model pin は手動メンテナンス**: hook の `model` には alias (`sonnet` 等) を使えず、 完全なモデル ID を書く (alias は存在しないモデル名と同じ扱いになり、 hook が通過扱いになる)。 pin 先の Sonnet を変える場合は、 `hooks/hooks.json` の 4 本の `model` field を手動で同期する
+- **pin 更新後の実機確認**: 存在しないモデル名を pin しても hook はエラーにならないため、 pin を更新したら、 4 本の hook (`gh issue create` / `gh issue edit` / `gh pr create` / `gh pr edit`) それぞれについて、 禁止表現を含む本文で block されることと、 問題の無い本文で通過することを実機で確認する。 GitHub に投稿しないよう、 リポジトリ外の使い捨てディレクトリの `.claude/settings.json` に hooks.json と同じ hook を置き、 PATH の先頭に何もしない偽の `gh` を置いたうえで、 そのディレクトリで `claude -p` に各 command を実行させて hook の判定を見る
 - **check-uncommitted の発火タイミング制約**: 最初のプロンプト時点で worktree が clean だと、 同 session 中に後から発生した未コミット変更は検知しない (上記参照)
 - **配送済みマーカーは OS の tmp cleanup による自然消去のみ**: `${TMPDIR:-/tmp}/agent-discipline-state/` 配下の配送済みマーカーに明示的な保持期間 (retention) 処理は無く、`check-uncommitted-on-session-start.sh` が使う `agent-discipline-markers/` とは別 namespace を使う
 - **compact 直後のギャップ**: `SessionStart(source=compact)` 後、次のユーザプロンプトまでは part 1 要素 (delivery-note + `always-1.md`) のみが再注入され、残りの要素 (part 2/3・分業規律) は再配送されない (`UserPromptSubmit` はユーザプロンプトでしか発火しないため)。compact 後に agentic loop が自動継続する経路では、この間の推論は part 1 の delivery-note (自己修復指示) と compact summary 内の痕跡に依存する。常時ルールと分業規律を単一要素に連結する構成でも同経路では persisted-output (2KB プレビュー) しか届かないため、分割配送による劣化ではない
