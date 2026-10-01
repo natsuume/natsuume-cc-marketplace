@@ -962,6 +962,12 @@ class ClaimArgumentTest(ClaimIssueScriptTestCase):
             {
                 "未知のオプション": [ISSUE, BRANCH, "--force"],
                 "--session-id の値なし": [ISSUE, BRANCH, "--session-id"],
+                "--session-id の値がオプション": [
+                    ISSUE,
+                    BRANCH,
+                    "--session-id",
+                    "--confirmed-leftover",
+                ],
             }
         )
 

@@ -15,7 +15,8 @@
 # - <issue 番号>: 数字だけの文字列。それ以外は引数の不正とする
 # - <branch 名>: claim comment の `branch=` に入れる。空文字列は引数の不正とする
 # - --session-id <id>: 自分のセッション ID。無ければ環境変数 CLAUDE_CODE_SESSION_ID を使う
-#   (どちらも空文字列は未設定と同じに扱う)
+#   (どちらも空文字列は未設定と同じに扱う)。`-` で始まる値は、値の欠けたオプションとして
+#   引数の不正とする
 # - --ignore-comment-id <id>: 数値 comment id。複数回指定できる。指定した id の claim comment は
 #   早期判定・先着判定の対象から除き、`session=` が自分のセッション ID と一致しても自分の claim
 #   として扱わない。先頭の 0 は無視して数値として比べる。数字以外は引数の不正とする
@@ -148,6 +149,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --session-id)
       [ $# -ge 2 ] || stop invalid-arguments
+      # 次のオプションを値として取り込まないよう、`-` で始まる値は値の欠落とみなす。
+      case "$2" in
+        -*) stop invalid-arguments ;;
+      esac
       SESSION_ID=$2
       shift 2
       ;;
