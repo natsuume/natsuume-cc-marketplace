@@ -117,7 +117,7 @@ claude plugin install agent-discipline@natsuume-plugins
 
 - 常時ルールの part 2/3 または part 3/3 (`always-2.md` / `always-3.md`) の本文そのものを、at-most-once で個別要素の `additionalContext` として配送する。注入内容はメインセッションのモデルに依らず同一である
 - マーカー `${TMPDIR:-/tmp}/agent-discipline-state/delivered-rules-<n>-<session_id>` が存在すれば即 `exit 0` (毎プロンプトのオーバーヘッドをファイル存在チェックのみに抑える)
-- part 3 の配送時だけ、本文の `{{CLAIM_ISSUE_SCRIPT_PATH}}` を `skills/issue-start/scripts/claim-issue.sh` の正規化した絶対パス (`..` を含まない) に置き換える。スクリプトが無い場合は、プレースホルダを含む行全体を「claim 用のスクリプトが見つからないため、issue への着手をせずユーザーに報告する。」に置き換え、part 3 の他の rule はそのまま配送する。パスに awk・正規表現のメタ文字が含まれてもそのまま埋め込む
+- part 3 の配送時だけ、本文の `{{CLAIM_ISSUE_SCRIPT_PATH}}` を `skills/issue-start/scripts/claim-issue.sh` の正規化した絶対パス (`..` を含まない) に置き換える。スクリプトが無い場合は、プレースホルダを含む行全体を「claim 用のスクリプトが見つからないため、issue への着手をせずユーザーに報告する。」に置き換え、part 3 の他の rule はそのまま配送する。パスに awk・正規表現のメタ文字が含まれてもそのまま埋め込み、プレースホルダを囲む single quote に合わせてパスの `'` は `'\''` に置き換える
 - マーカー不在時は `always-<n>.md` を注入し、出力 JSON の生成に成功した後でマーカーを書く (先にマーカーを書くと、本文読取失敗時に当該要素が session 中永久欠落する)。マーカーの書込は同一ディレクトリ内 temp file → `mv` の atomic 書込にする
 - `jq` 不在 / 不正 JSON 入力 / `hook_event_name` か `session_id` が空の場合は無音 `exit 0`。`always-<n>.md` が読めない・空の場合と、part 3 のプレースホルダの置き換えが失敗した場合も無音 `exit 0` でマーカーは書かない (次プロンプトで再試行)
 

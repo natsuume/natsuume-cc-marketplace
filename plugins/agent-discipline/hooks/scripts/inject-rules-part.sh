@@ -35,7 +35,8 @@
 # `cd … && pwd` で得た正規化した形 (`..` を含まない) にする。
 #
 # - スクリプトがある: プレースホルダだけをパスに置き換える (1 行に複数あればすべて)。パスに
-#   awk・正規表現のメタ文字 (`\` `&` 等) が含まれてもそのまま埋め込む
+#   awk・正規表現のメタ文字 (`\` `&` 等) が含まれてもそのまま埋め込む。プレースホルダは本文で
+#   single quote に囲まれているため、パスの `'` は `'\''` に置き換えて埋め込む
 # - スクリプトが無い: プレースホルダを含む行全体を「claim 用のスクリプトが見つからないため、
 #   issue への着手をせずユーザーに報告する。」の 1 行に置き換える。part 3 の他の行と rule は
 #   そのまま配送する
@@ -120,8 +121,17 @@ if [ "$PART" = "3" ]; then
   CONTEXT=$(printf '%s\n' "$CONTEXT" | CLAIM_SCRIPT_PATH="$CLAIM_SCRIPT_PATH" awk '
     BEGIN {
       placeholder = "{{CLAIM_ISSUE_SCRIPT_PATH}}"
-      path = ENVIRON["CLAIM_SCRIPT_PATH"]
+      raw = ENVIRON["CLAIM_SCRIPT_PATH"]
       missing = "claim 用のスクリプトが見つからないため、issue への着手をせずユーザーに報告する。"
+      # プレースホルダは single quote の中にあるため、パスの single quote (\047) を
+      # quote を閉じて escape し直す形 (\047 \\ \047 \047) に置き換える。
+      quote = "\047"
+      path = ""
+      while ((position = index(raw, quote)) > 0) {
+        path = path substr(raw, 1, position - 1) quote "\\" quote quote
+        raw = substr(raw, position + 1)
+      }
+      path = path raw
     }
     {
       if (index($0, placeholder) == 0) {

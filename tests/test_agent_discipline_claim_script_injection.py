@@ -11,6 +11,9 @@ inject-rules-part.sh は part 3 を配送するとき、プレースホルダを
   パス (realpath で比べる) に置き換え、出力にプレースホルダを残さない。プレースホルダの行の
   ほかは always-3.md の本文 (先頭の保守者向け HTML コメントを除いたもの) と同じ。part 2 の
   配送は always-2.md の本文のまま。part 3 の配送本文は 7,800 字 (Unicode code point 数) 以下。
+- ``ClaimScriptQuotedPathTest``: plugin を `'`・`&`・`\\` を含むディレクトリにコピーして配送
+  すると、置き換えたパスは呼び出しの single quote の中で 1 つのシェルの語として claim-issue.sh
+  の実パスに戻る (パスの `'` は `'\\''` に置き換わる)。
 - ``ClaimScriptMissingTest``: plugin ディレクトリを一時ディレクトリにコピーし、コピー側の
   claim-issue.sh を削除して実行すると、プレースホルダを含む行全体が「claim 用のスクリプトが
   見つからないため、issue への着手をせずユーザーに報告する」趣旨の 1 行に置き換わる。ほかの行は
@@ -27,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -228,6 +232,33 @@ class ClaimScriptPathSubstitutionTest(InjectionTestCase):
         """part 2 の配送は always-2.md の本文のまま。"""
         context = self.run_part(PLUGIN_DIR, "2", "part2")
         self.assertEqual(body_lines(read(ALWAYS_2)), context.splitlines())
+
+
+class ClaimScriptQuotedPathTest(InjectionTestCase):
+    """plugin のパスに single quote やメタ文字が含まれるときの配送。"""
+
+    def test_path_stays_one_shell_word_inside_single_quotes(self) -> None:
+        """置き換えたパスは、呼び出しの single quote の中で 1 つのシェルの語として
+        claim-issue.sh の実パスに戻る (パスの `'` は `'\\''` に置き換える)。"""
+        plugin_copy = self.work / "it's & \\ dir" / "agent-discipline"
+        shutil.copytree(PLUGIN_DIR, plugin_copy)
+        always_3 = plugin_copy / PROMPTS_RELATIVE / "always-3.md"
+        expected = body_lines(read(always_3))
+        index = self.placeholder_line_index(expected, always_3)
+        context = self.run_part(plugin_copy, "3", "part3-quoted")
+        actual = context.splitlines()
+        self.assert_only_line_differs(expected, actual, index, "part 3 (quote を含むパス)")
+
+        prefix, suffix = expected[index].split(PLACEHOLDER)
+        self.assertTrue(prefix.endswith("'") and suffix.startswith("'"), expected[index])
+        line = actual[index]
+        self.assertTrue(line.startswith(prefix) and line.endswith(suffix), line)
+        quoted_word = "'" + line[len(prefix) : len(line) - len(suffix)] + "'"
+        self.assertIn("'\\''", quoted_word)
+        self.assertEqual(
+            [os.path.realpath(plugin_copy / CLAIM_SCRIPT_RELATIVE)],
+            [os.path.realpath(word) for word in shlex.split(quoted_word)],
+        )
 
 
 class ClaimScriptMissingTest(InjectionTestCase):
