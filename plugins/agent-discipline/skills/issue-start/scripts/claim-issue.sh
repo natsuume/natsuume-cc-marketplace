@@ -92,8 +92,10 @@
 #     gh api 'repos/{owner}/{repo}/issues/<N>'
 #   (応答の `.labels[].name`)
 # - comment の全件取得 (早期判定と先着判定の両方):
-#     gh api --paginate --slurp 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'
-#   (出力はページの配列の配列。`jq 'add // []'` で 1 つの配列に結合する)
+#     gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'
+#   (出力はページごとの JSON 配列が連続したもの。`jq -s 'add // []'` で 1 つの配列に結合する。
+#   `--slurp` は新しい gh にしか無いので使わない。出力が空・配列でない値を含むなど JSON の配列の列と
+#   して読めない場合は取得の失敗とする)
 # - claim comment の投稿:
 #     gh api -X POST 'repos/{owner}/{repo}/issues/<N>/comments' -f body=<本文>
 #   (応答の `.id` と `.created_at` を使う)
@@ -212,16 +214,17 @@ fetch_has_in_progress_label() {
   ' 2>/dev/null
 }
 
-# comment の全件を 1 つの JSON 配列として書く。取得の失敗 (非ゼロ終了) と読めない応答では 1 を
-# 返す。gh が途中までの出力で非ゼロ終了した場合も失敗として扱う。
+# comment の全件を 1 つの JSON 配列として書く。gh はページごとの JSON 配列を連続して出力する
+# ので、jq -s で読み込んで結合する。取得の失敗 (非ゼロ終了) と読めない応答 (空の出力・配列で
+# ない値を含む出力) では 1 を返す。gh が途中までの出力で非ゼロ終了した場合も失敗として扱う。
 fetch_all_comments() {
   local response
-  response=$(gh api --paginate --slurp "repos/{owner}/{repo}/issues/$ISSUE/comments?per_page=100") \
+  response=$(gh api --paginate "repos/{owner}/{repo}/issues/$ISSUE/comments?per_page=100") \
     || return 1
-  printf '%s' "$response" | jq -c '
-    if type == "array" and all(.[]; type == "array")
+  printf '%s' "$response" | jq -s -c '
+    if length > 0 and all(.[]; type == "array")
     then add // []
-    else error("ページの配列ではない")
+    else error("ページの配列の列ではない")
     end
   ' 2>/dev/null
 }

@@ -13,8 +13,9 @@
 応答する。それ以外の呼び出しは ``unknown`` として記録して exit 64 で終わる。
 
 - ``gh api 'repos/{owner}/{repo}/issues/<N>'`` (kind ``get_issue``)
-- ``gh api --paginate --slurp 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'``
-  (kind ``get_comments``。ページの配列の配列を返す)
+- ``gh api --paginate 'repos/{owner}/{repo}/issues/<N>/comments?per_page=100'``
+  (kind ``get_comments``。ページごとの JSON 配列を区切りなしで連続して出力し、comment が 0 件なら
+  ``[]`` を出力する。``--slurp`` 付きの呼び出しは ``unknown`` として扱う)
 - ``gh api -X POST 'repos/{owner}/{repo}/issues/<N>/comments' -f body=<本文>``
   (kind ``post_comment``)
 - ``gh api -X DELETE 'repos/{owner}/{repo}/issues/comments/<id>'`` (kind ``delete_comment``)
@@ -25,7 +26,7 @@
 - ``issue``: issue 番号 (数値)。コマンドの <N> がこれと違えば ``unknown`` になる
 - ``labels``: issue に付いているラベル名の配列
 - ``comments``: comment (``id``・``created_at``・``body``) の配列。一覧は id 昇順で返す
-- ``page_size``: ``--paginate --slurp`` の 1 ページの件数 (小さくすると 2 ページ以上に分かれる)
+- ``page_size``: ``--paginate`` の 1 ページの件数 (小さくすると 2 ページ以上に分かれる)
 - ``next_comment_id`` / ``post_created_at``: POST で作る comment の id と created_at
 - ``post_visible``: false なら、POST は成功を返すが comment を一覧に加えない
 - ``after_post_comments``: POST の直後に一覧へ加える comment (他 session の claim の race の
@@ -198,7 +199,7 @@ def classify(argv, state):
     if (
         method == "GET"
         and paginate
-        and slurp
+        and not slurp
         and not fields
         and endpoint == f"{REPO}/issues/{issue}/comments?per_page=100"
     ):
@@ -238,6 +239,11 @@ def pages(state):
     return chunks or [[]]
 
 
+def paginated_output(state):
+    """gh api --paginate の出力 (ページごとの JSON 配列を連続させたもの)。"""
+    return "".join(json.dumps(page, ensure_ascii=False) for page in pages(state))
+
+
 def main():
     argv = sys.argv[1:]
     state = load_state()
@@ -272,7 +278,7 @@ def main():
         labels = [{"name": name} for name in state["labels"]]
         output = json.dumps({"number": state["issue"], "labels": labels}, ensure_ascii=False)
     elif kind == "get_comments":
-        output = json.dumps(pages(state), ensure_ascii=False)
+        output = paginated_output(state)
     elif kind == "post_comment":
         comment_id = int(state.get("next_comment_id", 1000))
         state["next_comment_id"] = comment_id + 1
@@ -1020,16 +1026,16 @@ class ClaimGhFailureTest(ClaimIssueScriptTestCase):
         """step 4 の取得が失敗したら (非ゼロ終了・読めない応答・途中までの出力で非ゼロ終了)、
         確保を確定せず exit 2。投稿済みの自分の claim は削除しない。"""
         own_claim_only = json.dumps(
-            [[{
+            [{
                 "id": POSTED_ID,
                 "created_at": POSTED_AT,
                 "body": f"{CLAIM_PREFIX}branch={BRANCH} session={SESSION} ts={POSTED_AT}",
-            }]],
+            }],
             ensure_ascii=False,
         )
         cases = {
             "非ゼロ終了": {"from_call": 2},
-            "読めない応答": {"from_call": 2, "exit_code": 0, "stdout": "[[{"},
+            "読めない応答": {"from_call": 2, "exit_code": 0, "stdout": "[{"},
             "途中までの出力で非ゼロ終了": {"from_call": 2, "stdout": own_claim_only},
         }
         for case, failure in cases.items():
