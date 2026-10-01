@@ -213,8 +213,8 @@ EXPECTED_DESCRIPTION_DIGESTS: dict[str, tuple[int, str] | None] = {
         "90626da44b2df5eeae7466555da039d3d02912b2ecd145ec8ad1297ce0e93d72",
     ),
     "ui-discipline": (
-        425,
-        "e90df5f278bcc0ea72e8b3d36262a5874381d5d659ebec4127cba83003d8563e",
+        560,
+        "62209a9bfdbce85359d90202fb1fbbeb626befc7ca9fe9c77d0a1eea2427bcfa",
     ),
 }
 
@@ -250,7 +250,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "update-default-branch": "0.4.7",
     "natsuume-statusline": "0.11.8",
     "agent-discipline": "4.1.1",
-    "ui-discipline": "0.4.10",
+    "ui-discipline": "0.5.0",
     "natsuume-writing": "0.13.1",
     "cross-model-advisor": "6.0.1",
     "rate-limit": "0.5.5",
