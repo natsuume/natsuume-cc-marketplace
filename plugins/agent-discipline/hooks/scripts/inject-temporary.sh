@@ -3,7 +3,7 @@
 # SessionStart と UserPromptSubmit で「暫定ルール (temporary rules)」を注入する。
 #
 # 暫定ルールとは、Claude Code 本体や外部ツールの問題が修正されるまでの間だけ配送したい
-# 一時的な作業規律であり、恒久規律 (always-*.md / discipline-*.md) と違い
+# 一時的な作業規律であり、恒久規律 (always-*.md / discipline.md) と違い
 # 「問題修正後にいつでも外せること」を第一要件とする。そのため本スクリプトは
 # inject-always.sh から独立した配送経路を持ち、以下の撤去手順を成立させる:
 #
@@ -14,7 +14,7 @@
 #
 # ## 注入仕様
 #
-# - SessionStart: hooks/prompts/temporary/*.md を従来どおり全件配送し、同じ session の
+# - SessionStart: hooks/prompts/temporary/*.md を全件配送し、同じ session の
 #   UserPromptSubmit では再送しないよう配送済み集合を記録する
 # - UserPromptSubmit: SessionStart 後に追加された未配送 md だけをファイル名の辞書順
 #   (LC_ALL=C で固定) に連結し、1 つの additionalContext として one-shot 配送する
@@ -23,8 +23,7 @@
 # - 配送済み単位はファイル名の POSIX cksum (CRC + byte length)。本文変更ではなく
 #   temporary md の追加・削除を lifecycle とする既存の撤去契約に合わせる
 # - モデル判定・permission_mode 判定は行わない (暫定ルールはモデルに依らず全セッション共通)。
-#   inject-always.sh とは別 hook entry = 別メッセージとして注入されるため、
-#   inject-always.sh 側の self-gate 射程 (「見出し〜メッセージ末尾」) には影響しない
+#   inject-always.sh とは別 hook entry = 別メッセージとして注入する
 # - agent_id 付き UserPromptSubmit は subagent 経路として無音終了する
 #
 # ## 出力 JSON 形状 (inject-always.sh と同形)
@@ -45,9 +44,10 @@
 # - hooks/prompts/temporary/ ディレクトリ不在
 # - temporary/*.md が 0 件、連結結果が空、または全件配送済み
 #
-# SessionStart の session_id 欠落時だけは v0.12.0 からの既存配送を維持するため、marker
-# 無しで全件を注入する。正常な hook input では session_id があり、atomic marker 書込成功後に
-# のみ出力する。設計経緯: PR #218、issue #237 を参照。
+# SessionStart で session_id が空 (または sanitize 後に空) の場合は、配送済み集合を記録
+# せず (marker 無しで) 全件を注入する。
+# UserPromptSubmit は marker が無いと再送を防げないため、同じ条件では配送しない。正常な
+# hook input では session_id があり、配送済み集合の atomic 書込に成功した後にのみ出力する。
 
 if ! command -v jq >/dev/null 2>&1; then
   exit 0
@@ -103,7 +103,7 @@ if [ -n "$SESSION_ID" ]; then
   SAFE_SESSION_ID=$(printf '%s' "$SESSION_ID" | tr -cd 'A-Za-z0-9._-')
   if [ -z "$SAFE_SESSION_ID" ]; then
     # UserPromptSubmit は marker 無しで配送すると再送を防げないため無音終了する。
-    # SessionStart は従来の全件配送を維持し、marker だけを省略する。
+    # SessionStart は全件配送し、marker だけを省略する。
     if [ "$HOOK_EVENT" = "UserPromptSubmit" ]; then
       exit 0
     fi
