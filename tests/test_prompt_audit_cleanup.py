@@ -34,10 +34,10 @@
   issue-start は closing keyword の詳細として有効なキーワード一覧を挙げない。issue-plan の
   GitHub 仕様の記述 2 箇所に確認日がある。README は always-3 の思考量の文を説明しない。
   暫定ルールの先頭コメントに確認方法と確認した Claude Code のバージョンがある。
-- ``UiDisciplineAvoidDefaultsTest`` (ui-discipline): 「避ける既定」の一覧が ui-rules.md の
-  rule 10 と ui-patterns skill で同じ文言であり、指定の既定スタイルを含む。skill の視覚方向の
-  例示はこれらの既定に該当しない。注入文は SessionStart (ui-rules.md 単体) と SubagentStart
-  (前置き注記との連結後) の両方で 8,000 字以内に収まる。
+- ``UiDisciplineAvoidDefaultsTest`` (ui-discipline): 「避ける既定」の一覧は ui-patterns skill
+  の rule:visual-direction の節にだけ 1 回あり (常時注入の ui-rules.md には無い)、指定の既定
+  スタイルを含む。skill の視覚方向の例示はこれらの既定に該当しない。注入文は SessionStart
+  (ui-rules.md 単体) と SubagentStart (前置き注記との連結後) の両方で 8,000 字以内に収まる。
 - ``CodexStatusModelNameTest`` (rate-limit): 独立枠の説明に固定のモデル名を書かない。
 - ``RebaseWorkflowTest`` (git-guardrails): コンフリクト解消を 1 文で書き、戦略助言を
   持たず、デフォルトブランチ名は `git symbolic-ref` を単独で実行して読み取りで得る。
@@ -747,52 +747,61 @@ class UiDisciplineAvoidDefaultsTest(ContractTestCase):
         items = [strip_whitespace(item).rstrip("。") for item in raw_items]
         return [item for item in items if item]
 
-    def ui_rules_visual_direction(self) -> str:
-        block = rule_block(read(UI_RULES), "visual-direction")
-        self.assert_scope_found(
-            display_path(UI_RULES), block, "`<!-- rule:visual-direction -->` が無い"
-        )
-        return block
+    VISUAL_DIRECTION_RULE = "rule:visual-direction"
 
     def skill_visual_direction(self) -> str:
-        section = markdown_section(read(UI_PATTERNS_SKILL), "## 10. rule:visual-direction")
+        """SKILL.md のうち、見出しに `rule:visual-direction` を含む節 (見出し番号は問わない)。"""
+        text = read(UI_PATTERNS_SKILL)
+        headings = [
+            line
+            for line in text.splitlines()
+            if HEADING_PATTERN.match(line) and self.VISUAL_DIRECTION_RULE in line
+        ]
         self.assert_scope_found(
-            display_path(UI_PATTERNS_SKILL), section, "`## 10. rule:visual-direction` 節が無い"
+            display_path(UI_PATTERNS_SKILL),
+            "\n".join(headings),
+            f"見出しに `{self.VISUAL_DIRECTION_RULE}` を含む節が無い",
+        )
+        section = markdown_section(text, headings[0])
+        self.assert_scope_found(
+            display_path(UI_PATTERNS_SKILL),
+            section,
+            f"`{self.VISUAL_DIRECTION_RULE}` の節が空である",
         )
         return section
 
-    def test_avoid_defaults_lists_are_identical(self) -> None:
-        rules_items = self.avoid_defaults_items(self.ui_rules_visual_direction())
-        skill_items = self.avoid_defaults_items(self.skill_visual_direction())
-        for path, items in ((UI_RULES, rules_items), (UI_PATTERNS_SKILL, skill_items)):
+    def test_avoid_defaults_list_is_kept_only_in_the_skill(self) -> None:
+        """一覧は skill の rule:visual-direction の節に 1 回だけあり、ui-rules.md には無い。"""
+        skill_text = read(UI_PATTERNS_SKILL)
+        with self.subTest(file=display_path(UI_PATTERNS_SKILL)):
             self.assert_scope_found(
-                f"{display_path(path)} の視覚方向の節",
-                "\n".join(items),
+                f"{display_path(UI_PATTERNS_SKILL)} の視覚方向の節",
+                "\n".join(self.avoid_defaults_items(self.skill_visual_direction())),
                 f"「{self.AVOID_DEFAULTS_LABEL}」の一覧が無い",
             )
-        self.assertEqual(
-            rules_items,
-            skill_items,
-            f"「{self.AVOID_DEFAULTS_LABEL}」の一覧が {display_path(UI_RULES)} の rule 10 と "
-            f"{display_path(UI_PATTERNS_SKILL)} で一致しない",
-        )
+            self.assertEqual(
+                1,
+                skill_text.count(self.AVOID_DEFAULTS_LABEL),
+                f"{display_path(UI_PATTERNS_SKILL)}: 「{self.AVOID_DEFAULTS_LABEL}」が 1 回だけ"
+                "現れるのでない (ルール本文と例で一覧を重ねて書かない)",
+            )
+        with self.subTest(file=display_path(UI_RULES)):
+            self.assert_phrase_absent(
+                display_path(UI_RULES), read(UI_RULES), self.AVOID_DEFAULTS_LABEL
+            )
 
     def test_avoid_defaults_list_contains_the_required_defaults(self) -> None:
-        for path, scope in (
-            (UI_RULES, self.ui_rules_visual_direction()),
-            (UI_PATTERNS_SKILL, self.skill_visual_direction()),
-        ):
-            items = self.avoid_defaults_items(scope)
-            for name, requirements in self.REQUIRED_DEFAULTS:
-                with self.subTest(file=display_path(path), default=name):
-                    if not any(
-                        all(satisfies(item, requirement) for requirement in requirements)
-                        for item in items
-                    ):
-                        self.fail(
-                            f"{display_path(path)}: 「{self.AVOID_DEFAULTS_LABEL}」の一覧に"
-                            f"「{name}」の項目が無い (一覧: {items})"
-                        )
+        items = self.avoid_defaults_items(self.skill_visual_direction())
+        for name, requirements in self.REQUIRED_DEFAULTS:
+            with self.subTest(default=name):
+                if not any(
+                    all(satisfies(item, requirement) for requirement in requirements)
+                    for item in items
+                ):
+                    self.fail(
+                        f"{display_path(UI_PATTERNS_SKILL)}: 「{self.AVOID_DEFAULTS_LABEL}」の"
+                        f"一覧に「{name}」の項目が無い (一覧: {items})"
+                    )
 
     def test_visual_direction_example_avoids_the_defaults(self) -> None:
         """skill の視覚方向の提案例 (引用ブロック) は 2 案以上あり、避ける既定に該当しない。"""

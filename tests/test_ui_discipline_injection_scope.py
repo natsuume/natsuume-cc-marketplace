@@ -175,7 +175,7 @@ class IncludedAgentTest(unittest.TestCase):
         context = hook_output["additionalContext"]
         self.assertIsInstance(context, str, f"{label}: additionalContext が文字列でない")
         self.assertIn(
-            "<!-- rule:component-layers -->",
+            "<!-- rule:visibility-taxonomy -->",
             context,
             f"{label}: additionalContext に UI 実装規律の本文が無い",
         )
