@@ -250,7 +250,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "update-default-branch": "0.4.7",
     "natsuume-statusline": "0.11.8",
     "agent-discipline": "4.1.2",
-    "ui-discipline": "0.5.0",
+    "ui-discipline": "0.6.0",
     "natsuume-writing": "0.13.1",
     "cross-model-advisor": "6.0.1",
     "rate-limit": "0.5.5",

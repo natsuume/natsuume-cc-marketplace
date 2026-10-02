@@ -31,7 +31,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [update-default-branch](#update-default-branch) | 0.4.7 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.11.8 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 4.1.2 | 作業規律を SessionStart / UserPromptSubmit / SubagentStart の hook で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
-| [ui-discipline](#ui-discipline) | 0.5.0 | UI 実装の 10 規律を SessionStart / SubagentStart prompt で常時注入するプラグイン。具体例は ui-patterns Skill が提供する |
+| [ui-discipline](#ui-discipline) | 0.6.0 | UI 実装の 3 規律を SessionStart / SubagentStart で常時注入し、残り 7 規律の本文と具体例を ui-patterns Skill が提供するプラグイン |
 | [natsuume-writing](#natsuume-writing) | 0.13.1 | natsuume の文体規則でテックブログ・技術書・社内技術文書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
 | [cross-model-advisor](#cross-model-advisor) | 6.0.1 | Codex を advisor として相談し、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.5 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
@@ -301,9 +301,9 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## ui-discipline
 
-UI (フロントエンド) 実装時の規律を配送するプラグインです。UI を持つプロジェクトでのみ enable して使います。共通化すべきか / 表示・非表示をどう決めるか / レイアウトが崩れないか、といった UI 実装で繰り返し発生する判断基準を 10 ルールとして常時配送し、判断のぶれによる重複 component や CLS (Cumulative Layout Shift)、a11y 欠落を防ぎます。
+UI (フロントエンド) 実装時の規律を配送するプラグインです。UI を持つプロジェクトでのみ enable して使います。共通化すべきか / 表示・非表示をどう決めるか / レイアウトが崩れないか、といった UI 実装で繰り返し発生する判断の拠り所を 10 のルールにまとめて配送し、判断のぶれによる重複 component や CLS (Cumulative Layout Shift)、a11y 欠落を防ぎます。UI 実装のたびに関わる 3 ルールは常時注入し、特定の作業で必要になる 7 ルールは ui-patterns Skill で提供します。
 
-常時注入層 (`SessionStart`) が 10 ルールの compact 版を配送し、ui-patterns Skill が具体的なコード例・チェックリストを提供する 2 層構成です。`hooks/prompts/ui-rules.md` と subagent 前置きを使います。UI 実装規律は UI を持つプロジェクトでのみ意味を持つため agent-discipline には統合せず、plugin の enable 単位をそのまま適用範囲の単位としています。
+常時注入層 (`SessionStart` / `SubagentStart`) が 3 ルールの本文と残り 7 ルールの要約を配送し、ui-patterns Skill が 7 ルールの本文と、10 ルールの具体的なコード例・チェックリストを提供する 2 層構成です。`hooks/prompts/ui-rules.md` と subagent 前置きを使います。UI 実装規律は UI を持つプロジェクトでのみ意味を持つため agent-discipline には統合せず、plugin の enable 単位をそのまま適用範囲の単位としています。
 
 ### 機能
 
@@ -311,14 +311,14 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 | Hook 名 | イベント | 説明 |
 |---------|---------|------|
-| `inject-ui-rules` | SessionStart | 10 rule ID を `additionalContext` として常時注入する |
+| `inject-ui-rules` | SessionStart | 3 ルールの本文と残り 7 ルールの要約を `additionalContext` として常時注入する |
 | `inject-ui-rules-subagent` | SubagentStart | 前置き注記 + 共通 prompt を連結して注入する |
 
 #### Skills
 
 | スキル名 | コマンド | 説明 |
 |---------|---------|------|
-| ui-patterns | `/ui-patterns` | 常時注入される 10 ルールに対応する具体的なコード例・チェックリストを提供する |
+| ui-patterns | `/ui-patterns` | 7 ルールの本文 (意図・指示・境界) と、10 ルールの具体的なコード例・チェックリストを提供する |
 
 ### キーワード
 

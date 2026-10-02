@@ -4,21 +4,21 @@ UI (フロントエンド) 実装時の規律を配送するプラグインで�
 
 ## バージョン
 
-v0.5.0
+v0.6.0
 
 ## 概要
 
-UI 実装は「共通化すべきか」「表示/非表示をどう決めるか」「レイアウトが崩れないか」といった判断が実装のたびに発生し、判断がぶれると重複 component の乱立や CLS (Cumulative Layout Shift)、a11y 欠落として表面化します。本プラグインはこれらの判断基準を 10 ルールとして常時配送し、判断のぶれを構造的に抑えます。
+UI 実装は「共通化すべきか」「表示/非表示をどう決めるか」「レイアウトが崩れないか」といった判断が実装のたびに発生し、判断がぶれると重複 component の乱立や CLS (Cumulative Layout Shift)、a11y 欠落として表面化します。本プラグインはこれらの判断の拠り所を 10 のルールにまとめて配送し、判断のぶれを抑えます。UI 実装のたびに関わる 3 ルールは常時注入し、特定の作業で必要になる 7 ルールは ui-patterns skill で提供します。
 
 配送は次の構成です:
 
 | 層 | 配送経路 | 内容 |
 |---|---|---|
-| メインセッション | `SessionStart` (`inject-ui-rules.sh`) | `hooks/prompts/ui-rules.md` の 10 ルールを `additionalContext` として注入 |
+| メインセッション | `SessionStart` (`inject-ui-rules.sh`) | `hooks/prompts/ui-rules.md` (3 ルールの本文と、残り 7 ルールの rule ID・要約) を `additionalContext` として注入 |
 | subagent | `SubagentStart` (`inject-ui-rules-subagent.sh`) | 同一の `ui-rules.md` に `ui-rules-subagent-preamble.md` を連結して注入。UI を実装しない agent は除外する (Claude Code 2.0.43+) |
-| ui-patterns Skill | `skills/ui-patterns/SKILL.md` | 10 ルールそれぞれに対応する具体的なコード例・チェックリストを提供 |
+| ui-patterns Skill | `skills/ui-patterns/SKILL.md` | 7 ルールの本文 (意図・指示・境界) と、10 ルールのコード例・チェックリストを提供 |
 
-常時注入層はルールの「意図・指示・境界」のみを圧縮して伝え、コード例やチェックリストの詳細実装パターンは ui-patterns skill 側が担当することで、常時消費されるトークン量を抑えています。prompt ファイル先頭の保守者向け HTML コメントは、注入時に除きます (`hooks/scripts/lib/prompt-body.sh`)。
+常時注入層は 3 ルールの「意図・指示・境界」と、残り 7 ルールの rule ID・1 行の要約だけを伝えます。7 ルールの本文と、10 ルールのコード例・チェックリストは ui-patterns skill が提供するため、常時消費されるトークン量を抑えられます。prompt ファイル先頭の保守者向け HTML コメントは、注入時に除きます (`hooks/scripts/lib/prompt-body.sh`)。
 
 ## インストール
 
@@ -43,20 +43,27 @@ user settings (`~/.claude/settings.json`) で有効にすると (`--scope` を�
 
 本プラグインは Claude Code 専用で、Codex marketplace では配布していません。
 
-## 配送する 10 ルール
+## 常時注入する 3 ルール
 
-`hooks/prompts/ui-rules.md` が常時注入する rule ID の一覧です (rule ID は `<!-- rule:<id> -->` コメントとしてファイル内に埋め込まれています)。
+`hooks/prompts/ui-rules.md` が常時注入するルールの rule ID の一覧です。UI 実装のたびに関わるルールで、本文 (意図・指示・境界) を注入します (rule ID は `<!-- rule:<id> -->` コメントとしてファイル内に埋め込まれています)。
+
+| rule ID | 説明 |
+|---|---|
+| `visibility-taxonomy` | 表示/非表示・disabled の決定表。状況ごとに表示したまま disabled / 常時有効 + エラー提示 / 非表示、を使い分ける |
+| `layout-stability` | レイアウト安定 (CLS 対策)。寸法の事前予約とテキストの吸収でレイアウトジャンプを防ぐ |
+| `async-states` | 非同期状態の網羅。データ取得を伴う UI は loading / empty / error の 3 状態を必ず設計する |
+
+## ui-patterns skill が提供する 7 ルール
+
+`skills/ui-patterns/SKILL.md` が本文 (意図・指示・境界) とコード例を提供するルールの rule ID の一覧です。SKILL.md では各ルールの節の見出しに `rule:<id>` を書いています。`ui-rules.md` の末尾には、この 7 ルールの rule ID と 1 行の要約を並べ、該当する作業で ui-patterns skill を呼び出すよう書いています。
 
 | rule ID | 説明 |
 |---|---|
 | `component-layers` | 層別の共通化基準。design token / primitive / pattern shell は共通化必須、domain component は rule of three |
 | `composition` | 共通 component の実装様式。composition (children / slots) を既定とし、variant は enum prop までに留める |
 | `component-search` | 実装前の既存探索。新規 component を作る前に既存 component インベントリを探索し重複作成を防ぐ |
-| `visibility-taxonomy` | 表示/非表示・disabled の決定表。状況ごとに表示したまま disabled / 常時有効 + エラー提示 / 非表示、を使い分ける |
-| `layout-stability` | レイアウト安定 (CLS 対策)。寸法の事前予約とテキストの吸収でレイアウトジャンプを防ぐ |
 | `design-tokens` | token 経由のスタイル指定。色・余白・タイポグラフィ等をハードコードせず theme / design token 経由で指定する |
 | `a11y-basics` | アクセシビリティ基本則。キーボード操作完結・focus trap・コントラスト確保・色のみに頼らない状態表現 |
-| `async-states` | 非同期状態の網羅。データ取得を伴う UI は loading / empty / error の 3 状態を必ず設計する |
 | `robustness` | フォントサイズ・ビューポート頑健性。rem 基準・固定高さ回避・100vh 決め打ち回避でブラウザ拡大や画面分割に耐える |
 | `visual-direction` | 視覚方向の明示的選択。オープンエンドな視覚デザインでは実装前に 3〜4 案を提案してユーザの選択を得る。選ばれた 1 方向のみを実装し、既存デザインシステムや theme があればそれに従う |
 
@@ -73,13 +80,17 @@ user settings (`~/.claude/settings.json`) で有効にすると (`--scope` を�
 
 | スキル名 | コマンド | 説明 |
 |---|---|---|
-| `ui-patterns` | `/ui-patterns` | 常時注入される 10 ルールに対応する具体的なコード例・チェックリスト集を提供する。UI component / 画面 / ダイアログ・フォーム・一覧の実装や修正時にトリガーされる |
+| `ui-patterns` | `/ui-patterns` | 7 ルールの本文 (意図・指示・境界) と、10 ルールの具体的なコード例・チェックリスト集を提供する。共通 component の新設・API 設計、スタイル値の指定、新規の視覚デザイン、UI component / 画面 / ダイアログ・フォーム・一覧の実装や修正時にトリガーされる |
 
 ## 設計上の選択
 
 ### なぜ agent-discipline に統合せず独立 plugin としたか
 
 UI 実装規律は UI を持つプロジェクトでのみ意味を持ち、バックエンドや CLI 中心のプロジェクトでは不要です。agent-discipline のような「全プロジェクト共通で有用な規律」とは適用範囲の性質が異なるため統合せず、plugin の enable/disable 単位をそのまま適用範囲の単位とする独立 plugin としています。
+
+### なぜ 3 ルールだけを常時注入するか
+
+visibility-taxonomy・layout-stability・async-states の 3 ルールは、UI 実装のたびに関わるため常時注入します。残りの 7 ルールは、共通 component の新設時やダイアログの実装時など特定の作業でだけ必要になるもの、または現行モデル・frontend-design plugin・公式ガイドが既に扱っている内容であるため、ui-patterns skill に置いています。
 
 ### なぜモデル別 prompt 分岐を持たないか
 
@@ -112,7 +123,7 @@ UI 実装規律は UI を実装する agent にだけ意味があります。レ
 
 ui-discipline の 10 ルールはモデル・実行主体に依存しない判断基準であり、subagent との差分は rule:visual-direction のエスカレーション化だけです。全文コピーによる silent drift を避けるため、単一ソース (`ui-rules.md`) + 前置き注記 (`ui-rules-subagent-preamble.md`) の連結方式を採っています。
 
-前置き注記・本体・ui-patterns SKILL.md のいずれかが欠けた場合は全体を注入しません。読み替え規則を欠いたまま rule:visual-direction を subagent に配送すると、subagent には実行不能な「ユーザの選択を得る」指示が残るためです (部分注入の禁止)。
+前置き注記・本体・ui-patterns SKILL.md のいずれかが欠けた場合は全体を注入しません。前置き注記を欠いたまま注入すると、subagent が ui-patterns skill の rule:visual-direction を読んだときに、実行できない「ユーザの選択を得る」指示が読み替えなしに残るためです (部分注入の禁止)。
 
 ### なぜ inject script が fail-open か
 
