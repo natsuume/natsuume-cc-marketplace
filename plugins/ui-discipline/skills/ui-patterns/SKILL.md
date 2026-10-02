@@ -189,13 +189,13 @@ Tailwind 等のユーティリティ CSS では theme スケール上の class (
 ## 8. rule:async-states — 3 状態の分岐
 
 ```tsx
-if (isLoading) return <ListSkeleton rows={5} />; // 最終レイアウトと同寸 (rule 5 の予約を兼ねる)
+if (isLoading) return <ListSkeleton rows={5} />; // 最終レイアウトと同寸 (rule:layout-stability の予約を兼ねる)
 if (error) return <ErrorState onRetry={refetch} />;
 if (items.length === 0) return <EmptyState message="まだ項目がありません" />;
 return <ItemList items={items} />;
 ```
 
-Skeleton / ErrorState / EmptyState 自体も pattern shell として共通化する (rule 1)。
+Skeleton / ErrorState / EmptyState 自体も pattern shell として共通化する (rule:component-layers)。
 
 ## 9. rule:robustness — フォントサイズ・ビューポート頑健性
 
@@ -251,12 +251,12 @@ Skeleton / ErrorState / EmptyState 自体も pattern shell として共通化す
 
 そのタスクで触れたルールに対応する項目だけを確認する (全項目の機械的な確認は不要)。
 
-- [ ] 新規 component を作る前に既存を探索した (rule 3)
-- [ ] 共通 component に boolean prop を追加していない (rule 2)
-- [ ] スタイル値の直書きがない (rule 6)
-- [ ] 極端なコンテンツ (長い連続文字列・空・大量件数) で崩れない (rule 5)
-- [ ] loading / empty / error を実装した (rule 8)
-- [ ] キーボードのみで一巡できる (rule 7)
-- [ ] ブラウザ拡大 200% で操作できる (rule 9)
-- [ ] 条件表示の増減でレイアウトが跳ねない (rule 4)
-- [ ] オープンエンドな新規デザインでは視覚方向のユーザ選択を得た (rule 10)
+- [ ] 新規 component を作る前に既存を探索した (rule:component-search)
+- [ ] 共通 component に boolean prop を追加していない (rule:composition)
+- [ ] スタイル値の直書きがない (rule:design-tokens)
+- [ ] 極端なコンテンツ (長い連続文字列・空・大量件数) で崩れない (rule:layout-stability)
+- [ ] loading / empty / error を実装した (rule:async-states)
+- [ ] キーボードのみで一巡できる (rule:a11y-basics)
+- [ ] ブラウザ拡大 200% で操作できる (rule:robustness)
+- [ ] 条件表示の増減でレイアウトが跳ねない (rule:visibility-taxonomy)
+- [ ] オープンエンドな新規デザインでは視覚方向のユーザ選択を得た (rule:visual-direction)
