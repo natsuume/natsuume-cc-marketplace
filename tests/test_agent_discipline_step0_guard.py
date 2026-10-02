@@ -51,7 +51,7 @@ EXPECTED_IF_FILTERS = (
 )
 IF_FILTER_PATTERN = re.compile(r"\ABash\(gh (?P<cmd>[a-z]+ [a-z]+):\*\)\Z")
 
-EXPECTED_AGENT_MODEL = "claude-sonnet-5"
+EXPECTED_AGENT_MODEL = "claude-sonnet-5-5"
 EXPECTED_AGENT_TIMEOUT = 60
 
 STEP0_HEADING = "## Step 0: defense-in-depth command guard"

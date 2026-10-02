@@ -74,7 +74,7 @@ REPO_README = ROOT / "README.md"
 PLUGIN_README = PLUGIN_DIR / "README.md"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "4.1.1"
+PLUGIN_VERSION = "4.1.2"
 
 INJECT_ALWAYS = "inject-always.sh"
 INJECT_RULES_PART = "inject-rules-part.sh"
@@ -174,7 +174,7 @@ STATE_DIR_NAME = "agent-discipline-state"
 SESSION_ID = "unified-discipline-session"
 
 OPUS_MODEL = "claude-opus-5-5"
-SONNET_MODEL = "claude-sonnet-5"
+SONNET_MODEL = "claude-sonnet-5-5"
 FABLE_MODEL = "claude-fable-5-1"
 
 # stdin の .model の値の組 (UNSET は .model キー自体を書かない)。

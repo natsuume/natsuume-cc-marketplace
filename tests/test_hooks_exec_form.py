@@ -164,7 +164,7 @@ COMMAND_HOOK_KEYS = {"type", "command", "args"}
 
 # agent entry のキー集合と値。`args` は command hook 専用のため持たない。
 AGENT_HOOK_KEYS = {"type", "if", "model", "prompt", "timeout"}
-AGENT_HOOK_MODEL = "claude-sonnet-5"
+AGENT_HOOK_MODEL = "claude-sonnet-5-5"
 AGENT_HOOK_TIMEOUT = 60
 EXPECTED_AGENT_HOOKS: dict[str, tuple[tuple[str, str], ...]] = {
     # plugin -> (event, `if` 条件) の多重集合
@@ -249,7 +249,7 @@ EXPECTED_PLUGIN_VERSIONS: dict[str, str] = {
     "pre-merge-cross-review": "4.0.2",
     "update-default-branch": "0.4.7",
     "natsuume-statusline": "0.11.8",
-    "agent-discipline": "4.1.1",
+    "agent-discipline": "4.1.2",
     "ui-discipline": "0.5.0",
     "natsuume-writing": "0.13.1",
     "cross-model-advisor": "6.0.1",
