@@ -285,13 +285,16 @@ fi
 
 # テキスト系文書のみの push も review 実行不要。block-pre-push-codex.sh も同じ判定
 # (is_text_only_push_in) でマーカーを要求せずに push を通すため、pending attestation は
-# 書かない (判定条件と fail-closed 方針は lib/text-paths.sh ヘッダを参照)。
-# stdout にだけは決まった 1 行を出す。codex-reviewer subagent は、wrapper が exit 0 で
-# stdout が (terminal sentinel の案内行と終了行を除いて) この 1 行だけのときに
-# `Status: skipped` の report を返す (agents/codex-reviewer.md の report 契約)。
+# 書かない (判定条件と fail-closed 方針は lib/text-paths.sh ヘッダを参照)。skip するのは判定
+# 関数が 0 を返したときだけで、2 (テキスト系文書だけだが gitleaks による秘匿情報の検査で
+# 止めた) のときは通常どおり codex review を実行する。
+# skip の経路では stdout に決まった 1 行だけを出し、stderr には何も出さない。codex-reviewer
+# subagent は、wrapper が exit 0 で、出力 (stdout と stderr が混ざって届いた場合はその全体) に
+# この 1 行がちょうど 1 行あり、他の行が terminal sentinel の案内行・終了行・空行だけのときに
+# `Status: skipped` の report を返す (agents/codex-reviewer.md の report 契約)。stderr に案内を
+# 出すと、混ざって届いた出力でこの条件が崩れる。
 if is_text_only_push_in "" "$BASE"; then
   printf 'Review skipped: text-only changes\n'
-  printf '[run-pre-push-codex-review] 変更がテキスト系文書のみのため codex review は実行不要です (push gate はマーカーを要求しません)。\n' >&2
   exit 0
 fi
 

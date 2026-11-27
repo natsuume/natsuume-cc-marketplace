@@ -81,23 +81,66 @@
 # remote に届くのは net diff ではなく範囲内の全 commit であり、中間 commit のコードも履歴に
 # 残る。
 #
+# 1-4 を満たした範囲は、最後に秘匿情報の候補を検査する (下記「秘匿情報の検査」)。
+#
+# exit code:
+#
+#   - 0: 範囲内の変更がテキスト系文書だけで、秘匿情報の検査も通った (skip してよい)
+#   - 1: テキスト系文書だけではない、または 1-4 の判定に必要な git の呼び出しが失敗した
+#   - 2: テキスト系文書だけだが、gitleaks が秘匿情報の候補を検出した、または gitleaks の実行が
+#        失敗した
+#
+# 呼び出し側は 0 のときだけ skip し、1 と 2 では従来どおりレビューを要求する。2 を 1 と
+# 分けるのは、deny の理由文で「テキスト系文書だけだが秘匿情報の検査で止めた」ことを示すため。
+#
+# ## 秘匿情報の検査 (gitleaks)
+#
+# テキスト系文書だけの skip ではレビュー (security review を含む) を行わないため、文書に
+# 書き込まれた認証情報も検査されない。PATH に gitleaks がある (`command -v gitleaks` が成功
+# する) 場合に限り、skip の前に範囲内の commit を次の形で検査する:
+#
+#   gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error
+#     --exit-code 1 --timeout 30 --log-opts="<base の OID>..<head の OID>" <repo の toplevel>
+#
+#   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う
+#   - `--timeout 30` は、gate を実行する Claude Code の command hook の既定の timeout
+#     (60 秒) より短くするための値。hook が timeout すると gate の判定が働かないため、
+#     gitleaks 自身の timeout で先に終わらせ、レビュー必須 (戻り値 2) に倒す
+#   - `--ignore-gitleaks-allow` は、文書中に `gitleaks:allow` コメントを書くだけで検出を
+#     抑止できないようにするために付ける (テキスト系文書だけの変更は、レビュー無しで
+#     そのコメントを書き込める)
+#   - stdout / stderr はどちらも捨てる。検出した認証情報の内容を hook や wrapper の出力に
+#     流さないため
+#   - 終了コード 0 だけを「検出なし」とし、それ以外 (検出・timeout・実行エラー) はすべて
+#     exit code 2 にする。repo の toplevel を解決できない場合も 2 にする
+#   - repo の `.gitleaks.toml` / `.gitleaksignore` は gitleaks の既定どおり読まれる。どちらも
+#     テキスト系文書ではないため、テキスト系文書だけの変更では書き換えられない
+#
+# gitleaks が PATH に無い環境では検査せず、1-4 を満たせば 0 を返す。
+#
 # ## push の予測 (is_text_only_push_in)
 #
 # push gate と push 前の codex review wrapper が使う。index と working tree が clean
 # (`git diff-index --quiet --cached HEAD` と `git diff-files --quiet` がともに成功) で、
-# かつ `origin/<base>..HEAD` が is_text_only_range_in を満たすときだけ成立する。
+# かつ `origin/<base>..HEAD` が is_text_only_range_in を満たすときだけ成立する。exit code は
+# is_text_only_range_in と同じ (index / working tree が clean でなければ 1。範囲の判定の
+# 2 はそのまま返す)。
 #
 # ## 利用側
 #
 #   - push gate (block-pre-push.sh / block-pre-push-codex.sh): 空 push の skip の直後に
-#     is_text_only_push_in で判定し、成立すればマーカーを要求せずに通す
+#     is_text_only_push_in で判定し、0 ならマーカーを要求せずに通す
 #   - push 前の codex review wrapper: 空 push の判定の直後に is_text_only_push_in で判定し、
-#     成立すれば codex review を実行せず、pending attestation も書かずに終了する
+#     0 なら codex review を実行せず、pending attestation も書かずに終了する
 #   - merge gate (block-pre-merge.sh): gh が返す PR の base commit (`baseRefOid`) と head SHA
-#     を is_text_only_range_in に渡し、成立すればレビュー記録を照合せずに通す
+#     を is_text_only_range_in に渡し、0 ならレビュー記録を照合せずに通す
 #   - merge 前の codex review wrapper: PR の base commit (`baseRefOid`) と HEAD を
-#     is_text_only_range_in に渡し、成立すれば codex review を実行せず、pending attestation
-#     も書かずに終了する
+#     is_text_only_range_in に渡し、0 なら codex review を実行せず、pending attestation も
+#     書かずに終了する
+#
+# gate は 2 のとき、deny の理由文に秘匿情報の検査でレビューを要求した旨の 1 文を加える
+# (認証情報の内容や gitleaks の出力は含めない)。wrapper は 2 のとき通常どおり codex review を
+# 実行する。
 
 # is_text_document_path <repo 相対 path>
 # exit code: 0 = テキスト系文書、1 = それ以外。定義はファイルヘッダの「テキスト系文書の
@@ -221,10 +264,33 @@ _text_paths_diff_is_text_only() {
   [ "${statuses[0]}" = "0" ] && [ "${statuses[1]}" = "0" ]
 }
 
+# _text_paths_secrets_scan_passes <target_cwd> <base_oid> <head_oid>
+# `<base_oid>..<head_oid>` の commit を gitleaks で検査し、終了コード 0 (検出なし) のときだけ
+# 0 を返す。gitleaks が PATH に無い場合は検査せずに 0 を返す。起動の形と、出力を捨てる理由は
+# ファイルヘッダの「秘匿情報の検査」を参照。
+_text_paths_secrets_scan_passes() {
+  local target_cwd="$1"
+  local base_oid="$2"
+  local head_oid="$3"
+  command -v gitleaks >/dev/null 2>&1 || return 0
+  local -a git_prefix=()
+  if [ -n "$target_cwd" ]; then
+    git_prefix=(-C "$target_cwd")
+  fi
+  local toplevel
+  toplevel=$(git "${git_prefix[@]}" rev-parse --show-toplevel 2>/dev/null) || return 1
+  [ -n "$toplevel" ] || return 1
+  gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
+    --exit-code 1 --timeout 30 --log-opts="${base_oid}..${head_oid}" "$toplevel" \
+    </dev/null >/dev/null 2>&1
+}
+
 # is_text_only_range_in <target_cwd> <base_rev> <head_rev>
-# exit code: 0 = 範囲内の変更がテキスト系文書だけ、1 = それ以外 (git の失敗を含む)。
-# 判定条件はファイルヘッダの「範囲の判定」を参照。target_cwd が空文字なら現在の cwd で、
-# 非空なら `git -C <target_cwd>` で git を実行する (diff-hash.sh の `*_in` 関数と同じ扱い)。
+# exit code: 0 = 範囲内の変更がテキスト系文書だけで秘匿情報の検査も通った、1 = テキスト系
+# 文書だけではない (git の失敗を含む)、2 = テキスト系文書だけだが秘匿情報の検査で止めた。
+# 判定条件はファイルヘッダの「範囲の判定」と「秘匿情報の検査」を参照。target_cwd が空文字
+# なら現在の cwd で、非空なら `git -C <target_cwd>` で git を実行する (diff-hash.sh の `*_in`
+# 関数と同じ扱い)。
 is_text_only_range_in() {
   local target_cwd="$1"
   local base_rev="$2"
@@ -271,13 +337,16 @@ is_text_only_range_in() {
   [ -n "$merge_base_oid" ] || return 1
   _text_paths_diff_is_text_only "$target_cwd" "$merge_base_oid" "$head_oid" || return 1
 
+  # 条件 5: 秘匿情報の候補が無いこと (gitleaks がある場合のみ検査する)。
+  _text_paths_secrets_scan_passes "$target_cwd" "$base_oid" "$head_oid" || return 2
+
   return 0
 }
 
 # is_text_only_push_in <target_cwd> <base>
-# exit code: 0 = push される変更がテキスト系文書だけ、1 = それ以外 (git の失敗を含む)。
-# 判定条件はファイルヘッダの「push の予測」を参照。target_cwd の扱いは
-# is_text_only_range_in と同じ。
+# exit code: is_text_only_range_in と同じ (0 = skip してよい、1 = テキスト系文書だけではない
+# または git の失敗、2 = テキスト系文書だけだが秘匿情報の検査で止めた)。判定条件はファイル
+# ヘッダの「push の予測」を参照。target_cwd の扱いは is_text_only_range_in と同じ。
 is_text_only_push_in() {
   local target_cwd="$1"
   local base="$2"

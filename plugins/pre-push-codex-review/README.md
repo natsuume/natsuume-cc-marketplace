@@ -120,14 +120,14 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 - 親 session は finding の priority / location / impact / verification / fix direction / disposition を受け取る。実行可能な command、payload、環境値、段階的な再現・回避手順、raw stdout / stderr は subagent context に閉じ込められる
 - exact detail を使った追加確認が必要な場合は同一 codex-reviewer を resume し、検証結果だけを再度 parent-safe report で受け取る
 - wrapper は exit 0 完了時に hash-bound pending attestation を atomic write し、auto-mark が subagent の正規 `pass/findings` report と current hash 一致を確認して codex-reviewed マーカーへ昇格する
-- 変更がテキスト系文書だけの場合、wrapper は codex review を実行せず、stdout に `Review skipped: text-only changes` の 1 行だけを出して exit 0 で終了する (pending attestation は書かない)。subagent はこのとき `Status: skipped` / `Reason: text-only changes` の report を返す。auto-mark は `Status: skipped` ではマーカーを書かず、review cadence も数えない (push gate はこの push にマーカーを要求しない)
+- 変更がテキスト系文書だけの場合、wrapper は codex review を実行せず、stdout に `Review skipped: text-only changes` の 1 行だけを出して exit 0 で終了する (pending attestation は書かず、stderr には terminal sentinel の案内行以外を出さない)。gitleaks が秘匿情報の候補を検出した場合や実行に失敗した場合は skip せず、通常どおり codex review を実行する。subagent は skip のとき `Status: skipped` / `Reason: text-only changes` の report を返す。stdout と stderr が混ざって届いても判定できるよう、subagent は出力全体に skip の行がちょうど 1 行あり、他の行が terminal sentinel の案内行・終了行・空行だけであることを条件にする。auto-mark は `Status: skipped` ではマーカーを書かず、review cadence も数えない (push gate はこの push にマーカーを要求しない)
 - model は `sonnet` に固定
 
 ## テキスト系文書のみの変更
 
 branch の変更がテキスト系文書だけの push は、空 push と同じく codex マーカーを要求せずに通します。push gate が deny しないため、codex-reviewer を起動する必要もありません。どの push が該当するかは push gate が判定します。codex-reviewer を起動した場合も、wrapper は codex review を実行せず、codex-reviewer は `Status: skipped` を返します。
 
-この skip では codex review も行わないため、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
+この skip では codex review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり codex マーカーを要求します (wrapper も通常どおり codex review を実行します)。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。repo の `.gitleaks.toml` / `.gitleaksignore` は gitleaks の既定どおり読まれます (どちらもテキスト系文書ではないため、テキスト系文書だけの変更では書き換えられません)。gitleaks が無い環境では、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
 
 **テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。Claude Code や他の coding agent は特定の場所・名前の Markdown を指示として読み込むため、次に列挙した場所・名前の Markdown はコードとして扱います (列挙に無いものの扱いは「既知の制約」を参照):
 

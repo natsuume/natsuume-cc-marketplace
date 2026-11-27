@@ -60,7 +60,7 @@ The `terminal sentinel:` announcement line and the `terminal sentinel end` line 
 
 Allowed status values are `Status: pass | findings | execution-failed | skipped`.
 
-When the wrapper exited zero and its stdout, apart from the `terminal sentinel:` announcement line, the `terminal sentinel end` line and blank lines, is exactly the single line `Review skipped: text-only changes`, the wrapper found that the branch changes only text documents and ran no review; the push gate does not require the codex-reviewed marker for such a push. In that case return only:
+When the wrapper exited zero, its output contains exactly one `Review skipped: text-only changes` line, and every other line is a `terminal sentinel:` announcement line, the `terminal sentinel end` line or a blank line, the wrapper found that the branch changes only text documents and ran no review; the push gate does not require the codex-reviewed marker for such a push. Apply this check to the whole output you received: when stdout and stderr arrive interleaved in one stream, check that combined stream. In that case return only:
 
 ```markdown
 # Codex Review
@@ -69,7 +69,7 @@ Status: skipped
 Reason: text-only changes
 ```
 
-A `Status: skipped` report never promotes the codex-reviewed marker. Return it only on that exact stdout; any other stdout from a zero exit is normalized as a review result below.
+A `Status: skipped` report never promotes the codex-reviewed marker. Return it only when that check holds; any other output from a zero exit is normalized as a review result below.
 
 When the `SubagentHandback` tool is available (Claude Code auto mode), deliver this report as the `message` of exactly one `SubagentHandback` call; the same contract applies to that message, and any closing text you write after the call is not the report. Otherwise return the report as your final message.
 

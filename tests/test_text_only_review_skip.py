@@ -294,8 +294,57 @@ FAKE_COMPANION_SCRIPT = (
 )
 
 
+# fake gitleaks は受け取った引数を記録し、環境変数で指定した終了コードで終わる。stdout と
+# stderr に目印の文字列を出し、hook や wrapper の出力へ流れないことの確認に使う。
+GITLEAKS_LOG_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_LOG"
+GITLEAKS_EXIT_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_EXIT"
+GITLEAKS_OUTPUT_MARKER = "FAKE-GITLEAKS-FINDING ghp_textonlyskiptestsecret0000000000"
+FAKE_GITLEAKS_TEMPLATE = """#!{python}
+import json
+import os
+import sys
+
+with open(os.environ["{log_env}"], "a", encoding="utf-8") as fp:
+    fp.write(json.dumps(sys.argv[1:]) + "\\n")
+print("{marker}")
+print("{marker}", file=sys.stderr)
+sys.exit(int(os.environ.get("{exit_env}", "0")))
+"""
+# テキスト系文書だけだが gitleaks で止めたとき、gate が deny の理由文に加える 1 文。
+GITLEAKS_DENY_SENTENCE = (
+    "変更はテキスト系文書だけですが、gitleaks が秘匿情報の候補を検出したか"
+    "実行に失敗したため、レビューを要求します。"
+)
+
+# gitleaks を含まない PATH (実行環境の PATH にある実行ファイルのうち gitleaks 以外への
+# symlink を集めたディレクトリ)。プロセス内で 1 度だけ作る。
+_GITLEAKS_FREE_BIN: tempfile.TemporaryDirectory[str] | None = None
+
+
+def gitleaks_free_bin() -> Path:
+    global _GITLEAKS_FREE_BIN
+    if _GITLEAKS_FREE_BIN is None:
+        _GITLEAKS_FREE_BIN = tempfile.TemporaryDirectory()
+        farm = Path(_GITLEAKS_FREE_BIN.name)
+        seen: set[str] = set()
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            candidate = Path(directory)
+            if not directory or not candidate.is_dir():
+                continue
+            for entry in candidate.iterdir():
+                if entry.name in seen or entry.name == "gitleaks":
+                    continue
+                try:
+                    if entry.is_file() and os.access(entry, os.X_OK):
+                        (farm / entry.name).symlink_to(entry)
+                        seen.add(entry.name)
+                except OSError:
+                    continue
+    return Path(_GITLEAKS_FREE_BIN.name)
+
+
 def wrapper_body_lines(stdout: str) -> list[str]:
-    """wrapper の stdout から、terminal sentinel の案内行・終了行と空行を除いた行。"""
+    """wrapper の出力から、terminal sentinel の案内行・終了行と空行を除いた行。"""
     return [
         line
         for line in stdout.splitlines()
@@ -421,7 +470,59 @@ class WorkspaceTestCase(unittest.TestCase):
         env["GIT_AUTHOR_EMAIL"] = "text-only-skip@example.invalid"
         env["GIT_COMMITTER_NAME"] = "Text Only Skip Test"
         env["GIT_COMMITTER_EMAIL"] = "text-only-skip@example.invalid"
+        # 実行環境の gitleaks の有無に結果が左右されないよう、既定では PATH の先頭に fake
+        # gitleaks (終了コード 0 = 検出なし) を置く。
+        self.fake_gitleaks_dir = self.root / "fake-gitleaks-bin"
+        self.fake_gitleaks_dir.mkdir()
+        fake_gitleaks = self.fake_gitleaks_dir / "gitleaks"
+        fake_gitleaks.write_text(
+            FAKE_GITLEAKS_TEMPLATE.format(
+                python=sys.executable,
+                log_env=GITLEAKS_LOG_ENV,
+                exit_env=GITLEAKS_EXIT_ENV,
+                marker=GITLEAKS_OUTPUT_MARKER,
+            ),
+            encoding="utf-8",
+        )
+        fake_gitleaks.chmod(fake_gitleaks.stat().st_mode | stat.S_IXUSR)
+        self.gitleaks_log = self.root / "gitleaks-calls.jsonl"
+        env[GITLEAKS_LOG_ENV] = str(self.gitleaks_log)
+        env[GITLEAKS_EXIT_ENV] = "0"
+        env["PATH"] = f"{self.fake_gitleaks_dir}{os.pathsep}{env.get('PATH', '')}"
         self.env = env
+
+    # ------------------------------------------------------------------
+    # gitleaks
+    # ------------------------------------------------------------------
+
+    def set_gitleaks_exit(self, code: int) -> None:
+        self.env[GITLEAKS_EXIT_ENV] = str(code)
+
+    def gitleaks_calls(self) -> list[list[str]]:
+        if not self.gitleaks_log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.gitleaks_log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def remove_gitleaks_from_path(self) -> None:
+        """PATH から gitleaks を取り除く (fake を外し、gitleaks を含むディレクトリを
+        gitleaks 以外の実行ファイルの symlink 集合に置き換える)。"""
+        entries: list[str] = []
+        replaced = False
+        for entry in self.env["PATH"].split(os.pathsep):
+            if entry == str(self.fake_gitleaks_dir):
+                continue
+            if entry and (Path(entry) / "gitleaks").exists():
+                if not replaced:
+                    entries.append(str(gitleaks_free_bin()))
+                    replaced = True
+                continue
+            entries.append(entry)
+        self.env["PATH"] = os.pathsep.join(entries)
+        self.assertIsNone(shutil.which("gitleaks", path=self.env["PATH"]))
 
     # ------------------------------------------------------------------
     # fixture
@@ -928,6 +1029,74 @@ class TextOnlyPushPredictionTest(WorkspaceTestCase):
         self.assertEqual(self.push_status(repository, base="no-such-base"), 1)
 
 
+class TextOnlySecretsScanTest(WorkspaceTestCase):
+    """テキスト系文書だけの範囲は、PATH に gitleaks があれば skip の前に秘匿情報を検査する。
+
+    戻り値は 0 = skip してよい / 1 = テキスト系文書だけではない / 2 = テキスト系文書だけだが
+    gitleaks が候補を検出した、または gitleaks の実行が失敗した。
+    """
+
+    def create_text_only_branch(self) -> Repository:
+        repository = self.create_repository()
+        repository.git(
+            "update-ref", "refs/remotes/origin/master", repository.rev("master")
+        )
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        return repository
+
+    def test_gitleaks_receives_the_resolved_range_and_fixed_options(self) -> None:
+        repository = self.create_text_only_branch()
+        self.assertEqual(self.range_status(repository, base="master"), 0)
+        self.assertEqual(
+            self.gitleaks_calls(),
+            [
+                [
+                    "git",
+                    "--no-banner",
+                    "--redact",
+                    "--ignore-gitleaks-allow",
+                    "--log-level",
+                    "error",
+                    "--exit-code",
+                    "1",
+                    "--timeout",
+                    "30",
+                    f"--log-opts={repository.rev('master')}..{repository.head()}",
+                    str(repository.path),
+                ]
+            ],
+        )
+
+    def test_gitleaks_findings_or_failures_stop_the_skip(self) -> None:
+        for code in (1, 2, 126):
+            with self.subTest(exit_code=code):
+                repository = self.create_repository(f"repo-{code}")
+                repository.git(
+                    "update-ref", "refs/remotes/origin/master", repository.rev("master")
+                )
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                self.set_gitleaks_exit(code)
+                self.assertEqual(self.range_status(repository), 2)
+                self.assertEqual(self.push_status(repository), 2)
+
+    def test_gitleaks_is_not_run_for_ranges_that_are_not_text_only(self) -> None:
+        repository = self.create_repository()
+        repository.write("tool.py", "print('changed')\n")
+        repository.commit_all("code")
+        self.set_gitleaks_exit(1)
+        self.assertEqual(self.range_status(repository), 1)
+        self.assertEqual(self.gitleaks_calls(), [])
+
+    def test_text_only_range_is_skipped_without_gitleaks_on_path(self) -> None:
+        repository = self.create_text_only_branch()
+        self.remove_gitleaks_from_path()
+        self.assertEqual(self.range_status(repository), 0)
+        self.assertEqual(self.push_status(repository), 0)
+        self.assertEqual(self.gitleaks_calls(), [])
+
+
 @unittest.skipUnless(JQ, "push gate integration requires jq")
 class PushGateTextOnlySkipTest(WorkspaceTestCase):
     """2 つの push gate がテキスト系文書のみの push をマーカー無しで通す。"""
@@ -983,6 +1152,51 @@ class PushGateTextOnlySkipTest(WorkspaceTestCase):
             repository.merge_base("origin/master"),
             "HEAD",
         )
+        for name, gate in self.GATES.items():
+            with self.subTest(gate=name):
+                result = self.run_gate(gate, repository)
+                self.assertEqual(result.stdout, b"", result.stdout.decode())
+        # 通すのは gitleaks (fake、終了コード 0) の検査を経た後である。
+        self.assertEqual(len(self.gitleaks_calls()), len(self.GATES))
+
+    def create_text_only_push(self) -> Repository:
+        repository = self.create_pushable_repository()
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        return repository
+
+    def test_gitleaks_finding_or_failure_requires_markers(self) -> None:
+        """gitleaks が検出・失敗したら skip せず、deny の理由文にその旨の 1 文を加える。
+        gitleaks の出力は hook の出力に出さない。"""
+        repository = self.create_text_only_push()
+        for code in (1, 3):
+            self.set_gitleaks_exit(code)
+            for name, gate in self.GATES.items():
+                with self.subTest(gate=name, exit_code=code):
+                    result = self.run_gate(gate, repository)
+                    self.assert_marker_deny(result)
+                    reason = json.loads(result.stdout)["hookSpecificOutput"][
+                        "permissionDecisionReason"
+                    ]
+                    self.assertIn(GITLEAKS_DENY_SENTENCE, reason)
+                    self.assertNotIn(
+                        GITLEAKS_OUTPUT_MARKER.encode(), result.stdout + result.stderr
+                    )
+
+    def test_code_push_deny_does_not_mention_gitleaks(self) -> None:
+        repository = self.create_pushable_repository()
+        repository.write("tool.py", "print('changed')\n")
+        repository.commit_all("code")
+        self.set_gitleaks_exit(1)
+        for name, gate in self.GATES.items():
+            with self.subTest(gate=name):
+                result = self.run_gate(gate, repository)
+                self.assert_marker_deny(result)
+                self.assertNotIn("gitleaks", result.stdout.decode())
+
+    def test_text_only_push_passes_without_gitleaks_on_path(self) -> None:
+        repository = self.create_text_only_push()
+        self.remove_gitleaks_from_path()
         for name, gate in self.GATES.items():
             with self.subTest(gate=name):
                 result = self.run_gate(gate, repository)
@@ -1113,6 +1327,44 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         self.assertFalse((repository.git_dir() / MERGE_FINAL_RECORD).exists())
         result = self.run_gate(repository)
         self.assertEqual(result.stdout, b"", result.stdout.decode())
+        # 通すのは gitleaks (fake、終了コード 0) の検査を経た後である。
+        self.assertEqual(len(self.gitleaks_calls()), 1)
+
+    def create_text_only_pr(self) -> Repository:
+        repository = self.create_pr_repository()
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        self.configure_pr(repository.head(), repository.rev("master"))
+        return repository
+
+    def test_gitleaks_finding_or_failure_falls_back_to_record(self) -> None:
+        """gitleaks が検出・失敗したら記録を照合し、deny の理由文にその旨の 1 文を加える。
+        gitleaks の出力は hook の出力に出さない。"""
+        for code in (1, 3):
+            with self.subTest(exit_code=code):
+                repository = self.create_pr_repository(f"repo-{code}")
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                head = repository.head()
+                self.configure_pr(head, repository.rev("master"))
+                self.set_gitleaks_exit(code)
+                result = self.run_gate(repository)
+                self.assert_record_deny(result)
+                reason = json.loads(result.stdout)["hookSpecificOutput"][
+                    "permissionDecisionReason"
+                ]
+                self.assertIn(GITLEAKS_DENY_SENTENCE, reason)
+                self.assertNotIn(
+                    GITLEAKS_OUTPUT_MARKER.encode(), result.stdout + result.stderr
+                )
+                self.write_record(repository, head)
+                self.assertEqual(self.run_gate(repository).stdout, b"")
+
+    def test_text_only_pr_passes_without_gitleaks_on_path(self) -> None:
+        repository = self.create_text_only_pr()
+        self.remove_gitleaks_from_path()
+        result = self.run_gate(repository)
+        self.assertEqual(result.stdout, b"", result.stdout.decode())
 
     def test_mixed_pr_still_requires_record(self) -> None:
         repository = self.create_pr_repository()
@@ -1231,6 +1483,17 @@ class WrapperTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
             timeout=180,
         )
 
+    def assert_skip_only_output(self, result: subprocess.CompletedProcess[str]) -> None:
+        """skip の経路の出力: stdout は skip の 1 行だけ、stderr は terminal sentinel の
+        案内行だけで、両者が混ざって届いても skip の 1 行以外は sentinel の行と空行だけ。"""
+        self.assertEqual(wrapper_body_lines(result.stdout), [SKIP_LINE], result.stdout)
+        self.assertEqual(wrapper_body_lines(result.stderr), [], result.stderr)
+        self.assertEqual(
+            wrapper_body_lines(result.stdout + result.stderr),
+            [SKIP_LINE],
+            result.stdout + result.stderr,
+        )
+
     # -- pre-push-codex-review --------------------------------------------
 
     def create_push_repository(self) -> Repository:
@@ -1251,16 +1514,28 @@ class WrapperTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         result = self.run_wrapper(PUSH_WRAPPER, repository)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(wrapper_body_lines(result.stdout), [SKIP_LINE], result.stdout)
+        self.assert_skip_only_output(result)
         self.assertFalse(self.tripwire.exists(), "codex companion が起動された")
         self.assertFalse(pending.exists(), "pending attestation が残っている")
-        guidance = [
-            line
-            for line in result.stderr.splitlines()
-            if line.startswith("[run-pre-push-codex-review]")
-            and "テキスト系文書" in line
-        ]
-        self.assertEqual(len(guidance), 1, result.stderr)
+        self.assertEqual(len(self.gitleaks_calls()), 1)
+
+    def test_push_wrapper_reviews_text_only_branch_when_gitleaks_stops_it(
+        self,
+    ) -> None:
+        repository = self.create_push_repository()
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        self.set_gitleaks_exit(1)
+
+        result = self.run_wrapper(PUSH_WRAPPER, repository)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(SKIP_LINE, result.stdout)
+        self.assertTrue(self.tripwire.exists(), result.stderr)
+        self.assertTrue(
+            (repository.git_dir() / PUSH_CODEX_PENDING).exists(), result.stderr
+        )
+        self.assertNotIn(GITLEAKS_OUTPUT_MARKER, result.stdout + result.stderr)
 
     def test_push_wrapper_reviews_mixed_branch(self) -> None:
         repository = self.create_push_repository()
@@ -1318,10 +1593,72 @@ class WrapperTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         result = self.run_wrapper(MERGE_WRAPPER, repository)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(wrapper_body_lines(result.stdout), [SKIP_LINE], result.stdout)
+        self.assert_skip_only_output(result)
         self.assertFalse(self.tripwire.exists(), "codex companion が起動された")
         self.assertFalse(pending.exists(), "pending attestation が残っている")
         self.assertFalse(final.exists(), "起動前の final attestation が残っている")
+        self.assertEqual(len(self.gitleaks_calls()), 1)
+
+    @unittest.skipUnless(JQ, "merge wrapper requires jq")
+    def test_merge_wrapper_skip_after_fetching_the_base_writes_nothing_to_stderr(
+        self,
+    ) -> None:
+        """PR の base commit がローカルに無く fetch した場合も、skip の経路では fetch の
+        案内と出力を stderr に出さない。"""
+        repository = self.create_merge_repository()
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        # 別の clone から origin の master を進め、ローカルには無い base commit を作る。
+        other = Repository(self.root / "other", self.env)
+        Repository(self.root, self.env).git(
+            "clone", "-q", str(self.root / "repo-origin.git"), str(other.path)
+        )
+        other.write("docs/base-update.md", "base update\n")
+        advanced_base = other.commit_all("advance base")
+        other.git("push", "-q", "origin", "HEAD:master")
+        assert GIT is not None
+        lookup = subprocess.run(
+            [GIT, "cat-file", "-e", f"{advanced_base}^{{commit}}"],
+            cwd=repository.path,
+            env=self.env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(lookup.returncode, 0, "base commit がローカルに既にある")
+        self.configure_fake_gh(
+            {
+                "number": PR_NUMBER,
+                "headRefOid": repository.head(),
+                "baseRefName": "master",
+                "baseRefOid": advanced_base,
+            }
+        )
+
+        result = self.run_wrapper(MERGE_WRAPPER, repository)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(repository.rev("refs/remotes/origin/master"), advanced_base)
+        self.assert_skip_only_output(result)
+        self.assertFalse(self.tripwire.exists(), "codex companion が起動された")
+
+    @unittest.skipUnless(JQ, "merge wrapper requires jq")
+    def test_merge_wrapper_reviews_text_only_pr_when_gitleaks_stops_it(self) -> None:
+        repository = self.create_merge_repository()
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        self.configure_merge_pr(repository)
+        self.set_gitleaks_exit(1)
+
+        result = self.run_wrapper(MERGE_WRAPPER, repository)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(SKIP_LINE, result.stdout)
+        self.assertTrue(self.tripwire.exists(), result.stderr)
+        self.assertTrue(
+            (repository.git_dir() / MERGE_PENDING_RECORD).exists(), result.stderr
+        )
+        self.assertNotIn(GITLEAKS_OUTPUT_MARKER, result.stdout + result.stderr)
 
     @unittest.skipUnless(JQ, "merge wrapper requires jq")
     def test_merge_wrapper_reviews_mixed_pr(self) -> None:
@@ -1663,6 +2000,25 @@ class SkippedReportContractTest(unittest.TestCase):
                 self.assertIn(f"```markdown\n{SKIPPED_REPORT}\n```", body)
                 self.assertIn("exited zero", body)
 
+    def test_skip_condition_holds_on_interleaved_stdout_and_stderr(self) -> None:
+        """skip の条件は stdout と stderr の分離に依存しない (出力全体に skip の行が
+        ちょうど 1 行あり、他は sentinel の行と空行だけ)。"""
+        for name, path in self.AGENTS.items():
+            with self.subTest(agent=name):
+                body = " ".join(path.read_text(encoding="utf-8").split())
+                self.assertIn(
+                    f"its output contains exactly one `{SKIP_LINE}` line, and every "
+                    "other line is a `terminal sentinel:` announcement line, the "
+                    "`terminal sentinel end` line or a blank line",
+                    body,
+                )
+                self.assertIn(
+                    "when stdout and stderr arrive interleaved in one stream, check "
+                    "that combined stream",
+                    body,
+                )
+                self.assertNotIn("its stdout, apart from", body)
+
     def test_merge_reviewer_checks_skip_before_inconclusive_body(self) -> None:
         body = MERGE_CODEX_AGENT.read_text(encoding="utf-8")
         skip_index = body.find(f"`{SKIP_LINE}`")
@@ -1735,11 +2091,26 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
         for name, path in {**PLUGIN_READMES, "root": ROOT / "README.md"}.items():
             with self.subTest(readme=name):
                 body = path.read_text(encoding="utf-8")
+                self.assertIn("PATH に gitleaks がある環境では", body)
                 self.assertIn("文書に書き込まれた token などの認証情報", body)
                 self.assertIn(
                     "gitleaks 等の secret scanner を pre-commit / pre-push hook として併用",
                     body,
                 )
+
+    def test_plugin_readmes_describe_the_gitleaks_scan(self) -> None:
+        """gitleaks の検査で skip を止める条件、`--ignore-gitleaks-allow` の理由、repo の
+        設定ファイルの扱いを書く。"""
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合", body
+                )
+                self.assertIn("`--ignore-gitleaks-allow` を付けるのは", body)
+                self.assertIn("`gitleaks:allow` コメント", body)
+                self.assertIn("`.gitleaks.toml` / `.gitleaksignore`", body)
+                self.assertIn("deny の理由文にその旨を 1 文加えます", body)
 
     def test_split_plugin_readmes_list_the_lib_in_file_table(self) -> None:
         for name in ("pre-push-codex-review", "pre-merge-cross-review"):

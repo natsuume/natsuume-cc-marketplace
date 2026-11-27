@@ -33,6 +33,7 @@
 #    - default branch (master/main) なら git-guardrails に委譲して skip
 #    - 空 push (全 commit が empty commit の鎖) なら marker gate を skip
 #    - テキスト系文書のみの push (定義は lib/text-paths.sh ヘッダ参照) なら marker gate を skip
+#      (gitleaks が PATH にあれば秘匿情報の検査を通った場合に限る)
 #    - commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを計算
 #    - codex マーカー (markers.sh の `CODEX_MARKER_NAME` で定義) と一致しなければ deny
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
@@ -114,8 +115,18 @@ case "$COMMAND" in
   *\\$'\n'*) COMMAND=$(normalize_line_continuations_to_space "$COMMAND") ;;
 esac
 
+# deny の理由文の末尾に加える 1 文。テキスト系文書だけの push を秘匿情報の検査で止めた
+# 場合だけ設定する (下の is_text_only_push_in の判定を参照)。
+DENY_REASON_SUFFIX=""
+
 deny() {
-  jq -n --arg reason "$1" '{
+  local reason="$1"
+  if [ -n "$DENY_REASON_SUFFIX" ]; then
+    reason="${reason}
+
+${DENY_REASON_SUFFIX}"
+  fi
+  jq -n --arg reason "$reason" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
@@ -728,10 +739,17 @@ if is_empty_push_in "$TARGET_CWD" "$BASE"; then
 fi
 
 # テキスト系文書のみの push も、空 push と同じくマーカーを要求せずに通す。判定条件 (各
-# commit の raw 差分の path と mode、merge commit の除外、index / worktree の clean) と
-# fail-closed 方針は lib/text-paths.sh ヘッダを参照。
-if is_text_only_push_in "$TARGET_CWD" "$BASE"; then
+# commit の raw 差分の path と mode、merge commit の除外、index / worktree の clean、gitleaks に
+# よる秘匿情報の検査) と fail-closed 方針は lib/text-paths.sh ヘッダを参照。通すのは判定関数が
+# 0 を返したときだけで、2 (テキスト系文書だけだが秘匿情報の検査で止めた) のときは従来どおり
+# マーカーを照合し、deny の理由文にその旨を加える (gitleaks の出力は含めない)。
+TEXT_ONLY_STATUS=0
+is_text_only_push_in "$TARGET_CWD" "$BASE" || TEXT_ONLY_STATUS=$?
+if [ "$TEXT_ONLY_STATUS" -eq 0 ]; then
   exit 0
+fi
+if [ "$TEXT_ONLY_STATUS" -eq 2 ]; then
+  DENY_REASON_SUFFIX="変更はテキスト系文書だけですが、gitleaks が秘匿情報の候補を検出したか実行に失敗したため、レビューを要求します。"
 fi
 
 # branch diff hash 計算。 失敗時 (orphan branch / shallow clone 等) は明示 deny。

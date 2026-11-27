@@ -273,20 +273,45 @@ base_oid_is_in_origin_base() {
   git merge-base --is-ancestor "$BASE_OID" "$BASE_REF_FULL" 2>/dev/null
 }
 
+# fetch の案内と git fetch の出力は、 ここでは stderr に出さずに FETCH_LOG に保持する。 後段で
+# テキスト系文書のみの PR として skip する場合は stderr に何も出さない契約のため (理由は skip の
+# 判定の直前のコメントを参照)。 失敗して中断する場合と、 skip せずにレビューへ進む場合は、
+# 保持した内容を stderr へ出す。
+FETCH_LOG=""
 if ! base_oid_is_in_origin_base; then
-  note "PR の base commit (${BASE_OID}) がローカルの ${BASE_REF_FULL} に含まれないため fetch します。"
+  FETCH_LOG="[run-pre-merge-codex-review] PR の base commit (${BASE_OID}) がローカルの ${BASE_REF_FULL} に含まれないため fetch しました。"
   # 明示 refspec で fetch する。 refspec を省略すると single-branch clone 等では FETCH_HEAD
   # しか更新されず、 再判定が読む完全修飾 ref が更新されないまま恒久的に fail する。
-  git fetch origin "+refs/heads/${BASE_NAME}:${BASE_REF_FULL}" >&2 || fail "\`git fetch origin +refs/heads/${BASE_NAME}:${BASE_REF_FULL}\` に失敗しました。 ネットワークと remote の状態を確認してから再実行してください。"
+  if ! FETCH_OUTPUT=$(git fetch origin "+refs/heads/${BASE_NAME}:${BASE_REF_FULL}" 2>&1); then
+    printf '%s\n%s\n' "$FETCH_LOG" "$FETCH_OUTPUT" >&2
+    fail "\`git fetch origin +refs/heads/${BASE_NAME}:${BASE_REF_FULL}\` に失敗しました。 ネットワークと remote の状態を確認してから再実行してください。"
+  fi
+  if [ -n "$FETCH_OUTPUT" ]; then
+    FETCH_LOG="${FETCH_LOG}
+${FETCH_OUTPUT}"
+  fi
   if ! base_oid_is_in_origin_base; then
+    printf '%s\n' "$FETCH_LOG" >&2
     fail "PR #${PR_NUMBER} の base commit (${BASE_OID}) が fetch 後もローカルの ${BASE_REF_FULL} に含まれません。 ローカルの base ref が PR の base branch (${BASE_NAME}) を表していない可能性があります (別 remote を指す PR / base branch の force-push 等)。 remote の設定と \`git fetch origin ${BASE_NAME}\` の結果を確認してから再実行してください。"
   fi
 fi
 
+# 保持した fetch の案内と出力を stderr へ出す (中断・レビューへ進む経路で使う)。
+flush_fetch_log() {
+  if [ -n "$FETCH_LOG" ]; then
+    printf '%s\n' "$FETCH_LOG" >&2
+    FETCH_LOG=""
+  fi
+}
+
 # レビュー対象範囲 (merge-base..HEAD) に差分が無い状態でレビューすると、 何も見ていない
 # 「レビュー済み」 記録を残すことになるため実行しない。
-MERGE_BASE=$(git merge-base HEAD "$BASE_REF_FULL" 2>/dev/null) || fail "HEAD と ${BASE_REF_FULL} の merge-base を解決できませんでした (shallow clone / 履歴の不足が考えられます)。 \`git fetch --unshallow\` 等で履歴を補ってから再実行してください。"
+if ! MERGE_BASE=$(git merge-base HEAD "$BASE_REF_FULL" 2>/dev/null); then
+  flush_fetch_log
+  fail "HEAD と ${BASE_REF_FULL} の merge-base を解決できませんでした (shallow clone / 履歴の不足が考えられます)。 \`git fetch --unshallow\` 等で履歴を補ってから再実行してください。"
+fi
 if git diff --quiet "$MERGE_BASE" HEAD 2>/dev/null; then
+  flush_fetch_log
   fail "レビュー対象の差分が空です (merge-base ${MERGE_BASE} と HEAD が同一内容)。 PR に差分がある状態で再実行してください。"
 fi
 
@@ -296,15 +321,18 @@ fi
 # 同じ起点で同じ判定を行い、 成立すればレビュー記録を要求しない。 ローカルの
 # `refs/remotes/origin/<base>` を起点にしないのは、 PR の実際の base に無い commit を含みうる
 # ためで、 そのまま起点にすると merge で base に入る commit が判定範囲から外れる。 起動時の
-# stale 記録の掃除は上で済んでいる。
-# stdout にだけは決まった 1 行を出す。 codex-reviewer subagent は、 wrapper が exit 0 で
-# stdout が (terminal sentinel の案内行と終了行を除いて) この 1 行だけのときに
-# `Status: skipped` の report を返す (agents/codex-reviewer.md の report 契約)。
+# stale 記録の掃除は上で済んでいる。 skip するのは判定関数が 0 を返したときだけで、 2 (テキスト
+# 系文書だけだが gitleaks による秘匿情報の検査で止めた) のときは通常どおり codex review を実行する。
+# skip の経路では stdout に決まった 1 行だけを出し、 stderr には何も出さない。 codex-reviewer
+# subagent は、 wrapper が exit 0 で、 出力 (stdout と stderr が混ざって届いた場合はその全体) に
+# この 1 行がちょうど 1 行あり、 他の行が terminal sentinel の案内行・終了行・空行だけのときに
+# `Status: skipped` の report を返す (agents/codex-reviewer.md の report 契約)。 stderr に案内を
+# 出すと、 混ざって届いた出力でこの条件が崩れる。
 if is_text_only_range_in "" "$BASE_OID" HEAD; then
   printf 'Review skipped: text-only changes\n'
-  note "PR #${PR_NUMBER} の変更はテキスト系文書のみのため codex review は実行不要です (merge gate はレビュー記録を要求しません)。"
   exit 0
 fi
+flush_fetch_log
 
 COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つかりません。 \`claude plugin install codex@openai-codex\` で導入してください (versioned cache / unversioned cache / marketplace clone のいずれにも codex-companion.mjs が見つかりませんでした。 詳細な探索 path は \`lib/codex-companion-resolver.sh\` のヘッダを参照)。"
 

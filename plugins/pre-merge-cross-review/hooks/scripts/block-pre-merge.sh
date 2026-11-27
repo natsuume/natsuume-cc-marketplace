@@ -33,7 +33,9 @@
 #    すると merge で base に入る commit が判定範囲から外れる。 base commit SHA の欠落・形式
 #    不正、 lib の読み込み失敗、 判定の不成立 (base や head の object がローカルに無い等の git
 #    失敗を含む) では判定を打ち切り、 次のローカル記録の検証へ進む (判定できない場合は
-#    レビュー必須に倒す)。
+#    レビュー必須に倒す)。 テキスト系文書だけでも、 gitleaks が PATH にあり秘匿情報の候補を
+#    検出した (または実行に失敗した) 場合は通さず、 記録の検証へ進み、 deny の理由文にその旨を
+#    1 文加える。
 # 5. **ローカル記録の検証**: merge 実行 repo (payload の `cwd`) の git-dir 直下にある codex
 #    review の final attestation (2 行 `pr=<全数字>` / `head=<40 hex 小文字>`) が symlink で
 #    ない regular file として在り、 番号と head SHA が gh の値の両方に一致するときだけ無出力で
@@ -93,8 +95,18 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
+# deny の理由文の末尾に加える 1 文。テキスト系文書だけの PR を秘匿情報の検査で止めた場合
+# だけ設定する (下の is_text_only_range_in の判定を参照)。
+DENY_REASON_SUFFIX=""
+
 deny() {
-  jq -n --arg reason "$1" '{
+  local reason="$1"
+  if [ -n "$DENY_REASON_SUFFIX" ]; then
+    reason="${reason}
+
+${DENY_REASON_SUFFIX}"
+  fi
+  jq -n --arg reason "$reason" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
@@ -348,9 +360,17 @@ is_full_lowercase_commit_sha() {
   esac
   [ "${#1}" -eq 40 ]
 }
-if [ "$TEXT_PATHS_LOADED" = "1" ] && is_full_lowercase_commit_sha "$BASE_OID" \
-  && is_text_only_range_in "$PAYLOAD_CWD" "$BASE_OID" "$HEAD_SHA"; then
-  exit 0
+# 通すのは判定関数が 0 を返したときだけ。2 (テキスト系文書だけだが gitleaks による秘匿情報の
+# 検査で止めた) のときは記録を照合し、deny の理由文にその旨を加える (gitleaks の出力は含めない)。
+if [ "$TEXT_PATHS_LOADED" = "1" ] && is_full_lowercase_commit_sha "$BASE_OID"; then
+  TEXT_ONLY_STATUS=0
+  is_text_only_range_in "$PAYLOAD_CWD" "$BASE_OID" "$HEAD_SHA" || TEXT_ONLY_STATUS=$?
+  if [ "$TEXT_ONLY_STATUS" -eq 0 ]; then
+    exit 0
+  fi
+  if [ "$TEXT_ONLY_STATUS" -eq 2 ]; then
+    DENY_REASON_SUFFIX="変更はテキスト系文書だけですが、gitleaks が秘匿情報の候補を検出したか実行に失敗したため、レビューを要求します。"
+  fi
 fi
 
 if [ -z "$FINAL_PATH" ]; then
