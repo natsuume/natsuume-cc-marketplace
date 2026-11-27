@@ -199,6 +199,8 @@ command -v agy >/dev/null 2>&1 || fail "agy (Antigravity CLI) が見つかりま
 # ユーザーから読めない。umask は変えない (変えると、起動する agy が作るログ等の権限にも
 # 継承されるため)。
 WORK_DIR=""
+# 起動中の agy の pid。起動前と終了後は空。
+AGY_PID=""
 
 remove_work_dir() {
   if [ -n "$WORK_DIR" ]; then
@@ -206,9 +208,17 @@ remove_work_dir() {
   fi
 }
 
+# シグナル受信時は、起動中の agy に TERM を転送してから明示的に exit し、EXIT trap で
+# 後始末する。
+on_signal() {
+  if [ -n "$AGY_PID" ]; then
+    kill -TERM "$AGY_PID" 2>/dev/null
+  fi
+  exit 1
+}
+
 trap remove_work_dir EXIT
-# シグナル受信時は明示的に exit して EXIT trap で後始末する。
-trap 'exit 1' HUP INT TERM
+trap on_signal HUP INT TERM
 
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/antigravity-rate-limit.XXXXXX" 2>/dev/null)
 if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
@@ -221,9 +231,15 @@ AGY_STDERR_FILE="$WORK_DIR/agy-stderr"
 
 # ---- agy の起動 ----
 
+# agy は background で起動して wait で待つ。foreground の子を待っている間の bash は、
+# 受けたシグナルの trap を子の終了まで実行しないため、agy が応答待ちで止まると script も
+# 後始末もそのまま止まる。wait はシグナルを受けるとすぐ戻り、trap が agy を止めて終了する。
 agy -p "/usage" --output-format json --print-timeout 60s \
-  < /dev/null > "$AGY_STDOUT_FILE" 2> "$AGY_STDERR_FILE"
+  < /dev/null > "$AGY_STDOUT_FILE" 2> "$AGY_STDERR_FILE" &
+AGY_PID=$!
+wait "$AGY_PID"
 AGY_EXIT_CODE=$?
+AGY_PID=""
 
 if [ "$AGY_EXIT_CODE" -ne 0 ]; then
   log_error "agy が終了コード $AGY_EXIT_CODE で終了しました。"

@@ -31,8 +31,10 @@ import copy
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -925,6 +927,76 @@ def skill_frontmatter(text: str) -> dict[str, str]:
             raise AssertionError(f"frontmatter の行が `key: value` でない: {line!r}")
         fields[key.strip()] = value.strip()
     return fields
+
+
+SLOW_FAKE_AGY_SCRIPT = """#!/bin/sh
+printf '%s\\n' "$$" > "$FAKE_AGY_PID_FILE"
+exec "$FAKE_AGY_SLEEP" 30
+"""
+
+
+class SignalHandlingTest(ScriptBehaviorTestCase):
+    """応答しない agy を待っている間に script だけがシグナルを受けた場合の後始末。"""
+
+    def wait_for_file(self, path: Path, timeout_seconds: float) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if path.exists() and path.read_text(encoding="utf-8").strip():
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"{path} が作られなかった")
+
+    def test_term_stops_waiting_agy_and_removes_work_dir(self) -> None:
+        sleep_path = shutil.which("sleep")
+        self.assertIsNotNone(sleep_path)
+        bin_dir = self.make_bin(with_agy=False, with_jq=True)
+        slow_agy = bin_dir / "agy"
+        slow_agy.write_text(SLOW_FAKE_AGY_SCRIPT, encoding="utf-8")
+        slow_agy.chmod(0o755)
+        pid_file = self.tmp / "agy.pid"
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": str(bin_dir),
+                "HOME": str(self.home),
+                "TMPDIR": str(self.script_tmpdir),
+                "FAKE_AGY_PID_FILE": str(pid_file),
+                "FAKE_AGY_SLEEP": str(sleep_path),
+            }
+        )
+        process = subprocess.Popen(
+            [BASH, str(SCRIPT)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.wait_for_file(pid_file, 10)
+        agy_pid = int(pid_file.read_text(encoding="utf-8").strip())
+
+        # script のプロセスだけに TERM を送る (agy には直接送らない)。
+        process.send_signal(signal.SIGTERM)
+        started = time.monotonic()
+        process.communicate(timeout=10)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertNotEqual(0, process.returncode)
+
+        # script が agy に TERM を転送し、agy も終了している。
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(agy_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(agy_pid, signal.SIGKILL)
+            self.fail("script が agy に TERM を転送していない")
+
+        # 一時ディレクトリが残っていない。
+        self.assertEqual([], list(self.script_tmpdir.iterdir()))
 
 
 class PluginStructureTest(unittest.TestCase):
