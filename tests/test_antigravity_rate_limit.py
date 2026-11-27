@@ -8,11 +8,14 @@
     0〜100)。違反時は agy を起動しない
   - 依存 (agy / jq) の不在。jq が無いときは agy を起動しない
   - agy に渡す引数 (`-p /usage --output-format json --print-timeout 60s`) と、agy の
-    非 0 終了 (終了コード 2 を含む) を取得失敗として扱うこと
-  - agy の応答の検証 (JSON・status・num_turns・command.name・groups・bucket)
-  - 正規化した JSON の出力 (usedPercent の丸め、未使用 bucket の resetTime、description
-    の有無)
-  - 閾値判定 (`--max-used-percent` 指定時の exit 0 / 2 と境界値)
+    非 0 終了 (終了コード 2 を含む) を取得失敗として扱うこと。そのとき stderr に出す
+    agy の stderr は先頭 5 行まで
+  - agy の応答の検証 (JSON がちょうど 1 つ・status・num_turns・command.name・groups・
+    各グループの buckets 配列・bucket)
+  - 正規化した JSON の出力 (usedPercent の丸め、未使用・欠損の resetTime、文字列でない
+    name / description、空の buckets)
+  - 閾値判定 (`--max-used-percent` 指定時の exit 0 / 2 と境界値。空の buckets は判定の
+    対象が無いだけ)
 - plugin の構造 (`PluginStructureTest`): plugin.json・marketplace.json・リポジトリ直下
   README・plugin README の version と配布メタデータ、skill の frontmatter
 
@@ -536,6 +539,17 @@ class AgyInvocationTest(ScriptBehaviorTestCase):
         self.assertIn("fake-agy-api-key-error", result.stderr)
         self.assert_agy_called_once_with_expected_args()
 
+    def test_agy_stderr_is_limited_to_first_five_lines(self) -> None:
+        lines = [f"fake-agy-stderr-line-{number}" for number in range(1, 9)]
+        result = self.run_script(
+            agy_stderr="".join(f"{line}\n" for line in lines), agy_exit_code=1
+        )
+        self.assert_fetch_failure(result)
+        for line in lines[:5]:
+            self.assertIn(line, result.stderr)
+        for line in lines[5:]:
+            self.assertNotIn(line, result.stderr)
+
 
 @unittest.skipUnless(JQ, "script の実行には jq が必要")
 class ResponseValidationTest(ScriptBehaviorTestCase):
@@ -556,11 +570,23 @@ class ResponseValidationTest(ScriptBehaviorTestCase):
         valid = json.dumps(measured_response())
         for agy_stdout in (
             "",
+            "\n  \n",
             "not json\n",
             valid[: len(valid) // 2],
             "Gemini Models\tWeekly Limit Remaining\t99%\t2026-12-04T09:00:59Z\n",
         ):
             with self.subTest(agy_stdout=agy_stdout[:40]):
+                self.assert_rejected(agy_stdout)
+
+    def test_concatenated_json_documents_are_rejected(self) -> None:
+        valid = json.dumps(measured_response())
+        for agy_stdout in (
+            f"{valid}\n{valid}\n",
+            f"{valid}{valid}",
+            f"{valid}\n{{}}\n",
+            f"{valid} 0",
+        ):
+            with self.subTest(agy_stdout=agy_stdout[-20:]):
                 self.assert_rejected(agy_stdout)
 
     def test_json_that_is_not_a_success_object_is_rejected(self) -> None:
@@ -628,6 +654,24 @@ class ResponseValidationTest(ScriptBehaviorTestCase):
             response = measured_response()
             del response["command"]["data"]
             self.assert_rejected_response(response)
+
+    def test_group_without_bucket_array_is_rejected(self) -> None:
+        for buckets in ({}, "buckets", None, 1):
+            with self.subTest(buckets=buckets):
+                response = measured_response()
+                response["command"]["data"]["groups"][1]["buckets"] = buckets
+                self.assert_rejected_response(response)
+        with self.subTest(buckets="missing"):
+            response = measured_response()
+            del response["command"]["data"]["groups"][1]["buckets"]
+            self.assert_rejected_response(response)
+
+    def test_group_that_is_not_an_object_is_rejected(self) -> None:
+        for group in ("group", [], None):
+            with self.subTest(group=group):
+                response = measured_response()
+                response["command"]["data"]["groups"][1] = group
+                self.assert_rejected_response(response)
 
     def test_bucket_without_string_id_or_window_is_rejected(self) -> None:
         for field in ("id", "window"):
@@ -738,6 +782,41 @@ class NormalizedOutputTest(ScriptBehaviorTestCase):
         )
         self.assertEqual([[100, 100]], used_percents(output))
 
+    def test_non_string_texts_and_missing_reset_time_become_null(self) -> None:
+        response = measured_response()
+        data = response["command"]["data"]
+        data["description"] = 1
+        data["groups"][0]["name"] = None
+        del data["groups"][0]["description"]
+        weekly, five_hour = data["groups"][0]["buckets"]
+        weekly["name"] = ["Weekly"]
+        weekly["description"] = {"text": "x"}
+        del weekly["reset_time"]
+        del five_hour["name"]
+        five_hour["reset_time"] = 1764597659
+        output = self.assert_success_output(self.run_with_response(response), 0)
+
+        self.assertIsNone(output["description"])
+        group = output["groups"][0]
+        self.assertIsNone(group["name"])
+        self.assertIsNone(group["description"])
+        for bucket in group["buckets"]:
+            with self.subTest(bucket=bucket["id"]):
+                self.assertIsNone(bucket["name"])
+                self.assertIsNone(bucket["description"])
+                self.assertIsNone(bucket["resetTime"])
+        self.assertEqual(EXPECTED_NORMALIZED_OUTPUT["groups"][1], output["groups"][1])
+
+    def test_group_with_empty_buckets_is_kept(self) -> None:
+        output = self.assert_success_output(
+            self.run_with_response(response_with_fractions([[0.5], []])), 0
+        )
+        self.assertEqual([[50], []], used_percents(output))
+        self.assertEqual(
+            {"name": "Group 1", "description": "Group 1 description", "buckets": []},
+            output["groups"][1],
+        )
+
 
 @unittest.skipUnless(JQ, "script の実行には jq が必要")
 class ThresholdTest(ScriptBehaviorTestCase):
@@ -790,6 +869,17 @@ class ThresholdTest(ScriptBehaviorTestCase):
             response_with_fractions([[1, 1], [1, 0.25]]), "50", 2
         )
         self.assertEqual([[0, 0], [0, 75]], used_percents(output))
+
+    def test_empty_buckets_are_not_judged(self) -> None:
+        for fractions, threshold, expected_exit_code in (
+            ([[0.5], []], "49", 2),
+            ([[], [1]], "0", 0),
+            ([[], []], "0", 0),
+        ):
+            with self.subTest(fractions=fractions, threshold=threshold):
+                self.run_threshold(
+                    response_with_fractions(fractions), threshold, expected_exit_code
+                )
 
     def test_exceeded_output_equals_output_without_threshold(self) -> None:
         response = response_with_fractions([[0.9, 0.2], [0.6]])

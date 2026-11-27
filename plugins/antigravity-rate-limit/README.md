@@ -17,7 +17,7 @@ claude plugin install antigravity-rate-limit@natsuume-plugins
 
 ## 前提
 
-- `agy` 1.1.11 以上が PATH にあること。1.1.11 より古い agy では `/usage` が model への prompt として扱われ、quota を消費しえます
+- `agy` 1.1.11 以上が PATH にあること
 - `agy` にログイン済みであること。未ログインなら、ターミナルで `agy` を起動してログインします
 - `jq`
 
@@ -42,7 +42,7 @@ stdin は使いません。進捗とエラーは stderr に日本語で出しま
 
 ### 引数
 
-`--max-used-percent <N>` だけを受け付けます。N は 10 進整数 (数字のみ・最大 3 桁) で 0〜100 の範囲です。空文字を含む範囲外の値・値の欠落・未知の引数は、usage を stderr に出して exit 1 になります。このとき agy は起動しません。
+`--max-used-percent <N>` だけを受け付けます。N は 10 進整数 (数字 0-9 のみ・最大 3 桁) で 0〜100 の範囲です。空文字・空白や改行を含む値・範囲外の値・値の欠落・未知の引数は、usage を stderr に出して exit 1 になります。このとき agy は起動しません。
 
 ### stdout
 
@@ -74,11 +74,11 @@ stdin は使いません。進捗とエラーは stderr に日本語で出しま
 | フィールド | 値 |
 |---|---|
 | `remainingFraction` | agy の `remaining_fraction` (0〜1) |
-| `usedPercent` | `(1 - remainingFraction) * 100` を小数第 1 位に丸めた数値 |
-| `resetTime` | agy の `reset_time` (RFC3339、UTC)。未使用の枠を表す `1970-01-01T00:00:00Z` は `null` |
+| `usedPercent` | `(1 - remainingFraction) * 100` を小数第 1 位に四捨五入した数値 |
+| `resetTime` | agy の `reset_time` (RFC3339、UTC)。未使用の枠を表す `1970-01-01T00:00:00Z` と、文字列でない値 (欠損を含む) は `null` |
 | `description` (bucket) | agy の原文。使用済みの枠にだけ付き、無ければ `null` |
 
-`description` と `name` は、agy の値が文字列ならそのまま、それ以外なら `null` にします。グループと枠の順序は agy の応答のままです。
+`description` と `name` は、agy の値が文字列ならそのまま、それ以外 (欠損を含む) なら `null` にします。グループと枠の順序は agy の応答のままで、`buckets` が空配列のグループは空配列のまま出します。
 
 ### exit code
 
@@ -88,18 +88,18 @@ stdin は使いません。進捗とエラーは stderr に日本語で出しま
 | 1 | 取得失敗・引数不正 | なし |
 | 2 | `--max-used-percent` 指定時のみ: いずれかの枠の `usedPercent` が N を超えた | JSON あり |
 
-判定は全グループの全枠を同じ N で比べ、丸めた後の `usedPercent` が N を超える枠が 1 つでもあれば exit 2 です。
+判定は全グループの全枠を同じ N で比べ、丸めた後の `usedPercent` が N を超える枠が 1 つでもあれば exit 2 です。枠が 1 つも無い場合は exit 0 です。exit 2 のときは、N を超えた枠を stderr にも列挙します。
 
 exit 1 になる取得失敗は次のとおりです。
 
 - agy または jq が PATH に無い (jq が無いときは agy を起動しません)
-- agy が非 0 で終了した。agy の終了コード 2 も exit 1 として返します。stderr には agy の終了コードと、agy の stderr の先頭数行を出します
+- agy が非 0 で終了した。agy の終了コード 2 も exit 1 として返します。stderr には agy の終了コードと、agy の stderr の先頭 5 行を出します
 - agy の応答が次の条件を満たさない
-  - JSON として解釈できる
+  - stdout が JSON 1 つとして解釈できる (空・JSON として解釈できない・2 つ以上の JSON の連結は不正)
   - `status` が `"SUCCESS"`
   - `num_turns` が 0。0 でなければ agent turn が実行された (古い agy で `/usage` が prompt として送られた) 可能性があり、quota を消費したおそれがある旨を stderr に出します
   - `command.name` が `"usage"`
-  - `command.data.groups` が 1 件以上の配列
+  - `command.data.groups` が 1 件以上の配列で、各グループが `buckets` 配列を持つ (空配列は許容します)
   - 各枠が文字列の `id`・`window` と、0〜1 の数値の `remaining_fraction` を持つ
 
 ## 取得方式
@@ -128,7 +128,7 @@ script は agy を起動するだけですが、agy は実行のたびに次を�
 - macOS では実測していません (script は bash 3.2 と BSD ツールで動くように書いています)
 - 枠はモデル単位ではなくグループ単位です。特定のモデルの残量は、そのモデルが属するグループの枠として読みます
 - `GEMINI_API_KEY` で接続している agy では取得できません。agy 同梱の changelog によると、この場合 agy は終了コード 2 で終わります (未実測)。script は exit 1 を返します
-- 1.1.11 より古い agy では `/usage` が prompt として扱われ、quota を消費しえます。script は `num_turns` が 0 でない応答を exit 1 にしますが、消費そのものは防げません
+- 1.1.11 より古い agy では `/usage` が model への prompt として扱われ、quota を消費しえます。script は `num_turns` が 0 でない応答を exit 1 にしますが、消費そのものは防げません
 
 ## ファイル構成
 

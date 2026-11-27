@@ -36,7 +36,7 @@ exit 0 と exit 2 のとき、stdout に次の JSON が返る。枠はモデル�
 | `groups[].buckets[].resetTime` | reset 時刻 (RFC3339、UTC)。未使用の枠では `null` |
 | `groups[].buckets[].description` | reset までの時間などの説明 (agy の原文)。使用済みの枠にだけ付き、無ければ `null` |
 
-`description` と `name` は、agy の応答に無ければ `null` になる。
+`description` と `name` は、agy の値が文字列でなければ (欠損を含む) `null` になる。`groups[].buckets` は空配列のことがある。
 
 ## 3. ユーザへの報告
 
@@ -45,6 +45,7 @@ exit 0 と exit 2 のとき、stdout に次の JSON が返る。枠はモデル�
 - 残り割合: `remainingFraction` を % で表示する (例: `0.988` → 98.8%)。使用率 `usedPercent` も併記する
 - reset 時刻: `resetTime` (UTC) と、ローカル時刻に直した値を併記する。ローカルのタイムゾーンのオフセットは `date +%z` で確認する。`resetTime` が `null` の枠は「未使用」と報告する
 - グループに属するモデル: `groups[].description` の内容を伝える
+- `buckets` が空配列のグループは「枠の情報なし」と報告する
 
 `--max-used-percent <N>` を付けた場合は判定結果も報告する。exit 0 なら全枠の `usedPercent` が N 以下であること、exit 2 なら N を超えた枠 (グループ名・窓・`usedPercent`) を明示する。
 
