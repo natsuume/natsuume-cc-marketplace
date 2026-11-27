@@ -4,7 +4,7 @@ Claude Code の振る舞い規律 (= agent としての discipline) を配送す
 
 ## バージョン
 
-v4.1.2
+v4.1.3
 ## 概要
 
 Claude Code に「個人の開発スタイル」を一括で適用するための plugin です。機能ごとに別 plugin に分けず、1 plugin 内に複数のルール群を集約することで、個人 marketplace の plugin 数肥大化を抑えます。
@@ -69,7 +69,7 @@ claude plugin install agent-discipline@natsuume-plugins
 - 注入内容はメインセッションのモデルに依らず同一である。stdin (hook input JSON) から読むのは `hook_event_name` と `session_id` のみで、`.model` と `transcript_path` は読まない
 - 残りの part (`always-2.md` / `always-3.md`) と分業規律 (`discipline.md`) は本スクリプトの責務外で、UserPromptSubmit の `inject-rules-part.sh` / `inject-discipline.sh` が個別要素として配送する
 - **配送済みマーカーのリセット**: `session_id` が非空なら、UserPromptSubmit 側の配送済みマーカー (`${TMPDIR:-/tmp}/agent-discipline-state/` 配下の `delivered-rules-2-<sid>` / `delivered-rules-3-<sid>` / `delivered-discipline-<sid>`) を SessionStart のたびに無条件で削除する (`resume` / `clear` / `compact` でも全要素を再配送するため)
-- **8K ガード**: additionalContext を組み立てた後の全文文字数を計測し、8,000 字を超える場合は (i) 実パス行を落として再計測 → (ii) それでも超える場合は delivery-note 全体を落として再計測、の順で段階的に縮退する。自己修復指示とルール本文 (`always-1.md`) はいかなる場合も落とさない
+- **8K ガード**: additionalContext を組み立てた後の全文文字数を計測し、8,000 字を超える場合は (i) 実パス行を落として再計測 → (ii) それでも超える場合は delivery-note 全体を落として再計測、の順で段階的に縮退する。自己修復指示とルール本文 (`always-1.md`) はいかなる場合も落とさない。文字数は bash 組み込みの `${#変数}` で数えるため hook を実行する環境の locale に従い、UTF-8 locale では文字数、C / POSIX 等の単一バイト locale ではバイト数になる (単一バイト locale では日本語の payload が 8,000 を超え、縮退が発動する)。`wc -m` 等の外部コマンドは locale の扱いが実装 (GNU / BSD / uutils coreutils) によって異なるため使わない
 - `SessionStart` は `startup` 以外に `resume` / `clear` / `compact` でも発火するため同一セッション内で複数回呼ばれる可能性があるが、注入内容は static なので重複しても害は無い (毎回コンテキストトークンを再消費する点に留意)
 - 入力 JSON から `hook_event_name` を読み取り `hookSpecificOutput.hookEventName` に同じ値を設定 (誤った既定値で別 event の文脈に誘導しないため)
 - `jq` 不在 / 不正 JSON 入力 / `hook_event_name` が空 / `always-1.md` が読めない・空の場合はすべて無音 `exit 0` (フェイルセーフ)。`delivery-note.md` が読めない場合は delivery-note 無しで part 1 本文のみ注入する (ペイロード単位の fail-open)
