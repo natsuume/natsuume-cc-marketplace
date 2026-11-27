@@ -1,9 +1,11 @@
 """antigravity-advisor plugin の wrapper と plugin 構造の契約を検査する。
 
 wrapper (`scripts/run-antigravity-advisor.sh`) の検査は fake `agy` を使う。fake `agy` は
-受け取った引数・cwd・`--add-dir` の中身を記録し、環境変数で指定された stdout と
+受け取った引数・cwd・cwd の中のファイル・cwd が git の work tree の中かを記録し、
+環境変数で指定された書き換えを相談対象のリポジトリに行ったうえで、指定された stdout と
 exit code を返す。wrapper に渡す PATH は fake `agy` の置き場所と、wrapper が使う
-コマンドへの symlink の置き場所だけで組み立てるため、実 agy は起動しない。
+コマンドへの symlink の置き場所だけで組み立てるため、実 agy は起動しない。git だけは
+symlink ではなく、呼び出しを記録してから本物の git を実行する shim を置く。
 
 wrapper の一時ディレクトリが残らないことは、TMPDIR をテスト専用の空ディレクトリに
 して、終了後も空であることで確かめる。git の work tree 内での検査は、tempfile の
@@ -12,6 +14,7 @@ wrapper の一時ディレクトリが残らないことは、TMPDIR をテス�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -45,9 +48,20 @@ EXPECTED_KEYWORDS = {
 }
 RUNNER_SUBAGENT_TYPE = "antigravity-advisor:antigravity-advisor-runner"
 
-# wrapper が agy に必ず渡す、ファイル書き込み・shell・MCP・URL 取得を拒否する権限設定。
+# wrapper が agy に必ず渡す権限設定。ファイルの書き込み・shell・MCP・URL の取得・実行・
+# download を拒否する。
+DENY_RULES = [
+    "write_file(*)",
+    "command(*)",
+    "mcp(*)",
+    "read_url(*)",
+    "execute_url(*)",
+    "download_url(*)",
+]
 SETTINGS_ARGUMENT = (
-    '{"permissions":{"deny":["write_file(*)","command(*)","mcp(*)","read_url(*)"]}}'
+    '{"allowNonWorkspaceAccess":true,"permissions":{"deny":'
+    '["write_file(*)","command(*)","mcp(*)","read_url(*)",'
+    '"execute_url(*)","download_url(*)"]}}'
 )
 
 # runner が plugin cache から wrapper の最新版を探すコマンド。
@@ -80,9 +94,10 @@ FAILURE_CLASSES = (
 
 # wrapper を起動する bash。macOS では bash 3.2 の /bin/bash を使い、互換性を検査する。
 BASH = "/bin/bash" if Path("/bin/bash").exists() else shutil.which("bash")
+REAL_GIT = shutil.which("git")
 
 # wrapper と fake agy が使いうるコマンド。PATH を組み立てるときに、見つかったものだけを
-# symlink で並べる。
+# symlink で並べる。git は shim を置くため含めない。
 TOOL_COMMANDS = (
     "awk",
     "basename",
@@ -96,7 +111,7 @@ TOOL_COMMANDS = (
     "diff",
     "dirname",
     "env",
-    "git",
+    "find",
     "grep",
     "head",
     "id",
@@ -124,8 +139,25 @@ TOOL_COMMANDS = (
     "wc",
 )
 
-# 受け取った引数・cwd・--add-dir の中身を記録し、環境変数で指定された出力を返す fake agy。
+# FAKE_GIT_LOG が設定されているときだけ、git の呼び出し (GIT_OPTIONAL_LOCKS の値と引数)
+# を記録してから本物の git を実行する shim。
+GIT_SHIM_TEMPLATE = r"""#!/bin/bash
+if [ -n "${FAKE_GIT_LOG:-}" ]; then
+  {
+    printf 'optional_locks=%s' "${GIT_OPTIONAL_LOCKS:-}"
+    for arg in "$@"; do
+      printf ' %s' "$arg"
+    done
+    printf '\n'
+  } >> "$FAKE_GIT_LOG"
+fi
+exec "__REAL_GIT__" "$@"
+"""
+
+# 受け取った引数・cwd・cwd の中のファイルを記録し、環境変数で指定された書き換えと出力を
+# 行う fake agy。リポジトリへの書き換えは wrapper の git の呼び出しとして記録しない。
 FAKE_AGY_SCRIPT = r"""#!/bin/bash
+unset FAKE_GIT_LOG
 record_dir="${FAKE_AGY_RECORD_DIR:?}"
 printf 'invoked\n' >> "$record_dir/invocations"
 : > "$record_dir/args"
@@ -133,17 +165,12 @@ for arg in "$@"; do
   printf '%s\0' "$arg" >> "$record_dir/args"
 done
 pwd -P > "$record_dir/cwd"
-add_dir=""
-previous=""
-for arg in "$@"; do
-  if [ "$previous" = "--add-dir" ]; then
-    add_dir="$arg"
-  fi
-  previous="$arg"
-done
-if [ -n "$add_dir" ] && [ -d "$add_dir" ]; then
-  mkdir -p "$record_dir/add-dir"
-  cp -R "$add_dir"/. "$record_dir/add-dir"/
+mkdir -p "$record_dir/cwd-files"
+cp -R ./. "$record_dir/cwd-files"/
+if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  printf 'inside\n' > "$record_dir/cwd-git"
+else
+  printf 'outside\n' > "$record_dir/cwd-git"
 fi
 if [ -n "${FAKE_AGY_CREATE_FILE:-}" ]; then
   printf 'created by fake agy\n' > "$FAKE_AGY_CREATE_FILE"
@@ -152,7 +179,16 @@ if [ -n "${FAKE_AGY_APPEND_FILE:-}" ]; then
   printf 'appended by fake agy\n' >> "$FAKE_AGY_APPEND_FILE"
 fi
 if [ -n "${FAKE_AGY_COMMIT:-}" ]; then
-  git commit --quiet --allow-empty -m "commit by fake agy" > /dev/null 2>&1
+  git -C "$FAKE_AGY_REPO" commit --quiet --allow-empty -m "commit by fake agy" > /dev/null 2>&1
+fi
+if [ -n "${FAKE_AGY_SYMBOLIC_REF:-}" ]; then
+  git -C "$FAKE_AGY_REPO" symbolic-ref HEAD "$FAKE_AGY_SYMBOLIC_REF"
+fi
+if [ -n "${FAKE_AGY_ADD_REF:-}" ]; then
+  git -C "$FAKE_AGY_REPO" update-ref "$FAKE_AGY_ADD_REF" HEAD
+fi
+if [ -n "${FAKE_AGY_CONFIG_KEY:-}" ]; then
+  git -C "$FAKE_AGY_REPO" config "$FAKE_AGY_CONFIG_KEY" "${FAKE_AGY_CONFIG_VALUE:-}"
 fi
 if [ -n "${FAKE_AGY_STDERR:-}" ]; then
   printf '%s\n' "$FAKE_AGY_STDERR" >&2
@@ -233,6 +269,43 @@ def git_environment(home: Path) -> dict[str, str]:
     return environment
 
 
+def run_git(repo: Path, home: Path, *args: str) -> str:
+    assert REAL_GIT is not None
+    return subprocess.run(
+        [REAL_GIT, *args],
+        cwd=str(repo),
+        env=git_environment(home),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        check=True,
+    ).stdout
+
+
+def init_repository(repo: Path, home: Path, *, with_commit: bool) -> None:
+    """user 設定だけを持つ git repo を作る。with_commit なら tracked.txt を commit する。"""
+    repo.mkdir(parents=True)
+    run_git(repo, home, "init", "--quiet")
+    run_git(repo, home, "config", "user.name", "antigravity-advisor test")
+    run_git(repo, home, "config", "user.email", "antigravity-advisor@example.invalid")
+    run_git(repo, home, "config", "commit.gpgsign", "false")
+    if with_commit:
+        (repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        run_git(repo, home, "add", "tracked.txt")
+        run_git(repo, home, "commit", "--quiet", "-m", "initial")
+
+
+def directory_digest(directory: Path) -> dict[str, str]:
+    """ディレクトリ配下の各ファイルの相対パスと内容の SHA-256。"""
+    return {
+        path.relative_to(directory).as_posix(): hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and not path.is_symlink()
+    }
+
+
 class WrapperHarness(unittest.TestCase):
     """fake agy と隔離した PATH・TMPDIR で wrapper を実行する共通部分。"""
 
@@ -262,7 +335,7 @@ class WrapperHarness(unittest.TestCase):
         self.request.write_text(DEFAULT_REQUEST, encoding="utf-8")
 
     def tool_bin(self, *, with_jq: bool) -> Path:
-        """wrapper が使うコマンドへの symlink だけを置いたディレクトリ。"""
+        """wrapper が使うコマンドへの symlink と git の shim だけを置いたディレクトリ。"""
         name = "tool-bin" if with_jq else "tool-bin-without-jq"
         directory = self.base / name
         if directory.exists():
@@ -274,6 +347,12 @@ class WrapperHarness(unittest.TestCase):
             found = shutil.which(command)
             if found is not None:
                 (directory / command).symlink_to(found)
+        if REAL_GIT is not None:
+            shim = directory / "git"
+            shim.write_text(
+                GIT_SHIM_TEMPLATE.replace("__REAL_GIT__", REAL_GIT), encoding="utf-8"
+            )
+            shim.chmod(0o755)
         return directory
 
     def wrapper_environment(
@@ -347,8 +426,21 @@ class WrapperHarness(unittest.TestCase):
         self.assertTrue(raw.endswith("\0"), "fake agy の引数の記録が壊れている")
         return raw[:-1].split("\0")
 
+    def recorded_prompt(self) -> str:
+        args = self.recorded_args()
+        self.assertEqual("-p", args[-2])
+        return args[-1]
+
     def recorded_cwd(self) -> str:
         return read_text(self.records / "cwd").strip()
+
+    def recorded_cwd_files(self) -> dict[str, bytes]:
+        snapshot = self.records / "cwd-files"
+        return {
+            path.relative_to(snapshot).as_posix(): path.read_bytes()
+            for path in sorted(snapshot.rglob("*"))
+            if path.is_file()
+        }
 
     def assert_succeeded(
         self, result: subprocess.CompletedProcess[str], response: str
@@ -359,6 +451,7 @@ class WrapperHarness(unittest.TestCase):
             (response, response + "\n"),
             "stdout には .response の本文だけを出す",
         )
+        self.assertEqual("", result.stderr, "成功の経路では stderr に何も出さない")
         self.assertEqual(1, self.agy_invocation_count(), "agy は 1 回だけ起動する")
 
     def assert_failed(
@@ -388,7 +481,7 @@ class WrapperHarness(unittest.TestCase):
 
 
 class WrapperSuccessTest(WrapperHarness):
-    """成功時に .response だけを出し、agy を決まった引数で起動する。"""
+    """成功時に .response だけを出し、agy を決まった引数と cwd で起動する。"""
 
     def test_prints_only_the_response_text(self) -> None:
         response = (
@@ -396,6 +489,10 @@ class WrapperSuccessTest(WrapperHarness):
         )
         result = self.run_wrapper(agy_stdout=success_payload(response))
         self.assert_succeeded(result, response)
+
+    def test_success_keeps_stderr_empty_even_when_agy_writes_stderr(self) -> None:
+        result = self.run_wrapper(extra_env={"FAKE_AGY_STDERR": "agy progress line"})
+        self.assert_succeeded(result, "既定の助言")
 
     def test_empty_denied_actions_list_is_a_success(self) -> None:
         response = "拒否された操作は無い"
@@ -408,8 +505,6 @@ class WrapperSuccessTest(WrapperHarness):
         result = self.run_wrapper()
         self.assert_succeeded(result, "既定の助言")
         args = self.recorded_args()
-        self.assertIn("--add-dir", args)
-        add_dir = args[args.index("--add-dir") + 1]
         self.assertEqual(
             [
                 "--mode",
@@ -418,8 +513,6 @@ class WrapperSuccessTest(WrapperHarness):
                 "json",
                 "--settings",
                 SETTINGS_ARGUMENT,
-                "--add-dir",
-                add_dir,
                 "--print-timeout",
                 "25m",
                 "-p",
@@ -427,6 +520,11 @@ class WrapperSuccessTest(WrapperHarness):
             ],
             args,
         )
+
+    def test_add_dir_is_not_passed(self) -> None:
+        result = self.run_wrapper()
+        self.assert_succeeded(result, "既定の助言")
+        self.assertNotIn("--add-dir", self.recorded_args())
 
     def test_settings_deny_writes_shell_mcp_and_url_access(self) -> None:
         for model in ("", "gemini-3-pro"):
@@ -440,60 +538,42 @@ class WrapperSuccessTest(WrapperHarness):
                 self.assertEqual(1, args.count("--settings"))
                 settings = args[args.index("--settings") + 1]
                 self.assertEqual(SETTINGS_ARGUMENT, settings)
+                # allowNonWorkspaceAccess は、空のディレクトリの外にあるリポジトリを
+                # headless で読むために必要 (無いと read_file が自動で拒否される)。
                 self.assertEqual(
                     {
-                        "permissions": {
-                            "deny": [
-                                "write_file(*)",
-                                "command(*)",
-                                "mcp(*)",
-                                "read_url(*)",
-                            ]
-                        }
+                        "allowNonWorkspaceAccess": True,
+                        "permissions": {"deny": DENY_RULES},
                     },
                     json.loads(settings),
                 )
                 self.assertLess(args.index("--settings"), args.index("-p"))
 
-    def test_add_dir_holds_only_the_request_copy(self) -> None:
+    def test_agy_cwd_is_an_empty_directory_under_tmpdir_outside_work_trees(
+        self,
+    ) -> None:
         result = self.run_wrapper()
         self.assert_succeeded(result, "既定の助言")
-        snapshot = self.records / "add-dir"
-        files = [path for path in sorted(snapshot.rglob("*")) if path.is_file()]
-        self.assertEqual(1, len(files), [str(path) for path in files])
-        self.assertEqual(self.request.read_bytes(), files[0].read_bytes())
+        agy_cwd = Path(self.recorded_cwd())
+        self.assertEqual(Path(os.path.realpath(self.wrapper_tmpdir)), agy_cwd.parent)
+        self.assertNotEqual(Path(os.path.realpath(self.workdir)), agy_cwd)
+        self.assertEqual("outside", read_text(self.records / "cwd-git").strip())
 
-    def test_add_dir_is_a_wrapper_directory_under_tmpdir(self) -> None:
+    def test_agy_cwd_holds_only_the_request_copy(self) -> None:
         result = self.run_wrapper()
         self.assert_succeeded(result, "既定の助言")
-        args = self.recorded_args()
-        add_dir = Path(args[args.index("--add-dir") + 1])
-        self.assertTrue(add_dir.is_absolute(), add_dir)
-        self.assertEqual(
-            Path(os.path.realpath(self.wrapper_tmpdir)),
-            Path(os.path.realpath(add_dir)).parent,
-            "一時ディレクトリは TMPDIR の直下に作る",
-        )
+        files = self.recorded_cwd_files()
+        self.assertEqual(1, len(files), sorted(files))
+        self.assertEqual([self.request.read_bytes()], list(files.values()))
 
-    def test_prompt_points_to_the_copied_request_without_its_body(self) -> None:
+    def test_prompt_names_the_request_copy_and_the_repository_root(self) -> None:
         result = self.run_wrapper()
         self.assert_succeeded(result, "既定の助言")
-        args = self.recorded_args()
-        add_dir = args[args.index("--add-dir") + 1]
-        prompt = args[-1]
-        snapshot = self.records / "add-dir"
-        request_bytes = self.request.read_bytes()
-        copies = [
-            path.relative_to(snapshot).as_posix()
-            for path in sorted(snapshot.rglob("*"))
-            if path.is_file() and path.read_bytes() == request_bytes
-        ]
-        self.assertTrue(copies, "--add-dir に request のコピーが無い")
-        self.assertTrue(
-            any(f"{add_dir}/{copy}" in prompt for copy in copies),
-            f"prompt にコピーした request の絶対パスが無い: {prompt!r}",
-        )
-        for arg in args:
+        prompt = self.recorded_prompt()
+        (copy_name,) = self.recorded_cwd_files()
+        self.assertIn(f"{self.recorded_cwd()}/{copy_name}", prompt)
+        self.assertIn(os.path.realpath(self.workdir), prompt)
+        for arg in self.recorded_args():
             self.assertNotIn(
                 "REQUEST-BODY-MARKER-4f1c", arg, "request の本文を引数に載せない"
             )
@@ -501,16 +581,11 @@ class WrapperSuccessTest(WrapperHarness):
     def test_prompt_is_an_english_read_only_instruction(self) -> None:
         result = self.run_wrapper()
         self.assert_succeeded(result, "既定の助言")
-        prompt = self.recorded_args()[-1]
+        prompt = self.recorded_prompt()
         self.assertNotRegex(prompt, JAPANESE_CHARACTER, "prompt は英語の固定文")
-        for keyword in ("read-only", "shell", "language"):
+        for keyword in ("read-only", "shell", "language", "absolute path"):
             with self.subTest(keyword=keyword):
                 self.assertIn(keyword, prompt.lower())
-
-    def test_agy_runs_in_the_callers_cwd(self) -> None:
-        result = self.run_wrapper(cwd=self.workdir)
-        self.assert_succeeded(result, "既定の助言")
-        self.assertEqual(os.path.realpath(self.workdir), self.recorded_cwd())
 
     def test_request_path_with_spaces_is_accepted(self) -> None:
         request = self.base / "dir with space" / "request file.md"
@@ -527,14 +602,13 @@ class WrapperSuccessTest(WrapperHarness):
 
 
 class WrapperTemporaryDirectoryTest(WrapperHarness):
-    """wrapper の一時ディレクトリを成功・失敗のどちらでも残さない。"""
+    """wrapper の一時ディレクトリを work tree の外に作り、成功・失敗のどちらでも残さない。"""
 
     def test_removed_after_success(self) -> None:
         result = self.run_wrapper()
         self.assert_succeeded(result, "既定の助言")
-        args = self.recorded_args()
-        add_dir = Path(args[args.index("--add-dir") + 1])
-        self.assertFalse(add_dir.exists(), f"{add_dir} が残っている")
+        agy_cwd = Path(self.recorded_cwd())
+        self.assertFalse(agy_cwd.exists(), f"{agy_cwd} が残っている")
         self.assert_wrapper_tmpdir_is_empty()
 
     def test_removed_after_agy_failure(self) -> None:
@@ -551,6 +625,23 @@ class WrapperTemporaryDirectoryTest(WrapperHarness):
         result = self.run_wrapper(extra_env={"ANTIGRAVITY_ADVISOR_MODEL": "bad model"})
         self.assert_failed(result, 2, agy_invoked=False)
         self.assert_wrapper_tmpdir_is_empty()
+
+    def test_tmpdir_inside_a_work_tree_falls_back_to_tmp(self) -> None:
+        repo = self.base / "repo"
+        init_repository(repo, self.home, with_commit=True)
+        tmpdir_inside_repo = repo / "tmp-inside"
+        tmpdir_inside_repo.mkdir()
+        self.wrapper_tmpdir = tmpdir_inside_repo
+        result = self.run_wrapper(
+            cwd=repo, extra_env={"TMPDIR": str(tmpdir_inside_repo)}
+        )
+        self.assert_succeeded(result, "既定の助言")
+        agy_cwd = Path(self.recorded_cwd())
+        self.assertEqual(Path(os.path.realpath("/tmp")), agy_cwd.parent)
+        self.assertEqual("outside", read_text(self.records / "cwd-git").strip())
+        self.assertFalse(agy_cwd.exists(), f"{agy_cwd} が残っている")
+        self.assert_wrapper_tmpdir_is_empty()
+        self.assertEqual("", run_git(repo, self.home, "status", "--porcelain"))
 
 
 class WrapperModelEnvironmentTest(WrapperHarness):
@@ -662,6 +753,18 @@ class WrapperAgyFailureTest(WrapperHarness):
                     extra_env={"FAKE_AGY_STDERR": "fake agy failure"},
                 )
                 self.assert_failed(result, 4, agy_invoked=True)
+                self.assertIn(str(agy_exit), result.stderr)
+
+    def test_agy_stderr_is_summarized_instead_of_streamed(self) -> None:
+        result = self.run_wrapper(
+            agy_exit=9,
+            extra_env={
+                "FAKE_AGY_STDERR": "first agy line\nsecond agy line\nthird agy line"
+            },
+        )
+        self.assert_failed(result, 4, agy_invoked=True)
+        self.assertNotIn("second agy line", result.stderr)
+        self.assertNotIn("third agy line", result.stderr)
 
 
 class WrapperIncompleteResponseTest(WrapperHarness):
@@ -677,12 +780,19 @@ class WrapperIncompleteResponseTest(WrapperHarness):
                 "途中で終わった助言",
                 denied_actions=[{"action": "command", "display_name": "Bash"}],
             ),
+            "soft-denied with empty response": success_payload(
+                "",
+                denied_actions=[{"action": "command", "display_name": "Bash"}],
+            ),
             "empty response": success_payload(""),
             "missing response": {
                 "conversation_id": "conversation-1",
                 "status": "SUCCESS",
             },
             "null response": {**success_payload(""), "response": None},
+            "two json values": json.dumps(success_payload("a"))
+            + "\n"
+            + json.dumps(success_payload("b")),
             "json array": [],
             "json string": '"SUCCESS"',
         }
@@ -694,37 +804,37 @@ class WrapperIncompleteResponseTest(WrapperHarness):
 
 
 class WrapperWorkspaceGuardTest(WrapperHarness):
-    """git の work tree 内では、agy の実行前後の HEAD と working tree の変化を失敗にする。"""
+    """git の work tree 内では、agy の実行前後の変化を exit 5 として検知する。"""
 
     def setUp(self) -> None:
         super().setUp()
         self.repo = self.base / "repo"
-        self.repo.mkdir()
-        self.git("init", "--quiet")
-        self.git("config", "user.name", "antigravity-advisor test")
-        self.git("config", "user.email", "antigravity-advisor@example.invalid")
-        self.git("config", "commit.gpgsign", "false")
-        (self.repo / "tracked.txt").write_text("tracked\n", encoding="utf-8")
-        self.git("add", "tracked.txt")
-        self.git("commit", "--quiet", "-m", "initial")
+        init_repository(self.repo, self.home, with_commit=True)
 
     def git(self, *args: str) -> str:
-        git = shutil.which("git")
-        assert git is not None
-        return subprocess.run(
-            [git, *args],
-            cwd=str(self.repo),
-            env=git_environment(self.home),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            encoding="utf-8",
-            check=True,
-        ).stdout
+        return run_git(self.repo, self.home, *args)
+
+    def run_in_repo(
+        self,
+        *,
+        cwd: Path | None = None,
+        agy_stdout: str | dict | list | None = None,
+        agy_exit: int = 0,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        environment = {"FAKE_AGY_REPO": str(self.repo), **(extra_env or {})}
+        return self.run_wrapper(
+            cwd=cwd or self.repo,
+            agy_stdout=agy_stdout,
+            agy_exit=agy_exit,
+            extra_env=environment,
+        )
 
     def test_unchanged_clean_tree_succeeds(self) -> None:
-        result = self.run_wrapper(cwd=self.repo)
+        result = self.run_in_repo()
         self.assert_succeeded(result, "既定の助言")
-        self.assertEqual(os.path.realpath(self.repo), self.recorded_cwd())
+        self.assertIn(os.path.realpath(self.repo), self.recorded_prompt())
+        self.assertEqual("outside", read_text(self.records / "cwd-git").strip())
         self.assertEqual(
             "", self.git("status", "--porcelain"), "wrapper は repo に書き込まない"
         )
@@ -732,26 +842,108 @@ class WrapperWorkspaceGuardTest(WrapperHarness):
     def test_unchanged_dirty_tree_succeeds(self) -> None:
         (self.repo / "untracked.txt").write_text("untracked\n", encoding="utf-8")
         (self.repo / "tracked.txt").write_text("modified\n", encoding="utf-8")
-        result = self.run_wrapper(cwd=self.repo)
+        result = self.run_in_repo()
         self.assert_succeeded(result, "既定の助言")
 
+    def test_repository_objects_and_index_are_unchanged(self) -> None:
+        (self.repo / "tracked.txt").write_text("modified\n", encoding="utf-8")
+        (self.repo / "untracked.txt").write_text("untracked\n", encoding="utf-8")
+        (self.repo / "copy-of-tracked.txt").write_text("tracked\n", encoding="utf-8")
+        before = directory_digest(self.repo / ".git")
+        result = self.run_in_repo()
+        self.assert_succeeded(result, "既定の助言")
+        self.assertEqual(before, directory_digest(self.repo / ".git"))
+        self.assert_wrapper_tmpdir_is_empty()
+
+    def test_every_git_call_disables_fsmonitor_and_optional_locks(self) -> None:
+        git_log = self.base / "git-calls.log"
+        result = self.run_in_repo(extra_env={"FAKE_GIT_LOG": str(git_log)})
+        self.assert_succeeded(result, "既定の助言")
+        calls = read_text(git_log).splitlines()
+        self.assertTrue(calls, "wrapper の git の呼び出しが記録されていない")
+        for call in calls:
+            with self.subTest(call=call):
+                self.assertTrue(call.startswith("optional_locks=0 "), call)
+                self.assertIn(" -c core.fsmonitor=false ", f"{call} ")
+
+    def test_prompt_names_the_toplevel_from_a_subdirectory(self) -> None:
+        subdirectory = self.repo / "sub"
+        subdirectory.mkdir()
+        (subdirectory / "kept.txt").write_text("kept\n", encoding="utf-8")
+        self.git("add", "sub/kept.txt")
+        self.git("commit", "--quiet", "-m", "add sub")
+        result = self.run_in_repo(cwd=subdirectory)
+        self.assert_succeeded(result, "既定の助言")
+        prompt = self.recorded_prompt()
+        self.assertIn(os.path.realpath(self.repo), prompt)
+        self.assertNotIn(os.path.realpath(subdirectory), prompt)
+
     def test_created_untracked_file_is_workspace_modified(self) -> None:
-        result = self.run_wrapper(
-            cwd=self.repo,
-            extra_env={"FAKE_AGY_CREATE_FILE": str(self.repo / "created.txt")},
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_CREATE_FILE": str(self.repo / "created.txt")}
         )
         self.assert_failed(result, 5, agy_invoked=True)
         self.assert_wrapper_tmpdir_is_empty()
 
     def test_modified_tracked_file_is_workspace_modified(self) -> None:
-        result = self.run_wrapper(
-            cwd=self.repo,
-            extra_env={"FAKE_AGY_APPEND_FILE": str(self.repo / "tracked.txt")},
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_APPEND_FILE": str(self.repo / "tracked.txt")}
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_append_to_an_already_modified_file_is_workspace_modified(self) -> None:
+        (self.repo / "tracked.txt").write_text("modified\n", encoding="utf-8")
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_APPEND_FILE": str(self.repo / "tracked.txt")}
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_append_to_an_existing_untracked_file_is_workspace_modified(self) -> None:
+        (self.repo / "untracked.txt").write_text("untracked\n", encoding="utf-8")
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_APPEND_FILE": str(self.repo / "untracked.txt")}
         )
         self.assert_failed(result, 5, agy_invoked=True)
 
     def test_new_commit_is_workspace_modified(self) -> None:
-        result = self.run_wrapper(cwd=self.repo, extra_env={"FAKE_AGY_COMMIT": "1"})
+        result = self.run_in_repo(extra_env={"FAKE_AGY_COMMIT": "1"})
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_symbolic_ref_change_is_workspace_modified(self) -> None:
+        self.git("branch", "other")
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_SYMBOLIC_REF": "refs/heads/other"}
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_added_ref_is_workspace_modified(self) -> None:
+        result = self.run_in_repo(extra_env={"FAKE_AGY_ADD_REF": "refs/heads/added"})
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_git_config_change_is_workspace_modified(self) -> None:
+        result = self.run_in_repo(
+            extra_env={
+                "FAKE_AGY_CONFIG_KEY": "advisor.injected",
+                "FAKE_AGY_CONFIG_VALUE": "1",
+            }
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_added_hook_is_workspace_modified(self) -> None:
+        result = self.run_in_repo(
+            extra_env={
+                "FAKE_AGY_CREATE_FILE": str(self.repo / ".git" / "hooks" / "pre-commit")
+            }
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_info_change_is_workspace_modified(self) -> None:
+        info = self.repo / ".git" / "info"
+        info.mkdir(exist_ok=True)
+        (info / "exclude").write_text("# exclude\n", encoding="utf-8")
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_APPEND_FILE": str(info / "exclude")}
+        )
         self.assert_failed(result, 5, agy_invoked=True)
 
     def test_change_seen_from_a_subdirectory_cwd(self) -> None:
@@ -760,23 +952,21 @@ class WrapperWorkspaceGuardTest(WrapperHarness):
         (subdirectory / "kept.txt").write_text("kept\n", encoding="utf-8")
         self.git("add", "sub/kept.txt")
         self.git("commit", "--quiet", "-m", "add sub")
-        result = self.run_wrapper(
+        result = self.run_in_repo(
             cwd=subdirectory,
             extra_env={"FAKE_AGY_CREATE_FILE": str(self.repo / "root-level.txt")},
         )
         self.assert_failed(result, 5, agy_invoked=True)
 
     def test_workspace_change_wins_over_agy_failure(self) -> None:
-        result = self.run_wrapper(
-            cwd=self.repo,
+        result = self.run_in_repo(
             agy_exit=9,
             extra_env={"FAKE_AGY_CREATE_FILE": str(self.repo / "created.txt")},
         )
         self.assert_failed(result, 5, agy_invoked=True)
 
     def test_workspace_change_wins_over_incomplete_response(self) -> None:
-        result = self.run_wrapper(
-            cwd=self.repo,
+        result = self.run_in_repo(
             agy_stdout="not json",
             extra_env={"FAKE_AGY_CREATE_FILE": str(self.repo / "created.txt")},
         )
@@ -789,24 +979,7 @@ class WrapperUnbornHeadTest(WrapperHarness):
     def setUp(self) -> None:
         super().setUp()
         self.repo = self.base / "unborn-repo"
-        self.repo.mkdir()
-        git = shutil.which("git")
-        assert git is not None
-        environment = git_environment(self.home)
-        for args in (
-            ("init", "--quiet"),
-            ("config", "user.name", "antigravity-advisor test"),
-            ("config", "user.email", "antigravity-advisor@example.invalid"),
-            ("config", "commit.gpgsign", "false"),
-        ):
-            subprocess.run(
-                [git, *args],
-                cwd=str(self.repo),
-                env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=True,
-            )
+        init_repository(self.repo, self.home, with_commit=False)
 
     def test_unchanged_unborn_repo_succeeds(self) -> None:
         result = self.run_wrapper(cwd=self.repo)
@@ -820,7 +993,10 @@ class WrapperUnbornHeadTest(WrapperHarness):
         self.assert_failed(result, 5, agy_invoked=True)
 
     def test_first_commit_in_unborn_repo_is_workspace_modified(self) -> None:
-        result = self.run_wrapper(cwd=self.repo, extra_env={"FAKE_AGY_COMMIT": "1"})
+        result = self.run_wrapper(
+            cwd=self.repo,
+            extra_env={"FAKE_AGY_COMMIT": "1", "FAKE_AGY_REPO": str(self.repo)},
+        )
         self.assert_failed(result, 5, agy_invoked=True)
 
 
@@ -830,7 +1006,7 @@ class WrapperOutsideGitTest(WrapperHarness):
     def test_succeeds_outside_a_work_tree(self) -> None:
         result = self.run_wrapper(cwd=self.workdir)
         self.assert_succeeded(result, "既定の助言")
-        self.assertEqual(os.path.realpath(self.workdir), self.recorded_cwd())
+        self.assertIn(os.path.realpath(self.workdir), self.recorded_prompt())
 
     def test_file_creation_outside_a_work_tree_is_not_compared(self) -> None:
         result = self.run_wrapper(
@@ -879,9 +1055,20 @@ class PluginMetadataContractTest(unittest.TestCase):
         self.assertTrue(following)
         self.assertEqual(f"v{EXPECTED_VERSION}", following[0])
 
-    def test_plugin_readme_documents_the_permission_settings(self) -> None:
+    def test_plugin_readme_documents_the_read_only_boundary(self) -> None:
         readme = read_text(PLUGIN_README)
-        self.assertIn(SETTINGS_ARGUMENT, readme)
+        for literal in (
+            SETTINGS_ARGUMENT,
+            "execute_url(*)",
+            "download_url(*)",
+            ".agents/",
+            "2026-11-27",
+            "1.5.18",
+            "~/.gemini/config",
+            "絶対パスで列挙",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, readme)
         self.assertNotIn("mktemp", readme)
 
     def test_plugin_has_no_hooks_or_commands(self) -> None:
@@ -943,6 +1130,7 @@ class RunnerAgentContractTest(unittest.TestCase):
             "Exit status: <数値 or unknown>",
             "Failure class: " + " | ".join(FAILURE_CLASSES),
             "Recovery direction: <概念的な次の一手>",
+            "stderr に何も出さない",
         ):
             with self.subTest(literal=literal):
                 self.assertIn(literal, self.body)
@@ -987,6 +1175,7 @@ class ConsultSkillContractTest(unittest.TestCase):
             with self.subTest(item=item):
                 self.assertIn(item, self.body)
         self.assertIn("絶対パス", self.body)
+        self.assertIn("絶対パスで列挙", self.body)
 
     def test_failure_handling(self) -> None:
         self.assertIn("Status: execution-failed", self.body)
@@ -1019,12 +1208,19 @@ class WrapperScriptStaticTest(unittest.TestCase):
             "ANTIGRAVITY_ADVISOR_MODEL",
             "^[A-Za-z0-9._-]+$",
             "TMPDIR",
+            "/tmp",
             "--mode plan --output-format json",
             "--print-timeout 25m -p <prompt>",
             SETTINGS_ARGUMENT,
             "git rev-parse --verify -q HEAD",
+            "git symbolic-ref -q HEAD",
+            "git for-each-ref --format='%(refname) %(objectname)'",
             "git status --porcelain=v1 -z --untracked-files=all",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
             "GIT_OPTIONAL_LOCKS=0",
+            "-c core.fsmonitor=false",
             "LC_ALL=C",
             "stdout",
             "stderr",
