@@ -43,12 +43,16 @@
 # 区別しないため、`Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして
 # 解決され、agent に読み込まれる。
 #
-# 同じ理由で、大文字小文字の変換や畳み込みで ASCII の文字になる非 ASCII 文字を path のどこかに
-# 含む場合は、テキスト系文書としない。対象は `İ` (U+0130)・`ı` (U+0131)・`ſ` (U+017F)・
-# `ß` (U+00DF)・`ẞ` (U+1E9E)・`K` (U+212A)・合字 U+FB00〜U+FB06 (`ﬀ`〜`ﬆ`)。filesystem が
-# これらを ASCII の文字と同一視する場合、`ſkills/` のような path は ASCII の照合では除外対象に
-# 当たらないまま、除外対象の場所 (`skills/`) に解決されうる。日本語などの文字は変換しても
-# ASCII にならないため、この条件に当たらない。
+# 同じ理由で、次の非 ASCII 文字を path のどこかに含む場合は、テキスト系文書としない:
+#
+#   - 大文字小文字の変換や畳み込みで ASCII の文字になる文字: `İ` (U+0130)・`ı` (U+0131)・
+#     `ſ` (U+017F)・`ß` (U+00DF)・`ẞ` (U+1E9E)・`K` (U+212A)・合字 U+FB00〜U+FB06 (`ﬀ`〜`ﬆ`)
+#   - HFS+ が名前の比較で無視する不可視の文字 (git の `core.protectHFS` が扱う文字と同じ):
+#     U+200C〜U+200F・U+202A〜U+202E・U+206A〜U+206F・U+FEFF
+#
+# filesystem がこれらを含む名前を ASCII だけの名前と同一視する場合、`ſkills/` のような path は
+# ASCII の照合では除外対象に当たらないまま、除外対象の場所 (`skills/`) に解決されうる。日本語
+# などの文字はこの条件に当たらない。
 #
 # 例: `README.md` / `docs/a.MD` / `plugins/x/README.md` / `docs/skills.md` (basename は
 # ディレクトリ要素の除外条件の対象外) / `.github/README.md` はテキスト系文書。
@@ -77,15 +81,20 @@
 #   4. merge-base(`<base_rev>`, `<head_rev>`) と `<head_rev>` の raw 差分も、3 と同じ条件を
 #      満たす
 #
-# git はすべて `--no-replace-objects` を付けて呼ぶ (秘匿情報の検査の gitleaks には環境変数
-# `GIT_NO_REPLACE_OBJECTS=1` を渡す)。ローカルの replace ref (`git replace`) があると、git は
-# commit や tree を置き換え先の内容で読むため、コードを足す commit をテキスト系文書だけの
-# commit に見せかけられる。push や merge で remote に届くのは置き換え前の object である。
+# git はすべて `--no-replace-objects -c core.commitGraph=false` を付けて呼ぶ (秘匿情報の検査の
+# gitleaks には、同じ設定を環境変数で渡す)。ローカルの replace ref (`git replace`) があると、
+# git は commit や tree を置き換え先の内容で読むため、コードを足す commit をテキスト系文書だけの
+# commit に見せかけられる。commit-graph ファイルは commit の親を記録した cache で、git は
+# commit の object より先にこれを読むため、書き換えられると範囲の commit を隠せる。push や
+# merge で remote に届くのは、どちらにも左右されない object そのものである。
 #
 # 同じ理由で、graft ファイル (`<git dir>/info/grafts`、または環境変数 `GIT_GRAFT_FILE` が
 # 指す file) が存在する場合は、判定を行わずレビュー必須 (戻り値 1) とする。graft は commit の
 # 親を書き換えるため、コードを足して後で消す中間 commit を範囲から隠せる (3 の検査を回避
 # できる)。graft を無効にする git の option は無いため、存在を検出して打ち切る。
+#
+# object そのものの改ざん (git dir の object の file を書き換える等) は検出しない。git dir に
+# 書き込める主体は、判定に使う object 自体を書き換えられる。
 #
 # raw 差分は rename / copy の検出を行わずに取る (rename は削除と追加の 2 エントリになり、
 # 変更前と変更後の両方の path が検査対象になる)。出力は NUL 区切りで読み、空白・改行・
@@ -98,10 +107,14 @@
 # remote に届くのは net diff ではなく範囲内の全 commit であり、中間 commit のコードも履歴に
 # 残る。
 #
-# commit 数の上限 (100) は、gate を実行する Claude Code の command hook の既定の timeout
-# (60 秒) 内に判定を終えるためのもの。3 は commit ごとに git を起動するため、範囲の commit 数に
-# 比例して時間がかかる。hook が timeout すると gate の判定が働かないため、上限を超える範囲は
-# 判定を行わずレビュー必須 (戻り値 1) として扱う。
+# commit 数の上限 (100) と判定の時間の上限 (15 秒) は、gate を実行する Claude Code の
+# command hook の既定の timeout (60 秒) 内に判定を終えるためのもの。hook が timeout すると
+# gate の判定が働かないため、上限を超えた場合は判定を打ち切ってレビュー必須 (戻り値 1) として
+# 扱う。3 は commit ごとに git を起動し、raw 差分の解析は bash で 1 エントリずつ行うため、
+# commit 数と変更されたファイルの数に比例して時間がかかる。時間の上限は、判定の開始から数えて、
+# 各 commit の差分を取る前と raw 差分の各エントリを読むたびに確かめる (bash の `SECONDS`
+# を使うため、1 秒未満の端数の分だけ遅れうる)。秘匿情報の検査の時間は別に上限を設ける
+# (下記「秘匿情報の検査」)。
 #
 # 判定は 1 → 2 → 4 → 3 の順に行う。git の呼び出しが 1 回で済む 4 (net diff) を、commit 数に
 # 比例する 3 より先に行い、net diff にテキスト系文書以外の変更がある範囲では各 commit を走査
@@ -113,7 +126,8 @@
 #
 #   - 0: 範囲内の変更がテキスト系文書だけで、秘匿情報の検査も通った (skip してよい)
 #   - 1: 1-4 のいずれかを満たさない (テキスト系文書だけではない、commit 数が上限を超える等)、
-#        graft ファイルがある、または 1-4 の判定に必要な git の呼び出しが失敗した
+#        graft ファイルがある、判定が時間の上限を超えた、または 1-4 の判定に必要な git の
+#        呼び出しが失敗した
 #   - 2: テキスト系文書だけだが、gitleaks が秘匿情報の候補を検出した、または gitleaks の実行が
 #        失敗した
 #
@@ -126,19 +140,22 @@
 # 書き込まれた認証情報も検査されない。PATH に gitleaks がある (`command -v gitleaks` が成功
 # する) 場合に限り、skip の前に範囲内の commit を次の形で検査する:
 #
-#   GIT_DIR=<repo の git dir の絶対 path> GIT_WORK_TREE=<走査元> GIT_NO_REPLACE_OBJECTS=1
+#   env GIT_DIR=<repo の git dir の絶対 path> GIT_WORK_TREE=<走査元> GIT_NO_REPLACE_OBJECTS=1
+#       GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.commitGraph GIT_CONFIG_VALUE_0=false
 #   gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error
-#     --exit-code 1 --timeout 30 [--config <一時ファイル>] --gitleaks-ignore-path <走査元>
+#     --exit-code 1 --timeout 25 [--config <一時ファイル>] --gitleaks-ignore-path <走査元>
 #     --log-opts="--no-textconv --no-ext-diff --text --no-color <base の OID>..<head の OID>"
 #     <走査元>
 #
 #   - <走査元> は空の一時ディレクトリ (理由は下の「設定と ignore の読み方」を参照)。gitleaks は
 #     走査元で `git log -p` を実行するため、repo は環境変数 `GIT_DIR` で指定する。環境変数は
-#     gitleaks の起動行にだけ付け、export しない
+#     `env` で gitleaks の起動にだけ渡し、export しない。`GIT_CONFIG_COUNT` 等は、gitleaks が
+#     実行する git に `core.commitGraph=false` を渡す (git 2.31 以降。理由は「範囲の判定」を参照)
 #   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う
-#   - `--timeout 30` は、gate を実行する Claude Code の command hook の既定の timeout
-#     (60 秒) より短くするための値。hook が timeout すると gate の判定が働かないため、
-#     gitleaks 自身の timeout で先に終わらせ、レビュー必須 (戻り値 2) に倒す
+#   - gitleaks は 25 秒で打ち切り、レビュー必須 (戻り値 2) に倒す。gate を実行する hook の
+#     既定の timeout (60 秒) から、範囲の判定の時間の上限 (15 秒) と gate 自身の処理の分を
+#     引いた値。`--timeout 25` も渡すが、gitleaks は大きな範囲でこの指定を超えて走査を続ける
+#     ことがあるため、外側でも打ち切る (_text_paths_run_with_time_limit)
 #   - `--ignore-gitleaks-allow` は、文書中に `gitleaks:allow` コメントを書くだけで検出を
 #     抑止できないようにするために付ける (テキスト系文書だけの変更は、レビュー無しで
 #     そのコメントを書き込める)
@@ -216,13 +233,25 @@ is_text_document_path() {
     */*) directories="${path%/*}" ;;
   esac
 
-  # 大文字小文字の変換や畳み込みで ASCII の文字になる非 ASCII 文字を含まないこと。UTF-8 の
-  # バイト列で照合する (順に İ ı ſ ß ẞ K と、合字 U+FB00〜U+FB06)。
+  # filesystem が ASCII だけの名前と同一視しうる非 ASCII 文字を含まないこと。UTF-8 の
+  # バイト列で照合する。1 つ目の case は大文字小文字の変換や畳み込みで ASCII になる文字
+  # (順に İ ı ſ ß ẞ K と、合字 U+FB00〜U+FB06)、2 つ目は HFS+ が無視する文字 (U+200C〜U+200F・
+  # U+202A〜U+202E・U+206A〜U+206F・U+FEFF)。
   case "$path" in
     *$'\xc4\xb0'* | *$'\xc4\xb1'* | *$'\xc5\xbf'* | *$'\xc3\x9f'* | \
       *$'\xe1\xba\x9e'* | *$'\xe2\x84\xaa'* | \
       *$'\xef\xac\x80'* | *$'\xef\xac\x81'* | *$'\xef\xac\x82'* | *$'\xef\xac\x83'* | \
       *$'\xef\xac\x84'* | *$'\xef\xac\x85'* | *$'\xef\xac\x86'*)
+      return 1
+      ;;
+  esac
+  case "$path" in
+    *$'\xe2\x80\x8c'* | *$'\xe2\x80\x8d'* | *$'\xe2\x80\x8e'* | *$'\xe2\x80\x8f'* | \
+      *$'\xe2\x80\xaa'* | *$'\xe2\x80\xab'* | *$'\xe2\x80\xac'* | *$'\xe2\x80\xad'* | \
+      *$'\xe2\x80\xae'* | \
+      *$'\xe2\x81\xaa'* | *$'\xe2\x81\xab'* | *$'\xe2\x81\xac'* | *$'\xe2\x81\xad'* | \
+      *$'\xe2\x81\xae'* | *$'\xe2\x81\xaf'* | \
+      *$'\xef\xbb\xbf'*)
       return 1
       ;;
   esac
@@ -285,15 +314,19 @@ is_text_document_path() {
   return 0
 }
 
-# _text_paths_raw_entries_are_text_only
+# _text_paths_raw_entries_are_text_only <deadline>
 # 標準入力の `git diff-tree -r -z --no-renames --no-commit-id` の出力 (エントリごとに
 # `:<変更前 mode> <変更後 mode> <変更前 blob> <変更後 blob> <status>` と path の 2 フィールドを
 # NUL で区切る) を読み、全エントリが範囲の判定の条件 3 を満たすとき 0 を返す。想定外の
 # 形式 (先頭が `:` でないフィールド、path の欠けたエントリ、NUL で終わらない末尾) は 1 に倒す。
+# <deadline> は bash の `SECONDS` の値で表した判定の期限で、各エントリを読む前に確かめ、
+# 期限に達していれば 1 を返す。
 _text_paths_raw_entries_are_text_only() {
+  local deadline="$1"
   local metadata=""
   local path old_mode new_mode
   while IFS= read -r -d '' metadata; do
+    [ "$SECONDS" -lt "$deadline" ] || return 1
     IFS= read -r -d '' path || return 1
     case "$metadata" in
       :*) ;;
@@ -319,21 +352,24 @@ _text_paths_raw_entries_are_text_only() {
   return 0
 }
 
-# _text_paths_diff_is_text_only <target_cwd> <from_oid> <to_oid>
+# _text_paths_diff_is_text_only <target_cwd> <from_oid> <to_oid> <deadline>
 # from と to の raw 差分の全エントリが範囲の判定の条件 3 を満たすとき 0 を返す。git の失敗も
-# 解析の失敗も 1 に倒す (pipeline の両側の終了状態を PIPESTATUS で確かめる)。
+# 解析の失敗も、<deadline> (bash の `SECONDS` の値) に達した場合も 1 に倒す (pipeline の
+# 両側の終了状態を PIPESTATUS で確かめる)。
 _text_paths_diff_is_text_only() {
   local target_cwd="$1"
   local from_oid="$2"
   local to_oid="$3"
-  local -a git_prefix=(--no-replace-objects)
+  local deadline="$4"
+  [ "$SECONDS" -lt "$deadline" ] || return 1
+  local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
   if [ -n "$target_cwd" ]; then
     git_prefix+=(-C "$target_cwd")
   fi
   local -a statuses=()
   git "${git_prefix[@]}" diff-tree -r -z --no-renames --no-commit-id \
     --ignore-submodules=none "$from_oid" "$to_oid" </dev/null 2>/dev/null \
-    | _text_paths_raw_entries_are_text_only
+    | _text_paths_raw_entries_are_text_only "$deadline"
   statuses=("${PIPESTATUS[@]}")
   [ "${statuses[0]}" = "0" ] && [ "${statuses[1]}" = "0" ]
 }
@@ -346,13 +382,37 @@ _text_paths_extract_base_file() {
   local base_oid="$2"
   local path="$3"
   local destination="$4"
-  local -a git_prefix=(--no-replace-objects)
+  local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
   if [ -n "$target_cwd" ]; then
     git_prefix+=(-C "$target_cwd")
   fi
   git "${git_prefix[@]}" cat-file -e "${base_oid}:${path}" 2>/dev/null || return 1
   git "${git_prefix[@]}" cat-file blob "${base_oid}:${path}" >"$destination" 2>/dev/null || return 2
   return 0
+}
+
+# _text_paths_run_with_time_limit <seconds> <command> [<arg>...]
+# command を background で起動し、<seconds> 秒以内に終われば command の終了コードを返す。
+# 終わらなければ command を KILL して 124 を返す。macOS には `timeout` コマンドが無いため、
+# 0.1 秒ごとに `kill -0` で終了を確かめる。redirect は呼び出し側で関数呼び出しに付ける
+# (command はそれを引き継ぐ)。
+_text_paths_run_with_time_limit() {
+  local limit_seconds="$1"
+  shift
+  "$@" &
+  local pid=$!
+  local ticks=0
+  local max_ticks=$((limit_seconds * 10))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$ticks" -ge "$max_ticks" ]; then
+      kill -KILL "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+  wait "$pid"
 }
 
 # _text_paths_run_gitleaks <target_cwd> <base_oid> <head_oid> <git_dir> <work_dir>
@@ -395,9 +455,11 @@ _text_paths_run_gitleaks() {
   # stderr は走査元の外のファイルに受け、空かどうかだけを見る (内容は出力しない)。
   local stderr_path="${work_dir}/gitleaks.stderr"
   local gitleaks_status=0
-  GIT_DIR="$git_dir" GIT_WORK_TREE="$source_dir" GIT_NO_REPLACE_OBJECTS=1 \
+  _text_paths_run_with_time_limit 25 \
+    env GIT_DIR="$git_dir" GIT_WORK_TREE="$source_dir" GIT_NO_REPLACE_OBJECTS=1 \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.commitGraph GIT_CONFIG_VALUE_0=false \
     gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
-    --exit-code 1 --timeout 30 "${config_args[@]}" --gitleaks-ignore-path "$source_dir" \
+    --exit-code 1 --timeout 25 "${config_args[@]}" --gitleaks-ignore-path "$source_dir" \
     --log-opts="--no-textconv --no-ext-diff --text --no-color ${base_oid}..${head_oid}" \
     "$source_dir" </dev/null >/dev/null 2>"$stderr_path" || gitleaks_status=$?
   [ "$gitleaks_status" -eq 0 ] || return "$gitleaks_status"
@@ -413,7 +475,7 @@ _text_paths_secrets_scan_passes() {
   local base_oid="$2"
   local head_oid="$3"
   command -v gitleaks >/dev/null 2>&1 || return 0
-  local -a git_prefix=(--no-replace-objects)
+  local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
   if [ -n "$target_cwd" ]; then
     git_prefix+=(-C "$target_cwd")
   fi
@@ -444,10 +506,13 @@ is_text_only_range_in() {
   local target_cwd="$1"
   local base_rev="$2"
   local head_rev="$3"
-  local -a git_prefix=(--no-replace-objects)
+  local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
   if [ -n "$target_cwd" ]; then
     git_prefix+=(-C "$target_cwd")
   fi
+  # 判定 (1-4) の期限を bash の `SECONDS` の値で表す (理由はファイルヘッダの「範囲の判定」を
+  # 参照)。
+  local deadline=$((SECONDS + 15))
 
   # revision は git の引数になるため、空や `-` 始まり (option として解釈される値) は拒否する。
   case "$base_rev" in
@@ -506,7 +571,8 @@ is_text_only_range_in() {
   local merge_base_oid
   merge_base_oid=$(git "${git_prefix[@]}" merge-base "$base_oid" "$head_oid" 2>/dev/null) || return 1
   [ -n "$merge_base_oid" ] || return 1
-  _text_paths_diff_is_text_only "$target_cwd" "$merge_base_oid" "$head_oid" || return 1
+  _text_paths_diff_is_text_only "$target_cwd" "$merge_base_oid" "$head_oid" "$deadline" \
+    || return 1
 
   # 条件 3: 範囲内の各 commit を親とともに列挙する (`<commit> <親>...` の 1 行ずつ)。親が
   # ちょうど 1 つでない行 (親を持たない commit と merge commit) があれば不成立。
@@ -520,7 +586,7 @@ is_text_only_range_in() {
     if [ -z "$commit" ] || [ -z "$parent" ] || [ -n "$extra" ]; then
       return 1
     fi
-    _text_paths_diff_is_text_only "$target_cwd" "$parent" "$commit" || return 1
+    _text_paths_diff_is_text_only "$target_cwd" "$parent" "$commit" "$deadline" || return 1
   done <<<"$listing" || return 1
 
   # 条件 5: 秘匿情報の候補が無いこと (gitleaks がある場合のみ検査する)。
@@ -536,7 +602,7 @@ is_text_only_range_in() {
 is_text_only_push_in() {
   local target_cwd="$1"
   local base="$2"
-  local -a git_prefix=(--no-replace-objects)
+  local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
   if [ -n "$target_cwd" ]; then
     git_prefix+=(-C "$target_cwd")
   fi

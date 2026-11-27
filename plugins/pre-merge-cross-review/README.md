@@ -159,7 +159,7 @@ PR の変更がテキスト系文書だけの場合、merge gate はローカル
 
 `Status: skipped` を受け取った後でも、merge gate に deny された場合は、同じ head SHA で codex-reviewer を 1 回だけ再起動してかまいません。wrapper の実行後に PR の base commit が変わり、その object がローカルに無いと、gate の判定が成立しないことがあるためです。再起動した wrapper は base を fetch してから判定し直し、結果は `Status: skipped` か通常のレビュー記録のどちらかになります。
 
-この skip では codex review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおりローカル記録を照合します (wrapper も通常どおり codex review を実行します)。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。
+この skip では codex review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおりローカル記録を照合します (wrapper も通常どおり codex review を実行します)。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の実行は 25 秒で打ち切り、gitleaks の実行に失敗した場合として扱います。
 
 gitleaks の設定 (`.gitleaks.toml` / `.gitleaksignore`) は、working tree ではなく範囲の起点 (base の commit) の tree から読みます。working tree に未追跡の設定ファイルを置いて検出を抑止できないようにするためです。また、gitleaks が内部で実行する `git log` に `--text --no-textconv --no-color` を付け、ローカルの git の属性 (binary の指定・textconv) や `color.ui` の設定で文書の差分が検査から隠れないようにしています。base の tree に `.gitleaks.toml` が無ければ gitleaks の既定のルールだけを使い、`.gitleaksignore` が無ければ ignore は空にします。環境変数 `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` を設定している場合は、利用者自身の設定としてそちらを使います。
 
@@ -171,14 +171,14 @@ gitleaks が無い環境では、文書に書き込まれた token などの認�
 - 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts`、`.github` → `chatmodes` のいずれかの順に並ぶ
 - basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
 
-これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。同じ理由で、大文字小文字の変換で ASCII の文字になる非 ASCII 文字 (U+017F の `ſ` や U+212A の `K` など。全件は `hooks/scripts/lib/text-paths.sh` のヘッダに記載) を path に含むファイルは、場所を問わずテキスト系文書として扱いません。
+これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。同じ理由で、大文字小文字の変換で ASCII の文字になる非 ASCII 文字や、HFS+ が名前の比較で無視する不可視の文字 (U+017F の `ſ`、U+212A の `K`、U+200C など。全件は `hooks/scripts/lib/text-paths.sh` のヘッダに記載) を path に含むファイルは、場所を問わずテキスト系文書として扱いません。
 
 判定の範囲は merge 実行 repo の `<PR の base commit SHA>..<PR の head SHA>` で、起点には GitHub が記録する PR の base commit (`baseRefOid`) を使います。ローカルの `origin/<base>` は、PR の実際の base に無い commit を含みうる (base の履歴が書き換えられた後にローカルを更新していない等) ため起点にしません。そのまま起点にすると、merge で base に入る commit が判定範囲から外れます。判定できない場合はレビュー必須として扱います。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
 
 - base commit SHA が gh の応答に無い、または 40 桁の小文字 16 進数でない
 - PR の base commit か head の commit がローカルに無い (fetch していない等)
 - 範囲に commit が無い、または merge commit を含む
-- 範囲の commit が 100 を超える (hook の時間内に判定を終えるため、判定せずにレビュー必須として扱う)
+- 範囲の commit が 100 を超える、または判定に 15 秒を超えてかかる (hook の時間内に判定を終えるため、判定を打ち切ってレビュー必須として扱う)
 - 範囲内の各 commit とその親との差分、または merge-base と head の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
 - 範囲内に親を持たない commit がある
 - git の graft ファイル (`.git/info/grafts`、または環境変数 `GIT_GRAFT_FILE` が指すファイル) がある (graft は commit の親を書き換え、範囲の途中の commit を判定から隠せるため)
@@ -242,6 +242,7 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - **列挙に無い場所にある agent の指示ファイルはテキスト系文書と判定される**: テキスト系文書のみの変更の判定でコード扱いにするのは、列挙した場所・名前の Markdown だけです。それ以外の場所にある agent の指示ファイルは、テキスト系文書としてレビュー記録無しで merge されます
 - **除外対象から間接的に読み込まれる文書は検出しない**: `CLAUDE.md` から `@path` で import される文書など、除外対象のファイルが読み込む文書も、その場所・名前が列挙に当たらなければテキスト系文書と判定されます
 - **実行される文書もテキスト系文書と判定される**: doctest や文書のビルドでコードが実行される文書も、拡張子が `md` / `markdown` / `rst` / `adoc` であればテキスト系文書としてレビュー記録無しで merge されます
+- **git dir の object の改ざんは検出しない**: テキスト系文書のみの変更の判定は、replace ref・graft・commit-graph の影響を受けないようにしていますが、git dir にある object の file そのものが書き換えられた場合は検出しません
 
 ## pre-push-review / pre-push-codex-review との併用設計
 

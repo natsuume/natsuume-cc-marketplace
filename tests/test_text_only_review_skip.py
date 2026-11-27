@@ -38,6 +38,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -278,6 +279,23 @@ NON_TEXT_PATHS = (
     "docs/ﬄx.md",
     "docs/ﬅyle.md",
     "docs/ﬆyle.md",
+    # HFS+ が名前の比較で無視する不可視の文字を含む (場所を問わない)
+    "plugins/x/sk‌ills/s/SKILL.md",
+    "docs/a‍.md",
+    "docs/a‎.md",
+    "docs/a‏.md",
+    "docs/a‪.md",
+    "docs/a‫.md",
+    "docs/a‬.md",
+    "docs/a‭.md",
+    "docs/a‮.md",
+    "docs/a⁪.md",
+    "docs/a⁫.md",
+    "docs/a⁬.md",
+    "docs/a⁭.md",
+    "docs/a⁮.md",
+    "docs/a⁯.md",
+    "﻿CLAUDE.md",
 )
 
 # bash 3.2 (macOS) に無い構文。lib に含まれないことを静的に確かめる。
@@ -320,9 +338,10 @@ FAKE_COMPANION_SCRIPT = (
 
 
 # fake gitleaks は、受け取った引数と、起動時点の `--config` の内容・`--gitleaks-ignore-path`
-# の中身・環境変数 `GIT_DIR` / `GIT_WORK_TREE` / `GIT_NO_REPLACE_OBJECTS` を記録し、
-# 環境変数で指定した終了コードで終わる。stdout と stderr に目印の文字列を出し、hook や wrapper の出力へ流れないことの確認に
-# 使う。
+# の中身・git に関する環境変数 (`GIT_DIR` / `GIT_WORK_TREE` / `GIT_NO_REPLACE_OBJECTS` と、
+# 設定を渡す `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_0` / `GIT_CONFIG_VALUE_0`) を記録し、
+# 環境変数で指定した終了コードで終わる。stdout と stderr に目印の文字列を出し、hook や
+# wrapper の出力へ流れないことの確認に使う。
 GITLEAKS_LOG_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_LOG"
 GITLEAKS_EXIT_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_EXIT"
 GITLEAKS_STDERR_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_STDERR"
@@ -355,7 +374,14 @@ if ignore_path is not None:
             ignore_files[name] = fp.read()
 git_env = {{
     name: os.environ.get(name)
-    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_NO_REPLACE_OBJECTS")
+    for name in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+    )
 }}
 record = {{
     "args": args,
@@ -1174,6 +1200,20 @@ class TextOnlyRangeScanCostTest(WorkspaceTestCase):
         for index in range(4):
             repository.write("README.md", f"# updated {index}\n")
             repository.commit_all(f"docs {index}")
+        git_log = self.install_logging_git_shim()
+
+        self.assertEqual(self.range_status(repository), 1)
+
+        diff_tree_calls = [
+            line
+            for line in git_log.read_text(encoding="utf-8").splitlines()
+            if " diff-tree " in f" {line} "
+        ]
+        self.assertEqual(len(diff_tree_calls), 1, diff_tree_calls)
+
+    def install_logging_git_shim(self) -> Path:
+        """PATH の先頭に、受け取った引数を 1 行ずつ記録してから本物の git を実行する shim を
+        置き、記録先の path を返す (shim を置いた後の git の呼び出しだけが記録される)。"""
         assert GIT is not None
         shim_dir = self.root / "git-shim-bin"
         shim_dir.mkdir()
@@ -1185,15 +1225,103 @@ class TextOnlyRangeScanCostTest(WorkspaceTestCase):
         )
         shim.chmod(shim.stat().st_mode | stat.S_IXUSR)
         self.env["PATH"] = f"{shim_dir}{os.pathsep}{self.env['PATH']}"
+        return git_log
 
-        self.assertEqual(self.range_status(repository), 1)
+    def test_every_git_call_ignores_replace_refs_and_commit_graph(self) -> None:
+        """判定 lib の git の呼び出しはすべて replace ref と commit-graph を読まない。"""
+        repository = self.create_base_with_gitleaks_files_and_docs_commit()
+        git_log = self.install_logging_git_shim()
+        self.assertEqual(self.range_status(repository), 0)
+        calls = git_log.read_text(encoding="utf-8").splitlines()
+        # 範囲の判定と、base の tree からの gitleaks の設定の取り出しを含む。
+        self.assertTrue(any(" diff-tree " in f" {call} " for call in calls), calls)
+        self.assertTrue(any(" cat-file " in f" {call} " for call in calls), calls)
+        for call in calls:
+            with self.subTest(call=call):
+                self.assertTrue(
+                    call.startswith("--no-replace-objects -c core.commitGraph=false "),
+                    call,
+                )
 
-        diff_tree_calls = [
-            line
-            for line in git_log.read_text(encoding="utf-8").splitlines()
-            if " diff-tree " in f" {line} "
-        ]
-        self.assertEqual(len(diff_tree_calls), 1, diff_tree_calls)
+    def create_base_with_gitleaks_files_and_docs_commit(self) -> Repository:
+        repository = self.create_repository("repo-with-gitleaks-files")
+        repository.git("switch", "-q", "master")
+        repository.write(".gitleaks.toml", DEFAULT_GITLEAKS_CONFIG)
+        repository.commit_all("gitleaks config")
+        repository.git("switch", "-q", "feature")
+        repository.git("reset", "-q", "--hard", "master")
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        return repository
+
+    def test_diff_check_stops_at_the_deadline(self) -> None:
+        """期限 (bash の `SECONDS` の値) に達していれば、git を呼ばずに 1 を返す。"""
+        repository = self.create_repository()
+        repository.write("README.md", "# updated\n")
+        head = repository.commit_all("docs")
+        master = repository.rev("master")
+        self.assertEqual(
+            self.call_text_paths(
+                "_text_paths_diff_is_text_only",
+                str(repository.path),
+                master,
+                head,
+                "1000000",
+            ),
+            0,
+        )
+        git_log = self.install_logging_git_shim()
+        self.assertEqual(
+            self.call_text_paths(
+                "_text_paths_diff_is_text_only", str(repository.path), master, head, "0"
+            ),
+            1,
+        )
+        self.assertFalse(git_log.exists())
+
+    def test_raw_entry_parser_stops_at_the_deadline(self) -> None:
+        """raw 差分の解析は、各エントリを読む前に期限を確かめる。"""
+        assert BASH is not None
+        script = (
+            'source "$1" || exit 99; '
+            "printf ':100644 100644 0000000 1111111 M\\0README.md\\0' "
+            '| _text_paths_raw_entries_are_text_only "$2"'
+        )
+        for deadline, expected in (("1000000", 0), ("0", 1)):
+            with self.subTest(deadline=deadline):
+                result = subprocess.run(
+                    [BASH, "-c", script, "text-paths-test", str(TEXT_PATHS_LIB), deadline],
+                    cwd=self.root,
+                    env=self.env,
+                    capture_output=True,
+                    check=False,
+                    timeout=60,
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+
+
+class TextOnlyTimeLimitTest(WorkspaceTestCase):
+    """_text_paths_run_with_time_limit: 上限を超えた command を打ち切る。"""
+
+    def test_command_over_the_limit_is_killed(self) -> None:
+        started = time.monotonic()
+        status = self.call_text_paths(
+            "_text_paths_run_with_time_limit", "1", "sleep", "30"
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(status, 124)
+        self.assertLess(elapsed, 10)
+
+    def test_command_within_the_limit_returns_its_status(self) -> None:
+        cases = ((("true",), 0), (("sh", "-c", "exit 3"), 3))
+        for command, expected in cases:
+            with self.subTest(command=command):
+                self.assertEqual(
+                    self.call_text_paths(
+                        "_text_paths_run_with_time_limit", "5", *command
+                    ),
+                    expected,
+                )
 
 
 class TextOnlyPushPredictionTest(WorkspaceTestCase):
@@ -1278,13 +1406,17 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 temporary,
             )
         self.assertFalse(config_path.startswith(f"{source_path}{os.sep}"), config_path)
-        # repo は GIT_DIR で渡し、git に repo の working tree と replace ref を参照させない。
+        # repo は GIT_DIR で渡し、git に repo の working tree・replace ref・commit-graph を
+        # 参照させない。
         self.assertEqual(
             record["git_env"],
             {
                 "GIT_DIR": str(repository.git_dir()),
                 "GIT_WORK_TREE": source_path,
                 "GIT_NO_REPLACE_OBJECTS": "1",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.commitGraph",
+                "GIT_CONFIG_VALUE_0": "false",
             },
         )
         self.assertEqual(
@@ -1299,7 +1431,7 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 "--exit-code",
                 "1",
                 "--timeout",
-                "30",
+                "25",
                 "--config",
                 config_path,
                 "--gitleaks-ignore-path",
@@ -2622,10 +2754,25 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
     def test_plugin_readmes_exclude_ascii_folding_characters(self) -> None:
         for name, path in PLUGIN_READMES.items():
             with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
                 self.assertIn(
-                    "大文字小文字の変換で ASCII の文字になる非 ASCII 文字",
-                    path.read_text(encoding="utf-8"),
+                    "大文字小文字の変換で ASCII の文字になる非 ASCII 文字", body
                 )
+                self.assertIn("HFS+ が名前の比較で無視する不可視の文字", body)
+
+    def test_plugin_readmes_state_the_time_limits(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn("判定に 15 秒を超えてかかる", body)
+                self.assertIn("gitleaks の実行は 25 秒で打ち切り", body)
+
+    def test_plugin_readmes_state_that_object_tampering_is_not_detected(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                constraints = body[body.index("## 既知の制約") :]
+                self.assertIn("git dir の object の改ざんは検出しない", constraints)
 
     def test_plugin_readmes_list_the_graft_condition(self) -> None:
         for name, path in PLUGIN_READMES.items():
