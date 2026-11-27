@@ -1206,8 +1206,9 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
                 os.environ["LC_ALL"] = locale
                 os.environ["LANG"] = locale
                 if path_prefix is not None:
+                    # PATH が未設定なら既定の検索 path を続け、jq 等を見つけられるようにする。
                     os.environ["PATH"] = os.pathsep.join(
-                        [path_prefix, *([saved["PATH"]] if "PATH" in saved else [])]
+                        [path_prefix, saved.get("PATH", os.defpath)]
                     )
                 return builder(tmp_dir, None)
             finally:
@@ -1227,9 +1228,12 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
         env = os.environ.copy()
         env["LC_ALL"] = "C"
         env["LANG"] = "C"
-        env["PATH"] = os.pathsep.join([fake_bin, env.get("PATH", "")])
+        env["PATH"] = os.pathsep.join([fake_bin, env.get("PATH", os.defpath)])
+        # 非 ASCII の文字列は argv ではなく stdin に UTF-8 で渡す (argv の encode は親の
+        # Python の locale に左右されるため)。
         result = subprocess.run(
-            ["/bin/bash", "-c", 'printf "%s" "$1" | wc -m', "probe", "日本語"],
+            ["/bin/bash", "-c", "wc -m"],
+            input="日本語",
             env=env,
             text=True,
             encoding="utf-8",
