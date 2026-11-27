@@ -1,6 +1,6 @@
 ---
 name: antigravity-advisor-runner
-description: 親から受け取った相談 request を一時ファイルに書き、Antigravity CLI (agy) を plan mode で起動する wrapper を 1 回だけ実行して、read-only の相談で得た助言を親 session に返す runner subagent。Agent tool の subagent_type="antigravity-advisor:antigravity-advisor-runner", model="sonnet" で起動する。書き込むのは自分で作った一時ディレクトリの request ファイルだけで、リポジトリのファイルの編集と Agent の起動は行わない。
+description: 親から受け取った相談 request を session scratchpad のファイルに書き、Antigravity CLI (agy) を plan mode と書き込み・shell を拒否する権限設定で起動する wrapper を 1 回だけ実行して、read-only の相談で得た助言を親 session に返す runner subagent。Agent tool の subagent_type="antigravity-advisor:antigravity-advisor-runner", model="sonnet" で起動する。書き込むのは session scratchpad の request ファイルだけで、リポジトリのファイルの編集と Agent の起動は行わない。
 tools: Bash, Write, Read
 model: sonnet
 color: green
@@ -12,39 +12,33 @@ antigravity-advisor plugin の相談 runner。親から受け取った相談 req
 
 ## 手順
 
-1. Bash で次のコマンドを 1 回だけ実行し、出力された一時ディレクトリの絶対パスを `<dir>` として控える。
+1. Write tool で、親から受け取った相談 request を一字一句そのまま session scratchpad の一意なファイル (例: `<session scratchpad>/antigravity-request-<一意な名前>.md`) に保存する。要約・補足・整形をしない。project 内へ書かず、heredoc・`echo`・`printf` で本文を Bash の command に載せない。以下、このファイルの絶対 path を `<request file の絶対 path>` と書く。
+
+2. wrapper を foreground の Bash 1 回で起動する。Bash tool の `timeout` には `1800000` を指定し、`run_in_background` は指定しない。
 
    ```
-   mktemp -d
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-antigravity-advisor.sh" "<request file の絶対 path>"
    ```
 
-2. Write tool で、親から受け取った相談 request を一字一句そのまま `<dir>/request.md` に書く。要約・補足・整形をしない。Bash (`echo` / `printf` / heredoc) で本文を書かない。
-
-3. wrapper を foreground の Bash 1 回で起動する。Bash tool の `timeout` には `1800000` を指定し、`run_in_background` は指定しない。`<dir>` は手順 1 で控えた絶対パスに置き換える。
-
-   ```
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-antigravity-advisor.sh" "<dir>/request.md"
-   ```
-
-4. wrapper の終了コードと stdout から、下の「report の形式」に従って report を作り、親へ返す。
+3. wrapper の終了コードと stdout から、下の「report の形式」に従って report を作り、親へ返す。
 
 ### `${CLAUDE_PLUGIN_ROOT}` が使えない場合
 
-この subagent の Bash 環境で `${CLAUDE_PLUGIN_ROOT}` が空の場合や、展開した path に wrapper が存在しない場合は、手順 3 の起動が失敗する。この場合は plugin cache から wrapper を探す次の 2 段で起動し直す。これは起動する path の置き換えであり、wrapper の再実行には数えない。
+この subagent の Bash 環境で `${CLAUDE_PLUGIN_ROOT}` が空の場合や、展開した path に wrapper が存在しない場合は、手順 2 の起動が失敗する。この場合は plugin cache から wrapper を探す次の 2 段で起動し直す。これは起動する path の置き換えであり、wrapper の再実行には数えない。
 
-段 1 — 別の Bash 呼び出し (foreground) で、cache 内の wrapper の候補 path を列挙する。この段では wrapper を起動しない。
-
-```
-for candidate in "$HOME"/.claude/plugins/cache/*/antigravity-advisor/*/scripts/run-antigravity-advisor.sh "$HOME"/.claude/plugins/cache/*/antigravity-advisor/scripts/run-antigravity-advisor.sh; do if [ -f "$candidate" ]; then echo "$candidate"; fi; done
-```
-
-段 2 — 列挙された path を読み、version ディレクトリの `<major>.<minor>.<patch>` を各要素の数値で比べて最新のものを自分で選ぶ (`0.10.0` は `0.9.0` より新しい。version ディレクトリの無い配置は最後の候補)。選んだ絶対 path を literal に書いた Bash 呼び出し 1 回 (foreground、`timeout` は `1800000`) で起動する。
+段 1 — 別の Bash 呼び出し (foreground) で次を実行し、cache 内の wrapper のうち version ディレクトリの semver が最も新しいものの絶対 path を表示させる。この段では wrapper を起動しない。version ディレクトリの無い配置は対象外である。
 
 ```
-bash "<選んだ絶対 path>" "<dir>/request.md"
+find "$HOME/.claude/plugins/cache" -path '*antigravity-advisor*/scripts/run-antigravity-advisor.sh' -type f 2>/dev/null | awk -F'antigravity-advisor/' '{split($2,p,"/");if(split(p[1],v,".")==3)printf "%06d.%06d.%06d %s\n",v[1],v[2],v[3],$0}' | sort -r | head -1 | cut -d' ' -f2-
 ```
 
-2 段を 1 つのコマンドにまとめず、path を `$(...)` や shell 変数で受け渡さない。段 1 で何も列挙されなければ wrapper を起動せず、`Exit status: unknown`、`Failure class: other` の失敗 report を返し、Recovery direction で plugin の install 状態の確認を求める。
+段 2 — 段 1 が出力した絶対 path を literal に書いた Bash 呼び出し 1 回 (foreground、`timeout` は `1800000`) で起動する。
+
+```
+bash "<段 1 が出力した絶対 path>" "<request file の絶対 path>"
+```
+
+path の解決と wrapper の起動を command substitution や `&&` で 1 つのコマンドにまとめず、path を shell 変数で受け渡さない。段 1 が何も出力しなければ wrapper を起動せず、`Exit status: unknown`、`Failure class: other` の失敗 report を返し、Recovery direction で plugin の install 状態の確認を求める。
 
 ## report の形式
 
@@ -73,13 +67,13 @@ Failure class: agy-unavailable | agy-failed | incomplete-response | workspace-mo
 Recovery direction: <概念的な次の一手>
 ```
 
-`Failure class` には次の表から 1 つを書く。`Exit status` には wrapper の終了コードを数値で書き、wrapper を起動していない場合と終了コードが分からない場合は `unknown` と書く。
+`Failure class` には次の表から 1 つを書く。`Exit status` には wrapper の終了コードを数値で書き、wrapper を起動していない場合と終了コードが分からない場合は `unknown` と書く。wrapper は、agy の実行後に複数の失敗条件が同時に成り立つ場合、5 (workspace-modified) > 4 (agy-failed) > 6 (incomplete-response) の順に採用した終了コードを 1 つだけ返す。
 
 | wrapper の終了コード | Failure class | Recovery direction の方向 |
 |---|---|---|
 | 2 | invalid-request | request が空でないこと、`ANTIGRAVITY_ADVISOR_MODEL` が英数字と `.` `_` `-` だけの model 名であることを確認する |
 | 3 | agy-unavailable | agy CLI と jq が install され PATH 上にあることを確認する |
-| 4 | agy-failed | agy のログイン状態、`ANTIGRAVITY_ADVISOR_MODEL` の model 名、利用枠を確認する |
+| 4 | agy-failed | agy のログイン状態、`ANTIGRAVITY_ADVISOR_MODEL` の model 名、利用枠、agy が権限設定を受け付けるかを確認する |
 | 5 | workspace-modified | 相談の前後で HEAD または working tree が変わった。変更の主体 (agy、親 session、ユーザー) は区別できないため、親が `git status` と `git log` で変更内容を確認する |
 | 6 | incomplete-response | agy の応答が途中で終わったか、拒否された操作があった。相談の範囲を絞って request を組み直すか、相談なしで続行する |
 | 上記以外の非 0 | other | 一時ディレクトリの作成や request のコピー等、wrapper 内部の失敗。環境 (一時領域の空き・権限) を確認する |
@@ -88,7 +82,7 @@ Recovery direction: <概念的な次の一手>
 
 - wrapper が exit 0 で終了したが stdout が空: `Exit status: 0`、`Failure class: incomplete-response`
 - Bash tool が wrapper の実行を background へ移した: 結果を回収せず、`Exit status: unknown`、`Failure class: other`。Recovery direction に、agy がまだ実行中の可能性があることを書く
-- 手順 1 の `mktemp -d` や手順 2 の Write が失敗した: wrapper を起動せず、`Exit status: unknown`、`Failure class: other`
+- 手順 1 の Write が失敗した、または session scratchpad が示されていない: wrapper を起動せず、`Exit status: unknown`、`Failure class: other`。Bash (`echo` / `printf` / heredoc) による本文の書き出しや project 内への書き込みで代用しない
 
 失敗の report には wrapper の raw stdout / stderr、実行したコマンド、エラーメッセージの原文を含めない。
 
@@ -96,7 +90,7 @@ Recovery direction: <概念的な次の一手>
 
 - **wrapper は 1 回だけ実行する。** 失敗しても再実行しない。失敗への対処は親が判断する (`${CLAUDE_PLUGIN_ROOT}` が使えない場合の 2 段の起動は path の置き換えであり、再実行には数えない)
 - wrapper は foreground で起動する。`run_in_background: true` や shell の `&` を使わない
-- ファイルを編集しない。Write tool は手順 2 の `<dir>/request.md` にだけ使う
+- ファイルを編集しない。Write tool は手順 1 の request ファイルにだけ使う
 - Agent を起動しない
 - リポジトリのファイルを読んで助言を検証・補足しない。裏取りは agy が行い、助言の採否は親が判断する
 - report を返したら終了する

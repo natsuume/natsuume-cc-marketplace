@@ -397,9 +397,9 @@ Claude Code からの利用には [公式 codex plugin](https://github.com/opena
 
 ## antigravity-advisor
 
-Antigravity CLI (`agy`) を read-only の助言役 (advisor) として相談するプラグインです。`/antigravity-advisor:consult` Skill が self-contained な相談 request (目的、制約・受入基準、現在の方針、集めた証拠、具体的な問い、期待する回答形式) を組み立て、`antigravity-advisor:antigravity-advisor-runner` subagent (`model: "sonnet"`) を起動します。runner は request を一時ファイルに書き、wrapper script を foreground で 1 回実行して、助言の本文を report として親セッションへ返します。
+Antigravity CLI (`agy`) を read-only の助言役 (advisor) として相談するプラグインです。`/antigravity-advisor:consult` Skill が self-contained な相談 request (目的、制約・受入基準、現在の方針、集めた証拠、具体的な問い、期待する回答形式) を組み立て、`antigravity-advisor:antigravity-advisor-runner` subagent (`model: "sonnet"`) を起動します。runner は request を session scratchpad のファイルに書き、wrapper script を foreground で 1 回実行して、助言の本文を report として親セッションへ返します。
 
-wrapper は agy を `--mode plan --output-format json` で起動し、応答の JSON の `status`・`denied_actions`・`response` を検査します。model は agy の既定を使い、環境変数 `ANTIGRAVITY_ADVISOR_MODEL` が設定されているときだけ `--model` に渡します。plan mode でのファイルの書き込みの禁止はツールのレベルではなく運用上の制約のため、cwd が git の work tree 内なら、wrapper が agy の実行前後の HEAD と working tree の状態を比較し、変化していれば失敗にします。
+wrapper は agy を `--mode plan --output-format json` で起動し、応答の JSON の `status`・`denied_actions`・`response` を検査します。model は agy の既定を使い、環境変数 `ANTIGRAVITY_ADVISOR_MODEL` が設定されているときだけ `--model` に渡します。read-only は 2 段で守ります。agy の起動に `--settings` でセッション限定の権限設定を渡し、ファイルの書き込み・shell の実行・MCP・URL の取得を権限のレベルで拒否します。加えて、cwd が git の work tree 内なら、wrapper が agy の実行前後の HEAD と working tree の状態を比較し、変化していれば失敗にします。
 
 助言はフラットに扱い、採否と理由を明示します。コード差分の finding を得る用途には使わず、設計・仕様の決定はユーザーの専権事項のままです。相談に失敗した場合は相談なしで作業を続け、理由を作業報告に含めます。hook と SessionStart の常時注入は持ちません。wrapper の終了コードの契約と read-only の保証の範囲は [plugins/antigravity-advisor/README.md](plugins/antigravity-advisor/README.md) を参照してください。
 
@@ -415,7 +415,7 @@ wrapper は agy を `--mode plan --output-format json` で起動し、応答の 
 
 | Agent 名 | 説明 |
 |---------|------|
-| `antigravity-advisor-runner` | 相談 request を一時ファイルに書き、`scripts/run-antigravity-advisor.sh` を foreground で 1 回実行して、成功時は助言の本文を、失敗時は終了コードと失敗の分類を report として返す。tools は `Bash, Write, Read`、model は `sonnet` に固定する |
+| `antigravity-advisor-runner` | 相談 request を session scratchpad のファイルに書き、`scripts/run-antigravity-advisor.sh` を foreground で 1 回実行して、成功時は助言の本文を、失敗時は終了コードと失敗の分類を report として返す。tools は `Bash, Write, Read`、model は `sonnet` に固定する |
 
 ### 依存
 

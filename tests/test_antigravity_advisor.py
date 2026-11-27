@@ -45,6 +45,20 @@ EXPECTED_KEYWORDS = {
 }
 RUNNER_SUBAGENT_TYPE = "antigravity-advisor:antigravity-advisor-runner"
 
+# wrapper が agy に必ず渡す、ファイル書き込み・shell・MCP・URL 取得を拒否する権限設定。
+SETTINGS_ARGUMENT = (
+    '{"permissions":{"deny":["write_file(*)","command(*)","mcp(*)","read_url(*)"]}}'
+)
+
+# runner が plugin cache から wrapper の最新版を探すコマンド。
+FALLBACK_LOOKUP_COMMAND = (
+    'find "$HOME/.claude/plugins/cache" -path '
+    "'*antigravity-advisor*/scripts/run-antigravity-advisor.sh' -type f 2>/dev/null"
+    " | awk -F'antigravity-advisor/' '{split($2,p,\"/\");"
+    'if(split(p[1],v,".")==3)printf "%06d.%06d.%06d %s\\n",v[1],v[2],v[3],$0}\''
+    " | sort -r | head -1 | cut -d' ' -f2-"
+)
+
 # wrapper の終了コードと、runner が report に書く Failure class の対応。
 FAILURE_CLASS_BY_EXIT = {
     2: "invalid-request",
@@ -53,6 +67,8 @@ FAILURE_CLASS_BY_EXIT = {
     5: "workspace-modified",
     6: "incomplete-response",
 }
+# 複数の失敗条件が同時に成り立つときに採用する exit code の順。
+EXIT_PRECEDENCE = "5 (workspace-modified) > 4 (agy-failed) > 6 (incomplete-response)"
 FAILURE_CLASSES = (
     "agy-unavailable",
     "agy-failed",
@@ -400,6 +416,8 @@ class WrapperSuccessTest(WrapperHarness):
                 "plan",
                 "--output-format",
                 "json",
+                "--settings",
+                SETTINGS_ARGUMENT,
                 "--add-dir",
                 add_dir,
                 "--print-timeout",
@@ -409,6 +427,41 @@ class WrapperSuccessTest(WrapperHarness):
             ],
             args,
         )
+
+    def test_settings_deny_writes_shell_mcp_and_url_access(self) -> None:
+        for model in ("", "gemini-3-pro"):
+            with self.subTest(model=model):
+                self.setUp()
+                result = self.run_wrapper(
+                    extra_env={"ANTIGRAVITY_ADVISOR_MODEL": model}
+                )
+                self.assert_succeeded(result, "既定の助言")
+                args = self.recorded_args()
+                self.assertEqual(1, args.count("--settings"))
+                settings = args[args.index("--settings") + 1]
+                self.assertEqual(SETTINGS_ARGUMENT, settings)
+                self.assertEqual(
+                    {
+                        "permissions": {
+                            "deny": [
+                                "write_file(*)",
+                                "command(*)",
+                                "mcp(*)",
+                                "read_url(*)",
+                            ]
+                        }
+                    },
+                    json.loads(settings),
+                )
+                self.assertLess(args.index("--settings"), args.index("-p"))
+
+    def test_add_dir_holds_only_the_request_copy(self) -> None:
+        result = self.run_wrapper()
+        self.assert_succeeded(result, "既定の助言")
+        snapshot = self.records / "add-dir"
+        files = [path for path in sorted(snapshot.rglob("*")) if path.is_file()]
+        self.assertEqual(1, len(files), [str(path) for path in files])
+        self.assertEqual(self.request.read_bytes(), files[0].read_bytes())
 
     def test_add_dir_is_a_wrapper_directory_under_tmpdir(self) -> None:
         result = self.run_wrapper()
@@ -593,7 +646,11 @@ class WrapperRequiredCommandTest(WrapperHarness):
 
 
 class WrapperAgyFailureTest(WrapperHarness):
-    """agy が非 0 で終了したら、stdout の内容に依らず exit 4 にする。"""
+    """working tree が変わっていなければ、agy の非 0 終了は stdout の内容に依らず exit 4。"""
+
+    def test_agy_failure_wins_over_incomplete_response(self) -> None:
+        result = self.run_wrapper(agy_stdout="not json", agy_exit=9)
+        self.assert_failed(result, 4, agy_invoked=True)
 
     def test_non_zero_agy_exit(self) -> None:
         for agy_exit in (1, 9, 124):
@@ -709,6 +766,63 @@ class WrapperWorkspaceGuardTest(WrapperHarness):
         )
         self.assert_failed(result, 5, agy_invoked=True)
 
+    def test_workspace_change_wins_over_agy_failure(self) -> None:
+        result = self.run_wrapper(
+            cwd=self.repo,
+            agy_exit=9,
+            extra_env={"FAKE_AGY_CREATE_FILE": str(self.repo / "created.txt")},
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_workspace_change_wins_over_incomplete_response(self) -> None:
+        result = self.run_wrapper(
+            cwd=self.repo,
+            agy_stdout="not json",
+            extra_env={"FAKE_AGY_CREATE_FILE": str(self.repo / "created.txt")},
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+
+class WrapperUnbornHeadTest(WrapperHarness):
+    """commit の無い repo でも HEAD の取得失敗を失敗扱いにせず、working tree を比較する。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo = self.base / "unborn-repo"
+        self.repo.mkdir()
+        git = shutil.which("git")
+        assert git is not None
+        environment = git_environment(self.home)
+        for args in (
+            ("init", "--quiet"),
+            ("config", "user.name", "antigravity-advisor test"),
+            ("config", "user.email", "antigravity-advisor@example.invalid"),
+            ("config", "commit.gpgsign", "false"),
+        ):
+            subprocess.run(
+                [git, *args],
+                cwd=str(self.repo),
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+    def test_unchanged_unborn_repo_succeeds(self) -> None:
+        result = self.run_wrapper(cwd=self.repo)
+        self.assert_succeeded(result, "既定の助言")
+
+    def test_created_file_in_unborn_repo_is_workspace_modified(self) -> None:
+        result = self.run_wrapper(
+            cwd=self.repo,
+            extra_env={"FAKE_AGY_CREATE_FILE": str(self.repo / "created.txt")},
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_first_commit_in_unborn_repo_is_workspace_modified(self) -> None:
+        result = self.run_wrapper(cwd=self.repo, extra_env={"FAKE_AGY_COMMIT": "1"})
+        self.assert_failed(result, 5, agy_invoked=True)
+
 
 class WrapperOutsideGitTest(WrapperHarness):
     """cwd が git の work tree の外なら、比較を行わずに相談する。"""
@@ -765,6 +879,11 @@ class PluginMetadataContractTest(unittest.TestCase):
         self.assertTrue(following)
         self.assertEqual(f"v{EXPECTED_VERSION}", following[0])
 
+    def test_plugin_readme_documents_the_permission_settings(self) -> None:
+        readme = read_text(PLUGIN_README)
+        self.assertIn(SETTINGS_ARGUMENT, readme)
+        self.assertNotIn("mktemp", readme)
+
     def test_plugin_has_no_hooks_or_commands(self) -> None:
         self.assertFalse((PLUGIN_DIR / "hooks").exists(), "hook は持たない")
         self.assertFalse((PLUGIN_DIR / "commands").exists())
@@ -797,15 +916,24 @@ class RunnerAgentContractTest(unittest.TestCase):
         for literal in (
             f'subagent_type: "{RUNNER_SUBAGENT_TYPE}"',
             'model: "sonnet"',
-            "mktemp -d",
-            "<dir>/request.md",
-            'bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-antigravity-advisor.sh" "<dir>/request.md"',
+            "session scratchpad",
+            'bash "${CLAUDE_PLUGIN_ROOT}/scripts/run-antigravity-advisor.sh" '
+            '"<request file の絶対 path>"',
             "1800000",
-            '"$HOME"/.claude/plugins/cache/*/antigravity-advisor/*/scripts/run-antigravity-advisor.sh',
+            FALLBACK_LOOKUP_COMMAND,
             "SubagentHandback",
         ):
             with self.subTest(literal=literal):
                 self.assertIn(literal, self.body)
+
+    def test_procedure_does_not_create_its_own_temporary_directory(self) -> None:
+        for literal in (
+            "mktemp",
+            "<dir>",
+            '"$HOME"/.claude/plugins/cache/*/antigravity-advisor/',
+        ):
+            with self.subTest(literal=literal):
+                self.assertNotIn(literal, self.text)
 
     def test_report_format(self) -> None:
         for literal in (
@@ -893,13 +1021,25 @@ class WrapperScriptStaticTest(unittest.TestCase):
             "TMPDIR",
             "--mode plan --output-format json",
             "--print-timeout 25m -p <prompt>",
-            "git rev-parse HEAD",
+            SETTINGS_ARGUMENT,
+            "git rev-parse --verify -q HEAD",
             "git status --porcelain=v1 -z --untracked-files=all",
+            "GIT_OPTIONAL_LOCKS=0",
+            "LC_ALL=C",
             "stdout",
             "stderr",
         ):
             with self.subTest(literal=literal):
                 self.assertIn(literal, self.header)
+
+    def test_exit_precedence_is_documented_in_header_readme_and_runner(self) -> None:
+        for path, text in (
+            (WRAPPER, self.header),
+            (PLUGIN_README, read_text(PLUGIN_README)),
+            (RUNNER_AGENT, read_text(RUNNER_AGENT)),
+        ):
+            with self.subTest(path=path.relative_to(ROOT).as_posix()):
+                self.assertIn(EXIT_PRECEDENCE, text)
 
     def test_header_exit_code_table_matches_the_runner(self) -> None:
         for exit_code, failure_class in FAILURE_CLASS_BY_EXIT.items():
