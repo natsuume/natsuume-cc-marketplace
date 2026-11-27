@@ -107,13 +107,16 @@
 # remote に届くのは net diff ではなく範囲内の全 commit であり、中間 commit のコードも履歴に
 # 残る。
 #
-# commit 数の上限 (100) と判定の時間の上限 (10 秒) は、gate を実行する Claude Code の
-# command hook の既定の timeout (60 秒) 内に判定を終えるためのもの。範囲の判定 (10 秒) と
-# 秘匿情報の検査 (20 秒) の上限を足しても、gate 自身の処理 (merge gate が先に行う
-# `gh pr view` 等) に 30 秒が残る。hook が timeout すると
-# gate の判定が働かないため、上限を超えた場合は判定を打ち切ってレビュー必須 (戻り値 1) として
-# 扱う。3 は commit ごとに git を起動し、raw 差分の解析は bash で 1 エントリずつ行うため、
-# commit 数と変更されたファイルの数に比例して時間がかかる。時間の上限は、判定の開始から数えて、
+# commit 数の上限 (100) と判定の時間の上限 (10 秒) は、gate の hook が timeout する前に判定を
+# 終えるためのもの。PreToolUse の command hook は timeout すると tool call を止めないため、
+# timeout した gate は判定を終えないまま push や merge を通してしまう (Claude Code の hooks
+# リファレンスで 2026-11-28 に確認。command hook の既定の timeout は 600 秒で、gate の hook は
+# timeout を指定しない)。範囲の判定 (10 秒) と秘匿情報の検査 (20 秒) の上限は、gate 自身の処理
+# (merge gate が先に行う `gh pr view` 等) と合わせても既定の timeout より十分短い。上限を超えた
+# 場合は判定を打ち切ってレビュー必須 (戻り値 1) として扱う。
+#
+# 3 は commit ごとに git を起動し、raw 差分の解析は bash で 1 エントリずつ行うため、commit 数と
+# 変更されたファイルの数に比例して時間がかかる。時間の上限は、判定の開始から数えて、
 # 各 commit の差分を取る前と raw 差分の各エントリを読むたびに確かめる (bash の `SECONDS`
 # を使うため、1 秒未満の端数の分だけ遅れうる)。秘匿情報の検査の時間は別に上限を設ける
 # (下記「秘匿情報の検査」)。
@@ -164,9 +167,9 @@
 #     では `z/` が付く。どちらも base の `.gitleaks.toml` の path の allowlist に当たって検出から
 #     外れうる
 #   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う
-#   - gitleaks は 20 秒で打ち切り、レビュー必須 (戻り値 2) に倒す。gate の hook の既定の
-#     timeout (60 秒) 内に、範囲の判定 (10 秒) と gate 自身の処理と合わせて終えるための値
-#     (「範囲の判定」を参照)。`--timeout 20` も渡すが、gitleaks は大きな範囲でこの指定を超えて
+#   - gitleaks は 20 秒で打ち切り、レビュー必須 (戻り値 2) として扱う。範囲の判定 (10 秒) と
+#     gate 自身の処理と合わせて、gate の hook が timeout する前に終えるための値 (「範囲の
+#     判定」を参照)。`--timeout 20` も渡すが、gitleaks は大きな範囲でこの指定を超えて
 #     走査を続けることがあるため、外側でも打ち切る (_text_paths_run_with_time_limit)
 #   - `--ignore-gitleaks-allow` は、文書中に `gitleaks:allow` コメントを書くだけで検出を
 #     抑止できないようにするために付ける (テキスト系文書だけの変更は、レビュー無しで
