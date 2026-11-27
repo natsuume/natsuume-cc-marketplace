@@ -108,7 +108,7 @@
 # 残る。
 #
 # commit 数の上限 (100) と判定の時間の上限 (10 秒) は、gate の hook が timeout する前に判定を
-# 終えるためのもの。PreToolUse の command hook は timeout すると tool call を止めないため、
+# 終えるためのもの。PreToolUse の command hook は timeout しても通常は tool call を止めないため、
 # timeout した gate は判定を終えないまま push や merge を通してしまう (Claude Code の hooks
 # リファレンスで 2026-11-28 に確認。command hook の既定の timeout は 600 秒で、gate の hook は
 # timeout を指定しない)。範囲の判定 (10 秒) と秘匿情報の検査 (20 秒) の上限は、gate 自身の処理
@@ -176,10 +176,11 @@
 #     そのコメントを書き込める)
 #   - `--log-opts` の先頭の 4 つのオプションは、gitleaks が実行する `git log -p` の出力を、
 #     ローカルの git の属性と設定で変えさせないために付ける。属性で文書を binary 扱いにする
-#     (`.git/info/attributes` の `*.md binary` 等)、textconv で内容を変換する、
-#     `color.ui = always` で出力に色を付ける、のいずれでも、gitleaks は差分から文書の内容を
-#     読み取れず「検出なし」で終わる。`--text` / `--no-textconv` / `--no-color` はそれぞれを
-#     無効にし、`--no-ext-diff` は外部 diff を使わせない
+#     (`.git/info/attributes` の `*.md binary` 等) と、`color.ui = always` で出力に色を付ける
+#     と、gitleaks は差分から文書の内容を読み取れず「検出なし」で終わる。textconv で内容を
+#     変換した場合も、変換後の差分に秘匿情報が残らなければ検出されない。`--text` /
+#     `--no-textconv` / `--no-color` はそれぞれを無効にし、`--no-ext-diff` は外部 diff を
+#     使わせない
 #   - stdout は捨て、stderr は一時ディレクトリのファイルに受けて空かどうかだけを見る。検出
 #     した認証情報の内容を hook や wrapper の出力に流さないため
 #   - 終了コード 0 で、かつ stderr に何も出ていないときだけを「検出なし」とし、それ以外

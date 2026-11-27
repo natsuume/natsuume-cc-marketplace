@@ -171,7 +171,7 @@ gitleaks が無い環境では、文書に書き込まれた token などの認�
 - 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts`、`.github` → `chatmodes` のいずれかの順に並ぶ
 - basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
 
-これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。同じ理由で、大文字小文字の変換で ASCII の文字になる非 ASCII 文字や、HFS+ が名前の比較で無視する不可視の文字 (U+017F の `ſ`、U+212A の `K`、U+200C など。全件は `hooks/scripts/lib/text-paths.sh` のヘッダに記載) を path に含むファイルは、場所を問わずテキスト系文書として扱いません。
+これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。同じ理由で、大文字小文字の変換で ASCII の文字になる非 ASCII 文字や、HFS+ が名前の比較で無視する不可視の文字 (U+017F の `ſ`、U+212A の `K`、U+200C など。全件は `hooks/scripts/lib/text-paths.sh` のヘッダに記載) を path に含むファイルは、場所を問わずテキスト系文書として扱いません。
 
 判定の範囲は merge 実行 repo の `<PR の base commit SHA>..<PR の head SHA>` で、起点には GitHub が記録する PR の base commit (`baseRefOid`) を使います。ローカルの `origin/<base>` は、PR の実際の base に無い commit を含みうる (base の履歴が書き換えられた後にローカルを更新していない等) ため起点にしません。そのまま起点にすると、merge で base に入る commit が判定範囲から外れます。判定できない場合はレビュー必須として扱います。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
 
