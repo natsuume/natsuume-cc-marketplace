@@ -934,6 +934,13 @@ printf '%s\\n' "$$" > "$FAKE_AGY_PID_FILE"
 exec "$FAKE_AGY_SLEEP" 30
 """
 
+# TERM を無視する agy。無視の設定は exec 後の sleep にも引き継がれる。
+TERM_IGNORING_FAKE_AGY_SCRIPT = """#!/bin/sh
+trap '' TERM
+printf '%s\\n' "$$" > "$FAKE_AGY_PID_FILE"
+exec "$FAKE_AGY_SLEEP" 30
+"""
+
 
 class SignalHandlingTest(ScriptBehaviorTestCase):
     """応答しない agy を待っている間に script だけがシグナルを受けた場合の後始末。"""
@@ -947,13 +954,21 @@ class SignalHandlingTest(ScriptBehaviorTestCase):
         raise AssertionError(f"{path} が作られなかった")
 
     def test_term_stops_waiting_agy_and_removes_work_dir(self) -> None:
+        self.assert_signal_stops_agy(SLOW_FAKE_AGY_SCRIPT, max_seconds=5)
+
+    def test_agy_ignoring_term_is_killed_after_grace_period(self) -> None:
+        # TERM の転送後 5 秒待っても終わらない agy は KILL で止める。
+        self.assert_signal_stops_agy(TERM_IGNORING_FAKE_AGY_SCRIPT, max_seconds=9)
+
+    def assert_signal_stops_agy(self, fake_agy_script: str, max_seconds: float) -> None:
         sleep_path = shutil.which("sleep")
         self.assertIsNotNone(sleep_path)
         bin_dir = self.make_bin(with_agy=False, with_jq=True)
         slow_agy = bin_dir / "agy"
-        slow_agy.write_text(SLOW_FAKE_AGY_SCRIPT, encoding="utf-8")
+        slow_agy.write_text(fake_agy_script, encoding="utf-8")
         slow_agy.chmod(0o755)
         pid_file = self.tmp / "agy.pid"
+        pid_file.unlink(missing_ok=True)
 
         env = os.environ.copy()
         env.update(
@@ -979,12 +994,12 @@ class SignalHandlingTest(ScriptBehaviorTestCase):
         # script のプロセスだけに TERM を送る (agy には直接送らない)。
         process.send_signal(signal.SIGTERM)
         started = time.monotonic()
-        process.communicate(timeout=10)
-        self.assertLess(time.monotonic() - started, 5)
+        process.communicate(timeout=15)
+        self.assertLess(time.monotonic() - started, max_seconds)
         self.assertNotEqual(0, process.returncode)
 
-        # script が agy に TERM を転送し、agy も終了している。
-        deadline = time.monotonic() + 5
+        # script の終了時点で agy も終了している (zombie の回収待ちを除く)。
+        deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             try:
                 os.kill(agy_pid, 0)
@@ -993,7 +1008,7 @@ class SignalHandlingTest(ScriptBehaviorTestCase):
             time.sleep(0.05)
         else:
             os.kill(agy_pid, signal.SIGKILL)
-            self.fail("script が agy に TERM を転送していない")
+            self.fail("script の終了後も agy が残っている")
 
         # 一時ディレクトリが残っていない。
         self.assertEqual([], list(self.script_tmpdir.iterdir()))

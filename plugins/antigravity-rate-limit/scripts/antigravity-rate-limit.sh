@@ -208,11 +208,17 @@ remove_work_dir() {
   fi
 }
 
-# シグナル受信時は、起動中の agy に TERM を転送してから明示的に exit し、EXIT trap で
-# 後始末する。
+# シグナル受信時は、起動中の agy に TERM を転送し、終了を最大 5 秒待つ。終わらなければ
+# KILL で止めてから明示的に exit し、EXIT trap で後始末する。
 on_signal() {
+  local waited=0
   if [ -n "$AGY_PID" ]; then
     kill -TERM "$AGY_PID" 2>/dev/null
+    while kill -0 "$AGY_PID" 2>/dev/null && [ "$waited" -lt 50 ]; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+    kill -KILL "$AGY_PID" 2>/dev/null
   fi
   exit 1
 }
