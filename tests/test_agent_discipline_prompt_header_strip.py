@@ -120,7 +120,7 @@ def read(path: Path) -> str:
 def detect_utf8_locale() -> str | None:
     """`locale -a` から UTF-8 系 locale を 1 つ選ぶ (見つからなければ None)。
 
-    inject-always.sh は ``wc -m`` で文字数を数えるため、UTF-8 locale でないと日本語を
+    inject-always.sh は locale に従う bash の ``${#変数}`` で文字数を数えるため、UTF-8 locale でないと日本語を
     バイト数で数え、8K ガードで delivery-note を落とす。
     """
     try:

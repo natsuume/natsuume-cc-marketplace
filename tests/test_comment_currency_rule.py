@@ -49,8 +49,10 @@ import inspect
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -686,7 +688,7 @@ def detect_non_utf8_locale() -> str | None:
     locale の選定にのみ使う。
     契約: 候補は C と POSIX のみに限定する。任意の「非 UTF-8 系」まで許容
     すると、マルチバイト非 UTF-8 locale (EUC-JP 等) が選ばれた場合に
-    `wc -m` の計上がバイト基準になる保証が無く、縮退発動の前提が崩れて
+    hook の文字数の計上 (bash の ``${#変数}``) がバイト基準になる保証が無く、縮退発動の前提が崩れて
     製品欠陥なしの red を作るため。C / POSIX は文字 = 1 バイトが保証される。
     `locale -a` の実行失敗・タイムアウト・非ゼロ終了・候補ゼロはすべて
     None を返し、呼び出し側が理由付きの明示 skip に変換する (silent green に
@@ -728,7 +730,7 @@ def run_hook(
     subprocess へ継承させる (locale 未指定 fallback。この経路の実走検証は
     LocaleFallbackDeliveryTests が ambient を制御して行う)。locale が
     利用可能であれば LC_ALL/LANG に固定する (detect_utf8_locale 参照) が、
-    これは hook script 内部 (`wc -m` 等) の locale 依存動作を安定させる
+    これは hook script 内部 (文字数の計上等) の locale 依存動作を安定させる
     best-effort な補助にすぎず、この Python プロセス自身の subprocess 出力
     デコードは encoding="utf-8" を明示し、親プロセスの locale 設定に依存
     させない。既定値 (locale=UTF8_LOCALE) は関数定義時点の検出済み値に
@@ -1094,14 +1096,51 @@ class RunnerLocaleDefaultBindingTests(unittest.TestCase):
         )
 
 
+# locale を参照せず入力を常に UTF-8 として数える ``wc`` の fake の本体 (Python)。
+# ``-m`` には UTF-8 の code point 数、``-c`` にはバイト数を返し、それ以外の引数は
+# exit 2 にする。
+LOCALE_IGNORING_WC_PROGRAM = """\
+import sys
+data = sys.stdin.buffer.read()
+option = sys.argv[1] if len(sys.argv) > 1 else ""
+if option == "-m":
+    print(len(data.decode("utf-8", errors="replace")))
+elif option == "-c":
+    print(len(data))
+else:
+    sys.exit(2)
+"""
+
+
+def write_locale_ignoring_wc(directory: str) -> Path:
+    """locale を参照しない ``wc`` の fake を directory に実行可能ファイルとして作る。
+
+    ``wc -m`` の locale の扱いは実装によって異なり、C / POSIX locale でも
+    バイト数ではなく UTF-8 の code point 数を返す実装 (uutils coreutils の一部の版
+    など) がある。directory を PATH の先頭に置くと、hook が外部の ``wc`` で文字数を
+    数えた場合にこの fake が使われる。fake は sh から現在の Python
+    インタプリタを呼ぶ (shebang のパス長の制限を受けないため)。
+    """
+    script = Path(directory) / "wc"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'exec {shlex.quote(sys.executable)} -I -c'
+        f' {shlex.quote(LOCALE_IGNORING_WC_PROGRAM)} "$@"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
 @unittest.skipUnless(shutil.which("jq"), "hook integration requires jq")
 class LocaleFallbackDeliveryTests(unittest.TestCase):
     """UTF-8 locale が env に固定されない hook 起動経路 (locale fallback) の実走検証。
 
     既存の SizeBudgetTests は hook subprocess の LC_ALL/LANG を検出済み UTF-8
     locale に固定して起動するため、「非 UTF-8 locale では inject-always.sh の
-    `wc -m` がバイト計上になり縮退が発動する」経路はどのケースでも実走しない。
-    本クラスはその経路を、ambient locale に依存せず決定的に実走させる:
+    文字数の計上 (bash の ``${#変数}``) がバイト計上になり縮退が発動する」経路は
+    どのケースでも実走しない。本クラスはその経路を、ambient locale に依存せず
+    決定的に実走させる:
 
     - 制御用 locale: detect_non_utf8_locale が `locale -a` から選ぶ単一バイト
       locale (C / POSIX) を、テストが os.environ の LC_ALL/LANG へ一時設定し
@@ -1112,7 +1151,7 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
       ため、テスト実行環境の既定 locale には依存しない
     - 対象経路: 段階的縮退ガードを持つ inject-always.sh の part 1 配送のみ。他の
       経路はサイズ計測を持たず locale で挙動が変わらないため対象外
-    - 期待挙動: 非 UTF-8 locale では `wc -m` が日本語 payload をバイト数
+    - 期待挙動: 非 UTF-8 locale では hook が日本語 payload をバイト数
       (UTF-8 で 1 文字 3 バイト前後) で計上するため、現行 payload は必ず
       8,000 を超え、二段縮退 ((参照パス) 行の除去 → 配送メモ全体の除去) が
       発動して ESSENTIAL (自己修復指示 + CORE) だけが配送される。CORE は
@@ -1123,6 +1162,11 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
       (c) (参照パス) 行が payload に存在しない
       (d) CORE (always-1.md の配送本文) が payload に残存する (ESSENTIAL 不落)
       (e) payload が自己修復指示 (「(自己修復)」) で始まる
+    - 外部コマンドの実装差への非依存: locale を参照せず code point 数を返す
+      ``wc`` の fake (write_locale_ignoring_wc) を PATH の先頭に置いた状態でも
+      (a)〜(e) が成り立つことを検査する。hook の計上が外部の ``wc`` の実装
+      (GNU / BSD / uutils coreutils) に左右されないことを、uutils coreutils の
+      無い環境でも確かめるため
     - 前提の明示: 本検査は「バイト計上では現行 payload が必ず予算を超える」
       という現行サイズを前提とする。payload がバイト計上でも 8,000 以下まで
       縮小した場合は縮退が発動せず (b)(c) が red になるため、その時点で本
@@ -1136,28 +1180,35 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
       検査の合否と設計 (定義時束縛の locale 固定・無条件実行) は変更しない
     """
 
-    def _deliver_under_non_utf8_locale(self, builder) -> str:
+    def _deliver_under_non_utf8_locale(
+        self, builder, path_prefix: str | None = None
+    ) -> str:
         """制御用単一バイト locale を ambient に一時設定し、locale=None で
         builder を実行して additionalContext を返す。
 
         run_hook 自身は locale を上書きせず、テストが制御した ambient
         LC_ALL/LANG を hook subprocess が継承する (locale 未指定 fallback
-        分岐の実走)。detect_non_utf8_locale が None の場合は理由付きで
-        skipTest する。locale の検出と skip 判定は環境変更より前に行い、
-        環境変更は builder 1 回の実行区間に限定し、元々キーが無かった状態も
-        含めて完全復元する。
+        分岐の実走)。path_prefix を渡すと、同じ区間だけ ambient の PATH の
+        先頭にそのディレクトリを加える (外部コマンドを fake に差し替えるため)。
+        detect_non_utf8_locale が None の場合は理由付きで skipTest する。
+        locale の検出と skip 判定は環境変更より前に行い、環境変更は builder
+        1 回の実行区間に限定し、元々キーが無かった状態も含めて完全復元する。
         """
         locale = detect_non_utf8_locale()
         if locale is None:
             self.skipTest(
                 "制御用の単一バイト locale (C / POSIX) がホストで確認できないため skip"
             )
-        keys = ("LC_ALL", "LANG")
+        keys = ("LC_ALL", "LANG", "PATH")
         saved = {key: os.environ[key] for key in keys if key in os.environ}
         with tempfile.TemporaryDirectory() as tmp_dir:
             try:
                 os.environ["LC_ALL"] = locale
                 os.environ["LANG"] = locale
+                if path_prefix is not None:
+                    os.environ["PATH"] = os.pathsep.join(
+                        [path_prefix, *([saved["PATH"]] if "PATH" in saved else [])]
+                    )
                 return builder(tmp_dir, None)
             finally:
                 for key in keys:
@@ -1166,12 +1217,38 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
                     else:
                         os.environ.pop(key, None)
 
-    def test_part1_delivery_degrades_to_essential_under_non_utf8_locale(
-        self,
-    ) -> None:
-        """part 1 配送がバイト計上の縮退で ESSENTIAL のみになること (a)〜(e)。"""
-        context = self._deliver_under_non_utf8_locale(delivery_part1)
-        # (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
+    def _assert_fake_wc_takes_precedence(self, fake_bin: str) -> None:
+        """fake_bin を PATH の先頭に置いた bash で ``wc -m`` を実行すると、C
+        locale でも fake が code point 数を返すことを確かめる。
+
+        fake が PATH で優先されない環境では、hook が外部の ``wc`` に依存して
+        いても縮退の検査が green になりうるため、前提として検査する。
+        """
+        env = os.environ.copy()
+        env["LC_ALL"] = "C"
+        env["LANG"] = "C"
+        env["PATH"] = os.pathsep.join([fake_bin, env.get("PATH", "")])
+        result = subprocess.run(
+            ["/bin/bash", "-c", 'printf "%s" "$1" | wc -m', "probe", "日本語"],
+            env=env,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(
+            "3",
+            result.stdout.strip(),
+            "PATH の先頭に置いた fake の wc が使われていない"
+            f" (stdout: {result.stdout!r}, stderr: {result.stderr!r})",
+        )
+
+    def _assert_degraded_to_essential(self, context: str) -> None:
+        """context がバイト計上の二段縮退後の ESSENTIAL のみであること (b)〜(e)。
+
+        (a) は run_hook 内の既存検証 (正常終了・additionalContext 存在) が担う。
+        """
         note_payload = delivery_note_payload_text()
         self.assertTrue(
             note_payload, "delivery-note.md から配送メモ本文を抽出できない (空・ヘッダのみの疑い)"
@@ -1196,6 +1273,24 @@ class LocaleFallbackDeliveryTests(unittest.TestCase):
             context.startswith("(自己修復)"),
             "payload が自己修復指示で始まっていない",
         )
+
+    def test_part1_delivery_degrades_to_essential_under_non_utf8_locale(
+        self,
+    ) -> None:
+        """part 1 配送がバイト計上の縮退で ESSENTIAL のみになること (a)〜(e)。"""
+        context = self._deliver_under_non_utf8_locale(delivery_part1)
+        self._assert_degraded_to_essential(context)
+
+    def test_part1_delivery_degrades_even_if_wc_ignores_the_locale(self) -> None:
+        """locale を参照しない ``wc`` が PATH の先頭にあっても、part 1 配送が
+        バイト計上の縮退で ESSENTIAL のみになること (a)〜(e)。"""
+        with tempfile.TemporaryDirectory() as fake_bin:
+            write_locale_ignoring_wc(fake_bin)
+            self._assert_fake_wc_takes_precedence(fake_bin)
+            context = self._deliver_under_non_utf8_locale(
+                delivery_part1, path_prefix=fake_bin
+            )
+        self._assert_degraded_to_essential(context)
 
 
 class RuleBlockSelfComplianceTests(unittest.TestCase):
