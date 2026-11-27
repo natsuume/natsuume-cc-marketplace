@@ -379,15 +379,18 @@ git_env = {{
         "GIT_WORK_TREE",
         "GIT_NO_REPLACE_OBJECTS",
         "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_KEY_0",
-        "GIT_CONFIG_VALUE_0",
     )
 }}
+git_config = [
+    (os.environ.get(f"GIT_CONFIG_KEY_{{index}}"), os.environ.get(f"GIT_CONFIG_VALUE_{{index}}"))
+    for index in range(int(os.environ.get("GIT_CONFIG_COUNT") or 0))
+]
 record = {{
     "args": args,
     "config": config,
     "ignore_files": ignore_files,
     "git_env": git_env,
+    "git_config": git_config,
 }}
 with open(os.environ["{log_env}"], "a", encoding="utf-8") as fp:
     fp.write(json.dumps(record) + "\\n")
@@ -1407,17 +1410,25 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
             )
         self.assertFalse(config_path.startswith(f"{source_path}{os.sep}"), config_path)
         # repo は GIT_DIR で渡し、git に repo の working tree・replace ref・commit-graph を
-        # 参照させない。
+        # 参照させず、差分の path の表記を git の既定に固定する。
         self.assertEqual(
             record["git_env"],
             {
                 "GIT_DIR": str(repository.git_dir()),
                 "GIT_WORK_TREE": source_path,
                 "GIT_NO_REPLACE_OBJECTS": "1",
-                "GIT_CONFIG_COUNT": "1",
-                "GIT_CONFIG_KEY_0": "core.commitGraph",
-                "GIT_CONFIG_VALUE_0": "false",
+                "GIT_CONFIG_COUNT": "5",
             },
+        )
+        self.assertEqual(
+            record["git_config"],
+            [
+                ["core.commitGraph", "false"],
+                ["diff.noprefix", "false"],
+                ["diff.mnemonicPrefix", "false"],
+                ["diff.relative", "false"],
+                ["core.quotePath", "true"],
+            ],
         )
         self.assertEqual(
             args,
@@ -1694,6 +1705,24 @@ class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
                     repository.git("config", key, value)
                 self.skip_unless_naive_scan_is_suppressed(repository)
                 self.assertEqual(self.range_status(repository), 2)
+
+    def test_noprefix_does_not_move_the_secret_into_an_allowlisted_path(self) -> None:
+        """`diff.noprefix` で gitleaks が報告する path の先頭の要素が落ちても、base の
+        allowlist (`^vendor/`) に当たって検出から外れない。"""
+        repository = self.create_repository()
+        repository.git("switch", "-q", "master")
+        repository.write(
+            ".gitleaks.toml",
+            "[extend]\nuseDefault = true\n\n[allowlist]\npaths = ['''^vendor/''']\n",
+        )
+        repository.commit_all("gitleaks config")
+        repository.git("switch", "-q", "feature")
+        repository.git("reset", "-q", "--hard", "master")
+        repository.write("docs/vendor/notes.md", f"example = {DUMMY_GITHUB_PAT}\n")
+        repository.commit_all("docs")
+        repository.git("config", "diff.noprefix", "true")
+        self.skip_unless_naive_scan_is_suppressed(repository)
+        self.assertEqual(self.range_status(repository), 2)
 
     def test_replace_ref_does_not_hide_the_secret(self) -> None:
         """token を書き込む commit を、replace ref で token の無い commit に置き換えても検出する。"""

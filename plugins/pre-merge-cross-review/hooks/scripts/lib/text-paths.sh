@@ -141,7 +141,9 @@
 # する) 場合に限り、skip の前に範囲内の commit を次の形で検査する:
 #
 #   env GIT_DIR=<repo の git dir の絶対 path> GIT_WORK_TREE=<走査元> GIT_NO_REPLACE_OBJECTS=1
-#       GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.commitGraph GIT_CONFIG_VALUE_0=false
+#       GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_<n>=<key> GIT_CONFIG_VALUE_<n>=<value> (n = 0〜4。
+#       core.commitGraph=false・diff.noprefix=false・diff.mnemonicPrefix=false・
+#       diff.relative=false・core.quotePath=true)
 #   gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error
 #     --exit-code 1 --timeout 25 [--config <一時ファイル>] --gitleaks-ignore-path <走査元>
 #     --log-opts="--no-textconv --no-ext-diff --text --no-color <base の OID>..<head の OID>"
@@ -150,7 +152,11 @@
 #   - <走査元> は空の一時ディレクトリ (理由は下の「設定と ignore の読み方」を参照)。gitleaks は
 #     走査元で `git log -p` を実行するため、repo は環境変数 `GIT_DIR` で指定する。環境変数は
 #     `env` で gitleaks の起動にだけ渡し、export しない。`GIT_CONFIG_COUNT` 等は、gitleaks が
-#     実行する git に `core.commitGraph=false` を渡す (git 2.31 以降。理由は「範囲の判定」を参照)
+#     実行する git に設定を渡す (git 2.31 以降)。`core.commitGraph=false` の理由は「範囲の
+#     判定」を参照。残りの 4 つは差分の path の表記を git の既定に固定する。たとえば
+#     `diff.noprefix = true` では gitleaks が報告する path から先頭の要素が落ち
+#     (`docs/vendor/x.md` が `vendor/x.md` になる)、base の `.gitleaks.toml` の path の
+#     allowlist に当たって検出から外れうる
 #   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う
 #   - gitleaks は 25 秒で打ち切り、レビュー必須 (戻り値 2) に倒す。gate を実行する hook の
 #     既定の timeout (60 秒) から、範囲の判定の時間の上限 (15 秒) と gate 自身の処理の分を
@@ -394,23 +400,23 @@ _text_paths_extract_base_file() {
 # _text_paths_run_with_time_limit <seconds> <command> [<arg>...]
 # command を background で起動し、<seconds> 秒以内に終われば command の終了コードを返す。
 # 終わらなければ command を KILL して 124 を返す。macOS には `timeout` コマンドが無いため、
-# 0.1 秒ごとに `kill -0` で終了を確かめる。redirect は呼び出し側で関数呼び出しに付ける
-# (command はそれを引き継ぐ)。
+# 0.1 秒ごとに `kill -0` で終了を確かめる。経過時間は bash の `SECONDS` で測る (`sleep` の
+# 回数で数えると、`sleep` を起動する時間の分だけ遅れる)。`SECONDS` は整数秒のため、打ち切りは
+# <seconds> 秒より最大 1 秒早まりうる。redirect は呼び出し側で関数呼び出しに付ける (command は
+# それを引き継ぐ)。
 _text_paths_run_with_time_limit() {
   local limit_seconds="$1"
   shift
   "$@" &
   local pid=$!
-  local ticks=0
-  local max_ticks=$((limit_seconds * 10))
+  local deadline=$((SECONDS + limit_seconds))
   while kill -0 "$pid" 2>/dev/null; do
-    if [ "$ticks" -ge "$max_ticks" ]; then
+    if [ "$SECONDS" -ge "$deadline" ]; then
       kill -KILL "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
       return 124
     fi
     sleep 0.1
-    ticks=$((ticks + 1))
   done
   wait "$pid"
 }
@@ -457,7 +463,12 @@ _text_paths_run_gitleaks() {
   local gitleaks_status=0
   _text_paths_run_with_time_limit 25 \
     env GIT_DIR="$git_dir" GIT_WORK_TREE="$source_dir" GIT_NO_REPLACE_OBJECTS=1 \
-    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.commitGraph GIT_CONFIG_VALUE_0=false \
+    GIT_CONFIG_COUNT=5 \
+    GIT_CONFIG_KEY_0=core.commitGraph GIT_CONFIG_VALUE_0=false \
+    GIT_CONFIG_KEY_1=diff.noprefix GIT_CONFIG_VALUE_1=false \
+    GIT_CONFIG_KEY_2=diff.mnemonicPrefix GIT_CONFIG_VALUE_2=false \
+    GIT_CONFIG_KEY_3=diff.relative GIT_CONFIG_VALUE_3=false \
+    GIT_CONFIG_KEY_4=core.quotePath GIT_CONFIG_VALUE_4=true \
     gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
     --exit-code 1 --timeout 25 "${config_args[@]}" --gitleaks-ignore-path "$source_dir" \
     --log-opts="--no-textconv --no-ext-diff --text --no-color ${base_oid}..${head_oid}" \

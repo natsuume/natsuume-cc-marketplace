@@ -188,9 +188,9 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 branch の変更がテキスト系文書だけの push は、空 push と同じく 2 マーカーを要求せずに通します。push gate が deny しないため、`/pre-push-review:review` を実行する必要もありません。どの push が該当するかは push gate が判定します。
 
-この skip では security review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり 2 マーカーを要求します。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の実行は 25 秒で打ち切り、gitleaks の実行に失敗した場合として扱います。
+この skip では security review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり 2 マーカーを要求します。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の実行は 25 秒で打ち切り、打ち切った場合は実行に失敗した場合と同じく扱います。
 
-gitleaks の設定 (`.gitleaks.toml` / `.gitleaksignore`) は、working tree ではなく範囲の起点 (base の commit) の tree から読みます。working tree に未追跡の設定ファイルを置いて検出を抑止できないようにするためです。また、gitleaks が内部で実行する `git log` に `--text --no-textconv --no-color` を付け、ローカルの git の属性 (binary の指定・textconv) や `color.ui` の設定で文書の差分が検査から隠れないようにしています。base の tree に `.gitleaks.toml` が無ければ gitleaks の既定のルールだけを使い、`.gitleaksignore` が無ければ ignore は空にします。環境変数 `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` を設定している場合は、利用者自身の設定としてそちらを使います。
+gitleaks の設定 (`.gitleaks.toml` / `.gitleaksignore`) は、working tree ではなく範囲の起点 (base の commit) の tree から読みます。working tree に未追跡の設定ファイルを置いて検出を抑止できないようにするためです。また、gitleaks が内部で実行する `git log` に `--text --no-textconv --no-color` を付け、ローカルの git の属性 (binary の指定・textconv) や `color.ui` の設定で文書の差分が検査から隠れないようにしています。差分の path の表記 (`diff.noprefix` 等) も git の既定に固定し、報告される path がずれて `.gitleaks.toml` の path の allowlist に当たらないようにしています。base の tree に `.gitleaks.toml` が無ければ gitleaks の既定のルールだけを使い、`.gitleaksignore` が無ければ ignore は空にします。環境変数 `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` を設定している場合は、利用者自身の設定としてそちらを使います。
 
 gitleaks が無い環境では、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
 
