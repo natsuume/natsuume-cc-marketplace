@@ -247,7 +247,9 @@ if [ "$DOCUMENT_COUNT" != "1" ]; then
 fi
 
 # 応答の構造を検証し、最初に見つかった違反の種類 (違反が無ければ ok) を返す。型を先に
-# 確かめてからフィールドを読むことで、想定外の型でも jq をエラーで止めない。
+# 確かめてからフィールドを読むことで、想定外の型でも jq をエラーで止めない。num_turns が
+# 0 以外の数値である違反は status の検査より先に判定する。agent turn が実行された応答は
+# status にかかわらず quota を消費したおそれがあり、その警告を他の違反の報告で隠さないため。
 VALIDATION_FILTER='
 def is_fraction:
   if type != "number" then false else (. >= 0 and . <= 1) end;
@@ -259,9 +261,9 @@ def is_valid_bucket:
 def is_valid_group:
   if type != "object" then false else ((.buckets | type) == "array") end;
 if type != "object" then "not-object"
+elif ((.num_turns | type) == "number" and .num_turns != 0) then "num-turns"
 elif .status != "SUCCESS" then "status"
 elif (.num_turns | type) != "number" then "num-turns-type"
-elif .num_turns != 0 then "num-turns"
 elif (.command | type) != "object" then "command"
 elif .command.name != "usage" then "command"
 elif (.command.data | type) != "object" then "groups"

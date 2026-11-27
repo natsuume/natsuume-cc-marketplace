@@ -611,6 +611,15 @@ class ResponseValidationTest(ScriptBehaviorTestCase):
         self.assertIn("num_turns", result.stderr)
         self.assertIn("quota", result.stderr)
 
+    def test_quota_warning_is_not_hidden_by_status_violation(self) -> None:
+        # agent turn が実行された応答は、status が SUCCESS でなくても quota の警告を出す。
+        response = measured_response()
+        response["num_turns"] = 2
+        response["status"] = "ERROR"
+        result = self.assert_rejected_response(response)
+        self.assertIn("num_turns", result.stderr)
+        self.assertIn("quota", result.stderr)
+
     def test_missing_or_non_numeric_num_turns_is_rejected(self) -> None:
         for num_turns in ("0", None, False):
             with self.subTest(num_turns=num_turns):
