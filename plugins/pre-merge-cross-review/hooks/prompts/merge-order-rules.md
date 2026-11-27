@@ -13,7 +13,7 @@
 
 起動は PR の head SHA ごとに 1 回でよい。このセッションで現在の head SHA について `Status: pass` / `Status: findings` / `Status: skipped` の report を受け取っている場合に限り、再起動しない (ローカル記録の有無は判断材料にしない。gate が受理する状態かどうかは gate 自身が判定する)。`Status: execution-failed` の場合は原因を解消してから再起動してよい。report の findings を分類・対応し、head SHA が変わる commit を追加した場合は、次の merge 試行の前に同じ手順で再起動する。report を受け取った後の `gh pr merge` で、merge gate がローカルの codex review 記録を検証して merge に進む。
 
-PR の差分がテキスト系文書だけの場合も起動手順は同じで、codex-reviewer を起動する。その場合 wrapper はレビューせずに終わり、reviewer は `Status: skipped` を返す。`Status: skipped` の report を受け取った head SHA では再起動せずに merge に進む (merge gate はこの PR に記録を要求しない)。起動を省くかどうかをセッション自身で判定しない (テキスト系文書だけかの判定条件は gate と wrapper が持つ)。
+PR の差分がテキスト系文書だけの場合も起動手順は同じで、codex-reviewer を起動する。その場合 wrapper はレビューせずに終わり、reviewer は `Status: skipped` を返す。`Status: skipped` の report を受け取った head SHA では再起動せずに merge に進む (merge gate はこの PR に記録を要求しない)。起動を省くかどうかをセッション自身で判定しない (テキスト系文書だけかの判定条件は gate と wrapper が持つ)。`Status: skipped` を受け取った後でも merge gate に deny された場合は、同じ head SHA でも codex-reviewer を 1 回だけ再起動してよい (wrapper の実行後に PR の base commit が変わり、その object がローカルに無いと gate の判定が成立しないことがある。再起動した wrapper は base を fetch して判定し直し、結果は `Status: skipped` か通常のレビューの記録になる)。
 
 **境界**: 本規律は permission mode に依らず適用する (auto 以外でも手順は同じで無害)。merge gate に deny された後にその案内に従って起動することもできるが、それは復旧経路であり既定の順序ではない。
 

@@ -44,7 +44,7 @@ review cadence (Codex review 一定回数ごとの checkpoint 強制) の計数�
 3. 関与したコマンドが **受理正規形** `gh pr merge [<number>] [flags...]` に完全一致するかを確認する (照合の前に、コマンド前後の空行・空白・区切りだけは落とす)。番号を置けるのは `gh pr merge` の直後の 1 語だけで、それ以降は長フラグ (`--name` / `--name=value`) と単文字の短フラグ (`-d` 等) のみを許す。短フラグの束ね形 (`-dR` 等) は受理しない (束の中に repo selector を隠すと `--repo` / `-R` の文字列検出をすり抜けるため)。一致しない関与形 — リダイレクト (`> file` / `2>&1` / `10> file` 等)、シェル演算子による連結 (`&&` / `||` / `;` / `|` / `&`)、quote、`$` 展開、フラグより後ろの数字、複数の merge、前置コマンド — は **一律 deny** する (gate の解釈と shell の実挙動が乖離しうるため。リダイレクトや連結を外した単独コマンドへの言い換えで対応する)
 4. 照合する repo は hook payload の `cwd` (merge が実行されるディレクトリ) を正本とする。`cwd` の欠落・空・非絶対パス・不在ディレクトリ・移動不能はいずれも deny する (hook プロセスの cwd への fallback は持たない)
 5. 対象 PR の解決と、PR 番号・現在の head SHA・base commit SHA の取得は gh (`gh pr view --json number,headRefOid,baseRefOid`) に委ねる (正規形で番号があればその番号、無ければ current branch の PR)。gh / jq が見つからない・PR を解決できない・取得に失敗した・PR 番号や head SHA が得られない場合はすべて deny する (fail-closed)。gh は取得だけに使い、PR のレビューやコメントは読まず、GitHub には何も書かない
-6. base commit SHA が 40 桁の小文字 16 進数の場合に限り、merge 実行 repo で `<base commit SHA>..<head SHA>` の変更がテキスト系文書だけかを判定し、成立すればレビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる。判定の定義と保守的に倒す条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。base commit SHA の欠落・形式不正や判定の不成立では次の記録の検証へ進む
+6. base commit SHA が 40 桁の小文字 16 進数の場合に限り、merge 実行 repo で `<base commit SHA>..<head SHA>` の変更がテキスト系文書だけかを判定し、成立すればレビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる。判定の定義とレビュー必須とする条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。base commit SHA の欠落・形式不正や判定の不成立では次の記録の検証へ進む
 7. merge 実行 repo の git-dir 直下にあるローカルのレビュー記録を検証する。final attestation (`.claude-pre-merge-codex-reviewed`) が symlink でない通常ファイルで、1 行目 `pr=<全数字>` / 2 行目 `head=<40 hex 小文字>` の形式を満たし、PR 番号と現在の head SHA の両方に一致する場合のみ無出力で終了する (既定の許可フローに委ねる)。記録は消さない (merge が失敗して再実行する場合も同じ記録で通り、head SHA が変われば自動的に失効する)
 8. 次の場合はいずれも deny する: 記録が無い (pending だけの場合を含む) / git-dir を解決できない / PR 番号を取得できない / 記録が symlink・通常ファイルでない・2 行の形式を満たさない / 記録の PR 番号が merge 対象と異なる / 記録の head SHA が現在の head と異なる (両方の SHA を示して再レビューを案内する)
 9. deny 時は `pre-merge-cross-review:codex-reviewer` subagent の実行を案内する。subagent がレビューを実行してローカルに記録を保存し、その後の `gh pr merge` で gate が記録を検証してから merge に進む流れを示す。レビューは current branch の PR に対して実行され記録もその PR に紐づくため、別 PR を番号指定して merge する場合は、先にその PR のブランチへ `git switch` してから subagent を起動する必要がある旨も併せて案内する
@@ -157,15 +157,19 @@ wrapper が exit 0 で完了した場合、parent-safe report の `Status` は *
 
 PR の変更がテキスト系文書だけの場合、merge gate はローカルのレビュー記録を要求せずに merge を通します。起動手順は変わらず、codex-reviewer を起動します。wrapper は codex review を実行せずに終わり、codex-reviewer は `Status: skipped` を返します。起動を省くかどうかを session 側では判定せず、テキスト系文書だけかの判定は gate と wrapper が行います (起動順の規律は `hooks/prompts/merge-order-rules.md`)。
 
-**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。ただし次のいずれかに当たるファイルは、Claude Code や他の coding agent が指示として読み込む Markdown なのでコードとして扱います:
+`Status: skipped` を受け取った後でも、merge gate に deny された場合は、同じ head SHA で codex-reviewer を 1 回だけ再起動してかまいません。wrapper の実行後に PR の base commit が変わり、その object がローカルに無いと、gate の判定が成立しないことがあるためです。再起動した wrapper は base を fetch してから判定し直し、結果は `Status: skipped` か通常のレビュー記録のどちらかになります。
 
-- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf` に一致する (深さは問わない)
-- 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts` のいずれかの順に並ぶ
-- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
+この skip では codex review も行わないため、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
+
+**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。Claude Code や他の coding agent は特定の場所・名前の Markdown を指示として読み込むため、次に列挙した場所・名前の Markdown はコードとして扱います (列挙に無いものの扱いは「既知の制約」を参照):
+
+- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf` / `.clinerules` / `.roo` / `.kiro` / `.continue` / `.junie` / `.amazonq` に一致する (深さは問わない)
+- 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts`、`.github` → `chatmodes` のいずれかの順に並ぶ
+- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
 
 これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。
 
-判定の範囲は merge 実行 repo の `<PR の base commit SHA>..<PR の head SHA>` で、起点には GitHub が記録する PR の base commit (`baseRefOid`) を使います。ローカルの `origin/<base>` は、PR の実際の base に無い commit を含みうる (base の履歴が書き換えられた後にローカルを更新していない等) ため起点にしません。そのまま起点にすると、merge で base に入る commit が判定範囲から外れます。判定できない場合はレビュー必須に倒します。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
+判定の範囲は merge 実行 repo の `<PR の base commit SHA>..<PR の head SHA>` で、起点には GitHub が記録する PR の base commit (`baseRefOid`) を使います。ローカルの `origin/<base>` は、PR の実際の base に無い commit を含みうる (base の履歴が書き換えられた後にローカルを更新していない等) ため起点にしません。そのまま起点にすると、merge で base に入る commit が判定範囲から外れます。判定できない場合はレビュー必須として扱います。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
 
 - base commit SHA が gh の応答に無い、または 40 桁の小文字 16 進数でない
 - PR の base commit か head の commit がローカルに無い (fetch していない等)
@@ -229,6 +233,8 @@ classifier は project settings (`.claude/settings.json` / `.claude/settings.loc
 - **remote `origin` = PR の repository が前提 (fork 構成は非対応)**: wrapper はレビュー範囲の base をローカルの `origin/<base>` で解決するため、remote `origin` が PR の属する repository を指す個人環境を前提とします。fork からの PR (origin と PR の repository が異なる構成) には対応しません
 - **merge queue による暗黙の遅延 merge は検出しない**: merge queue が有効な base branch では `--auto` を付けなくても merge が queue 経由の遅延実行になりえますが、gate はこれを検出しません (遅延 merge はサポート外です)
 - **PowerShell tool / Monitor tool 経由の `gh pr merge` は観測しない**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `gh pr merge` を gate は観測しません。これらの tool を有効にした環境はサポート外です
+- **列挙に無い場所にある agent の指示ファイルはテキスト系文書と判定される**: テキスト系文書のみの変更の判定でコード扱いにするのは、列挙した場所・名前の Markdown だけです。それ以外の場所にある agent の指示ファイルは、テキスト系文書としてレビュー記録無しで merge されます
+- **除外対象から間接的に読み込まれる文書は検出しない**: `CLAUDE.md` から `@path` で import される文書など、除外対象のファイルが読み込む文書も、その場所・名前が列挙に当たらなければテキスト系文書と判定されます
 
 ## pre-push-review / pre-push-codex-review との併用設計
 

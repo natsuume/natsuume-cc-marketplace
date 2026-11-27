@@ -160,6 +160,9 @@ TEXT_DOCUMENT_PATHS = (
     ".github/workflows/notes.md",
     "github/prompts/x.md",
     "docs/instructions/x.md",
+    "docs/chatmodes/x.md",
+    "roo/x.md",
+    "kiro/notes.md",
     "docs/claude.md.rst",
     "docs/a b.md",
     "docs/日本語.md",
@@ -202,15 +205,25 @@ NON_TEXT_PATHS = (
     ".gemini/x.md",
     ".codex/x.md",
     ".windsurf/x.md",
+    ".clinerules/x.md",
+    ".roo/rules-code/x.md",
+    ".kiro/steering/x.md",
+    ".continue/x.md",
+    ".junie/guidelines.md",
+    ".amazonq/x.md",
+    "sub/.roo/x.md",
     # 連続する 2 つのディレクトリ要素
     "plugins/x/hooks/prompts/p.md",
     ".github/instructions/x.md",
     ".github/prompts/x.md",
+    ".github/chatmodes/x.chatmode.md",
     "sub/.github/prompts/x.md",
     # basename
     ".claude/CLAUDE.md",
     "sub/CLAUDE.md",
     "AGENTS.md",
+    "AGENTS.override.md",
+    "sub/AGENTS.override.md",
     "CLAUDE.md",
     "CLAUDE.local.md",
     "GEMINI.md",
@@ -232,6 +245,14 @@ NON_TEXT_PATHS = (
     "gemini.MD",
     "Claude.Local.md",
     "Copilot-Instructions.MD",
+    "agents.Override.md",
+    ".ClineRules/x.md",
+    ".ROO/x.md",
+    ".Kiro/x.md",
+    ".CONTINUE/x.md",
+    ".Junie/x.md",
+    ".AmazonQ/x.md",
+    ".GitHub/ChatModes/x.md",
 )
 
 # bash 3.2 (macOS) に無い構文。lib に含まれないことを静的に確かめる。
@@ -1675,12 +1696,50 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                     "`.gemini`",
                     "`.codex`",
                     "`.windsurf`",
+                    "`.clinerules`",
+                    "`.roo`",
+                    "`.kiro`",
+                    "`.continue`",
+                    "`.junie`",
+                    "`.amazonq`",
                     "`.github` → `instructions`",
                     "`.github` → `prompts`",
+                    "`.github` → `chatmodes`",
                     "`copilot-instructions.md`",
+                    "`AGENTS.override.md`",
                 ):
                     self.assertIn(excluded, body)
                 self.assertIn("大文字小文字を区別しません", body)
+                self.assertIn(
+                    "次に列挙した場所・名前の Markdown はコードとして扱います", body
+                )
+
+    def test_plugin_readmes_state_the_limits_of_the_exclusion_list(self) -> None:
+        """既知の制約に、列挙に無い指示ファイルと間接的に読み込まれる文書を書く。"""
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                constraints = body[body.index("## 既知の制約") :]
+                self.assertIn(
+                    "列挙に無い場所にある agent の指示ファイルはテキスト系文書と判定される",
+                    constraints,
+                )
+                self.assertIn(
+                    "除外対象から間接的に読み込まれる文書は検出しない", constraints
+                )
+                self.assertIn("`@path` で import される文書", constraints)
+
+    def test_readmes_say_text_only_skip_does_not_scan_for_secrets(self) -> None:
+        """skip ではレビューを行わないため認証情報も検査されず、secret scanner の併用を
+        推奨する。"""
+        for name, path in {**PLUGIN_READMES, "root": ROOT / "README.md"}.items():
+            with self.subTest(readme=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn("文書に書き込まれた token などの認証情報", body)
+                self.assertIn(
+                    "gitleaks 等の secret scanner を pre-commit / pre-push hook として併用",
+                    body,
+                )
 
     def test_split_plugin_readmes_list_the_lib_in_file_table(self) -> None:
         for name in ("pre-push-codex-review", "pre-merge-cross-review"):
@@ -1721,6 +1780,22 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
         self.assertIn("セッション自身で判定しない", body)
         self.assertNotIn("判定に迷う場合は起動してよい", body)
         self.assertNotIn("起動は不要", body)
+
+    def test_merge_docs_allow_one_relaunch_after_skipped_and_deny(self) -> None:
+        """skipped を受け取った後に merge gate に deny された場合は、同じ head SHA でも
+        1 回だけ再起動してよい (注入文と README の両方に書く)。"""
+        rules = MERGE_ORDER_RULES.read_text(encoding="utf-8")
+        self.assertIn(
+            "`Status: skipped` を受け取った後でも merge gate に deny された場合は、"
+            "同じ head SHA でも codex-reviewer を 1 回だけ再起動してよい",
+            rules,
+        )
+        readme = PLUGIN_READMES["pre-merge-cross-review"].read_text(encoding="utf-8")
+        self.assertIn(
+            "同じ head SHA で codex-reviewer を 1 回だけ再起動してかまいません", readme
+        )
+        for body in (rules, readme):
+            self.assertIn("base を fetch", body)
 
 
 if __name__ == "__main__":

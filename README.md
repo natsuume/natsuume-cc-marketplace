@@ -132,7 +132,7 @@ security-reviewer / code-reviewer subagent を **self-contained** に保つの�
 
 Linked worktree では marker、launch attestation、tombstone を main `.git` 直下ではなく、`git rev-parse --absolute-git-dir` が返す worktree 専用 git-dir (`.git/worktrees/<name>/`) に保存します。push deny メッセージは実際の marker storage を表示するため、main `.git` に残る別 worktree の marker と取り違えずに状態を確認できます。
 
-branch の変更がテキスト系文書 (拡張子が `md` / `markdown` / `rst` / `adoc` のファイル。agent や skill の定義・`CLAUDE.md` 等、coding agent が指示として読み込む Markdown を除く) だけの push は、マーカーを要求せずに通します。判定できない場合はレビュー必須に倒します。定義と判定条件は [plugin README](plugins/pre-push-review/README.md#テキスト系文書のみの変更) を参照してください。
+branch の変更がテキスト系文書 (拡張子が `md` / `markdown` / `rst` / `adoc` のファイル。agent や skill の定義・`CLAUDE.md` 等、coding agent が指示として読み込む Markdown を除く) だけの push は、マーカーを要求せずに通します。判定できない場合はレビュー必須として扱います。この skip では security review も行わないため、文書に書き込まれた token などの認証情報も検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。定義と判定条件は [plugin README](plugins/pre-push-review/README.md#テキスト系文書のみの変更) を参照してください。
 
 ### 設計上のメリット
 

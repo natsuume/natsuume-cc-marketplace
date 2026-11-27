@@ -52,7 +52,7 @@ push 前レビューを **同じアシスタントメッセージで並列に** 
 
 **ファイル**: `hooks/scripts/block-pre-push-codex.sh`
 
-`git push` を含むコマンドを検出した際、「commit 列 (HEAD / merge-base の OID) + ブランチ全差分 + 未コミット差分」のハッシュと codex マーカー (`pre-push-codex-review:codex-reviewer` subagent 起因) のハッシュを比較し、一致しなければ `deny` を返します。push 検出・複合コマンド解析・target 解決・dirty-tree gate・空 push 判定・default branch 上での skip (git-guardrails への委譲) は、本 plugin が単独 install でも自立動作できるよう、`pre-push-review` core の `block-pre-push.sh` と同等の判定を本スクリプトが独立に実装します。deny メッセージは codex マーカーの状態と `pre-push-codex-review:codex-reviewer` subagent への案内のみを記載し、core の 2 マーカーには言及しません。branch の変更がテキスト系文書だけの push は、空 push と同じくマーカーを要求せずに通します (定義と保守的に倒す条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。
+`git push` を含むコマンドを検出した際、「commit 列 (HEAD / merge-base の OID) + ブランチ全差分 + 未コミット差分」のハッシュと codex マーカー (`pre-push-codex-review:codex-reviewer` subagent 起因) のハッシュを比較し、一致しなければ `deny` を返します。push 検出・複合コマンド解析・target 解決・dirty-tree gate・空 push 判定・default branch 上での skip (git-guardrails への委譲) は、本 plugin が単独 install でも自立動作できるよう、`pre-push-review` core の `block-pre-push.sh` と同等の判定を本スクリプトが独立に実装します。deny メッセージは codex マーカーの状態と `pre-push-codex-review:codex-reviewer` subagent への案内のみを記載し、core の 2 マーカーには言及しません。branch の変更がテキスト系文書だけの push は、空 push と同じくマーカーを要求せずに通します (定義とレビュー必須とする条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。
 
 #### 2. block-bg-codex-wrapper (PreToolUse, matcher: `Bash`)
 
@@ -127,15 +127,17 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 branch の変更がテキスト系文書だけの push は、空 push と同じく codex マーカーを要求せずに通します。push gate が deny しないため、codex-reviewer を起動する必要もありません。どの push が該当するかは push gate が判定します。codex-reviewer を起動した場合も、wrapper は codex review を実行せず、codex-reviewer は `Status: skipped` を返します。
 
-**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。ただし次のいずれかに当たるファイルは、Claude Code や他の coding agent が指示として読み込む Markdown なのでコードとして扱います:
+この skip では codex review も行わないため、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
 
-- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf` に一致する (深さは問わない)
-- 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts` のいずれかの順に並ぶ
-- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
+**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。Claude Code や他の coding agent は特定の場所・名前の Markdown を指示として読み込むため、次に列挙した場所・名前の Markdown はコードとして扱います (列挙に無いものの扱いは「既知の制約」を参照):
+
+- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf` / `.clinerules` / `.roo` / `.kiro` / `.continue` / `.junie` / `.amazonq` に一致する (深さは問わない)
+- 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts`、`.github` → `chatmodes` のいずれかの順に並ぶ
+- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
 
 これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。
 
-判定できない場合はレビュー必須に倒します。次のいずれかに当たる push はテキスト系文書のみとは扱わず、従来どおり codex マーカーを要求します:
+判定できない場合はレビュー必須として扱います。次のいずれかに当たる push はテキスト系文書のみとは扱わず、従来どおり codex マーカーを要求します:
 
 - `origin/<base>..HEAD` に commit が無い、または merge commit を含む
 - 範囲内の各 commit とその親との差分、または merge-base と HEAD の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
@@ -237,6 +239,8 @@ wrapper (`run-pre-push-codex-review.sh`) は companion の `review` を起動す
 
 - **gate の観測範囲は Bash tool のみ**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `git push` を gate は観測しない。これらの tool を有効にした環境はサポート外
 - **古い broker の判定は `PATH` と引数列に依存する**: guard はコマンド名だけの `codex` を guard 自身の `PATH` で解決する。codex を複数の場所にインストールしていて、broker を起動した環境と guard を実行する環境で `PATH` の順序が違うと、broker が使っているものとは別の実行ファイルの時刻を見る。また、実行ファイルのパスに空白が含まれると codex の app-server を特定できず、警告を出して続行する
+- **列挙に無い場所にある agent の指示ファイルはテキスト系文書と判定される**: テキスト系文書のみの変更の判定でコード扱いにするのは、列挙した場所・名前の Markdown だけである。それ以外の場所にある agent の指示ファイルは、テキスト系文書としてレビュー無しで push される
+- **除外対象から間接的に読み込まれる文書は検出しない**: `CLAUDE.md` から `@path` で import される文書など、除外対象のファイルが読み込む文書も、その場所・名前が列挙に当たらなければテキスト系文書と判定される
 
 ## 関連プラグイン
 

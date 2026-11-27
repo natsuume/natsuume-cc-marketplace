@@ -22,16 +22,22 @@
 # 宣言 (requirements.txt 等) やビルド定義 (CMakeLists.txt) があり、mdx にはコードを埋め込める
 # ため、どちらもレビュー無しで通すと挙動の変更を見逃すから。
 #
-# ただし次のいずれかに当たる path は、Claude Code や他の coding agent が指示として読み込む
-# Markdown (実質的にコードとして働く) なので、テキスト系文書から除く:
+# Claude Code や他の coding agent は、特定の場所・名前の Markdown を指示として読み込む
+# (実質的にコードとして働く)。そのため、次に列挙した場所・名前の Markdown はコード扱いにし、
+# テキスト系文書から除く:
 #
 #   - basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` /
-#     `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf`
-#     に一致する (深さは問わない)
+#     `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf` /
+#     `.clinerules` / `.roo` / `.kiro` / `.continue` / `.junie` / `.amazonq` に一致する (深さは
+#     問わない)
 #   - 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、
-#     `.github` → `prompts` のいずれかの順に並ぶ
-#   - basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` /
-#     `copilot-instructions.md` に一致する
+#     `.github` → `prompts`、`.github` → `chatmodes` のいずれかの順に並ぶ
+#   - basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md` /
+#     `GEMINI.md` / `copilot-instructions.md` に一致する
+#
+# 除外するのは列挙した場所・名前だけである。列挙に無い場所にある agent の指示ファイルや、
+# 除外対象のファイルから間接的に読み込まれる文書 (`CLAUDE.md` から `@path` で import される
+# 文書など) はテキスト系文書と判定される。
 #
 # 除外条件の照合は ASCII の大文字小文字を区別しない。macOS 既定の filesystem は大文字小文字を
 # 区別しないため、`Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして
@@ -122,6 +128,7 @@ is_text_document_path() {
     [cC][lL][aA][uU][dD][eE].[mM][dD] | \
       [cC][lL][aA][uU][dD][eE].[lL][oO][cC][aA][lL].[mM][dD] | \
       [aA][gG][eE][nN][tT][sS].[mM][dD] | \
+      [aA][gG][eE][nN][tT][sS].[oO][vV][eE][rR][rR][iI][dD][eE].[mM][dD] | \
       [gG][eE][mM][iI][nN][iI].[mM][dD] | \
       [cC][oO][pP][iI][lL][oO][tT]-[iI][nN][sS][tT][rR][uU][cC][tT][iI][oO][nN][sS].[mM][dD])
       return 1
@@ -143,9 +150,16 @@ is_text_document_path() {
         */.[gG][eE][mM][iI][nN][iI]/* | \
         */.[cC][oO][dD][eE][xX]/* | \
         */.[wW][iI][nN][dD][sS][uU][rR][fF]/* | \
+        */.[cC][lL][iI][nN][eE][rR][uU][lL][eE][sS]/* | \
+        */.[rR][oO][oO]/* | \
+        */.[kK][iI][rR][oO]/* | \
+        */.[cC][oO][nN][tT][iI][nN][uU][eE]/* | \
+        */.[jJ][uU][nN][iI][eE]/* | \
+        */.[aA][mM][aA][zZ][oO][nN][qQ]/* | \
         */[hH][oO][oO][kK][sS]/[pP][rR][oO][mM][pP][tT][sS]/* | \
         */.[gG][iI][tT][hH][uU][bB]/[iI][nN][sS][tT][rR][uU][cC][tT][iI][oO][nN][sS]/* | \
-        */.[gG][iI][tT][hH][uU][bB]/[pP][rR][oO][mM][pP][tT][sS]/*)
+        */.[gG][iI][tT][hH][uU][bB]/[pP][rR][oO][mM][pP][tT][sS]/* | \
+        */.[gG][iI][tT][hH][uU][bB]/[cC][hH][aA][tT][mM][oO][dD][eE][sS]/*)
         return 1
         ;;
     esac
