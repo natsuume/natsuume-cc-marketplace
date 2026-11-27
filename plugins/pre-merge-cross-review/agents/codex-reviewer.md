@@ -70,11 +70,22 @@ A failed shape check is always the unidentifiable-run boundary: whether the run 
 
 The `terminal sentinel:` announcement line and the `terminal sentinel end` line are the wrapper's own startup and completion notices, so never treat them as findings and never include them in the parent-safe report.
 
-Allowed status values are `Status: pass | findings | execution-failed`.
+Allowed status values are `Status: pass | findings | execution-failed | skipped`.
 
 ### Deriving `Status`
 
 These rules apply only to a wrapper run that exited zero. A non-zero wrapper exit (Procedure step 4) always takes precedence and yields `Status: execution-failed` with its failure class, regardless of how much of the report body reached stdout — the wrapper prints the body before the record-writing step, so a body can be complete even though no record was written.
+
+Check for a skipped review first. When the wrapper exited zero and its stdout, apart from the `terminal sentinel:` announcement line, the `terminal sentinel end` line and blank lines, is exactly the single line `Review skipped: text-only changes`, the wrapper found that the pull request changes only text documents and ran no review; the merge gate does not require the local record for such a pull request. In that case return only:
+
+```markdown
+# Codex Review
+
+Status: skipped
+Reason: text-only changes
+```
+
+A `Status: skipped` report never promotes a local record. This rule takes precedence over the inconclusive-body rule below; any other stdout from a zero exit goes through the rules below.
 
 For a run that exited zero, derive `Status` from the **Codex report body** (the wrapper's stdout):
 

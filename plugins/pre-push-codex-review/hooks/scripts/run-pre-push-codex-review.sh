@@ -88,6 +88,8 @@ _RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && 
 
 # shellcheck source=lib/diff-hash.sh
 source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/diff-hash.sh"
+# shellcheck source=lib/text-paths.sh
+source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/text-paths.sh"
 # shellcheck source=lib/markers.sh
 source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/markers.sh"
 # shellcheck source=lib/codex-companion-resolver.sh
@@ -280,6 +282,19 @@ if is_empty_push "$BASE"; then
   # pending attestation は書かない (空 push 時は block-pre-push-codex.sh が gate を skip するため不要)。
   exit 0
 fi
+
+# テキスト系文書のみの push も review 実行不要。block-pre-push-codex.sh も同じ判定
+# (is_text_only_push_in) でマーカーを要求せずに push を通すため、pending attestation は
+# 書かない (判定条件と fail-closed 方針は lib/text-paths.sh ヘッダを参照)。
+# stdout にだけは決まった 1 行を出す。codex-reviewer subagent は、wrapper が exit 0 で
+# stdout が (terminal sentinel の案内行と終了行を除いて) この 1 行だけのときに
+# `Status: skipped` の report を返す (agents/codex-reviewer.md の report 契約)。
+if is_text_only_push_in "" "$BASE"; then
+  printf 'Review skipped: text-only changes\n'
+  printf '[run-pre-push-codex-review] 変更がテキスト系文書のみのため codex review は実行不要です (push gate はマーカーを要求しません)。\n' >&2
+  exit 0
+fi
+
 HASH=$(compute_review_hash "$BASE") || fail "branch diff hash の計算に失敗しました。"
 
 # codex companion path 解決

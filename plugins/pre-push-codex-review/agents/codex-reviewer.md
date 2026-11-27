@@ -58,7 +58,18 @@ A failed shape check is always the unidentifiable-run boundary: whether the run 
 
 The `terminal sentinel:` announcement line and the `terminal sentinel end` line are the wrapper's own startup and completion notices, so never treat them as findings and never include them in the parent-safe report.
 
-Allowed status values are `Status: pass | findings | execution-failed`.
+Allowed status values are `Status: pass | findings | execution-failed | skipped`.
+
+When the wrapper exited zero and its stdout, apart from the `terminal sentinel:` announcement line, the `terminal sentinel end` line and blank lines, is exactly the single line `Review skipped: text-only changes`, the wrapper found that the branch changes only text documents and ran no review; the push gate does not require the codex-reviewed marker for such a push. In that case return only:
+
+```markdown
+# Codex Review
+
+Status: skipped
+Reason: text-only changes
+```
+
+A `Status: skipped` report never promotes the codex-reviewed marker. Return it only on that exact stdout; any other stdout from a zero exit is normalized as a review result below.
 
 When the `SubagentHandback` tool is available (Claude Code auto mode), deliver this report as the `message` of exactly one `SubagentHandback` call; the same contract applies to that message, and any closing text you write after the call is not the report. Otherwise return the report as your final message.
 

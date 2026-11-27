@@ -6,6 +6,8 @@ description: push 前レビューを同じアシスタントメッセージで�
 
 このコマンドは `git push` 前に必須となる **push 前レビュー** を、 **同じアシスタントメッセージで並列に** subagent として起動する確定的フローです。 順序入れ替えや引数指定は受け付けません — このコマンド本文に固定された並列発出が既定で、並列発出が技術的に成立しない場合だけ下記の節に従います。
 
+branch の変更がテキスト系文書だけの場合 (定義は plugin README の「テキスト系文書のみの変更」節) は、 本 plugin と `pre-push-review` core のどちらの push gate もマーカーを要求しないため、 このコマンドを実行する必要はありません。
+
 起動する subagent は install 構成で決まります:
 
 - `pre-push-review` core を併用している環境: core の `pre-push-review:code-reviewer` / `pre-push-review:security-reviewer` と本 plugin の `pre-push-codex-review:codex-reviewer` の **3 subagent** を 1 メッセージで並列発出する (= 3 レビュー構成)

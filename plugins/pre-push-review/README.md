@@ -7,7 +7,7 @@
 
 codex review の gate は独立した `pre-push-codex-review` プラグインが提供し、本プラグインは codex review のマーカー (`.claude-pre-push-codex-reviewed`) を参照しません。両プラグインを併用すると push 前のレビューは 3 レビュー構成になります。
 
-correctness バグ検出に security review を重ねた defense-in-depth です。 修正や commit 列の変更 (add→revert / amend / rebase 含む) により hash が変わると 2 マーカーは自動失効し、 Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。
+correctness バグ検出に security review を重ねた defense-in-depth です。 修正や commit 列の変更 (add→revert / amend / rebase 含む) により hash が変わると 2 マーカーは自動失効し、 Claude は再走させる以外に push を通す手段がありません (= ループが構造的に強制されます)。 branch の変更がテキスト系文書だけの push はマーカーを要求せずに通します ([テキスト系文書のみの変更](#テキスト系文書のみの変更))。
 
 2 レビューをどちらも subagent 経由に統一していることの意味:
 
@@ -19,7 +19,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v7.0.4
+v7.1.0
 ## インストール
 
 ```bash
@@ -62,6 +62,7 @@ push 前 2 レビューを **同じアシスタントメッセージで並列に
 - `git -C dir push` や `git --git-dir=... push`、 `GIT_DIR=... git push` のような target-override 形式も許容 (cooperative 利用前提)
 - カレントブランチが default branch (master/main) の場合は本フックでは gate せず、 `git-guardrails` の `block-default-branch-push.sh` に委譲 (重複 deny メッセージを避けるため)
 - merge-base と HEAD の tree が一致し、 merge commit を含まず、 範囲内の全 commit の tree が HEAD tree と一致し、 かつ index / worktree が clean な場合は gate しない (空 push は通す。 tree OID ベースの判定)
+- branch の変更がテキスト系文書だけの push も gate しない (定義と保守的に倒す条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))
 - **working tree が dirty (staged または unstaged 変更あり) の場合は markers の状態に関わらず deny**: push される committed 部分とレビューされた working tree の乖離を防ぐため、 push 前に commit 完了を要求する
 - 2 マーカーがすべて一致した場合はそのまま push を許容する (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する)
 - ハッシュは `head <HEAD の commit OID>` 行 + `mbase <merge-base の commit OID>` 行 + `git diff <merge-base> HEAD` + `git diff --cached` + `git diff` (diff 3 種はいずれも `--no-ext-diff --no-textconv` 付き) を連結した入力に対する sha256 として計算する。 HEAD の commit OID をハッシュ入力に束縛しているため、 レビュー後に commit A を積んでから revert して戻す (net diff は review 時と同一でも commit 列は変わっている) 操作でもマーカーは自動失効する。 未コミットの edit があると `git diff --cached` / `git diff` の内容が変わりハッシュも変わるため、 markers が失効し commit + 再 review を強制できる
@@ -182,6 +183,29 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
 
 **呼び出しタイミング (2 subagent 共通)**: `/pre-push-review:review` slash command の指示で 2 並列 `Agent` tool calls として起動する (完了は SubagentStop で検知されるため起動 mode は問わない)。 deny メッセージにも個別起動のフォールバック手順を案内している。
+
+## テキスト系文書のみの変更
+
+branch の変更がテキスト系文書だけの push は、空 push と同じく 2 マーカーを要求せずに通します。この場合は `/pre-push-review:review` を実行する必要がありません。
+
+**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `mdx` / `markdown` / `txt` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。ただし次のいずれかに当たるファイルは、Claude Code や他の coding agent の挙動を定義する Markdown なのでコードとして扱います:
+
+- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `.claude` / `.agents` に一致する (深さは問わず、大文字小文字を区別する)
+- 連続する 2 つのディレクトリ要素が `hooks`、`prompts` の順に並ぶ
+- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` に一致する (大文字小文字を区別する)
+
+判定できない場合はレビュー必須に倒します。次のいずれかに当たる push はテキスト系文書のみとは扱わず、従来どおり 2 マーカーを要求します:
+
+- `origin/<base>..HEAD` に commit が無い、または merge commit を含む
+- 範囲内の各 commit とその親との差分、または merge-base と HEAD の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
+- 範囲内に親を持たない commit がある
+- 変更前後のファイル mode に通常ファイル (`100644`) 以外を含む (symlink・submodule・実行ビット付きファイル)
+- index か working tree に未コミットの変更がある
+- 判定に使う git コマンドが失敗した
+
+net diff ではなく範囲内の各 commit を検査するため、コードを追加した commit を後の commit で revert した branch も、push される履歴にコードが残るのでマーカーを要求します。
+
+判定は `hooks/scripts/lib/text-paths.sh` が行います。この lib は本 plugin が canonical で、`pre-push-codex-review` と `pre-merge-cross-review` が byte-identical なコピーを保持します。同一性は `tests/test_shared_lib_copies.py` と `tests/test_pre_merge_lib_copies.py` が検査します。
 
 ## 既知の制約
 

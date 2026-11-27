@@ -2,13 +2,15 @@
 # block-pre-merge.sh
 # codex review 済みでない PR の `gh pr merge` をブロックする PreToolUse フック。 レビュー済みの
 # 証拠は merge 実行 repo の git-dir 直下にあるローカル記録 (final attestation) であり、 それが
-# PR 番号と現在の head SHA の両方に一致する場合だけ merge を通す。 GitHub には何も書かず、 gh は
-# PR 番号と head SHA の取得だけに使う。
+# PR 番号と現在の head SHA の両方に一致する場合だけ merge を通す。 ただし PR の変更がテキスト系
+# 文書だけの場合は記録を要求せずに通す。 GitHub には何も書かず、 gh は PR 番号・head SHA・base
+# branch 名の取得だけに使う。
 #
 # policy: fail-closed (関与したコマンドに限る)
 #   関与条件 (下記 1.) を満たさない Bash 呼び出しには一切関与しない (無出力で exit 0)。
 #   関与したコマンドについては、 判定不能・想定外状況 (gh / jq 不在、 PR 解決失敗、
 #   PR 番号・head SHA の取得失敗、 ローカル記録の解決・検証失敗) をすべて deny に倒す。
+#   テキスト系文書のみの PR の判定 (下記 4.) は、 判定できなければ記録の検証へ進む。
 #
 # ## 判定の流れ
 #
@@ -19,10 +21,17 @@
 #    レビュー記録の有無に依らず deny する。 `--auto` は gate 確認と実 merge を
 #    分離する遅延予約、 `--admin` は保護 bypass であり、 いずれも本 gate の観測範囲外の
 #    merge を作るためサポート外とする。
-# 3. **PR 番号と head SHA の取得**: merge 対象 PR の番号と現在の head SHA を gh
-#    (`gh pr view --json number,headRefOid`) で取得する。 取得できない・形式が不正な場合は
-#    deny する。
-# 4. **ローカル記録の検証**: merge 実行 repo (payload の `cwd`) の git-dir 直下にある codex
+# 3. **PR 番号・head SHA・base branch の取得**: merge 対象 PR の番号・現在の head SHA・
+#    base branch 名を gh (`gh pr view --json number,headRefOid,baseRefName`) で取得する。
+#    番号と head SHA を取得できない・形式が不正な場合は deny する。
+# 4. **テキスト系文書のみの PR の通過**: base branch 名が `^[A-Za-z0-9._/-]+$` に一致し
+#    先頭が `-` でない場合に限り、 merge 実行 repo で `refs/remotes/origin/<base>..<head SHA>`
+#    の変更がテキスト系文書だけかを lib/text-paths.sh の is_text_only_range_in で判定し、
+#    成立すればレビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる)。
+#    base branch 名の欠落・不正、 lib の読み込み失敗、 判定の不成立 (head の object が
+#    ローカルに無い等の git 失敗を含む) では判定を打ち切り、 次のローカル記録の検証へ進む
+#    (判定できない場合はレビュー必須に倒す)。
+# 5. **ローカル記録の検証**: merge 実行 repo (payload の `cwd`) の git-dir 直下にある codex
 #    review の final attestation (2 行 `pr=<全数字>` / `head=<40 hex 小文字>`) が symlink で
 #    ない regular file として在り、 番号と head SHA が gh の値の両方に一致するときだけ無出力で
 #    終了する (既定の許可フローに委ねる)。 記録が無い (pending だけの場合を含む) / git-dir を
@@ -225,9 +234,9 @@ fi
 run_gh_pr_view() {
   cd "$PAYLOAD_CWD" || return 1
   if [ -n "$1" ]; then
-    gh pr view "$1" --json number,headRefOid 2>/dev/null
+    gh pr view "$1" --json number,headRefOid,baseRefName 2>/dev/null
   else
-    gh pr view --json number,headRefOid 2>/dev/null
+    gh pr view --json number,headRefOid,baseRefName 2>/dev/null
   fi
 }
 
@@ -236,7 +245,7 @@ PR_JSON=$(run_gh_pr_view "$TARGET") || PR_JSON=""
 if [ -z "$PR_JSON" ]; then
   deny "マージをブロックしました。 merge 対象 PR の情報を gh から取得できませんでした (PR を解決できない / 認証が切れている / ネットワーク不通 等)。
 
-\`gh pr view --json number,headRefOid\` が成功する状態にしてから、もう一度 gh pr merge を実行してください。"
+\`gh pr view --json number,headRefOid,baseRefName\` が成功する状態にしてから、もう一度 gh pr merge を実行してください。"
   exit 0
 fi
 
@@ -263,6 +272,14 @@ if ! source "$_BLOCK_PRE_MERGE_SCRIPT_DIR/lib/markers.sh" 2>/dev/null; then
 
 plugin を再インストール (\`claude plugin install pre-merge-cross-review@natsuume-plugins\`) してから、もう一度 gh pr merge を実行してください。"
   exit 0
+fi
+
+# テキスト系文書のみの PR の判定に使う lib。 読み込めない場合は判定せず、 レビュー記録の
+# 照合だけで判断する (レビュー必須に倒す)。
+TEXT_PATHS_LOADED=0
+# shellcheck source=lib/text-paths.sh
+if source "$_BLOCK_PRE_MERGE_SCRIPT_DIR/lib/text-paths.sh" 2>/dev/null; then
+  TEXT_PATHS_LOADED=1
 fi
 
 # レビュー記録は merge が実行される repo の git-dir 直下に置かれる。 gh と同じく payload の
@@ -311,6 +328,27 @@ ${REVIEW_GUIDANCE}"
     exit 0
     ;;
 esac
+
+# テキスト系文書のみの PR は、 レビュー記録を照合せずに既定の許可フローへ委ねる (判定条件と
+# fail-closed 方針は lib/text-paths.sh ヘッダを参照)。 base branch 名は git の ref の一部に
+# なるため、 英数字と `.` `_` `/` `-` だけから成り先頭が `-` でない名前に限って判定する
+# (option として解釈される値や想定外の文字を git へ渡さない)。 lib を読み込めない・base
+# branch 名が欠落または不正・判定が不成立 (head の object がローカルに無い等の git 失敗を
+# 含む) のいずれでも、 判定を打ち切って下のレビュー記録の照合へ進む。
+BASE_REF_NAME=$(printf '%s' "$PR_JSON" | jq -r '.baseRefName // empty' 2>/dev/null) || BASE_REF_NAME=""
+# 許可する文字は範囲表記 (`A-Z` 等) を使わずに列挙する。 bracket 式の範囲は locale によって
+# 含む文字が変わり、 行単位で照合する grep は改行を含む値の一部の行だけで一致しうるため。
+is_judgeable_base_ref_name() {
+  case "$1" in
+    ""|-*) return 1 ;;
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*) return 1 ;;
+  esac
+  return 0
+}
+if [ "$TEXT_PATHS_LOADED" = "1" ] && is_judgeable_base_ref_name "$BASE_REF_NAME" \
+  && is_text_only_range_in "$PAYLOAD_CWD" "refs/remotes/origin/${BASE_REF_NAME}" "$HEAD_SHA"; then
+  exit 0
+fi
 
 if [ -z "$FINAL_PATH" ]; then
   deny "マージをブロックしました。 merge 前に codex review を実行してください。

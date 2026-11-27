@@ -38,21 +38,21 @@
       "name": "pre-push-review",
       "source": "./plugins/pre-push-review",
       "description": "push 前に code / security レビューを強制する",
-      "version": "7.0.4",
+      "version": "7.1.0",
       "keywords": ["push", "review", "quality", "code-review", "security-review", "subagent", "branch-diff", "pr-diff", "parallel"]
     },
     {
       "name": "pre-push-codex-review",
       "source": "./plugins/pre-push-codex-review",
       "description": "push 前に codex review の完了を強制する",
-      "version": "4.0.7",
+      "version": "4.1.0",
       "keywords": ["push", "review", "quality", "codex", "openai", "subagent", "branch-diff", "gate"]
     },
     {
       "name": "pre-merge-cross-review",
       "source": "./plugins/pre-merge-cross-review",
       "description": "merge 前の codex review を必須化する",
-      "version": "4.0.2",
+      "version": "4.1.0",
       "keywords": ["merge", "review", "quality", "codex", "openai", "cross-review", "subagent", "pr-diff", "gate"]
     },
     {

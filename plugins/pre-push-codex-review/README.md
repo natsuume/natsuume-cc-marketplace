@@ -8,7 +8,7 @@
 
 ## バージョン
 
-v4.0.7
+v4.1.0
 ## インストール
 
 ```bash
@@ -52,7 +52,7 @@ push 前レビューを **同じアシスタントメッセージで並列に** 
 
 **ファイル**: `hooks/scripts/block-pre-push-codex.sh`
 
-`git push` を含むコマンドを検出した際、「commit 列 (HEAD / merge-base の OID) + ブランチ全差分 + 未コミット差分」のハッシュと codex マーカー (`pre-push-codex-review:codex-reviewer` subagent 起因) のハッシュを比較し、一致しなければ `deny` を返します。push 検出・複合コマンド解析・target 解決・dirty-tree gate・空 push 判定・default branch 上での skip (git-guardrails への委譲) は、本 plugin が単独 install でも自立動作できるよう、`pre-push-review` core の `block-pre-push.sh` と同等の判定を本スクリプトが独立に実装します。deny メッセージは codex マーカーの状態と `pre-push-codex-review:codex-reviewer` subagent への案内のみを記載し、core の 2 マーカーには言及しません。
+`git push` を含むコマンドを検出した際、「commit 列 (HEAD / merge-base の OID) + ブランチ全差分 + 未コミット差分」のハッシュと codex マーカー (`pre-push-codex-review:codex-reviewer` subagent 起因) のハッシュを比較し、一致しなければ `deny` を返します。push 検出・複合コマンド解析・target 解決・dirty-tree gate・空 push 判定・default branch 上での skip (git-guardrails への委譲) は、本 plugin が単独 install でも自立動作できるよう、`pre-push-review` core の `block-pre-push.sh` と同等の判定を本スクリプトが独立に実装します。deny メッセージは codex マーカーの状態と `pre-push-codex-review:codex-reviewer` subagent への案内のみを記載し、core の 2 マーカーには言及しません。branch の変更がテキスト系文書だけの push は、空 push と同じくマーカーを要求せずに通します (定義と保守的に倒す条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。
 
 #### 2. block-bg-codex-wrapper (PreToolUse, matcher: `Bash`)
 
@@ -120,7 +120,31 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 - 親 session は finding の priority / location / impact / verification / fix direction / disposition を受け取る。実行可能な command、payload、環境値、段階的な再現・回避手順、raw stdout / stderr は subagent context に閉じ込められる
 - exact detail を使った追加確認が必要な場合は同一 codex-reviewer を resume し、検証結果だけを再度 parent-safe report で受け取る
 - wrapper は exit 0 完了時に hash-bound pending attestation を atomic write し、auto-mark が subagent の正規 `pass/findings` report と current hash 一致を確認して codex-reviewed マーカーへ昇格する
+- 変更がテキスト系文書だけの場合、wrapper は codex review を実行せず、stdout に `Review skipped: text-only changes` の 1 行だけを出して exit 0 で終了する (pending attestation は書かない)。subagent はこのとき `Status: skipped` / `Reason: text-only changes` の report を返す。auto-mark は `Status: skipped` ではマーカーを書かず、review cadence も数えない (push gate はこの push にマーカーを要求しない)
 - model は `sonnet` に固定
+
+## テキスト系文書のみの変更
+
+branch の変更がテキスト系文書だけの push は、空 push と同じく codex マーカーを要求せずに通します。この場合は codex-reviewer を起動する必要がありません。起動した場合も wrapper は codex review を実行せず、codex-reviewer は `Status: skipped` を返します。
+
+**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `mdx` / `markdown` / `txt` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。ただし次のいずれかに当たるファイルは、Claude Code や他の coding agent の挙動を定義する Markdown なのでコードとして扱います:
+
+- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `.claude` / `.agents` に一致する (深さは問わず、大文字小文字を区別する)
+- 連続する 2 つのディレクトリ要素が `hooks`、`prompts` の順に並ぶ
+- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` に一致する (大文字小文字を区別する)
+
+判定できない場合はレビュー必須に倒します。次のいずれかに当たる push はテキスト系文書のみとは扱わず、従来どおり codex マーカーを要求します:
+
+- `origin/<base>..HEAD` に commit が無い、または merge commit を含む
+- 範囲内の各 commit とその親との差分、または merge-base と HEAD の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
+- 範囲内に親を持たない commit がある
+- 変更前後のファイル mode に通常ファイル (`100644`) 以外を含む (symlink・submodule・実行ビット付きファイル)
+- index か working tree に未コミットの変更がある
+- 判定に使う git コマンドが失敗した
+
+net diff ではなく範囲内の各 commit を検査するため、コードを追加した commit を後の commit で revert した branch も、push される履歴にコードが残るのでマーカーを要求します。
+
+判定は `hooks/scripts/lib/text-paths.sh` が行います (canonical は `pre-push-review` core。下記「共有 lib の同一性」を参照)。push gate と wrapper は同じ判定関数を使うため、wrapper が skip した branch では push gate もマーカーを要求しません。
 
 ## review cadence
 
@@ -176,6 +200,8 @@ wrapper (`run-pre-push-codex-review.sh`) は companion の `review` を起動す
 
 `hooks/scripts/lib/cmd-parser.sh` / `target-resolver.sh` / `diff-hash.sh` は `pre-push-review` core (`plugins/pre-push-review/hooks/scripts/lib/`) が canonical で、本 plugin はその byte-identical なコピーを保持します。同一性は `tests/test_shared_lib_copies.py` の契約テストと `.github/workflows/sync-shared-libs.yml` が検査します。
 
+`hooks/scripts/lib/text-paths.sh` (テキスト系文書のみの変更の判定) も `pre-push-review` core が canonical で、本 plugin と `pre-merge-cross-review` (`plugins/pre-merge-cross-review/hooks/scripts/lib/text-paths.sh`) が byte-identical なコピーを保持します。同一性は `tests/test_shared_lib_copies.py` と `tests/test_pre_merge_lib_copies.py` が検査します。
+
 逆に `hooks/scripts/lib/codex-companion-resolver.sh` は本 plugin が canonical で、`cross-model-advisor` (`plugins/cross-model-advisor/scripts/lib/codex-companion-resolver.sh`) がそのコピーを保持し追従します。
 
 `hooks/scripts/lib/stale-broker-guard.mjs` も本 plugin が canonical で、`pre-merge-cross-review` (`plugins/pre-merge-cross-review/hooks/scripts/lib/stale-broker-guard.mjs`) と `cross-model-advisor` (`plugins/cross-model-advisor/scripts/lib/stale-broker-guard.mjs`) が byte-identical なコピーを保持します。同一性は `tests/test_shared_lib_copies.py` と `tests/test_pre_merge_lib_copies.py` が検査します。
@@ -197,6 +223,7 @@ wrapper (`run-pre-push-codex-review.sh`) は companion の `review` を起動す
 | `hooks/scripts/lib/cmd-parser.sh` | Bash command のセグメント分割・tokenize (core からの byte-identical コピー) |
 | `hooks/scripts/lib/target-resolver.sh` | push target cwd の解決 (core からの byte-identical コピー) |
 | `hooks/scripts/lib/diff-hash.sh` | レビューハッシュ計算・空 push 判定 (core からの byte-identical コピー) |
+| `hooks/scripts/lib/text-paths.sh` | テキスト系文書のみの変更の判定 (core からの byte-identical コピー) |
 | `hooks/scripts/lib/markers.sh` | 本 plugin のマーカーファイル名の単一ソース |
 | `hooks/scripts/lib/exit-trap.sh` | 予期せぬエラー時の診断 trap |
 | `hooks/scripts/lib/codex-companion-resolver.sh` | codex companion 解決ロジック (本 plugin が canonical) |

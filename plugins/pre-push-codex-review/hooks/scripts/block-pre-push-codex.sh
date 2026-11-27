@@ -32,6 +32,7 @@
 # 5. 解決した target cwd 上で:
 #    - default branch (master/main) なら git-guardrails に委譲して skip
 #    - 空 push (全 commit が empty commit の鎖) なら marker gate を skip
+#    - テキスト系文書のみの push (定義は lib/text-paths.sh ヘッダ参照) なら marker gate を skip
 #    - commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを計算
 #    - codex マーカー (markers.sh の `CODEX_MARKER_NAME` で定義) と一致しなければ deny
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
@@ -89,8 +90,8 @@ fi
 # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
 case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
-# 4 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`
-# で即使うため必須。 target-resolver / diff-hash / markers は本処理 (segment 解析以降) で
+# 5 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`
+# で即使うため必須。 target-resolver / diff-hash / text-paths / markers は本処理 (segment 解析以降) で
 # 使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。 `${COMMAND//$'\\\n'/ }`
 # を直接書かない理由は cmd-parser.sh の `_normalize_line_continuations_impl` を参照。
 SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
@@ -100,6 +101,8 @@ source "$SCRIPT_DIR/lib/cmd-parser.sh"
 source "$SCRIPT_DIR/lib/target-resolver.sh"
 # shellcheck source=lib/diff-hash.sh
 source "$SCRIPT_DIR/lib/diff-hash.sh"
+# shellcheck source=lib/text-paths.sh
+source "$SCRIPT_DIR/lib/text-paths.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
 
@@ -721,6 +724,13 @@ fi
 # (#126 と同根の穴を塞ぐ)。dirty-tree gate は通過済みだが、呼び出し順への依存を
 # 作らないよう is_empty_push_in は index / worktree の clean も自前で再検査する。
 if is_empty_push_in "$TARGET_CWD" "$BASE"; then
+  exit 0
+fi
+
+# テキスト系文書のみの push も、空 push と同じくマーカーを要求せずに通す。判定条件 (各
+# commit の raw 差分の path と mode、merge commit の除外、index / worktree の clean) と
+# fail-closed 方針は lib/text-paths.sh ヘッダを参照。
+if is_text_only_push_in "$TARGET_CWD" "$BASE"; then
   exit 0
 fi
 

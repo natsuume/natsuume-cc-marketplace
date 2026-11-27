@@ -25,9 +25,9 @@ claude plugin install git-guardrails@natsuume-plugins
 | [git-guardrails](#git-guardrails) | 0.7.6 | GitHub Flow を構造強制するプラグイン。デフォルトブランチ (master/main) への直接書き込み経路 (commit / push / master/main を head とする PR 作成) を PreToolUse hook で deny し、変更を GitHub 上の PR merge 経由のみに限定する |
 | [enforce-draft-pr](#enforce-draft-pr) | 0.5.8 | `gh pr create` に `--draft` を自動付与する PreToolUse hook プラグイン (任意導入)。PR を常に draft として作成させ、レビューを経て ready 化する運用を支える |
 | [auto-lint-check](#auto-lint-check) | 0.8.4 | 編集後の自動フォーマット適用、git commit 直前の staged ファイル lint、commit 直後の HEAD 再 lint を行うプラグイン。lint の ignore コメント挿入も編集時に禁止する |
-| [pre-push-review](#pre-push-review) | 7.0.4 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
-| [pre-push-codex-review](#pre-push-codex-review) | 4.0.7 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
-| [pre-merge-cross-review](#pre-merge-cross-review) | 4.0.2 | `gh pr merge` 前に codex review 完了 (PR 番号と head SHA を記録したローカル記録) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
+| [pre-push-review](#pre-push-review) | 7.1.0 | `git push` 前に 2 つのレビュー (code review / security review) の完了を強制するプラグイン。レビュー済みマーカーと「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」の同一性検証により、未レビューの commit が remote に到達するのを構造的にブロックする |
+| [pre-push-codex-review](#pre-push-codex-review) | 4.1.0 | `git push` 前に codex review の完了を強制する gate。pre-push-review core と併用で 3 レビュー構成になる |
+| [pre-merge-cross-review](#pre-merge-cross-review) | 4.1.0 | `gh pr merge` 前に codex review 完了 (PR 番号と head SHA を記録したローカル記録) を確認する軽量 merge gate。個人環境向けに「merge 前に 1 回だけ codex review」を成立させる |
 | [update-default-branch](#update-default-branch) | 0.4.7 | PR マージ報告を契機にデフォルトブランチを最新化し、追跡先が消えたローカルブランチを片付けるプラグイン |
 | [natsuume-statusline](#natsuume-statusline) | 0.11.8 | Claude Code の statusLine 表示 (パス / repo / branch / 変更量 / context 使用量 / レートリミット) を提供するプラグイン。`/natsuume-statusline:setup` で `~/.claude/settings.json` に登録する |
 | [agent-discipline](#agent-discipline) | 4.1.2 | 作業規律を SessionStart / UserPromptSubmit / SubagentStart の hook で配送し、gh issue/pr body の未決定事項を PreToolUse で検知するプラグイン |
@@ -132,6 +132,8 @@ security-reviewer / code-reviewer subagent を **self-contained** に保つの�
 
 Linked worktree では marker、launch attestation、tombstone を main `.git` 直下ではなく、`git rev-parse --absolute-git-dir` が返す worktree 専用 git-dir (`.git/worktrees/<name>/`) に保存します。push deny メッセージは実際の marker storage を表示するため、main `.git` に残る別 worktree の marker と取り違えずに状態を確認できます。
 
+branch の変更がテキスト系文書 (拡張子が `md` / `mdx` / `markdown` / `txt` / `rst` / `adoc` のファイル。agent や skill の定義・`CLAUDE.md` 等の挙動を定義する Markdown を除く) だけの push は、マーカーを要求せずに通します。判定できない場合はレビュー必須に倒します。定義と判定条件は [plugin README](plugins/pre-push-review/README.md#テキスト系文書のみの変更) を参照してください。
+
 ### 設計上のメリット
 
 - **commit 履歴の意味的解像度を保てる**: 初期実装 / code review 指摘修正 / security 指摘修正をそれぞれ独立 commit として記録できる (`git log` / `blame` / `bisect` の精度が上がる)。commit 単位でレビューを強制する方式では、これらすべてが 1 commit に圧縮される
@@ -167,6 +169,8 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 修正や commit 列の変更 (add→revert / amend / rebase 含む) により「commit 列 (HEAD / merge-base の OID) + ブランチ全差分」のハッシュが変わると codex マーカーは自動失効し、Claude は `pre-push-codex-review:codex-reviewer` subagent を再走させる以外に push を通す手段がありません。
 
+branch の変更がテキスト系文書だけの push は、[pre-push-review](#pre-push-review) と同じ判定でマーカーを要求せずに通し、codex review wrapper も codex review を実行しません (codex-reviewer は `Status: skipped` を返します)。定義と判定条件は [plugin README](plugins/pre-push-codex-review/README.md#テキスト系文書のみの変更) を参照してください。
+
 ### 機能
 
 #### Hooks
@@ -189,7 +193,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 単独 install でも自立動作するため、共通 gate ロジック (push 検出・target 解決・dirty-tree gate 等) は pre-push-review core と独立に実装しています。deny メッセージも自分が検証するマーカーのみに言及し、core の deny メッセージにも codex マーカーへの言及はありません。両 plugin を併用した場合、`git push` を含む Bash 呼び出しは両方の PreToolUse hook を通過し、どちらか一方でも deny を返せば push は成立しません。
 
-`hooks/scripts/lib/cmd-parser.sh` / `target-resolver.sh` / `diff-hash.sh` は pre-push-review core が canonical で、本プラグインはその byte-identical なコピーを保持します。逆に `hooks/scripts/lib/codex-companion-resolver.sh` は本プラグインが canonical で、[cross-model-advisor](#cross-model-advisor) がそのコピーを保持し追従します。
+`hooks/scripts/lib/cmd-parser.sh` / `target-resolver.sh` / `diff-hash.sh` / `text-paths.sh` は pre-push-review core が canonical で、本プラグインはその byte-identical なコピーを保持します。逆に `hooks/scripts/lib/codex-companion-resolver.sh` は本プラグインが canonical で、[cross-model-advisor](#cross-model-advisor) がそのコピーを保持し追従します。
 
 ### キーワード
 
@@ -201,7 +205,9 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 `gh pr merge` を実行する前に codex review (OpenAI クロスモデルレビュー) の完了を確認するプラグインです。codex-reviewer subagent はレビュー対象の PR 番号と head SHA をローカル記録として repo の git-dir 直下に保存し、merge gate はその記録が PR 番号と現在の head SHA の両方に一致する場合だけ merge を通します (記録が無い・一致しなければ deny)。GitHub には何も書かないため、別マシン・別 clone から merge する場合はそこで再レビューが必要です。SessionStart では、auto mode の classifier に subagent 起動を拒否されないよう「`gh pr merge` の前に cross review を起動する」規律を注入します。個人環境 (ChatGPT Plus の codex CLI) 向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させます。push 毎の codex review を要求する [pre-push-codex-review](#pre-push-codex-review) との併用は前提としていません。
 
-詳細な gate 手順・ローカル記録の仕様・既知の制約は [plugins/pre-merge-cross-review/README.md](plugins/pre-merge-cross-review/README.md) を参照してください。
+PR の変更がテキスト系文書だけの場合は、[pre-push-review](#pre-push-review) と同じ定義の判定 (`hooks/scripts/lib/text-paths.sh`) でローカル記録を要求せずに merge を通し、codex review wrapper も codex review を実行しません (codex-reviewer は `Status: skipped` を返します)。判定できない場合は記録を照合します。
+
+詳細な gate 手順・ローカル記録の仕様・テキスト系文書の定義・既知の制約は [plugins/pre-merge-cross-review/README.md](plugins/pre-merge-cross-review/README.md) を参照してください。
 
 ### キーワード
 
