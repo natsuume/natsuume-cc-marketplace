@@ -11,7 +11,7 @@ description: Antigravity CLI (agy) の利用枠 (モデルのグループごと�
 
 ## 1. 実行
 
-Bash ツールで以下を **foreground で 1 回**実行する。失敗しても自動で再実行しない (agy は実行のたびにログの作成・OAuth token の refresh・auto-update の起動を行うため)。agy の応答待ちは最大 60 秒で、Bash の timeout は既定で足りる。
+Bash ツールで以下を **foreground で 1 回**実行する。失敗しても自動で再実行しない (agy は実行のたびにログの作成・OAuth token の refresh・auto-update の起動を行うため)。script は agy に `--print-timeout 60s` を渡すが、agy の版や接続によってはこの上限が `/usage` の応答待ちに効かないことがあるため、Bash の `timeout` に 120000 を指定する。Bash が timeout した、または実行を background へ移した場合は、agy が応答していないものとして失敗を報告し、再実行しない。
 
 ```bash
 bash "<plugin-root>/scripts/antigravity-rate-limit.sh"

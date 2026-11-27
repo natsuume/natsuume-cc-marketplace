@@ -195,7 +195,9 @@ command -v agy >/dev/null 2>&1 || fail "agy (Antigravity CLI) が見つかりま
 
 # ---- 一時ディレクトリ ----
 
-umask 077
+# mktemp -d は所有者だけが使える権限 (0700) でディレクトリを作るため、中のファイルは他の
+# ユーザーから読めない。umask は変えない (変えると、起動する agy が作るログ等の権限にも
+# 継承されるため)。
 WORK_DIR=""
 
 remove_work_dir() {
