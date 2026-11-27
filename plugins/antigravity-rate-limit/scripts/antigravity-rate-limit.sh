@@ -199,7 +199,8 @@ command -v agy >/dev/null 2>&1 || fail "agy (Antigravity CLI) が見つかりま
 # ユーザーから読めない。umask は変えない (変えると、起動する agy が作るログ等の権限にも
 # 継承されるため)。
 WORK_DIR=""
-# 起動中の agy の pid。起動前と終了後は空。
+# agy の起動の状態 (空 = 起動前、running = 起動中、done = 終了後) と pid。
+AGY_STATE=""
 AGY_PID=""
 
 remove_work_dir() {
@@ -210,15 +211,22 @@ remove_work_dir() {
 
 # シグナル受信時は、起動中の agy に TERM を転送し、終了を最大 5 秒待つ。終わらなければ
 # KILL で止めてから明示的に exit し、EXIT trap で後始末する。
+# pid は AGY_PID が未設定なら $! から取る。この script で background に起動するのは agy
+# だけなので、起動の直後で AGY_PID へ代入する前にシグナルを受けても $! が agy を指す
+# (起動前なら $! は空)。
 on_signal() {
   local waited=0
-  if [ -n "$AGY_PID" ]; then
-    kill -TERM "$AGY_PID" 2>/dev/null
-    while kill -0 "$AGY_PID" 2>/dev/null && [ "$waited" -lt 50 ]; do
+  local pid=""
+  if [ "$AGY_STATE" = "running" ]; then
+    pid="${AGY_PID:-$!}"
+  fi
+  if [ -n "$pid" ]; then
+    kill -TERM "$pid" 2>/dev/null
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 50 ]; do
       sleep 0.1
       waited=$((waited + 1))
     done
-    kill -KILL "$AGY_PID" 2>/dev/null
+    kill -KILL "$pid" 2>/dev/null
   fi
   exit 1
 }
@@ -240,11 +248,13 @@ AGY_STDERR_FILE="$WORK_DIR/agy-stderr"
 # agy は background で起動して wait で待つ。foreground の子を待っている間の bash は、
 # 受けたシグナルの trap を子の終了まで実行しないため、agy が応答待ちで止まると script も
 # 後始末もそのまま止まる。wait はシグナルを受けるとすぐ戻り、trap が agy を止めて終了する。
+AGY_STATE="running"
 agy -p "/usage" --output-format json --print-timeout 60s \
   < /dev/null > "$AGY_STDOUT_FILE" 2> "$AGY_STDERR_FILE" &
 AGY_PID=$!
 wait "$AGY_PID"
 AGY_EXIT_CODE=$?
+AGY_STATE="done"
 AGY_PID=""
 
 if [ "$AGY_EXIT_CODE" -ne 0 ]; then
