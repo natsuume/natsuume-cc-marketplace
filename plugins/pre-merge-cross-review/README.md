@@ -159,7 +159,7 @@ PR の変更がテキスト系文書だけの場合、merge gate はローカル
 
 `Status: skipped` を受け取った後でも、merge gate に deny された場合は、同じ head SHA で codex-reviewer を 1 回だけ再起動してかまいません。wrapper の実行後に PR の base commit が変わり、その object がローカルに無いと、gate の判定が成立しないことがあるためです。再起動した wrapper は base を fetch してから判定し直し、結果は `Status: skipped` か通常のレビュー記録のどちらかになります。
 
-この skip では codex review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおりローカル記録を照合します (wrapper も通常どおり codex review を実行します)。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の実行は 25 秒で打ち切り、打ち切った場合は実行に失敗した場合と同じく扱います。
+この skip では codex review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおりローカル記録を照合します (wrapper も通常どおり codex review を実行します)。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の実行は 20 秒で打ち切り、打ち切った場合は実行に失敗した場合と同じく扱います。
 
 gitleaks の設定 (`.gitleaks.toml` / `.gitleaksignore`) は、working tree ではなく範囲の起点 (base の commit) の tree から読みます。working tree に未追跡の設定ファイルを置いて検出を抑止できないようにするためです。また、gitleaks が内部で実行する `git log` に `--text --no-textconv --no-color` を付け、ローカルの git の属性 (binary の指定・textconv) や `color.ui` の設定で文書の差分が検査から隠れないようにしています。差分の path の表記 (`diff.noprefix` 等) も git の既定に固定し、報告される path がずれて `.gitleaks.toml` の path の allowlist に当たらないようにしています。base の tree に `.gitleaks.toml` が無ければ gitleaks の既定のルールだけを使い、`.gitleaksignore` が無ければ ignore は空にします。環境変数 `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` を設定している場合は、利用者自身の設定としてそちらを使います。
 
@@ -178,7 +178,7 @@ gitleaks が無い環境では、文書に書き込まれた token などの認�
 - base commit SHA が gh の応答に無い、または 40 桁の小文字 16 進数でない
 - PR の base commit か head の commit がローカルに無い (fetch していない等)
 - 範囲に commit が無い、または merge commit を含む
-- 範囲の commit が 100 を超える、または判定に 15 秒を超えてかかる (hook の時間内に判定を終えるため、判定を打ち切ってレビュー必須として扱う)
+- 範囲の commit が 100 を超える、または判定に 10 秒を超えてかかる (hook の時間内に判定を終えるため、判定を打ち切ってレビュー必須として扱う)
 - 範囲内の各 commit とその親との差分、または merge-base と head の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
 - 範囲内に親を持たない commit がある
 - git の graft ファイル (`.git/info/grafts`、または環境変数 `GIT_GRAFT_FILE` が指すファイル) がある (graft は commit の親を書き換え、範囲の途中の commit を判定から隠せるため)

@@ -107,8 +107,10 @@
 # remote に届くのは net diff ではなく範囲内の全 commit であり、中間 commit のコードも履歴に
 # 残る。
 #
-# commit 数の上限 (100) と判定の時間の上限 (15 秒) は、gate を実行する Claude Code の
-# command hook の既定の timeout (60 秒) 内に判定を終えるためのもの。hook が timeout すると
+# commit 数の上限 (100) と判定の時間の上限 (10 秒) は、gate を実行する Claude Code の
+# command hook の既定の timeout (60 秒) 内に判定を終えるためのもの。範囲の判定 (10 秒) と
+# 秘匿情報の検査 (20 秒) の上限を足しても、gate 自身の処理 (merge gate が先に行う
+# `gh pr view` 等) に 30 秒が残る。hook が timeout すると
 # gate の判定が働かないため、上限を超えた場合は判定を打ち切ってレビュー必須 (戻り値 1) として
 # 扱う。3 は commit ごとに git を起動し、raw 差分の解析は bash で 1 エントリずつ行うため、
 # commit 数と変更されたファイルの数に比例して時間がかかる。時間の上限は、判定の開始から数えて、
@@ -145,23 +147,27 @@
 #       core.commitGraph=false・diff.noprefix=false・diff.mnemonicPrefix=false・
 #       diff.relative=false・core.quotePath=true)
 #   gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error
-#     --exit-code 1 --timeout 25 [--config <一時ファイル>] --gitleaks-ignore-path <走査元>
-#     --log-opts="--no-textconv --no-ext-diff --text --no-color <base の OID>..<head の OID>"
+#     --exit-code 1 --timeout 20 [--config <一時ファイル>] --gitleaks-ignore-path <走査元>
+#     --log-opts="--no-textconv --no-ext-diff --text --no-color --src-prefix=a/ --dst-prefix=b/
+#       <base の OID>..<head の OID>"
 #     <走査元>
 #
 #   - <走査元> は空の一時ディレクトリ (理由は下の「設定と ignore の読み方」を参照)。gitleaks は
 #     走査元で `git log -p` を実行するため、repo は環境変数 `GIT_DIR` で指定する。環境変数は
 #     `env` で gitleaks の起動にだけ渡し、export しない。`GIT_CONFIG_COUNT` 等は、gitleaks が
 #     実行する git に設定を渡す (git 2.31 以降)。`core.commitGraph=false` の理由は「範囲の
-#     判定」を参照。残りの 4 つは差分の path の表記を git の既定に固定する。たとえば
-#     `diff.noprefix = true` では gitleaks が報告する path から先頭の要素が落ち
-#     (`docs/vendor/x.md` が `vendor/x.md` になる)、base の `.gitleaks.toml` の path の
-#     allowlist に当たって検出から外れうる
+#     判定」を参照。残りの 4 つと、`--log-opts` の `--src-prefix=a/ --dst-prefix=b/` は、差分の
+#     path の表記を git の既定に固定する。接頭辞は設定 (`diff.noprefix`・`diff.mnemonicPrefix`・
+#     `diff.srcPrefix`・`diff.dstPrefix`) より command line の option が優先されるため、
+#     option で明示する。たとえば `diff.noprefix = true` では gitleaks が報告する path から
+#     先頭の要素が落ち (`docs/vendor/x.md` が `vendor/x.md` になる)、`diff.dstPrefix = y/z/`
+#     では `z/` が付く。どちらも base の `.gitleaks.toml` の path の allowlist に当たって検出から
+#     外れうる
 #   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う
-#   - gitleaks は 25 秒で打ち切り、レビュー必須 (戻り値 2) に倒す。gate を実行する hook の
-#     既定の timeout (60 秒) から、範囲の判定の時間の上限 (15 秒) と gate 自身の処理の分を
-#     引いた値。`--timeout 25` も渡すが、gitleaks は大きな範囲でこの指定を超えて走査を続ける
-#     ことがあるため、外側でも打ち切る (_text_paths_run_with_time_limit)
+#   - gitleaks は 20 秒で打ち切り、レビュー必須 (戻り値 2) に倒す。gate の hook の既定の
+#     timeout (60 秒) 内に、範囲の判定 (10 秒) と gate 自身の処理と合わせて終えるための値
+#     (「範囲の判定」を参照)。`--timeout 20` も渡すが、gitleaks は大きな範囲でこの指定を超えて
+#     走査を続けることがあるため、外側でも打ち切る (_text_paths_run_with_time_limit)
 #   - `--ignore-gitleaks-allow` は、文書中に `gitleaks:allow` コメントを書くだけで検出を
 #     抑止できないようにするために付ける (テキスト系文書だけの変更は、レビュー無しで
 #     そのコメントを書き込める)
@@ -461,7 +467,7 @@ _text_paths_run_gitleaks() {
   # stderr は走査元の外のファイルに受け、空かどうかだけを見る (内容は出力しない)。
   local stderr_path="${work_dir}/gitleaks.stderr"
   local gitleaks_status=0
-  _text_paths_run_with_time_limit 25 \
+  _text_paths_run_with_time_limit 20 \
     env GIT_DIR="$git_dir" GIT_WORK_TREE="$source_dir" GIT_NO_REPLACE_OBJECTS=1 \
     GIT_CONFIG_COUNT=5 \
     GIT_CONFIG_KEY_0=core.commitGraph GIT_CONFIG_VALUE_0=false \
@@ -470,8 +476,8 @@ _text_paths_run_gitleaks() {
     GIT_CONFIG_KEY_3=diff.relative GIT_CONFIG_VALUE_3=false \
     GIT_CONFIG_KEY_4=core.quotePath GIT_CONFIG_VALUE_4=true \
     gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
-    --exit-code 1 --timeout 25 "${config_args[@]}" --gitleaks-ignore-path "$source_dir" \
-    --log-opts="--no-textconv --no-ext-diff --text --no-color ${base_oid}..${head_oid}" \
+    --exit-code 1 --timeout 20 "${config_args[@]}" --gitleaks-ignore-path "$source_dir" \
+    --log-opts="--no-textconv --no-ext-diff --text --no-color --src-prefix=a/ --dst-prefix=b/ ${base_oid}..${head_oid}" \
     "$source_dir" </dev/null >/dev/null 2>"$stderr_path" || gitleaks_status=$?
   [ "$gitleaks_status" -eq 0 ] || return "$gitleaks_status"
   [ ! -s "$stderr_path" ]
@@ -523,7 +529,7 @@ is_text_only_range_in() {
   fi
   # 判定 (1-4) の期限を bash の `SECONDS` の値で表す (理由はファイルヘッダの「範囲の判定」を
   # 参照)。
-  local deadline=$((SECONDS + 15))
+  local deadline=$((SECONDS + 10))
 
   # revision は git の引数になるため、空や `-` 始まり (option として解釈される値) は拒否する。
   case "$base_rev" in

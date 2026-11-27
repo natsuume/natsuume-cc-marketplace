@@ -188,7 +188,7 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 branch の変更がテキスト系文書だけの push は、空 push と同じく 2 マーカーを要求せずに通します。push gate が deny しないため、`/pre-push-review:review` を実行する必要もありません。どの push が該当するかは push gate が判定します。
 
-この skip では security review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり 2 マーカーを要求します。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の実行は 25 秒で打ち切り、打ち切った場合は実行に失敗した場合と同じく扱います。
+この skip では security review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり 2 マーカーを要求します。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の実行は 20 秒で打ち切り、打ち切った場合は実行に失敗した場合と同じく扱います。
 
 gitleaks の設定 (`.gitleaks.toml` / `.gitleaksignore`) は、working tree ではなく範囲の起点 (base の commit) の tree から読みます。working tree に未追跡の設定ファイルを置いて検出を抑止できないようにするためです。また、gitleaks が内部で実行する `git log` に `--text --no-textconv --no-color` を付け、ローカルの git の属性 (binary の指定・textconv) や `color.ui` の設定で文書の差分が検査から隠れないようにしています。差分の path の表記 (`diff.noprefix` 等) も git の既定に固定し、報告される path がずれて `.gitleaks.toml` の path の allowlist に当たらないようにしています。base の tree に `.gitleaks.toml` が無ければ gitleaks の既定のルールだけを使い、`.gitleaksignore` が無ければ ignore は空にします。環境変数 `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` を設定している場合は、利用者自身の設定としてそちらを使います。
 
@@ -205,7 +205,7 @@ gitleaks が無い環境では、文書に書き込まれた token などの認�
 判定できない場合はレビュー必須として扱います。次のいずれかに当たる push はテキスト系文書のみとは扱わず、従来どおり 2 マーカーを要求します:
 
 - `origin/<base>..HEAD` に commit が無い、または merge commit を含む
-- 範囲の commit が 100 を超える、または判定に 15 秒を超えてかかる (hook の時間内に判定を終えるため、判定を打ち切ってレビュー必須として扱う)
+- 範囲の commit が 100 を超える、または判定に 10 秒を超えてかかる (hook の時間内に判定を終えるため、判定を打ち切ってレビュー必須として扱う)
 - 範囲内の各 commit とその親との差分、または merge-base と HEAD の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
 - 範囲内に親を持たない commit がある
 - git の graft ファイル (`.git/info/grafts`、または環境変数 `GIT_GRAFT_FILE` が指すファイル) がある (graft は commit の親を書き換え、範囲の途中の commit を判定から隠せるため)

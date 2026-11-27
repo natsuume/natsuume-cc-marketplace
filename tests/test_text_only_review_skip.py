@@ -404,7 +404,9 @@ sys.exit(exit_code)
 """
 # `--log-opts` で範囲の前に付けるオプション (`git log -p` の出力をローカルの属性と設定で
 # 変えさせない)。
-GITLEAKS_LOG_OPTS_PREFIX = "--no-textconv --no-ext-diff --text --no-color"
+GITLEAKS_LOG_OPTS_PREFIX = (
+    "--no-textconv --no-ext-diff --text --no-color --src-prefix=a/ --dst-prefix=b/"
+)
 # base の tree に `.gitleaks.toml` が無いときに渡す設定 (gitleaks の既定のルールだけを使う)。
 DEFAULT_GITLEAKS_CONFIG = "[extend]\nuseDefault = true\n"
 # base の tree に置く設定・ignore と、working tree に置く (渡されてはならない) 設定・ignore。
@@ -1442,7 +1444,7 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 "--exit-code",
                 "1",
                 "--timeout",
-                "25",
+                "20",
                 "--config",
                 config_path,
                 "--gitleaks-ignore-path",
@@ -1706,23 +1708,32 @@ class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
                 self.skip_unless_naive_scan_is_suppressed(repository)
                 self.assertEqual(self.range_status(repository), 2)
 
-    def test_noprefix_does_not_move_the_secret_into_an_allowlisted_path(self) -> None:
-        """`diff.noprefix` で gitleaks が報告する path の先頭の要素が落ちても、base の
+    def test_diff_prefix_settings_do_not_move_the_secret_into_an_allowlisted_path(
+        self,
+    ) -> None:
+        """`diff.noprefix` / `diff.dstPrefix` で gitleaks が報告する path がずれても、base の
         allowlist (`^vendor/`) に当たって検出から外れない。"""
-        repository = self.create_repository()
-        repository.git("switch", "-q", "master")
-        repository.write(
-            ".gitleaks.toml",
-            "[extend]\nuseDefault = true\n\n[allowlist]\npaths = ['''^vendor/''']\n",
-        )
-        repository.commit_all("gitleaks config")
-        repository.git("switch", "-q", "feature")
-        repository.git("reset", "-q", "--hard", "master")
-        repository.write("docs/vendor/notes.md", f"example = {DUMMY_GITHUB_PAT}\n")
-        repository.commit_all("docs")
-        repository.git("config", "diff.noprefix", "true")
-        self.skip_unless_naive_scan_is_suppressed(repository)
-        self.assertEqual(self.range_status(repository), 2)
+        cases = {
+            "noprefix": ("diff.noprefix", "true", "docs/vendor/notes.md"),
+            "dstPrefix": ("diff.dstPrefix", "b/vendor/", "notes.md"),
+        }
+        for label, (key, value, document) in cases.items():
+            with self.subTest(case=label):
+                repository = self.create_repository(f"repo-{label}")
+                repository.git("switch", "-q", "master")
+                repository.write(
+                    ".gitleaks.toml",
+                    "[extend]\nuseDefault = true\n\n"
+                    "[allowlist]\npaths = ['''^vendor/''']\n",
+                )
+                repository.commit_all("gitleaks config")
+                repository.git("switch", "-q", "feature")
+                repository.git("reset", "-q", "--hard", "master")
+                repository.write(document, f"example = {DUMMY_GITHUB_PAT}\n")
+                repository.commit_all("docs")
+                repository.git("config", key, value)
+                self.skip_unless_naive_scan_is_suppressed(repository)
+                self.assertEqual(self.range_status(repository), 2)
 
     def test_replace_ref_does_not_hide_the_secret(self) -> None:
         """token を書き込む commit を、replace ref で token の無い commit に置き換えても検出する。"""
@@ -2793,8 +2804,8 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
         for name, path in PLUGIN_READMES.items():
             with self.subTest(plugin=name):
                 body = path.read_text(encoding="utf-8")
-                self.assertIn("判定に 15 秒を超えてかかる", body)
-                self.assertIn("gitleaks の実行は 25 秒で打ち切り", body)
+                self.assertIn("判定に 10 秒を超えてかかる", body)
+                self.assertIn("gitleaks の実行は 20 秒で打ち切り", body)
 
     def test_plugin_readmes_state_that_object_tampering_is_not_detected(self) -> None:
         for name, path in PLUGIN_READMES.items():
