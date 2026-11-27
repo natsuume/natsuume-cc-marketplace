@@ -35,6 +35,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [natsuume-writing](#natsuume-writing) | 0.13.1 | natsuume の文体規則でテックブログ・技術書・社内技術文書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
 | [cross-model-advisor](#cross-model-advisor) | 6.0.1 | Codex を advisor として相談し、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
 | [rate-limit](#rate-limit) | 0.5.5 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
+| [antigravity-rate-limit](#antigravity-rate-limit) | 0.1.0 | Antigravity CLI (agy) の利用枠 (モデルのグループごとの週次枠・5 時間枠の残り割合と reset 時刻) を取得する `/antigravity-rate-limit:status` Skill を提供するプラグイン。`--max-used-percent <N>` で閾値判定する |
 | [session-handoff](#session-handoff) | 1.0.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.10 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
 | [enforce-japanese-response](#enforce-japanese-response) | 0.2.0 | settings の `language` が日本語のとき、turn 末尾の応答や tool 呼び出しの合間のメッセージが英語で書かれていたら検知し、日本語で書き直させるプラグイン |
@@ -426,6 +427,30 @@ Claude (エージェント自身) が、セッション内でサブスクリプ�
 ### キーワード
 
 `rate-limit` `usage-limit` `statusline` `oauth` `skill` `codex`
+
+---
+
+## antigravity-rate-limit
+
+Antigravity CLI (`agy`) の利用枠 (モデルのグループごとの週次枠・5 時間枠の残り割合と reset 時刻) を取得する `/antigravity-rate-limit:status` Skill を提供するプラグインです。`agy -p "/usage" --output-format json --print-timeout 60s` を 1 回実行し、応答を検証・正規化した JSON を返します。print mode の `/usage` は agy 同梱の changelog に記載された機能で、agent turn を始めず quota を消費しません (agy 1.1.11 以上)。`--max-used-percent <N>` を付けると、使用率が N% を超えた枠の有無を exit code (0 = 超過なし / 1 = 取得失敗 / 2 = 超過) で返します。
+
+枠はモデル単位ではなくグループ単位です。agy は実行のたびにログの作成・期限切れの OAuth token の refresh・auto-update の起動を行います (agy 自身の挙動)。`GEMINI_API_KEY` で接続している agy では取得できません。macOS では実測していません。
+
+### 機能
+
+#### Skills
+
+| スキル名 | コマンド | 説明 |
+|---------|---------|------|
+| status | `/antigravity-rate-limit:status` | `scripts/antigravity-rate-limit.sh` を実行し、グループごと・窓ごとの残り割合と reset 時刻を報告する。`--max-used-percent <N>` で閾値判定 (exit 0/1/2) |
+
+### 依存
+
+`agy` 1.1.11 以上 (ログイン済み)、`jq` (必須)
+
+### キーワード
+
+`antigravity` `agy` `rate-limit` `usage-limit` `quota` `skill`
 
 ---
 

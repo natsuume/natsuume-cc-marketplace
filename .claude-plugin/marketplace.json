@@ -105,6 +105,13 @@
       "keywords": ["rate-limit", "usage-limit", "statusline", "oauth", "skill", "codex"]
     },
     {
+      "name": "antigravity-rate-limit",
+      "source": "./plugins/antigravity-rate-limit",
+      "description": "Antigravity (agy) の利用枠を取得する",
+      "version": "0.1.0",
+      "keywords": ["antigravity", "agy", "rate-limit", "usage-limit", "quota", "skill"]
+    },
+    {
       "name": "session-handoff",
       "source": "./plugins/session-handoff",
       "description": "context 閾値超過時に handoff を作成・引き継ぐ",
