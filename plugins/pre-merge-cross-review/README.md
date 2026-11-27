@@ -171,7 +171,7 @@ gitleaks が無い環境では、文書に書き込まれた token などの認�
 - 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts`、`.github` → `chatmodes` のいずれかの順に並ぶ
 - basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
 
-これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。
+これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。同じ理由で、大文字小文字の変換で ASCII の文字になる非 ASCII 文字 (U+017F の `ſ` や U+212A の `K` など。全件は `hooks/scripts/lib/text-paths.sh` のヘッダに記載) を path に含むファイルは、場所を問わずテキスト系文書として扱いません。
 
 判定の範囲は merge 実行 repo の `<PR の base commit SHA>..<PR の head SHA>` で、起点には GitHub が記録する PR の base commit (`baseRefOid`) を使います。ローカルの `origin/<base>` は、PR の実際の base に無い commit を含みうる (base の履歴が書き換えられた後にローカルを更新していない等) ため起点にしません。そのまま起点にすると、merge で base に入る commit が判定範囲から外れます。判定できない場合はレビュー必須として扱います。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
 
@@ -181,6 +181,7 @@ gitleaks が無い環境では、文書に書き込まれた token などの認�
 - 範囲の commit が 100 を超える (hook の時間内に判定を終えるため、判定せずにレビュー必須として扱う)
 - 範囲内の各 commit とその親との差分、または merge-base と head の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
 - 範囲内に親を持たない commit がある
+- git の graft ファイル (`.git/info/grafts`、または環境変数 `GIT_GRAFT_FILE` が指すファイル) がある (graft は commit の親を書き換え、範囲の途中の commit を判定から隠せるため)
 - 変更前後のファイル mode に通常ファイル (`100644`) 以外を含む (symlink・submodule・実行ビット付きファイル)
 - 判定に使う git コマンドが失敗した
 

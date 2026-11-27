@@ -123,6 +123,8 @@ INHERITED_ENV_TO_DROP = (
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CEILING_DIRECTORIES",
+    "GIT_GRAFT_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
     "XDG_CONFIG_HOME",
     # gitleaks の設定を利用者の環境から渡す変数 (判定 lib はこれがあると `--config` を渡さない)。
     "GITLEAKS_CONFIG",
@@ -173,6 +175,8 @@ TEXT_DOCUMENT_PATHS = (
     "docs/claude.md.rst",
     "docs/a b.md",
     "docs/日本語.md",
+    "docs/café.md",
+    "docs/Ärger.md",
     "docs/tab\there.md",
     "docs/new\nline.md",
 )
@@ -260,6 +264,20 @@ NON_TEXT_PATHS = (
     ".Junie/x.md",
     ".AmazonQ/x.md",
     ".GitHub/ChatModes/x.md",
+    # 大文字小文字の変換や畳み込みで ASCII の文字になる非 ASCII 文字を含む (場所を問わない)
+    "plugins/x/ſkills/s/SKILL.md",
+    ".Kiro/x.md",
+    "docs/İnstructions.md",
+    "docs/ındex.md",
+    "docs/straße.md",
+    "docs/STRAẞE.md",
+    "docs/ﬀ.md",
+    "docs/ﬁle.md",
+    "docs/ﬂow.md",
+    "docs/ﬃx.md",
+    "docs/ﬄx.md",
+    "docs/ﬅyle.md",
+    "docs/ﬆyle.md",
 )
 
 # bash 3.2 (macOS) に無い構文。lib に含まれないことを静的に確かめる。
@@ -307,6 +325,7 @@ FAKE_COMPANION_SCRIPT = (
 # 使う。
 GITLEAKS_LOG_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_LOG"
 GITLEAKS_EXIT_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_EXIT"
+GITLEAKS_STDERR_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_STDERR"
 GITLEAKS_OUTPUT_MARKER = "FAKE-GITLEAKS-FINDING ghp_textonlyskiptestsecret0000000000"
 FAKE_GITLEAKS_TEMPLATE = """#!{python}
 import json
@@ -346,9 +365,13 @@ record = {{
 }}
 with open(os.environ["{log_env}"], "a", encoding="utf-8") as fp:
     fp.write(json.dumps(record) + "\\n")
+exit_code = int(os.environ.get("{exit_env}", "0"))
 print("{marker}")
-print("{marker}", file=sys.stderr)
-sys.exit(int(os.environ.get("{exit_env}", "0")))
+# 実際の gitleaks は `--log-level error` の正常な走査では stderr に何も出さない。stderr に
+# 出すのは、終了コードが 0 でないときと、内部の git の失敗を模す指定があるときだけにする。
+if exit_code != 0 or os.environ.get("{stderr_env}") == "1":
+    print("{marker}", file=sys.stderr)
+sys.exit(exit_code)
 """
 # `--log-opts` で範囲の前に付けるオプション (`git log -p` の出力をローカルの属性と設定で
 # 変えさせない)。
@@ -532,6 +555,7 @@ class WorkspaceTestCase(unittest.TestCase):
                 python=sys.executable,
                 log_env=GITLEAKS_LOG_ENV,
                 exit_env=GITLEAKS_EXIT_ENV,
+                stderr_env=GITLEAKS_STDERR_ENV,
                 marker=GITLEAKS_OUTPUT_MARKER,
             ),
             encoding="utf-8",
@@ -1018,6 +1042,47 @@ class TextOnlyRangeRejectsOtherChangesTest(WorkspaceTestCase):
         self.assertEqual(repository.changed_paths("master", "HEAD"), ["README.md"])
         self.assertEqual(self.range_status(repository), 1)
 
+    def test_graft_does_not_hide_intermediate_code_commit(self) -> None:
+        """graft で、コードを足して後で消す中間 commit を範囲から隠しても判定しない。"""
+        repository = self.create_repository()
+        repository.write("helper.py", "print('added')\n")
+        repository.commit_all("code")
+        repository.remove("helper.py")
+        repository.write("README.md", "# updated\n")
+        head = repository.commit_all("docs")
+        self.assertEqual(self.range_status(repository), 1)
+
+        graft_file = repository.git_dir() / "info" / "grafts"
+        graft_file.parent.mkdir(exist_ok=True)
+        graft_file.write_text(f"{head} {repository.rev('master')}\n", encoding="utf-8")
+        # graft を読む通常の git の呼び出しでは、範囲は README.md だけを変える 1 commit に見える。
+        self.assertEqual(len(repository.range_commits("master")), 1)
+        # `--git-path` が返す相対 path を、target_cwd を指定した場合と現在の cwd の場合の
+        # どちらでも正しく解決する。
+        with self.subTest(target_cwd="repository path"):
+            self.assertEqual(self.range_status(repository), 1)
+        with self.subTest(target_cwd="empty"):
+            self.assertEqual(
+                self.call_text_paths(
+                    "is_text_only_range_in", "", "master", "HEAD", cwd=repository.path
+                ),
+                1,
+            )
+
+    def test_graft_file_from_environment_is_detected(self) -> None:
+        """`GIT_GRAFT_FILE` が指す graft ファイルも検出する。"""
+        repository = self.create_repository()
+        repository.write("helper.py", "print('added')\n")
+        repository.commit_all("code")
+        repository.remove("helper.py")
+        repository.write("README.md", "# updated\n")
+        head = repository.commit_all("docs")
+        graft_file = self.root / "outside-grafts"
+        graft_file.write_text(f"{head} {repository.rev('master')}\n", encoding="utf-8")
+        self.env["GIT_GRAFT_FILE"] = str(graft_file)
+        self.assertEqual(len(repository.range_commits("master")), 1)
+        self.assertEqual(self.range_status(repository), 1)
+
     def test_parentless_commit_in_range_is_not_text_only(self) -> None:
         repository = self.create_repository()
         # `git switch --orphan` は追跡中のファイルを working tree と index から取り除く。
@@ -1318,6 +1383,34 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 self.assertEqual("--config" in args, expects_config, args)
                 self.assertIn("--gitleaks-ignore-path", args)
 
+    def test_gitleaks_stderr_output_with_exit_zero_stops_the_skip(self) -> None:
+        """gitleaks が終了コード 0 でも stderr に何か出していれば (内部の git の失敗等)、
+        2 (レビュー必須) を返す。stderr の内容は出力しない。"""
+        repository = self.create_text_only_branch()
+        self.env[GITLEAKS_STDERR_ENV] = "1"
+        result = subprocess.run(
+            [
+                BASH,
+                "-c",
+                CALL_FUNCTION_SCRIPT,
+                "text-paths-test",
+                str(TEXT_PATHS_LIB),
+                "is_text_only_range_in",
+                str(repository.path),
+                "master",
+                "HEAD",
+            ],
+            cwd=self.root,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn(GITLEAKS_OUTPUT_MARKER, result.stdout + result.stderr)
+        self.assert_no_leftover_temporary_files()
+
     def test_temporary_files_are_removed_even_when_gitleaks_fails(self) -> None:
         repository = self.create_text_only_branch()
         self.set_gitleaks_exit(1)
@@ -1426,6 +1519,18 @@ class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
         repository.write("README.md", "# updated\n")
         repository.commit_all("docs")
         self.assertEqual(self.range_status(repository), 0)
+
+    def test_failed_internal_git_log_stops_the_skip(self) -> None:
+        """範囲内の blob が欠けて gitleaks の内部の `git log` が失敗した場合は 2 を返す
+        (gitleaks 自身はエラーを log に出して終了コード 0 で終わることがある)。"""
+        repository = self.create_repository()
+        repository.write("README.md", "# updated\n")
+        head = repository.commit_all("docs")
+        blob = repository.rev(f"{head}:README.md")
+        loose_object = repository.git_dir() / "objects" / blob[:2] / blob[2:]
+        loose_object.chmod(loose_object.stat().st_mode | stat.S_IWUSR)
+        loose_object.unlink()
+        self.assertEqual(self.range_status(repository), 2)
 
     def test_secret_in_text_only_range_stops_the_skip(self) -> None:
         repository = self.create_branch_with_secret()
@@ -2513,6 +2618,21 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                 self.assertIn(
                     "範囲の commit が 100 を超える", path.read_text(encoding="utf-8")
                 )
+
+    def test_plugin_readmes_exclude_ascii_folding_characters(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                self.assertIn(
+                    "大文字小文字の変換で ASCII の文字になる非 ASCII 文字",
+                    path.read_text(encoding="utf-8"),
+                )
+
+    def test_plugin_readmes_list_the_graft_condition(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn("git の graft ファイル", body)
+                self.assertIn("`GIT_GRAFT_FILE`", body)
 
     def test_split_plugin_readmes_list_the_lib_in_file_table(self) -> None:
         for name in ("pre-push-codex-review", "pre-merge-cross-review"):

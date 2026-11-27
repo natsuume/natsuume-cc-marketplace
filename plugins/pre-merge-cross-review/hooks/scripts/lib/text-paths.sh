@@ -43,6 +43,13 @@
 # 区別しないため、`Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして
 # 解決され、agent に読み込まれる。
 #
+# 同じ理由で、大文字小文字の変換や畳み込みで ASCII の文字になる非 ASCII 文字を path のどこかに
+# 含む場合は、テキスト系文書としない。対象は `İ` (U+0130)・`ı` (U+0131)・`ſ` (U+017F)・
+# `ß` (U+00DF)・`ẞ` (U+1E9E)・`K` (U+212A)・合字 U+FB00〜U+FB06 (`ﬀ`〜`ﬆ`)。filesystem が
+# これらを ASCII の文字と同一視する場合、`ſkills/` のような path は ASCII の照合では除外対象に
+# 当たらないまま、除外対象の場所 (`skills/`) に解決されうる。日本語などの文字は変換しても
+# ASCII にならないため、この条件に当たらない。
+#
 # 例: `README.md` / `docs/a.MD` / `plugins/x/README.md` / `docs/skills.md` (basename は
 # ディレクトリ要素の除外条件の対象外) / `.github/README.md` はテキスト系文書。
 # `plugins/x/agents/r.md` / `plugins/x/skills/s/SKILL.md` / `plugins/x/hooks/prompts/p.md` /
@@ -75,6 +82,11 @@
 # commit や tree を置き換え先の内容で読むため、コードを足す commit をテキスト系文書だけの
 # commit に見せかけられる。push や merge で remote に届くのは置き換え前の object である。
 #
+# 同じ理由で、graft ファイル (`<git dir>/info/grafts`、または環境変数 `GIT_GRAFT_FILE` が
+# 指す file) が存在する場合は、判定を行わずレビュー必須 (戻り値 1) とする。graft は commit の
+# 親を書き換えるため、コードを足して後で消す中間 commit を範囲から隠せる (3 の検査を回避
+# できる)。graft を無効にする git の option は無いため、存在を検出して打ち切る。
+#
 # raw 差分は rename / copy の検出を行わずに取る (rename は削除と追加の 2 エントリになり、
 # 変更前と変更後の両方の path が検査対象になる)。出力は NUL 区切りで読み、空白・改行・
 # 非 ASCII 文字を含む path も quote されないまま扱う。mode の条件により、symlink
@@ -101,7 +113,7 @@
 #
 #   - 0: 範囲内の変更がテキスト系文書だけで、秘匿情報の検査も通った (skip してよい)
 #   - 1: 1-4 のいずれかを満たさない (テキスト系文書だけではない、commit 数が上限を超える等)、
-#        または 1-4 の判定に必要な git の呼び出しが失敗した
+#        graft ファイルがある、または 1-4 の判定に必要な git の呼び出しが失敗した
 #   - 2: テキスト系文書だけだが、gitleaks が秘匿情報の候補を検出した、または gitleaks の実行が
 #        失敗した
 #
@@ -136,10 +148,13 @@
 #     `color.ui = always` で出力に色を付ける、のいずれでも、gitleaks は差分から文書の内容を
 #     読み取れず「検出なし」で終わる。`--text` / `--no-textconv` / `--no-color` はそれぞれを
 #     無効にし、`--no-ext-diff` は外部 diff を使わせない
-#   - stdout / stderr はどちらも捨てる。検出した認証情報の内容を hook や wrapper の出力に
-#     流さないため
-#   - 終了コード 0 だけを「検出なし」とし、それ以外 (検出・timeout・実行エラー) はすべて
-#     exit code 2 にする。repo の git dir を解決できない場合も 2 にする
+#   - stdout は捨て、stderr は一時ディレクトリのファイルに受けて空かどうかだけを見る。検出
+#     した認証情報の内容を hook や wrapper の出力に流さないため
+#   - 終了コード 0 で、かつ stderr に何も出ていないときだけを「検出なし」とし、それ以外
+#     (検出・timeout・実行エラー) はすべて exit code 2 にする。gitleaks は内部の `git log` が
+#     失敗しても (repo や object が読めない等) エラーを log に出して終了コード 0 で終わる。
+#     `--log-level error` では正常な走査は stderr に何も出さないため、stderr の有無で失敗を
+#     見分ける。repo の git dir を解決できない場合も 2 にする
 #
 # ### 設定と ignore の読み方
 #
@@ -199,6 +214,17 @@ is_text_document_path() {
   local directories=""
   case "$path" in
     */*) directories="${path%/*}" ;;
+  esac
+
+  # 大文字小文字の変換や畳み込みで ASCII の文字になる非 ASCII 文字を含まないこと。UTF-8 の
+  # バイト列で照合する (順に İ ı ſ ß ẞ K と、合字 U+FB00〜U+FB06)。
+  case "$path" in
+    *$'\xc4\xb0'* | *$'\xc4\xb1'* | *$'\xc5\xbf'* | *$'\xc3\x9f'* | \
+      *$'\xe1\xba\x9e'* | *$'\xe2\x84\xaa'* | \
+      *$'\xef\xac\x80'* | *$'\xef\xac\x81'* | *$'\xef\xac\x82'* | *$'\xef\xac\x83'* | \
+      *$'\xef\xac\x84'* | *$'\xef\xac\x85'* | *$'\xef\xac\x86'*)
+      return 1
+      ;;
   esac
 
   # 拡張子 (basename の最後の `.` より後ろ) が対象の 4 つのいずれかであること。
@@ -366,11 +392,16 @@ _text_paths_run_gitleaks() {
     *) return 1 ;;
   esac
 
+  # stderr は走査元の外のファイルに受け、空かどうかだけを見る (内容は出力しない)。
+  local stderr_path="${work_dir}/gitleaks.stderr"
+  local gitleaks_status=0
   GIT_DIR="$git_dir" GIT_WORK_TREE="$source_dir" GIT_NO_REPLACE_OBJECTS=1 \
     gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
     --exit-code 1 --timeout 30 "${config_args[@]}" --gitleaks-ignore-path "$source_dir" \
     --log-opts="--no-textconv --no-ext-diff --text --no-color ${base_oid}..${head_oid}" \
-    "$source_dir" </dev/null >/dev/null 2>&1
+    "$source_dir" </dev/null >/dev/null 2>"$stderr_path" || gitleaks_status=$?
+  [ "$gitleaks_status" -eq 0 ] || return "$gitleaks_status"
+  [ ! -s "$stderr_path" ]
 }
 
 # _text_paths_secrets_scan_passes <target_cwd> <base_oid> <head_oid>
@@ -425,6 +456,24 @@ is_text_only_range_in() {
   case "$head_rev" in
     "" | -*) return 1 ;;
   esac
+
+  # graft ファイルがあれば判定しない (理由はファイルヘッダの「範囲の判定」を参照)。
+  # `--git-path info/grafts` は環境変数 `GIT_GRAFT_FILE` も考慮した path を返す。相対 path は
+  # git を実行したディレクトリ (target_cwd か現在の cwd) からの path なので、target_cwd を補う。
+  local graft_path
+  graft_path=$(git "${git_prefix[@]}" rev-parse --git-path info/grafts 2>/dev/null) || return 1
+  [ -n "$graft_path" ] || return 1
+  case "$graft_path" in
+    /*) ;;
+    *)
+      if [ -n "$target_cwd" ]; then
+        graft_path="${target_cwd}/${graft_path}"
+      fi
+      ;;
+  esac
+  if [ -e "$graft_path" ] || [ -L "$graft_path" ]; then
+    return 1
+  fi
 
   # 以降の git 呼び出しには解決済みの commit OID (16 進数のみ) だけを渡す。
   local base_oid head_oid
