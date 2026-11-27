@@ -98,6 +98,13 @@
       "keywords": ["codex", "advisor", "second-opinion", "system-prompt", "hook", "skill", "openai"]
     },
     {
+      "name": "antigravity-advisor",
+      "source": "./plugins/antigravity-advisor",
+      "description": "Antigravity (agy) へ read-only で相談する",
+      "version": "0.1.0",
+      "keywords": ["antigravity", "agy", "advisor", "second-opinion", "skill", "gemini"]
+    },
+    {
       "name": "rate-limit",
       "source": "./plugins/rate-limit",
       "description": "Claude / Codex の rate limit を取得する",

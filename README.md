@@ -34,6 +34,7 @@ claude plugin install git-guardrails@natsuume-plugins
 | [ui-discipline](#ui-discipline) | 0.6.0 | UI 実装の 3 規律を SessionStart / SubagentStart で常時注入し、残り 7 規律の本文と具体例を ui-patterns Skill が提供するプラグイン |
 | [natsuume-writing](#natsuume-writing) | 0.13.1 | natsuume の文体規則でテックブログ・技術書・社内技術文書の執筆を支援し、文章作成一般のルールを成果物の日本語の文章すべてに適用するプラグイン |
 | [cross-model-advisor](#cross-model-advisor) | 6.0.1 | Codex を advisor として相談し、Codex rescue / review / advisor を role 固有 runner subagent に閉じ込めて追跡喪失から復旧する。codex-advisor-runner が review cadence checkpoint の attestation footer を発行する (要 openai-codex plugin + Codex CLI) |
+| [antigravity-advisor](#antigravity-advisor) | 0.1.0 | Antigravity CLI (agy) を read-only の advisor として相談する `/antigravity-advisor:consult` Skill と、agy を plan mode で 1 回起動して助言を返す runner subagent を提供するプラグイン (要 agy CLI + jq) |
 | [rate-limit](#rate-limit) | 0.5.5 | Claude 自身がサブスクリプション usage limit (5h/週次の使用率と reset 時刻) を自律取得する `/rate-limit:status` Skill と、codex (OpenAI) の rate limit (週次枠使用率・reset 時刻) を取得する `/rate-limit:codex-status` Skill を提供するプラグイン。`/rate-limit:setup` で statusline キャッシュ連携を登録する |
 | [session-handoff](#session-handoff) | 1.0.0 | context 使用率が閾値を超えたら handoff ドキュメントの作成を促し、次のセッション (`/clear`・起動直後) にその内容を自動注入するプラグイン。`/session-handoff:setup` で natsuume-statusline のキャッシュ連携を登録する |
 | [repo-analytics](#repo-analytics) | 0.2.10 | GitHub の issue/PR タイムラインから AI タスクのリードタイム (着手→PR ready) を分析し、生存バイアス・サイズ交絡を統制した推移レポート (Artifact + ターミナルサマリ) を生成するプラグイン |
@@ -391,6 +392,38 @@ Claude Code からの利用には [公式 codex plugin](https://github.com/opena
 ### キーワード
 
 `codex` `advisor` `second-opinion` `system-prompt` `hook` `skill` `openai`
+
+---
+
+## antigravity-advisor
+
+Antigravity CLI (`agy`) を read-only の助言役 (advisor) として相談するプラグインです。`/antigravity-advisor:consult` Skill が self-contained な相談 request (目的、制約・受入基準、現在の方針、集めた証拠、具体的な問い、期待する回答形式) を組み立て、`antigravity-advisor:antigravity-advisor-runner` subagent (`model: "sonnet"`) を起動します。runner は request を一時ファイルに書き、wrapper script を foreground で 1 回実行して、助言の本文を report として親セッションへ返します。
+
+wrapper は agy を `--mode plan --output-format json` で起動し、応答の JSON の `status`・`denied_actions`・`response` を検査します。model は agy の既定を使い、環境変数 `ANTIGRAVITY_ADVISOR_MODEL` が設定されているときだけ `--model` に渡します。plan mode でのファイルの書き込みの禁止はツールのレベルではなく運用上の制約のため、cwd が git の work tree 内なら、wrapper が agy の実行前後の HEAD と working tree の状態を比較し、変化していれば失敗にします。
+
+助言はフラットに扱い、採否と理由を明示します。コード差分の finding を得る用途には使わず、設計・仕様の決定はユーザーの専権事項のままです。相談に失敗した場合は相談なしで作業を続け、理由を作業報告に含めます。hook と SessionStart の常時注入は持ちません。wrapper の終了コードの契約と read-only の保証の範囲は [plugins/antigravity-advisor/README.md](plugins/antigravity-advisor/README.md) を参照してください。
+
+### 機能
+
+#### Skills
+
+| スキル名 | コマンド | 説明 |
+|---------|---------|------|
+| consult | `/antigravity-advisor:consult` | self-contained な相談 request を組み立て、`antigravity-advisor:antigravity-advisor-runner` を起動して助言を受け取る |
+
+#### Agents
+
+| Agent 名 | 説明 |
+|---------|------|
+| `antigravity-advisor-runner` | 相談 request を一時ファイルに書き、`scripts/run-antigravity-advisor.sh` を foreground で 1 回実行して、成功時は助言の本文を、失敗時は終了コードと失敗の分類を report として返す。tools は `Bash, Write, Read`、model は `sonnet` に固定する |
+
+### 依存
+
+Antigravity CLI (`agy`) とログイン、`jq` (必須)、`git` (working tree の変化の検知に使う)
+
+### キーワード
+
+`antigravity` `agy` `advisor` `second-opinion` `skill` `gemini`
 
 ---
 
