@@ -38,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -97,8 +98,10 @@ MERGE_PENDING_RECORD = ".claude-pre-merge-codex-reviewed.pending"
 MERGE_HANDBACK_PREFIX = ".claude-pre-merge-handback-"
 
 PR_NUMBER = 123
-# ローカルに object が無い head SHA (merge gate の判定が成立しない状況の再現に使う)。
+# ローカルに object が無い head SHA / base commit SHA (merge gate の判定が成立しない状況の
+# 再現に使う)。
 ABSENT_HEAD_SHA = "fedcba0987654321fedcba0987654321fedcba09"
+ABSENT_BASE_SHA = "0123456789abcdef0123456789abcdef01234567"
 
 BASH = shutil.which("bash")
 GIT = shutil.which("git")
@@ -130,66 +133,105 @@ CLASSIFY_SCRIPT = (
 )
 CALL_FUNCTION_SCRIPT = 'source "$1" || exit 99; shift; "$@"'
 
-# テキスト系文書に分類される path (拡張子は大文字小文字を区別しない。除外条件の
-# ディレクトリ名と basename は大文字小文字を区別する。basename は除外条件の
-# ディレクトリ要素に含まない)。
+# テキスト系文書に分類される path (拡張子は md / markdown / rst / adoc で、大文字小文字を
+# 区別しない。basename はディレクトリ要素の除外条件の対象外。除外条件は要素単位で
+# 照合するため、除外名を一部に含むだけの要素や、片方だけの要素の組は除外しない)。
 TEXT_DOCUMENT_PATHS = (
     "README.md",
     "docs/a.MD",
     "plugins/x/README.md",
-    "notes.txt",
-    "docs/agents.md",
-    "a.mdx",
+    "docs/skills.md",
+    "docs/commands.rst",
     "a.markdown",
+    "a.MARKDOWN",
     "a.rst",
+    "a.Rst",
     "a.adoc",
-    "A.TXT",
     "docs/Guide.Markdown",
     "x.sh.md",
-    "docs/CLAUDE.md.txt",
-    "docs/claude.md",
-    "docs/Agents/x.md",
     "agentsx/r.md",
     "my-skills/r.md",
+    "output-styles.md",
     "hooks/x.md",
     "prompts/x.md",
     "prompts/hooks/x.md",
     "a/hooks/b/prompts/x.md",
+    ".github/README.md",
+    ".github/workflows/notes.md",
+    "github/prompts/x.md",
+    "docs/instructions/x.md",
+    "docs/claude.md.rst",
     "docs/a b.md",
     "docs/日本語.md",
     "docs/tab\there.md",
     "docs/new\nline.md",
 )
 
-# テキスト系文書に分類されない path (コード・拡張子なし・挙動を定義する Markdown)。
+# テキスト系文書に分類されない path (対象外の拡張子・拡張子なし・コード、および coding
+# agent が指示として読み込む Markdown。除外条件は大文字小文字を区別しない)。
 NON_TEXT_PATHS = (
-    "plugins/x/agents/r.md",
-    "plugins/x/skills/s/SKILL.md",
-    "plugins/x/hooks/prompts/p.md",
-    "a/rules/r.md",
-    ".claude/CLAUDE.md",
-    "sub/CLAUDE.md",
-    "AGENTS.md",
+    # 対象外の拡張子 (txt / mdx を含む)・拡張子なし
+    "notes.txt",
+    "A.TXT",
+    "requirements.txt",
+    "CMakeLists.txt",
+    "docs/CLAUDE.md.txt",
+    "a.mdx",
+    "docs/page.MDX",
     "x.sh",
     "Makefile",
     "README",
-    "CLAUDE.md",
-    "CLAUDE.local.md",
-    "GEMINI.md",
-    "docs/AGENTS.md",
-    "agents/r.md",
-    "commands/c.md",
-    "skills/s/SKILL.md",
-    ".agents/x.md",
-    ".claude/notes.md",
-    "a/b/skills/c/d/e.md",
-    "hooks/prompts/p.txt",
     "x.md.sh",
     "README.",
     "dir.md/file",
     "docs/notes.json",
     "image.png",
     "",
+    # ディレクトリ要素
+    "plugins/x/agents/r.md",
+    "plugins/x/skills/s/SKILL.md",
+    "a/rules/r.md",
+    "agents/r.md",
+    "commands/c.md",
+    "skills/s/SKILL.md",
+    "a/b/skills/c/d/e.md",
+    "output-styles/concise.md",
+    ".claude/notes.md",
+    ".agents/x.md",
+    ".cursor/x.md",
+    ".gemini/x.md",
+    ".codex/x.md",
+    ".windsurf/x.md",
+    # 連続する 2 つのディレクトリ要素
+    "plugins/x/hooks/prompts/p.md",
+    ".github/instructions/x.md",
+    ".github/prompts/x.md",
+    "sub/.github/prompts/x.md",
+    # basename
+    ".claude/CLAUDE.md",
+    "sub/CLAUDE.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "GEMINI.md",
+    "docs/AGENTS.md",
+    ".github/copilot-instructions.md",
+    "docs/copilot-instructions.md",
+    # 大文字小文字違い
+    "docs/Agents/x.md",
+    "Skills/s/SKILL.md",
+    "Output-Styles/x.md",
+    ".Claude/x.md",
+    ".CURSOR/x.md",
+    "HOOKS/Prompts/x.md",
+    ".GitHub/Instructions/x.md",
+    ".Github/PROMPTS/x.md",
+    "docs/claude.md",
+    "docs/agents.md",
+    "Agents.md",
+    "gemini.MD",
+    "Claude.Local.md",
+    "Copilot-Instructions.MD",
 )
 
 # bash 3.2 (macOS) に無い構文。lib に含まれないことを静的に確かめる。
@@ -497,11 +539,12 @@ class TextOnlyRangeDetectsTextOnlyChangesTest(WorkspaceTestCase):
         repository.write("README.md", "# updated\n")
         repository.commit_all("update readme")
         repository.write("docs/new.md", "new\n")
-        repository.write("docs/notes.txt", "notes\n")
+        repository.write("docs/notes.rst", "notes\n")
+        repository.write("docs/manual.adoc", "manual\n")
         repository.commit_all("add docs")
         self.assert_all_regular_text_changes(
             repository,
-            ["README.md", "docs/new.md", "docs/notes.txt"],
+            ["README.md", "docs/manual.adoc", "docs/new.md", "docs/notes.rst"],
             repository.merge_base("master"),
             "HEAD",
         )
@@ -584,6 +627,24 @@ class TextOnlyRangeRejectsOtherChangesTest(WorkspaceTestCase):
         )
         self.assertEqual(self.range_status(repository), 1)
 
+    def test_txt_and_mdx_files_are_not_text_only(self) -> None:
+        """依存宣言・ビルド定義に使われる txt と、コードを埋め込める mdx は対象外。"""
+        for index, path in enumerate(
+            ("requirements.txt", "CMakeLists.txt", "docs/notes.txt", "docs/page.mdx")
+        ):
+            with self.subTest(path=path):
+                repository = self.create_repository(f"repo-{index}")
+                repository.write("README.md", "# updated\n")
+                repository.write(path, "content\n")
+                repository.commit_all("docs and txt or mdx")
+                self.assert_all_regular_text_changes(
+                    repository,
+                    ["README.md", path],
+                    repository.merge_base("master"),
+                    "HEAD",
+                )
+                self.assertEqual(self.range_status(repository), 1)
+
     def test_code_commit_next_to_text_commit_is_not_text_only(self) -> None:
         repository = self.create_repository()
         repository.write("README.md", "# updated\n")
@@ -652,7 +713,7 @@ class TextOnlyRangeRejectsOtherChangesTest(WorkspaceTestCase):
 
     def test_executable_bit_is_not_text_only(self) -> None:
         cases = {
-            "new_executable_text_file": "docs/run.txt",
+            "new_executable_text_file": "docs/run.md",
             "mode_change_only": "README.md",
         }
         for label, path in cases.items():
@@ -700,6 +761,11 @@ class TextOnlyRangeRejectsOtherChangesTest(WorkspaceTestCase):
                 "plugins/x/hooks/prompts/p.md",
                 ".claude/CLAUDE.md",
                 "sub/AGENTS.md",
+                ".github/copilot-instructions.md",
+                ".github/instructions/review.md",
+                "output-styles/concise.md",
+                "Plugins/X/Agents/r.md",
+                "docs/claude.md",
             )
         ):
             with self.subTest(path=path):
@@ -972,10 +1038,10 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         )
         return repository
 
-    def configure_pr(self, head: str, base_ref_name: str | None = "master") -> None:
+    def configure_pr(self, head: str, base_oid: str | None) -> None:
         pr: dict[str, object] = {"number": PR_NUMBER, "headRefOid": head}
-        if base_ref_name is not None:
-            pr["baseRefName"] = base_ref_name
+        if base_oid is not None:
+            pr["baseRefOid"] = base_oid
         self.configure_fake_gh(pr)
 
     def write_record(self, repository: Repository, head: str) -> None:
@@ -1022,7 +1088,7 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
             repository.merge_base("refs/remotes/origin/master"),
             "HEAD",
         )
-        self.configure_pr(repository.head())
+        self.configure_pr(repository.head(), repository.rev("master"))
         self.assertFalse((repository.git_dir() / MERGE_FINAL_RECORD).exists())
         result = self.run_gate(repository)
         self.assertEqual(result.stdout, b"", result.stdout.decode())
@@ -1032,34 +1098,37 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         repository.write("README.md", "# updated\n")
         repository.write("tool.py", "print('changed')\n")
         repository.commit_all("mixed")
-        self.configure_pr(repository.head())
+        self.configure_pr(repository.head(), repository.rev("master"))
         self.assert_record_deny(self.run_gate(repository))
 
-    def test_unjudgeable_base_ref_name_falls_back_to_record(self) -> None:
-        """base branch 名が欠落・不正なら判定せず、記録の有無で決まる。
+    def test_unusable_base_commit_falls_back_to_record(self) -> None:
+        """base commit SHA が欠落・形式不正・ローカルに無い場合は判定せず、記録の有無で
+        決まる。
 
-        不正な名前にも同名の remote-tracking ref を用意し、名前を検証せずに判定すると
-        通ってしまう状態にしておく。
+        形式不正の値には、git が解決できてしまう値 (大文字の SHA・短縮 SHA・branch 名) を
+        使い、形式を検証せずに判定すると通ってしまう状態にしておく。
         """
-        cases: dict[str, str | None] = {
+        cases: dict[str, Callable[[str], str] | None] = {
             "missing": None,
-            "parenthesis": "feat(x)",
-            "leading_dash": "-x",
-            "non_ascii": "日本語",
+            "uppercase": lambda base: base.upper(),
+            "abbreviated": lambda base: base[:12],
+            "branch_name": lambda base: "master",
+            "absent_object": lambda base: ABSENT_BASE_SHA,
         }
-        for label, base_ref_name in cases.items():
+        # 判定関数に渡せば成立してしまう (gate の形式検証だけが止める) 値。
+        resolvable_cases = ("uppercase", "abbreviated", "branch_name")
+        for label, make_base in cases.items():
             with self.subTest(case=label):
                 repository = self.create_pr_repository(f"repo-{label}")
-                if base_ref_name is not None:
-                    repository.git(
-                        "update-ref",
-                        f"refs/remotes/origin/{base_ref_name}",
-                        repository.rev("master"),
-                    )
+                base = repository.rev("master")
                 repository.write("README.md", "# updated\n")
                 repository.commit_all("docs")
                 head = repository.head()
-                self.configure_pr(head, base_ref_name)
+                base_oid = None if make_base is None else make_base(base)
+                if label in resolvable_cases:
+                    assert base_oid is not None
+                    self.assertEqual(self.range_status(repository, base=base_oid), 0)
+                self.configure_pr(head, base_oid)
                 self.assert_record_deny(self.run_gate(repository))
                 self.write_record(repository, head)
                 self.assertEqual(self.run_gate(repository).stdout, b"")
@@ -1068,10 +1137,28 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         repository = self.create_pr_repository()
         repository.write("README.md", "# updated\n")
         repository.commit_all("docs")
-        self.configure_pr(ABSENT_HEAD_SHA)
+        self.configure_pr(ABSENT_HEAD_SHA, repository.rev("master"))
         self.assert_record_deny(self.run_gate(repository))
         self.write_record(repository, ABSENT_HEAD_SHA)
         self.assertEqual(self.run_gate(repository).stdout, b"")
+
+    def test_local_base_ref_containing_pr_code_commit_does_not_hide_it(self) -> None:
+        """ローカルの origin/<base> が PR の head にあるコード commit を含んでいても、
+        PR の base commit (baseRefOid) がその commit を含まなければ skip しない。"""
+        repository = self.create_pr_repository()
+        base = repository.rev("master")
+        repository.write("tool.py", "print('changed')\n")
+        code_commit = repository.commit_all("code")
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        repository.git("update-ref", "refs/remotes/origin/master", code_commit)
+        # ローカルの ref を起点にすると、コード commit が範囲から外れてテキストだけになる。
+        self.assertEqual(
+            self.range_status(repository, base="refs/remotes/origin/master"), 0
+        )
+        self.assertEqual(self.range_status(repository, base=base), 1)
+        self.configure_pr(repository.head(), base)
+        self.assert_record_deny(self.run_gate(repository))
 
 
 @unittest.skipUnless(NODE, "wrapper integration requires node")
@@ -1171,26 +1258,19 @@ class WrapperTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
 
     # -- pre-merge-cross-review -------------------------------------------
 
-    def create_merge_repository(self, base_name: str = "master") -> Repository:
+    def create_merge_repository(self) -> Repository:
         self.install_fake_gh()
         repository = self.create_repository()
         self.attach_origin(repository)
-        if base_name != "master":
-            repository.git(
-                "update-ref",
-                f"refs/remotes/origin/{base_name}",
-                repository.rev("master"),
-            )
         return repository
 
-    def configure_merge_pr(
-        self, repository: Repository, base_name: str = "master"
-    ) -> None:
+    def configure_merge_pr(self, repository: Repository) -> None:
+        """PR の base commit は master branch の commit (fixture の base commit)。"""
         self.configure_fake_gh(
             {
                 "number": PR_NUMBER,
                 "headRefOid": repository.head(),
-                "baseRefName": base_name,
+                "baseRefName": "master",
                 "baseRefOid": repository.rev("master"),
             }
         )
@@ -1241,17 +1321,22 @@ class WrapperTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         )
 
     @unittest.skipUnless(JQ, "merge wrapper requires jq")
-    def test_merge_wrapper_reviews_text_only_pr_whose_base_the_gate_does_not_judge(
+    def test_merge_wrapper_reviews_when_local_base_ref_contains_pr_code_commit(
         self,
     ) -> None:
-        """merge gate が判定しない base branch 名 (英数字と `._/-` 以外を含む) では、
-        wrapper も skip せずにレビューして記録を書く (skip した PR が gate に deny され
-        続けないため)。"""
-        base_name = "feat(x)"
-        repository = self.create_merge_repository(base_name)
+        """ローカルの origin/<base> が PR の head にあるコード commit を含んでいても、
+        PR の base commit (baseRefOid) がその commit を含まなければ skip しない。"""
+        repository = self.create_merge_repository()
+        repository.write("tool.py", "print('changed')\n")
+        code_commit = repository.commit_all("code")
         repository.write("README.md", "# updated\n")
         repository.commit_all("docs")
-        self.configure_merge_pr(repository, base_name)
+        repository.git("update-ref", "refs/remotes/origin/master", code_commit)
+        # ローカルの ref を起点にすると、コード commit が範囲から外れてテキストだけになる。
+        self.assertEqual(
+            self.range_status(repository, base="refs/remotes/origin/master"), 0
+        )
+        self.configure_merge_pr(repository)
 
         result = self.run_wrapper(MERGE_WRAPPER, repository)
 
@@ -1576,21 +1661,66 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                 self.assertIn("## テキスト系文書のみの変更", body)
                 self.assertIn("hooks/scripts/lib/text-paths.sh", body)
 
+    def test_plugin_readmes_state_the_current_definition(self) -> None:
+        """拡張子は md / markdown / rst / adoc の 4 つで、追加した除外対象と大文字小文字を
+        区別しない照合を説明する。"""
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn("`md` / `markdown` / `rst` / `adoc`", body)
+                self.assertNotIn("`md` / `mdx` /", body)
+                for excluded in (
+                    "`output-styles`",
+                    "`.cursor`",
+                    "`.gemini`",
+                    "`.codex`",
+                    "`.windsurf`",
+                    "`.github` → `instructions`",
+                    "`.github` → `prompts`",
+                    "`copilot-instructions.md`",
+                ):
+                    self.assertIn(excluded, body)
+                self.assertIn("大文字小文字を区別しません", body)
+
     def test_split_plugin_readmes_list_the_lib_in_file_table(self) -> None:
         for name in ("pre-push-codex-review", "pre-merge-cross-review"):
             with self.subTest(plugin=name):
                 body = PLUGIN_READMES[name].read_text(encoding="utf-8")
                 self.assertIn("| `hooks/scripts/lib/text-paths.sh` |", body)
 
-    def test_review_commands_say_text_only_changes_need_no_review(self) -> None:
+    def test_merge_readme_uses_pr_base_commit_as_range_start(self) -> None:
+        body = PLUGIN_READMES["pre-merge-cross-review"].read_text(encoding="utf-8")
+        self.assertIn("baseRefOid", body)
+        self.assertNotIn("baseRefName`)", body)
+        self.assertNotIn("base branch 名が英数字", body)
+
+    def test_review_commands_say_gate_does_not_deny_text_only_push(self) -> None:
+        """コマンドは「gate が deny しないため実行不要」と述べ、該当するかの判定を
+        session に委ねない。"""
         for name, path in REVIEW_COMMANDS.items():
             with self.subTest(plugin=name):
-                self.assertIn("テキスト系文書", path.read_text(encoding="utf-8"))
+                body = path.read_text(encoding="utf-8")
+                self.assertIn("テキスト系文書だけの push", body)
+                self.assertIn("deny しないため", body)
+                self.assertIn("push gate が判定します", body)
 
-    def test_merge_order_rules_mention_text_only_skip(self) -> None:
+    def test_merge_order_rules_always_launch_the_reviewer(self) -> None:
+        """テキスト系文書だけの PR でも codex-reviewer を起動し、`Status: skipped` を
+        受け取った head SHA では再起動しない。起動を省く判定を session にさせない。"""
         body = MERGE_ORDER_RULES.read_text(encoding="utf-8")
-        self.assertIn("テキスト系文書", body)
-        self.assertIn("`Status: skipped`", body)
+        self.assertIn(
+            "`Status: pass` / `Status: findings` / `Status: skipped` の report を"
+            "受け取っている場合に限り、再起動しない",
+            body,
+        )
+        self.assertIn(
+            "PR の差分がテキスト系文書だけの場合も起動手順は同じで、"
+            "codex-reviewer を起動する",
+            body,
+        )
+        self.assertIn("セッション自身で判定しない", body)
+        self.assertNotIn("判定に迷う場合は起動してよい", body)
+        self.assertNotIn("起動は不要", body)
 
 
 if __name__ == "__main__":

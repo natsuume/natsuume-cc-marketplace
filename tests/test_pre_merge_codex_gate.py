@@ -8,8 +8,8 @@ gate (`plugins/pre-merge-cross-review/hooks/scripts/block-pre-merge.sh`) が固�
 - 関与したコマンドに `--auto` / `--admin` / `--repo` / `-R` の文字列を含む場合は、
   レビュー記録の有無に依らず deny する。受理正規形 `gh pr merge [<number>] [flags...]`
   以外の関与形も deny する。
-- それ以外の関与コマンドでは、merge 対象 PR の番号・現在の head SHA・base branch 名を gh
-  (`gh pr view --json number,headRefOid,baseRefName`) で取得し、merge 実行 repo (hook payload の
+- それ以外の関与コマンドでは、merge 対象 PR の番号・現在の head SHA・base commit SHA を gh
+  (`gh pr view --json number,headRefOid,baseRefOid`) で取得し、merge 実行 repo (hook payload の
   `cwd`) の git-dir 直下にある final attestation
   (`.claude-pre-merge-codex-reviewed`、2 行 `pr=<番号>` / `head=<40 hex>`) が両方に一致する
   場合だけ無出力で終了する (既定の許可フローに委ねる)。記録が無い・不一致・形式不正は
@@ -17,7 +17,7 @@ gate (`plugins/pre-merge-cross-review/hooks/scripts/block-pre-merge.sh`) が固�
 - gh / jq が見つからない・PR の解決や取得に失敗した・番号や head SHA が得られない場合は
   すべて deny する (fail-closed)。
 - gate は GitHub に何も書かず、PR のレビューやコメントも取得しない (gh は `pr view` で
-  `number,headRefOid,baseRefName` を取得するためだけに呼ぶ)。PR 上に codex review 形式のコメントが
+  `number,headRefOid,baseRefOid` を取得するためだけに呼ぶ)。PR 上に codex review 形式のコメントが
   あっても判断材料にしない。
 - gate は permissionDecision として deny 以外を出さない。
 
@@ -227,10 +227,14 @@ class GateHarness(unittest.TestCase):
             if line
         ]
 
-    def assert_allowed(self, result: subprocess.CompletedProcess[bytes], label: str = "") -> None:
+    def assert_allowed(
+        self, result: subprocess.CompletedProcess[bytes], label: str = ""
+    ) -> None:
         self.assertEqual(result.stdout, b"", f"{label}: {result.stdout.decode()}")
 
-    def assert_denied(self, result: subprocess.CompletedProcess[bytes], label: str = "") -> None:
+    def assert_denied(
+        self, result: subprocess.CompletedProcess[bytes], label: str = ""
+    ) -> None:
         self.assertEqual(self.decision(result), "deny", label)
 
 
@@ -357,9 +361,7 @@ class PreMergeGateMissingDependencyTest(unittest.TestCase):
     def test_merge_is_denied_without_gh(self) -> None:
         """gh 以外の全コマンドが見える PATH (symlink farm) でも、gh が無ければ
         merge は deny される。"""
-        if not (
-            shutil.which("bash") and shutil.which("git") and shutil.which("jq")
-        ):
+        if not (shutil.which("bash") and shutil.which("git") and shutil.which("jq")):
             self.skipTest("requires bash, git, and jq")
         with tempfile.TemporaryDirectory() as name:
             shims = Path(name) / "bin"
@@ -448,9 +450,7 @@ class PreMergeGateTargetResolutionTest(GateHarness):
             "bare": "gh pr merge",
             "flag_only": "gh pr merge --squash",
             "number_only": f"gh pr merge {PR_NUMBER}",
-            "number_and_flags": (
-                f"gh pr merge {PR_NUMBER} --squash --delete-branch"
-            ),
+            "number_and_flags": (f"gh pr merge {PR_NUMBER} --squash --delete-branch"),
             "short_flag": f"gh pr merge {PR_NUMBER} -d",
             "flag_with_value": (
                 f"gh pr merge {PR_NUMBER} --match-head-commit={HEAD_SHA}"
@@ -474,9 +474,7 @@ class PreMergeGateTargetResolutionTest(GateHarness):
     def test_bundled_short_flags_are_denied(self) -> None:
         """短フラグの束ね形は deny する (束の中に repo selector を隠せるため)。"""
         cases = {
-            "bundle_with_repo_and_value": (
-                f"gh pr merge {PR_NUMBER} -dR owner/other"
-            ),
+            "bundle_with_repo_and_value": (f"gh pr merge {PR_NUMBER} -dR owner/other"),
             "bundle_with_repo": f"gh pr merge {PR_NUMBER} -sR",
             "bundle_without_repo": f"gh pr merge {PR_NUMBER} -sd",
             "bundle_no_target": "gh pr merge -dR owner/other",
@@ -489,9 +487,7 @@ class PreMergeGateTargetResolutionTest(GateHarness):
         cases = {
             "trailing_newline": f"gh pr merge {PR_NUMBER} --squash\n",
             "leading_newline": f"\ngh pr merge {PR_NUMBER} --squash",
-            "surrounding_blank_lines": (
-                f"\n\ngh pr merge {PR_NUMBER} --squash\n\n"
-            ),
+            "surrounding_blank_lines": (f"\n\ngh pr merge {PR_NUMBER} --squash\n\n"),
             "surrounding_spaces": f"  gh pr merge {PR_NUMBER} --squash  ",
             "trailing_semicolon": f"gh pr merge {PR_NUMBER} --squash;",
         }
@@ -503,9 +499,7 @@ class PreMergeGateTargetResolutionTest(GateHarness):
         cases = {
             "and_chain": "gh pr merge --squash && echo merged",
             "semicolon_chain": "gh pr merge --squash; git switch master",
-            "number_then_semicolon": (
-                f"gh pr merge {PR_NUMBER}; git switch master"
-            ),
+            "number_then_semicolon": (f"gh pr merge {PR_NUMBER}; git switch master"),
         }
         for label, command in cases.items():
             with self.subTest(case=label):
@@ -551,9 +545,7 @@ class PreMergeGateRepoScopeTest(GateHarness):
 
     def test_denies_url_target(self) -> None:
         cases = {
-            "https": (
-                "gh pr merge https://github.com/owner/other/pull/123 --squash"
-            ),
+            "https": ("gh pr merge https://github.com/owner/other/pull/123 --squash"),
             "http": "gh pr merge http://github.com/owner/other/pull/123",
         }
         for label, command in cases.items():
@@ -568,9 +560,7 @@ class PreMergeGateRepoScopeTest(GateHarness):
             "redirect_multi_digit_fd": "gh pr merge --squash 10> /tmp/m.log",
             "redirect_append_fd": "gh pr merge --squash 22>>/tmp/m.log",
             "redirect_input": "gh pr merge --squash </tmp/in.txt",
-            "number_with_redirect": (
-                f"gh pr merge {PR_NUMBER} --squash > /tmp/m.log"
-            ),
+            "number_with_redirect": (f"gh pr merge {PR_NUMBER} --squash > /tmp/m.log"),
             "pipe_chain": f"gh pr merge {PR_NUMBER} | tee /tmp/merge.log",
             "background": f"gh pr merge {PR_NUMBER} &",
             "quoted_flag_value": 'gh pr merge --subject "merge it"',
@@ -656,10 +646,8 @@ class PreMergeGateMalformedPayloadTest(unittest.TestCase):
     def test_malformed_payload_with_merge_shape_is_denied(self) -> None:
         cases = {
             "truncated": b'{"tool_input": {"command": "gh pr merge 123"',
-            "not_json": b'gh pr merge 123 --squash',
-            "trailing_garbage": (
-                b'{"tool_input": {"command": "gh pr merge 123"}} }}'
-            ),
+            "not_json": b"gh pr merge 123 --squash",
+            "trailing_garbage": (b'{"tool_input": {"command": "gh pr merge 123"}} }}'),
         }
         for label, raw in cases.items():
             with self.subTest(case=label):
@@ -746,9 +734,9 @@ class PreMergeGateLocalAttestationTest(GateHarness):
 class PreMergeGateNoGitHubWriteTest(GateHarness):
     """gate は GitHub に書かず、PR のレビュー・コメントを判断材料にしない契約。"""
 
-    def assert_only_number_head_and_base_are_requested(self) -> None:
+    def assert_only_number_head_and_base_commit_are_requested(self) -> None:
         """gh へ要求するのは PR 番号・head SHA と、テキスト系文書のみの PR の判定に
-        使う base branch 名だけである (レビューやコメントは要求しない)。"""
+        使う base commit SHA だけである (レビューやコメントは要求しない)。"""
         calls = self.gh_calls()
         self.assertTrue(calls, "gate は gh pr view を呼ぶ")
         for call in calls:
@@ -756,13 +744,13 @@ class PreMergeGateNoGitHubWriteTest(GateHarness):
             self.assertIn("--json", call)
             fields = call[call.index("--json") + 1].split(",")
             self.assertEqual(
-                sorted(fields), ["baseRefName", "headRefOid", "number"], call
+                sorted(fields), ["baseRefOid", "headRefOid", "number"], call
             )
 
     def test_allow_path_calls_only_pr_view_for_number_and_head(self) -> None:
         self.write_final_attestation()
         self.assert_allowed(self.run_gate())
-        self.assert_only_number_head_and_base_are_requested()
+        self.assert_only_number_head_and_base_commit_are_requested()
 
     def test_deny_paths_call_only_pr_view_for_number_and_head(self) -> None:
         cases = {
@@ -776,7 +764,7 @@ class PreMergeGateNoGitHubWriteTest(GateHarness):
                 if head is not None:
                     self.write_final_attestation(head=head)
                 self.assert_denied(self.run_gate(), label)
-                self.assert_only_number_head_and_base_are_requested()
+                self.assert_only_number_head_and_base_commit_are_requested()
 
     def test_pr_review_comment_does_not_satisfy_the_gate(self) -> None:
         """PR 上に現在の head の codex review 形式のコメントがあっても、ローカル記録が
@@ -788,7 +776,7 @@ class PreMergeGateNoGitHubWriteTest(GateHarness):
             ]
         )
         self.assert_denied(self.run_gate())
-        self.assert_only_number_head_and_base_are_requested()
+        self.assert_only_number_head_and_base_commit_are_requested()
 
     def test_matching_record_allows_regardless_of_pr_review_comments(self) -> None:
         self.configure_fake_gh(review_bodies=[codex_review_comment(OTHER_SHA)])

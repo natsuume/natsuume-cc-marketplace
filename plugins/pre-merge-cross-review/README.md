@@ -43,8 +43,8 @@ review cadence (Codex review 一定回数ごとの checkpoint 強制) の計数�
 2. 関与したコマンドに `--auto` / `--admin` (遅延 merge 予約・保護 bypass) または `--repo` / `-R` (別 repo の PR を merge しうる repo selector) の文字列を含む場合は deny する (粗い文字列検出でよく、レビュー記録の有無に依らない)
 3. 関与したコマンドが **受理正規形** `gh pr merge [<number>] [flags...]` に完全一致するかを確認する (照合の前に、コマンド前後の空行・空白・区切りだけは落とす)。番号を置けるのは `gh pr merge` の直後の 1 語だけで、それ以降は長フラグ (`--name` / `--name=value`) と単文字の短フラグ (`-d` 等) のみを許す。短フラグの束ね形 (`-dR` 等) は受理しない (束の中に repo selector を隠すと `--repo` / `-R` の文字列検出をすり抜けるため)。一致しない関与形 — リダイレクト (`> file` / `2>&1` / `10> file` 等)、シェル演算子による連結 (`&&` / `||` / `;` / `|` / `&`)、quote、`$` 展開、フラグより後ろの数字、複数の merge、前置コマンド — は **一律 deny** する (gate の解釈と shell の実挙動が乖離しうるため。リダイレクトや連結を外した単独コマンドへの言い換えで対応する)
 4. 照合する repo は hook payload の `cwd` (merge が実行されるディレクトリ) を正本とする。`cwd` の欠落・空・非絶対パス・不在ディレクトリ・移動不能はいずれも deny する (hook プロセスの cwd への fallback は持たない)
-5. 対象 PR の解決と、PR 番号・現在の head SHA・base branch 名の取得は gh (`gh pr view --json number,headRefOid,baseRefName`) に委ねる (正規形で番号があればその番号、無ければ current branch の PR)。gh / jq が見つからない・PR を解決できない・取得に失敗した・PR 番号や head SHA が得られない場合はすべて deny する (fail-closed)。gh は取得だけに使い、PR のレビューやコメントは読まず、GitHub には何も書かない
-6. base branch 名が英数字と `.` `_` `/` `-` だけから成り先頭が `-` でない場合に限り、merge 実行 repo で `refs/remotes/origin/<base>..<head SHA>` の変更がテキスト系文書だけかを判定し、成立すればレビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる。判定の定義と保守的に倒す条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。base branch 名の欠落・不正や判定の不成立では次の記録の検証へ進む
+5. 対象 PR の解決と、PR 番号・現在の head SHA・base commit SHA の取得は gh (`gh pr view --json number,headRefOid,baseRefOid`) に委ねる (正規形で番号があればその番号、無ければ current branch の PR)。gh / jq が見つからない・PR を解決できない・取得に失敗した・PR 番号や head SHA が得られない場合はすべて deny する (fail-closed)。gh は取得だけに使い、PR のレビューやコメントは読まず、GitHub には何も書かない
+6. base commit SHA が 40 桁の小文字 16 進数の場合に限り、merge 実行 repo で `<base commit SHA>..<head SHA>` の変更がテキスト系文書だけかを判定し、成立すればレビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる。判定の定義と保守的に倒す条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。base commit SHA の欠落・形式不正や判定の不成立では次の記録の検証へ進む
 7. merge 実行 repo の git-dir 直下にあるローカルのレビュー記録を検証する。final attestation (`.claude-pre-merge-codex-reviewed`) が symlink でない通常ファイルで、1 行目 `pr=<全数字>` / 2 行目 `head=<40 hex 小文字>` の形式を満たし、PR 番号と現在の head SHA の両方に一致する場合のみ無出力で終了する (既定の許可フローに委ねる)。記録は消さない (merge が失敗して再実行する場合も同じ記録で通り、head SHA が変われば自動的に失効する)
 8. 次の場合はいずれも deny する: 記録が無い (pending だけの場合を含む) / git-dir を解決できない / PR 番号を取得できない / 記録が symlink・通常ファイルでない・2 行の形式を満たさない / 記録の PR 番号が merge 対象と異なる / 記録の head SHA が現在の head と異なる (両方の SHA を示して再レビューを案内する)
 9. deny 時は `pre-merge-cross-review:codex-reviewer` subagent の実行を案内する。subagent がレビューを実行してローカルに記録を保存し、その後の `gh pr merge` で gate が記録を検証してから merge に進む流れを示す。レビューは current branch の PR に対して実行され記録もその PR に紐づくため、別 PR を番号指定して merge する場合は、先にその PR のブランチへ `git switch` してから subagent を起動する必要がある旨も併せて案内する
@@ -145,7 +145,7 @@ codex review wrapper (`hooks/scripts/run-pre-merge-codex-review.sh`) を foregro
 - **working tree が dirty なら中断**: codex のレビューは working tree を含む差分を見るため、未コミット変更があると head SHA を記録しながら別内容をレビューすることになります (commit / stash を案内します)
 - **base の妥当性**: PR が記録する base commit (`baseRefOid`) がローカルの `origin/<base>` から到達可能 (ancestor) であることを確認します。到達不能なら 1 度だけ明示 refspec (`git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>`) で fetch して再判定し、それでも到達不能ならレビューも記録の書き込みも行いません。base branch は PR 作成後も進むため完全一致は要求せず、レビュー範囲の anchor は `git merge-base HEAD origin/<base>` (GitHub の PR diff と同じ範囲) を使います
 - **空 diff の中断**: merge-base..HEAD の差分が空の場合も、何も見ていない「レビュー済み」記録を残さないため中断します
-- **テキスト系文書のみの PR の skip**: `refs/remotes/origin/<base>..HEAD` の変更がテキスト系文書だけなら ([テキスト系文書のみの変更](#テキスト系文書のみの変更))、codex review を実行せず、stdout に `Review skipped: text-only changes` の 1 行だけを出して exit 0 で終了します (pending attestation は書きません)。merge gate と同じく、base branch 名が英数字と `.` `_` `/` `-` だけから成る場合に限ります。subagent はこのとき `Status: skipped` / `Reason: text-only changes` の report を返し、auto-mark は記録を昇格しません
+- **テキスト系文書のみの PR の skip**: 上で検証した PR の base commit (`baseRefOid`) から HEAD までの変更がテキスト系文書だけなら ([テキスト系文書のみの変更](#テキスト系文書のみの変更))、codex review を実行せず、stdout に `Review skipped: text-only changes` の 1 行だけを出して exit 0 で終了します (pending attestation は書きません)。merge gate も同じ起点で同じ判定を行います。subagent はこのとき `Status: skipped` / `Reason: text-only changes` の report を返し、auto-mark は記録を昇格しません
 - **起動時の stale 記録の掃除**: 実行開始時に git-dir 直下の final / pending attestation を削除します (前回の中断が残した記録で merge が通る経路を残さないため。削除できない場合は中断します)
 - **記録を書く直前の再検証**: codex review 完了後・記録を書く前に HEAD と working tree の状態を再確認し、レビュー実行中に変化していれば記録を書かず中断します (レビューした内容と記録する head SHA の乖離を残さないため)
 
@@ -155,25 +155,27 @@ wrapper が exit 0 で完了した場合、parent-safe report の `Status` は *
 
 ## テキスト系文書のみの変更
 
-PR の変更がテキスト系文書だけの場合、merge gate はローカルのレビュー記録を要求せずに merge を通します。この場合は codex-reviewer を起動する必要がありません。起動した場合も wrapper は codex review を実行せず、codex-reviewer は `Status: skipped` を返します。
+PR の変更がテキスト系文書だけの場合、merge gate はローカルのレビュー記録を要求せずに merge を通します。起動手順は変わらず、codex-reviewer を起動します。wrapper は codex review を実行せずに終わり、codex-reviewer は `Status: skipped` を返します。起動を省くかどうかを session 側では判定せず、テキスト系文書だけかの判定は gate と wrapper が行います (起動順の規律は `hooks/prompts/merge-order-rules.md`)。
 
-**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `mdx` / `markdown` / `txt` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。ただし次のいずれかに当たるファイルは、Claude Code や他の coding agent の挙動を定義する Markdown なのでコードとして扱います:
+**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。ただし次のいずれかに当たるファイルは、Claude Code や他の coding agent が指示として読み込む Markdown なのでコードとして扱います:
 
-- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `.claude` / `.agents` に一致する (深さは問わず、大文字小文字を区別する)
-- 連続する 2 つのディレクトリ要素が `hooks`、`prompts` の順に並ぶ
-- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` に一致する (大文字小文字を区別する)
+- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf` に一致する (深さは問わない)
+- 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts` のいずれかの順に並ぶ
+- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
 
-判定の範囲は merge 実行 repo の `refs/remotes/origin/<base>..<PR の head SHA>` です。判定できない場合はレビュー必須に倒します。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
+これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。
 
-- base branch 名が gh の応答に無い、または英数字と `.` `_` `/` `-` 以外の文字を含むか `-` で始まる
-- PR の head の commit がローカルに無い、またはローカルの `origin/<base>` が無い (fetch していない等)
+判定の範囲は merge 実行 repo の `<PR の base commit SHA>..<PR の head SHA>` で、起点には GitHub が記録する PR の base commit (`baseRefOid`) を使います。ローカルの `origin/<base>` は、PR の実際の base に無い commit を含みうる (base の履歴が書き換えられた後にローカルを更新していない等) ため起点にしません。そのまま起点にすると、merge で base に入る commit が判定範囲から外れます。判定できない場合はレビュー必須に倒します。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
+
+- base commit SHA が gh の応答に無い、または 40 桁の小文字 16 進数でない
+- PR の base commit か head の commit がローカルに無い (fetch していない等)
 - 範囲に commit が無い、または merge commit を含む
 - 範囲内の各 commit とその親との差分、または merge-base と head の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
 - 範囲内に親を持たない commit がある
 - 変更前後のファイル mode に通常ファイル (`100644`) 以外を含む (symlink・submodule・実行ビット付きファイル)
 - 判定に使う git コマンドが失敗した
 
-net diff ではなく範囲内の各 commit を検査するため、コードを追加した commit を後の commit で revert した PR も、merge される履歴にコードが残るのでレビュー記録を要求します。ローカルの `origin/<base>` が古く、base に取り込み済みのコードの commit が範囲に入る場合も、判定は成立せずレビュー記録を要求します。
+net diff ではなく範囲内の各 commit を検査するため、コードを追加した commit を後の commit で revert した PR も、merge される履歴にコードが残るのでレビュー記録を要求します。
 
 判定は `hooks/scripts/lib/text-paths.sh` が行います (canonical は `pre-push-review`。「共有 lib の同一性」節を参照)。
 

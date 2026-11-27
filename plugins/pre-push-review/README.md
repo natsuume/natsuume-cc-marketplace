@@ -186,13 +186,15 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 ## テキスト系文書のみの変更
 
-branch の変更がテキスト系文書だけの push は、空 push と同じく 2 マーカーを要求せずに通します。この場合は `/pre-push-review:review` を実行する必要がありません。
+branch の変更がテキスト系文書だけの push は、空 push と同じく 2 マーカーを要求せずに通します。push gate が deny しないため、`/pre-push-review:review` を実行する必要もありません。どの push が該当するかは push gate が判定します。
 
-**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `mdx` / `markdown` / `txt` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。ただし次のいずれかに当たるファイルは、Claude Code や他の coding agent の挙動を定義する Markdown なのでコードとして扱います:
+**テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。ただし次のいずれかに当たるファイルは、Claude Code や他の coding agent が指示として読み込む Markdown なのでコードとして扱います:
 
-- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `.claude` / `.agents` に一致する (深さは問わず、大文字小文字を区別する)
-- 連続する 2 つのディレクトリ要素が `hooks`、`prompts` の順に並ぶ
-- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` に一致する (大文字小文字を区別する)
+- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf` に一致する (深さは問わない)
+- 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts` のいずれかの順に並ぶ
+- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `GEMINI.md` / `copilot-instructions.md` に一致する
+
+これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。
 
 判定できない場合はレビュー必須に倒します。次のいずれかに当たる push はテキスト系文書のみとは扱わず、従来どおり 2 マーカーを要求します:
 

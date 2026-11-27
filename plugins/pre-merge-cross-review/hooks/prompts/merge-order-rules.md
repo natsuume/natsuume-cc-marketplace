@@ -11,9 +11,9 @@
 
 > current branch の PR (#<番号>) の merge-base..head 差分に対して、agent body の契約に従い codex review を 1 回実行し、parent-safe な markdown report を返してください。
 
-起動は PR の head SHA ごとに 1 回でよい。このセッションで現在の head SHA について `Status: pass` / `Status: findings` の report を受け取っている場合に限り、再起動しない (ローカル記録の有無は判断材料にしない。gate が受理する状態かどうかは gate 自身が判定する)。`Status: execution-failed` の場合は原因を解消してから再起動してよい。report の findings を分類・対応し、head SHA が変わる commit を追加した場合は、次の merge 試行の前に同じ手順で再起動する。report を受け取った後の `gh pr merge` で、merge gate がローカルの codex review 記録を検証して merge に進む。
+起動は PR の head SHA ごとに 1 回でよい。このセッションで現在の head SHA について `Status: pass` / `Status: findings` / `Status: skipped` の report を受け取っている場合に限り、再起動しない (ローカル記録の有無は判断材料にしない。gate が受理する状態かどうかは gate 自身が判定する)。`Status: execution-failed` の場合は原因を解消してから再起動してよい。report の findings を分類・対応し、head SHA が変わる commit を追加した場合は、次の merge 試行の前に同じ手順で再起動する。report を受け取った後の `gh pr merge` で、merge gate がローカルの codex review 記録を検証して merge に進む。
 
-PR の差分がテキスト系文書だけの場合、merge gate はローカル記録を要求しないため codex-reviewer の起動は不要である (テキスト系文書の定義は plugin README を参照)。判定に迷う場合は起動してよい。その場合 reviewer は `Status: skipped` を返すので、再起動せずに merge に進む。
+PR の差分がテキスト系文書だけの場合も起動手順は同じで、codex-reviewer を起動する。その場合 wrapper はレビューせずに終わり、reviewer は `Status: skipped` を返す。`Status: skipped` の report を受け取った head SHA では再起動せずに merge に進む (merge gate はこの PR に記録を要求しない)。起動を省くかどうかをセッション自身で判定しない (テキスト系文書だけかの判定条件は gate と wrapper が持つ)。
 
 **境界**: 本規律は permission mode に依らず適用する (auto 以外でも手順は同じで無害)。merge gate に deny された後にその案内に従って起動することもできるが、それは復旧経路であり既定の順序ではない。
 

@@ -132,7 +132,7 @@ security-reviewer / code-reviewer subagent を **self-contained** に保つの�
 
 Linked worktree では marker、launch attestation、tombstone を main `.git` 直下ではなく、`git rev-parse --absolute-git-dir` が返す worktree 専用 git-dir (`.git/worktrees/<name>/`) に保存します。push deny メッセージは実際の marker storage を表示するため、main `.git` に残る別 worktree の marker と取り違えずに状態を確認できます。
 
-branch の変更がテキスト系文書 (拡張子が `md` / `mdx` / `markdown` / `txt` / `rst` / `adoc` のファイル。agent や skill の定義・`CLAUDE.md` 等の挙動を定義する Markdown を除く) だけの push は、マーカーを要求せずに通します。判定できない場合はレビュー必須に倒します。定義と判定条件は [plugin README](plugins/pre-push-review/README.md#テキスト系文書のみの変更) を参照してください。
+branch の変更がテキスト系文書 (拡張子が `md` / `markdown` / `rst` / `adoc` のファイル。agent や skill の定義・`CLAUDE.md` 等、coding agent が指示として読み込む Markdown を除く) だけの push は、マーカーを要求せずに通します。判定できない場合はレビュー必須に倒します。定義と判定条件は [plugin README](plugins/pre-push-review/README.md#テキスト系文書のみの変更) を参照してください。
 
 ### 設計上のメリット
 
@@ -205,7 +205,7 @@ branch の変更がテキスト系文書だけの push は、[pre-push-review](#
 
 `gh pr merge` を実行する前に codex review (OpenAI クロスモデルレビュー) の完了を確認するプラグインです。codex-reviewer subagent はレビュー対象の PR 番号と head SHA をローカル記録として repo の git-dir 直下に保存し、merge gate はその記録が PR 番号と現在の head SHA の両方に一致する場合だけ merge を通します (記録が無い・一致しなければ deny)。GitHub には何も書かないため、別マシン・別 clone から merge する場合はそこで再レビューが必要です。SessionStart では、auto mode の classifier に subagent 起動を拒否されないよう「`gh pr merge` の前に cross review を起動する」規律を注入します。個人環境 (ChatGPT Plus の codex CLI) 向けに「push の都度ではなく merge 前に 1 回だけ codex review」を成立させます。push 毎の codex review を要求する [pre-push-codex-review](#pre-push-codex-review) との併用は前提としていません。
 
-PR の変更がテキスト系文書だけの場合は、[pre-push-review](#pre-push-review) と同じ定義の判定 (`hooks/scripts/lib/text-paths.sh`) でローカル記録を要求せずに merge を通し、codex review wrapper も codex review を実行しません (codex-reviewer は `Status: skipped` を返します)。判定できない場合は記録を照合します。
+PR の変更がテキスト系文書だけの場合は、[pre-push-review](#pre-push-review) と同じ定義の判定 (`hooks/scripts/lib/text-paths.sh`、起点は PR の base commit) でローカル記録を要求せずに merge を通します。codex-reviewer の起動手順は変わらず、wrapper は codex review を実行せずに終わります (codex-reviewer は `Status: skipped` を返します)。判定できない場合は記録を照合します。
 
 詳細な gate 手順・ローカル記録の仕様・テキスト系文書の定義・既知の制約は [plugins/pre-merge-cross-review/README.md](plugins/pre-merge-cross-review/README.md) を参照してください。
 

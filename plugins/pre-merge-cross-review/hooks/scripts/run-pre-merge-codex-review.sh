@@ -16,7 +16,7 @@
 #    ことを確認する (到達不能なら 1 度だけ fetch して再判定し、 それでも到達不能なら実行
 #    しない)。 さらに merge-base..HEAD の差分が空でないことを確認する (空のままレビューすると、
 #    何も見ていない 「レビュー済み」 記録を残すことになるため)
-#    `refs/remotes/origin/<base>..HEAD` の変更がテキスト系文書だけなら (判定は
+#    PR の base commit から HEAD までの変更がテキスト系文書だけなら (判定は
 #    lib/text-paths.sh)、 codex review を実行せず記録も書かずに終了する (merge gate は同じ
 #    判定でレビュー記録を要求しない)
 # 5. PR の実 base との merge-base..HEAD 全差分に対して codex review を foreground 実行する
@@ -291,22 +291,16 @@ if git diff --quiet "$MERGE_BASE" HEAD 2>/dev/null; then
 fi
 
 # PR の変更がテキスト系文書だけなら codex review は実行不要で、 pending attestation も書かない
-# (判定条件と fail-closed 方針は lib/text-paths.sh ヘッダを参照)。 merge gate
-# (block-pre-merge.sh) は同じ範囲を同じ判定にかけ、 成立すればレビュー記録を要求しない。
-# gate は base branch 名が英数字と `.` `_` `/` `-` だけから成る場合に限って判定するため、
-# ここでも同じ条件を満たす名前に限って skip する (gate が判定しない名前で skip すると、
-# 記録が無いまま gate に deny され続けるため)。 起動時の stale 記録の掃除は上で済んでいる。
+# (判定条件と fail-closed 方針は lib/text-paths.sh ヘッダを参照)。 範囲の起点は、 上で形式と
+# 到達可能性を検証した PR の base commit (`baseRefOid`)。 merge gate (block-pre-merge.sh) も
+# 同じ起点で同じ判定を行い、 成立すればレビュー記録を要求しない。 ローカルの
+# `refs/remotes/origin/<base>` を起点にしないのは、 PR の実際の base に無い commit を含みうる
+# ためで、 そのまま起点にすると merge で base に入る commit が判定範囲から外れる。 起動時の
+# stale 記録の掃除は上で済んでいる。
 # stdout にだけは決まった 1 行を出す。 codex-reviewer subagent は、 wrapper が exit 0 で
 # stdout が (terminal sentinel の案内行と終了行を除いて) この 1 行だけのときに
 # `Status: skipped` の report を返す (agents/codex-reviewer.md の report 契約)。
-base_name_is_judged_by_merge_gate() {
-  case "$BASE_NAME" in
-    -*) return 1 ;;
-    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*) return 1 ;;
-  esac
-  return 0
-}
-if base_name_is_judged_by_merge_gate && is_text_only_range_in "" "$BASE_REF_FULL" HEAD; then
+if is_text_only_range_in "" "$BASE_OID" HEAD; then
   printf 'Review skipped: text-only changes\n'
   note "PR #${PR_NUMBER} の変更はテキスト系文書のみのため codex review は実行不要です (merge gate はレビュー記録を要求しません)。"
   exit 0
