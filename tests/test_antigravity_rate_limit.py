@@ -724,6 +724,8 @@ class NormalizedOutputTest(ScriptBehaviorTestCase):
             (0.123, 87.7),
             (0.3333, 66.7),
             (0.99999, 0),
+            # (1 - 0.9995) * 1000 は 2 進誤差で 0.4999... になる。0.05 の四捨五入は 0.1
+            (0.9995, 0.1),
         )
         output = self.assert_success_output(
             self.run_with_response(

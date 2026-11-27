@@ -311,12 +311,14 @@ esac
 
 # usedPercent は (1 - remaining_fraction) * 100 を小数第 1 位に四捨五入する。値は 0 以上
 # なので「1000 倍に 0.5 を足して floor し 10 で割る」で四捨五入になる (round は jq の
-# build によって無いことがあるため使わない)。
+# build によって無いことがあるため使わない)。floor の前に 1e-9 を足すのは、2 進浮動小数点の
+# 誤差で 0.5 ちょうどの値が 0.4999... になり、切り捨て側 (閾値判定では fail-open 側) に
+# ずれるのを防ぐため (例: remaining_fraction 0.9995 の 1000 倍は 0.49999999999994 になる)。
 NORMALIZE_FILTER='
 def string_or_null:
   if type == "string" then . else null end;
 def used_percent:
-  (((1 - .) * 1000 + 0.5) | floor) / 10;
+  (((1 - .) * 1000 + 0.5 + 1e-9) | floor) / 10;
 {
   description: (.command.data.description | string_or_null),
   groups: [
