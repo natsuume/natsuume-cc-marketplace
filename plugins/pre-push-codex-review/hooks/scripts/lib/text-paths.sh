@@ -70,6 +70,11 @@
 #   4. merge-base(`<base_rev>`, `<head_rev>`) と `<head_rev>` の raw 差分も、3 と同じ条件を
 #      満たす
 #
+# git はすべて `--no-replace-objects` を付けて呼ぶ (秘匿情報の検査の gitleaks には環境変数
+# `GIT_NO_REPLACE_OBJECTS=1` を渡す)。ローカルの replace ref (`git replace`) があると、git は
+# commit や tree を置き換え先の内容で読むため、コードを足す commit をテキスト系文書だけの
+# commit に見せかけられる。push や merge で remote に届くのは置き換え前の object である。
+#
 # raw 差分は rename / copy の検出を行わずに取る (rename は削除と追加の 2 エントリになり、
 # 変更前と変更後の両方の path が検査対象になる)。出力は NUL 区切りで読み、空白・改行・
 # 非 ASCII 文字を含む path も quote されないまま扱う。mode の条件により、symlink
@@ -109,10 +114,15 @@
 # 書き込まれた認証情報も検査されない。PATH に gitleaks がある (`command -v gitleaks` が成功
 # する) 場合に限り、skip の前に範囲内の commit を次の形で検査する:
 #
+#   GIT_DIR=<repo の git dir の絶対 path> GIT_WORK_TREE=<走査元> GIT_NO_REPLACE_OBJECTS=1
 #   gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error
-#     --exit-code 1 --timeout 30 [--config <一時ファイル>] --gitleaks-ignore-path <一時ディレクトリ>
-#     --log-opts="<base の OID>..<head の OID>" <repo の toplevel>
+#     --exit-code 1 --timeout 30 [--config <一時ファイル>] --gitleaks-ignore-path <走査元>
+#     --log-opts="--no-textconv --no-ext-diff --text --no-color <base の OID>..<head の OID>"
+#     <走査元>
 #
+#   - <走査元> は空の一時ディレクトリ (理由は下の「設定と ignore の読み方」を参照)。gitleaks は
+#     走査元で `git log -p` を実行するため、repo は環境変数 `GIT_DIR` で指定する。環境変数は
+#     gitleaks の起動行にだけ付け、export しない
 #   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う
 #   - `--timeout 30` は、gate を実行する Claude Code の command hook の既定の timeout
 #     (60 秒) より短くするための値。hook が timeout すると gate の判定が働かないため、
@@ -120,27 +130,37 @@
 #   - `--ignore-gitleaks-allow` は、文書中に `gitleaks:allow` コメントを書くだけで検出を
 #     抑止できないようにするために付ける (テキスト系文書だけの変更は、レビュー無しで
 #     そのコメントを書き込める)
+#   - `--log-opts` の先頭の 4 つのオプションは、gitleaks が実行する `git log -p` の出力を、
+#     ローカルの git の属性と設定で変えさせないために付ける。属性で文書を binary 扱いにする
+#     (`.git/info/attributes` の `*.md binary` 等)、textconv で内容を変換する、
+#     `color.ui = always` で出力に色を付ける、のいずれでも、gitleaks は差分から文書の内容を
+#     読み取れず「検出なし」で終わる。`--text` / `--no-textconv` / `--no-color` はそれぞれを
+#     無効にし、`--no-ext-diff` は外部 diff を使わせない
 #   - stdout / stderr はどちらも捨てる。検出した認証情報の内容を hook や wrapper の出力に
 #     流さないため
 #   - 終了コード 0 だけを「検出なし」とし、それ以外 (検出・timeout・実行エラー) はすべて
-#     exit code 2 にする。repo の toplevel を解決できない場合も 2 にする
+#     exit code 2 にする。repo の git dir を解決できない場合も 2 にする
 #
-# gitleaks の設定 (`.gitleaks.toml`) と ignore (`.gitleaksignore`) は、gitleaks の既定の
-# 読み方 (走査対象の toplevel の `.gitleaks.toml` と、cwd の `.gitleaksignore`) をさせず、
-# 範囲の起点 (解決済みの base OID) の tree から読む。既定の読み方では working tree の
-# 未追跡ファイルも読まれるが、push gate の clean 検査は未追跡ファイルを見ず、merge gate には
-# clean 検査が無い。そのため未追跡の設定ファイルを置くだけで検出を抑止できてしまう。base の
-# tree は、テキスト系文書だけの変更では書き換えられない (どちらのファイルもテキスト系文書では
-# ない):
+# ### 設定と ignore の読み方
+#
+# gitleaks の設定 (`.gitleaks.toml`) と ignore (`.gitleaksignore`) は、範囲の起点 (解決済みの
+# base OID) の tree から読み、repo の working tree からは読ませない。gitleaks は `--config` が
+# 無ければ走査元の `.gitleaks.toml` を読み、ignore は `--gitleaks-ignore-path` の指定先に
+# 加えて走査元の直下の `.gitleaksignore` も読む。走査元を working tree にすると未追跡の
+# ファイルも読まれるが、push gate の clean 検査は未追跡ファイルを見ず、merge gate には clean
+# 検査が無い。そのため未追跡の設定ファイルを置くだけで検出を抑止できてしまう。走査元を空の
+# 一時ディレクトリにし、`GIT_WORK_TREE` も走査元にして、git にも repo の working tree を
+# 参照させない。base の tree は、テキスト系文書だけの変更では書き換えられない (どちらの
+# ファイルもテキスト系文書ではない):
 #
 #   - 利用者の環境変数 `GITLEAKS_CONFIG` か `GITLEAKS_CONFIG_TOML` が空でない場合は、
 #     利用者自身の設定として尊重し、`--config` を渡さない
-#   - それ以外の場合、base の tree に `.gitleaks.toml` があればその内容を一時ファイルに
-#     取り出して `--config` に渡す。無ければ `[extend]` と `useDefault = true` だけを書いた
-#     一時ファイルを渡す (gitleaks の既定のルールだけを使う)
-#   - `--gitleaks-ignore-path` には常に一時ディレクトリを渡す。base の tree に
-#     `.gitleaksignore` があれば、その内容をこの一時ディレクトリの `.gitleaksignore` に
-#     取り出す。無ければ空のディレクトリのまま渡す
+#   - それ以外の場合、base の tree に `.gitleaks.toml` があればその内容を一時ファイル
+#     (走査元の外) に取り出して `--config` に渡す。無ければ `[extend]` と
+#     `useDefault = true` だけを書いた一時ファイルを渡す (gitleaks の既定のルールだけを使う)
+#   - `--gitleaks-ignore-path` には走査元と同じディレクトリを渡す。base の tree に
+#     `.gitleaksignore` があれば、その内容を走査元の `.gitleaksignore` に取り出す。無ければ
+#     走査元は空のまま渡す
 #   - 一時ファイルと一時ディレクトリは `mktemp` で作り、関数を抜ける前に消す (source する
 #     script の trap には手を加えない)。作成や取り出しに失敗した場合は exit code 2 にする
 #
@@ -280,9 +300,9 @@ _text_paths_diff_is_text_only() {
   local target_cwd="$1"
   local from_oid="$2"
   local to_oid="$3"
-  local -a git_prefix=()
+  local -a git_prefix=(--no-replace-objects)
   if [ -n "$target_cwd" ]; then
-    git_prefix=(-C "$target_cwd")
+    git_prefix+=(-C "$target_cwd")
   fi
   local -a statuses=()
   git "${git_prefix[@]}" diff-tree -r -z --no-renames --no-commit-id \
@@ -300,24 +320,24 @@ _text_paths_extract_base_file() {
   local base_oid="$2"
   local path="$3"
   local destination="$4"
-  local -a git_prefix=()
+  local -a git_prefix=(--no-replace-objects)
   if [ -n "$target_cwd" ]; then
-    git_prefix=(-C "$target_cwd")
+    git_prefix+=(-C "$target_cwd")
   fi
   git "${git_prefix[@]}" cat-file -e "${base_oid}:${path}" 2>/dev/null || return 1
   git "${git_prefix[@]}" cat-file blob "${base_oid}:${path}" >"$destination" 2>/dev/null || return 2
   return 0
 }
 
-# _text_paths_run_gitleaks <target_cwd> <base_oid> <head_oid> <toplevel> <work_dir>
-# <work_dir> (呼び出し側が作り、消す一時ディレクトリ) に gitleaks の設定と ignore を用意して
-# gitleaks を起動する。gitleaks の終了コード 0 のときだけ 0 を返し、設定の用意に失敗した場合も
-# 0 以外を返す。設定の決め方はファイルヘッダの「秘匿情報の検査」を参照。
+# _text_paths_run_gitleaks <target_cwd> <base_oid> <head_oid> <git_dir> <work_dir>
+# <work_dir> (呼び出し側が作り、消す一時ディレクトリ) に gitleaks の設定と走査元を用意して
+# gitleaks を起動する。gitleaks の終了コード 0 のときだけ 0 を返し、用意に失敗した場合も
+# 0 以外を返す。起動の形と設定の決め方はファイルヘッダの「秘匿情報の検査」を参照。
 _text_paths_run_gitleaks() {
   local target_cwd="$1"
   local base_oid="$2"
   local head_oid="$3"
-  local toplevel="$4"
+  local git_dir="$4"
   local work_dir="$5"
   local extract_status
 
@@ -335,20 +355,22 @@ _text_paths_run_gitleaks() {
     config_args=(--config "$config_path")
   fi
 
-  local ignore_dir="${work_dir}/ignore"
-  mkdir "$ignore_dir" 2>/dev/null || return 1
+  # 走査元は ignore の置き場を兼ねる。base の tree に `.gitleaksignore` が無ければ空のまま使う。
+  local source_dir="${work_dir}/source"
+  mkdir "$source_dir" 2>/dev/null || return 1
   extract_status=0
   _text_paths_extract_base_file "$target_cwd" "$base_oid" .gitleaksignore \
-    "${ignore_dir}/.gitleaksignore" || extract_status=$?
+    "${source_dir}/.gitleaksignore" || extract_status=$?
   case "$extract_status" in
     0 | 1) ;;
     *) return 1 ;;
   esac
 
-  gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
-    --exit-code 1 --timeout 30 "${config_args[@]}" --gitleaks-ignore-path "$ignore_dir" \
-    --log-opts="${base_oid}..${head_oid}" "$toplevel" \
-    </dev/null >/dev/null 2>&1
+  GIT_DIR="$git_dir" GIT_WORK_TREE="$source_dir" GIT_NO_REPLACE_OBJECTS=1 \
+    gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
+    --exit-code 1 --timeout 30 "${config_args[@]}" --gitleaks-ignore-path "$source_dir" \
+    --log-opts="--no-textconv --no-ext-diff --text --no-color ${base_oid}..${head_oid}" \
+    "$source_dir" </dev/null >/dev/null 2>&1
 }
 
 # _text_paths_secrets_scan_passes <target_cwd> <base_oid> <head_oid>
@@ -360,13 +382,13 @@ _text_paths_secrets_scan_passes() {
   local base_oid="$2"
   local head_oid="$3"
   command -v gitleaks >/dev/null 2>&1 || return 0
-  local -a git_prefix=()
+  local -a git_prefix=(--no-replace-objects)
   if [ -n "$target_cwd" ]; then
-    git_prefix=(-C "$target_cwd")
+    git_prefix+=(-C "$target_cwd")
   fi
-  local toplevel
-  toplevel=$(git "${git_prefix[@]}" rev-parse --show-toplevel 2>/dev/null) || return 1
-  [ -n "$toplevel" ] || return 1
+  local git_dir
+  git_dir=$(git "${git_prefix[@]}" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  [ -n "$git_dir" ] || return 1
 
   # 一時ディレクトリはこの関数の中で作って消す (source する script の trap に手を加えない)。
   local work_dir
@@ -375,7 +397,7 @@ _text_paths_secrets_scan_passes() {
     return 1
   fi
   local scan_status=0
-  _text_paths_run_gitleaks "$target_cwd" "$base_oid" "$head_oid" "$toplevel" "$work_dir" \
+  _text_paths_run_gitleaks "$target_cwd" "$base_oid" "$head_oid" "$git_dir" "$work_dir" \
     || scan_status=$?
   rm -rf "$work_dir" 2>/dev/null
   return "$scan_status"
@@ -391,9 +413,9 @@ is_text_only_range_in() {
   local target_cwd="$1"
   local base_rev="$2"
   local head_rev="$3"
-  local -a git_prefix=()
+  local -a git_prefix=(--no-replace-objects)
   if [ -n "$target_cwd" ]; then
-    git_prefix=(-C "$target_cwd")
+    git_prefix+=(-C "$target_cwd")
   fi
 
   # revision は git の引数になるため、空や `-` 始まり (option として解釈される値) は拒否する。
@@ -465,9 +487,9 @@ is_text_only_range_in() {
 is_text_only_push_in() {
   local target_cwd="$1"
   local base="$2"
-  local -a git_prefix=()
+  local -a git_prefix=(--no-replace-objects)
   if [ -n "$target_cwd" ]; then
-    git_prefix=(-C "$target_cwd")
+    git_prefix+=(-C "$target_cwd")
   fi
   [ -n "$base" ] || return 1
 

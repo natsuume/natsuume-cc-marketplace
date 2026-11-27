@@ -188,7 +188,11 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 
 branch の変更がテキスト系文書だけの push は、空 push と同じく 2 マーカーを要求せずに通します。push gate が deny しないため、`/pre-push-review:review` を実行する必要もありません。どの push が該当するかは push gate が判定します。
 
-この skip では security review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり 2 マーカーを要求します。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の設定 (`.gitleaks.toml` / `.gitleaksignore`) は、working tree ではなく範囲の起点 (base の commit) の tree から読みます。working tree に未追跡の設定ファイルを置いて検出を抑止できないようにするためです。base の tree に `.gitleaks.toml` が無ければ gitleaks の既定のルールだけを使い、`.gitleaksignore` が無ければ ignore は空にします。環境変数 `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` を設定している場合は、利用者自身の設定としてそちらを使います。gitleaks が無い環境では、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
+この skip では security review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり 2 マーカーを要求します。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。
+
+gitleaks の設定 (`.gitleaks.toml` / `.gitleaksignore`) は、working tree ではなく範囲の起点 (base の commit) の tree から読みます。working tree に未追跡の設定ファイルを置いて検出を抑止できないようにするためです。また、gitleaks が内部で実行する `git log` に `--text --no-textconv --no-color` を付け、ローカルの git の属性 (binary の指定・textconv) や `color.ui` の設定で文書の差分が検査から隠れないようにしています。base の tree に `.gitleaks.toml` が無ければ gitleaks の既定のルールだけを使い、`.gitleaksignore` が無ければ ignore は空にします。環境変数 `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` を設定している場合は、利用者自身の設定としてそちらを使います。
+
+gitleaks が無い環境では、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
 
 **テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。Claude Code や他の coding agent は特定の場所・名前の Markdown を指示として読み込むため、次に列挙した場所・名前の Markdown はコードとして扱います (列挙に無いものの扱いは「既知の制約」を参照):
 
@@ -217,6 +221,7 @@ net diff ではなく範囲内の各 commit を検査するため、コードを
 - **中間 commit の秘匿情報検出は LLM レビューに依存する**: security-reviewer は中間 commit の per-commit patch も検査するが、 LLM による検出であり見落としがありうる。 秘匿情報の混入を決定的に止めたい場合は、 gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨する
 - **列挙に無い場所にある agent の指示ファイルはテキスト系文書と判定される**: テキスト系文書のみの変更の判定でコード扱いにするのは、列挙した場所・名前の Markdown だけである。それ以外の場所にある agent の指示ファイルは、テキスト系文書としてレビュー無しで push される
 - **除外対象から間接的に読み込まれる文書は検出しない**: `CLAUDE.md` から `@path` で import される文書など、除外対象のファイルが読み込む文書も、その場所・名前が列挙に当たらなければテキスト系文書と判定される
+- **実行される文書もテキスト系文書と判定される**: doctest や文書のビルドでコードが実行される文書も、拡張子が `md` / `markdown` / `rst` / `adoc` であればテキスト系文書としてレビュー無しで push される
 - **gate の観測範囲は Bash tool のみ**: PreToolUse hook の matcher が `Bash` であるため、PowerShell tool (`CLAUDE_CODE_USE_POWERSHELL_TOOL=1` で Linux / macOS でも有効化できる) および Monitor tool 経由で発行された `git push` を gate は観測しない。これらの tool を有効にした環境はサポート外
 
 ## 関連プラグイン

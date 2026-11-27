@@ -30,6 +30,7 @@ Python 側で確認してから判定や gate を実行し、fixture の取り�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -108,6 +109,8 @@ BASH = shutil.which("bash")
 GIT = shutil.which("git")
 JQ = shutil.which("jq")
 NODE = shutil.which("node")
+# 実際の gitleaks (fake ではない)。無い環境では実物を使うテストを skip する。
+REAL_GITLEAKS = shutil.which("gitleaks")
 
 # fixture と hook の git 解決を実行環境から切り離すため、継承しない環境変数。
 # XDG_CONFIG_HOME は git が global 設定を探す場所になるため外す (HOME は一時
@@ -299,8 +302,9 @@ FAKE_COMPANION_SCRIPT = (
 
 
 # fake gitleaks は、受け取った引数と、起動時点の `--config` の内容・`--gitleaks-ignore-path`
-# の中身を記録し、環境変数で指定した終了コードで終わる。stdout と stderr に目印の文字列を
-# 出し、hook や wrapper の出力へ流れないことの確認に使う。
+# の中身・環境変数 `GIT_DIR` / `GIT_WORK_TREE` / `GIT_NO_REPLACE_OBJECTS` を記録し、
+# 環境変数で指定した終了コードで終わる。stdout と stderr に目印の文字列を出し、hook や wrapper の出力へ流れないことの確認に
+# 使う。
 GITLEAKS_LOG_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_LOG"
 GITLEAKS_EXIT_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_EXIT"
 GITLEAKS_OUTPUT_MARKER = "FAKE-GITLEAKS-FINDING ghp_textonlyskiptestsecret0000000000"
@@ -330,13 +334,25 @@ if ignore_path is not None:
     for name in sorted(os.listdir(ignore_path)):
         with open(os.path.join(ignore_path, name), encoding="utf-8") as fp:
             ignore_files[name] = fp.read()
-record = {{"args": args, "config": config, "ignore_files": ignore_files}}
+git_env = {{
+    name: os.environ.get(name)
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_NO_REPLACE_OBJECTS")
+}}
+record = {{
+    "args": args,
+    "config": config,
+    "ignore_files": ignore_files,
+    "git_env": git_env,
+}}
 with open(os.environ["{log_env}"], "a", encoding="utf-8") as fp:
     fp.write(json.dumps(record) + "\\n")
 print("{marker}")
 print("{marker}", file=sys.stderr)
 sys.exit(int(os.environ.get("{exit_env}", "0")))
 """
+# `--log-opts` で範囲の前に付けるオプション (`git log -p` の出力をローカルの属性と設定で
+# 変えさせない)。
+GITLEAKS_LOG_OPTS_PREFIX = "--no-textconv --no-ext-diff --text --no-color"
 # base の tree に `.gitleaks.toml` が無いときに渡す設定 (gitleaks の既定のルールだけを使う)。
 DEFAULT_GITLEAKS_CONFIG = "[extend]\nuseDefault = true\n"
 # base の tree に置く設定・ignore と、working tree に置く (渡されてはならない) 設定・ignore。
@@ -535,7 +551,7 @@ class WorkspaceTestCase(unittest.TestCase):
         self.env[GITLEAKS_EXIT_ENV] = str(code)
 
     def gitleaks_records(self) -> list[dict[str, Any]]:
-        """fake gitleaks の起動ごとの記録 (args / config / ignore_files)。"""
+        """fake gitleaks の起動ごとの記録 (args / config / ignore_files / git_env)。"""
         if not self.gitleaks_log.exists():
             return []
         return [
@@ -980,6 +996,28 @@ class TextOnlyRangeRejectsOtherChangesTest(WorkspaceTestCase):
         self.assertEqual(repository.range_commits("master"), [])
         self.assertEqual(self.range_status(repository), 1)
 
+    def test_replace_ref_does_not_hide_code_commit(self) -> None:
+        """ローカルの replace ref でコードを足す commit をテキスト系文書だけの commit に
+        見せかけても、置き換え前の object で判定する。"""
+        repository = self.create_repository()
+        repository.write("README.md", "# replacement\n")
+        repository.git("add", "README.md")
+        replacement = repository.git(
+            "commit-tree",
+            repository.git("write-tree").strip(),
+            "-p",
+            repository.rev("master"),
+            "-m",
+            "replacement",
+        ).strip()
+        repository.write("helper.py", "print('added')\n")
+        real = repository.commit_all("code")
+        repository.git("replace", real, replacement)
+        # replace ref を使う通常の git の呼び出しでは、HEAD は README.md だけを変える commit に
+        # 見える。
+        self.assertEqual(repository.changed_paths("master", "HEAD"), ["README.md"])
+        self.assertEqual(self.range_status(repository), 1)
+
     def test_parentless_commit_in_range_is_not_text_only(self) -> None:
         repository = self.create_repository()
         # `git switch --orphan` は追跡中のファイルを working tree と index から取り除く。
@@ -1163,15 +1201,27 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
     def test_gitleaks_receives_the_resolved_range_and_fixed_options(self) -> None:
         repository = self.create_text_only_branch()
         self.assertEqual(self.range_status(repository, base="master"), 0)
-        args = self.single_gitleaks_record()["args"]
+        record = self.single_gitleaks_record()
+        args = record["args"]
         # 一時ファイル・一時ディレクトリの path は実行ごとに変わるため、位置だけを確かめる。
+        # 走査元 (位置引数) は ignore の置き場を兼ねる一時ディレクトリで、repo ではない。
         config_path = args[args.index("--config") + 1]
-        ignore_path = args[args.index("--gitleaks-ignore-path") + 1]
-        for temporary in (config_path, ignore_path):
+        source_path = args[args.index("--gitleaks-ignore-path") + 1]
+        for temporary in (config_path, source_path):
             self.assertTrue(
                 temporary.startswith(f"{self.tmp}{os.sep}text-paths-gitleaks."),
                 temporary,
             )
+        self.assertFalse(config_path.startswith(f"{source_path}{os.sep}"), config_path)
+        # repo は GIT_DIR で渡し、git に repo の working tree と replace ref を参照させない。
+        self.assertEqual(
+            record["git_env"],
+            {
+                "GIT_DIR": str(repository.git_dir()),
+                "GIT_WORK_TREE": source_path,
+                "GIT_NO_REPLACE_OBJECTS": "1",
+            },
+        )
         self.assertEqual(
             args,
             [
@@ -1188,9 +1238,10 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 "--config",
                 config_path,
                 "--gitleaks-ignore-path",
-                ignore_path,
-                f"--log-opts={repository.rev('master')}..{repository.head()}",
-                str(repository.path),
+                source_path,
+                f"--log-opts={GITLEAKS_LOG_OPTS_PREFIX} "
+                f"{repository.rev('master')}..{repository.head()}",
+                source_path,
             ],
         )
         self.assert_no_leftover_temporary_files()
@@ -1240,6 +1291,7 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
         record = self.single_gitleaks_record()
         self.assertEqual(record["config"], DEFAULT_GITLEAKS_CONFIG)
         self.assertEqual(record["ignore_files"], {})
+        self.assertNotIn(str(repository.path), record["args"])
         self.assertNotIn(str(repository.path / ".gitleaks.toml"), record["args"])
 
     def test_user_config_environment_is_respected(self) -> None:
@@ -1308,6 +1360,122 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
         self.assertEqual(self.range_status(repository), 0)
         self.assertEqual(self.push_status(repository), 0)
         self.assertEqual(self.gitleaks_calls(), [])
+
+
+# 実際の gitleaks の既定のルール (github-pat) に一致するダミー値。実在の token ではない。この
+# ファイル自体が secret scanner に検出されないよう、値は実行時に組み立てる (連番のような
+# 規則的な値は gitleaks が検出しないため、固定の文字列の sha256 から作る)。
+DUMMY_GITHUB_PAT = "ghp_" + hashlib.sha256(b"text-only-skip-test").hexdigest()[:36]
+
+
+@unittest.skipUnless(REAL_GITLEAKS, "requires gitleaks on PATH")
+class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
+    """実際の gitleaks で、ローカルの未追跡ファイルや git の設定が検出を抑止しないこと。
+
+    fake gitleaks は受け取った引数しか記録できないため、gitleaks が引数以外から読む入力
+    (走査元の `.gitleaksignore`) と、`git log -p` の出力の変化は実物で確かめる。抑止の手段を
+    使う各テストは、その手段が素朴な起動 (repo を走査元にし、`--log-opts` に範囲だけを渡す)
+    では実際に検出を抑止することを先に確かめ、抑止されない gitleaks の版では skip する。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        assert REAL_GITLEAKS is not None
+        fake = self.fake_gitleaks_dir / "gitleaks"
+        fake.unlink()
+        fake.symlink_to(REAL_GITLEAKS)
+
+    def create_branch_with_secret(self, name: str = "repo") -> Repository:
+        """feature branch の commit で README.md の 3 行目にダミーの token を書き込む。"""
+        repository = self.create_repository(name)
+        repository.write("README.md", f"# docs\n\nexample = {DUMMY_GITHUB_PAT}\n")
+        repository.commit_all("docs")
+        return repository
+
+    def naive_scan_detects(self, repository: Repository) -> bool:
+        result = subprocess.run(
+            [
+                "gitleaks",
+                "git",
+                "--no-banner",
+                "--redact",
+                "--log-level",
+                "error",
+                "--exit-code",
+                "1",
+                "--timeout",
+                "30",
+                f"--log-opts={repository.rev('master')}..{repository.head()}",
+                str(repository.path),
+            ],
+            cwd=repository.path,
+            env=self.env,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertIn(result.returncode, (0, 1), result.stderr)
+        return result.returncode == 1
+
+    def skip_unless_naive_scan_is_suppressed(self, repository: Repository) -> None:
+        if self.naive_scan_detects(repository):
+            self.skipTest("この gitleaks では素朴な起動でも検出が抑止されない")
+
+    def test_clean_text_only_range_passes(self) -> None:
+        repository = self.create_repository()
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        self.assertEqual(self.range_status(repository), 0)
+
+    def test_secret_in_text_only_range_stops_the_skip(self) -> None:
+        repository = self.create_branch_with_secret()
+        self.assertTrue(self.naive_scan_detects(repository))
+        self.assertEqual(self.range_status(repository), 2)
+
+    def test_untracked_gitleaksignore_does_not_suppress_detection(self) -> None:
+        repository = self.create_branch_with_secret()
+        repository.write(
+            ".gitleaksignore", f"{repository.head()}:README.md:github-pat:3\n"
+        )
+        self.skip_unless_naive_scan_is_suppressed(repository)
+        self.assertEqual(self.range_status(repository), 2)
+
+    def test_local_git_attributes_and_config_do_not_hide_the_diff(self) -> None:
+        cases: dict[str, tuple[str | None, tuple[tuple[str, str], ...]]] = {
+            "binary": ("*.md binary\n", ()),
+            "textconv": ("*.md diff=hide\n", (("diff.hide.textconv", "true"),)),
+            "color": (None, (("color.ui", "always"),)),
+        }
+        for label, (attributes, configs) in cases.items():
+            with self.subTest(case=label):
+                repository = self.create_branch_with_secret(f"repo-{label}")
+                if attributes is not None:
+                    info = repository.git_dir() / "info"
+                    info.mkdir(exist_ok=True)
+                    (info / "attributes").write_text(attributes, encoding="utf-8")
+                for key, value in configs:
+                    repository.git("config", key, value)
+                self.skip_unless_naive_scan_is_suppressed(repository)
+                self.assertEqual(self.range_status(repository), 2)
+
+    def test_replace_ref_does_not_hide_the_secret(self) -> None:
+        """token を書き込む commit を、replace ref で token の無い commit に置き換えても検出する。"""
+        repository = self.create_repository()
+        repository.write("README.md", "# replacement\n")
+        repository.git("add", "README.md")
+        replacement = repository.git(
+            "commit-tree",
+            repository.git("write-tree").strip(),
+            "-p",
+            repository.rev("master"),
+            "-m",
+            "replacement",
+        ).strip()
+        repository.write("README.md", f"# docs\n\nexample = {DUMMY_GITHUB_PAT}\n")
+        real = repository.commit_all("docs")
+        repository.git("replace", real, replacement)
+        self.skip_unless_naive_scan_is_suppressed(repository)
+        self.assertEqual(self.range_status(repository), 2)
 
 
 @unittest.skipUnless(JQ, "push gate integration requires jq")
@@ -2284,7 +2452,8 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                 )
 
     def test_plugin_readmes_state_the_limits_of_the_exclusion_list(self) -> None:
-        """既知の制約に、列挙に無い指示ファイルと間接的に読み込まれる文書を書く。"""
+        """既知の制約に、列挙に無い指示ファイル・間接的に読み込まれる文書・実行される文書を
+        書く。"""
         for name, path in PLUGIN_READMES.items():
             with self.subTest(plugin=name):
                 body = path.read_text(encoding="utf-8")
@@ -2297,6 +2466,10 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                     "除外対象から間接的に読み込まれる文書は検出しない", constraints
                 )
                 self.assertIn("`@path` で import される文書", constraints)
+                self.assertIn(
+                    "実行される文書もテキスト系文書と判定される", constraints
+                )
+                self.assertIn("doctest や文書のビルド", constraints)
 
     def test_readmes_say_text_only_skip_does_not_scan_for_secrets(self) -> None:
         """skip ではレビューを行わないため認証情報も検査されず、secret scanner の併用を
@@ -2326,6 +2499,9 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                 self.assertIn(
                     "working tree ではなく範囲の起点 (base の commit) の tree から読みます",
                     body,
+                )
+                self.assertIn(
+                    "`git log` に `--text --no-textconv --no-color` を付け", body
                 )
                 self.assertIn("`GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML`", body)
                 self.assertNotIn("gitleaks の既定どおり読まれます", body)
