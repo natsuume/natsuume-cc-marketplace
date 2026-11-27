@@ -127,7 +127,7 @@ codex review wrapper (`hooks/scripts/run-pre-push-codex-review.sh`) を foregrou
 
 branch の変更がテキスト系文書だけの push は、空 push と同じく codex マーカーを要求せずに通します。push gate が deny しないため、codex-reviewer を起動する必要もありません。どの push が該当するかは push gate が判定します。codex-reviewer を起動した場合も、wrapper は codex review を実行せず、codex-reviewer は `Status: skipped` を返します。
 
-この skip では codex review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり codex マーカーを要求します (wrapper も通常どおり codex review を実行します)。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。repo の `.gitleaks.toml` / `.gitleaksignore` は gitleaks の既定どおり読まれます (どちらもテキスト系文書ではないため、テキスト系文書だけの変更では書き換えられません)。gitleaks が無い環境では、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
+この skip では codex review も行いません。PATH に gitleaks がある環境では、skip の前に範囲内の commit を gitleaks で検査し (`gitleaks git --redact --ignore-gitleaks-allow` 等)、秘匿情報の候補を検出した場合や gitleaks の実行に失敗した場合 (timeout を含む) は skip せず、従来どおり codex マーカーを要求します (wrapper も通常どおり codex review を実行します)。このとき deny の理由文にその旨を 1 文加えます (認証情報の内容や gitleaks の出力は含めません)。`--ignore-gitleaks-allow` を付けるのは、文書中の `gitleaks:allow` コメントで検出を抑止させないためです。gitleaks の設定 (`.gitleaks.toml` / `.gitleaksignore`) は、working tree ではなく範囲の起点 (base の commit) の tree から読みます。working tree に未追跡の設定ファイルを置いて検出を抑止できないようにするためです。base の tree に `.gitleaks.toml` が無ければ gitleaks の既定のルールだけを使い、`.gitleaksignore` が無ければ ignore は空にします。環境変数 `GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` を設定している場合は、利用者自身の設定としてそちらを使います。gitleaks が無い環境では、文書に書き込まれた token などの認証情報は検査されません。秘匿情報の混入を決定的に止めたい場合は、gitleaks 等の secret scanner を pre-commit / pre-push hook として併用することを推奨します。
 
 **テキスト系文書** は、basename の拡張子 (最後の `.` より後ろ) が大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイルは含みません。`txt` は依存宣言 (`requirements.txt` 等) やビルド定義 (`CMakeLists.txt`) に使われ、`mdx` はコードを埋め込めるため、どちらも対象外です。Claude Code や他の coding agent は特定の場所・名前の Markdown を指示として読み込むため、次に列挙した場所・名前の Markdown はコードとして扱います (列挙に無いものの扱いは「既知の制約」を参照):
 
@@ -140,6 +140,7 @@ branch の変更がテキスト系文書だけの push は、空 push と同じ�
 判定できない場合はレビュー必須として扱います。次のいずれかに当たる push はテキスト系文書のみとは扱わず、従来どおり codex マーカーを要求します:
 
 - `origin/<base>..HEAD` に commit が無い、または merge commit を含む
+- 範囲の commit が 100 を超える (hook の時間内に判定を終えるため、判定せずにレビュー必須として扱う)
 - 範囲内の各 commit とその親との差分、または merge-base と HEAD の差分に、テキスト系文書以外のファイルの変更がある。rename は検出せず、削除と追加として変更前後の両方の path を検査する
 - 範囲内に親を持たない commit がある
 - 変更前後のファイル mode に通常ファイル (`100644`) 以外を含む (symlink・submodule・実行ビット付きファイル)

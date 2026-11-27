@@ -61,7 +61,7 @@
 # `<base_rev>..<head_rev>` の変更がテキスト系文書だけと判定するのは、次をすべて満たす
 # ときに限る:
 #
-#   1. `<base_rev>..<head_rev>` に commit が 1 つ以上ある
+#   1. `<base_rev>..<head_rev>` の commit が 1 つ以上、100 以下である
 #   2. 範囲内に merge commit が無い
 #   3. 範囲内の各 commit について、親 commit との raw 差分の全エントリで、変更前・変更後の
 #      ファイル mode がそれぞれ `000000` (不在) か `100644` (通常ファイル) のいずれかで、
@@ -81,12 +81,22 @@
 # remote に届くのは net diff ではなく範囲内の全 commit であり、中間 commit のコードも履歴に
 # 残る。
 #
+# commit 数の上限 (100) は、gate を実行する Claude Code の command hook の既定の timeout
+# (60 秒) 内に判定を終えるためのもの。3 は commit ごとに git を起動するため、範囲の commit 数に
+# 比例して時間がかかる。hook が timeout すると gate の判定が働かないため、上限を超える範囲は
+# 判定を行わずレビュー必須 (戻り値 1) として扱う。
+#
+# 判定は 1 → 2 → 4 → 3 の順に行う。git の呼び出しが 1 回で済む 4 (net diff) を、commit 数に
+# 比例する 3 より先に行い、net diff にテキスト系文書以外の変更がある範囲では各 commit を走査
+# せずに不成立を返す。
+#
 # 1-4 を満たした範囲は、最後に秘匿情報の候補を検査する (下記「秘匿情報の検査」)。
 #
 # exit code:
 #
 #   - 0: 範囲内の変更がテキスト系文書だけで、秘匿情報の検査も通った (skip してよい)
-#   - 1: テキスト系文書だけではない、または 1-4 の判定に必要な git の呼び出しが失敗した
+#   - 1: 1-4 のいずれかを満たさない (テキスト系文書だけではない、commit 数が上限を超える等)、
+#        または 1-4 の判定に必要な git の呼び出しが失敗した
 #   - 2: テキスト系文書だけだが、gitleaks が秘匿情報の候補を検出した、または gitleaks の実行が
 #        失敗した
 #
@@ -100,7 +110,8 @@
 # する) 場合に限り、skip の前に範囲内の commit を次の形で検査する:
 #
 #   gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error
-#     --exit-code 1 --timeout 30 --log-opts="<base の OID>..<head の OID>" <repo の toplevel>
+#     --exit-code 1 --timeout 30 [--config <一時ファイル>] --gitleaks-ignore-path <一時ディレクトリ>
+#     --log-opts="<base の OID>..<head の OID>" <repo の toplevel>
 #
 #   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う
 #   - `--timeout 30` は、gate を実行する Claude Code の command hook の既定の timeout
@@ -113,8 +124,25 @@
 #     流さないため
 #   - 終了コード 0 だけを「検出なし」とし、それ以外 (検出・timeout・実行エラー) はすべて
 #     exit code 2 にする。repo の toplevel を解決できない場合も 2 にする
-#   - repo の `.gitleaks.toml` / `.gitleaksignore` は gitleaks の既定どおり読まれる。どちらも
-#     テキスト系文書ではないため、テキスト系文書だけの変更では書き換えられない
+#
+# gitleaks の設定 (`.gitleaks.toml`) と ignore (`.gitleaksignore`) は、gitleaks の既定の
+# 読み方 (走査対象の toplevel の `.gitleaks.toml` と、cwd の `.gitleaksignore`) をさせず、
+# 範囲の起点 (解決済みの base OID) の tree から読む。既定の読み方では working tree の
+# 未追跡ファイルも読まれるが、push gate の clean 検査は未追跡ファイルを見ず、merge gate には
+# clean 検査が無い。そのため未追跡の設定ファイルを置くだけで検出を抑止できてしまう。base の
+# tree は、テキスト系文書だけの変更では書き換えられない (どちらのファイルもテキスト系文書では
+# ない):
+#
+#   - 利用者の環境変数 `GITLEAKS_CONFIG` か `GITLEAKS_CONFIG_TOML` が空でない場合は、
+#     利用者自身の設定として尊重し、`--config` を渡さない
+#   - それ以外の場合、base の tree に `.gitleaks.toml` があればその内容を一時ファイルに
+#     取り出して `--config` に渡す。無ければ `[extend]` と `useDefault = true` だけを書いた
+#     一時ファイルを渡す (gitleaks の既定のルールだけを使う)
+#   - `--gitleaks-ignore-path` には常に一時ディレクトリを渡す。base の tree に
+#     `.gitleaksignore` があれば、その内容をこの一時ディレクトリの `.gitleaksignore` に
+#     取り出す。無ければ空のディレクトリのまま渡す
+#   - 一時ファイルと一時ディレクトリは `mktemp` で作り、関数を抜ける前に消す (source する
+#     script の trap には手を加えない)。作成や取り出しに失敗した場合は exit code 2 にする
 #
 # gitleaks が PATH に無い環境では検査せず、1-4 を満たせば 0 を返す。
 #
@@ -264,10 +292,69 @@ _text_paths_diff_is_text_only() {
   [ "${statuses[0]}" = "0" ] && [ "${statuses[1]}" = "0" ]
 }
 
+# _text_paths_extract_base_file <target_cwd> <base_oid> <path> <destination>
+# base の tree に <path> の blob があれば、その内容を <destination> に書き出す。
+# exit code: 0 = 書き出した、1 = base の tree に無い、2 = 有るが書き出せなかった。
+_text_paths_extract_base_file() {
+  local target_cwd="$1"
+  local base_oid="$2"
+  local path="$3"
+  local destination="$4"
+  local -a git_prefix=()
+  if [ -n "$target_cwd" ]; then
+    git_prefix=(-C "$target_cwd")
+  fi
+  git "${git_prefix[@]}" cat-file -e "${base_oid}:${path}" 2>/dev/null || return 1
+  git "${git_prefix[@]}" cat-file blob "${base_oid}:${path}" >"$destination" 2>/dev/null || return 2
+  return 0
+}
+
+# _text_paths_run_gitleaks <target_cwd> <base_oid> <head_oid> <toplevel> <work_dir>
+# <work_dir> (呼び出し側が作り、消す一時ディレクトリ) に gitleaks の設定と ignore を用意して
+# gitleaks を起動する。gitleaks の終了コード 0 のときだけ 0 を返し、設定の用意に失敗した場合も
+# 0 以外を返す。設定の決め方はファイルヘッダの「秘匿情報の検査」を参照。
+_text_paths_run_gitleaks() {
+  local target_cwd="$1"
+  local base_oid="$2"
+  local head_oid="$3"
+  local toplevel="$4"
+  local work_dir="$5"
+  local extract_status
+
+  local -a config_args=()
+  if [ -z "${GITLEAKS_CONFIG:-}" ] && [ -z "${GITLEAKS_CONFIG_TOML:-}" ]; then
+    local config_path="${work_dir}/gitleaks.toml"
+    extract_status=0
+    _text_paths_extract_base_file "$target_cwd" "$base_oid" .gitleaks.toml "$config_path" \
+      || extract_status=$?
+    case "$extract_status" in
+      0) ;;
+      1) printf '[extend]\nuseDefault = true\n' >"$config_path" 2>/dev/null || return 1 ;;
+      *) return 1 ;;
+    esac
+    config_args=(--config "$config_path")
+  fi
+
+  local ignore_dir="${work_dir}/ignore"
+  mkdir "$ignore_dir" 2>/dev/null || return 1
+  extract_status=0
+  _text_paths_extract_base_file "$target_cwd" "$base_oid" .gitleaksignore \
+    "${ignore_dir}/.gitleaksignore" || extract_status=$?
+  case "$extract_status" in
+    0 | 1) ;;
+    *) return 1 ;;
+  esac
+
+  gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
+    --exit-code 1 --timeout 30 "${config_args[@]}" --gitleaks-ignore-path "$ignore_dir" \
+    --log-opts="${base_oid}..${head_oid}" "$toplevel" \
+    </dev/null >/dev/null 2>&1
+}
+
 # _text_paths_secrets_scan_passes <target_cwd> <base_oid> <head_oid>
 # `<base_oid>..<head_oid>` の commit を gitleaks で検査し、終了コード 0 (検出なし) のときだけ
-# 0 を返す。gitleaks が PATH に無い場合は検査せずに 0 を返す。起動の形と、出力を捨てる理由は
-# ファイルヘッダの「秘匿情報の検査」を参照。
+# 0 を返す。gitleaks が PATH に無い場合は検査せずに 0 を返す。起動の形、設定と ignore の決め方、
+# 出力を捨てる理由はファイルヘッダの「秘匿情報の検査」を参照。
 _text_paths_secrets_scan_passes() {
   local target_cwd="$1"
   local base_oid="$2"
@@ -280,9 +367,18 @@ _text_paths_secrets_scan_passes() {
   local toplevel
   toplevel=$(git "${git_prefix[@]}" rev-parse --show-toplevel 2>/dev/null) || return 1
   [ -n "$toplevel" ] || return 1
-  gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
-    --exit-code 1 --timeout 30 --log-opts="${base_oid}..${head_oid}" "$toplevel" \
-    </dev/null >/dev/null 2>&1
+
+  # 一時ディレクトリはこの関数の中で作って消す (source する script の trap に手を加えない)。
+  local work_dir
+  work_dir=$(mktemp -d "${TMPDIR:-/tmp}/text-paths-gitleaks.XXXXXX" 2>/dev/null) || return 1
+  if [ -z "$work_dir" ] || [ ! -d "$work_dir" ]; then
+    return 1
+  fi
+  local scan_status=0
+  _text_paths_run_gitleaks "$target_cwd" "$base_oid" "$head_oid" "$toplevel" "$work_dir" \
+    || scan_status=$?
+  rm -rf "$work_dir" 2>/dev/null
+  return "$scan_status"
 }
 
 # is_text_only_range_in <target_cwd> <base_rev> <head_rev>
@@ -316,7 +412,32 @@ is_text_only_range_in() {
     return 1
   fi
 
-  # 条件 1-3: 範囲内の各 commit を親とともに列挙する (`<commit> <親>...` の 1 行ずつ)。親が
+  # 判定は 1 → 2 → 4 → 3 の順に行う (理由はファイルヘッダの「範囲の判定」を参照)。
+
+  # 条件 1: 範囲の commit 数が 1 以上、上限以下であること。
+  local max_commits=100
+  local commit_count
+  commit_count=$(git "${git_prefix[@]}" rev-list --count "${base_oid}..${head_oid}" 2>/dev/null) || return 1
+  case "$commit_count" in
+    "" | *[!0123456789]*) return 1 ;;
+  esac
+  if [ "$commit_count" -eq 0 ] || [ "$commit_count" -gt "$max_commits" ]; then
+    return 1
+  fi
+
+  # 条件 2: 範囲内に merge commit が無いこと。
+  local merge_count
+  merge_count=$(git "${git_prefix[@]}" rev-list --min-parents=2 --count "${base_oid}..${head_oid}" 2>/dev/null) || return 1
+  [ "$merge_count" = "0" ] || return 1
+
+  # 条件 4: merge-base から head までの差分 (net diff)。git の呼び出しが 1 回で済むため、
+  # 各 commit の走査より先に行う。
+  local merge_base_oid
+  merge_base_oid=$(git "${git_prefix[@]}" merge-base "$base_oid" "$head_oid" 2>/dev/null) || return 1
+  [ -n "$merge_base_oid" ] || return 1
+  _text_paths_diff_is_text_only "$target_cwd" "$merge_base_oid" "$head_oid" || return 1
+
+  # 条件 3: 範囲内の各 commit を親とともに列挙する (`<commit> <親>...` の 1 行ずつ)。親が
   # ちょうど 1 つでない行 (親を持たない commit と merge commit) があれば不成立。
   local listing
   listing=$(git "${git_prefix[@]}" rev-list --parents "${base_oid}..${head_oid}" 2>/dev/null) || return 1
@@ -330,12 +451,6 @@ is_text_only_range_in() {
     fi
     _text_paths_diff_is_text_only "$target_cwd" "$parent" "$commit" || return 1
   done <<<"$listing" || return 1
-
-  # 条件 4: merge-base から head までの差分。
-  local merge_base_oid
-  merge_base_oid=$(git "${git_prefix[@]}" merge-base "$base_oid" "$head_oid" 2>/dev/null) || return 1
-  [ -n "$merge_base_oid" ] || return 1
-  _text_paths_diff_is_text_only "$target_cwd" "$merge_base_oid" "$head_oid" || return 1
 
   # 条件 5: 秘匿情報の候補が無いこと (gitleaks がある場合のみ検査する)。
   _text_paths_secrets_scan_passes "$target_cwd" "$base_oid" "$head_oid" || return 2

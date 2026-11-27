@@ -40,6 +40,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +121,9 @@ INHERITED_ENV_TO_DROP = (
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CEILING_DIRECTORIES",
     "XDG_CONFIG_HOME",
+    # gitleaks の設定を利用者の環境から渡す変数 (判定 lib はこれがあると `--config` を渡さない)。
+    "GITLEAKS_CONFIG",
+    "GITLEAKS_CONFIG_TOML",
 )
 
 # 分類関数が外部コマンドに依存しないことを確かめるため、lib を source した後に
@@ -294,8 +298,9 @@ FAKE_COMPANION_SCRIPT = (
 )
 
 
-# fake gitleaks は受け取った引数を記録し、環境変数で指定した終了コードで終わる。stdout と
-# stderr に目印の文字列を出し、hook や wrapper の出力へ流れないことの確認に使う。
+# fake gitleaks は、受け取った引数と、起動時点の `--config` の内容・`--gitleaks-ignore-path`
+# の中身を記録し、環境変数で指定した終了コードで終わる。stdout と stderr に目印の文字列を
+# 出し、hook や wrapper の出力へ流れないことの確認に使う。
 GITLEAKS_LOG_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_LOG"
 GITLEAKS_EXIT_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_EXIT"
 GITLEAKS_OUTPUT_MARKER = "FAKE-GITLEAKS-FINDING ghp_textonlyskiptestsecret0000000000"
@@ -304,12 +309,43 @@ import json
 import os
 import sys
 
+args = sys.argv[1:]
+
+
+def option_value(name):
+    if name in args and args.index(name) + 1 < len(args):
+        return args[args.index(name) + 1]
+    return None
+
+
+config_path = option_value("--config")
+config = None
+if config_path is not None:
+    with open(config_path, encoding="utf-8") as fp:
+        config = fp.read()
+ignore_path = option_value("--gitleaks-ignore-path")
+ignore_files = None
+if ignore_path is not None:
+    ignore_files = {{}}
+    for name in sorted(os.listdir(ignore_path)):
+        with open(os.path.join(ignore_path, name), encoding="utf-8") as fp:
+            ignore_files[name] = fp.read()
+record = {{"args": args, "config": config, "ignore_files": ignore_files}}
 with open(os.environ["{log_env}"], "a", encoding="utf-8") as fp:
-    fp.write(json.dumps(sys.argv[1:]) + "\\n")
+    fp.write(json.dumps(record) + "\\n")
 print("{marker}")
 print("{marker}", file=sys.stderr)
 sys.exit(int(os.environ.get("{exit_env}", "0")))
 """
+# base の tree に `.gitleaks.toml` が無いときに渡す設定 (gitleaks の既定のルールだけを使う)。
+DEFAULT_GITLEAKS_CONFIG = "[extend]\nuseDefault = true\n"
+# base の tree に置く設定・ignore と、working tree に置く (渡されてはならない) 設定・ignore。
+BASE_GITLEAKS_CONFIG = (
+    '[extend]\nuseDefault = true\n\n[allowlist]\ndescription = "base"\n'
+)
+BASE_GITLEAKS_IGNORE = "base-fingerprint:README.md:generic-api-key:1\n"
+UNTRACKED_GITLEAKS_CONFIG = '[allowlist]\ndescription = "untracked"\npaths = [".*"]\n'
+UNTRACKED_GITLEAKS_IGNORE = "untracked-fingerprint:README.md:generic-api-key:1\n"
 # テキスト系文書だけだが gitleaks で止めたとき、gate が deny の理由文に加える 1 文。
 GITLEAKS_DENY_SENTENCE = (
     "変更はテキスト系文書だけですが、gitleaks が秘匿情報の候補を検出したか"
@@ -498,7 +534,8 @@ class WorkspaceTestCase(unittest.TestCase):
     def set_gitleaks_exit(self, code: int) -> None:
         self.env[GITLEAKS_EXIT_ENV] = str(code)
 
-    def gitleaks_calls(self) -> list[list[str]]:
+    def gitleaks_records(self) -> list[dict[str, Any]]:
+        """fake gitleaks の起動ごとの記録 (args / config / ignore_files)。"""
         if not self.gitleaks_log.exists():
             return []
         return [
@@ -506,6 +543,9 @@ class WorkspaceTestCase(unittest.TestCase):
             for line in self.gitleaks_log.read_text(encoding="utf-8").splitlines()
             if line
         ]
+
+    def gitleaks_calls(self) -> list[list[str]]:
+        return [record["args"] for record in self.gitleaks_records()]
 
     def remove_gitleaks_from_path(self) -> None:
         """PATH から gitleaks を取り除く (fake を外し、gitleaks を含むディレクトリを
@@ -987,6 +1027,72 @@ class TextOnlyRangeRejectsOtherChangesTest(WorkspaceTestCase):
                 self.assertEqual(self.call_text_paths(*call), 1)
 
 
+class TextOnlyRangeScanCostTest(WorkspaceTestCase):
+    """範囲の走査を hook の時間内に終えるための commit 数の上限と判定順。"""
+
+    MAX_RANGE_COMMITS = 100
+
+    def create_branch_with_text_commits(self, count: int) -> Repository:
+        """master の上に、README.md だけを変える commit を count 個積んだ feature branch。
+
+        fixture を速く作るため `git commit-tree` で積む (2 個目以降は親と同じ tree の commit)。
+        """
+        repository = self.create_repository(f"repo-{count}")
+        repository.write("README.md", "# updated\n")
+        repository.git("add", "README.md")
+        tree = repository.git("write-tree").strip()
+        tip = repository.rev("master")
+        for index in range(count):
+            tip = repository.git(
+                "commit-tree", tree, "-p", tip, "-m", f"docs {index}"
+            ).strip()
+        repository.git("update-ref", "refs/heads/feature", tip)
+        self.assertEqual(len(repository.range_commits("master")), count)
+        return repository
+
+    def test_range_at_the_commit_limit_is_text_only(self) -> None:
+        repository = self.create_branch_with_text_commits(self.MAX_RANGE_COMMITS)
+        self.assertEqual(self.range_status(repository), 0)
+
+    def test_range_over_the_commit_limit_requires_review(self) -> None:
+        repository = self.create_branch_with_text_commits(self.MAX_RANGE_COMMITS + 1)
+        self.assertEqual(self.range_status(repository), 1)
+        self.assertEqual(self.gitleaks_calls(), [])
+
+    def test_code_in_net_diff_is_rejected_before_scanning_each_commit(self) -> None:
+        """net diff にコードがある範囲は、各 commit の差分を取らずに 1 を返す。
+
+        コードを足す commit を範囲の最も古い位置に置く (rev-list は新しい順に並べるため、
+        各 commit を先に走査すると、テキストだけの commit の差分を取った後でコードに当たる)。
+        """
+        repository = self.create_repository()
+        repository.write("helper.py", "print('added')\n")
+        repository.commit_all("code")
+        for index in range(4):
+            repository.write("README.md", f"# updated {index}\n")
+            repository.commit_all(f"docs {index}")
+        assert GIT is not None
+        shim_dir = self.root / "git-shim-bin"
+        shim_dir.mkdir()
+        git_log = self.root / "git-calls.log"
+        shim = shim_dir / "git"
+        shim.write_text(
+            f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "{git_log}"\nexec "{GIT}" "$@"\n',
+            encoding="utf-8",
+        )
+        shim.chmod(shim.stat().st_mode | stat.S_IXUSR)
+        self.env["PATH"] = f"{shim_dir}{os.pathsep}{self.env['PATH']}"
+
+        self.assertEqual(self.range_status(repository), 1)
+
+        diff_tree_calls = [
+            line
+            for line in git_log.read_text(encoding="utf-8").splitlines()
+            if " diff-tree " in f" {line} "
+        ]
+        self.assertEqual(len(diff_tree_calls), 1, diff_tree_calls)
+
+
 class TextOnlyPushPredictionTest(WorkspaceTestCase):
     """is_text_only_push_in: index / working tree の clean と origin/<base>..HEAD の判定。"""
 
@@ -1045,28 +1151,135 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
         repository.commit_all("docs")
         return repository
 
+    def single_gitleaks_record(self) -> dict[str, Any]:
+        records = self.gitleaks_records()
+        self.assertEqual(len(records), 1, records)
+        return records[0]
+
+    def assert_no_leftover_temporary_files(self) -> None:
+        leftovers = sorted(path.name for path in self.tmp.glob("text-paths-gitleaks*"))
+        self.assertEqual(leftovers, [])
+
     def test_gitleaks_receives_the_resolved_range_and_fixed_options(self) -> None:
         repository = self.create_text_only_branch()
         self.assertEqual(self.range_status(repository, base="master"), 0)
+        args = self.single_gitleaks_record()["args"]
+        # 一時ファイル・一時ディレクトリの path は実行ごとに変わるため、位置だけを確かめる。
+        config_path = args[args.index("--config") + 1]
+        ignore_path = args[args.index("--gitleaks-ignore-path") + 1]
+        for temporary in (config_path, ignore_path):
+            self.assertTrue(
+                temporary.startswith(f"{self.tmp}{os.sep}text-paths-gitleaks."),
+                temporary,
+            )
         self.assertEqual(
-            self.gitleaks_calls(),
+            args,
             [
-                [
-                    "git",
-                    "--no-banner",
-                    "--redact",
-                    "--ignore-gitleaks-allow",
-                    "--log-level",
-                    "error",
-                    "--exit-code",
-                    "1",
-                    "--timeout",
-                    "30",
-                    f"--log-opts={repository.rev('master')}..{repository.head()}",
-                    str(repository.path),
-                ]
+                "git",
+                "--no-banner",
+                "--redact",
+                "--ignore-gitleaks-allow",
+                "--log-level",
+                "error",
+                "--exit-code",
+                "1",
+                "--timeout",
+                "30",
+                "--config",
+                config_path,
+                "--gitleaks-ignore-path",
+                ignore_path,
+                f"--log-opts={repository.rev('master')}..{repository.head()}",
+                str(repository.path),
             ],
         )
+        self.assert_no_leftover_temporary_files()
+
+    def create_branch_on_base_with_gitleaks_files(self) -> Repository:
+        """base (master) の tree に `.gitleaks.toml` と `.gitleaksignore` を持つ repository。"""
+        path = self.root / "repo-with-config"
+        path.mkdir()
+        repository = Repository(path, self.env)
+        repository.git("-c", "init.defaultBranch=master", "init", "-q")
+        repository.write("README.md", "# base\n")
+        repository.write(".gitleaks.toml", BASE_GITLEAKS_CONFIG)
+        repository.write(".gitleaksignore", BASE_GITLEAKS_IGNORE)
+        repository.commit_all("base")
+        repository.git("switch", "-q", "-c", "feature")
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        return repository
+
+    def test_config_and_ignore_come_from_the_base_tree(self) -> None:
+        repository = self.create_branch_on_base_with_gitleaks_files()
+        # working tree の内容を base と変えておき、base の tree から読むことを確かめる。
+        repository.write(".gitleaks.toml", UNTRACKED_GITLEAKS_CONFIG)
+        repository.write(".gitleaksignore", UNTRACKED_GITLEAKS_IGNORE)
+        self.assertEqual(self.range_status(repository), 0)
+        record = self.single_gitleaks_record()
+        self.assertEqual(record["config"], BASE_GITLEAKS_CONFIG)
+        self.assertEqual(
+            record["ignore_files"], {".gitleaksignore": BASE_GITLEAKS_IGNORE}
+        )
+        self.assert_no_leftover_temporary_files()
+
+    def test_default_rules_and_empty_ignore_without_base_files(self) -> None:
+        repository = self.create_text_only_branch()
+        self.assertEqual(self.range_status(repository), 0)
+        record = self.single_gitleaks_record()
+        self.assertEqual(record["config"], DEFAULT_GITLEAKS_CONFIG)
+        self.assertEqual(record["ignore_files"], {})
+
+    def test_untracked_config_and_ignore_are_not_passed(self) -> None:
+        """working tree に未追跡の `.gitleaks.toml` / `.gitleaksignore` を置いても、
+        gitleaks に渡すのは base の tree の内容 (ここでは既定のルールと空の ignore)。"""
+        repository = self.create_text_only_branch()
+        repository.write(".gitleaks.toml", UNTRACKED_GITLEAKS_CONFIG)
+        repository.write(".gitleaksignore", UNTRACKED_GITLEAKS_IGNORE)
+        self.assertEqual(self.range_status(repository), 0)
+        record = self.single_gitleaks_record()
+        self.assertEqual(record["config"], DEFAULT_GITLEAKS_CONFIG)
+        self.assertEqual(record["ignore_files"], {})
+        self.assertNotIn(str(repository.path / ".gitleaks.toml"), record["args"])
+
+    def test_user_config_environment_is_respected(self) -> None:
+        """`GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` が空でなければ `--config` を渡さない
+        (ignore の一時ディレクトリは渡す)。空文字なら未設定と同じに扱う。"""
+        cases = {
+            "GITLEAKS_CONFIG": ("/path/to/user/gitleaks.toml", False),
+            "GITLEAKS_CONFIG_TOML": ("[extend]\nuseDefault = true\n", False),
+            "empty_GITLEAKS_CONFIG": ("", True),
+        }
+        for label, (value, expects_config) in cases.items():
+            with self.subTest(case=label):
+                repository = self.create_repository(f"repo-{label}")
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                name = label.removeprefix("empty_")
+                self.gitleaks_log.unlink(missing_ok=True)
+                self.env[name] = value
+                try:
+                    self.assertEqual(self.range_status(repository), 0)
+                finally:
+                    del self.env[name]
+                args = self.single_gitleaks_record()["args"]
+                self.assertEqual("--config" in args, expects_config, args)
+                self.assertIn("--gitleaks-ignore-path", args)
+
+    def test_temporary_files_are_removed_even_when_gitleaks_fails(self) -> None:
+        repository = self.create_text_only_branch()
+        self.set_gitleaks_exit(1)
+        self.assertEqual(self.range_status(repository), 2)
+        self.assert_no_leftover_temporary_files()
+
+    def test_failure_to_prepare_temporary_files_requires_review(self) -> None:
+        """一時ディレクトリを作れない場合は 2 (レビュー必須) を返し、gitleaks を起動しない。"""
+        repository = self.create_text_only_branch()
+        failing_mktemp = self.fake_gitleaks_dir / "mktemp"
+        failing_mktemp.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        failing_mktemp.chmod(failing_mktemp.stat().st_mode | stat.S_IXUSR)
+        self.assertEqual(self.range_status(repository), 2)
+        self.assertEqual(self.gitleaks_calls(), [])
 
     def test_gitleaks_findings_or_failures_stop_the_skip(self) -> None:
         for code in (1, 2, 126):
@@ -2110,7 +2323,20 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                 self.assertIn("`--ignore-gitleaks-allow` を付けるのは", body)
                 self.assertIn("`gitleaks:allow` コメント", body)
                 self.assertIn("`.gitleaks.toml` / `.gitleaksignore`", body)
+                self.assertIn(
+                    "working tree ではなく範囲の起点 (base の commit) の tree から読みます",
+                    body,
+                )
+                self.assertIn("`GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML`", body)
+                self.assertNotIn("gitleaks の既定どおり読まれます", body)
                 self.assertIn("deny の理由文にその旨を 1 文加えます", body)
+
+    def test_plugin_readmes_list_the_commit_limit(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                self.assertIn(
+                    "範囲の commit が 100 を超える", path.read_text(encoding="utf-8")
+                )
 
     def test_split_plugin_readmes_list_the_lib_in_file_table(self) -> None:
         for name in ("pre-push-codex-review", "pre-merge-cross-review"):
