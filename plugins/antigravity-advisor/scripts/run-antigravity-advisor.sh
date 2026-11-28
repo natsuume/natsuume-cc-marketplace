@@ -45,8 +45,8 @@
 #
 # 1. 2 つの一時ディレクトリを作り、request を agy の cwd にするディレクトリへコピーする
 # 2. cwd が git の work tree 内なら、次の 4 つを記録する。work tree の外なら記録も比較も
-#    しない。git が判定に失敗したのに cwd の祖先に `.git` がある場合は、work tree の中の
-#    可能性があるため agy を起動せず exit 1 にする。wrapper が実行する git コマンドには
+#    しない。git が無いか判定に失敗したのに cwd の祖先に `.git` がある場合は、work tree の
+#    中の可能性があるため agy を起動せず exit 1 にする。wrapper が実行する git コマンドには
 #    すべて `GIT_OPTIONAL_LOCKS=0` と `-c core.fsmonitor=false -c core.splitIndex=false
 #    -c core.hooksPath=/dev/null` を付け、index の更新や fsmonitor のコマンド、hook を起こさない
 #    - `<git-dir>/config`・`config.worktree`・`hooks/` 配下・`info/` 配下 (`info/refs` を
@@ -252,13 +252,12 @@ has_git_entry_in_ancestors() {
 }
 
 # wrapper の cwd が git の work tree 内か。
-# 戻り値: 0 work tree 内、1 work tree の外 (git が無い場合を含む)、2 git の判定が失敗した
-# のに祖先に `.git` がある (所有者の検査による拒否や壊れた gitdir の指定など、git が
-# 判定できない work tree の中の可能性がある)
+# 戻り値: 0 work tree 内、1 work tree の外、2 git が無いか git の判定が失敗したのに祖先に
+# `.git` がある (git が無い、所有者の検査による拒否、壊れた gitdir の指定など、判定できない
+# work tree の中の可能性がある)
 classify_cwd_work_tree() {
   local answer cwd
-  git_is_available || return 1
-  if answer=$(run_git rev-parse --is-inside-work-tree 2> /dev/null); then
+  if git_is_available && answer=$(run_git rev-parse --is-inside-work-tree 2> /dev/null); then
     [ "$answer" = "true" ] && return 0
     return 1
   fi
@@ -502,7 +501,7 @@ case $cwd_work_tree in
     prepare_git_context || fail 1 "相談対象の git リポジトリの情報を取得できません (git 2.31 以降が必要です)"
     ;;
   2)
-    fail 1 "cwd の祖先に .git がありますが、git が work tree を判定できません (所有者の検査による拒否など)。working tree の変化を検知できないため、agy を起動しません"
+    fail 1 "cwd の祖先に .git がありますが、git が work tree を判定できません (git が無い、所有者の検査による拒否など)。working tree の変化を検知できないため、agy を起動しません"
     ;;
   *)
     repository_root=$(pwd -P) || fail 1 "cwd の絶対パスを取得できません"

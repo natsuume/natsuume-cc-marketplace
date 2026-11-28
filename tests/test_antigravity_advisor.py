@@ -371,9 +371,13 @@ class WrapperHarness(unittest.TestCase):
         self.request.parent.mkdir()
         self.request.write_text(DEFAULT_REQUEST, encoding="utf-8")
 
-    def tool_bin(self, *, with_jq: bool) -> Path:
+    def tool_bin(self, *, with_jq: bool, with_git: bool = True) -> Path:
         """wrapper が使うコマンドへの symlink と git の shim だけを置いたディレクトリ。"""
-        name = "tool-bin" if with_jq else "tool-bin-without-jq"
+        name = "tool-bin"
+        if not with_jq:
+            name += "-without-jq"
+        if not with_git:
+            name += "-without-git"
         directory = self.base / name
         if directory.exists():
             return directory
@@ -384,7 +388,7 @@ class WrapperHarness(unittest.TestCase):
             found = shutil.which(command)
             if found is not None:
                 (directory / command).symlink_to(found)
-        if REAL_GIT is not None:
+        if with_git and REAL_GIT is not None:
             shim = directory / "git"
             shim.write_text(
                 GIT_SHIM_TEMPLATE.replace("__REAL_GIT__", REAL_GIT), encoding="utf-8"
@@ -398,8 +402,9 @@ class WrapperHarness(unittest.TestCase):
         with_agy: bool,
         with_jq: bool,
         extra_env: dict[str, str] | None,
+        with_git: bool = True,
     ) -> dict[str, str]:
-        path_entries = [str(self.tool_bin(with_jq=with_jq))]
+        path_entries = [str(self.tool_bin(with_jq=with_jq, with_git=with_git))]
         if with_agy:
             path_entries.insert(0, str(self.fake_bin))
         environment = {
@@ -424,6 +429,7 @@ class WrapperHarness(unittest.TestCase):
         agy_exit: int = 0,
         with_agy: bool = True,
         with_jq: bool = True,
+        with_git: bool = True,
         extra_env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         if agy_stdout is None:
@@ -442,7 +448,10 @@ class WrapperHarness(unittest.TestCase):
             [BASH, str(WRAPPER), *args],
             cwd=str(cwd or self.workdir),
             env=self.wrapper_environment(
-                with_agy=with_agy, with_jq=with_jq, extra_env=fake_env
+                with_agy=with_agy,
+                with_jq=with_jq,
+                extra_env=fake_env,
+                with_git=with_git,
             ),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -1236,6 +1245,16 @@ class WrapperOutsideGitTest(WrapperHarness):
             extra_env={"FAKE_AGY_CREATE_FILE": str(self.workdir / "created.txt")},
         )
         self.assert_succeeded(result, "既定の助言")
+
+    def test_succeeds_outside_a_work_tree_without_git(self) -> None:
+        result = self.run_wrapper(cwd=self.workdir, with_git=False)
+        self.assert_succeeded(result, "既定の助言")
+
+    def test_missing_git_inside_a_work_tree_stops_before_agy(self) -> None:
+        repo = self.base / "repo"
+        init_repository(repo, self.home, with_commit=True)
+        result = self.run_wrapper(cwd=repo, with_git=False)
+        self.assert_failed(result, 1, agy_invoked=False)
 
     def test_work_tree_git_cannot_inspect_stops_before_agy(self) -> None:
         # 祖先に .git があるのに、git が work tree を判定できない (gitdir の指定が壊れている)。

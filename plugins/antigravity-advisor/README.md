@@ -64,7 +64,7 @@ Recovery direction: <概念的な次の一手>
 
 ### wrapper (`scripts/run-antigravity-advisor.sh`)
 
-引数に request ファイルを 1 つ取り、起動したときの cwd を相談対象のリポジトリとみなします。cwd が git の work tree 内ならその toplevel、外ならその cwd をリポジトリのルートとします。git が判定に失敗したのに cwd の祖先に `.git` がある場合 (所有者の検査による拒否、壊れた gitdir の指定など) は、cwd が work tree の中にある可能性があり、その場合は変化を検知できないため、agy を起動せず exit 1 にします。
+引数に request ファイルを 1 つ取り、起動したときの cwd を相談対象のリポジトリとみなします。cwd が git の work tree 内ならその toplevel、外ならその cwd をリポジトリのルートとします。git で work tree を判定できないのに cwd の祖先に `.git` がある場合 (git が PATH に無い、所有者の検査による拒否、壊れた gitdir の指定など) は、cwd が work tree の中にある可能性があり、その場合は変化を検知できないため、agy を起動せず exit 1 にします。
 
 wrapper 専用の一時ディレクトリを `${TMPDIR:-/tmp}` の直下に 2 つ作ります。1 つは agy の cwd にする空のディレクトリで、request のコピーだけを置きます。もう 1 つは agy の stdout / stderr と working tree の記録を置く、agy に渡さないものです。作ったディレクトリが git の work tree の中にある場合は `/tmp` の直下に作り直し、それでも中なら exit 1 にします。一時ディレクトリはどちらも終了時に削除します。
 
