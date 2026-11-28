@@ -76,7 +76,7 @@ agy --mode plan --output-format json [--model <model>] \
   --print-timeout 25m -p '<prompt>'
 ```
 
-`<HOME>` は、実行時の `$HOME` から末尾の `/` を除いた論理的な path で、wrapper が JSON の文字列として埋め込みます。wrapper は `cd "$HOME" && pwd -P` で物理的な path (symlink を解決した path。末尾の `/` は除く) も求め、論理的な path と違う場合は、物理的な path を `<HOME>` に置いた 10 規則を続けて渡します。`$HOME` が空、`/` で始まらない、または cd できない場合は、agy を起動せず exit 1 にします。
+`<HOME>` は、実行時の `$HOME` から末尾の `/` を除いた論理的な path (symlink を解決しない path) で、wrapper が JSON の文字列として埋め込みます。wrapper は `cd "$HOME" && pwd -P` で物理的な path (symlink を解決した path。末尾の `/` は除く) も求め、論理的な path と違う場合は、物理的な path を `<HOME>` に置いた 10 規則を続けて渡します。`$HOME` が空、`/` で始まらない、または cd できない場合は、agy を起動せず exit 1 にします。
 
 prompt は英語の固定文で、request のコピーの絶対パスと、リポジトリのルートの絶対パスを含みます (request の本文は含みません)。agy に対して、次を指示します。
 
@@ -157,7 +157,7 @@ deny の規則で拒否された tool の呼び出しは `denied_actions` に記
 
 wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` と `-c core.fsmonitor=false` を付けます。agy が権限設定をすり抜けて `.git/config` に fsmonitor を仕込んでいても、事後の検査でそのコマンドが実行されないようにするためです。実行後の記録では `.git` の設定・hook・info を最初に比べ、変わっていれば `git add` を実行する前に失敗にします。一時的な index と object ディレクトリは agy に渡さない一時ディレクトリに置き、リポジトリの object ディレクトリと本物の index には書き込みません。
 
-この検知は事後のもので、変更を防いだり元に戻したりはしません。変更の主体も区別しないため、相談中に親セッションやユーザーが同じ work tree を変更した場合も exit 5 になります。ref は HEAD とその branch だけを比べるため、相談中に相談対象の work tree の外にある別の worktree で commit や stash をしても、fetch で remote-tracking branch が更新されても、失敗にはしません。
+この検知は事後のもので、変更を防いだり元に戻したりはしません。変更の主体も区別しないため、相談中に親セッションやユーザーが同じ work tree を変更した場合も exit 5 になります。ref は HEAD とその branch だけを比べるため、相談中に、相談対象の work tree の外にある別の worktree で commit や stash をしても、fetch で remote-tracking branch が更新されても、失敗にはしません。
 
 ## 既知の制約
 
