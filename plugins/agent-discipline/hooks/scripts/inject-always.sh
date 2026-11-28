@@ -56,6 +56,12 @@
 # (best effort) — persisted-output 化されたときにこそ自己修復指示が必要になるため、その場合も
 # 指示を先頭に残すことを優先する。
 #
+# 文字数は bash 組み込みの `${#変数}` で数える。bash は hook を実行する環境の locale
+# (LC_ALL / LC_CTYPE / LANG) に従い、UTF-8 locale では文字 (code point) 数、C / POSIX 等の
+# 単一バイト locale ではバイト数を返す。そのため単一バイト locale では日本語の payload が
+# バイト数で計上されて 8,000 を超え、上記の縮退が発動する。外部コマンド (`wc -m` 等) は
+# locale の扱いが実装 (GNU / BSD / uutils coreutils) によって異なるため使わない。
+#
 # ## 出力 JSON 形状
 #
 #   {
@@ -136,6 +142,7 @@ PATH_LINE="(参照パス) $PROMPTS_DIR"
 # (i) 実パス行を落として再計測 → (ii) それでも超えるなら delivery-note 全体を落として再計測、
 # の順で段階的に縮退する。ESSENTIAL (= SELF_HEAL + CORE) はいかなる場合も落とさない。
 # ESSENTIAL 単体が 8,000 字を超える場合は超過を許容する (best effort、ヘッダ参照)。
+# 文字数は locale に従う bash 組み込みの `${#変数}` で数える (ヘッダ「delivery-note と 8K ガード」参照)。
 ESSENTIAL="$SELF_HEAL
 
 $CORE"
@@ -151,7 +158,7 @@ else
   FULL="$ESSENTIAL"
 fi
 
-LEN=$(printf '%s' "$FULL" | wc -m)
+LEN=${#FULL}
 
 if [ "$LEN" -gt 8000 ] && [ -n "$NOTE" ]; then
   FULL="$SELF_HEAL
@@ -159,7 +166,7 @@ if [ "$LEN" -gt 8000 ] && [ -n "$NOTE" ]; then
 $NOTE
 
 $CORE"
-  LEN=$(printf '%s' "$FULL" | wc -m)
+  LEN=${#FULL}
 fi
 
 if [ "$LEN" -gt 8000 ]; then
