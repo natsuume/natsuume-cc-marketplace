@@ -648,6 +648,40 @@ class WrapperSuccessTest(WrapperHarness):
                     self.recorded_deny_rules(),
                 )
 
+    def test_symlinked_credential_locations_also_deny_their_targets(self) -> None:
+        # 置き場所自体が symlink なら、たどった先の path でも読み取りを拒否する。
+        elsewhere = self.base / "elsewhere"
+        (elsewhere / "aws-real").mkdir(parents=True)
+        (elsewhere / "netrc-real").write_text("machine example\n", encoding="utf-8")
+        (self.home / ".aws").symlink_to(
+            elsewhere / "aws-real", target_is_directory=True
+        )
+        (self.home / ".netrc").symlink_to(elsewhere / "netrc-real")
+        result = self.run_wrapper()
+        self.assert_succeeded(result, "既定の助言")
+        self.assertEqual(
+            deny_rules(str(self.home))
+            + [
+                f"read_file({elsewhere}/aws-real)",
+                f"read_file({elsewhere}/netrc-real)",
+            ],
+            self.recorded_deny_rules(),
+        )
+
+    def test_relative_and_chained_credential_symlinks_are_followed(self) -> None:
+        elsewhere = self.base / "elsewhere"
+        (elsewhere / "ssh-real").mkdir(parents=True)
+        (self.home / "ssh-hop").symlink_to(
+            "../elsewhere/ssh-real", target_is_directory=True
+        )
+        (self.home / ".ssh").symlink_to("ssh-hop", target_is_directory=True)
+        result = self.run_wrapper()
+        self.assert_succeeded(result, "既定の助言")
+        self.assertEqual(
+            deny_rules(str(self.home)) + [f"read_file({elsewhere}/ssh-real)"],
+            self.recorded_deny_rules(),
+        )
+
     def test_home_that_cannot_be_entered_is_rejected(self) -> None:
         for name in ("missing-home", "home-is-a-file"):
             with self.subTest(home=name):

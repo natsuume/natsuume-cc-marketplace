@@ -82,7 +82,9 @@
 #    取得・実行・download と、`$HOME` の下の認証情報の置き場所の読み取りを権限設定で
 #    拒否する。`<HOME>` は実行時の `$HOME` から末尾の `/` を除いた論理的な path で、wrapper
 #    が jq で JSON の文字列として埋め込む。物理的な path が論理的な path と違う場合は、
-#    物理的な path を `<HOME>` に置いた 10 規則を続けて出す。それ以外の部分は固定である。
+#    物理的な path を `<HOME>` に置いた 10 規則を続けて出す。置き場所自体が symlink の
+#    場合は、たどった先の path の `read_file(<path>)` を最後に加える。それ以外の部分は
+#    固定である。
 #    prompt は英語の固定文で、request のコピーの絶対パスと、相談対象のリポジトリのルートの
 #    絶対パス (cwd が git の work tree 内ならその toplevel、外ならその cwd) を含み、request
 #    の本文は含まない。prompt は次を指示する:
@@ -216,19 +218,62 @@ without_trailing_slashes() {
   printf '%s' "$path"
 }
 
+# $1 の path が symlink なら、symlink をたどった先の絶対パスを 1 行で出す。symlink で
+# なければ何も出さない。readlink -f は macOS の古い版に無いため、readlink を繰り返して
+# たどる。先がディレクトリなら symlink を解決した物理的な path に、それ以外なら親
+# ディレクトリを解決した path に名前を付けた path にする (先が存在しなければ、たどった
+# path のまま)。
+resolve_symlinked_location() {
+  local path=$1 target directory hops=0
+  [ -L "$path" ] || return 0
+  while [ -L "$path" ] && [ "$hops" -lt 40 ]; do
+    target=$(readlink "$path") || return 0
+    case $target in
+      /*) path=$target ;;
+      *) path=$(dirname "$path")/$target ;;
+    esac
+    hops=$((hops + 1))
+  done
+  if [ -d "$path" ]; then
+    if directory=$(cd "$path" 2> /dev/null && pwd -P); then
+      path=$directory
+    fi
+  elif directory=$(cd "$(dirname "$path")" 2> /dev/null && pwd -P); then
+    path=$directory/$(basename "$path")
+  fi
+  without_trailing_slashes "$path"
+  printf '\n'
+}
+
+# 認証情報の置き場所のうち symlink のものについて、たどった先の path を JSON の文字列の
+# 配列として 1 行で出す。$1, $2: home ディレクトリの論理的な path と物理的な path。
+symlinked_credential_targets_json() {
+  local home name
+  for home in "$1" "$2"; do
+    while IFS= read -r name; do
+      resolve_symlinked_location "$home/$name"
+    done < <(printf '%s' "$CREDENTIAL_LOCATIONS_JSON" | jq -r '.[]')
+  done | LC_ALL=C sort -u | jq -R . | jq -s -c .
+}
+
 # agy に --settings で渡す権限設定の JSON を、空白を含まない 1 行で stdout に出す。
 # 認証情報の置き場所は、$1 (home ディレクトリの論理的な path) を前に付けた
 # `read_file(<path>)` の deny の規則にする。$2 (物理的な path) が $1 と違う場合は、$2 を
-# 前に付けた規則を続けて出す。値の JSON のエスケープは jq に任せる。
+# 前に付けた規則を続けて出す。$3 (置き場所の symlink をたどった先の path の JSON 配列) の
+# うち、ここまでの規則と重ならないものの規則を最後に出す。値の JSON のエスケープは jq に
+# 任せる。
 build_permission_settings() {
   jq -n -c --arg logical "$1" --arg physical "$2" \
+    --argjson targets "$3" \
     --argjson fixed "$FIXED_DENY_RULES_JSON" \
     --argjson credentials "$CREDENTIAL_LOCATIONS_JSON" '
     ([$logical] + (if $physical == $logical then [] else [$physical] end)) as $homes
+    | [$homes[] as $home | $credentials[] | "read_file(" + $home + "/" + . + ")"] as $home_rules
+    | [$targets[] | "read_file(" + . + ")" | select(. as $rule | ($home_rules | index($rule)) == null)] as $target_rules
     | {
         allowNonWorkspaceAccess: true,
         permissions: {
-          deny: ($fixed + [$homes[] as $home | $credentials[] | "read_file(" + $home + "/" + . + ")"])
+          deny: ($fixed + $home_rules + $target_rules)
         }
       }' 2> /dev/null
 }
@@ -488,7 +533,9 @@ physical_home=$(cd "$home_directory" 2> /dev/null && pwd -P) ||
   fail 1 "HOME のディレクトリに移動できないため、認証情報の置き場所の読み取りを拒否する権限設定を作れません"
 logical_home=$(without_trailing_slashes "$home_directory")
 physical_home=$(without_trailing_slashes "$physical_home")
-permission_settings=$(build_permission_settings "$logical_home" "$physical_home") ||
+credential_targets=$(symlinked_credential_targets_json "$logical_home" "$physical_home") ||
+  fail 1 "認証情報の置き場所の symlink の先を調べられません"
+permission_settings=$(build_permission_settings "$logical_home" "$physical_home" "$credential_targets") ||
   fail 1 "agy に渡す権限設定を jq で作れません"
 
 # --- 相談対象のリポジトリ ---
