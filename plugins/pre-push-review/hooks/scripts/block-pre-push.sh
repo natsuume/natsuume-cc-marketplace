@@ -34,7 +34,8 @@
 #    - 空 push (全 commit が empty commit の鎖) なら markers gate を skip
 #    - commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを計算
 #    - 2 マーカー (markers.sh の `*_MARKER_NAME` 定数で定義: code-reviewed /
-#      security-reviewed) と一致しなければ deny。 2 マーカーは常に全て必須。
+#      security-reviewed) と一致しなければ deny。 変更がテキスト系文書だけの push
+#      (判定は lib/text-paths.sh) は code-reviewed を要求せず、 security-reviewed だけを要求する
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
 #    引用符付き引数 / `push.default=matching` 環境での bare push 等は deny
 # 7. dirty-tree (target cwd の) は deny
@@ -80,10 +81,11 @@ fi
 # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
 case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
-# 4 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`
-# で即使うため必須。 target-resolver / diff-hash / markers は本処理 (segment 解析以降) で
-# 使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。 `${COMMAND//$'\\\n'/ }`
-# を直接書かない理由は cmd-parser.sh の `_normalize_line_continuations_impl` を参照。
+# 5 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`
+# で即使うため必須。 target-resolver / diff-hash / markers / text-paths は本処理 (segment
+# 解析以降) で使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。
+# `${COMMAND//$'\\\n'/ }` を直接書かない理由は cmd-parser.sh の
+# `_normalize_line_continuations_impl` を参照。
 SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
 # shellcheck source=lib/cmd-parser.sh
 source "$SCRIPT_DIR/lib/cmd-parser.sh"
@@ -93,6 +95,8 @@ source "$SCRIPT_DIR/lib/target-resolver.sh"
 source "$SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
+# shellcheck source=lib/text-paths.sh
+source "$SCRIPT_DIR/lib/text-paths.sh"
 
 # fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。
 # 関数本体 (`_normalize_line_continuations_impl`) にも fast-path がある (= 二重) が、
@@ -718,6 +722,15 @@ if is_empty_push_in "$TARGET_CWD" "$BASE"; then
   exit 0
 fi
 
+# 変更がテキスト系文書だけの push は code review の対象になるコードを含まないため、
+# code-reviewed マーカーを要求しない。 security-reviewed マーカーは文書に書かれた秘匿情報を
+# 見るために引き続き要求する。 判定は lib/text-paths.sh で、 codex 側の gate / wrapper と
+# 同じ形 (remote-tracking ref の完全な名前と HEAD) で呼ぶ。
+TEXT_ONLY_PUSH=0
+if is_text_only_range_in "$TARGET_CWD" "refs/remotes/origin/${BASE}" HEAD; then
+  TEXT_ONLY_PUSH=1
+fi
+
 # branch diff hash 計算。 失敗時 (orphan branch / shallow clone 等) は明示 deny。
 if ! CURRENT_HASH=$(compute_review_hash_in "$TARGET_CWD" "$BASE"); then
   REASON=$(cat <<EOF
@@ -746,11 +759,6 @@ is_fresh() {
   [ -n "$1" ] && [ "$1" = "$CURRENT_HASH" ]
 }
 
-# code-reviewed / security-reviewed の 2 マーカーを全必須化する単純 gate。
-if is_fresh "$CODE_REVIEWED_HASH" && is_fresh "$SECURITY_HASH"; then
-  exit 0
-fi
-
 format_status() {
   local stored="$1"
   if [ -z "$stored" ]; then
@@ -761,6 +769,43 @@ format_status() {
     printf '⚠ 失効 (差分または commit 列が変わったため再実行が必要)'
   fi
 }
+
+# テキスト系文書だけの push は security-reviewed マーカーだけを要求する。 deny 文も
+# security review だけを挙げ、 code review の subagent を案内しない (案内すると不要な
+# レビューを起動させるため)。
+if [ "$TEXT_ONLY_PUSH" -eq 1 ]; then
+  if is_fresh "$SECURITY_HASH"; then
+    exit 0
+  fi
+  SECURITY_STATUS=$(format_status "$SECURITY_HASH")
+  REASON=$(cat <<EOF
+プッシュをブロックしました。 push 前に security review を実行してください。
+
+target: ${TARGET_CWD}
+ブランチ: ${BRANCH} (基準: origin/${BASE})
+marker storage: ${MARKER_STORAGE_DIR}
+
+linked worktree では marker / launch attestation は main \`.git\` 直下ではなく、worktree 専用 git-dir (\`.git/worktrees/<name>/\`) に保存されます。target で \`git rev-parse --absolute-git-dir\` を実行し、上記 storage と一致することを確認してください。
+
+この push の変更はテキスト系文書だけのため、 code review の記録は要求しません。 文書に書かれた秘匿情報を見るため、 security review の記録は要求します。
+
+レビュー状態 (下記が「✓ 最新の差分でレビュー済み」 になると push が許可されます):
+  security review    : $SECURITY_STATUS
+
+Agent tool で subagent_type="pre-push-review:security-reviewer", model="opus" を起動してください。 上記の model を常に明示してください。
+
+修正後に branch 差分が変わるとマーカーは自動失効します。 マーカーが ✓ になったら \`git push\` を再試行してください。
+EOF
+)
+  deny "$REASON"
+  exit 0
+fi
+
+# code-reviewed / security-reviewed の 2 マーカーを全必須化する単純 gate。
+if is_fresh "$CODE_REVIEWED_HASH" && is_fresh "$SECURITY_HASH"; then
+  exit 0
+fi
+
 CODE_REVIEWED_STATUS=$(format_status "$CODE_REVIEWED_HASH")
 SECURITY_STATUS=$(format_status "$SECURITY_HASH")
 

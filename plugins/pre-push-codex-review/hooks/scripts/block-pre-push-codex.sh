@@ -32,6 +32,7 @@
 # 5. 解決した target cwd 上で:
 #    - default branch (master/main) なら git-guardrails に委譲して skip
 #    - 空 push (全 commit が empty commit の鎖) なら marker gate を skip
+#    - 変更がテキスト系文書だけの push (判定は lib/text-paths.sh) も marker gate を skip
 #    - commit 列 (HEAD / merge-base の OID) + branch 全差分 + 未コミット差分のハッシュを計算
 #    - codex マーカー (markers.sh の `CODEX_MARKER_NAME` で定義) と一致しなければ deny
 # 6. push の引数解析: refspec が現在ブランチ以外 / `--all` / `--mirror` / `--tags` /
@@ -89,10 +90,11 @@ fi
 # 「末尾 `\<LF>` 復元の caller 側 inline パターン」 セクション)。
 case "$COMMAND" in *\\) COMMAND="${COMMAND}"$'\n' ;; esac
 
-# 4 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`
-# で即使うため必須。 target-resolver / diff-hash / markers は本処理 (segment 解析以降) で
-# 使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。 `${COMMAND//$'\\\n'/ }`
-# を直接書かない理由は cmd-parser.sh の `_normalize_line_continuations_impl` を参照。
+# 5 lib をまとめて source: cmd-parser.sh は直下の `normalize_line_continuations_to_space`
+# で即使うため必須。 target-resolver / diff-hash / markers / text-paths は本処理 (segment
+# 解析以降) で使うが、 SCRIPT_DIR を 1 度の計算で済ますためまとめて上に置く。
+# `${COMMAND//$'\\\n'/ }` を直接書かない理由は cmd-parser.sh の
+# `_normalize_line_continuations_impl` を参照。
 SCRIPT_DIR="$_PRE_PUSH_REVIEW_SCRIPT_DIR"
 # shellcheck source=lib/cmd-parser.sh
 source "$SCRIPT_DIR/lib/cmd-parser.sh"
@@ -102,6 +104,8 @@ source "$SCRIPT_DIR/lib/target-resolver.sh"
 source "$SCRIPT_DIR/lib/diff-hash.sh"
 # shellcheck source=lib/markers.sh
 source "$SCRIPT_DIR/lib/markers.sh"
+# shellcheck source=lib/text-paths.sh
+source "$SCRIPT_DIR/lib/text-paths.sh"
 
 # fast-path: line continuation を含まない 99% の入力では `$(...)` subshell fork を回避。
 # 関数本体 (`_normalize_line_continuations_impl`) にも fast-path がある (= 二重) が、
@@ -721,6 +725,14 @@ fi
 # (#126 と同根の穴を塞ぐ)。dirty-tree gate は通過済みだが、呼び出し順への依存を
 # 作らないよう is_empty_push_in は index / worktree の clean も自前で再検査する。
 if is_empty_push_in "$TARGET_CWD" "$BASE"; then
+  exit 0
+fi
+
+# 変更がテキスト系文書だけの push は codex review の対象になるコードを含まないため、
+# marker gate を skip する。 判定は lib/text-paths.sh で、 wrapper (run-pre-push-codex-review.sh)
+# と同じ形 (remote-tracking ref の完全な名前と HEAD) で呼ぶため、 wrapper が skip した branch
+# ではこの gate も marker を要求しない。
+if is_text_only_range_in "$TARGET_CWD" "refs/remotes/origin/${BASE}" HEAD; then
   exit 0
 fi
 

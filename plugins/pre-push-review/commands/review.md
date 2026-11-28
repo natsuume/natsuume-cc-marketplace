@@ -6,6 +6,8 @@ description: pre-push gate を通すための 2 レビューを同じアシス�
 
 このコマンドは `git push` 前に必須となる **2 つのレビュー** を、 **同じアシスタントメッセージで並列に** 2 つの subagent として起動する確定的フローです。 順序入れ替えや引数指定は受け付けません — このコマンド本文に固定された 2 subagent 並列発出が既定で、並列発出が技術的に成立しない場合だけ下記の節に従います。
 
+変更がテキスト系文書だけの push では、 push gate は code review の記録を要求せず、 deny 文は security review だけを挙げます。 その場合は、 下記の 2 subagent の並列発出の代わりに、 deny 文が挙げた reviewer だけを起動すれば足ります。 どの push が該当するかは push gate が判定するので、 session 側では判定しません (定義は plugin README の「テキスト系文書のみの変更」節)。
+
 ## 必ず実行すること: 2 subagent の並列発出
 
 ### Phase 文脈の決定

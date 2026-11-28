@@ -3,8 +3,10 @@
 
 pre-push-review core と pre-push-codex-review は、それぞれ単独 install でも自立
 動作するため push gate の共通ロジック (`cmd-parser.sh` / `target-resolver.sh` /
-`diff-hash.sh`) を独立に保持する。正本 (canonical) は pre-push-review 側で、
-pre-push-codex-review 側は byte-identical なコピーを保つ契約とする。
+`diff-hash.sh` / `text-paths.sh`) を独立に保持する。正本 (canonical) は pre-push-review
+側で、pre-push-codex-review 側は byte-identical なコピーを保つ契約とする
+(`text-paths.sh` の pre-merge-cross-review 側コピーは tests/test_pre_merge_lib_copies.py
+が検査する)。
 
 `codex-companion-resolver.sh` と `stale-broker-guard.mjs` は逆方向で、
 pre-push-codex-review 側が正本、cross-model-advisor 側がそのコピーを保つ。
@@ -57,6 +59,7 @@ CORE_CANONICAL_LIB_NAMES = (
     "cmd-parser.sh",
     "target-resolver.sh",
     "diff-hash.sh",
+    "text-paths.sh",
 )
 
 
