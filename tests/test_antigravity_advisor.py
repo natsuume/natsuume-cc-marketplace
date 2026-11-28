@@ -1389,6 +1389,7 @@ class RunnerAgentContractTest(unittest.TestCase):
         # Bash tool は大きな出力をファイルに退避し、プレビューだけを返すことがある。
         for literal in (
             "退避したファイルを Read tool で全文読み",
+            "行番号と、その後の区切りのタブを除いた本文",
             "全文を読めない場合",
         ):
             with self.subTest(literal=literal):

@@ -58,7 +58,7 @@ Status: success
 
 wrapper は成功の経路では stderr に何も出さないため、exit 0 のときの Bash の出力全体が助言の本文 (stdout) である。これをそのまま載せ、要約・言い換え・取捨選択・自分の意見の追加をしない。
 
-出力が大きいと、Bash tool は出力の全文をファイルに退避し、先頭の一部 (プレビュー) と退避先の path だけを結果として返す。この場合は、プレビューを助言の本文にせず、退避したファイルを Read tool で全文読み、その内容を `<wrapper の出力全体をそのまま>` の位置に載せる。ファイルが大きく 1 回で読み切れない場合は、範囲を分けて最後まで読む。全文を読めない場合は `Status: execution-failed`、`Exit status: 0`、`Failure class: incomplete-response` とする。
+出力が大きいと、Bash tool は出力の全文をファイルに退避し、先頭の一部 (プレビュー) と退避先の path だけを結果として返す。この場合は、プレビューを助言の本文にせず、退避したファイルを Read tool で全文読み、Read tool が各行の先頭に付ける行番号と、その後の区切りのタブを除いた本文を `<wrapper の出力全体をそのまま>` の位置に載せる。ファイルが大きく 1 回で読み切れない場合は、範囲を分けて最後まで読む。全文を読めない場合は `Status: execution-failed`、`Exit status: 0`、`Failure class: incomplete-response` とする。
 
 それ以外の場合の report:
 
