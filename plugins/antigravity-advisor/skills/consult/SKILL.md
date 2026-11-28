@@ -5,11 +5,11 @@ description: Antigravity CLI (agy) を read-only の advisor として相談し�
 
 # /antigravity-advisor:consult — Antigravity への相談
 
-相談 request を Antigravity CLI (agy) に渡し、助言を受け取る。agy はリポジトリのファイルを絶対パスで読んで裏取りしたうえで助言を返す。wrapper は agy を git の work tree の外の空のディレクトリで起動するため、相談対象のリポジトリの `.agents/` (hook・MCP・rules・skills) は読み込まれない。あわせて、ファイルの書き込み・shell の実行・MCP・URL の取得を拒否する権限設定を渡し、git の work tree 内では実行前後の `.git` の設定・hook、ref、working tree の内容の変化も検査する。model は agy の既定を使い、環境変数 `ANTIGRAVITY_ADVISOR_MODEL` が設定されているときだけその model を指定する。
+相談 request を Antigravity CLI (agy) に渡し、助言を受け取る。agy はリポジトリのファイルを絶対パスで読んで裏取りしたうえで助言を返す。wrapper は agy を git の work tree の外の空のディレクトリで起動するため、相談対象のリポジトリの `.agents/` (hook・MCP・rules・skills) は読み込まれない。あわせて、ファイルの書き込み・shell の実行・MCP・URL の取得と、`$HOME` の下の認証情報の置き場所 (`.ssh`・`.aws` 等) の読み取りを拒否する権限設定を渡し、git の work tree 内では実行前後の `.git` の設定・hook、HEAD の branch とその commit、working tree の内容の変化も検査する。model は agy の既定を使い、環境変数 `ANTIGRAVITY_ADVISOR_MODEL` が設定されているときだけその model を指定する。
 
 この保証には次の制約が残る (詳細は plugin の README の「read-only の保証の範囲」)。
 
-- agy の読み取りは相談対象のリポジトリに限られず、ローカルのどのファイルにも及ぶ。読んだ内容は助言の本文として返りうる
+- agy の読み取りは相談対象のリポジトリに限られず、`$HOME` の下の認証情報の置き場所を除くローカルのどのファイルにも及ぶ。読んだ内容は model の提供元に送られ、助言の本文として返りうる
 - global の `~/.gemini/config` の設定 (hook を含む) は効く
 - 権限の種別が分からない tool (ブラウザー系・web 検索・subagent 等) は拒否の対象外になりうる
 - `--mode plan` は権限の境界ではない
@@ -82,5 +82,5 @@ runner が `Status: execution-failed` を返した場合は、相談なしで作
 | agy-unavailable | agy CLI または jq が PATH に無い |
 | agy-failed | agy が失敗した (未ログイン、model 名の誤り、利用枠の超過等) |
 | incomplete-response | agy の応答が途中で終わった、または拒否された操作があった |
-| workspace-modified | 相談の前後で、`.git` の設定・hook・info、HEAD・ref、または working tree の状態や内容が変わった。agy による変更か、相談中に自分やユーザーが同じ work tree を変更したかは区別されない。`git status`・`git diff`・`git log` と `.git` の設定・hook で変更内容を確認し、意図しない変更があれば作業報告に含める |
+| workspace-modified | 相談の前後で、`.git` の設定・hook・info、HEAD の branch とその commit、または working tree の状態や内容が変わった。agy による変更か、相談中に自分やユーザーが同じ work tree を変更したかは区別されない。`git status`・`git diff`・`git log` と `.git` の設定・hook で変更内容を確認し、意図しない変更があれば作業報告に含める |
 | other | 上記以外 (runner が request のファイルを書けない、wrapper が見つからない、wrapper が git の work tree の外に一時ディレクトリを作れない、Bash の実行が background へ移った等) |

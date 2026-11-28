@@ -49,8 +49,8 @@ EXPECTED_KEYWORDS = {
 RUNNER_SUBAGENT_TYPE = "antigravity-advisor:antigravity-advisor-runner"
 
 # wrapper が agy に必ず渡す権限設定。ファイルの書き込み・shell・MCP・URL の取得・実行・
-# download を拒否する。
-DENY_RULES = [
+# download を拒否し、$HOME の下の認証情報の置き場所の読み取りを拒否する。
+FIXED_DENY_RULES = [
     "write_file(*)",
     "command(*)",
     "mcp(*)",
@@ -58,11 +58,40 @@ DENY_RULES = [
     "execute_url(*)",
     "download_url(*)",
 ]
-SETTINGS_ARGUMENT = (
-    '{"allowNonWorkspaceAccess":true,"permissions":{"deny":'
-    '["write_file(*)","command(*)","mcp(*)","read_url(*)",'
-    '"execute_url(*)","download_url(*)"]}}'
+CREDENTIAL_LOCATIONS = (
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".config",
+    ".gemini",
+    ".claude",
+    ".netrc",
+    ".git-credentials",
+    ".docker",
+    ".kube",
 )
+# header と README で、実行時の $HOME の値の代わりに書く文字列。
+HOME_PLACEHOLDER = "<HOME>"
+
+
+def deny_rules(home: str) -> list[str]:
+    """wrapper が渡す deny の規則。認証情報の置き場所は home を前に付けた絶対パスで書く。"""
+    return [
+        *FIXED_DENY_RULES,
+        *(f"read_file({home}/{name})" for name in CREDENTIAL_LOCATIONS),
+    ]
+
+
+def settings_argument(home: str) -> str:
+    """wrapper が --settings に渡す、空白を含まない JSON の文字列。"""
+    return json.dumps(
+        {"allowNonWorkspaceAccess": True, "permissions": {"deny": deny_rules(home)}},
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+SETTINGS_TEMPLATE = settings_argument(HOME_PLACEHOLDER)
 
 # runner が plugin cache から wrapper の最新版を探すコマンド。
 FALLBACK_LOOKUP_COMMAND = (
@@ -180,6 +209,9 @@ if [ -n "${FAKE_AGY_APPEND_FILE:-}" ]; then
 fi
 if [ -n "${FAKE_AGY_COMMIT:-}" ]; then
   git -C "$FAKE_AGY_REPO" commit --quiet --allow-empty -m "commit by fake agy" > /dev/null 2>&1
+fi
+if [ -n "${FAKE_AGY_STASH:-}" ]; then
+  git -C "$FAKE_AGY_REPO" stash --quiet > /dev/null 2>&1
 fi
 if [ -n "${FAKE_AGY_SYMBOLIC_REF:-}" ]; then
   git -C "$FAKE_AGY_REPO" symbolic-ref HEAD "$FAKE_AGY_SYMBOLIC_REF"
@@ -512,7 +544,7 @@ class WrapperSuccessTest(WrapperHarness):
                 "--output-format",
                 "json",
                 "--settings",
-                SETTINGS_ARGUMENT,
+                settings_argument(str(self.home)),
                 "--print-timeout",
                 "25m",
                 "-p",
@@ -537,17 +569,42 @@ class WrapperSuccessTest(WrapperHarness):
                 args = self.recorded_args()
                 self.assertEqual(1, args.count("--settings"))
                 settings = args[args.index("--settings") + 1]
-                self.assertEqual(SETTINGS_ARGUMENT, settings)
+                self.assertEqual(settings_argument(str(self.home)), settings)
                 # allowNonWorkspaceAccess は、空のディレクトリの外にあるリポジトリを
                 # headless で読むために必要 (無いと read_file が自動で拒否される)。
                 self.assertEqual(
                     {
                         "allowNonWorkspaceAccess": True,
-                        "permissions": {"deny": DENY_RULES},
+                        "permissions": {"deny": deny_rules(str(self.home))},
                     },
                     json.loads(settings),
                 )
                 self.assertLess(args.index("--settings"), args.index("-p"))
+
+    def test_settings_deny_reading_credential_locations_under_home(self) -> None:
+        for home_name in ("home-a", "home with space"):
+            with self.subTest(home=home_name):
+                self.setUp()
+                home = self.base / home_name
+                home.mkdir()
+                result = self.run_wrapper(extra_env={"HOME": str(home)})
+                self.assert_succeeded(result, "既定の助言")
+                args = self.recorded_args()
+                deny = json.loads(args[args.index("--settings") + 1])["permissions"][
+                    "deny"
+                ]
+                for name in CREDENTIAL_LOCATIONS:
+                    with self.subTest(location=name):
+                        self.assertIn(f"read_file({home}/{name})", deny)
+                self.assertEqual(deny_rules(str(home)), deny)
+
+    def test_home_that_is_not_an_absolute_path_is_rejected(self) -> None:
+        for home in ("", "relative/home"):
+            with self.subTest(home=home):
+                self.setUp()
+                result = self.run_wrapper(extra_env={"HOME": home})
+                self.assert_failed(result, 1, agy_invoked=False)
+                self.assert_wrapper_tmpdir_is_empty()
 
     def test_agy_cwd_is_an_empty_directory_under_tmpdir_outside_work_trees(
         self,
@@ -916,8 +973,83 @@ class WrapperWorkspaceGuardTest(WrapperHarness):
         )
         self.assert_failed(result, 5, agy_invoked=True)
 
-    def test_added_ref_is_workspace_modified(self) -> None:
+    def test_added_branch_is_not_compared(self) -> None:
         result = self.run_in_repo(extra_env={"FAKE_AGY_ADD_REF": "refs/heads/added"})
+        self.assert_succeeded(result, "既定の助言")
+        self.assertEqual(
+            self.git("rev-parse", "HEAD"), self.git("rev-parse", "refs/heads/added")
+        )
+
+    def add_linked_worktree(self) -> Path:
+        """branch other を checkout した worktree を、repo の外 (隣) に作る。"""
+        linked = self.base / "linked-worktree"
+        self.git("worktree", "add", "--quiet", "-b", "other", str(linked))
+        return linked
+
+    def test_commit_in_another_worktree_is_not_compared(self) -> None:
+        linked = self.add_linked_worktree()
+        other_before = self.git("rev-parse", "refs/heads/other")
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_COMMIT": "1", "FAKE_AGY_REPO": str(linked)}
+        )
+        self.assert_succeeded(result, "既定の助言")
+        self.assertNotEqual(other_before, self.git("rev-parse", "refs/heads/other"))
+
+    def test_commit_in_the_main_worktree_is_not_compared_from_a_linked_worktree(
+        self,
+    ) -> None:
+        linked = self.add_linked_worktree()
+        master_before = self.git("rev-parse", "HEAD")
+        result = self.run_in_repo(
+            cwd=linked,
+            extra_env={"FAKE_AGY_COMMIT": "1", "FAKE_AGY_REPO": str(self.repo)},
+        )
+        self.assert_succeeded(result, "既定の助言")
+        self.assertIn(os.path.realpath(linked), self.recorded_prompt())
+        self.assertNotEqual(master_before, self.git("rev-parse", "HEAD"))
+
+    def test_new_commit_in_a_linked_worktree_is_workspace_modified(self) -> None:
+        linked = self.add_linked_worktree()
+        result = self.run_in_repo(
+            cwd=linked,
+            extra_env={"FAKE_AGY_COMMIT": "1", "FAKE_AGY_REPO": str(linked)},
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+
+    def test_stash_in_another_worktree_is_not_compared(self) -> None:
+        linked = self.add_linked_worktree()
+        (linked / "tracked.txt").write_text("modified in linked\n", encoding="utf-8")
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_STASH": "1", "FAKE_AGY_REPO": str(linked)}
+        )
+        self.assert_succeeded(result, "既定の助言")
+        self.assertTrue(self.git("rev-parse", "--verify", "-q", "refs/stash").strip())
+        self.assertEqual("", run_git(linked, self.home, "status", "--porcelain"))
+
+    def test_remote_tracking_ref_update_is_not_compared(self) -> None:
+        # fetch と同じく、既存の remote-tracking branch を新しい commit へ進める。
+        self.git("update-ref", "refs/remotes/origin/master", "HEAD")
+        self.git("commit", "--quiet", "--allow-empty", "-m", "second")
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_ADD_REF": "refs/remotes/origin/master"}
+        )
+        self.assert_succeeded(result, "既定の助言")
+        self.assertEqual(
+            self.git("rev-parse", "HEAD"),
+            self.git("rev-parse", "refs/remotes/origin/master"),
+        )
+
+    def test_branch_move_on_a_detached_head_is_not_compared(self) -> None:
+        branch = self.git("symbolic-ref", "HEAD").strip()
+        self.git("commit", "--quiet", "--allow-empty", "-m", "second")
+        self.git("checkout", "--quiet", "--detach", "HEAD~1")
+        result = self.run_in_repo(extra_env={"FAKE_AGY_ADD_REF": branch})
+        self.assert_succeeded(result, "既定の助言")
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.git("rev-parse", branch))
+
+    def test_new_commit_on_a_detached_head_is_workspace_modified(self) -> None:
+        self.git("checkout", "--quiet", "--detach")
+        result = self.run_in_repo(extra_env={"FAKE_AGY_COMMIT": "1"})
         self.assert_failed(result, 5, agy_invoked=True)
 
     def test_git_config_change_is_workspace_modified(self) -> None:
@@ -1058,7 +1190,7 @@ class PluginMetadataContractTest(unittest.TestCase):
     def test_plugin_readme_documents_the_read_only_boundary(self) -> None:
         readme = read_text(PLUGIN_README)
         for literal in (
-            SETTINGS_ARGUMENT,
+            SETTINGS_TEMPLATE,
             "execute_url(*)",
             "download_url(*)",
             ".agents/",
@@ -1070,6 +1202,7 @@ class PluginMetadataContractTest(unittest.TestCase):
             with self.subTest(literal=literal):
                 self.assertIn(literal, readme)
         self.assertNotIn("mktemp", readme)
+        self.assertNotIn("for-each-ref", readme, "HEAD の branch 以外の ref は比べない")
 
     def test_plugin_has_no_hooks_or_commands(self) -> None:
         self.assertFalse((PLUGIN_DIR / "hooks").exists(), "hook は持たない")
@@ -1211,10 +1344,10 @@ class WrapperScriptStaticTest(unittest.TestCase):
             "/tmp",
             "--mode plan --output-format json",
             "--print-timeout 25m -p <prompt>",
-            SETTINGS_ARGUMENT,
+            SETTINGS_TEMPLATE,
             "git rev-parse --verify -q HEAD",
+            "git rev-parse --verify -q <branch>",
             "git symbolic-ref -q HEAD",
-            "git for-each-ref --format='%(refname) %(objectname)'",
             "git status --porcelain=v1 -z --untracked-files=all",
             "GIT_INDEX_FILE",
             "GIT_OBJECT_DIRECTORY",
@@ -1227,6 +1360,9 @@ class WrapperScriptStaticTest(unittest.TestCase):
         ):
             with self.subTest(literal=literal):
                 self.assertIn(literal, self.header)
+        self.assertNotIn(
+            "for-each-ref", self.text, "HEAD の branch 以外の ref は比べない"
+        )
 
     def test_exit_precedence_is_documented_in_header_readme_and_runner(self) -> None:
         for path, text in (

@@ -1,6 +1,6 @@
 ---
 name: antigravity-advisor-runner
-description: 親から受け取った相談 request を session scratchpad のファイルに書き、Antigravity CLI (agy) を git の work tree の外の空のディレクトリで、書き込み・shell・MCP・URL の取得を拒否する権限設定とともに起動する wrapper を 1 回だけ実行して、read-only の相談で得た助言を親 session に返す runner subagent。Agent tool の subagent_type="antigravity-advisor:antigravity-advisor-runner", model="sonnet" で起動する。書き込むのは session scratchpad の request ファイルだけで、リポジトリのファイルの編集と Agent の起動は行わない。
+description: 親から受け取った相談 request を session scratchpad のファイルに書き、Antigravity CLI (agy) を git の work tree の外の空のディレクトリで、書き込み・shell・MCP・URL の取得と認証情報の置き場所の読み取りを拒否する権限設定とともに起動する wrapper を 1 回だけ実行して、read-only の相談で得た助言を親 session に返す runner subagent。Agent tool の subagent_type="antigravity-advisor:antigravity-advisor-runner", model="sonnet" で起動する。書き込むのは session scratchpad の request ファイルだけで、リポジトリのファイルの編集と Agent の起動は行わない。
 tools: Bash, Write, Read
 model: sonnet
 color: green
@@ -10,7 +10,7 @@ antigravity-advisor plugin の相談 runner。親から受け取った相談 req
 
 親はこの agent を `subagent_type: "antigravity-advisor:antigravity-advisor-runner"`、`model: "sonnet"` で起動し、self-contained な相談 request を prompt として渡す。
 
-read-only は wrapper が守る。wrapper は agy を git の work tree の外の空のディレクトリで起動して相談対象のリポジトリの `.agents/` (hook・MCP・rules・skills) を読み込ませず、書き込み・shell・MCP・URL の取得を権限設定で拒否し、git の work tree 内では実行前後の変化を検査する。agy の読み取りはローカルのどのファイルにも及び、global の `~/.gemini/config` の設定は効くため、この runner は wrapper の出力を親へ返すだけで、それ以上の保証を主張しない。
+read-only は wrapper が守る。wrapper は agy を git の work tree の外の空のディレクトリで起動して相談対象のリポジトリの `.agents/` (hook・MCP・rules・skills) を読み込ませず、書き込み・shell・MCP・URL の取得と `$HOME` の下の認証情報の置き場所の読み取りを権限設定で拒否し、git の work tree 内では実行前後の変化を検査する。agy の読み取りは認証情報の置き場所を除くローカルのどのファイルにも及び、global の `~/.gemini/config` の設定は効くため、この runner は wrapper の出力を親へ返すだけで、それ以上の保証を主張しない。
 
 ## 手順
 
@@ -76,7 +76,7 @@ Recovery direction: <概念的な次の一手>
 | 2 | invalid-request | request が空でないこと、`ANTIGRAVITY_ADVISOR_MODEL` が英数字と `.` `_` `-` だけの model 名であることを確認する |
 | 3 | agy-unavailable | agy CLI と jq が install され PATH 上にあることを確認する |
 | 4 | agy-failed | agy のログイン状態、`ANTIGRAVITY_ADVISOR_MODEL` の model 名、利用枠、agy が権限設定を受け付けるかを確認する |
-| 5 | workspace-modified | 相談の前後で、`.git` の設定・hook・info、HEAD・ref、または working tree の状態や内容が変わった。変更の主体 (agy、親 session、ユーザー) は区別できないため、親が `git status`・`git diff`・`git log` と `.git` の設定・hook で変更内容を確認する |
+| 5 | workspace-modified | 相談の前後で、`.git` の設定・hook・info、HEAD の branch とその commit、または working tree の状態や内容が変わった。変更の主体 (agy、親 session、ユーザー) は区別できないため、親が `git status`・`git diff`・`git log` と `.git` の設定・hook で変更内容を確認する |
 | 6 | incomplete-response | agy の応答が途中で終わったか、拒否された操作があった。相談の範囲を絞って request を組み直すか、相談なしで続行する |
 | 上記以外の非 0 | other | 一時ディレクトリの作成 (git の work tree の外に作れない場合を含む) や request のコピー等、wrapper 内部の失敗。環境 (TMPDIR と /tmp の場所・空き・権限、git の版) を確認する |
 

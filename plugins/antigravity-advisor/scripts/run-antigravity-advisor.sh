@@ -30,6 +30,8 @@
 #   --is-inside-work-tree` が成功する、または祖先に `.git` がある) 場合は削除して `/tmp`
 #   の直下に作り直し、それでも中なら exit 1。どちらも EXIT trap で削除し、成功・失敗の
 #   どちらでも残さない
+# - HOME: 権限設定の deny の規則に、`$HOME` の下の認証情報の置き場所を絶対パスで書くために
+#   使う。空、または `/` で始まらない場合は agy を起動せず exit 1
 #
 # ## 必要なコマンド
 #
@@ -47,9 +49,11 @@
 #    - `<git-dir>/config`・`config.worktree`・`hooks/` 配下・`info/` 配下の各ファイルの
 #      path と、内容のハッシュ (`git hash-object --no-filters`) と実行権の一覧
 #      (worktree では git-dir と common dir の両方)
-#    - `git symbolic-ref -q HEAD` (detached なら空) と `git rev-parse --verify -q HEAD`
-#      (commit の無い repo なら空) と `git for-each-ref --format='%(refname) %(objectname)'`
-#      の出力
+#    - HEAD の branch とその commit。`git symbolic-ref -q HEAD` で得る branch 名と、
+#      `git rev-parse --verify -q <branch>` で得るその branch の commit (commit の無い
+#      branch なら空)。detached HEAD のときは `git rev-parse --verify -q HEAD` で得る HEAD
+#      の commit だけ。他の ref (別の worktree の branch、stash、remote-tracking branch、
+#      tag 等) は比べない
 #    - `git status --porcelain=v1 -z --untracked-files=all` の出力
 #    - working tree 全体 (ignore されていない未追跡のファイルを含む) の tree OID。
 #      一時的な index (`GIT_INDEX_FILE`) と一時的な object ディレクトリ
@@ -63,14 +67,16 @@
 #    別のフラグを置くとエラーになるため、`-p <prompt>` をフラグ列の最後に置く。
 #
 #      agy --mode plan --output-format json [--model <model>] \
-#        --settings '{"allowNonWorkspaceAccess":true,"permissions":{"deny":["write_file(*)","command(*)","mcp(*)","read_url(*)","execute_url(*)","download_url(*)"]}}' \
+#        --settings '{"allowNonWorkspaceAccess":true,"permissions":{"deny":["write_file(*)","command(*)","mcp(*)","read_url(*)","execute_url(*)","download_url(*)","read_file(<HOME>/.ssh)","read_file(<HOME>/.gnupg)","read_file(<HOME>/.aws)","read_file(<HOME>/.config)","read_file(<HOME>/.gemini)","read_file(<HOME>/.claude)","read_file(<HOME>/.netrc)","read_file(<HOME>/.git-credentials)","read_file(<HOME>/.docker)","read_file(<HOME>/.kube)"]}}' \
 #        --print-timeout 25m -p <prompt>
 #
 #    agy の stdout と stderr は記録用の一時ディレクトリのファイルに書く。
 #    agy は cwd のリポジトリの `.agents/` (hook・MCP・rules・skills) を読み込むため、
 #    相談対象のリポジトリではなく git の work tree の外の空のディレクトリを cwd にする。
 #    --settings はこのセッションに限って、ファイルの書き込み・shell の実行・MCP・URL の
-#    取得・実行・download を権限設定で拒否する。値は固定である。
+#    取得・実行・download と、`$HOME` の下の認証情報の置き場所の読み取りを権限設定で
+#    拒否する。`<HOME>` は実行時の `$HOME` の値で、wrapper が jq で JSON の文字列として
+#    埋め込む。それ以外の部分は固定である。
 #    prompt は英語の固定文で、request のコピーの絶対パスと、相談対象のリポジトリのルートの
 #    絶対パス (cwd が git の work tree 内ならその toplevel、外ならその cwd) を含み、request
 #    の本文は含まない。prompt は次を指示する:
@@ -101,13 +107,13 @@
 # | 2 | invalid-request | 引数が不正、または ANTIGRAVITY_ADVISOR_MODEL が不正 |
 # | 3 | agy-unavailable | agy または jq が PATH に無い |
 # | 4 | agy-failed | agy が非 0 で終了した |
-# | 5 | workspace-modified | cwd が git の work tree 内で、agy の実行前後に `.git` の設定・hook・info、HEAD・ref、status、working tree の内容のいずれかが変わった |
+# | 5 | workspace-modified | cwd が git の work tree 内で、agy の実行前後に `.git` の設定・hook・info、HEAD の branch とその commit、status、working tree の内容のいずれかが変わった |
 # | 6 | incomplete-response | agy の stdout が JSON 1 つでない、`.status` が "SUCCESS" でない、`.denied_actions` が空でない、または `.response` が空 |
 #
 # agy の実行後に複数の条件が同時に成り立つ場合は、5 (workspace-modified) > 4 (agy-failed) > 6 (incomplete-response)
-# の順に採用する。上の表にない失敗 (一時ディレクトリの作成、work tree の外に一時ディレクトリを
-# 作れない、request のコピー、実行前の記録の失敗等) は exit 1 とし、runner は Failure class を
-# other とする。
+# の順に採用する。上の表にない失敗 (HOME が絶対パスでない、一時ディレクトリの作成、work tree
+# の外に一時ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は exit 1 とし、
+# runner は Failure class を other とする。
 #
 # ## stdout / stderr
 #
@@ -129,7 +135,10 @@
 set -u
 
 readonly LOG_PREFIX="[run-antigravity-advisor]"
-readonly PERMISSION_SETTINGS='{"allowNonWorkspaceAccess":true,"permissions":{"deny":["write_file(*)","command(*)","mcp(*)","read_url(*)","execute_url(*)","download_url(*)"]}}'
+# 権限設定で常に拒否する操作 (書き込み・shell・MCP・URL の取得・実行・download) の規則。
+readonly FIXED_DENY_RULES_JSON='["write_file(*)","command(*)","mcp(*)","read_url(*)","execute_url(*)","download_url(*)"]'
+# 読み取りを拒否する、$HOME の下の認証情報の置き場所。
+readonly CREDENTIAL_LOCATIONS_JSON='[".ssh",".gnupg",".aws",".config",".gemini",".claude",".netrc",".git-credentials",".docker",".kube"]'
 readonly PRINT_TIMEOUT="25m"
 readonly FALLBACK_TEMPORARY_ROOT="/tmp"
 
@@ -185,6 +194,21 @@ is_valid_model_name() {
     esac
     exit 0
   )
+}
+
+# agy に --settings で渡す権限設定の JSON を、空白を含まない 1 行で stdout に出す。
+# 認証情報の置き場所は $1 (home ディレクトリの絶対パス) を前に付けた `read_file(<path>)` の
+# deny の規則にする。値の JSON のエスケープは jq に任せる。
+build_permission_settings() {
+  jq -n -c --arg home "$1" \
+    --argjson fixed "$FIXED_DENY_RULES_JSON" \
+    --argjson credentials "$CREDENTIAL_LOCATIONS_JSON" '
+    {
+      allowNonWorkspaceAccess: true,
+      permissions: {
+        deny: ($fixed + ($credentials | map("read_file(" + $home + "/" + . + ")")))
+      }
+    }' 2> /dev/null
 }
 
 git_is_available() {
@@ -284,12 +308,24 @@ record_control_files() {
   done < "$1.control-paths"
 }
 
-# HEAD の参照先・HEAD の commit・すべての ref を $1.refs に書く。
+# HEAD の branch 名とその branch の commit を $1.refs に書く。detached HEAD のときは HEAD の
+# commit だけを書く。別の worktree の commit・stash・fetch で変わる他の ref は書かない。
+# symbolic-ref は detached HEAD のとき、rev-parse は commit の無い branch のとき 1 で終わり、
+# どちらも git の異常のときは 128 で終わるため、1 より大きい終了コードだけを記録の失敗とする。
 record_refs() {
-  printf 'symbolic-ref %s\nhead %s\n' \
-    "$(run_git -C "$repository_root" symbolic-ref -q HEAD 2> /dev/null)" \
-    "$(run_git -C "$repository_root" rev-parse --verify -q HEAD 2> /dev/null)" > "$1.refs"
-  run_git -C "$repository_root" for-each-ref --format='%(refname) %(objectname)' >> "$1.refs" 2> /dev/null
+  local branch commit status=0
+  branch=$(run_git -C "$repository_root" symbolic-ref -q HEAD 2> /dev/null) || status=$?
+  [ "$status" -le 1 ] || return 1
+  status=0
+  if [ -n "$branch" ]; then
+    commit=$(run_git -C "$repository_root" rev-parse --verify -q "$branch" 2> /dev/null) || status=$?
+    [ "$status" -le 1 ] || return 1
+    printf 'branch %s %s\n' "$branch" "$commit" > "$1.refs"
+  else
+    commit=$(run_git -C "$repository_root" rev-parse --verify -q HEAD 2> /dev/null) || status=$?
+    [ "$status" -le 1 ] || return 1
+    printf 'detached %s\n' "$commit" > "$1.refs"
+  fi
 }
 
 record_status() {
@@ -326,9 +362,9 @@ fail_if_workspace_changed() {
   cmp -s "$before.control" "$after.control" ||
     fail 5 "agy の実行中に .git の設定・hook・info が変わりました"
   record_refs "$after" ||
-    fail 5 "実行後の ref を記録できないため、変更されたものとして扱います"
+    fail 5 "実行後の HEAD の branch とその commit を記録できないため、変更されたものとして扱います"
   cmp -s "$before.refs" "$after.refs" ||
-    fail 5 "agy の実行中に HEAD または ref が変わりました。git log と git for-each-ref で変更を確認してください"
+    fail 5 "agy の実行中に HEAD の branch またはその commit が変わりました。git status と git log で変更を確認してください"
   record_status "$after" ||
     fail 5 "実行後の working tree の状態を記録できないため、変更されたものとして扱います"
   cmp -s "$before.status" "$after.status" ||
@@ -394,6 +430,15 @@ if [ -n "$model" ]; then
   model_args=(--model "$model")
 fi
 
+# --- 権限設定 ---
+home_directory=${HOME:-}
+case $home_directory in
+  /*) ;;
+  *) fail 1 "HOME が絶対パスでないため、認証情報の置き場所の読み取りを拒否する権限設定を作れません" ;;
+esac
+permission_settings=$(build_permission_settings "$home_directory") ||
+  fail 1 "agy に渡す権限設定を jq で作れません"
+
 # --- 相談対象のリポジトリ ---
 compare_workspace=0
 if cwd_is_inside_git_work_tree; then
@@ -426,7 +471,7 @@ agy_status=0
 (
   cd "$agy_directory" || exit 125
   exec agy --mode plan --output-format json ${model_args[@]+"${model_args[@]}"} \
-    --settings "$PERMISSION_SETTINGS" \
+    --settings "$permission_settings" \
     --print-timeout "$PRINT_TIMEOUT" -p "$prompt"
 ) > "$state_directory/agy-stdout" 2> "$state_directory/agy-stderr" || agy_status=$?
 
