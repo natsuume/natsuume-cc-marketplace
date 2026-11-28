@@ -183,7 +183,7 @@ merge 実行 repo の `refs/remotes/origin/<base>` (`<base>` は gh が返す PR
 ### 判定の制約
 
 - **途中の commit の内容は見ません**: net diff だけで判定するため、コードを足した commit を後の commit で消した PR も、net diff が文書だけなら記録を要求しません。squash 以外の方法で merge すると、その commit は merge 先の履歴に残ります
-- **gate はローカルの `refs/remotes/origin/<base>` を基準にし、fetch しません**: ref が古いと base に取り込み済みの変更も範囲に入り、コードの変更として記録を要求することがあります。wrapper は PR の base commit がこの ref に含まれなければ 1 度 fetch してから判定するため、wrapper の実行後は gate も更新後の ref で判定します
+- **gate はローカルの `refs/remotes/origin/<base>` を基準にし、fetch しません**: ref が古いと base に取り込み済みの変更も範囲に入り、コードの変更として記録を要求することがあります。逆に、ref が base branch の実際の履歴と食い違う場合 (別の場所で base branch が force push された後に fetch していない、origin 以外の remote から base の変更を取り込んだ等) は、コードの変更を含む PR を文書だけと判定することがあります。wrapper は PR の base commit がこの ref に含まれなければ 1 度 fetch してから判定するため、wrapper の実行後は gate も更新後の ref で判定します
 - **path だけで判定します**: ファイルの mode は見ないため、拡張子が対象の symlink や、文書への実行ビットの付与もテキスト系文書の変更として扱います
 - **列挙に無いものは文書として扱います**: 列挙に無い場所にある agent の指示ファイル、`CLAUDE.md` から `@path` で読み込まれる文書、doctest のように実行される文書は、テキスト系文書と判定されます
 

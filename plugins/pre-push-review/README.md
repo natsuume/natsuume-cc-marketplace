@@ -213,7 +213,7 @@ basename の拡張子 (最後の `.` より後ろ) が、ASCII の大文字小�
 ### 判定の制約
 
 - **途中の commit の内容は見ません**: net diff だけで判定するため、コードを足した commit を後の commit で消した branch も、net diff が文書だけなら code review を要求しません。push される履歴にはその commit が残ります (security review は各 commit の patch も検査します)
-- **ローカルの `refs/remotes/origin/<base>` を基準にします**: gate は fetch しません。ref が古いと base に取り込み済みの変更も範囲に入り、コードの変更として code review を要求することがあります
+- **ローカルの `refs/remotes/origin/<base>` を基準にします**: gate は fetch しません。ref が古いと base に取り込み済みの変更も範囲に入り、コードの変更として code review を要求することがあります。逆に、ref が base branch の実際の履歴と食い違う場合 (別の場所で base branch が force push された後に fetch していない、origin 以外の remote から base の変更を取り込んだ等) は、コードの変更を含む範囲を文書だけと判定することがあります
 - **path だけで判定します**: ファイルの mode は見ないため、拡張子が対象の symlink や、文書への実行ビットの付与もテキスト系文書の変更として扱います
 - **列挙に無いものは文書として扱います**: 列挙に無い場所にある agent の指示ファイル、`CLAUDE.md` から `@path` で読み込まれる文書、doctest のように実行される文書は、テキスト系文書と判定されます
 
