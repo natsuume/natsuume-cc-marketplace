@@ -117,6 +117,23 @@ NODE = shutil.which("node")
 # 実際の gitleaks (fake ではない)。無い環境では実物を使うテストを skip する。
 REAL_GITLEAKS = shutil.which("gitleaks")
 
+
+def git_version() -> tuple[int, ...]:
+    """PATH の git の版 (`git --version` の先頭の 3 つの数字。3 つ目が無ければ 0)。
+    取れなければ空の tuple。"""
+    if GIT is None:
+        return ()
+    output = subprocess.run(
+        [GIT, "--version"], capture_output=True, text=True, check=False
+    ).stdout
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", output)
+    if not match:
+        return ()
+    return tuple(int(part) if part is not None else 0 for part in match.groups())
+
+
+GIT_VERSION = git_version()
+
 # fixture と hook の git 解決を実行環境から切り離すため、継承しない環境変数。
 # XDG_CONFIG_HOME は git が global 設定を探す場所になるため外す (HOME は一時
 # ディレクトリへ差し替える)。
@@ -130,6 +147,7 @@ INHERITED_ENV_TO_DROP = (
     "GIT_CEILING_DIRECTORIES",
     "GIT_GRAFT_FILE",
     "GIT_NO_REPLACE_OBJECTS",
+    "GIT_NO_LAZY_FETCH",
     "XDG_CONFIG_HOME",
     # gitleaks の設定を利用者の環境から渡す変数 (判定 lib はこれがあると `--config` を渡さない)。
     "GITLEAKS_CONFIG",
@@ -1324,6 +1342,21 @@ class TextOnlyRangeScanCostTest(WorkspaceTestCase):
                     call,
                 )
 
+    def test_commit_count_stops_after_the_limit(self) -> None:
+        """条件 1 の commit 数は上限 + 1 で数えるのをやめる (上限を超える範囲を全部数えない)。"""
+        repository = self.create_branch_with_text_commits(3)
+        git_log = self.install_logging_git_shim()
+        self.assertEqual(self.range_status(repository), 0)
+        count_calls = [
+            call
+            for call in git_log.read_text(encoding="utf-8").splitlines()
+            if " rev-list " in f" {call} "
+            and " --count " in f" {call} "
+            and "--min-parents" not in call
+        ]
+        self.assertEqual(len(count_calls), 1, count_calls)
+        self.assertIn(f" --max-count={self.MAX_RANGE_COMMITS + 1} ", f" {count_calls[0]} ")
+
     def create_base_with_gitleaks_files_and_docs_commit(self) -> Repository:
         repository = self.create_repository("repo-with-gitleaks-files")
         repository.git("switch", "-q", "master")
@@ -1405,6 +1438,79 @@ class TextOnlyTimeLimitTest(WorkspaceTestCase):
                 )
 
 
+@unittest.skipUnless(
+    GIT_VERSION >= (2, 45, 1), "requires git 2.45.1 or later (GIT_NO_LAZY_FETCH)"
+)
+class TextOnlyPartialCloneTest(WorkspaceTestCase):
+    """partial clone で手元に無い object を、判定のために remote から取りに行かない。
+
+    remote の upload-pack を遅らせ、取りに行けば時間の上限 (10 秒) を超える状態にする。
+    """
+
+    UPLOAD_PACK_DELAY_SECONDS = 15
+
+    def create_partial_clone(self) -> Repository:
+        """feature branch に文書の commit を 2 つ持つ repository を `--filter=tree:0` で clone
+        し、clone の後で origin の upload-pack を遅らせる。"""
+        assert GIT is not None
+        source = self.create_repository("source")
+        source.write("README.md", "# updated\n")
+        source.commit_all("docs")
+        source.write("docs/new.md", "new\n")
+        source.commit_all("more docs")
+        source.git("config", "uploadpack.allowFilter", "true")
+        source.git("config", "uploadpack.allowAnySHA1InWant", "true")
+        clone = Repository(self.root / "clone", self.env)
+        Repository(self.root, self.env).git(
+            "clone",
+            "-q",
+            "--filter=tree:0",
+            "--branch",
+            "feature",
+            f"file://{source.path}",
+            str(clone.path),
+        )
+        # merge-base の tree が手元に無いこと。確かめる git 自体が取りに行かないよう
+        # GIT_NO_LAZY_FETCH を付け、tree の OID は commit の object から読む (`<commit>^{tree}`
+        # は tree の object を読もうとする)。
+        no_fetch = Repository(clone.path, {**self.env, "GIT_NO_LAZY_FETCH": "1"})
+        merge_base = no_fetch.merge_base("origin/master")
+        tree_line = no_fetch.git("cat-file", "commit", merge_base).splitlines()[0]
+        self.assertTrue(tree_line.startswith("tree "), tree_line)
+        lookup = subprocess.run(
+            [GIT, "cat-file", "-e", tree_line[len("tree ") :]],
+            cwd=clone.path,
+            env=no_fetch.env,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertNotEqual(lookup.returncode, 0, "merge-base の tree が手元にある")
+        slow_upload_pack = self.root / "slow-upload-pack"
+        slow_upload_pack.write_text(
+            "#!/bin/sh\n"
+            f"sleep {self.UPLOAD_PACK_DELAY_SECONDS}\n"
+            f'exec {shlex.quote(GIT)} upload-pack "$@"\n',
+            encoding="utf-8",
+        )
+        slow_upload_pack.chmod(slow_upload_pack.stat().st_mode | stat.S_IXUSR)
+        clone.git("config", "remote.origin.uploadpack", str(slow_upload_pack))
+        return clone
+
+    def test_missing_objects_are_not_fetched_during_the_check(self) -> None:
+        clone = self.create_partial_clone()
+        for label, call in {
+            "range": ("is_text_only_range_in", str(clone.path), "origin/master", "HEAD"),
+            "push": ("is_text_only_push_in", str(clone.path), "master"),
+        }.items():
+            with self.subTest(function=label):
+                started = time.monotonic()
+                status = self.call_text_paths(*call)
+                elapsed = time.monotonic() - started
+                self.assertEqual(status, 1)
+                self.assertLess(elapsed, 10)
+
+
 class TextOnlyPushPredictionTest(WorkspaceTestCase):
     """is_text_only_push_in: index / working tree の clean と origin/<base>..HEAD の判定。"""
 
@@ -1445,6 +1551,45 @@ class TextOnlyPushPredictionTest(WorkspaceTestCase):
     def test_missing_remote_base_is_not_predicted_text_only(self) -> None:
         repository = self.create_text_only_branch()
         self.assertEqual(self.push_status(repository, base="no-such-base"), 1)
+
+    # 短い名前 `origin/master` の解決で、remote-tracking ref より先に選ばれる ref。
+    SHADOW_REFS = {
+        "branch": "refs/heads/origin/master",
+        "tag": "refs/tags/origin/master",
+        "refs_root": "refs/origin/master",
+    }
+
+    def test_refs_shadowing_the_remote_base_do_not_hide_code_commits(self) -> None:
+        """`origin/<base>` という名前の branch・tag・`refs/origin/<base>` があっても、base は
+        remote-tracking ref (`refs/remotes/origin/<base>`) で解決する。"""
+        for label, shadow in self.SHADOW_REFS.items():
+            with self.subTest(shadow=label):
+                repository = self.create_repository(f"repo-{label}")
+                repository.git(
+                    "update-ref", "refs/remotes/origin/master", repository.rev("master")
+                )
+                repository.write("tool.py", "print('changed')\n")
+                code = repository.commit_all("code")
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                repository.git("update-ref", shadow, code)
+                # 短い名前は shadow の ref に解決され、コードの commit が範囲から外れる。
+                self.assertEqual(repository.rev("origin/master"), code)
+                self.assertEqual(self.range_status(repository, base="origin/master"), 0)
+                self.assertEqual(self.push_status(repository), 1)
+
+    def test_shadow_ref_without_the_remote_base_is_not_predicted_text_only(
+        self,
+    ) -> None:
+        """remote-tracking ref が無ければ、同名の別の ref があっても 1 を返す。"""
+        for label, shadow in self.SHADOW_REFS.items():
+            with self.subTest(shadow=label):
+                repository = self.create_repository(f"repo-{label}")
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                repository.git("update-ref", shadow, repository.rev("master"))
+                self.assertEqual(self.range_status(repository, base="origin/master"), 0)
+                self.assertEqual(self.push_status(repository), 1)
 
 
 class TextOnlySecretsScanTest(WorkspaceTestCase):
@@ -1739,6 +1884,78 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
         self.assertNotEqual(record["cwd"], str(repository.path))
         self.assertNotIn(str(repository.path), record["args"])
         self.assertNotIn(str(repository.path / ".gitleaks.toml"), record["args"])
+
+    def create_branch_on_base(
+        self, name: str, prepare_base: Callable[[Repository], None]
+    ) -> Repository:
+        """prepare_base で base (master) の tree を用意し、その上の feature branch で README.md
+        だけを変える repository。"""
+        repository = self.create_repository(name)
+        repository.git("switch", "-q", "master")
+        prepare_base(repository)
+        repository.commit_all("base config")
+        repository.git("switch", "-q", "feature")
+        repository.git("reset", "-q", "--hard", "master")
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        return repository
+
+    def test_unreadable_base_config_stops_the_skip(self) -> None:
+        """base の tree に `.gitleaks.toml` があるのに読めない場合 (blob が手元に無い・通常
+        ファイルでない) は、既定のルールに切り替えずに 2 を返し、gitleaks を起動しない。"""
+
+        def config_with_custom_rule(repository: Repository) -> None:
+            repository.write(
+                ".gitleaks.toml",
+                "[extend]\nuseDefault = true\n\n"
+                '[[rules]]\nid = "custom-rule"\n'
+                "regex = '''custom-secret-[0-9]{8}'''\n",
+            )
+
+        def config_as_symlink(repository: Repository) -> None:
+            config_with_custom_rule(repository)
+            (repository.path / ".gitleaks.toml").rename(
+                repository.path / "other.toml"
+            )
+            os.symlink("other.toml", repository.path / ".gitleaks.toml")
+
+        for label, prepare_base in {
+            "missing_blob": config_with_custom_rule,
+            "symlink": config_as_symlink,
+        }.items():
+            with self.subTest(case=label):
+                self.gitleaks_log.unlink(missing_ok=True)
+                repository = self.create_branch_on_base(f"repo-{label}", prepare_base)
+                entry = repository.git("ls-tree", "master", "--", ".gitleaks.toml")
+                if label == "missing_blob":
+                    self.assertTrue(entry.startswith("100644 blob "), entry)
+                    blob = repository.rev("master:.gitleaks.toml")
+                    loose_object = (
+                        repository.git_dir() / "objects" / blob[:2] / blob[2:]
+                    )
+                    loose_object.chmod(loose_object.stat().st_mode | stat.S_IWUSR)
+                    loose_object.unlink()
+                else:
+                    self.assertTrue(entry.startswith("120000 blob "), entry)
+                self.assertEqual(self.range_status(repository), 2)
+                self.assertEqual(self.gitleaks_calls(), [])
+                self.assert_no_leftover_temporary_files()
+
+    def test_base_config_is_read_from_the_tree_root_in_a_subdirectory(self) -> None:
+        """target_cwd が subdirectory でも、base の tree の root にある `.gitleaks.toml` を
+        読む。"""
+        repository = self.create_branch_on_base_with_gitleaks_files()
+        (repository.path / "docs").mkdir()
+        self.assertEqual(
+            self.call_text_paths(
+                "is_text_only_range_in",
+                str(repository.path / "docs"),
+                "master",
+                "HEAD",
+            ),
+            0,
+        )
+        self.assertEqual(self.single_gitleaks_record()["config"], BASE_GITLEAKS_CONFIG)
 
     def test_user_config_environment_is_respected(self) -> None:
         """`GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` が空でなければ `--config` を渡さない
@@ -2579,6 +2796,26 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
                 self.write_record(repository, head)
                 self.assertEqual(self.run_gate(repository).stdout, b"")
 
+    def test_unusable_head_sha_falls_back_to_record(self) -> None:
+        """gh が返す head SHA が 40 桁の小文字 16 進数でなければ、skip の判定をせずに記録を
+        照合する。判定関数に渡せば成立してしまう値 (短縮・大文字) を使う。"""
+        cases: dict[str, Callable[[str], str]] = {
+            "abbreviated": lambda head: head[:12],
+            "uppercase": lambda head: head.upper(),
+        }
+        for label, make_head in cases.items():
+            with self.subTest(case=label):
+                repository = self.create_pr_repository(f"repo-{label}")
+                base = repository.rev("master")
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                head = make_head(repository.head())
+                self.assertEqual(
+                    self.range_status(repository, base=base, head=head), 0
+                )
+                self.configure_pr(head, base)
+                self.assert_record_deny(self.run_gate(repository))
+
     def test_missing_head_object_falls_back_to_record(self) -> None:
         repository = self.create_pr_repository()
         repository.write("README.md", "# updated\n")
@@ -2771,6 +3008,51 @@ class WrapperTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         self.assertFalse(pending.exists(), "pending attestation が残っている")
         self.assertFalse(final.exists(), "起動前の final attestation が残っている")
         self.assertEqual(len(self.gitleaks_calls()), 1)
+
+    def add_and_remove_a_document(self, repository: Repository) -> None:
+        """文書を足す commit と消す commit を積む (net diff は空で、各 commit はテキスト系
+        文書だけ)。"""
+        repository.write("docs/temporary.md", "temporary\n")
+        repository.commit_all("add a document")
+        repository.remove("docs/temporary.md")
+        repository.commit_all("remove the document")
+        self.assertEqual(
+            repository.changed_paths(
+                repository.merge_base("refs/remotes/origin/master"), "HEAD"
+            ),
+            [],
+        )
+        self.assertEqual(self.range_status(repository), 0)
+
+    @unittest.skipUnless(JQ, "merge wrapper requires jq")
+    def test_merge_wrapper_skips_pr_that_adds_and_removes_a_document(self) -> None:
+        """net diff が空でもテキスト系文書だけの PR は、空の差分の判定より先に skip する
+        (merge gate も同じ判定で記録を要求しない)。"""
+        repository = self.create_merge_repository()
+        self.add_and_remove_a_document(repository)
+        self.configure_merge_pr(repository)
+        pending = repository.git_dir() / MERGE_PENDING_RECORD
+
+        result = self.run_wrapper(MERGE_WRAPPER, repository)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_skip_only_output(result)
+        self.assertFalse(self.tripwire.exists(), "codex companion が起動された")
+        self.assertFalse(pending.exists(), "pending attestation が書かれた")
+
+    def test_push_wrapper_skips_branch_that_adds_and_removes_a_document(self) -> None:
+        """push の wrapper も、文書を足して消した branch を skip する (空 push の判定は各
+        commit の tree も見るため、この branch を空 push とは扱わない)。"""
+        repository = self.create_push_repository()
+        self.add_and_remove_a_document(repository)
+        pending = repository.git_dir() / PUSH_CODEX_PENDING
+
+        result = self.run_wrapper(PUSH_WRAPPER, repository)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_skip_only_output(result)
+        self.assertFalse(self.tripwire.exists(), "codex companion が起動された")
+        self.assertFalse(pending.exists(), "pending attestation が書かれた")
 
     @unittest.skipUnless(JQ, "merge wrapper requires jq")
     def test_merge_wrapper_skip_after_fetching_the_base_writes_nothing_to_stderr(
@@ -3321,6 +3603,23 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                 self.assertIn("`GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML`", body)
                 self.assertNotIn("gitleaks の既定どおり読まれます", body)
                 self.assertIn("deny の理由文にその旨を 1 文加えます", body)
+
+    def test_plugin_readmes_state_that_unreadable_config_stops_the_skip(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "`.gitleaks.toml` があっても読めない場合 (symlink である、blob が手元に"
+                    "無い等) は、既定のルールに切り替えず、skip もしません",
+                    body,
+                )
+
+    def test_plugin_readmes_state_that_missing_objects_are_not_fetched(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn("判定に必要な object が手元に無い", body)
+                self.assertIn("判定では remote から object を取りに行かない", body)
 
     def test_plugin_readmes_list_the_commit_limit(self) -> None:
         for name, path in PLUGIN_READMES.items():

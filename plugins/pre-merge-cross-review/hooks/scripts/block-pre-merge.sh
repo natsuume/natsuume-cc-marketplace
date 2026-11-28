@@ -24,13 +24,15 @@
 # 3. **PR 番号・head SHA・base commit SHA の取得**: merge 対象 PR の番号・現在の head SHA・
 #    base commit SHA を gh (`gh pr view --json number,headRefOid,baseRefOid`) で取得する。
 #    番号と head SHA を取得できない・形式が不正な場合は deny する。
-# 4. **テキスト系文書のみの PR の通過**: base commit SHA が 40 桁の小文字 16 進数の場合に
-#    限り、 merge 実行 repo で `<base commit SHA>..<head SHA>` の変更がテキスト系文書だけかを
-#    lib/text-paths.sh の is_text_only_range_in で判定し、 成立すればレビュー記録を照合せずに
-#    無出力で終了する (既定の許可フローに委ねる)。 起点を GitHub が記録する PR の base commit
-#    にするのは、 ローカルの `refs/remotes/origin/<base>` が PR の実際の base に無い commit を
-#    含みうる (base の履歴の書き換え後にローカルを更新していない等) ためで、 そのまま起点に
-#    すると merge で base に入る commit が判定範囲から外れる。 base commit SHA の欠落・形式
+# 4. **テキスト系文書のみの PR の通過**: base commit SHA と head SHA がともに 40 桁の小文字
+#    16 進数の場合に限り、 merge 実行 repo で `<base commit SHA>..<head SHA>` の変更が
+#    テキスト系文書だけかを lib/text-paths.sh の is_text_only_range_in で判定し、 成立すれば
+#    レビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる)。 起点を GitHub が
+#    記録する PR の base commit にするのは、 ローカルの `refs/remotes/origin/<base>` が PR の
+#    実際の base に無い commit を含みうる (base の履歴の書き換え後にローカルを更新していない等)
+#    ためで、 そのまま起点にすると merge で base に入る commit が判定範囲から外れる。 head SHA も
+#    40 桁に限るのは、 記録の照合 (下記 5.) が 40 桁の完全一致を要求するのに対し、 判定関数は
+#    短縮した SHA や大文字の SHA も解決できるため。 base commit SHA や head SHA の欠落・形式
 #    不正、 lib の読み込み失敗、 判定の不成立 (base や head の object がローカルに無い等の git
 #    失敗を含む) では判定を打ち切り、 次のローカル記録の検証へ進む (判定できない場合は
 #    レビュー必須に倒す)。 テキスト系文書だけでも、 gitleaks が PATH にあり秘匿情報の候補を
@@ -347,10 +349,12 @@ esac
 # テキスト系文書のみの PR は、 レビュー記録を照合せずに既定の許可フローへ委ねる (判定条件と
 # fail-closed 方針は lib/text-paths.sh ヘッダを参照)。 判定範囲の起点は GitHub が記録する PR の
 # base commit (`baseRefOid`) で、 ローカルの remote-tracking ref は使わない (理由はヘッダの
-# 「判定の流れ」 4.)。 base commit SHA は git の引数になるため、 40 桁の小文字 16 進数に限って
-# 判定する (ref 名や短縮 SHA、 option として解釈される値を git へ渡さない)。 lib を読み込めない・
-# base commit SHA が欠落または形式不正・判定が不成立 (base や head の object がローカルに無い
-# 等の git 失敗を含む) のいずれでも、 判定を打ち切って下のレビュー記録の照合へ進む。
+# 「判定の流れ」 4.)。 base commit SHA と head SHA は git の引数になるため、 どちらも 40 桁の
+# 小文字 16 進数に限って判定する (ref 名や短縮 SHA、 option として解釈される値を git へ渡さない。
+# head SHA は上で 16 進数の文字だけからなることを確かめているが、 長さは見ていない)。 lib を
+# 読み込めない・base commit SHA か head SHA が欠落または形式不正・判定が不成立 (base や head の
+# object がローカルに無い等の git 失敗を含む) のいずれでも、 判定を打ち切って下のレビュー記録の
+# 照合へ進む。
 BASE_OID=$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid // empty' 2>/dev/null) || BASE_OID=""
 # 16 進数の文字は範囲表記 (`a-f` 等) を使わずに列挙する (bracket 式の範囲が含む文字は locale
 # によって変わるため)。
@@ -362,7 +366,8 @@ is_full_lowercase_commit_sha() {
 }
 # 通すのは判定関数が 0 を返したときだけ。2 (テキスト系文書だけだが gitleaks による秘匿情報の
 # 検査で止めた) のときは記録を照合し、deny の理由文にその旨を加える (gitleaks の出力は含めない)。
-if [ "$TEXT_PATHS_LOADED" = "1" ] && is_full_lowercase_commit_sha "$BASE_OID"; then
+if [ "$TEXT_PATHS_LOADED" = "1" ] && is_full_lowercase_commit_sha "$BASE_OID" \
+  && is_full_lowercase_commit_sha "$HEAD_SHA"; then
   TEXT_ONLY_STATUS=0
   is_text_only_range_in "$PAYLOAD_CWD" "$BASE_OID" "$HEAD_SHA" || TEXT_ONLY_STATUS=$?
   if [ "$TEXT_ONLY_STATUS" -eq 0 ]; then

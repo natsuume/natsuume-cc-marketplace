@@ -119,7 +119,21 @@
 # 変更されたファイルの数に比例して時間がかかる。時間の上限は、判定の開始から数えて、
 # 各 commit の差分を取る前と raw 差分の各エントリを読むたびに確かめる (bash の `SECONDS`
 # を使うため、1 秒未満の端数の分だけ遅れうる)。秘匿情報の検査の時間は別に上限を設ける
-# (下記「秘匿情報の検査」)。
+# (下記「秘匿情報の検査」)。1 の commit 数は上限 + 1 まで数えたら数えるのをやめる
+# (`rev-list --count --max-count=101`)。上限を大きく超える範囲を全部たどらないため。
+#
+# 時間の上限は git を呼ぶ前に確かめるため、1 回の git の呼び出しが止まったままになると上限を
+# 超える。partial clone (`--filter` を付けて clone した repo) では、git は手元に無い object を
+# remote (promisor) から取りに行き、remote が応答しなければ gate の hook が timeout するまで
+# 止まりうる。そのため is_text_only_range_in と is_text_only_push_in は、関数の中でだけ
+# 環境変数 `GIT_NO_LAZY_FETCH=1` を設定して (`local -x`) git を呼び、手元に無い object を
+# 取りに行かせない (秘匿情報の検査の `git log` を含む)。判定に必要な object が手元に無い範囲は、
+# git の呼び出しが失敗してレビュー必須になる (範囲の判定では 1、秘匿情報の検査では 2)。この
+# 環境変数は git 2.45.1 以降と、同じ修正を取り込んだ保守版 (2.39.4・2.43.4・2.44.1 等) で有効で、
+# それ以外の古い git は無視する (取りに行き、時間の上限を超えうる)。git 2.45.0 は、`git log -p`
+# が差分のための blob を先にまとめて取りに行く処理でこの環境変数を確かめない。同じ働きの
+# `--no-lazy-fetch` option は git 2.45.0 で追加され、それより古い git では未知の option として
+# 失敗するため使わない。
 #
 # 判定は 1 → 2 → 4 → 3 の順に行う。git の呼び出しが 1 回で済む 4 (net diff) を、commit 数に
 # 比例する 3 より先に行い、net diff にテキスト系文書以外の変更がある範囲では各 commit を走査
@@ -132,7 +146,7 @@
 #   - 0: 範囲内の変更がテキスト系文書だけで、秘匿情報の検査も通った (skip してよい)
 #   - 1: 1-4 のいずれかを満たさない (テキスト系文書だけではない、commit 数が上限を超える等)、
 #        graft ファイルがある、判定が時間の上限を超えた、または 1-4 の判定に必要な git の
-#        呼び出しが失敗した
+#        呼び出しが失敗した (判定に必要な object が手元に無い場合を含む)
 #   - 2: テキスト系文書だけだが、gitleaks の結果が canary だけの検出ではなかった (秘匿情報の
 #        候補を検出した・canary を検出しなかった・実行に失敗した)、または gitleaks に渡す入力を
 #        書き出せなかった (`git log` の失敗・空の出力)
@@ -242,6 +256,12 @@
 #   - それ以外の場合、base の tree に `.gitleaks.toml` があればその内容を一時ファイル
 #     (cwd にする空のディレクトリの外) に取り出して `--config` に渡す。無ければ `[extend]` と
 #     `useDefault = true` だけを書いた一時ファイルを渡す (gitleaks の既定のルールだけを使う)
+#   - 「無い」と「読めない」は分ける。entry の有無は `git ls-tree --full-tree -z` で確かめ
+#     (target_cwd が subdirectory でも tree の root からの path で探す)、entry が無いときだけ
+#     既定のルールを使う。entry があっても通常ファイル (`100644` / `100755`) でない (symlink・
+#     ディレクトリ・submodule) か、blob を読めない (object が手元に無い等) 場合と、tree を
+#     読めない場合は exit code 2 にする。既定のルールに切り替えると、base の設定にある独自の
+#     rule だけが当たる値を見逃すため
 #   - どの設定でも、既定の `github-pat` rule を含まない場合 (既定のルールを extend しない等) や、
 #     canary を検出から外す場合 (allowlist・`disabledRules` 等) は、canary が検出されないため
 #     exit code 2 になり、skip しない
@@ -256,11 +276,15 @@
 #
 # ## push の予測 (is_text_only_push_in)
 #
-# push gate と push 前の codex review wrapper が使う。index と working tree が clean
+# push gate と push 前の codex review wrapper が使う。remote-tracking ref
+# `refs/remotes/origin/<base>` があり、index と working tree が clean
 # (`git diff-index --quiet --cached HEAD` と `git diff-files --quiet` がともに成功) で、
-# かつ `origin/<base>..HEAD` が is_text_only_range_in を満たすときだけ成立する。exit code は
-# is_text_only_range_in と同じ (index / working tree が clean でなければ 1。範囲の判定の
-# 2 はそのまま返す)。
+# かつ `refs/remotes/origin/<base>..HEAD` が is_text_only_range_in を満たすときだけ成立する。
+# base を完全な名前で渡すのは、短い名前 `origin/<base>` は同名の ref (`refs/origin/<base>`・
+# tag `origin/<base>`・branch `origin/<base>`) があると remote-tracking ref より先にそちらに
+# 解決され、その ref をコードの commit に向けるだけで範囲からコードの commit を外せるため。
+# exit code は is_text_only_range_in と同じ (remote-tracking ref が無い、または index / working
+# tree が clean でなければ 1。範囲の判定の 2 はそのまま返す)。
 #
 # ## 利用側
 #
@@ -431,8 +455,11 @@ _text_paths_diff_is_text_only() {
 }
 
 # _text_paths_extract_base_file <target_cwd> <base_oid> <path> <destination>
-# base の tree に <path> の blob があれば、その内容を <destination> に書き出す。
-# exit code: 0 = 書き出した、1 = base の tree に無い、2 = 有るが書き出せなかった。
+# base の tree の root からの <path> に entry があり、それが通常ファイル (`100644` / `100755`)
+# の blob なら、その内容を <destination> に書き出す。
+# exit code: 0 = 書き出した、1 = base の tree に entry が無い、2 = tree を読めない・entry が
+# 通常ファイルでない (symlink・ディレクトリ・submodule)・blob を読めない (object が手元に無い
+# 等)・書き出せなかった。
 _text_paths_extract_base_file() {
   local target_cwd="$1"
   local base_oid="$2"
@@ -442,8 +469,34 @@ _text_paths_extract_base_file() {
   if [ -n "$target_cwd" ]; then
     git_prefix+=(-C "$target_cwd")
   fi
-  git "${git_prefix[@]}" cat-file -e "${base_oid}:${path}" 2>/dev/null || return 1
-  git "${git_prefix[@]}" cat-file blob "${base_oid}:${path}" >"$destination" 2>/dev/null || return 2
+  # entry は `<mode> <type> <oid>` + TAB + `<path>` + NUL の形で出る。`--full-tree` は、
+  # target_cwd が subdirectory でも <path> を tree の root から探すために付ける。NUL は
+  # command substitution で落とすと bash が警告を出すため tr で改行に変え、pipe の途中の
+  # git の失敗は pipefail で拾う。
+  local entry
+  entry=$(
+    set -o pipefail
+    git "${git_prefix[@]}" ls-tree --full-tree -z "$base_oid" -- "$path" 2>/dev/null \
+      | tr '\0' '\n'
+  ) || return 2
+  [ -n "$entry" ] || return 1
+  case "$entry" in
+    *$'\n'*) return 2 ;;
+  esac
+  local mode="${entry%% *}"
+  local rest="${entry#* }"
+  local object_type="${rest%% *}"
+  rest="${rest#* }"
+  local oid="${rest%%$'\t'*}"
+  case "$mode" in
+    100644 | 100755) ;;
+    *) return 2 ;;
+  esac
+  [ "$object_type" = "blob" ] || return 2
+  case "$oid" in
+    "" | *[!0123456789abcdef]*) return 2 ;;
+  esac
+  git "${git_prefix[@]}" cat-file blob "$oid" >"$destination" 2>/dev/null || return 2
   return 0
 }
 
@@ -615,6 +668,9 @@ is_text_only_range_in() {
   local target_cwd="$1"
   local base_rev="$2"
   local head_rev="$3"
+  # 手元に無い object を remote から取りに行かせない (理由はファイルヘッダの「範囲の判定」を
+  # 参照)。`local -x` は関数の中から起動する git にだけ渡り、関数を抜けると元に戻る。
+  local -x GIT_NO_LAZY_FETCH=1
   local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
   if [ -n "$target_cwd" ]; then
     git_prefix+=(-C "$target_cwd")
@@ -659,10 +715,12 @@ is_text_only_range_in() {
 
   # 判定は 1 → 2 → 4 → 3 の順に行う (理由はファイルヘッダの「範囲の判定」を参照)。
 
-  # 条件 1: 範囲の commit 数が 1 以上、上限以下であること。
+  # 条件 1: 範囲の commit 数が 1 以上、上限以下であること。上限 + 1 まで数えたら数えるのを
+  # やめる (上限を超える範囲を全部たどらない)。
   local max_commits=100
   local commit_count
-  commit_count=$(git "${git_prefix[@]}" rev-list --count "${base_oid}..${head_oid}" 2>/dev/null) || return 1
+  commit_count=$(git "${git_prefix[@]}" rev-list --count --max-count=$((max_commits + 1)) \
+    "${base_oid}..${head_oid}" 2>/dev/null) || return 1
   case "$commit_count" in
     "" | *[!0123456789]*) return 1 ;;
   esac
@@ -711,16 +769,23 @@ is_text_only_range_in() {
 is_text_only_push_in() {
   local target_cwd="$1"
   local base="$2"
+  # 手元に無い object を remote から取りに行かせない (is_text_only_range_in と同じ)。
+  local -x GIT_NO_LAZY_FETCH=1
   local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
   if [ -n "$target_cwd" ]; then
     git_prefix+=(-C "$target_cwd")
   fi
   [ -n "$base" ] || return 1
 
+  # base は remote-tracking ref の完全な名前で指定する (理由はファイルヘッダの「push の
+  # 予測」を参照)。ref が無ければ判定しない。
+  local base_ref="refs/remotes/origin/${base}"
+  git "${git_prefix[@]}" show-ref --verify --quiet "$base_ref" 2>/dev/null || return 1
+
   # index / working tree が clean であること。plumbing (textconv / external driver 非適用) で
   # 判定する。
   git "${git_prefix[@]}" diff-index --quiet --cached HEAD 2>/dev/null || return 1
   git "${git_prefix[@]}" diff-files --quiet 2>/dev/null || return 1
 
-  is_text_only_range_in "$target_cwd" "origin/${base}" HEAD
+  is_text_only_range_in "$target_cwd" "$base_ref" HEAD
 }

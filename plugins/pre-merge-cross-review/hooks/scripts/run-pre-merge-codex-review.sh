@@ -14,11 +14,11 @@
 #    (どちらかを欠くと、 head SHA を記録しながら別内容をレビューした記録を残すことになる)
 # 4. PR が記録する base commit がローカルの `origin/<base>` から到達可能 (ancestor) である
 #    ことを確認する (到達不能なら 1 度だけ fetch して再判定し、 それでも到達不能なら実行
-#    しない)。 さらに merge-base..HEAD の差分が空でないことを確認する (空のままレビューすると、
-#    何も見ていない 「レビュー済み」 記録を残すことになるため)
-#    PR の base commit から HEAD までの変更がテキスト系文書だけなら (判定は
+#    しない)。 続けて、 PR の base commit から HEAD までの変更がテキスト系文書だけなら (判定は
 #    lib/text-paths.sh)、 codex review を実行せず記録も書かずに終了する (merge gate は同じ
-#    判定でレビュー記録を要求しない)
+#    判定でレビュー記録を要求しない。 net diff が空の範囲もこの判定で skip しうるため、 空の
+#    差分の判定より前に行う)。 skip しない場合は merge-base..HEAD の差分が空でないことを確認する
+#    (空のままレビューすると、 何も見ていない 「レビュー済み」 記録を残すことになるため)
 # 5. PR の実 base との merge-base..HEAD 全差分に対して codex review を foreground 実行する
 #    (codex companion に `--base origin/<base>` を渡すと merge-base からの branch diff になる)
 # 6. 記録を書く直前に HEAD と working tree の状態を再確認し、 レビュー中に変化していれば記録を
@@ -304,17 +304,6 @@ flush_fetch_log() {
   fi
 }
 
-# レビュー対象範囲 (merge-base..HEAD) に差分が無い状態でレビューすると、 何も見ていない
-# 「レビュー済み」 記録を残すことになるため実行しない。
-if ! MERGE_BASE=$(git merge-base HEAD "$BASE_REF_FULL" 2>/dev/null); then
-  flush_fetch_log
-  fail "HEAD と ${BASE_REF_FULL} の merge-base を解決できませんでした (shallow clone / 履歴の不足が考えられます)。 \`git fetch --unshallow\` 等で履歴を補ってから再実行してください。"
-fi
-if git diff --quiet "$MERGE_BASE" HEAD 2>/dev/null; then
-  flush_fetch_log
-  fail "レビュー対象の差分が空です (merge-base ${MERGE_BASE} と HEAD が同一内容)。 PR に差分がある状態で再実行してください。"
-fi
-
 # PR の変更がテキスト系文書だけなら codex review は実行不要で、 pending attestation も書かない
 # (判定条件と fail-closed 方針は lib/text-paths.sh ヘッダを参照)。 範囲の起点は、 上で形式と
 # 到達可能性を検証した PR の base commit (`baseRefOid`)。 merge gate (block-pre-merge.sh) も
@@ -323,6 +312,9 @@ fi
 # ためで、 そのまま起点にすると merge で base に入る commit が判定範囲から外れる。 起動時の
 # stale 記録の掃除は上で済んでいる。 skip するのは判定関数が 0 を返したときだけで、 2 (テキスト
 # 系文書だけだが gitleaks による秘匿情報の検査で止めた) のときは通常どおり codex review を実行する。
+# この判定は下の merge-base の解決と空の差分の判定より前に行う。 文書を足して消した PR のように
+# net diff が空でも各 commit がテキスト系文書だけの範囲は、 merge gate がレビュー記録を要求せずに
+# 通すため、 wrapper も skip で終える (空の差分の判定で失敗させない)。
 # skip の経路では stdout に決まった 1 行だけを出し、 stderr には何も出さない。 codex-reviewer
 # subagent は、 wrapper が exit 0 で、 出力 (stdout と stderr が混ざって届いた場合はその全体) に
 # この 1 行がちょうど 1 行あり、 他の行が terminal sentinel の案内行・終了行・空行だけのときに
@@ -332,7 +324,17 @@ if is_text_only_range_in "" "$BASE_OID" HEAD; then
   printf 'Review skipped: text-only changes\n'
   exit 0
 fi
+# skip しない経路 (中断・レビューへ進む) では、 保持した fetch の案内と出力をここで出す。
 flush_fetch_log
+
+# レビュー対象範囲 (merge-base..HEAD) に差分が無い状態でレビューすると、 何も見ていない
+# 「レビュー済み」 記録を残すことになるため実行しない。
+if ! MERGE_BASE=$(git merge-base HEAD "$BASE_REF_FULL" 2>/dev/null); then
+  fail "HEAD と ${BASE_REF_FULL} の merge-base を解決できませんでした (shallow clone / 履歴の不足が考えられます)。 \`git fetch --unshallow\` 等で履歴を補ってから再実行してください。"
+fi
+if git diff --quiet "$MERGE_BASE" HEAD 2>/dev/null; then
+  fail "レビュー対象の差分が空です (merge-base ${MERGE_BASE} と HEAD が同一内容)。 PR に差分がある状態で再実行してください。"
+fi
 
 COMPANION=$(resolve_codex_companion) || fail "codex プラグインが見つかりません。 \`claude plugin install codex@openai-codex\` で導入してください (versioned cache / unversioned cache / marketplace clone のいずれにも codex-companion.mjs が見つかりませんでした。 詳細な探索 path は \`lib/codex-companion-resolver.sh\` のヘッダを参照)。"
 
