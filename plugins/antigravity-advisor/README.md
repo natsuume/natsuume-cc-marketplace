@@ -150,7 +150,7 @@ deny の規則で拒否された tool の呼び出しは `denied_actions` に記
 
 | 比べるもの | 記録の方法 |
 |---|---|
-| `.git` の設定・hook・info | `<git-dir>/config`・`config.worktree`・`hooks/` 配下・`info/` 配下の各ファイルの path・内容のハッシュ・実行権 (worktree では git-dir と common dir の両方) |
+| `.git` の設定・hook・info | `<git-dir>/config`・`config.worktree`・`hooks/` 配下・`info/` 配下の各ファイルの path・内容のハッシュ・実行権 (worktree では git-dir と common dir の両方)。`info/refs` は repack (auto gc を含む) が ref の一覧に書き直すため比べない |
 | HEAD の branch とその commit | `git symbolic-ref -q HEAD` で得る branch 名と、`git rev-parse --verify -q <branch>` で得るその branch の commit (commit の無い branch なら空)。detached HEAD のときは `git rev-parse --verify -q HEAD` で得る HEAD の commit だけ |
 | status | `git status --porcelain=v1 -z --untracked-files=all` |
 | working tree の内容 | 一時的な index と object ディレクトリで `git read-tree HEAD` (commit の無い repo では空の index) → `git add -A` → `git write-tree` を実行して得る、working tree 全体 (ignore されていない未追跡のファイルを含む) の tree OID |
@@ -168,7 +168,7 @@ wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` �
 - 権限設定による拒否は、2026-11-27 に agy 1.5.18 で `write_file(*)` と `command(*)` の 2 規則の設定を使って確認した。この設定で、`write_file` によるファイルの作成と `edit_file` による編集はどちらも user-configured deny rule として拒否され、`read_file` による読み取りは成功し、ファイルは変わらなかった。括弧の無い `"write_file"` は反映されなかった。空のディレクトリで起動する方式でも、書き込みは deny の規則で拒否された
 - 6 規則と `allowNonWorkspaceAccess` の設定は、同じ日に agy 1.5.18 で受理され、この設定での相談が成功した。認証情報の置き場所の読み取りを拒否する `read_file(<dir>)` の deny の規則は、agy 1.5.18 で前方一致で効くことを確認した。この 10 規則を加えた 16 規則の設定も、2026-11-28 に agy 1.5.18 で受理され、この設定での相談が成功した。`-p "/permissions"` では deny の規則が global scope の deny として表示される。`execute_url(*)` と `download_url(*)` が効くかは未確認。`mcp(*)` と `read_url(*)` が MCP の tool と URL の取得を実際に拒否するかも未確認。agy の更新で設定が受け付けられなくなった場合は、すべての相談が exit 4 になる。設定全体が無視されるようになった場合は、権限による拒否が効かず、working tree の事後の検知だけが残る
 - agy はディレクトリの一覧や検索のツールを使えない可能性がある (model の自己申告による)。読ませたいファイルは request に絶対パスで列挙する
-- 事後の検知は次の変更を見ない: `.gitignore` などで ignore されたファイル、リポジトリの外 (wrapper の一時ディレクトリを含む)、`.git` のうち設定・hook・info と HEAD の branch 以外の部分 (他の branch・tag・stash・remote-tracking branch の ref、object ディレクトリ、logs など)、`core.hooksPath` で `.git` の外に置いた hook、cwd が git の work tree の外のときのすべての変更
+- 事後の検知は次の変更を見ない: `.gitignore` などで ignore されたファイル、リポジトリの外 (wrapper の一時ディレクトリを含む)、`.git` のうち設定・hook・info (`info/refs` を除く) と HEAD の branch 以外の部分 (他の branch・tag・stash・remote-tracking branch の ref、object ディレクトリ、logs など)、`core.hooksPath` で `.git` の外に置いた hook、cwd が git の work tree の外のときのすべての変更
 - 事後の検知の `git add -A` は、利用者の git 設定にある clean filter (git-lfs など) を実行し、filter が自分の保存先 (`.git/lfs/` など) に書き込むことがある。また、working tree に既存の object と同じ内容のファイルがあると、git がその object の更新時刻を更新することがある (内容は変わらない)
 - すべての worktree が共有する git config (common config。common dir の `config`) を相談中に他の操作 (別の worktree での `git config` 等) が変えると、wrapper は変更と判定して exit 5 にする
 - 一時的な index に stage できない path (checkout されていない入れ子の repo、読めない未追跡のファイル) が working tree にあると、実行前の記録に失敗し、wrapper は agy を起動せずに exit 1 になる。working tree の内容の比較では、入れ子の repo は gitlink (その repo の HEAD の commit) としてだけ比べる。ignore されていない linked worktree が相談対象の work tree の中にあると、その worktree も入れ子の repo として gitlink で比べるため、その worktree での commit で exit 5 になる

@@ -48,9 +48,9 @@
 #    しない。wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` と
 #    `-c core.fsmonitor=false -c core.splitIndex=false` を付け、index の更新や fsmonitor の
 #    コマンドを起こさない
-#    - `<git-dir>/config`・`config.worktree`・`hooks/` 配下・`info/` 配下の各ファイルの
-#      path と、内容のハッシュ (`git hash-object --no-filters`) と実行権の一覧
-#      (worktree では git-dir と common dir の両方)
+#    - `<git-dir>/config`・`config.worktree`・`hooks/` 配下・`info/` 配下 (`info/refs` を
+#      除く) の各ファイルの path と、内容のハッシュ (`git hash-object --no-filters`) と
+#      実行権の一覧 (worktree では git-dir と common dir の両方)
 #    - HEAD の branch とその commit。`git symbolic-ref -q HEAD` で得る branch 名と、
 #      `git rev-parse --verify -q <branch>` で得るその branch の commit (commit の無い
 #      branch なら空)。detached HEAD のときは `git rev-parse --verify -q HEAD` で得る HEAD
@@ -299,6 +299,8 @@ prepare_git_context() {
 
 # `.git` の設定・hook・info の各ファイルの path・種類・内容のハッシュを $1.control に書く。
 # ハッシュは work tree の外 (記録用の一時ディレクトリ) で求め、リポジトリの設定を読まない。
+# info/refs は repack (auto gc を含む) が update-server-info で ref の一覧に書き直すため、
+# 別の worktree の commit や fetch の後にも変わる。git の挙動に関わらないので比べない。
 record_control_files() {
   local directory entry file hash mode
   for directory in "$git_directory" "$git_common_directory"; do
@@ -310,6 +312,9 @@ record_control_files() {
   done | LC_ALL=C sort -u > "$1.control-paths"
   : > "$1.control"
   while IFS= read -r file; do
+    case $file in
+      "$git_directory/info/refs" | "$git_common_directory/info/refs") continue ;;
+    esac
     if [ -L "$file" ]; then
       printf 'link %s %s\n' "$file" "$(readlink "$file")" >> "$1.control"
     elif [ -f "$file" ]; then

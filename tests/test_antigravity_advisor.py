@@ -1122,6 +1122,16 @@ class WrapperWorkspaceGuardTest(WrapperHarness):
         )
         self.assert_failed(result, 5, agy_invoked=True)
 
+    def test_server_info_refs_rewrite_is_not_compared(self) -> None:
+        # repack (auto gc を含む) は update-server-info で info/refs を ref の一覧に書き直す。
+        info = self.repo / ".git" / "info"
+        info.mkdir(exist_ok=True)
+        (info / "refs").write_text("0000\trefs/heads/old\n", encoding="utf-8")
+        result = self.run_in_repo(
+            extra_env={"FAKE_AGY_APPEND_FILE": str(info / "refs")}
+        )
+        self.assert_succeeded(result, "既定の助言")
+
     def test_change_seen_from_a_subdirectory_cwd(self) -> None:
         subdirectory = self.repo / "sub"
         subdirectory.mkdir()
