@@ -81,8 +81,8 @@
 #   4. merge-base(`<base_rev>`, `<head_rev>`) と `<head_rev>` の raw 差分も、3 と同じ条件を
 #      満たす
 #
-# git はすべて `--no-replace-objects -c core.commitGraph=false` を付けて呼ぶ (秘匿情報の検査の
-# gitleaks には、同じ設定を環境変数で渡す)。ローカルの replace ref (`git replace`) があると、
+# git はすべて `--no-replace-objects -c core.commitGraph=false` を付けて呼ぶ (秘匿情報の検査で
+# gitleaks に渡す入力を書き出す `git log` も同じ)。ローカルの replace ref (`git replace`) があると、
 # git は commit や tree を置き換え先の内容で読むため、コードを足す commit をテキスト系文書だけの
 # commit に見せかけられる。commit-graph ファイルは commit の親を記録した cache で、git は
 # commit の object より先にこれを読むため、書き換えられると範囲の commit を隠せる。push や
@@ -109,7 +109,7 @@
 #
 # commit 数の上限 (100) と判定の時間の上限 (10 秒) は、gate の hook が timeout する前に判定を
 # 終えるためのもの。PreToolUse の command hook は timeout しても通常は tool call を止めないため、
-# timeout した gate は判定を終えないまま push や merge を通してしまう (Claude Code の hooks
+# timeout した gate は判定を終えないまま push や merge を止められなくなる (Claude Code の hooks
 # リファレンスで 2026-11-28 に確認。command hook の既定の timeout は 600 秒で、gate の hook は
 # timeout を指定しない)。範囲の判定 (10 秒) と秘匿情報の検査 (20 秒) の上限は、gate 自身の処理
 # (merge gate が先に行う `gh pr view` 等) と合わせても既定の timeout より十分短い。上限を超えた
@@ -133,8 +133,8 @@
 #   - 1: 1-4 のいずれかを満たさない (テキスト系文書だけではない、commit 数が上限を超える等)、
 #        graft ファイルがある、判定が時間の上限を超えた、または 1-4 の判定に必要な git の
 #        呼び出しが失敗した
-#   - 2: テキスト系文書だけだが、gitleaks が秘匿情報の候補を検出した、または gitleaks の実行が
-#        失敗した
+#   - 2: テキスト系文書だけだが、gitleaks が秘匿情報の候補を検出した、gitleaks の実行が失敗した、
+#        または gitleaks に渡す入力を書き出せなかった (`git log` の失敗・空の出力)
 #
 # 呼び出し側は 0 のときだけ skip し、1 と 2 では従来どおりレビューを要求する。2 を 1 と
 # 分けるのは、deny の理由文で「テキスト系文書だけだが秘匿情報の検査で止めた」ことを示すため。
@@ -143,72 +143,82 @@
 #
 # テキスト系文書だけの skip ではレビュー (security review を含む) を行わないため、文書に
 # 書き込まれた認証情報も検査されない。PATH に gitleaks がある (`command -v gitleaks` が成功
-# する) 場合に限り、skip の前に範囲内の commit を次の形で検査する:
+# する) 場合に限り、skip の前に範囲内の commit を検査する。範囲内の commit の message と差分を
+# `git log` で一時ファイル (<入力>) に書き出し、その内容を gitleaks の stdin に渡す:
 #
-#   env GIT_DIR=<repo の git dir の絶対 path> GIT_WORK_TREE=<走査元> GIT_NO_REPLACE_OBJECTS=1
-#       GIT_CONFIG_COUNT=5 GIT_CONFIG_KEY_<n>=<key> GIT_CONFIG_VALUE_<n>=<value> (n = 0〜4。
-#       core.commitGraph=false・diff.noprefix=false・diff.mnemonicPrefix=false・
-#       diff.relative=false・core.quotePath=true)
-#   gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error
-#     --exit-code 1 --timeout 20 [--config <一時ファイル>] --gitleaks-ignore-path <走査元>
-#     --log-opts="--no-textconv --no-ext-diff --text --no-color --src-prefix=a/ --dst-prefix=b/
-#       <base の OID>..<head の OID>"
-#     <走査元>
+#   git --no-replace-objects -c core.commitGraph=false [-C <target_cwd>] -c diff.relative=false
+#     log -p -U0 --no-textconv --no-ext-diff --text --no-color --no-show-signature
+#     --encoding=UTF-8 --format='commit %H%n%n%B' <base の OID>..<head の OID> > <入力>
 #
-#   - <走査元> は空の一時ディレクトリ (理由は下の「設定と ignore の読み方」を参照)。gitleaks は
-#     走査元で `git log -p` を実行するため、repo は環境変数 `GIT_DIR` で指定する。環境変数は
-#     `env` で gitleaks の起動にだけ渡し、export しない。`GIT_CONFIG_COUNT` 等は、gitleaks が
-#     実行する git に設定を渡す (git 2.31 以降)。`core.commitGraph=false` の理由は「範囲の
-#     判定」を参照。残りの 4 つと、`--log-opts` の `--src-prefix=a/ --dst-prefix=b/` は、差分の
-#     path の表記を git の既定に固定する。接頭辞は設定 (`diff.noprefix`・`diff.mnemonicPrefix`・
-#     `diff.srcPrefix`・`diff.dstPrefix`) より command line の option が優先されるため、
-#     option で明示する。たとえば `diff.noprefix = true` では gitleaks が報告する path から
-#     先頭の要素が落ち (`docs/vendor/x.md` が `vendor/x.md` になる)、`diff.dstPrefix = y/z/`
-#     では `z/` が付く。どちらも base の `.gitleaks.toml` の path の allowlist に当たって検出から
-#     外れうる
-#   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う
-#   - gitleaks は 20 秒で打ち切り、レビュー必須 (戻り値 2) として扱う。範囲の判定 (10 秒) と
-#     gate 自身の処理と合わせて、gate の hook が timeout する前に終えるための値 (「範囲の
-#     判定」を参照)。`--timeout 20` も渡すが、gitleaks は大きな範囲でこの指定を超えて
-#     走査を続けることがあるため、外側でも打ち切る (_text_paths_run_with_time_limit)
+#   (cwd = <空のディレクトリ>)
+#   gitleaks stdin --no-banner --redact --ignore-gitleaks-allow --log-level error
+#     --exit-code 1 --timeout <残り秒数> [--config <一時ファイル>]
+#     --gitleaks-ignore-path <空のディレクトリ> < <入力>
+#
+#   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う。`git log` の先頭の option の
+#     理由は「範囲の判定」を参照
+#   - 入力は path を持たないため、path で照合する allowlist (gitleaks の既定の設定にある、
+#     場所を問わず当たる `node_modules`・`bower_components`・`vendor/bundle`・ファイル名の
+#     `gitleaks.toml` 等と、base の `.gitleaks.toml` に書かれたもの) は文書に当たらない。repo を
+#     path ごとに走査させると、テキスト系文書を `docs/node_modules/a.md` のような場所に置く
+#     だけで検出から外せる
+#   - commit message (本文を含む) も検査する。差分は追加行と削除行を検査するため、秘匿情報を
+#     含む行を消す変更でも skip しない (レビュー必須の側に倒す)
+#   - `-U0` は文脈行を入力に入れず、差分の追加行と削除行だけを検査するために付ける。
+#     文脈行を入れると、既存の例示用の認証情報の近くを編集しただけで skip しなくなる。ただし
+#     git は hunk の見出し (`@@ ... @@` の行) の後ろに、変更箇所より前にある行を 1 行付ける
+#     ことがあり (関数名の表示。属性で diff driver を指定しない文書では、英字・`_`・`$` で
+#     始まる直近の行)、その行は入力に入る
+#   - `git log` の残りの option は、入力をローカルの設定と属性で変えさせないために付ける。
+#     `--format` は利用者の `format.pretty` (`oneline` 等) で message の本文が落ちないように、
+#     `diff.relative=false` は target_cwd が subdirectory のときに差分がその配下に絞られない
+#     ように、`--encoding=UTF-8` は `i18n.logOutputEncoding` で message が別の encoding に
+#     変換されないように付ける。属性で文書を binary 扱いにする (`.git/info/attributes` の
+#     `*.md binary` 等) と、差分から文書の内容を読み取れない。`color.ui = always` では、
+#     出力に色の制御文字が混ざる。textconv で内容を変換した場合も、変換後の差分に秘匿情報が残らなければ
+#     検出されない。`--text` / `--no-textconv` / `--no-color` はそれぞれを無効にし、
+#     `--no-ext-diff` は外部 diff を使わせない。`--no-show-signature` は `log.showSignature`
+#     で署名の検証 (gpg 等の起動) を行わせない
+#   - `git log` の stderr は捨てる。`git log` が 0 以外で終わった場合 (下の時間の上限による
+#     打ち切りを含む) と、<入力> が 0 バイトの場合は gitleaks を起動せず exit code 2 にする。
+#     gitleaks は空の入力を「検出なし」(終了コード 0) で終えるため、検査できていない入力を
+#     通さない
+#   - `git log` と gitleaks は合わせて 20 秒で打ち切り、レビュー必須 (戻り値 2) として扱う。
+#     範囲の判定 (10 秒) と gate 自身の処理と合わせて、gate の hook が timeout する前に終える
+#     ための値 (「範囲の判定」を参照)。期限は `git log` の前に bash の `SECONDS` で 1 つ決め、
+#     gitleaks には起動時点の残り秒数を `--timeout` と外側の打ち切り
+#     (_text_paths_run_with_time_limit) の両方に渡す。gitleaks がこの指定どおりに終わらない
+#     場合に備えて、外側でも打ち切る。残りが 1 秒未満なら gitleaks を起動せず 2 にする
+#   - gitleaks の stdin には <入力> を子 process の中で redirect して渡す
+#     (_text_paths_exec_in_dir_with_input)。_text_paths_run_with_time_limit が background で
+#     起動する command の stdin は `/dev/null` になるため
 #   - `--ignore-gitleaks-allow` は、文書中に `gitleaks:allow` コメントを書くだけで検出を
 #     抑止できないようにするために付ける (テキスト系文書だけの変更は、レビュー無しで
 #     そのコメントを書き込める)
-#   - `--log-opts` の先頭の 4 つのオプションは、gitleaks が実行する `git log -p` の出力を、
-#     ローカルの git の属性と設定で変えさせないために付ける。属性で文書を binary 扱いにする
-#     (`.git/info/attributes` の `*.md binary` 等) と、`color.ui = always` で出力に色を付ける
-#     と、gitleaks は差分から文書の内容を読み取れず「検出なし」で終わる。textconv で内容を
-#     変換した場合も、変換後の差分に秘匿情報が残らなければ検出されない。`--text` /
-#     `--no-textconv` / `--no-color` はそれぞれを無効にし、`--no-ext-diff` は外部 diff を
-#     使わせない
 #   - stdout は捨て、stderr は一時ディレクトリのファイルに受けて空かどうかだけを見る。検出
 #     した認証情報の内容を hook や wrapper の出力に流さないため
 #   - 終了コード 0 で、かつ stderr に何も出ていないときだけを「検出なし」とし、それ以外
-#     (検出・timeout・実行エラー) はすべて exit code 2 にする。gitleaks は内部の `git log` が
-#     失敗しても (repo や object が読めない等) エラーを log に出して終了コード 0 で終わる。
-#     `--log-level error` では正常な走査は stderr に何も出さないため、stderr の有無で失敗を
-#     見分ける。repo の git dir を解決できない場合も 2 にする
+#     (検出・timeout・実行エラー) はすべて exit code 2 にする。`--log-level error` では正常な
+#     走査は stderr に何も出さないため、終了コードが 0 でも stderr に何か出ていればエラーが
+#     起きたものとして扱う
 #
 # ### 設定と ignore の読み方
 #
-# gitleaks の設定 (`.gitleaks.toml`) と ignore (`.gitleaksignore`) は、範囲の起点 (解決済みの
-# base OID) の tree から読み、repo の working tree からは読ませない。gitleaks は `--config` が
-# 無ければ走査元の `.gitleaks.toml` を読み、ignore は `--gitleaks-ignore-path` の指定先に
-# 加えて走査元の直下の `.gitleaksignore` も読む。走査元を working tree にすると未追跡の
-# ファイルも読まれるが、push gate の clean 検査は未追跡ファイルを見ず、merge gate には clean
-# 検査が無い。そのため未追跡の設定ファイルを置くだけで検出を抑止できてしまう。走査元を空の
-# 一時ディレクトリにし、`GIT_WORK_TREE` も走査元にして、git にも repo の working tree を
-# 参照させない。base の tree は、テキスト系文書だけの変更では書き換えられない (どちらの
-# ファイルもテキスト系文書ではない):
+# gitleaks の設定 (`.gitleaks.toml`) は、範囲の起点 (解決済みの base OID) の tree から読み、
+# repo の working tree からは読ませない。working tree の未追跡のファイルを読ませると、push gate
+# の clean 検査は未追跡ファイルを見ず、merge gate には clean 検査が無いため、未追跡の設定
+# ファイルを置くだけで検出を抑止できてしまう。base の tree は、テキスト系文書だけの変更では
+# 書き換えられない (`.gitleaks.toml` はテキスト系文書ではない):
 #
 #   - 利用者の環境変数 `GITLEAKS_CONFIG` か `GITLEAKS_CONFIG_TOML` が空でない場合は、
 #     利用者自身の設定として尊重し、`--config` を渡さない
 #   - それ以外の場合、base の tree に `.gitleaks.toml` があればその内容を一時ファイル
-#     (走査元の外) に取り出して `--config` に渡す。無ければ `[extend]` と
+#     (cwd にする空のディレクトリの外) に取り出して `--config` に渡す。無ければ `[extend]` と
 #     `useDefault = true` だけを書いた一時ファイルを渡す (gitleaks の既定のルールだけを使う)
-#   - `--gitleaks-ignore-path` には走査元と同じディレクトリを渡す。base の tree に
-#     `.gitleaksignore` があれば、その内容を走査元の `.gitleaksignore` に取り出す。無ければ
-#     走査元は空のまま渡す
+#   - ignore (`.gitleaksignore`) は使わない。base の tree にあっても取り出さない。gitleaks は
+#     `--gitleaks-ignore-path` の指定先に加えて cwd の `.gitleaksignore` も読むため、cwd と
+#     `--gitleaks-ignore-path` の両方を同じ空の一時ディレクトリにする (cwd が repo の working
+#     tree だと、未追跡の `.gitleaksignore` が読まれる)
 #   - 一時ファイルと一時ディレクトリは `mktemp` で作り、関数を抜ける前に消す (source する
 #     script の trap には手を加えない)。作成や取り出しに失敗した場合は exit code 2 にする
 #
@@ -412,8 +422,10 @@ _text_paths_extract_base_file() {
 # 終わらなければ command を KILL して 124 を返す。macOS には `timeout` コマンドが無いため、
 # 0.1 秒ごとに `kill -0` で終了を確かめる。経過時間は bash の `SECONDS` で測る (`sleep` の
 # 回数で数えると、`sleep` を起動する時間の分だけ遅れる)。`SECONDS` は整数秒のため、打ち切りは
-# <seconds> 秒より最大 1 秒早まりうる。redirect は呼び出し側で関数呼び出しに付ける (command は
-# それを引き継ぐ)。
+# <seconds> 秒より最大 1 秒早まりうる。stdout と stderr の redirect は呼び出し側で関数呼び出しに
+# 付ける (command はそれを引き継ぐ)。stdin はこの方法では届かない: job control が無効な shell
+# では background の command の stdin は `/dev/null` になる。command に入力を渡すには、子の中で
+# redirect する (_text_paths_exec_in_dir_with_input を command にする)。
 _text_paths_run_with_time_limit() {
   local limit_seconds="$1"
   shift
@@ -431,17 +443,35 @@ _text_paths_run_with_time_limit() {
   wait "$pid"
 }
 
-# _text_paths_run_gitleaks <target_cwd> <base_oid> <head_oid> <git_dir> <work_dir>
-# <work_dir> (呼び出し側が作り、消す一時ディレクトリ) に gitleaks の設定と走査元を用意して
-# gitleaks を起動する。gitleaks の終了コード 0 のときだけ 0 を返し、用意に失敗した場合も
-# 0 以外を返す。起動の形と設定の決め方はファイルヘッダの「秘匿情報の検査」を参照。
+# _text_paths_exec_in_dir_with_input <dir> <input> <command> [<arg>...]
+# cwd を <dir> に移し、stdin を <input> にして command を exec する。
+# _text_paths_run_with_time_limit が background で起動する子の中でだけ呼ぶ (呼び出した shell
+# 自身の cwd と stdin を変えないため。exec で子の process が command に置き換わる)。本体で
+# subshell を使わないのは、_text_paths_run_with_time_limit の `$!` が指す process (期限切れで
+# KILL する相手) を command そのものにするため。
+_text_paths_exec_in_dir_with_input() {
+  local dir="$1"
+  local input="$2"
+  shift 2
+  cd "$dir" || return 1
+  exec "$@" <"$input"
+}
+
+# _text_paths_run_gitleaks <target_cwd> <base_oid> <head_oid> <work_dir>
+# <work_dir> (呼び出し側が作り、消す一時ディレクトリ) に gitleaks の設定・入力・空の cwd を
+# 用意して gitleaks を起動する。gitleaks の終了コード 0 で stderr が空のときだけ 0 を返し、
+# 用意や入力の書き出しに失敗した場合も 0 以外を返す。起動の形と設定の決め方はファイルヘッダの
+# 「秘匿情報の検査」を参照。
 _text_paths_run_gitleaks() {
   local target_cwd="$1"
   local base_oid="$2"
   local head_oid="$3"
-  local git_dir="$4"
-  local work_dir="$5"
+  local work_dir="$4"
   local extract_status
+  local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
+  if [ -n "$target_cwd" ]; then
+    git_prefix+=(-C "$target_cwd")
+  fi
 
   local -a config_args=()
   if [ -z "${GITLEAKS_CONFIG:-}" ] && [ -z "${GITLEAKS_CONFIG_TOML:-}" ]; then
@@ -457,52 +487,50 @@ _text_paths_run_gitleaks() {
     config_args=(--config "$config_path")
   fi
 
-  # 走査元は ignore の置き場を兼ねる。base の tree に `.gitleaksignore` が無ければ空のまま使う。
-  local source_dir="${work_dir}/source"
-  mkdir "$source_dir" 2>/dev/null || return 1
-  extract_status=0
-  _text_paths_extract_base_file "$target_cwd" "$base_oid" .gitleaksignore \
-    "${source_dir}/.gitleaksignore" || extract_status=$?
-  case "$extract_status" in
-    0 | 1) ;;
-    *) return 1 ;;
-  esac
+  # gitleaks の cwd と ignore path を兼ねる空のディレクトリ。設定・入力・stderr のファイルは
+  # この外 (<work_dir> の直下) に置き、起動時点で中身を空に保つ。
+  local scan_dir="${work_dir}/scan"
+  mkdir "$scan_dir" 2>/dev/null || return 1
 
-  # stderr は走査元の外のファイルに受け、空かどうかだけを見る (内容は出力しない)。
+  # `git log` と gitleaks で 1 つの期限 (bash の `SECONDS` の値) を共有する。
+  local deadline=$((SECONDS + 20))
+
+  # gitleaks に渡す入力 (範囲内の commit の message と差分) を書き出す。stderr は捨てる。
+  local input_path="${work_dir}/gitleaks.input"
+  local log_status=0
+  _text_paths_run_with_time_limit "$((deadline - SECONDS))" \
+    git "${git_prefix[@]}" -c diff.relative=false log -p -U0 --no-textconv --no-ext-diff \
+    --text --no-color --no-show-signature --encoding=UTF-8 --format='commit %H%n%n%B' \
+    "${base_oid}..${head_oid}" </dev/null >"$input_path" 2>/dev/null || log_status=$?
+  [ "$log_status" -eq 0 ] || return "$log_status"
+  # 空の入力は gitleaks が「検出なし」で終えるため、検査できていないものとして扱う。
+  [ -s "$input_path" ] || return 1
+
+  # gitleaks には残り秒数を渡す。1 秒未満なら起動しない。
+  local remaining=$((deadline - SECONDS))
+  [ "$remaining" -ge 1 ] || return 124
+
+  # stderr は cwd の外のファイルに受け、空かどうかだけを見る (内容は出力しない)。
   local stderr_path="${work_dir}/gitleaks.stderr"
   local gitleaks_status=0
-  _text_paths_run_with_time_limit 20 \
-    env GIT_DIR="$git_dir" GIT_WORK_TREE="$source_dir" GIT_NO_REPLACE_OBJECTS=1 \
-    GIT_CONFIG_COUNT=5 \
-    GIT_CONFIG_KEY_0=core.commitGraph GIT_CONFIG_VALUE_0=false \
-    GIT_CONFIG_KEY_1=diff.noprefix GIT_CONFIG_VALUE_1=false \
-    GIT_CONFIG_KEY_2=diff.mnemonicPrefix GIT_CONFIG_VALUE_2=false \
-    GIT_CONFIG_KEY_3=diff.relative GIT_CONFIG_VALUE_3=false \
-    GIT_CONFIG_KEY_4=core.quotePath GIT_CONFIG_VALUE_4=true \
-    gitleaks git --no-banner --redact --ignore-gitleaks-allow --log-level error \
-    --exit-code 1 --timeout 20 "${config_args[@]}" --gitleaks-ignore-path "$source_dir" \
-    --log-opts="--no-textconv --no-ext-diff --text --no-color --src-prefix=a/ --dst-prefix=b/ ${base_oid}..${head_oid}" \
-    "$source_dir" </dev/null >/dev/null 2>"$stderr_path" || gitleaks_status=$?
+  _text_paths_run_with_time_limit "$remaining" \
+    _text_paths_exec_in_dir_with_input "$scan_dir" "$input_path" \
+    gitleaks stdin --no-banner --redact --ignore-gitleaks-allow --log-level error \
+    --exit-code 1 --timeout "$remaining" "${config_args[@]}" --gitleaks-ignore-path "$scan_dir" \
+    </dev/null >/dev/null 2>"$stderr_path" || gitleaks_status=$?
   [ "$gitleaks_status" -eq 0 ] || return "$gitleaks_status"
   [ ! -s "$stderr_path" ]
 }
 
 # _text_paths_secrets_scan_passes <target_cwd> <base_oid> <head_oid>
-# `<base_oid>..<head_oid>` の commit を gitleaks で検査し、終了コード 0 (検出なし) のときだけ
-# 0 を返す。gitleaks が PATH に無い場合は検査せずに 0 を返す。起動の形、設定と ignore の決め方、
-# 出力を捨てる理由はファイルヘッダの「秘匿情報の検査」を参照。
+# `<base_oid>..<head_oid>` の commit の message と差分を gitleaks で検査し、終了コード 0 (検出
+# なし) で stderr が空のときだけ 0 を返す。gitleaks が PATH に無い場合は検査せずに 0 を返す。
+# 起動の形、設定と ignore の決め方、出力を捨てる理由はファイルヘッダの「秘匿情報の検査」を参照。
 _text_paths_secrets_scan_passes() {
   local target_cwd="$1"
   local base_oid="$2"
   local head_oid="$3"
   command -v gitleaks >/dev/null 2>&1 || return 0
-  local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
-  if [ -n "$target_cwd" ]; then
-    git_prefix+=(-C "$target_cwd")
-  fi
-  local git_dir
-  git_dir=$(git "${git_prefix[@]}" rev-parse --absolute-git-dir 2>/dev/null) || return 1
-  [ -n "$git_dir" ] || return 1
 
   # 一時ディレクトリはこの関数の中で作って消す (source する script の trap に手を加えない)。
   local work_dir
@@ -511,7 +539,7 @@ _text_paths_secrets_scan_passes() {
     return 1
   fi
   local scan_status=0
-  _text_paths_run_gitleaks "$target_cwd" "$base_oid" "$head_oid" "$git_dir" "$work_dir" \
+  _text_paths_run_gitleaks "$target_cwd" "$base_oid" "$head_oid" "$work_dir" \
     || scan_status=$?
   rm -rf "$work_dir" 2>/dev/null
   return "$scan_status"
