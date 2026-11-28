@@ -12,7 +12,7 @@
   plugin 名を `null` に対応づける (利用者に削除通知が届く)
 - C. gate 系 4 plugin の README の `## 既知の制約` 節が、PowerShell tool / Monitor tool
   経由で発行されたコマンドを gate が観測しないことを明記する
-- D. 17 plugin の version が 4 箇所 (plugin.json / marketplace.json / 直下 README の
+- D. 18 plugin の version が 4 箇所 (plugin.json / marketplace.json / 直下 README の
   一覧テーブル / plugin README の `## バージョン` 節) で一致する
 
 exec form が必要な理由: shell form (`args` 無し) では `command` 全体が shell で
@@ -688,7 +688,7 @@ class GateConstraintDocumentationTest(unittest.TestCase):
 
 
 class PluginVersionSyncTest(unittest.TestCase):
-    """17 plugin の version が 4 箇所で一致する。"""
+    """18 plugin の version が 4 箇所で一致する。"""
 
     def test_expected_versions_cover_every_distributed_plugin(self) -> None:
         marketplace_names = sorted(
