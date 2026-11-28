@@ -133,8 +133,9 @@
 #   - 1: 1-4 のいずれかを満たさない (テキスト系文書だけではない、commit 数が上限を超える等)、
 #        graft ファイルがある、判定が時間の上限を超えた、または 1-4 の判定に必要な git の
 #        呼び出しが失敗した
-#   - 2: テキスト系文書だけだが、gitleaks が秘匿情報の候補を検出した、gitleaks の実行が失敗した、
-#        または gitleaks に渡す入力を書き出せなかった (`git log` の失敗・空の出力)
+#   - 2: テキスト系文書だけだが、gitleaks の結果が canary だけの検出ではなかった (秘匿情報の
+#        候補を検出した・canary を検出しなかった・実行に失敗した)、または gitleaks に渡す入力を
+#        書き出せなかった (`git log` の失敗・空の出力)
 #
 # 呼び出し側は 0 のときだけ skip し、1 と 2 では従来どおりレビューを要求する。2 を 1 と
 # 分けるのは、deny の理由文で「テキスト系文書だけだが秘匿情報の検査で止めた」ことを示すため。
@@ -144,16 +145,23 @@
 # テキスト系文書だけの skip ではレビュー (security review を含む) を行わないため、文書に
 # 書き込まれた認証情報も検査されない。PATH に gitleaks がある (`command -v gitleaks` が成功
 # する) 場合に限り、skip の前に範囲内の commit を検査する。範囲内の commit の message と差分を
-# `git log` で一時ファイル (<入力>) に書き出し、その内容を gitleaks の stdin に渡す:
+# `git log` で一時ファイル (<log>) に書き出し、1 行目に canary を置いた入力 (<入力>) を作って
+# gitleaks の stdin に渡す:
 #
 #   git --no-replace-objects -c core.commitGraph=false [-C <target_cwd>] -c diff.relative=false
 #     log -p -U0 --no-textconv --no-ext-diff --text --no-color --no-show-signature
-#     --encoding=UTF-8 --format='commit %H%n%n%B' <base の OID>..<head の OID> > <入力>
+#     --encoding=UTF-8 --format='commit %H%n%n%B' <base の OID>..<head の OID> > <log>
+#
+#   <入力> = <canary> + 改行 + <log>
 #
 #   (cwd = <空のディレクトリ>)
 #   gitleaks stdin --no-banner --redact --ignore-gitleaks-allow --log-level error
-#     --exit-code 1 --timeout <残り秒数> [--config <一時ファイル>]
+#     --exit-code 3 --timeout <残り秒数> --report-format template
+#     --report-template <template> --report-path <report> [--config <一時ファイル>]
 #     --gitleaks-ignore-path <空のディレクトリ> < <入力>
+#
+#   <template> = `{{ range . }}{{ .RuleID }} {{ .StartLine }}\n{{ end }}` (`\n` は改行 1 つ。
+#   末尾に改行は付けない)
 #
 #   - 範囲の両端には、1-4 の判定で解決済みの commit OID を使う。`git log` の先頭の option の
 #     理由は「範囲の判定」を参照
@@ -180,9 +188,31 @@
 #     `--no-ext-diff` は外部 diff を使わせない。`--no-show-signature` は `log.showSignature`
 #     で署名の検証 (gpg 等の起動) を行わせない
 #   - `git log` の stderr は捨てる。`git log` が 0 以外で終わった場合 (下の時間の上限による
-#     打ち切りを含む) と、<入力> が 0 バイトの場合は gitleaks を起動せず exit code 2 にする。
-#     gitleaks は空の入力を「検出なし」(終了コード 0) で終えるため、検査できていない入力を
-#     通さない
+#     打ち切りを含む) と、<log> が 0 バイトの場合は gitleaks を起動せず exit code 2 にする。
+#     <log> が空でも、canary の行だけの入力は「検出なし」になるため、検査できていない入力を
+#     ここで止める
+#   - canary は、gitleaks の既定の `github-pat` rule に当たる偽 token (`ghp_` + 英数字 36 文字。
+#     英数字は検査ごとに `/dev/urandom` から作る)。代入の形にせず token だけを 1 行に置くため、
+#     既定の rule では `github-pat` の 1 件だけが当たる。`github-pat` rule は値の entropy が 3 を
+#     超えることも求める。ランダムな 36 文字なら通常は超え、超えなかった場合は canary が検出
+#     されずに exit code 2 になる。canary を置くのは、gitleaks が入力の形式を先頭の内容で判定し、
+#     binary の形式 (tar 等) と判定すると何も検査せずに終了コード 0 で終わるため (形式の判定は
+#     改行をまだ 1 つも読んでいない間だけ行われ、canary の行の改行があるため先頭の chunk だけが
+#     判定される)。たとえば入力の offset 257 に tar の magic
+#     (`ustar` + NUL + `00`) があると tar と判定される。<log> の先頭は固定の `commit <OID>` の
+#     header だが、その後ろの commit message や文書の内容 (`--text` で NUL もそのまま出る) で
+#     offset 257 を細工できるため、終了コード 0 だけでは入力を検査したことにならない。canary が
+#     検出されたことで、入力を実際に検査したことを確かめる
+#   - 検出なしとするのは、終了コード 3・stderr が空・report がバイト単位で `github-pat 1` +
+#     改行 (canary の 1 件だけ) のすべてを満たすときに限る。それ以外 (終了コード 0 = canary も
+#     検出されなかった、1 = 致命的なエラー、時間の上限による打ち切り、report の不一致 = canary
+#     以外の候補を検出した) はすべて exit code 2 にする。`--exit-code 3` は、検出 (3) と
+#     致命的なエラー (設定の構文誤り等で 1) を終了コードで見分けるために付ける。
+#     `--log-level error` では正常な走査は stderr に何も出さないため、stderr に何か出ていれば
+#     エラーが起きたものとして扱う
+#   - `--report-format template` は明示する。`--report-format` が無いと gitleaks は report の
+#     形式を `--report-path` の拡張子から決めようとし、拡張子の無い <report> では致命的なエラー
+#     (終了コード 1) で終わる
 #   - `git log` と gitleaks は合わせて 20 秒で打ち切り、レビュー必須 (戻り値 2) として扱う。
 #     範囲の判定 (10 秒) と gate 自身の処理と合わせて、gate の hook が timeout する前に終える
 #     ための値 (「範囲の判定」を参照)。期限は `git log` の前に bash の `SECONDS` で 1 つ決め、
@@ -195,12 +225,9 @@
 #   - `--ignore-gitleaks-allow` は、文書中に `gitleaks:allow` コメントを書くだけで検出を
 #     抑止できないようにするために付ける (テキスト系文書だけの変更は、レビュー無しで
 #     そのコメントを書き込める)
-#   - stdout は捨て、stderr は一時ディレクトリのファイルに受けて空かどうかだけを見る。検出
-#     した認証情報の内容を hook や wrapper の出力に流さないため
-#   - 終了コード 0 で、かつ stderr に何も出ていないときだけを「検出なし」とし、それ以外
-#     (検出・timeout・実行エラー) はすべて exit code 2 にする。`--log-level error` では正常な
-#     走査は stderr に何も出さないため、終了コードが 0 でも stderr に何か出ていればエラーが
-#     起きたものとして扱う
+#   - stdout は捨て、stderr は一時ディレクトリのファイルに受けて空かどうかだけを見る。report
+#     には template で rule と行番号だけを書かせる。いずれも、検出した認証情報の内容を hook や
+#     wrapper の出力に流さないため
 #
 # ### 設定と ignore の読み方
 #
@@ -215,6 +242,9 @@
 #   - それ以外の場合、base の tree に `.gitleaks.toml` があればその内容を一時ファイル
 #     (cwd にする空のディレクトリの外) に取り出して `--config` に渡す。無ければ `[extend]` と
 #     `useDefault = true` だけを書いた一時ファイルを渡す (gitleaks の既定のルールだけを使う)
+#   - どの設定でも、既定の `github-pat` rule を含まない場合 (既定のルールを extend しない等) や、
+#     canary を検出から外す場合 (allowlist・`disabledRules` 等) は、canary が検出されないため
+#     exit code 2 になり、skip しない
 #   - ignore (`.gitleaksignore`) は使わない。base の tree にあっても取り出さない。gitleaks は
 #     `--gitleaks-ignore-path` の指定先に加えて cwd の `.gitleaksignore` も読むため、cwd と
 #     `--gitleaks-ignore-path` の両方を同じ空の一時ディレクトリにする (cwd が repo の working
@@ -458,10 +488,11 @@ _text_paths_exec_in_dir_with_input() {
 }
 
 # _text_paths_run_gitleaks <target_cwd> <base_oid> <head_oid> <work_dir>
-# <work_dir> (呼び出し側が作り、消す一時ディレクトリ) に gitleaks の設定・入力・空の cwd を
-# 用意して gitleaks を起動する。gitleaks の終了コード 0 で stderr が空のときだけ 0 を返し、
-# 用意や入力の書き出しに失敗した場合も 0 以外を返す。起動の形と設定の決め方はファイルヘッダの
-# 「秘匿情報の検査」を参照。
+# <work_dir> (呼び出し側が作り、消す一時ディレクトリ) に gitleaks の設定・canary を先頭に置いた
+# 入力・report の template・空の cwd を用意して gitleaks を起動する。gitleaks が canary だけを
+# 検出したとき (終了コード 3・stderr が空・report が canary の 1 行だけ) に限って 0 を返し、
+# それ以外の結果や、用意や入力の書き出しに失敗した場合は 0 以外を返す。起動の形と設定の
+# 決め方はファイルヘッダの「秘匿情報の検査」を参照。
 _text_paths_run_gitleaks() {
   local target_cwd="$1"
   local base_oid="$2"
@@ -487,24 +518,47 @@ _text_paths_run_gitleaks() {
     config_args=(--config "$config_path")
   fi
 
-  # gitleaks の cwd と ignore path を兼ねる空のディレクトリ。設定・入力・stderr のファイルは
-  # この外 (<work_dir> の直下) に置き、起動時点で中身を空に保つ。
+  # gitleaks の cwd と ignore path を兼ねる空のディレクトリ。設定・入力・template・report・
+  # stderr のファイルはこの外 (<work_dir> の直下) に置き、起動時点で中身を空に保つ。
   local scan_dir="${work_dir}/scan"
   mkdir "$scan_dir" 2>/dev/null || return 1
+
+  # canary は入力の 1 行目に置く偽 token (gitleaks の既定の `github-pat` rule に当たる形)。
+  # 検査ごとに `/dev/urandom` から作る。読む量を先に決めておき (512 バイトから英数字を取り出すと
+  # 平均 124 文字残る)、`tr` が入力の終わりを待ち続けないようにする。
+  local canary_body
+  canary_body=$(head -c 512 /dev/urandom 2>/dev/null | LC_ALL=C tr -dc 'A-Za-z0-9' 2>/dev/null)
+  canary_body="${canary_body:0:36}"
+  [ "${#canary_body}" -eq 36 ] || return 1
+  local canary="ghp_${canary_body}"
+
+  # report の template (検出ごとに rule と行番号だけを 1 行に書く) と、canary だけを検出した
+  # ときの report の期待値。
+  local template_path="${work_dir}/gitleaks-report.tmpl"
+  local expected_report_path="${work_dir}/gitleaks-report.expected"
+  local report_path="${work_dir}/gitleaks-report"
+  printf '{{ range . }}{{ .RuleID }} {{ .StartLine }}\n{{ end }}' >"$template_path" \
+    2>/dev/null || return 1
+  printf 'github-pat 1\n' >"$expected_report_path" 2>/dev/null || return 1
 
   # `git log` と gitleaks で 1 つの期限 (bash の `SECONDS` の値) を共有する。
   local deadline=$((SECONDS + 20))
 
-  # gitleaks に渡す入力 (範囲内の commit の message と差分) を書き出す。stderr は捨てる。
-  local input_path="${work_dir}/gitleaks.input"
+  # 範囲内の commit の message と差分を書き出す。stderr は捨てる。
+  local log_path="${work_dir}/gitleaks.log"
   local log_status=0
   _text_paths_run_with_time_limit "$((deadline - SECONDS))" \
     git "${git_prefix[@]}" -c diff.relative=false log -p -U0 --no-textconv --no-ext-diff \
     --text --no-color --no-show-signature --encoding=UTF-8 --format='commit %H%n%n%B' \
-    "${base_oid}..${head_oid}" </dev/null >"$input_path" 2>/dev/null || log_status=$?
+    "${base_oid}..${head_oid}" </dev/null >"$log_path" 2>/dev/null || log_status=$?
   [ "$log_status" -eq 0 ] || return "$log_status"
-  # 空の入力は gitleaks が「検出なし」で終えるため、検査できていないものとして扱う。
-  [ -s "$input_path" ] || return 1
+  # 空の出力は検査できていない入力として扱う。
+  [ -s "$log_path" ] || return 1
+
+  # gitleaks に渡す入力は、canary の行 + `git log` の出力。
+  local input_path="${work_dir}/gitleaks.input"
+  printf '%s\n' "$canary" >"$input_path" 2>/dev/null || return 1
+  cat "$log_path" >>"$input_path" 2>/dev/null || return 1
 
   # gitleaks には残り秒数を渡す。1 秒未満なら起動しない。
   local remaining=$((deadline - SECONDS))
@@ -516,16 +570,22 @@ _text_paths_run_gitleaks() {
   _text_paths_run_with_time_limit "$remaining" \
     _text_paths_exec_in_dir_with_input "$scan_dir" "$input_path" \
     gitleaks stdin --no-banner --redact --ignore-gitleaks-allow --log-level error \
-    --exit-code 1 --timeout "$remaining" "${config_args[@]}" --gitleaks-ignore-path "$scan_dir" \
+    --exit-code 3 --timeout "$remaining" --report-format template \
+    --report-template "$template_path" --report-path "$report_path" \
+    "${config_args[@]}" --gitleaks-ignore-path "$scan_dir" \
     </dev/null >/dev/null 2>"$stderr_path" || gitleaks_status=$?
-  [ "$gitleaks_status" -eq 0 ] || return "$gitleaks_status"
-  [ ! -s "$stderr_path" ]
+  # 検出なしとするのは、canary だけを検出したとき (終了コード 3・stderr が空・report が
+  # canary の 1 行だけ) に限る。
+  [ "$gitleaks_status" -eq 3 ] || return 1
+  [ ! -s "$stderr_path" ] || return 1
+  cmp -s "$expected_report_path" "$report_path"
 }
 
 # _text_paths_secrets_scan_passes <target_cwd> <base_oid> <head_oid>
-# `<base_oid>..<head_oid>` の commit の message と差分を gitleaks で検査し、終了コード 0 (検出
-# なし) で stderr が空のときだけ 0 を返す。gitleaks が PATH に無い場合は検査せずに 0 を返す。
-# 起動の形、設定と ignore の決め方、出力を捨てる理由はファイルヘッダの「秘匿情報の検査」を参照。
+# `<base_oid>..<head_oid>` の commit の message と差分を gitleaks で検査し、gitleaks が入力の
+# 先頭に置いた canary だけを検出したとき (検査を実行し、秘匿情報の候補が無かったとき) に限って
+# 0 を返す。gitleaks が PATH に無い場合は検査せずに 0 を返す。起動の形、設定と ignore の
+# 決め方、出力を捨てる理由はファイルヘッダの「秘匿情報の検査」を参照。
 _text_paths_secrets_scan_passes() {
   local target_cwd="$1"
   local base_oid="$2"

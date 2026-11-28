@@ -33,9 +33,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import secrets
 import shlex
 import shutil
 import stat
+import string
 import subprocess
 import sys
 import tempfile
@@ -339,18 +342,29 @@ FAKE_COMPANION_SCRIPT = (
 
 
 # fake gitleaks は、起動ごとに、受け取った引数・標準入力の内容・cwd とその中身・起動時点の
-# `--config` の内容・`--gitleaks-ignore-path` の中身・git に関する環境変数 (`GIT_DIR` /
-# `GIT_WORK_TREE` / `GIT_NO_REPLACE_OBJECTS` / `GIT_CONFIG_COUNT`) を記録し、環境変数で
-# 指定した終了コードで終わる。CI には実物の gitleaks が無いため、検査する内容が標準入力に
-# 届いていること (`/dev/null` になっていないこと) はこの記録で確かめる。stdout と stderr に
-# 目印の文字列を出し、hook や wrapper の出力へ流れないことの確認に使う。
+# `--config` と `--report-template` の内容・`--gitleaks-ignore-path` の中身・git に関する環境
+# 変数 (`GIT_DIR` / `GIT_WORK_TREE` / `GIT_NO_REPLACE_OBJECTS` / `GIT_CONFIG_COUNT`) を記録する。
+# 結果は環境変数 (GITLEAKS_RESULT_ENV) で切り替える:
+#
+#   - `canary` (既定): canary だけを検出した実物の gitleaks と同じく振る舞う。標準入力の 1 行目が
+#     canary の形 (`ghp_` + 英数字 36 文字) なら `--report-path` に `github-pat 1\n` を書いて
+#     `--exit-code` の値で終わり、そうでなければ空の report を書いて終了コード 0 で終わる
+#   - `finding`: canary に加えて別の候補も検出した (report に 5 行目の候補の行も書き、
+#     `--exit-code` の値で終わる)
+#   - `no-canary`: canary も検出しなかった (空の report を書き、終了コード 0 で終わる)
+#   - `canary-with-stderr`: `canary` と同じ結果で、stderr にも出力する
+#   - `exit:<n>`: report を書かず、stderr に出力して終了コード n で終わる (実行エラー)
+#
+# CI には実物の gitleaks が無いため、検査する内容が標準入力に届いていること (`/dev/null` に
+# なっていないこと) はこの記録で確かめる。stdout と stderr に目印の文字列を出し、hook や
+# wrapper の出力へ流れないことの確認に使う。
 GITLEAKS_LOG_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_LOG"
-GITLEAKS_EXIT_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_EXIT"
-GITLEAKS_STDERR_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_STDERR"
+GITLEAKS_RESULT_ENV = "TEXT_ONLY_SKIP_TEST_GITLEAKS_RESULT"
 GITLEAKS_OUTPUT_MARKER = "FAKE-GITLEAKS-FINDING ghp_textonlyskiptestsecret0000000000"
 FAKE_GITLEAKS_TEMPLATE = """#!{python}
 import json
 import os
+import re
 import sys
 
 args = sys.argv[1:]
@@ -364,11 +378,17 @@ def option_value(name):
     return None
 
 
-config_path = option_value("--config")
-config = None
-if config_path is not None:
-    with open(config_path, encoding="utf-8") as fp:
-        config = fp.read()
+def read_option_file(name):
+    path = option_value(name)
+    if path is None:
+        return None
+    # 改行を変換せずに読む (template はバイト単位で比べる)。
+    with open(path, encoding="utf-8", newline="") as fp:
+        return fp.read()
+
+
+config = read_option_file("--config")
+report_template = read_option_file("--report-template")
 ignore_path = option_value("--gitleaks-ignore-path")
 ignore_files = None
 if ignore_path is not None:
@@ -391,19 +411,40 @@ record = {{
     "cwd": cwd,
     "cwd_entries": sorted(os.listdir(cwd)),
     "config": config,
+    "report_template": report_template,
     "ignore_files": ignore_files,
     "git_env": git_env,
 }}
 with open(os.environ["{log_env}"], "a", encoding="utf-8") as fp:
     fp.write(json.dumps(record) + "\\n")
-exit_code = int(os.environ.get("{exit_env}", "0"))
+
+result = os.environ.get("{result_env}") or "canary"
+exit_code_on_findings = int(option_value("--exit-code") or "1")
+report_path = option_value("--report-path")
+canary_found = re.match(r"ghp_[A-Za-z0-9]{{36}}\\n", stdin_text) is not None
+
+
+def write_report(content):
+    if report_path is not None:
+        with open(report_path, "w", encoding="utf-8") as fp:
+            fp.write(content)
+
+
 print("{marker}")
 # 実際の gitleaks は `--log-level error` の正常な走査では stderr に何も出さない。stderr に
-# 出すのは、終了コードが 0 でないときと、終了コード 0 のままエラーを出す指定があるときだけ
-# にする。
-if exit_code != 0 or os.environ.get("{stderr_env}") == "1":
+# 出すのは、実行エラーを模すときと、stderr への出力を指定したときだけにする。
+if result.startswith("exit:") or result == "canary-with-stderr":
     print("{marker}", file=sys.stderr)
-sys.exit(exit_code)
+if result.startswith("exit:"):
+    sys.exit(int(result[len("exit:"):]))
+if result == "finding":
+    write_report("github-pat 1\\ngithub-pat 5\\n")
+    sys.exit(exit_code_on_findings)
+if result == "no-canary" or not canary_found:
+    write_report("")
+    sys.exit(0)
+write_report("github-pat 1\\n")
+sys.exit(exit_code_on_findings)
 """
 # 判定 lib が gitleaks に渡す入力を書き出す `git log` の引数 (lib の git の共通の option と
 # `-C <target_cwd>` に続く部分)。範囲 (`<base の OID>..<head の OID>`) はこの後に付く。
@@ -421,6 +462,13 @@ SCAN_INPUT_GIT_LOG_ARGS = (
     "--encoding=UTF-8",
     "--format=commit %H%n%n%B",
 )
+# 判定 lib が gitleaks の入力の 1 行目に置く canary の形 (gitleaks の既定の `github-pat` rule に
+# 当たる偽 token)。canary の行は改行を含めて 41 バイト。
+CANARY_PATTERN = re.compile(r"ghp_[A-Za-z0-9]{36}")
+CANARY_LINE_LENGTH = len("ghp_") + 36 + 1
+# gitleaks に `--report-template` で渡す template と、canary だけを検出したときの report。
+GITLEAKS_REPORT_TEMPLATE = "{{ range . }}{{ .RuleID }} {{ .StartLine }}\n{{ end }}"
+CANARY_ONLY_REPORT = "github-pat 1\n"
 # base の tree に `.gitleaks.toml` が無いときに渡す設定 (gitleaks の既定のルールだけを使う)。
 DEFAULT_GITLEAKS_CONFIG = "[extend]\nuseDefault = true\n"
 # base の tree に置く設定・ignore (設定だけを渡し、ignore は渡さない) と、working tree に置く
@@ -592,7 +640,7 @@ class WorkspaceTestCase(unittest.TestCase):
         env["GIT_COMMITTER_NAME"] = "Text Only Skip Test"
         env["GIT_COMMITTER_EMAIL"] = "text-only-skip@example.invalid"
         # 実行環境の gitleaks の有無に結果が左右されないよう、既定では PATH の先頭に fake
-        # gitleaks (終了コード 0 = 検出なし) を置く。
+        # gitleaks (canary だけを検出する = 秘匿情報の候補なし) を置く。
         self.fake_gitleaks_dir = self.root / "fake-gitleaks-bin"
         self.fake_gitleaks_dir.mkdir()
         fake_gitleaks = self.fake_gitleaks_dir / "gitleaks"
@@ -600,8 +648,7 @@ class WorkspaceTestCase(unittest.TestCase):
             FAKE_GITLEAKS_TEMPLATE.format(
                 python=sys.executable,
                 log_env=GITLEAKS_LOG_ENV,
-                exit_env=GITLEAKS_EXIT_ENV,
-                stderr_env=GITLEAKS_STDERR_ENV,
+                result_env=GITLEAKS_RESULT_ENV,
                 marker=GITLEAKS_OUTPUT_MARKER,
             ),
             encoding="utf-8",
@@ -609,7 +656,6 @@ class WorkspaceTestCase(unittest.TestCase):
         fake_gitleaks.chmod(fake_gitleaks.stat().st_mode | stat.S_IXUSR)
         self.gitleaks_log = self.root / "gitleaks-calls.jsonl"
         env[GITLEAKS_LOG_ENV] = str(self.gitleaks_log)
-        env[GITLEAKS_EXIT_ENV] = "0"
         env["PATH"] = f"{self.fake_gitleaks_dir}{os.pathsep}{env.get('PATH', '')}"
         self.env = env
 
@@ -617,12 +663,14 @@ class WorkspaceTestCase(unittest.TestCase):
     # gitleaks
     # ------------------------------------------------------------------
 
-    def set_gitleaks_exit(self, code: int) -> None:
-        self.env[GITLEAKS_EXIT_ENV] = str(code)
+    def set_gitleaks_result(self, result: str) -> None:
+        """fake gitleaks の結果 (`canary` / `finding` / `no-canary` /
+        `canary-with-stderr` / `exit:<n>`) を切り替える。"""
+        self.env[GITLEAKS_RESULT_ENV] = result
 
     def gitleaks_records(self) -> list[dict[str, Any]]:
         """fake gitleaks の起動ごとの記録 (args / stdin / cwd / cwd_entries / config /
-        ignore_files / git_env)。"""
+        report_template / ignore_files / git_env)。"""
         if not self.gitleaks_log.exists():
             return []
         return [
@@ -650,6 +698,16 @@ class WorkspaceTestCase(unittest.TestCase):
             entries.append(entry)
         self.env["PATH"] = os.pathsep.join(entries)
         self.assertIsNone(shutil.which("gitleaks", path=self.env["PATH"]))
+
+    def scan_input_git_log(self, repository: Repository, base: str, head: str) -> bytes:
+        """判定 lib が gitleaks の入力 (canary の行の後ろ) に書き出す `git log` の出力。"""
+        return repository.run_git(
+            "--no-replace-objects",
+            "-c",
+            "core.commitGraph=false",
+            *SCAN_INPUT_GIT_LOG_ARGS,
+            f"{base}..{head}",
+        )
 
     # ------------------------------------------------------------------
     # fixture
@@ -1456,14 +1514,22 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
         record = self.single_gitleaks_record()
         args = record["args"]
         # 一時ファイル・一時ディレクトリの path は実行ごとに変わるため、位置だけを確かめる。
-        # ignore path は cwd を兼ねる空の一時ディレクトリで、repo ではない。
+        # ignore path は cwd を兼ねる空の一時ディレクトリで、repo ではない。設定・template・
+        # report のファイルはその外に置く。
         config_path = args[args.index("--config") + 1]
+        template_path = args[args.index("--report-template") + 1]
+        report_path = args[args.index("--report-path") + 1]
         ignore_path = args[args.index("--gitleaks-ignore-path") + 1]
-        self.assertTrue(
-            config_path.startswith(f"{self.tmp}{os.sep}text-paths-gitleaks."),
-            config_path,
-        )
-        self.assertFalse(config_path.startswith(f"{ignore_path}{os.sep}"), config_path)
+        for temporary in (config_path, template_path, report_path):
+            with self.subTest(temporary=temporary):
+                self.assertTrue(
+                    temporary.startswith(f"{self.tmp}{os.sep}text-paths-gitleaks."),
+                    temporary,
+                )
+                self.assertFalse(
+                    temporary.startswith(f"{ignore_path}{os.sep}"), temporary
+                )
+        self.assertEqual(len({config_path, template_path, report_path}), 3)
         # `--timeout` は `git log` と共有する 20 秒の期限の残り秒数 (`SECONDS` が `git log` の
         # 間に進むと 19 になる)。
         timeout = args[args.index("--timeout") + 1]
@@ -1479,15 +1545,22 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 "--log-level",
                 "error",
                 "--exit-code",
-                "1",
+                "3",
                 "--timeout",
                 timeout,
+                "--report-format",
+                "template",
+                "--report-template",
+                template_path,
+                "--report-path",
+                report_path,
                 "--config",
                 config_path,
                 "--gitleaks-ignore-path",
                 ignore_path,
             ],
         )
+        self.assertEqual(record["report_template"], GITLEAKS_REPORT_TEMPLATE)
         self.assert_no_gitleaksignore_is_read(record)
         # gitleaks には repo を渡さない (git に関する環境変数も渡さない)。
         self.assertEqual(
@@ -1499,9 +1572,17 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 "GIT_CONFIG_COUNT": None,
             },
         )
-        # 標準入力は範囲内の commit の header・message (本文を含む)・追加行と削除行で、範囲外の
-        # commit と差分の文脈行を含まない。
-        stdin = record["stdin"]
+        # 標準入力の 1 行目は canary で、2 行目以降は lib と同じ option の `git log` の出力。
+        canary, stdin = record["stdin"].split("\n", 1)
+        self.assertIsNotNone(CANARY_PATTERN.fullmatch(canary), canary)
+        self.assertEqual(
+            stdin,
+            self.scan_input_git_log(
+                repository, repository.rev("master"), repository.head()
+            ).decode("utf-8", errors="replace"),
+        )
+        # `git log` の出力は範囲内の commit の header・message (本文を含む)・追加行と削除行で、
+        # 範囲外の commit と差分の文脈行を含まない。
         for expected in (
             f"commit {commits[0]}\n",
             f"commit {commits[1]}\n",
@@ -1683,11 +1764,47 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 self.assertEqual("--config" in args, expects_config, args)
                 self.assertIn("--gitleaks-ignore-path", args)
 
-    def test_gitleaks_stderr_output_with_exit_zero_stops_the_skip(self) -> None:
-        """gitleaks が終了コード 0 でも stderr に何か出していれば (エラーを log に出した等)、
-        2 (レビュー必須) を返す。stderr の内容は出力しない。"""
+    def test_canary_differs_for_each_scan(self) -> None:
+        """canary は検査ごとにランダムに作る (2 回の検査で値が異なる)。"""
         repository = self.create_text_only_branch()
-        self.env[GITLEAKS_STDERR_ENV] = "1"
+        self.assertEqual(self.range_status(repository), 0)
+        self.assertEqual(self.range_status(repository), 0)
+        canaries = [
+            record["stdin"].split("\n", 1)[0] for record in self.gitleaks_records()
+        ]
+        self.assertEqual(len(canaries), 2, canaries)
+        for canary in canaries:
+            with self.subTest(canary=canary):
+                self.assertIsNotNone(CANARY_PATTERN.fullmatch(canary), canary)
+        self.assertNotEqual(canaries[0], canaries[1])
+
+    def test_anything_but_the_canary_alone_stops_the_skip(self) -> None:
+        """検出なしとするのは、終了コード 3・stderr が空・report が canary の 1 行だけ、を
+        すべて満たすときに限る。どれかを欠く結果はすべて 2 (レビュー必須) を返す。"""
+        cases = {
+            # 終了コード 0 で report が空 (canary も検出されない = 検査されていない)。
+            "canary_not_detected": "no-canary",
+            # report に canary 以外の行がある (秘匿情報の候補を検出した)。
+            "other_finding_in_report": "finding",
+            # 致命的なエラー (終了コード 1)。
+            "fatal_error": "exit:1",
+            # 終了コード 3 で report も canary だけだが、stderr に出力がある。
+            "canary_with_stderr": "canary-with-stderr",
+        }
+        for label, result in cases.items():
+            with self.subTest(case=label):
+                repository = self.create_repository(f"repo-{label}")
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                self.set_gitleaks_result(result)
+                self.assertEqual(self.range_status(repository), 2)
+                self.assert_no_leftover_temporary_files()
+
+    def test_gitleaks_stderr_output_stops_the_skip(self) -> None:
+        """gitleaks が canary だけを検出しても、stderr に何か出していれば (エラーを log に出した
+        等)、2 (レビュー必須) を返す。stderr の内容は出力しない。"""
+        repository = self.create_text_only_branch()
+        self.set_gitleaks_result("canary-with-stderr")
         result = subprocess.run(
             [
                 BASH,
@@ -1713,7 +1830,7 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
 
     def test_temporary_files_are_removed_even_when_gitleaks_fails(self) -> None:
         repository = self.create_text_only_branch()
-        self.set_gitleaks_exit(1)
+        self.set_gitleaks_result("finding")
         self.assertEqual(self.range_status(repository), 2)
         self.assert_no_leftover_temporary_files()
 
@@ -1726,16 +1843,27 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
         self.assertEqual(self.range_status(repository), 2)
         self.assertEqual(self.gitleaks_calls(), [])
 
+    def test_failure_to_make_the_canary_requires_review(self) -> None:
+        """canary を 36 文字の英数字で作れない場合は 2 (レビュー必須) を返し、gitleaks を
+        起動しない。"""
+        repository = self.create_text_only_branch()
+        empty_tr = self.fake_gitleaks_dir / "tr"
+        empty_tr.write_text("#!/bin/sh\ncat >/dev/null\nexit 0\n", encoding="utf-8")
+        empty_tr.chmod(empty_tr.stat().st_mode | stat.S_IXUSR)
+        self.assertEqual(self.range_status(repository), 2)
+        self.assertEqual(self.gitleaks_calls(), [])
+        self.assert_no_leftover_temporary_files()
+
     def test_gitleaks_findings_or_failures_stop_the_skip(self) -> None:
-        for code in (1, 2, 126):
-            with self.subTest(exit_code=code):
-                repository = self.create_repository(f"repo-{code}")
+        for index, result in enumerate(("finding", "exit:2", "exit:126")):
+            with self.subTest(result=result):
+                repository = self.create_repository(f"repo-{index}")
                 repository.git(
                     "update-ref", "refs/remotes/origin/master", repository.rev("master")
                 )
                 repository.write("README.md", "# updated\n")
                 repository.commit_all("docs")
-                self.set_gitleaks_exit(code)
+                self.set_gitleaks_result(result)
                 self.assertEqual(self.range_status(repository), 2)
                 self.assertEqual(self.push_status(repository), 2)
 
@@ -1743,7 +1871,7 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
         repository = self.create_repository()
         repository.write("tool.py", "print('changed')\n")
         repository.commit_all("code")
-        self.set_gitleaks_exit(1)
+        self.set_gitleaks_result("finding")
         self.assertEqual(self.range_status(repository), 1)
         self.assertEqual(self.gitleaks_calls(), [])
 
@@ -1764,7 +1892,8 @@ DUMMY_GITHUB_PAT = "ghp_" + hashlib.sha256(b"text-only-skip-test").hexdigest()[:
 @unittest.skipUnless(REAL_GITLEAKS, "requires gitleaks on PATH")
 class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
     """実際の gitleaks で、ローカルの未追跡ファイル・base の ignore・git の設定・文書の置き場所が
-    検出を抑止しないこと、commit message と削除行も検査すること。
+    検出を抑止しないこと、commit message と削除行も検査すること、入力の形式の判定 (tar の
+    magic) で検査を読み飛ばさせても skip しないこと。
 
     fake gitleaks は受け取った引数と標準入力しか記録できないため、gitleaks 自身の検出 (path の
     allowlist と `.gitleaksignore` の扱い、入力のどこを検査するか) は実物で確かめる。抑止の
@@ -1995,6 +2124,132 @@ class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
         )
         self.assertEqual(self.range_status(repository), 2)
 
+    # gitleaks stdin が入力を tar と判定する magic (offset 257 の `ustar` + NUL + `00`)。
+    TAR_MAGIC = b"ustar\x0000"
+    TAR_MAGIC_OFFSET = 257
+
+    def naive_stdin_scan_status(self, data: bytes, *extra_args: str) -> int:
+        """data をそのまま `gitleaks stdin` に渡したときの終了コード (0 = 検出なし、1 = 検出)。
+        cwd は空のディレクトリにする。"""
+        cwd = Path(tempfile.mkdtemp(dir=self.root))
+        result = subprocess.run(
+            [
+                "gitleaks",
+                "stdin",
+                "--no-banner",
+                "--redact",
+                "--log-level",
+                "error",
+                "--exit-code",
+                "1",
+                "--timeout",
+                "30",
+                *extra_args,
+            ],
+            cwd=cwd,
+            input=data,
+            env=self.env,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertIn(result.returncode, (0, 1), result.stderr)
+        return result.returncode
+
+    def create_branch_with_tar_magic(
+        self, name: str, magic_offset_in_git_log: int, with_secret: bool
+    ) -> tuple[Repository, bytes]:
+        """lib と同じ option の `git log` の出力で、先頭から magic_offset_in_git_log バイトの
+        位置に tar の magic が来るよう文書を書き込んだ feature branch と、その `git log` の出力。
+        commit message には NUL を入れられないため、magic は文書の内容 (`--text` で NUL が
+        そのまま出る) に置く。with_secret なら文書の 2 行目にダミーの token を書く。"""
+        repository = self.create_repository(name)
+        document = repository.path / "docs" / "archive.md"
+
+        def content(padding: int) -> bytes:
+            body = b"a" * padding + self.TAR_MAGIC + b"\n"
+            if with_secret:
+                body += f"example = {DUMMY_GITHUB_PAT}\n".encode()
+            return body
+
+        # 詰め物なしで commit して magic の位置を測り、詰め物の長さを決めて commit し直す
+        # (`git log` の出力のうち文書の内容より前の部分の長さは、詰め物の長さで変わらない)。
+        document.write_bytes(content(0))
+        repository.commit_all("docs")
+        base = repository.rev("master")
+        unpadded = self.scan_input_git_log(repository, base, repository.head())
+        padding = magic_offset_in_git_log - unpadded.index(self.TAR_MAGIC)
+        self.assertGreaterEqual(padding, 0)
+        document.write_bytes(content(padding))
+        repository.git("add", "-A")
+        repository.git("commit", "-q", "--amend", "-m", "docs")
+        output = self.scan_input_git_log(repository, base, repository.head())
+        self.assertEqual(output.index(self.TAR_MAGIC), magic_offset_in_git_log)
+        self.assert_all_regular_text_changes(
+            repository, ["docs/archive.md"], repository.merge_base("master"), "HEAD"
+        )
+        return repository, output
+
+    def test_tar_magic_without_a_canary_line_does_not_hide_the_secret(self) -> None:
+        """canary の行が無い入力 (`git log` の出力だけ) の offset 257 に tar の magic を置き、
+        gitleaks に何も検査させない細工をした範囲も、2 を返す。"""
+        repository, output = self.create_branch_with_tar_magic(
+            "repo", self.TAR_MAGIC_OFFSET, with_secret=True
+        )
+        # この配置の入力を素朴に `gitleaks stdin` に渡すと、token があっても検出されない
+        # (1 バイトずらすと検出される)。
+        self.assertEqual(self.naive_stdin_scan_status(output), 0)
+        self.assertEqual(self.naive_stdin_scan_status(b"\n" + output), 1)
+        self.assertEqual(self.range_status(repository), 2)
+
+    def test_tar_magic_after_the_canary_line_stops_the_skip(self) -> None:
+        """canary の行の後ろに続く入力の offset 257 に tar の magic を置き、gitleaks に canary
+        ごと何も検査させない細工をした範囲は、canary が検出されないため 2 を返す (秘匿情報の
+        有無によらない)。"""
+        for with_secret in (True, False):
+            with self.subTest(with_secret=with_secret):
+                repository, output = self.create_branch_with_tar_magic(
+                    f"repo-{with_secret}",
+                    self.TAR_MAGIC_OFFSET - CANARY_LINE_LENGTH,
+                    with_secret=with_secret,
+                )
+                canary = "ghp_" + "".join(
+                    secrets.choice(string.ascii_letters + string.digits)
+                    for _ in range(36)
+                )
+                canary_line = f"{canary}\n".encode()
+                self.assertEqual(len(canary_line), CANARY_LINE_LENGTH)
+                # canary の行 + この `git log` の出力を素朴に `gitleaks stdin` に渡すと、canary も
+                # 検出されない (1 バイトずらすと検出される)。
+                self.assertEqual(self.naive_stdin_scan_status(canary_line + output), 0)
+                self.assertEqual(
+                    self.naive_stdin_scan_status(canary_line + b"\n" + output), 1
+                )
+                self.assertEqual(self.range_status(repository), 2)
+
+    def test_config_without_the_default_rules_stops_the_skip(self) -> None:
+        """base の `.gitleaks.toml` が既定のルールを extend しない (独自のルールだけを持つ)
+        場合は、canary が検出されないため、秘匿情報の無い文書の範囲でも 2 を返す。"""
+        config = "[[rules]]\nid = \"custom-rule\"\nregex = '''custom-secret-[0-9]{8}'''\n"
+        # この設定自体は gitleaks が読める (秘匿情報の無い入力は終了コード 0 で終わる)。
+        config_file = self.root / "custom-only.toml"
+        config_file.write_text(config, encoding="utf-8")
+        self.assertEqual(
+            self.naive_stdin_scan_status(
+                b"clean\n", "--config", str(config_file)
+            ),
+            0,
+        )
+        repository = self.create_repository()
+        repository.git("switch", "-q", "master")
+        repository.write(".gitleaks.toml", config)
+        repository.commit_all("gitleaks config")
+        repository.git("switch", "-q", "feature")
+        repository.git("reset", "-q", "--hard", "master")
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        self.assertEqual(self.range_status(repository), 2)
+
     def test_replace_ref_does_not_hide_the_secret(self) -> None:
         """token を書き込む commit を、replace ref で token の無い commit に置き換えても検出する。"""
         repository = self.create_repository()
@@ -2087,10 +2342,10 @@ class PushGateTextOnlySkipTest(WorkspaceTestCase):
         """gitleaks が検出・失敗したら skip せず、deny の理由文にその旨の 1 文を加える。
         gitleaks の出力は hook の出力に出さない。"""
         repository = self.create_text_only_push()
-        for code in (1, 3):
-            self.set_gitleaks_exit(code)
+        for result in ("finding", "exit:1"):
+            self.set_gitleaks_result(result)
             for name, gate in self.GATES.items():
-                with self.subTest(gate=name, exit_code=code):
+                with self.subTest(gate=name, result=result):
                     result = self.run_gate(gate, repository)
                     self.assert_marker_deny(result)
                     reason = json.loads(result.stdout)["hookSpecificOutput"][
@@ -2105,7 +2360,7 @@ class PushGateTextOnlySkipTest(WorkspaceTestCase):
         repository = self.create_pushable_repository()
         repository.write("tool.py", "print('changed')\n")
         repository.commit_all("code")
-        self.set_gitleaks_exit(1)
+        self.set_gitleaks_result("finding")
         for name, gate in self.GATES.items():
             with self.subTest(gate=name):
                 result = self.run_gate(gate, repository)
@@ -2258,14 +2513,14 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
     def test_gitleaks_finding_or_failure_falls_back_to_record(self) -> None:
         """gitleaks が検出・失敗したら記録を照合し、deny の理由文にその旨の 1 文を加える。
         gitleaks の出力は hook の出力に出さない。"""
-        for code in (1, 3):
-            with self.subTest(exit_code=code):
-                repository = self.create_pr_repository(f"repo-{code}")
+        for index, gitleaks_result in enumerate(("finding", "exit:1")):
+            with self.subTest(result=gitleaks_result):
+                repository = self.create_pr_repository(f"repo-{index}")
                 repository.write("README.md", "# updated\n")
                 repository.commit_all("docs")
                 head = repository.head()
                 self.configure_pr(head, repository.rev("master"))
-                self.set_gitleaks_exit(code)
+                self.set_gitleaks_result(gitleaks_result)
                 result = self.run_gate(repository)
                 self.assert_record_deny(result)
                 reason = json.loads(result.stdout)["hookSpecificOutput"][
@@ -2443,7 +2698,7 @@ class WrapperTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         repository = self.create_push_repository()
         repository.write("README.md", "# updated\n")
         repository.commit_all("docs")
-        self.set_gitleaks_exit(1)
+        self.set_gitleaks_result("finding")
 
         result = self.run_wrapper(PUSH_WRAPPER, repository)
 
@@ -2566,7 +2821,7 @@ class WrapperTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         repository.write("README.md", "# updated\n")
         repository.commit_all("docs")
         self.configure_merge_pr(repository)
-        self.set_gitleaks_exit(1)
+        self.set_gitleaks_result("finding")
 
         result = self.run_wrapper(MERGE_WRAPPER, repository)
 
@@ -3038,6 +3293,14 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                 )
                 self.assertIn("秘匿情報を含む行を消す変更でも skip しません", body)
                 self.assertIn("`git log` が失敗した場合や出力が空の場合", body)
+                self.assertIn("入力の 1 行目には毎回ランダムに作る canary", body)
+                self.assertIn(
+                    "gitleaks が canary だけを検出したときに限って検出なしとします", body
+                )
+                self.assertIn(
+                    "binary の形式 (tar など) と判定すると何も検査せずに終了コード 0 で終わ", body
+                )
+                self.assertIn("既定の `github-pat` rule を含まない場合", body)
                 self.assertIn("`--ignore-gitleaks-allow` を付けるのは", body)
                 self.assertIn("`gitleaks:allow` コメント", body)
                 self.assertIn("gitleaks の設定 (`.gitleaks.toml`) は", body)
