@@ -76,7 +76,7 @@ agy --mode plan --output-format json [--model <model>] \
   --print-timeout 25m -p '<prompt>'
 ```
 
-`<HOME>` は実行時の `$HOME` の値で、wrapper が JSON の文字列として埋め込みます。`$HOME` が空、または `/` で始まらない場合は、agy を起動せず exit 1 にします。
+`<HOME>` は、実行時の `$HOME` から末尾の `/` を除いた論理的な path で、wrapper が JSON の文字列として埋め込みます。wrapper は `cd "$HOME" && pwd -P` で物理的な path (symlink を解決した path。末尾の `/` は除く) も求め、論理的な path と違う場合は、物理的な path を `<HOME>` に置いた 10 規則を続けて渡します。`$HOME` が空、`/` で始まらない、または cd できない場合は、agy を起動せず exit 1 にします。
 
 prompt は英語の固定文で、request のコピーの絶対パスと、リポジトリのルートの絶対パスを含みます (request の本文は含みません)。agy に対して、次を指示します。
 
@@ -102,7 +102,7 @@ agy の stdout (JSON 1 つ) を検査し、成功時は `.response` の本文だ
 
 agy の実行後に複数の条件が同時に成り立つ場合は、5 (workspace-modified) > 4 (agy-failed) > 6 (incomplete-response) の順に採用します。working tree の比較は agy の終了コードに関わらず必ず行います。
 
-上の表にない wrapper 内部の失敗 (`$HOME` が絶対パスでない、一時ディレクトリの作成、git の work tree の外に一時ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は exit 1 で、runner は Failure class を `other` とします。0 以外で終了するときは stdout に何も出しません。
+上の表にない wrapper 内部の失敗 (`$HOME` が絶対パスでない・cd できない、一時ディレクトリの作成、git の work tree の外に一時ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は exit 1 で、runner は Failure class を `other` とします。0 以外で終了するときは stdout に何も出しません。
 
 ## `ANTIGRAVITY_ADVISOR_MODEL`
 
@@ -157,7 +157,7 @@ deny の規則で拒否された tool の呼び出しは `denied_actions` に記
 
 wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` と `-c core.fsmonitor=false` を付けます。agy が権限設定をすり抜けて `.git/config` に fsmonitor を仕込んでいても、事後の検査でそのコマンドが実行されないようにするためです。実行後の記録では `.git` の設定・hook・info を最初に比べ、変わっていれば `git add` を実行する前に失敗にします。一時的な index と object ディレクトリは agy に渡さない一時ディレクトリに置き、リポジトリの object ディレクトリと本物の index には書き込みません。
 
-この検知は事後のもので、変更を防いだり元に戻したりはしません。変更の主体も区別しないため、相談中に親セッションやユーザーが同じ work tree を変更した場合も exit 5 になります。ref は HEAD とその branch だけを比べるため、相談中に別の worktree で commit や stash をしても、fetch で remote-tracking branch が更新されても、失敗にはしません。
+この検知は事後のもので、変更を防いだり元に戻したりはしません。変更の主体も区別しないため、相談中に親セッションやユーザーが同じ work tree を変更した場合も exit 5 になります。ref は HEAD とその branch だけを比べるため、相談中に相談対象の work tree の外にある別の worktree で commit や stash をしても、fetch で remote-tracking branch が更新されても、失敗にはしません。
 
 ## 既知の制約
 
@@ -171,7 +171,7 @@ wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` �
 - 事後の検知は次の変更を見ない: `.gitignore` などで ignore されたファイル、リポジトリの外 (wrapper の一時ディレクトリを含む)、`.git` のうち設定・hook・info と HEAD の branch 以外の部分 (他の branch・tag・stash・remote-tracking branch の ref、object ディレクトリ、logs など)、`core.hooksPath` で `.git` の外に置いた hook、cwd が git の work tree の外のときのすべての変更
 - 事後の検知の `git add -A` は、利用者の git 設定にある clean filter (git-lfs など) を実行し、filter が自分の保存先 (`.git/lfs/` など) に書き込むことがある。また、working tree に既存の object と同じ内容のファイルがあると、git がその object の更新時刻を更新することがある (内容は変わらない)
 - すべての worktree が共有する git config (common config。common dir の `config`) を相談中に他の操作 (別の worktree での `git config` 等) が変えると、wrapper は変更と判定して exit 5 にする
-- 一時的な index に stage できない path (checkout されていない入れ子の repo、読めない未追跡のファイル) が working tree にあると、実行前の記録に失敗し、wrapper は agy を起動せずに exit 1 になる。working tree の内容の比較では、入れ子の repo は gitlink (その repo の HEAD の commit) としてだけ比べる
+- 一時的な index に stage できない path (checkout されていない入れ子の repo、読めない未追跡のファイル) が working tree にあると、実行前の記録に失敗し、wrapper は agy を起動せずに exit 1 になる。working tree の内容の比較では、入れ子の repo は gitlink (その repo の HEAD の commit) としてだけ比べる。ignore されていない linked worktree が相談対象の work tree の中にあると、その worktree も入れ子の repo として gitlink で比べるため、その worktree での commit で exit 5 になる
 - 大きなリポジトリでは、事後の検知が実行前後に working tree 全体を読むため時間がかかる
 - agy の応答は `--print-timeout 25m` で 25 分に制限される。runner の Bash の timeout は 30 分
 - Bash tool が wrapper の実行を background へ移した場合、runner は結果を回収せず `Status: execution-failed` を返す。このとき agy はまだ実行中の可能性がある

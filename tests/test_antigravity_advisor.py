@@ -74,18 +74,23 @@ CREDENTIAL_LOCATIONS = (
 HOME_PLACEHOLDER = "<HOME>"
 
 
-def deny_rules(home: str) -> list[str]:
-    """wrapper が渡す deny の規則。認証情報の置き場所は home を前に付けた絶対パスで書く。"""
+def deny_rules(*homes: str) -> list[str]:
+    """wrapper が渡す deny の規則。認証情報の置き場所は、homes の順に各 home を前に付けた
+    絶対パスで書く。"""
     return [
         *FIXED_DENY_RULES,
-        *(f"read_file({home}/{name})" for name in CREDENTIAL_LOCATIONS),
+        *(
+            f"read_file({home}/{name})"
+            for home in homes
+            for name in CREDENTIAL_LOCATIONS
+        ),
     ]
 
 
-def settings_argument(home: str) -> str:
+def settings_argument(*homes: str) -> str:
     """wrapper が --settings に渡す、空白を含まない JSON の文字列。"""
     return json.dumps(
-        {"allowNonWorkspaceAccess": True, "permissions": {"deny": deny_rules(home)}},
+        {"allowNonWorkspaceAccess": True, "permissions": {"deny": deny_rules(*homes)}},
         separators=(",", ":"),
         ensure_ascii=False,
     )
@@ -603,6 +608,45 @@ class WrapperSuccessTest(WrapperHarness):
             with self.subTest(home=home):
                 self.setUp()
                 result = self.run_wrapper(extra_env={"HOME": home})
+                self.assert_failed(result, 1, agy_invoked=False)
+                self.assert_wrapper_tmpdir_is_empty()
+
+    def recorded_deny_rules(self) -> list[str]:
+        args = self.recorded_args()
+        return json.loads(args[args.index("--settings") + 1])["permissions"]["deny"]
+
+    def test_trailing_slashes_are_removed_from_home(self) -> None:
+        for suffix in ("/", "//"):
+            with self.subTest(suffix=suffix):
+                self.setUp()
+                result = self.run_wrapper(extra_env={"HOME": f"{self.home}{suffix}"})
+                self.assert_succeeded(result, "既定の助言")
+                self.assertEqual(deny_rules(str(self.home)), self.recorded_deny_rules())
+
+    def test_home_through_a_symlink_gets_rules_for_both_paths(self) -> None:
+        for suffix in ("", "/"):
+            with self.subTest(suffix=suffix):
+                self.setUp()
+                real_home = self.base / "real-home"
+                real_home.mkdir()
+                linked_home = self.base / "linked-home"
+                linked_home.symlink_to(real_home, target_is_directory=True)
+                result = self.run_wrapper(extra_env={"HOME": f"{linked_home}{suffix}"})
+                self.assert_succeeded(result, "既定の助言")
+                # 論理的な path の 10 規則に、物理的な path の 10 規則が続く。
+                self.assertEqual(
+                    deny_rules(str(linked_home), str(real_home)),
+                    self.recorded_deny_rules(),
+                )
+
+    def test_home_that_cannot_be_entered_is_rejected(self) -> None:
+        for name in ("missing-home", "home-is-a-file"):
+            with self.subTest(home=name):
+                self.setUp()
+                home = self.base / name
+                if name == "home-is-a-file":
+                    home.write_text("not a directory\n", encoding="utf-8")
+                result = self.run_wrapper(extra_env={"HOME": str(home)})
                 self.assert_failed(result, 1, agy_invoked=False)
                 self.assert_wrapper_tmpdir_is_empty()
 
@@ -1132,6 +1176,30 @@ class WrapperUnbornHeadTest(WrapperHarness):
         self.assert_failed(result, 5, agy_invoked=True)
 
 
+class WrapperColonInRepositoryPathTest(WrapperHarness):
+    """repo の path に `:` があっても、working tree の記録と比較ができる。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo = self.base / "repo:with:colons"
+        init_repository(self.repo, self.home, with_commit=True)
+
+    def test_unchanged_repository_succeeds(self) -> None:
+        result = self.run_wrapper(cwd=self.repo)
+        self.assert_succeeded(result, "既定の助言")
+        self.assertEqual("", run_git(self.repo, self.home, "status", "--porcelain"))
+
+    def test_append_to_an_already_modified_file_is_workspace_modified(self) -> None:
+        # status は変わらず、working tree の内容の比較だけが変化を検知する。
+        (self.repo / "tracked.txt").write_text("modified\n", encoding="utf-8")
+        result = self.run_wrapper(
+            cwd=self.repo,
+            extra_env={"FAKE_AGY_APPEND_FILE": str(self.repo / "tracked.txt")},
+        )
+        self.assert_failed(result, 5, agy_invoked=True)
+        self.assertIn("ファイルの内容が変わりました", result.stderr)
+
+
 class WrapperOutsideGitTest(WrapperHarness):
     """cwd が git の work tree の外なら、比較を行わずに相談する。"""
 
@@ -1351,7 +1419,7 @@ class WrapperScriptStaticTest(unittest.TestCase):
             "git status --porcelain=v1 -z --untracked-files=all",
             "GIT_INDEX_FILE",
             "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "info/alternates",
             "GIT_OPTIONAL_LOCKS=0",
             "-c core.fsmonitor=false",
             "LC_ALL=C",

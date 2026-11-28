@@ -31,7 +31,9 @@
 #   の直下に作り直し、それでも中なら exit 1。どちらも EXIT trap で削除し、成功・失敗の
 #   どちらでも残さない
 # - HOME: 権限設定の deny の規則に、`$HOME` の下の認証情報の置き場所を絶対パスで書くために
-#   使う。空、または `/` で始まらない場合は agy を起動せず exit 1
+#   使う。末尾の `/` を除いた論理的な path と、`cd "$HOME" && pwd -P` で得る物理的な path
+#   (末尾の `/` を除く) の 2 つを求め、2 つが違えば両方の path で規則を出す。空、`/` で
+#   始まらない、または cd できない場合は agy を起動せず exit 1
 #
 # ## 必要なコマンド
 #
@@ -57,8 +59,10 @@
 #    - `git status --porcelain=v1 -z --untracked-files=all` の出力
 #    - working tree 全体 (ignore されていない未追跡のファイルを含む) の tree OID。
 #      一時的な index (`GIT_INDEX_FILE`) と一時的な object ディレクトリ
-#      (`GIT_OBJECT_DIRECTORY`。元の object ディレクトリは `GIT_ALTERNATE_OBJECT_DIRECTORIES`
-#      で読み取り用に参照する) を記録用の一時ディレクトリに置き、`git read-tree HEAD`
+#      (`GIT_OBJECT_DIRECTORY`。その `info/alternates` に元の object ディレクトリの絶対パスを
+#      1 行で書き、読み取り用に参照する。alternates のファイルは 1 行に 1 つの path を書く
+#      形式で `:` を区切りとして扱わないため、path に `:` を含む repo でも参照できる) を
+#      記録用の一時ディレクトリに置き、`git read-tree HEAD`
 #      (commit の無い repo では `--empty`) → `git update-index -q --refresh` →
 #      `git add -A` → `git write-tree` で求める。リポジトリの object ディレクトリと本物の
 #      index には書き込まない
@@ -75,8 +79,9 @@
 #    相談対象のリポジトリではなく git の work tree の外の空のディレクトリを cwd にする。
 #    --settings はこのセッションに限って、ファイルの書き込み・shell の実行・MCP・URL の
 #    取得・実行・download と、`$HOME` の下の認証情報の置き場所の読み取りを権限設定で
-#    拒否する。`<HOME>` は実行時の `$HOME` の値で、wrapper が jq で JSON の文字列として
-#    埋め込む。それ以外の部分は固定である。
+#    拒否する。`<HOME>` は実行時の `$HOME` から末尾の `/` を除いた論理的な path で、wrapper
+#    が jq で JSON の文字列として埋め込む。物理的な path が論理的な path と違う場合は、
+#    物理的な path を `<HOME>` に置いた 10 規則を続けて出す。それ以外の部分は固定である。
 #    prompt は英語の固定文で、request のコピーの絶対パスと、相談対象のリポジトリのルートの
 #    絶対パス (cwd が git の work tree 内ならその toplevel、外ならその cwd) を含み、request
 #    の本文は含まない。prompt は次を指示する:
@@ -111,9 +116,9 @@
 # | 6 | incomplete-response | agy の stdout が JSON 1 つでない、`.status` が "SUCCESS" でない、`.denied_actions` が空でない、または `.response` が空 |
 #
 # agy の実行後に複数の条件が同時に成り立つ場合は、5 (workspace-modified) > 4 (agy-failed) > 6 (incomplete-response)
-# の順に採用する。上の表にない失敗 (HOME が絶対パスでない、一時ディレクトリの作成、work tree
-# の外に一時ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は exit 1 とし、
-# runner は Failure class を other とする。
+# の順に採用する。上の表にない失敗 (HOME が絶対パスでない・cd できない、一時ディレクトリの
+# 作成、work tree の外に一時ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は
+# exit 1 とし、runner は Failure class を other とする。
 #
 # ## stdout / stderr
 #
@@ -175,12 +180,13 @@ run_git() {
 }
 
 # 一時的な index と object ディレクトリで、相談対象のリポジトリに対して git を実行する。
+# リポジトリの object ディレクトリは、一時的な object ディレクトリの info/alternates から
+# 読み取り用に参照する。
 # $1: index のファイル、$2: object ディレクトリ、以降: git の引数
 run_git_with_temporary_index() {
   local index_file=$1 objects=$2
   shift 2
-  GIT_INDEX_FILE=$index_file GIT_OBJECT_DIRECTORY=$objects \
-    GIT_ALTERNATE_OBJECT_DIRECTORIES=$object_directory GIT_OPTIONAL_LOCKS=0 \
+  GIT_INDEX_FILE=$index_file GIT_OBJECT_DIRECTORY=$objects GIT_OPTIONAL_LOCKS=0 \
     git -c core.fsmonitor=false -c core.splitIndex=false -C "$repository_root" "$@"
 }
 
@@ -196,19 +202,30 @@ is_valid_model_name() {
   )
 }
 
+# $1 の末尾の `/` をすべて除いて出す。`/` だけでできている場合は空になる。
+without_trailing_slashes() {
+  local path=$1
+  while [ "${path%/}" != "$path" ]; do
+    path=${path%/}
+  done
+  printf '%s' "$path"
+}
+
 # agy に --settings で渡す権限設定の JSON を、空白を含まない 1 行で stdout に出す。
-# 認証情報の置き場所は $1 (home ディレクトリの絶対パス) を前に付けた `read_file(<path>)` の
-# deny の規則にする。値の JSON のエスケープは jq に任せる。
+# 認証情報の置き場所は、$1 (home ディレクトリの論理的な path) を前に付けた
+# `read_file(<path>)` の deny の規則にする。$2 (物理的な path) が $1 と違う場合は、$2 を
+# 前に付けた規則を続けて出す。値の JSON のエスケープは jq に任せる。
 build_permission_settings() {
-  jq -n -c --arg home "$1" \
+  jq -n -c --arg logical "$1" --arg physical "$2" \
     --argjson fixed "$FIXED_DENY_RULES_JSON" \
     --argjson credentials "$CREDENTIAL_LOCATIONS_JSON" '
-    {
-      allowNonWorkspaceAccess: true,
-      permissions: {
-        deny: ($fixed + ($credentials | map("read_file(" + $home + "/" + . + ")")))
-      }
-    }' 2> /dev/null
+    ([$logical] + (if $physical == $logical then [] else [$physical] end)) as $homes
+    | {
+        allowNonWorkspaceAccess: true,
+        permissions: {
+          deny: ($fixed + [$homes[] as $home | $credentials[] | "read_file(" + $home + "/" + . + ")"])
+        }
+      }' 2> /dev/null
 }
 
 git_is_available() {
@@ -336,7 +353,9 @@ record_status() {
 # (記録用の一時ディレクトリ) に置き、リポジトリの object ディレクトリと index は変えない。
 record_tree() {
   local index_file="$1.index" objects="$1.objects"
-  mkdir "$objects" || return 1
+  mkdir "$objects" "$objects/info" || return 1
+  # alternates のファイルは 1 行に 1 つの path を書く形式で、`:` を区切りとして扱わない。
+  printf '%s\n' "$object_directory" > "$objects/info/alternates" || return 1
   if [ -n "$(run_git -C "$repository_root" rev-parse --verify -q HEAD 2> /dev/null)" ]; then
     run_git_with_temporary_index "$index_file" "$objects" read-tree HEAD > /dev/null 2>&1 || return 1
   else
@@ -436,7 +455,13 @@ case $home_directory in
   /*) ;;
   *) fail 1 "HOME が絶対パスでないため、認証情報の置き場所の読み取りを拒否する権限設定を作れません" ;;
 esac
-permission_settings=$(build_permission_settings "$home_directory") ||
+# symlink を含む HOME では agy が見る path と規則の path が食い違いうるため、論理的な path
+# と物理的な path の両方で規則を出す。
+physical_home=$(cd "$home_directory" 2> /dev/null && pwd -P) ||
+  fail 1 "HOME のディレクトリに移動できないため、認証情報の置き場所の読み取りを拒否する権限設定を作れません"
+logical_home=$(without_trailing_slashes "$home_directory")
+physical_home=$(without_trailing_slashes "$physical_home")
+permission_settings=$(build_permission_settings "$logical_home" "$physical_home") ||
   fail 1 "agy に渡す権限設定を jq で作れません"
 
 # --- 相談対象のリポジトリ ---
