@@ -155,7 +155,7 @@ wrapper が exit 0 で完了した場合、parent-safe report の `Status` は *
 
 ## テキスト系文書のみの変更
 
-PR の変更が **テキスト系文書** だけの場合、merge gate はローカルのレビュー記録を要求せずに merge を通します。起動手順は変わらず、codex-reviewer を起動します。wrapper は codex review を実行せずに終わり、codex-reviewer は `Status: skipped` を返すので、その report を受け取ったら merge に進みます (起動順の規律は `hooks/prompts/merge-order-rules.md`)。起動を省くかどうかを session 側では判定せず、テキスト系文書だけかの判定は gate と wrapper が行います。
+PR の変更が **テキスト系文書** だけの場合、merge gate はローカルのレビュー記録を要求せずに merge を通します。起動手順は変わらず、codex-reviewer を起動します。wrapper は codex review を実行せずに終わり、codex-reviewer は `Status: skipped` を返すので、その report を受け取ったら merge に進みます (起動順の規律は `hooks/prompts/merge-order-rules.md`)。起動を省くかどうかを session 側では判定せず、テキスト系文書だけかの判定は gate と wrapper が行います。`Status: skipped` を受け取った後に merge gate に deny された場合 (PR の base branch を変えた等で、文書だけの判定が成り立たなくなった場合) は、同じ head SHA でも codex-reviewer を再起動します。
 
 ### テキスト系文書の定義
 

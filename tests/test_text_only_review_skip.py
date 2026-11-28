@@ -729,9 +729,17 @@ class MergeGateTest(WorkspaceTestCase):
         gh_path.chmod(gh_path.stat().st_mode | stat.S_IXUSR)
         self.env["PATH"] = f"{self.fake_bin_dir}{os.pathsep}{self.env['PATH']}"
 
-    def configure_pr(self, head: str, base_name: str | None = "master") -> None:
-        """fake gh が返す PR 情報を設定する (base_name が None なら baseRefName を含めない)。"""
-        pr: dict[str, object] = {"number": PR_NUMBER, "headRefOid": head}
+    def configure_pr(
+        self,
+        head: str,
+        base_name: str | None = "master",
+        number: int | str | None = PR_NUMBER,
+    ) -> None:
+        """fake gh が返す PR 情報を設定する (base_name / number が None なら、それぞれ
+        baseRefName / number を含めない)。"""
+        pr: dict[str, object] = {"headRefOid": head}
+        if number is not None:
+            pr["number"] = number
         if base_name is not None:
             pr["baseRefName"] = base_name
         (self.fake_bin_dir / "gh-config.json").write_text(
@@ -805,6 +813,18 @@ class MergeGateTest(WorkspaceTestCase):
         self.add_and_remove_a_document(repository)
         self.configure_pr(repository.head())
         self.assert_record_is_checked(repository)
+
+    def test_merge_gate_denies_document_only_pr_without_usable_pr_number(self) -> None:
+        """文書だけの PR でも、gh の応答に PR 番号が無いか数字でなければ、従来どおり deny
+        する (文書だけの判定は PR 番号の検証を通った後に行う)。"""
+        repository = self.create_repository_with_origin()
+        self.commit_documents(repository)
+        for label, number in {"number が無い": None, "数字でない": "abc"}.items():
+            with self.subTest(case=label):
+                self.configure_pr(repository.head(), number=number)
+                reason = self.deny_reason(self.run_gate(repository))
+                self.assertIn("PR 番号 (number) を取得できなかった", reason)
+                self.assertIn(MERGE_CODEX_REVIEWER, reason)
 
 
 @unittest.skipUnless(NODE, "wrapper integration requires node")
@@ -962,6 +982,12 @@ class TextOnlySkipDocumentTest(unittest.TestCase):
             rules,
         )
         self.assertIn("起動を省くかどうかをセッション自身で判定しない", rules)
+        # `Status: skipped` の後に gate に deny されたら、同じ head SHA でも再起動する。
+        self.assertIn(
+            "`Status: skipped` を受け取った後に merge gate に deny された場合",
+            rules,
+        )
+        self.assertIn("同じ head SHA でも codex-reviewer を再起動する", rules)
 
     def test_review_commands_leave_text_only_pushes_to_the_push_gate(self) -> None:
         core = self.read(CORE_REVIEW_COMMAND)

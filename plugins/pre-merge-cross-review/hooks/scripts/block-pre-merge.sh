@@ -22,9 +22,10 @@
 #    merge を作るためサポート外とする。
 # 3. **PR 番号・head SHA・base branch 名の取得**: merge 対象 PR の番号・現在の head SHA・
 #    base branch 名を gh (`gh pr view --json number,headRefOid,baseRefName`) で取得する。
-#    番号と head SHA を取得できない・head SHA の形式が不正な場合は deny する。
-# 4. **テキスト系文書だけの PR**: `refs/remotes/origin/<base branch 名>` と head SHA の
-#    merge-base から head までの変更がテキスト系文書だけ (判定は lib/text-paths.sh) なら、
+#    head SHA を取得できない・head SHA の形式が不正な場合と、 PR 番号を取得できない (全数字で
+#    ない場合を含む) 場合は deny する。
+# 4. **テキスト系文書だけの PR**: 3. の検証を通った後、 `refs/remotes/origin/<base branch 名>` と
+#    head SHA の merge-base から head までの変更がテキスト系文書だけ (判定は lib/text-paths.sh) なら、
 #    記録を照合せずに無出力で終了する。 base branch 名が空・`-` 始まり・branch 名として不正な
 #    場合と、 head SHA が 40 桁の小文字 16 進数でない場合は判定せずに 5. へ進む (判定が成立
 #    しない場合も 5. へ進む)。
@@ -262,25 +263,6 @@ PR_NUMBER=$(printf '%s' "$PR_JSON" | jq -r '.number // empty' 2>/dev/null) || PR
 
 _BLOCK_PRE_MERGE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# PR の変更がテキスト系文書だけなら、 codex review の記録を照合せずに通す。 判定は
-# lib/text-paths.sh で、 wrapper (run-pre-merge-codex-review.sh) と同じ形 (remote-tracking ref
-# の完全な名前と head) で呼ぶ。 base branch 名と head SHA は git の引数になるため、 使えない値
-# (空・`-` 始まり・branch 名として不正な base branch 名と、 40 桁の小文字 16 進数でない head
-# SHA) のときは判定せずに記録の照合へ進む。 lib を読み込めない場合も記録の照合へ進む。
-BASE_NAME=$(printf '%s' "$PR_JSON" | jq -r '.baseRefName // empty' 2>/dev/null) || BASE_NAME=""
-case "$BASE_NAME" in
-  "" | -*) ;;
-  *)
-    # shellcheck source=lib/text-paths.sh
-    if printf '%s' "$HEAD_SHA" | grep -qE '^[0-9a-f]{40}$' \
-      && git check-ref-format --branch "$BASE_NAME" >/dev/null 2>&1 \
-      && source "$_BLOCK_PRE_MERGE_SCRIPT_DIR/lib/text-paths.sh" 2>/dev/null \
-      && is_text_only_range_in "$PAYLOAD_CWD" "refs/remotes/origin/${BASE_NAME}" "$HEAD_SHA"; then
-      exit 0
-    fi
-    ;;
-esac
-
 # レビュー記録のファイル名は lib/markers.sh が単一ソース。 読み込めない場合は記録を検証でき
 # ないため deny に倒す (fail-closed)。
 # shellcheck source=lib/markers.sh
@@ -335,6 +317,27 @@ gh の認証・バージョンと PR の状態も併せて確認してくださ�
 
 ${REVIEW_GUIDANCE}"
     exit 0
+    ;;
+esac
+
+# PR の変更がテキスト系文書だけなら、 codex review の記録を照合せずに通す。 PR 番号の検証を
+# 通った後に判定するのは、 gh の応答が不完全な merge を文書だけという理由で通さないため。
+# 判定は lib/text-paths.sh で、 wrapper (run-pre-merge-codex-review.sh) と同じ形
+# (remote-tracking ref の完全な名前と head) で呼ぶ。 base branch 名と head SHA は git の引数に
+# なるため、 使えない値 (空・`-` 始まり・branch 名として不正な base branch 名と、 40 桁の小文字
+# 16 進数でない head SHA) のときは判定せずに記録の照合へ進む。 lib を読み込めない場合も記録の
+# 照合へ進む。
+BASE_NAME=$(printf '%s' "$PR_JSON" | jq -r '.baseRefName // empty' 2>/dev/null) || BASE_NAME=""
+case "$BASE_NAME" in
+  "" | -*) ;;
+  *)
+    # shellcheck source=lib/text-paths.sh
+    if printf '%s' "$HEAD_SHA" | grep -qE '^[0-9a-f]{40}$' \
+      && git check-ref-format --branch "$BASE_NAME" >/dev/null 2>&1 \
+      && source "$_BLOCK_PRE_MERGE_SCRIPT_DIR/lib/text-paths.sh" 2>/dev/null \
+      && is_text_only_range_in "$PAYLOAD_CWD" "refs/remotes/origin/${BASE_NAME}" "$HEAD_SHA"; then
+      exit 0
+    fi
     ;;
 esac
 
