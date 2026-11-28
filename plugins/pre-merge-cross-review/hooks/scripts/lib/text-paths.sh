@@ -149,8 +149,10 @@
 #        呼び出しが失敗した (判定に必要な object が手元に無い場合を含む)
 #   - 2: テキスト系文書だけだが、gitleaks の結果が canary だけの検出ではなかった (秘匿情報の
 #        候補を検出した・canary を検出しなかった・実行に失敗した)、gitleaks に渡す入力を
-#        書き出せなかった (`git log` の失敗・空の出力)、または実際に使う gitleaks の設定に
-#        `path =` の key がある・設定を読めない (下記「設定と ignore の読み方」)
+#        書き出せなかった (`git log` の失敗・空の出力)、範囲に UTF-8 以外の `encoding` header を
+#        持つ commit がある、gitleaks に渡す入力が 100,000 バイトを超える (下記「秘匿情報の
+#        検査」)、または実際に使う gitleaks の設定に `path =` の key がある・設定を読めない
+#        (下記「設定と ignore の読み方」)
 #
 # 呼び出し側は 0 のときだけ skip し、1 と 2 では従来どおりレビューを要求する。2 を 1 と
 # 分けるのは、deny の理由文で「テキスト系文書だけだが秘匿情報の検査で止めた」ことを示すため。
@@ -196,8 +198,10 @@
 #     `--format` は利用者の `format.pretty` (`oneline` 等) で message の本文が落ちないように、
 #     `diff.relative=false` は target_cwd が subdirectory のときに差分がその配下に絞られない
 #     ように、`--encoding=UTF-8` は `i18n.logOutputEncoding` で message が別の encoding に
-#     変換されないように付ける。属性で文書を binary 扱いにする (`.git/info/attributes` の
-#     `*.md binary` 等) と、差分から文書の内容を読み取れない。`color.ui = always` では、
+#     変換されないように付ける (commit 自身の `encoding` header による変換はこの option では
+#     防げないため、UTF-8 以外の header を持つ commit では検査しない。下記)。属性で文書を
+#     binary 扱いにする (`.git/info/attributes` の `*.md binary` 等) と、差分から文書の内容を
+#     読み取れない。`color.ui = always` では、
 #     出力に色の制御文字が混ざる。textconv で内容を変換した場合も、変換後の差分に秘匿情報が残らなければ
 #     検出されない。`--text` / `--no-textconv` / `--no-color` はそれぞれを無効にし、
 #     `--no-ext-diff` は外部 diff を使わせない。`--no-show-signature` は `log.showSignature`
@@ -206,6 +210,20 @@
 #     打ち切りを含む) と、<log> が 0 バイトの場合は gitleaks を起動せず exit code 2 にする。
 #     <log> が空でも、canary の行だけの入力は「検出なし」になるため、検査できていない入力を
 #     ここで止める
+#   - <log> を書き出す前に、範囲の commit の `encoding` header を
+#     `git <先頭の option> log --no-show-signature --format=%e <base の OID>..<head の OID>` で
+#     1 行ずつ書き出し (時間の上限の中で行う)、空 (header が無い commit。git は UTF-8 と
+#     みなす) か `UTF-8` / `utf8` (大文字小文字を区別しない) 以外の行があれば exit code 2 に
+#     する。git は message を header の encoding から `--encoding` の encoding に変換して
+#     書き出すため、たとえば header が `IBM037` の commit では、message のバイト列にある token が
+#     変換で別の文字列になり、入力から消える。この `git log` が失敗した場合も exit code 2
+#   - <入力> が 100,000 バイトを超える場合は gitleaks を起動せず exit code 2 にする。gitleaks
+#     stdin は最初に 100,000 バイトを読み、それを超える入力は分割して検査することがあり、分割の
+#     境界をまたぐ token を検出しない (stdin が file のときは、空行が見つかるまで最大 25,000
+#     バイトを読み足してから分割するため、空行を含まない入力は 125,000 バイトの位置で
+#     分割される。gitleaks 8.30.1 で、この位置をまたぐ token を見逃すことを確認した)。lib は
+#     stdin に通常の file を渡すため、100,000 バイト以下の入力は 1 回で読まれ、分割は起きない。
+#     大きさは `wc -c` で測る
 #   - canary は、gitleaks の既定の `github-pat` rule に当たる偽 token (`ghp_` + 英数字 36 文字。
 #     英数字は検査ごとに `/dev/urandom` から作る)。代入の形にせず token だけを 1 行に置くため、
 #     既定の rule では `github-pat` の 1 件だけが当たる。`github-pat` rule は値の entropy が 3 を
@@ -273,11 +291,15 @@
 #     正規表現と照合するため、path を条件にした rule (`[[rules]]` の `path`) は、その正規表現が
 #     空文字列に当たらない限り働かず、その rule だけが当たる値を検出できない。`[extend]` の
 #     `path` で別の設定を読み込む設定も同じ扱いになる (読み込んだ先の rule を確かめられない
-#     ため)。照合は行ごとの正規表現 (`LC_ALL=C grep -E` で `(^|[[:space:]{,.])["']?path["']?[[:space:]]*=`) で、
-#     引用符で囲んだ key (`"path" =`)・inline table の中 (`{ id = "x", path = "..." }`)・dotted
-#     key (`extend.path =`。`[extend]` の `path` と同じ意味) にも当たり、allowlist の `paths =`
-#     には当たらない。comment の中の `path =` にも当たる
-#     (レビュー必須の側)。`GITLEAKS_CONFIG` のファイルは gitleaks の cwd を移す前の cwd を
+#     ため)。照合は行ごとの正規表現 (`LC_ALL=C grep -Ei` で
+#     `(^|[[:space:]{,.])["']?path["']?[[:space:]]*=`) で行う。gitleaks は設定の key の大文字
+#     小文字を区別せずに読むため、照合も区別しない (`Path =` にも当たる)。引用符で囲んだ key
+#     (`"path" =`)・inline table の中 (`{ id = "x", path = "..." }`)・dotted key
+#     (`extend.path =`。`[extend]` の `path` と同じ意味) にも当たり、allowlist の `paths =` には
+#     当たらない。TOML の二重引用符の key は escape を使える (`"p\u0061th"` は `path` になる)
+#     ため、backslash を含む二重引用符の key への代入 (`"[^"]*\\[^"]*"[[:space:]]*=`) も同じ
+#     扱いにする。comment の中の `path =` にも当たる (レビュー必須の側)。
+#     `GITLEAKS_CONFIG` のファイルは gitleaks の cwd を移す前の cwd を
 #     基準に読み、読めなければ exit code 2 にする。base の tree に `.gitleaks.toml` が無いときの
 #     一時ファイル (既定のルールだけ) はこの key を持たない。既定のルールにも path を条件にした
 #     rule はあるが (8.30.1 では 5 件)、`.p12`・`.pfx` の鍵ファイル、`.php`・`.tf`・`.hcl`・
@@ -558,14 +580,19 @@ _text_paths_exec_in_dir_with_input() {
 }
 
 # _text_paths_config_has_path_key <file>
-# gitleaks の設定ファイル (TOML) に、key `path` の代入 (`path =`。引用符で囲んだ key・
-# inline table の中・dotted key を含み、allowlist の `paths =` は含まない) に当たる行が
-# あれば 0、無ければ 1、読めなければ 2 (grep の exit code) を返す。理由はファイルヘッダの「設定と ignore の読み方」
-# を参照。
+# gitleaks の設定ファイル (TOML) に key `path` の代入があるかを確かめ、当たる行があれば 0、
+# 無ければ 1、読めなければ 2 (grep の exit code) を返す。次のどちらかに当たる行を「key `path`
+# の代入がある」とみなす (理由はファイルヘッダの「設定と ignore の読み方」を参照):
+#   - `path =` (大文字小文字を区別しない。引用符で囲んだ key・inline table の中・dotted key を
+#     含み、allowlist の `paths =` は含まない)
+#   - backslash を含む二重引用符の key への代入 (escape を展開した後の key を確かめられない
+#     ため)
 _text_paths_config_has_path_key() {
-  local pattern="(^|[[:space:]{,.])[\"']?path[\"']?[[:space:]]*="
+  local key_pattern="(^|[[:space:]{,.])[\"']?path[\"']?[[:space:]]*="
+  local escaped_key_pattern="\"[^\"]*\\\\[^\"]*\"[[:space:]]*="
   local grep_status=0
-  LC_ALL=C grep -Eq -e "$pattern" -- "$1" 2>/dev/null || grep_status=$?
+  LC_ALL=C grep -Eqi -e "$key_pattern" -e "$escaped_key_pattern" -- "$1" 2>/dev/null \
+    || grep_status=$?
   return "$grep_status"
 }
 
@@ -651,6 +678,22 @@ _text_paths_run_gitleaks() {
   # `git log` と gitleaks で 1 つの期限 (bash の `SECONDS` の値) を共有する。
   local deadline=$((SECONDS + 20))
 
+  # 範囲の commit の `encoding` header を 1 行ずつ書き出し、UTF-8 以外があれば検査しない
+  # (理由はファイルヘッダの「秘匿情報の検査」を参照)。空の行は header の無い commit。
+  local encoding_path="${work_dir}/gitleaks.encodings"
+  local encoding_status=0
+  _text_paths_run_with_time_limit "$((deadline - SECONDS))" \
+    git "${git_prefix[@]}" log --no-show-signature --format=%e "${base_oid}..${head_oid}" \
+    </dev/null >"$encoding_path" 2>/dev/null || encoding_status=$?
+  [ "$encoding_status" -eq 0 ] || return "$encoding_status"
+  local commit_encoding
+  while IFS= read -r commit_encoding || [ -n "$commit_encoding" ]; do
+    case "$commit_encoding" in
+      "" | [uU][tT][fF]-8 | [uU][tT][fF]8) ;;
+      *) return 1 ;;
+    esac
+  done <"$encoding_path" || return 1
+
   # 範囲内の commit の message と差分を書き出す。stderr は捨てる。
   local log_path="${work_dir}/gitleaks.log"
   local log_status=0
@@ -666,6 +709,17 @@ _text_paths_run_gitleaks() {
   local input_path="${work_dir}/gitleaks.input"
   printf '%s\n' "$canary" >"$input_path" 2>/dev/null || return 1
   cat "$log_path" >>"$input_path" 2>/dev/null || return 1
+
+  # 入力の大きさの上限 (バイト)。gitleaks stdin は最初に 100,000 バイトを読み、それを超える
+  # 入力は分割して検査することがあり、分割の境界をまたぐ token を検出しない。通常の file から
+  # 読む 100,000 バイト以下の入力は分割されない (理由はファイルヘッダの「秘匿情報の検査」を参照)。
+  local max_input_bytes=100000
+  local input_bytes
+  input_bytes=$(wc -c <"$input_path" 2>/dev/null) || return 1
+  # macOS の `wc` は数値の前に空白を付けるため、数字だけを残す。
+  input_bytes="${input_bytes//[!0123456789]/}"
+  [ -n "$input_bytes" ] || return 1
+  [ "$input_bytes" -le "$max_input_bytes" ] || return 1
 
   # gitleaks には残り秒数を渡す。1 秒未満なら起動しない。
   local remaining=$((deadline - SECONDS))

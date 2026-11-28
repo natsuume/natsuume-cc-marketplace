@@ -717,6 +717,41 @@ class WorkspaceTestCase(unittest.TestCase):
         self.env["PATH"] = os.pathsep.join(entries)
         self.assertIsNone(shutil.which("gitleaks", path=self.env["PATH"]))
 
+    def commit_with_encoding_header(
+        self, repository: Repository, message: str, encoding: str | None
+    ) -> str:
+        """index の tree と HEAD を親にした commit を、`encoding` header を encoding にして作り、
+        今の branch を進める (encoding が None なら header を付けない)。git の commit 系の
+        コマンドは UTF-8 の header を書かないため、commit の object を直接書く。message の
+        バイト列はそのまま (変換せずに) 書く。"""
+        assert GIT is not None
+        tree = repository.git("write-tree").strip()
+        parent = repository.head()
+        identity = "Text Only Skip Test <text-only-skip@example.invalid> 1700000000 +0000"
+        lines = [
+            f"tree {tree}",
+            f"parent {parent}",
+            f"author {identity}",
+            f"committer {identity}",
+        ]
+        if encoding is not None:
+            lines.append(f"encoding {encoding}")
+        content = "\n".join(lines) + f"\n\n{message}\n"
+        result = subprocess.run(
+            [GIT, "hash-object", "-t", "commit", "-w", "--stdin"],
+            cwd=repository.path,
+            env=self.env,
+            input=content.encode("utf-8"),
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commit = result.stdout.decode("ascii").strip()
+        branch = repository.git("symbolic-ref", "HEAD").strip()
+        repository.git("update-ref", branch, commit)
+        return commit
+
     def scan_input_git_log(self, repository: Repository, base: str, head: str) -> bytes:
         """判定 lib が gitleaks の入力 (canary の行の後ろ) に書き出す `git log` の出力。"""
         return repository.run_git(
@@ -2002,6 +2037,14 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
             "regex = '''INTERNAL-[0-9]{8}'''\n\"path\" = '''^docs/'''\n"
         ),
         "dotted_key": 'extend.path = "other-gitleaks.toml"\n',
+        "upper_case_key": (
+            '[[rules]]\nid = "internal-id"\n'
+            "regex = '''INTERNAL-[0-9]{8}'''\nPath = '''^docs/'''\n"
+        ),
+        "escaped_quoted_key": (
+            '[[rules]]\nid = "internal-id"\n'
+            "regex = '''INTERNAL-[0-9]{8}'''\n\"p\\u0061th\" = '''^docs/'''\n"
+        ),
     }
 
     def test_base_config_with_a_path_key_stops_the_skip(self) -> None:
@@ -2062,10 +2105,13 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 self.assert_no_leftover_temporary_files()
 
     def test_allowlist_paths_key_does_not_stop_the_skip(self) -> None:
-        """allowlist の `paths =` だけを持つ設定は、今までどおり skip できる。"""
+        """allowlist の `paths =` だけを持つ設定は、今までどおり skip できる。backslash を
+        含む値 (key ではない) も skip を止めない。"""
         config = (
             "[extend]\nuseDefault = true\n\n"
-            "[allowlist]\npaths = ['''^vendor/''', '''(^|/)node_modules/''']\n"
+            '[allowlist]\ndescription = "values like C:\\\\docs"\n'
+            "paths = ['''^vendor/''', '''(^|/)node_modules/''']\n"
+            'regexes = ["\\\\d{4}-example"]\n'
         )
         repository = self.create_branch_on_base(
             "repo", lambda repository: repository.write(".gitleaks.toml", config)
@@ -2079,6 +2125,102 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
         finally:
             del self.env["GITLEAKS_CONFIG_TOML"]
         self.assertNotIn("--config", self.single_gitleaks_record()["args"])
+
+    def create_branch_with_encoding_headers(
+        self, name: str, encodings: list[str | None]
+    ) -> Repository:
+        """feature branch に、README.md を変える commit を encodings の header で 1 つずつ積む。"""
+        repository = self.create_repository(name)
+        for index, encoding in enumerate(encodings):
+            repository.write("README.md", f"# updated {index}\n")
+            repository.git("add", "README.md")
+            commit = self.commit_with_encoding_header(
+                repository, f"docs {index}", encoding
+            )
+            header = repository.run_git("cat-file", "commit", commit)
+            if encoding is None:
+                self.assertNotIn(b"\nencoding ", header)
+            else:
+                self.assertIn(f"\nencoding {encoding}\n".encode(), header)
+        return repository
+
+    def test_non_utf8_encoding_header_stops_the_skip(self) -> None:
+        """範囲に UTF-8 以外の `encoding` header を持つ commit があれば、gitleaks を起動せずに
+        2 を返す (範囲の一部の commit だけの場合も同じ)。"""
+        cases: dict[str, list[str | None]] = {
+            "IBM037": ["IBM037"],
+            "ISO-8859-1": ["ISO-8859-1"],
+            "one_of_two_commits": [None, "IBM037"],
+        }
+        for label, encodings in cases.items():
+            with self.subTest(case=label):
+                self.gitleaks_log.unlink(missing_ok=True)
+                repository = self.create_branch_with_encoding_headers(
+                    f"repo-{label}", encodings
+                )
+                self.assertEqual(self.range_status(repository), 2)
+                self.assertEqual(self.gitleaks_calls(), [])
+                self.assert_no_leftover_temporary_files()
+
+    def test_utf8_or_missing_encoding_header_keeps_the_skip(self) -> None:
+        """header が無い commit (git は UTF-8 とみなす) と、`UTF-8` / `utf8` の header の commit
+        は今までどおり skip できる。"""
+        repository = self.create_branch_with_encoding_headers(
+            "repo", [None, "UTF-8", "utf8"]
+        )
+        self.assertEqual(self.range_status(repository), 0)
+        self.assertEqual(len(self.gitleaks_calls()), 1)
+
+    # gitleaks に渡す入力 (canary の行 + `git log` の出力) の上限 (バイト)。
+    MAX_SCAN_INPUT_BYTES = 100_000
+
+    def create_branch_with_scan_input_of(self, name: str, size: int) -> Repository:
+        """gitleaks に渡す入力の大きさがちょうど size バイトになる文書の commit を持つ branch。
+
+        文書は 80 バイトの行を並べ、最後の行の長さで大きさを合わせる (1 度 commit して
+        `git log` の出力の大きさを測り、最後の行の長さを決めて commit し直す)。"""
+        repository = self.create_repository(name)
+        document = repository.path / "docs" / "large.md"
+        line = "a" * 79 + "\n"
+
+        def content(last_line_length: int) -> str:
+            return line * 1200 + "b" * last_line_length + "\n"
+
+        document.write_text(content(100), encoding="utf-8")
+        repository.commit_all("large document")
+        base = repository.rev("master")
+
+        def scan_input_size() -> int:
+            return CANARY_LINE_LENGTH + len(
+                self.scan_input_git_log(repository, base, repository.head())
+            )
+
+        last_line_length = 100 + size - scan_input_size()
+        self.assertGreaterEqual(last_line_length, 0)
+        document.write_text(content(last_line_length), encoding="utf-8")
+        repository.git("add", "-A")
+        repository.git("commit", "-q", "--amend", "-m", "large document")
+        self.assertEqual(scan_input_size(), size)
+        return repository
+
+    def test_scan_input_up_to_the_limit_keeps_the_skip(self) -> None:
+        repository = self.create_branch_with_scan_input_of(
+            "repo", self.MAX_SCAN_INPUT_BYTES
+        )
+        self.assertEqual(self.range_status(repository), 0)
+        self.assertEqual(
+            len(self.single_gitleaks_record()["stdin"].encode("utf-8")),
+            self.MAX_SCAN_INPUT_BYTES,
+        )
+
+    def test_scan_input_over_the_limit_stops_the_skip(self) -> None:
+        """gitleaks に渡す入力が上限を 1 バイトでも超えれば、gitleaks を起動せずに 2 を返す。"""
+        repository = self.create_branch_with_scan_input_of(
+            "repo", self.MAX_SCAN_INPUT_BYTES + 1
+        )
+        self.assertEqual(self.range_status(repository), 2)
+        self.assertEqual(self.gitleaks_calls(), [])
+        self.assert_no_leftover_temporary_files()
 
     def test_canary_differs_for_each_scan(self) -> None:
         """canary は検査ごとにランダムに作る (2 回の検査で値が異なる)。"""
@@ -2444,31 +2586,49 @@ class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
     TAR_MAGIC = b"ustar\x0000"
     TAR_MAGIC_OFFSET = 257
 
-    def naive_stdin_scan_status(self, data: bytes, *extra_args: str) -> int:
+    def naive_stdin_scan_status(
+        self, data: bytes, *extra_args: str, from_file: bool = False
+    ) -> int:
         """data をそのまま `gitleaks stdin` に渡したときの終了コード (0 = 検出なし、1 = 検出)。
-        cwd は空のディレクトリにする。"""
+        cwd は空のディレクトリにする。from_file なら、判定 lib と同じく stdin を file から
+        渡す (pipe とは gitleaks が 1 回に読める量が違い、入力を分割する位置も変わる)。"""
         cwd = Path(tempfile.mkdtemp(dir=self.root))
-        result = subprocess.run(
-            [
-                "gitleaks",
-                "stdin",
-                "--no-banner",
-                "--redact",
-                "--log-level",
-                "error",
-                "--exit-code",
-                "1",
-                "--timeout",
-                "30",
-                *extra_args,
-            ],
-            cwd=cwd,
-            input=data,
-            env=self.env,
-            capture_output=True,
-            check=False,
-            timeout=60,
-        )
+        arguments = [
+            "gitleaks",
+            "stdin",
+            "--no-banner",
+            "--redact",
+            "--log-level",
+            "error",
+            "--exit-code",
+            "1",
+            "--timeout",
+            "30",
+            *extra_args,
+        ]
+        if from_file:
+            input_file = self.root / f"{cwd.name}.input"
+            input_file.write_bytes(data)
+            with input_file.open("rb") as stdin:
+                result = subprocess.run(
+                    arguments,
+                    cwd=cwd,
+                    stdin=stdin,
+                    env=self.env,
+                    capture_output=True,
+                    check=False,
+                    timeout=60,
+                )
+        else:
+            result = subprocess.run(
+                arguments,
+                cwd=cwd,
+                input=data,
+                env=self.env,
+                capture_output=True,
+                check=False,
+                timeout=60,
+            )
         self.assertIn(result.returncode, (0, 1), result.stderr)
         return result.returncode
 
@@ -2564,6 +2724,73 @@ class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
         repository.git("reset", "-q", "--hard", "master")
         repository.write("README.md", "# updated\n")
         repository.commit_all("docs")
+        self.assertEqual(self.range_status(repository), 2)
+
+    def test_non_utf8_encoding_header_does_not_hide_the_message_secret(self) -> None:
+        """commit の `encoding` header を `IBM037` にして message に token を入れた範囲は、
+        `git log --encoding=UTF-8` の変換で token が入力から消えるが、skip せず 2 を返す。"""
+        repository = self.create_repository()
+        repository.write("README.md", "# updated\n")
+        repository.git("add", "README.md")
+        commit = self.commit_with_encoding_header(
+            repository, f"docs\n\nexample = {DUMMY_GITHUB_PAT}", "IBM037"
+        )
+        raw = repository.run_git("cat-file", "commit", commit)
+        self.assertIn(b"\nencoding IBM037\n", raw)
+        self.assertIn(DUMMY_GITHUB_PAT.encode(), raw)
+        # lib と同じ option (`--encoding=UTF-8`) で書き出すと、message が IBM037 から変換されて
+        # token が消える (この環境の iconv が IBM037 を変換できない場合は skip する)。
+        output = self.scan_input_git_log(repository, repository.rev("master"), commit)
+        if DUMMY_GITHUB_PAT.encode() in output:
+            self.skipTest("この環境の git は IBM037 の message を変換しない")
+        self.assertEqual(self.range_status(repository), 2)
+
+    # gitleaks stdin が分割の境界をまたぐ token を見逃す、token の行の始まりの位置 (入力の先頭
+    # からの offset)。stdin が file のとき、gitleaks は最初に 100,000 バイトを読み、空行が
+    # 見つかるまで最大 25,000 バイトを読み足してから分割するため、空行を含まない入力は
+    # 125,000 バイトの位置で分割される (gitleaks 8.30.1 で、この位置をまたぐ token の行
+    # (124,960〜124,998 から始まる行) を見逃すことを確認した)。
+    SPLIT_BOUNDARY_OFFSET = 124_980
+
+    def test_secret_across_the_split_boundary_stops_the_skip(self) -> None:
+        """gitleaks が入力を分割する境界をまたぐ位置に token の行を置いた範囲も、skip せず 2 を
+        返す。"""
+        repository = self.create_repository()
+        document = repository.path / "docs" / "large.md"
+        filler = "a" * 78 + "\n"
+        token_line = DUMMY_GITHUB_PAT.ljust(78, "b") + "\n"
+
+        def content(first_line_length: int) -> str:
+            return (
+                "c" * first_line_length
+                + "\n"
+                + filler * 1550
+                + token_line
+                + filler * 400
+            )
+
+        # lib の入力は canary の行 (41 バイト) + `git log` の出力。token の行 (`+` で始まる) が
+        # 入力の SPLIT_BOUNDARY_OFFSET から始まるよう、1 行目の長さを合わせて commit し直す。
+        target = self.SPLIT_BOUNDARY_OFFSET - CANARY_LINE_LENGTH
+        marker = f"+{DUMMY_GITHUB_PAT}".encode()
+        document.write_text(content(100), encoding="utf-8")
+        repository.commit_all("large document")
+        base = repository.rev("master")
+        first_line_length = 100 + target - self.scan_input_git_log(
+            repository, base, repository.head()
+        ).index(marker)
+        self.assertGreaterEqual(first_line_length, 0)
+        document.write_text(content(first_line_length), encoding="utf-8")
+        repository.git("add", "-A")
+        repository.git("commit", "-q", "--amend", "-m", "large document")
+        output = self.scan_input_git_log(repository, base, repository.head())
+        self.assertEqual(output.index(marker), target)
+        # canary の代わりに同じ長さの token でない行を置いた同じ配置の入力を、lib と同じく
+        # file から素朴に `gitleaks stdin` に渡すと、token は検出されない (この gitleaks で
+        # 境界の位置が異なる場合は skip する)。
+        placeholder_line = b"x" * (CANARY_LINE_LENGTH - 1) + b"\n"
+        if self.naive_stdin_scan_status(placeholder_line + output, from_file=True) != 0:
+            self.skipTest("この gitleaks では分割の境界の位置が異なる")
         self.assertEqual(self.range_status(repository), 2)
 
     def test_rule_with_a_path_condition_stops_the_skip(self) -> None:
@@ -3735,6 +3962,17 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                     "`.gitleaks.toml` があっても読めない場合 (symlink である、blob が手元に"
                     "無い等) は、既定のルールに切り替えず、skip もしません",
                     body,
+                )
+
+    def test_plugin_readmes_state_the_encoding_and_size_conditions(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "範囲に UTF-8 以外の `encoding` header を持つ commit がある場合", body
+                )
+                self.assertIn(
+                    "検査の入力が約 100 KB (100,000 バイト) を超える場合", body
                 )
 
     def test_plugin_readmes_state_that_a_path_key_stops_the_skip(self) -> None:
