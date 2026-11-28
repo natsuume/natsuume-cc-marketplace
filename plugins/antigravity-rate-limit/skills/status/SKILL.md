@@ -31,7 +31,7 @@ exit 0 と exit 2 のとき、stdout に次の JSON が返る。枠はモデル�
 | `groups[].buckets[].id` | 枠の識別子 |
 | `groups[].buckets[].name` | 枠の表示名 |
 | `groups[].buckets[].window` | 枠の窓。実測値は `weekly` (週次) と `5h` (5 時間) |
-| `groups[].buckets[].remainingFraction` | 残り割合 (0〜1) |
+| `groups[].buckets[].remainingFraction` | 残り割合 (0〜1)。agy の応答に割合が無い枠は、使い切った枠とみなして 0 |
 | `groups[].buckets[].usedPercent` | 使用率 (%)。`(1 - remainingFraction) * 100` を小数第 1 位に丸めた値 |
 | `groups[].buckets[].resetTime` | reset 時刻 (RFC3339、UTC)。未使用の枠では `null` |
 | `groups[].buckets[].description` | reset までの時間などの説明 (agy の原文)。使用済みの枠にだけ付き、無ければ `null` |
@@ -70,5 +70,6 @@ stderr に失敗理由が日本語で出る。その内容をそのままユー�
 | agy が非 0 で終了した (agy の stderr に認証・ログインの旨) | agy に未ログイン、または認証が切れている。ターミナルで `agy` を起動してログインするよう案内する |
 | agy が終了コード 2 で終了した | `GEMINI_API_KEY` で接続している可能性がある (agy 同梱の changelog の記載。未実測)。この接続では利用枠を取得できないため、`GEMINI_API_KEY` を設定しない状態で `agy` を起動してログインするよう案内する |
 | `num_turns` が 0 でない | agy が 1.1.11 より古く、`/usage` が prompt として送られた可能性がある。quota を消費したおそれがある旨を伝え、agy の更新を案内する |
+| 残りを `remaining_amount` で示す bucket がある | 残りを割合ではなく量で示す利用枠で、この script は対応していない。stderr の内容を報告する |
 | 応答の形式が想定と異なる (`status` / `command.name` / `groups` / bucket) | agy の更新で出力の形式が変わった可能性がある。stderr の内容を報告する |
 | 引数が不正 (usage を表示) | `--max-used-percent` を 1 回だけ、0〜100 の整数の値で指定して実行し直す |

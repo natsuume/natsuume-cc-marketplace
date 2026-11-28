@@ -705,15 +705,25 @@ class ResponseValidationTest(ScriptBehaviorTestCase):
                 self.assert_rejected_response(response)
 
     def test_bucket_without_fraction_in_range_is_rejected(self) -> None:
-        for value in (-0.01, 1.01, 2, "0.5", None, True):
+        for value in (-0.01, 1.01, 2, "0.5", True):
             with self.subTest(remaining_fraction=value):
                 response = measured_response()
                 target_bucket(response)["remaining_fraction"] = value
                 self.assert_rejected_response(response)
-        with self.subTest(remaining_fraction="missing"):
-            response = measured_response()
-            del target_bucket(response)["remaining_fraction"]
-            self.assert_rejected_response(response)
+
+    def test_bucket_with_amount_instead_of_fraction_is_rejected(self) -> None:
+        # 残りを割合ではなく量で示す bucket には対応していない。
+        for fraction in ("missing", None):
+            with self.subTest(remaining_fraction=fraction):
+                response = measured_response()
+                bucket = target_bucket(response)
+                if fraction == "missing":
+                    del bucket["remaining_fraction"]
+                else:
+                    bucket["remaining_fraction"] = fraction
+                bucket["remaining_amount"] = 5
+                result = self.assert_rejected_response(response)
+                self.assertIn("remaining_amount", result.stderr)
 
     def test_bucket_that_is_not_an_object_is_rejected(self) -> None:
         for bucket in ("bucket", 1, None):
@@ -758,6 +768,25 @@ class NormalizedOutputTest(ScriptBehaviorTestCase):
                 self.assertEqual(fraction, bucket["remainingFraction"])
                 self.assertIsInstance(bucket["usedPercent"], (int, float))
                 self.assertNotIsInstance(bucket["usedPercent"], bool)
+
+    def test_bucket_without_fraction_or_amount_is_exhausted(self) -> None:
+        # 使い切った枠 (値 0) では remaining_fraction が省かれる可能性があるため、割合も量も
+        # 無い bucket は残り 0 とみなす。
+        for fraction in ("missing", None):
+            with self.subTest(remaining_fraction=fraction):
+                response = measured_response()
+                bucket = target_bucket(response)
+                if fraction == "missing":
+                    del bucket["remaining_fraction"]
+                else:
+                    bucket["remaining_fraction"] = fraction
+                output = self.assert_success_output(self.run_with_response(response), 0)
+                normalized = output["groups"][1]["buckets"][1]
+                self.assertEqual(0, normalized["remainingFraction"])
+                self.assertEqual(100, normalized["usedPercent"])
+                self.assert_success_output(
+                    self.run_with_response(response, "--max-used-percent", "90"), 2
+                )
 
     def test_unused_bucket_reset_time_is_null(self) -> None:
         output = self.assert_success_output(
