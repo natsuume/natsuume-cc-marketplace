@@ -1,0 +1,6 @@
+{
+  "name": "antigravity-rate-limit",
+  "version": "0.1.0",
+  "author": {"name": "natsuume", "url": "https://github.com/natsuume"},
+  "description": "Antigravity (agy) の利用枠を取得する"
+}
