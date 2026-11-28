@@ -23,9 +23,12 @@ class GithubNamespaceCacheTest(unittest.TestCase):
         bin_dir.mkdir()
         call_log = root / "gh-calls.log"
         fake_gh = bin_dir / "gh"
+        # 呼ばれた時点で refresh の lock があるか (held / free) を、呼び出しごとに 1 行記録する。
         fake_gh.write_text(
             """#!/bin/sh
 printf '%s\n' "$*" >> "$GH_CALL_LOG"
+if [ -d "$GH_LOCK_DIR" ]; then lock_state=held; else lock_state=free; fi
+printf '%s\n' "$lock_state" >> "$GH_LOCK_STATE_LOG"
 sleep "$GH_FAKE_SLEEP_SECONDS"
 case "$2" in
   user) printf '%s\n' 'test-user' ;;
@@ -40,6 +43,10 @@ esac
         env["HOME"] = str(home)
         env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
         env["GH_CALL_LOG"] = str(call_log)
+        env["GH_LOCK_DIR"] = str(
+            home / ".claude" / "cache" / ".owned-github-namespaces.lock"
+        )
+        env["GH_LOCK_STATE_LOG"] = str(root / "gh-lock-states.log")
         env["GH_FAKE_SLEEP_SECONDS"] = str(sleep_seconds)
         return env, call_log
 
@@ -81,7 +88,7 @@ esac
     # 並行した cache miss で 1 process だけが refresh することは、2 つの process の起動の
     # タイミングに頼らずに確かめる。refresh 中の process が持つ lock をあらかじめ作り、
     # lock がある間の process が gh を呼ばずに返すこと (下の 2 件) と、lock が無い process が
-    # 1 回だけ refresh すること (その下の 1 件) を別々に検査する。
+    # lock を持ったまま 1 回だけ refresh すること (その下の 1 件) を別々に検査する。
     @staticmethod
     def cache_directory(env: dict[str, str]) -> Path:
         return Path(env["HOME"]) / ".claude" / "cache"
@@ -141,6 +148,12 @@ esac
             self.assertCountEqual(
                 calls,
                 ["api user --jq .login", "api user/orgs --jq .[].login"],
+            )
+            lock_states = (
+                Path(env["GH_LOCK_STATE_LOG"]).read_text(encoding="utf-8").splitlines()
+            )
+            self.assertEqual(
+                lock_states, ["held", "held"], "gh was called without holding the lock"
             )
             self.assertFalse((cache_dir / ".owned-github-namespaces.lock").exists())
             self.assertCountEqual(
