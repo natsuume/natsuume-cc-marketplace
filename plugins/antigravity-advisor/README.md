@@ -162,16 +162,16 @@ wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` �
 ## 既知の制約
 
 - agy の読み取りは相談対象のリポジトリに限られず、`$HOME` の下の認証情報の置き場所を除くローカルのどのファイルにも及ぶ。読んだ内容は model の提供元に送られ、助言の本文として親セッションに返りうる
-- 相談対象のリポジトリや `TMPDIR` が `$HOME` の下の認証情報の置き場所 (`~/.config` や `~/.claude` 等) の下にあると、agy はそのファイルや request のコピーを読めません
+- 相談対象のリポジトリや `TMPDIR` が `$HOME` の下の認証情報の置き場所 (`~/.config` や `~/.claude` 等) の下にあると、agy はそのファイルや request のコピーを読めない
 - global の `~/.gemini/config` の設定 (hook を含む) は、空のディレクトリで起動しても効く
 - 権限の種別が分からない tool (ブラウザー系・web 検索・subagent 等) は、deny の規則の対象外になりうる
 - 権限設定による拒否は、2026-11-27 に agy 1.5.18 で `write_file(*)` と `command(*)` の 2 規則の設定を使って確認した。この設定で、`write_file` によるファイルの作成と `edit_file` による編集はどちらも user-configured deny rule として拒否され、`read_file` による読み取りは成功し、ファイルは変わらなかった。括弧の無い `"write_file"` は反映されなかった。空のディレクトリで起動する方式でも、書き込みは deny の規則で拒否された
-- 6 規則と `allowNonWorkspaceAccess` の設定は、同じ日に agy 1.5.18 で受理され、この設定での相談が成功した。認証情報の置き場所の読み取りを拒否する `read_file(<dir>)` の deny の規則は、agy 1.5.18 で前方一致で効くことを確認した。`-p "/permissions"` では deny の規則が global scope の deny として表示される。`execute_url(*)` と `download_url(*)` が効くかは未確認。`mcp(*)` と `read_url(*)` が MCP の tool と URL の取得を実際に拒否するかも未確認。agy の更新で設定が受け付けられなくなった場合は、すべての相談が exit 4 になる。設定全体が無視されるようになった場合は、権限による拒否が効かず、working tree の事後の検知だけが残る
+- 6 規則と `allowNonWorkspaceAccess` の設定は、同じ日に agy 1.5.18 で受理され、この設定での相談が成功した。認証情報の置き場所の読み取りを拒否する `read_file(<dir>)` の deny の規則は、agy 1.5.18 で前方一致で効くことを確認した。この 10 規則を加えた 16 規則の設定も、2026-11-28 に agy 1.5.18 で受理され、この設定での相談が成功した。`-p "/permissions"` では deny の規則が global scope の deny として表示される。`execute_url(*)` と `download_url(*)` が効くかは未確認。`mcp(*)` と `read_url(*)` が MCP の tool と URL の取得を実際に拒否するかも未確認。agy の更新で設定が受け付けられなくなった場合は、すべての相談が exit 4 になる。設定全体が無視されるようになった場合は、権限による拒否が効かず、working tree の事後の検知だけが残る
 - agy はディレクトリの一覧や検索のツールを使えない可能性がある (model の自己申告による)。読ませたいファイルは request に絶対パスで列挙する
 - 事後の検知は次の変更を見ない: `.gitignore` などで ignore されたファイル、リポジトリの外 (wrapper の一時ディレクトリを含む)、`.git` のうち設定・hook・info と HEAD の branch 以外の部分 (他の branch・tag・stash・remote-tracking branch の ref、object ディレクトリ、logs など)、`core.hooksPath` で `.git` の外に置いた hook、cwd が git の work tree の外のときのすべての変更
 - 事後の検知の `git add -A` は、利用者の git 設定にある clean filter (git-lfs など) を実行し、filter が自分の保存先 (`.git/lfs/` など) に書き込むことがある。また、working tree に既存の object と同じ内容のファイルがあると、git がその object の更新時刻を更新することがある (内容は変わらない)
-- すべての worktree が共有する git config (common config。common dir の `config`) を相談中に他の操作 (別の worktree での `git config` 等) が変えると、wrapper は変更と判定して exit 5 にします
-- 一時的な index に stage できない path (checkout されていない入れ子の repo、読めない未追跡のファイル) が working tree にあると、実行前の記録に失敗し、wrapper は agy を起動せずに exit 1 になります。working tree の内容の比較では、入れ子の repo は gitlink (その repo の HEAD の commit) としてだけ比べます
+- すべての worktree が共有する git config (common config。common dir の `config`) を相談中に他の操作 (別の worktree での `git config` 等) が変えると、wrapper は変更と判定して exit 5 にする
+- 一時的な index に stage できない path (checkout されていない入れ子の repo、読めない未追跡のファイル) が working tree にあると、実行前の記録に失敗し、wrapper は agy を起動せずに exit 1 になる。working tree の内容の比較では、入れ子の repo は gitlink (その repo の HEAD の commit) としてだけ比べる
 - 大きなリポジトリでは、事後の検知が実行前後に working tree 全体を読むため時間がかかる
 - agy の応答は `--print-timeout 25m` で 25 分に制限される。runner の Bash の timeout は 30 分
 - Bash tool が wrapper の実行を background へ移した場合、runner は結果を回収せず `Status: execution-failed` を返す。このとき agy はまだ実行中の可能性がある
