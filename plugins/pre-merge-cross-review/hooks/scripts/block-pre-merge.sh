@@ -4,7 +4,7 @@
 # 証拠は merge 実行 repo の git-dir 直下にあるローカル記録 (final attestation) であり、 それが
 # PR 番号と現在の head SHA の両方に一致する場合だけ merge を通す。 ただし PR の変更がテキスト系
 # 文書だけの場合は記録を要求せずに通す。 GitHub には何も書かず、 gh は PR 番号・head SHA・base
-# commit SHA の取得だけに使う。
+# commit SHA・base branch 名の取得だけに使う。
 #
 # policy: fail-closed (関与したコマンドに限る)
 #   関与条件 (下記 1.) を満たさない Bash 呼び出しには一切関与しない (無出力で exit 0)。
@@ -21,20 +21,31 @@
 #    レビュー記録の有無に依らず deny する。 `--auto` は gate 確認と実 merge を
 #    分離する遅延予約、 `--admin` は保護 bypass であり、 いずれも本 gate の観測範囲外の
 #    merge を作るためサポート外とする。
-# 3. **PR 番号・head SHA・base commit SHA の取得**: merge 対象 PR の番号・現在の head SHA・
-#    base commit SHA を gh (`gh pr view --json number,headRefOid,baseRefOid`) で取得する。
-#    番号と head SHA を取得できない・形式が不正な場合は deny する。
+# 3. **PR 番号・head SHA・base commit SHA・base branch 名の取得**: merge 対象 PR の番号・現在の
+#    head SHA・base commit SHA・base branch 名を gh
+#    (`gh pr view --json number,headRefOid,baseRefOid,baseRefName`) で取得する。 番号と head SHA
+#    を取得できない・形式が不正な場合は deny する。 base commit SHA と base branch 名は
+#    テキスト系文書のみの PR の判定 (下記 4.) にだけ使う。
 # 4. **テキスト系文書のみの PR の通過**: base commit SHA と head SHA がともに 40 桁の小文字
-#    16 進数の場合に限り、 merge 実行 repo で `<base commit SHA>..<head SHA>` の変更が
-#    テキスト系文書だけかを lib/text-paths.sh の is_text_only_range_in で判定し、 成立すれば
-#    レビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる)。 起点を GitHub が
-#    記録する PR の base commit にするのは、 ローカルの `refs/remotes/origin/<base>` が PR の
-#    実際の base に無い commit を含みうる (base の履歴の書き換え後にローカルを更新していない等)
-#    ためで、 そのまま起点にすると merge で base に入る commit が判定範囲から外れる。 head SHA も
-#    40 桁に限るのは、 記録の照合 (下記 5.) が 40 桁の完全一致を要求するのに対し、 判定関数は
-#    短縮した SHA や大文字の SHA も解決できるため。 base commit SHA や head SHA の欠落・形式
-#    不正、 lib の読み込み失敗、 判定の不成立 (base や head の object がローカルに無い等の git
-#    失敗を含む) では判定を打ち切り、 次のローカル記録の検証へ進む (判定できない場合は
+#    16 進数で、 base commit SHA がローカルの `refs/remotes/origin/<base branch 名>` から到達
+#    できる (その祖先である) 場合に限り、 merge 実行 repo で `<base commit SHA>..<head SHA>` の
+#    変更がテキスト系文書だけかを lib/text-paths.sh の is_text_only_range_in で判定し、 成立
+#    すればレビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる)。 判定範囲の起点は
+#    GitHub が記録する PR の base commit (`baseRefOid`) で、 ローカルの
+#    `refs/remotes/origin/<base>` は起点には使わず、 base commit が base branch の履歴から外れて
+#    いないことの確認にだけ使う。 ローカルの ref を起点にしないのは、 この ref が PR の実際の
+#    base に無い commit を含みうる (base の履歴の書き換え後にローカルを更新していない等) ためで、
+#    そのまま起点にすると merge で base に入る commit が判定範囲から外れる。 到達を確認するのは、
+#    GitHub の `baseRefOid` が PR 作成時の値から更新されないことがあるため。 base branch が
+#    force push で書き換えられた後もこの値が更新されなければ、 base の履歴から外れた commit を
+#    指すことになり、 書き換えで base から消えた commit を PR が持ち込んでも判定範囲から外れる。
+#    merge 前の codex review wrapper も同じ確認をする (wrapper は到達できなければ 1 度 fetch して
+#    再判定する。 本 gate は network を使わず、 fetch しない)。 head SHA も 40 桁に限るのは、
+#    記録の照合 (下記 5.) が 40 桁の完全一致を要求するのに対し、 判定関数は短縮した SHA や
+#    大文字の SHA も解決できるため。 base commit SHA や head SHA の欠落・形式不正、 到達確認の
+#    不成立 (base branch 名の欠落・形式不正、 remote-tracking ref が無い、 base commit に到達
+#    できない)、 lib の読み込み失敗、 判定の不成立 (base や head の object がローカルに無い等の
+#    git 失敗を含む) では判定を打ち切り、 次のローカル記録の検証へ進む (判定できない場合は
 #    レビュー必須に倒す)。 テキスト系文書だけでも、 gitleaks が PATH にあり秘匿情報の候補を
 #    検出した (または実行に失敗した) 場合は通さず、 記録の検証へ進み、 deny の理由文にその旨を
 #    1 文加える。
@@ -251,9 +262,9 @@ fi
 run_gh_pr_view() {
   cd "$PAYLOAD_CWD" || return 1
   if [ -n "$1" ]; then
-    gh pr view "$1" --json number,headRefOid,baseRefOid 2>/dev/null
+    gh pr view "$1" --json number,headRefOid,baseRefOid,baseRefName 2>/dev/null
   else
-    gh pr view --json number,headRefOid,baseRefOid 2>/dev/null
+    gh pr view --json number,headRefOid,baseRefOid,baseRefName 2>/dev/null
   fi
 }
 
@@ -262,7 +273,7 @@ PR_JSON=$(run_gh_pr_view "$TARGET") || PR_JSON=""
 if [ -z "$PR_JSON" ]; then
   deny "マージをブロックしました。 merge 対象 PR の情報を gh から取得できませんでした (PR を解決できない / 認証が切れている / ネットワーク不通 等)。
 
-\`gh pr view --json number,headRefOid,baseRefOid\` が成功する状態にしてから、もう一度 gh pr merge を実行してください。"
+\`gh pr view --json number,headRefOid,baseRefOid,baseRefName\` が成功する状態にしてから、もう一度 gh pr merge を実行してください。"
   exit 0
 fi
 
@@ -348,14 +359,18 @@ esac
 
 # テキスト系文書のみの PR は、 レビュー記録を照合せずに既定の許可フローへ委ねる (判定条件と
 # fail-closed 方針は lib/text-paths.sh ヘッダを参照)。 判定範囲の起点は GitHub が記録する PR の
-# base commit (`baseRefOid`) で、 ローカルの remote-tracking ref は使わない (理由はヘッダの
-# 「判定の流れ」 4.)。 base commit SHA と head SHA は git の引数になるため、 どちらも 40 桁の
+# base commit (`baseRefOid`) で、 ローカルの `refs/remotes/origin/<base>` は起点には使わず、
+# base commit がその祖先である (base branch の履歴から外れていない) ことの確認にだけ使う
+# (fetch はしない)。 ローカルの ref を起点にしない理由と、 到達を確認する理由はヘッダの
+# 「判定の流れ」 4. を参照。 base commit SHA と head SHA は git の引数になるため、 どちらも 40 桁の
 # 小文字 16 進数に限って判定する (ref 名や短縮 SHA、 option として解釈される値を git へ渡さない。
 # head SHA は上で 16 進数の文字だけからなることを確かめているが、 長さは見ていない)。 lib を
-# 読み込めない・base commit SHA か head SHA が欠落または形式不正・判定が不成立 (base や head の
-# object がローカルに無い等の git 失敗を含む) のいずれでも、 判定を打ち切って下のレビュー記録の
-# 照合へ進む。
+# 読み込めない・base commit SHA か head SHA が欠落または形式不正・到達確認が不成立 (base branch
+# 名の欠落・形式不正、 remote-tracking ref が無い、 base commit に到達できない)・判定が不成立
+# (base や head の object がローカルに無い等の git 失敗を含む) のいずれでも、 判定を打ち切って
+# 下のレビュー記録の照合へ進む。
 BASE_OID=$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid // empty' 2>/dev/null) || BASE_OID=""
+BASE_NAME=$(printf '%s' "$PR_JSON" | jq -r '.baseRefName // empty' 2>/dev/null) || BASE_NAME=""
 # 16 進数の文字は範囲表記 (`a-f` 等) を使わずに列挙する (bracket 式の範囲が含む文字は locale
 # によって変わるため)。
 is_full_lowercase_commit_sha() {
@@ -364,10 +379,44 @@ is_full_lowercase_commit_sha() {
   esac
   [ "${#1}" -eq 40 ]
 }
+
+# base_oid_is_in_origin_base_in <target_cwd> <base_oid> <base_name>
+# base commit が `refs/remotes/origin/<base_name>` から到達できる (その祖先である) ときだけ 0 を
+# 返す。 base branch 名は git の引数になるため、 空や `-` 始まり (option として解釈される値) を
+# 拒否したうえで、 妥当性の判定を git の branch 名の規則 (`git check-ref-format --branch`) に
+# 委ねる (merge 前の codex review wrapper と同じ検証)。 ref は完全な名前で引く (短い名前
+# `origin/<base_name>` は同じ名前の tag や branch に解決されうるため)。 git は判定 lib の
+# is_text_only_range_in と同じ呼び方にする: replace ref と commit-graph を読まず
+# (`--no-replace-objects -c core.commitGraph=false`)、 手元に無い object を remote から取りに
+# 行かせない (`GIT_NO_LAZY_FETCH=1`)。 target_cwd が空文字なら現在の cwd で、 非空なら
+# `git -C <target_cwd>` で git を実行する。
+base_oid_is_in_origin_base_in() {
+  local target_cwd="$1"
+  local base_oid="$2"
+  local base_name="$3"
+  # `local -x` は関数の中から起動する git にだけ渡り、 関数を抜けると元に戻る。
+  local -x GIT_NO_LAZY_FETCH=1
+  local -a git_prefix=(--no-replace-objects -c core.commitGraph=false)
+  if [ -n "$target_cwd" ]; then
+    git_prefix+=(-C "$target_cwd")
+  fi
+  case "$base_name" in
+    "" | -*) return 1 ;;
+  esac
+  git "${git_prefix[@]}" check-ref-format --branch "$base_name" >/dev/null 2>&1 || return 1
+  local origin_base_oid
+  origin_base_oid=$(git "${git_prefix[@]}" rev-parse --verify --quiet \
+    "refs/remotes/origin/${base_name}^{commit}" 2>/dev/null) || return 1
+  [ -n "$origin_base_oid" ] || return 1
+  git "${git_prefix[@]}" merge-base --is-ancestor "$base_oid" "$origin_base_oid" >/dev/null 2>&1
+}
+
 # 通すのは判定関数が 0 を返したときだけ。2 (テキスト系文書だけだが gitleaks による秘匿情報の
 # 検査で止めた) のときは記録を照合し、deny の理由文にその旨を加える (gitleaks の出力は含めない)。
+# 到達確認が不成立なら判定関数を呼ばない (deny の理由文にも何も加えない)。
 if [ "$TEXT_PATHS_LOADED" = "1" ] && is_full_lowercase_commit_sha "$BASE_OID" \
-  && is_full_lowercase_commit_sha "$HEAD_SHA"; then
+  && is_full_lowercase_commit_sha "$HEAD_SHA" \
+  && base_oid_is_in_origin_base_in "$PAYLOAD_CWD" "$BASE_OID" "$BASE_NAME"; then
   TEXT_ONLY_STATUS=0
   is_text_only_range_in "$PAYLOAD_CWD" "$BASE_OID" "$HEAD_SHA" || TEXT_ONLY_STATUS=$?
   if [ "$TEXT_ONLY_STATUS" -eq 0 ]; then

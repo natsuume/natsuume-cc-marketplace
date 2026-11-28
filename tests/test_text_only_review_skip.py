@@ -3013,11 +3013,69 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         )
         return repository
 
-    def configure_pr(self, head: str, base_oid: str | None) -> None:
+    def configure_pr(
+        self, head: str, base_oid: str | None, base_ref_name: str | None = "master"
+    ) -> None:
+        """fake gh が返す PR 情報を設定する。base branch 名の既定は master
+        (create_pr_repository が refs/remotes/origin/master を向ける branch)。base_oid や
+        base_ref_name が None なら、その field を応答に含めない。"""
         pr: dict[str, object] = {"number": PR_NUMBER, "headRefOid": head}
         if base_oid is not None:
             pr["baseRefOid"] = base_oid
+        if base_ref_name is not None:
+            pr["baseRefName"] = base_ref_name
         self.configure_fake_gh(pr)
+
+    def is_ancestor(
+        self,
+        repository: Repository,
+        ancestor: str,
+        descendant: str,
+        *git_options: str,
+    ) -> bool:
+        """`git [git_options] merge-base --is-ancestor <ancestor> <descendant>` が成功するか。"""
+        assert GIT is not None
+        result = subprocess.run(
+            [GIT, *git_options, "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=repository.path,
+            env=self.env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=60,
+        )
+        self.assertIn(result.returncode, (0, 1), result.stderr.decode())
+        return result.returncode == 0
+
+    def create_pr_on_rewritten_base(self, name: str = "repo") -> tuple[Repository, str]:
+        """PR の base commit (baseRefOid) が、base branch の書き換えで base の履歴から外れた
+        PR を作り、repository と base commit を返す。
+
+        master にコード commit X を足して baseRefOid を X にし、PR の branch は X の上で文書
+        だけを変える。refs/remotes/origin/master は X の親から分岐した、X を含まない commit
+        に向ける (force push で master から X を消した状態)。
+        """
+        repository = self.create_pr_repository(name)
+        parent = repository.rev("master")
+        repository.write("tool.py", "print('code on the old base')\n")
+        stale_base = repository.commit_all("code on the old base")
+        repository.git("update-ref", "refs/heads/master", stale_base)
+        repository.write("README.md", "# updated\n")
+        repository.commit_all("docs")
+        rewritten_base = repository.git(
+            "commit-tree", f"{parent}^{{tree}}", "-p", parent, "-m", "rewritten base"
+        ).strip()
+        repository.git("update-ref", "refs/remotes/origin/master", rewritten_base)
+        self.configure_pr(repository.head(), stale_base)
+        return repository, stale_base
+
+    def assert_skip_without_reachability_check(
+        self, repository: Repository, base: str
+    ) -> None:
+        """`<base>..HEAD` がテキスト系文書だけで、判定関数に渡せば skip が成立すること
+        (base の到達確認が無ければ通ってしまう状態であることの確認)。"""
+        self.assert_all_regular_text_changes(repository, ["README.md"], base, "HEAD")
+        self.assertEqual(self.range_status(repository, base=base), 0)
 
     def write_record(self, repository: Repository, head: str) -> None:
         (repository.git_dir() / MERGE_FINAL_RECORD).write_text(
@@ -3191,6 +3249,86 @@ class MergeGateTextOnlySkipTest(FakeGhMixin, WorkspaceTestCase):
         )
         self.assertEqual(self.range_status(repository, base=base), 1)
         self.configure_pr(repository.head(), base)
+        self.assert_record_deny(self.run_gate(repository))
+
+    def test_base_commit_dropped_from_base_branch_falls_back_to_record(self) -> None:
+        """PR の base commit (baseRefOid) がローカルの refs/remotes/origin/<base> から到達
+        できない (base branch の書き換えで履歴から外れた) 場合は skip せず、記録を照合する。
+        base commit を起点にした範囲はテキスト系文書だけだが、merge で base に入る変更には
+        書き換えで base から消えたコード commit が含まれる。"""
+        repository, stale_base = self.create_pr_on_rewritten_base()
+        self.assert_skip_without_reachability_check(repository, stale_base)
+        self.assertFalse(
+            self.is_ancestor(repository, stale_base, "refs/remotes/origin/master")
+        )
+        self.assertIn(
+            "tool.py",
+            repository.changed_paths(
+                repository.merge_base("refs/remotes/origin/master"), "HEAD"
+            ),
+        )
+        self.assert_record_deny(self.run_gate(repository))
+        self.write_record(repository, repository.head())
+        self.assertEqual(self.run_gate(repository).stdout, b"")
+
+    def test_unusable_base_branch_name_falls_back_to_record(self) -> None:
+        """base branch 名 (baseRefName) が欠落・`-` 始まり・ref 名として不正・
+        remote-tracking ref の無い名前の場合は skip せず、記録を照合する。base commit は
+        refs/remotes/origin/master から到達できる (base branch 名が master なら skip される)
+        状態にしておく。"""
+        cases: dict[str, str | None] = {
+            "missing": None,
+            "leading_dash": "-master",
+            "invalid_ref_name": "bad..name",
+            "no_remote_tracking_ref": "develop",
+        }
+        for label, base_ref_name in cases.items():
+            with self.subTest(case=label):
+                repository = self.create_pr_repository(f"repo-{label}")
+                base = repository.rev("master")
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                head = repository.head()
+                self.assert_skip_without_reachability_check(repository, base)
+                self.assertTrue(
+                    self.is_ancestor(repository, base, "refs/remotes/origin/master")
+                )
+                if label == "leading_dash":
+                    # 同じ名前の remote-tracking ref を置き、名前の検証だけが止める状態にする。
+                    repository.git("update-ref", "refs/remotes/origin/-master", base)
+                if label == "no_remote_tracking_ref":
+                    # 短い名前 origin/develop で引けば解決できる branch と tag を置き、
+                    # 完全な名前 refs/remotes/origin/develop で引かなければ通ってしまう状態に
+                    # する。
+                    repository.git("update-ref", "refs/heads/origin/develop", base)
+                    repository.git("update-ref", "refs/tags/origin/develop", base)
+                    self.assertTrue(
+                        self.is_ancestor(repository, base, "origin/develop")
+                    )
+                self.configure_pr(head, base, base_ref_name=base_ref_name)
+                self.assert_record_deny(self.run_gate(repository))
+                self.write_record(repository, head)
+                self.assertEqual(self.run_gate(repository).stdout, b"")
+
+    def test_replace_ref_does_not_make_base_commit_reachable(self) -> None:
+        """refs/remotes/origin/<base> の commit の親を replace ref で PR の base commit に
+        差し替えても、gate は replace ref を読まずに到達を確かめ、記録を照合する。"""
+        repository, stale_base = self.create_pr_on_rewritten_base()
+        rewritten_base = repository.rev("refs/remotes/origin/master")
+        repository.git("replace", "--graft", rewritten_base, stale_base)
+        # replace ref を読む git では到達でき、読まない git では到達できない。
+        self.assertTrue(
+            self.is_ancestor(repository, stale_base, "refs/remotes/origin/master")
+        )
+        self.assertFalse(
+            self.is_ancestor(
+                repository,
+                stale_base,
+                "refs/remotes/origin/master",
+                "--no-replace-objects",
+            )
+        )
+        self.assert_skip_without_reachability_check(repository, stale_base)
         self.assert_record_deny(self.run_gate(repository))
 
 
@@ -4041,7 +4179,11 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
     def test_merge_readme_uses_pr_base_commit_as_range_start(self) -> None:
         body = PLUGIN_READMES["pre-merge-cross-review"].read_text(encoding="utf-8")
         self.assertIn("baseRefOid", body)
-        self.assertNotIn("baseRefName`)", body)
+        self.assertNotIn("--json number,headRefOid,baseRefName`", body)
+        self.assertIn(
+            "`baseRefOid` がローカルの `refs/remotes/origin/<base>` から到達できること",
+            body,
+        )
         self.assertNotIn("base branch 名が英数字", body)
 
     def test_review_commands_say_gate_does_not_deny_text_only_push(self) -> None:

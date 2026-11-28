@@ -8,8 +8,9 @@ gate (`plugins/pre-merge-cross-review/hooks/scripts/block-pre-merge.sh`) が固�
 - 関与したコマンドに `--auto` / `--admin` / `--repo` / `-R` の文字列を含む場合は、
   レビュー記録の有無に依らず deny する。受理正規形 `gh pr merge [<number>] [flags...]`
   以外の関与形も deny する。
-- それ以外の関与コマンドでは、merge 対象 PR の番号・現在の head SHA・base commit SHA を gh
-  (`gh pr view --json number,headRefOid,baseRefOid`) で取得し、merge 実行 repo (hook payload の
+- それ以外の関与コマンドでは、merge 対象 PR の番号・現在の head SHA・base commit SHA・
+  base branch 名を gh (`gh pr view --json number,headRefOid,baseRefOid,baseRefName`) で
+  取得し、merge 実行 repo (hook payload の
   `cwd`) の git-dir 直下にある final attestation
   (`.claude-pre-merge-codex-reviewed`、2 行 `pr=<番号>` / `head=<40 hex>`) が両方に一致する
   場合だけ無出力で終了する (既定の許可フローに委ねる)。記録が無い・不一致・形式不正は
@@ -17,7 +18,8 @@ gate (`plugins/pre-merge-cross-review/hooks/scripts/block-pre-merge.sh`) が固�
 - gh / jq が見つからない・PR の解決や取得に失敗した・番号や head SHA が得られない場合は
   すべて deny する (fail-closed)。
 - gate は GitHub に何も書かず、PR のレビューやコメントも取得しない (gh は `pr view` で
-  `number,headRefOid,baseRefOid` を取得するためだけに呼ぶ)。PR 上に codex review 形式のコメントが
+  `number,headRefOid,baseRefOid,baseRefName` を取得するためだけに呼ぶ)。PR 上に codex review
+  形式のコメントが
   あっても判断材料にしない。
 - gate は permissionDecision として deny 以外を出さない。
 
@@ -734,9 +736,11 @@ class PreMergeGateLocalAttestationTest(GateHarness):
 class PreMergeGateNoGitHubWriteTest(GateHarness):
     """gate は GitHub に書かず、PR のレビュー・コメントを判断材料にしない契約。"""
 
-    def assert_only_number_head_and_base_commit_are_requested(self) -> None:
+    def assert_only_number_head_base_commit_and_base_branch_are_requested(
+        self,
+    ) -> None:
         """gh へ要求するのは PR 番号・head SHA と、テキスト系文書のみの PR の判定に
-        使う base commit SHA だけである (レビューやコメントは要求しない)。"""
+        使う base commit SHA・base branch 名だけである (レビューやコメントは要求しない)。"""
         calls = self.gh_calls()
         self.assertTrue(calls, "gate は gh pr view を呼ぶ")
         for call in calls:
@@ -744,13 +748,15 @@ class PreMergeGateNoGitHubWriteTest(GateHarness):
             self.assertIn("--json", call)
             fields = call[call.index("--json") + 1].split(",")
             self.assertEqual(
-                sorted(fields), ["baseRefOid", "headRefOid", "number"], call
+                sorted(fields),
+                ["baseRefName", "baseRefOid", "headRefOid", "number"],
+                call,
             )
 
     def test_allow_path_calls_only_pr_view_for_number_and_head(self) -> None:
         self.write_final_attestation()
         self.assert_allowed(self.run_gate())
-        self.assert_only_number_head_and_base_commit_are_requested()
+        self.assert_only_number_head_base_commit_and_base_branch_are_requested()
 
     def test_deny_paths_call_only_pr_view_for_number_and_head(self) -> None:
         cases = {
@@ -764,7 +770,7 @@ class PreMergeGateNoGitHubWriteTest(GateHarness):
                 if head is not None:
                     self.write_final_attestation(head=head)
                 self.assert_denied(self.run_gate(), label)
-                self.assert_only_number_head_and_base_commit_are_requested()
+                self.assert_only_number_head_base_commit_and_base_branch_are_requested()
 
     def test_pr_review_comment_does_not_satisfy_the_gate(self) -> None:
         """PR 上に現在の head の codex review 形式のコメントがあっても、ローカル記録が
@@ -776,7 +782,7 @@ class PreMergeGateNoGitHubWriteTest(GateHarness):
             ]
         )
         self.assert_denied(self.run_gate())
-        self.assert_only_number_head_and_base_commit_are_requested()
+        self.assert_only_number_head_base_commit_and_base_branch_are_requested()
 
     def test_matching_record_allows_regardless_of_pr_review_comments(self) -> None:
         self.configure_fake_gh(review_bodies=[codex_review_comment(OTHER_SHA)])

@@ -43,8 +43,8 @@ review cadence (Codex review 一定回数ごとの checkpoint 強制) の計数�
 2. 関与したコマンドに `--auto` / `--admin` (遅延 merge 予約・保護 bypass) または `--repo` / `-R` (別 repo の PR を merge しうる repo selector) の文字列を含む場合は deny する (粗い文字列検出でよく、レビュー記録の有無に依らない)
 3. 関与したコマンドが **受理正規形** `gh pr merge [<number>] [flags...]` に完全一致するかを確認する (照合の前に、コマンド前後の空行・空白・区切りだけは落とす)。番号を置けるのは `gh pr merge` の直後の 1 語だけで、それ以降は長フラグ (`--name` / `--name=value`) と単文字の短フラグ (`-d` 等) のみを許す。短フラグの束ね形 (`-dR` 等) は受理しない (束の中に repo selector を隠すと `--repo` / `-R` の文字列検出をすり抜けるため)。一致しない関与形 — リダイレクト (`> file` / `2>&1` / `10> file` 等)、シェル演算子による連結 (`&&` / `||` / `;` / `|` / `&`)、quote、`$` 展開、フラグより後ろの数字、複数の merge、前置コマンド — は **一律 deny** する (gate の解釈と shell の実挙動が乖離しうるため。リダイレクトや連結を外した単独コマンドへの言い換えで対応する)
 4. 照合する repo は hook payload の `cwd` (merge が実行されるディレクトリ) を正本とする。`cwd` の欠落・空・非絶対パス・不在ディレクトリ・移動不能はいずれも deny する (hook プロセスの cwd への fallback は持たない)
-5. 対象 PR の解決と、PR 番号・現在の head SHA・base commit SHA の取得は gh (`gh pr view --json number,headRefOid,baseRefOid`) に委ねる (正規形で番号があればその番号、無ければ current branch の PR)。gh / jq が見つからない・PR を解決できない・取得に失敗した・PR 番号や head SHA が得られない場合はすべて deny する (fail-closed)。gh は取得だけに使い、PR のレビューやコメントは読まず、GitHub には何も書かない
-6. base commit SHA と head SHA がともに 40 桁の小文字 16 進数の場合に限り、merge 実行 repo で `<base commit SHA>..<head SHA>` の変更がテキスト系文書だけかを判定し、成立すればレビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる。判定の定義とレビュー必須とする条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。base commit SHA や head SHA の欠落・形式不正や判定の不成立では次の記録の検証へ進む。テキスト系文書だけでも、PATH にある gitleaks が秘匿情報の候補を検出した (または実行に失敗した) 場合は記録の検証へ進み、deny の理由文にその旨を 1 文加える
+5. 対象 PR の解決と、PR 番号・現在の head SHA・base commit SHA・base branch 名の取得は gh (`gh pr view --json number,headRefOid,baseRefOid,baseRefName`) に委ねる (正規形で番号があればその番号、無ければ current branch の PR)。gh / jq が見つからない・PR を解決できない・取得に失敗した・PR 番号や head SHA が得られない場合はすべて deny する (fail-closed)。gh は取得だけに使い、PR のレビューやコメントは読まず、GitHub には何も書かない
+6. base commit SHA と head SHA がともに 40 桁の小文字 16 進数で、base commit が merge 実行 repo の `refs/remotes/origin/<base branch 名>` から到達できる場合に限り、`<base commit SHA>..<head SHA>` の変更がテキスト系文書だけかを判定し、成立すればレビュー記録を照合せずに無出力で終了する (既定の許可フローに委ねる。判定の定義とレビュー必須とする条件は [テキスト系文書のみの変更](#テキスト系文書のみの変更))。base commit SHA・head SHA・base branch 名のどれかが欠落しているか形式が不正な場合、base commit に到達できない場合、判定が成立しない場合は、次の記録の検証へ進む。テキスト系文書だけでも、PATH にある gitleaks が秘匿情報の候補を検出した (または実行に失敗した) 場合は記録の検証へ進み、deny の理由文にその旨を 1 文加える
 7. merge 実行 repo の git-dir 直下にあるローカルのレビュー記録を検証する。final attestation (`.claude-pre-merge-codex-reviewed`) が symlink でない通常ファイルで、1 行目 `pr=<全数字>` / 2 行目 `head=<40 hex 小文字>` の形式を満たし、PR 番号と現在の head SHA の両方に一致する場合のみ無出力で終了する (既定の許可フローに委ねる)。記録は消さない (merge が失敗して再実行する場合も同じ記録で通り、head SHA が変われば自動的に失効する)
 8. 次の場合はいずれも deny する: 記録が無い (pending だけの場合を含む) / git-dir を解決できない / PR 番号を取得できない / 記録が symlink・通常ファイルでない・2 行の形式を満たさない / 記録の PR 番号が merge 対象と異なる / 記録の head SHA が現在の head と異なる (両方の SHA を示して再レビューを案内する)
 9. deny 時は `pre-merge-cross-review:codex-reviewer` subagent の実行を案内する。subagent がレビューを実行してローカルに記録を保存し、その後の `gh pr merge` で gate が記録を検証してから merge に進む流れを示す。レビューは current branch の PR に対して実行され記録もその PR に紐づくため、別 PR を番号指定して merge する場合は、先にその PR のブランチへ `git switch` してから subagent を起動する必要がある旨も併せて案内する
@@ -173,9 +173,15 @@ gitleaks が無い環境では、文書に書き込まれた token などの認�
 
 これらの照合は ASCII の大文字小文字を区別しません。macOS 既定の filesystem では `Agents/` や `claude.md` も `agents/` や `CLAUDE.md` と同じファイルとして解決され、agent に読み込まれるためです。同じ理由で、大文字小文字の変換で ASCII の文字になる非 ASCII 文字や、HFS+ が名前の比較で無視する不可視の文字 (U+017F の `ſ`、U+212A の `K`、U+200C など。全件は `hooks/scripts/lib/text-paths.sh` のヘッダに記載) を path に含むファイルは、場所を問わずテキスト系文書として扱いません。
 
-判定の範囲は merge 実行 repo の `<PR の base commit SHA>..<PR の head SHA>` で、起点には GitHub が記録する PR の base commit (`baseRefOid`) を使います。ローカルの `origin/<base>` は、PR の実際の base に無い commit を含みうる (base の履歴が書き換えられた後にローカルを更新していない等) ため起点にしません。そのまま起点にすると、merge で base に入る commit が判定範囲から外れます。判定できない場合はレビュー必須として扱います。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
+判定の範囲は merge 実行 repo の `<PR の base commit SHA>..<PR の head SHA>` で、起点には GitHub が記録する PR の base commit (`baseRefOid`) を使います。ローカルの `refs/remotes/origin/<base>` は、PR の実際の base に無い commit を含みうる (base の履歴が書き換えられた後にローカルを更新していない等) ため起点にしません。そのまま起点にすると、merge で base に入る commit が判定範囲から外れます。
+
+ただし、`baseRefOid` は PR の作成時の値から更新されないことがあります。base branch を force push で書き換えた後もこの値が更新されなければ、base の履歴から外れた commit を指すことになり、書き換えで base から消えた commit を PR が持ち込んでも、その commit は判定の対象になりません。そこで、`baseRefOid` がローカルの `refs/remotes/origin/<base>` から到達できること (ancestor であること) も確かめます。ローカルの ref はこの確認にだけ使い、起点には使いません。gate は fetch しません (codex-reviewer の wrapper は、到達できなければ base を 1 度 fetch して確かめ直します)。
+
+判定できない場合はレビュー必須として扱います。次のいずれかに当たる PR はテキスト系文書のみとは扱わず、従来どおりローカル記録を照合します:
 
 - base commit SHA か head SHA が gh の応答に無い、または 40 桁の小文字 16 進数でない
+- base branch 名が gh の応答に無い、`-` で始まる、または git の branch 名の規則を満たさない
+- ローカルに `refs/remotes/origin/<base>` が無い、または PR の base commit がそこから到達できない (base branch の force push 後等)
 - PR の base commit か head の commit がローカルに無い (fetch していない等)
 - 範囲に commit が無い、または merge commit を含む
 - 範囲の commit が 100 を超える、または判定に 10 秒を超えてかかる (hook の時間内に判定を終えるため、判定を打ち切ってレビュー必須として扱う)
