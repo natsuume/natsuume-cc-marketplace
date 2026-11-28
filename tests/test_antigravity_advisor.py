@@ -1385,6 +1385,15 @@ class RunnerAgentContractTest(unittest.TestCase):
             with self.subTest(literal=literal):
                 self.assertIn(literal, self.body)
 
+    def test_output_saved_to_a_file_is_read_in_full(self) -> None:
+        # Bash tool は大きな出力をファイルに退避し、プレビューだけを返すことがある。
+        for literal in (
+            "退避したファイルを Read tool で全文読み",
+            "全文を読めない場合",
+        ):
+            with self.subTest(literal=literal):
+                self.assertIn(literal, self.body)
+
     def test_exit_code_to_failure_class_table(self) -> None:
         for exit_code, failure_class in FAILURE_CLASS_BY_EXIT.items():
             with self.subTest(exit_code=exit_code):
