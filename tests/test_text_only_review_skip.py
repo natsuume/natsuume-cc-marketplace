@@ -14,6 +14,10 @@
 - codex review wrapper 2 つ (`run-pre-push-codex-review.sh` / `run-pre-merge-codex-review.sh`):
   テキスト系文書だけの変更では codex review を起動せず、stdout に
   `Review skipped: text-only changes` の 1 行だけを出して exit 0 で終わり、記録を書かない
+- session と subagent が読む文書: 2 つの codex-reviewer が skip の 1 行を受けて
+  `Status: skipped` の report を返す契約、merge 前の起動順の規律が文書だけの PR でも
+  codex-reviewer を起動して `Status: skipped` で merge に進む手順、2 つの review command が
+  文書だけの push の扱いを push gate の判定に委ねる文
 
 コードを含む変更・net diff が空の変更・判定に使う値が得られない場合は、従来どおり記録を
 要求する側に倒れることも固定する。
@@ -51,7 +55,22 @@ MERGE_GATE = MERGE_SCRIPTS / "block-pre-merge.sh"
 PUSH_WRAPPER = CODEX_SCRIPTS / "run-pre-push-codex-review.sh"
 MERGE_WRAPPER = MERGE_SCRIPTS / "run-pre-merge-codex-review.sh"
 
+CODEX_REVIEWER_AGENTS = {
+    "pre-push-codex-review": PLUGINS
+    / "pre-push-codex-review"
+    / "agents"
+    / "codex-reviewer.md",
+    "pre-merge-cross-review": PLUGINS
+    / "pre-merge-cross-review"
+    / "agents"
+    / "codex-reviewer.md",
+}
+MERGE_ORDER_RULES = MERGE_SCRIPTS.parent / "prompts" / "merge-order-rules.md"
+CORE_REVIEW_COMMAND = PLUGINS / "pre-push-review" / "commands" / "review.md"
+CODEX_REVIEW_COMMAND = PLUGINS / "pre-push-codex-review" / "commands" / "review.md"
+
 SKIP_LINE = "Review skipped: text-only changes"
+SKIPPED_REPORT = "# Codex Review\n\nStatus: skipped\nReason: text-only changes\n"
 
 # 判定に渡す base (完全な ref 名)。
 MASTER_REF = "refs/heads/master"
@@ -862,6 +881,65 @@ class MergeWrapperTest(WrapperTestCase):
         self.assertFalse(self.companion_log.exists(), "codex companion が起動された")
         _, pending = self.records(repository)
         self.assertFalse(pending.exists())
+
+
+class TextOnlySkipDocumentTest(unittest.TestCase):
+    """session と subagent が読む文書が、テキスト系文書だけの変更の扱いを定めていること。"""
+
+    def read(self, path: Path) -> str:
+        return path.read_text(encoding="utf-8")
+
+    def test_codex_reviewers_return_skipped_report_for_the_skip_line(self) -> None:
+        for plugin, agent in CODEX_REVIEWER_AGENTS.items():
+            with self.subTest(plugin=plugin):
+                body = self.read(agent)
+                self.assertIn(
+                    "Allowed status values are "
+                    "`Status: pass | findings | execution-failed | skipped`.",
+                    body,
+                )
+                self.assertIn(f"exactly one `{SKIP_LINE}` line", body)
+                self.assertIn(f"```markdown\n{SKIPPED_REPORT}```", body)
+                self.assertIn("A `Status: skipped` report never promotes", body)
+
+    def test_merge_order_rules_launch_the_reviewer_for_text_only_prs(self) -> None:
+        rules = self.read(MERGE_ORDER_RULES)
+        # 同じ head SHA で `Status: skipped` を受け取っていれば再起動しない。
+        self.assertIn(
+            "`Status: pass` / `Status: findings` / `Status: skipped` の report を"
+            "受け取っている場合に限り、再起動しない",
+            rules,
+        )
+        self.assertIn(
+            "PR の差分がテキスト系文書だけの場合も手順は同じで、codex-reviewer を起動する",
+            rules,
+        )
+        self.assertIn(
+            "`Status: skipped` を返すので、その report を受け取ったら merge に進む",
+            rules,
+        )
+        self.assertIn("起動を省くかどうかをセッション自身で判定しない", rules)
+
+    def test_review_commands_leave_text_only_pushes_to_the_push_gate(self) -> None:
+        core = self.read(CORE_REVIEW_COMMAND)
+        self.assertIn(
+            "変更がテキスト系文書だけの push では、 push gate は code review の記録を"
+            "要求せず、 deny 文は security review だけを挙げます",
+            core,
+        )
+        self.assertIn("deny 文が挙げた reviewer だけを起動すれば足ります", core)
+        codex = self.read(CODEX_REVIEW_COMMAND)
+        self.assertIn(
+            "変更がテキスト系文書だけの push では本 plugin の push gate が deny しないため、"
+            " codex review のためにこのコマンドを実行する必要はありません",
+            codex,
+        )
+        for name, body in {
+            "pre-push-review": core,
+            "pre-push-codex-review": codex,
+        }.items():
+            with self.subTest(command=name):
+                self.assertIn("どの push が該当するかは push gate が判定する", body)
 
 
 if __name__ == "__main__":

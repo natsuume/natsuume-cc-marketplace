@@ -2,8 +2,9 @@
 # block-pre-merge.sh
 # codex review 済みでない PR の `gh pr merge` をブロックする PreToolUse フック。 レビュー済みの
 # 証拠は merge 実行 repo の git-dir 直下にあるローカル記録 (final attestation) であり、 それが
-# PR 番号と現在の head SHA の両方に一致する場合だけ merge を通す。 GitHub には何も書かず、 gh は
-# PR 番号と head SHA の取得だけに使う。
+# PR 番号と現在の head SHA の両方に一致する場合だけ merge を通す。 PR の変更がテキスト系文書
+# だけの場合は記録を要求せずに通す。 GitHub には何も書かず、 gh は PR 番号・head SHA・base
+# branch 名の取得だけに使う。
 #
 # policy: fail-closed (関与したコマンドに限る)
 #   関与条件 (下記 1.) を満たさない Bash 呼び出しには一切関与しない (無出力で exit 0)。
@@ -19,10 +20,15 @@
 #    レビュー記録の有無に依らず deny する。 `--auto` は gate 確認と実 merge を
 #    分離する遅延予約、 `--admin` は保護 bypass であり、 いずれも本 gate の観測範囲外の
 #    merge を作るためサポート外とする。
-# 3. **PR 番号と head SHA の取得**: merge 対象 PR の番号と現在の head SHA を gh
-#    (`gh pr view --json number,headRefOid`) で取得する。 取得できない・形式が不正な場合は
-#    deny する。
-# 4. **ローカル記録の検証**: merge 実行 repo (payload の `cwd`) の git-dir 直下にある codex
+# 3. **PR 番号・head SHA・base branch 名の取得**: merge 対象 PR の番号・現在の head SHA・
+#    base branch 名を gh (`gh pr view --json number,headRefOid,baseRefName`) で取得する。
+#    番号と head SHA を取得できない・head SHA の形式が不正な場合は deny する。
+# 4. **テキスト系文書だけの PR**: `refs/remotes/origin/<base branch 名>` と head SHA の
+#    merge-base から head までの変更がテキスト系文書だけ (判定は lib/text-paths.sh) なら、
+#    記録を照合せずに無出力で終了する。 base branch 名が空・`-` 始まり・branch 名として不正な
+#    場合と、 head SHA が 40 桁の小文字 16 進数でない場合は判定せずに 5. へ進む (判定が成立
+#    しない場合も 5. へ進む)。
+# 5. **ローカル記録の検証**: merge 実行 repo (payload の `cwd`) の git-dir 直下にある codex
 #    review の final attestation (2 行 `pr=<全数字>` / `head=<40 hex 小文字>`) が symlink で
 #    ない regular file として在り、 番号と head SHA が gh の値の両方に一致するときだけ無出力で
 #    終了する (既定の許可フローに委ねる)。 記録が無い (pending だけの場合を含む) / git-dir を
@@ -225,9 +231,9 @@ fi
 run_gh_pr_view() {
   cd "$PAYLOAD_CWD" || return 1
   if [ -n "$1" ]; then
-    gh pr view "$1" --json number,headRefOid 2>/dev/null
+    gh pr view "$1" --json number,headRefOid,baseRefName 2>/dev/null
   else
-    gh pr view --json number,headRefOid 2>/dev/null
+    gh pr view --json number,headRefOid,baseRefName 2>/dev/null
   fi
 }
 
@@ -236,7 +242,7 @@ PR_JSON=$(run_gh_pr_view "$TARGET") || PR_JSON=""
 if [ -z "$PR_JSON" ]; then
   deny "マージをブロックしました。 merge 対象 PR の情報を gh から取得できませんでした (PR を解決できない / 認証が切れている / ネットワーク不通 等)。
 
-\`gh pr view --json number,headRefOid\` が成功する状態にしてから、もう一度 gh pr merge を実行してください。"
+\`gh pr view --json number,headRefOid,baseRefName\` が成功する状態にしてから、もう一度 gh pr merge を実行してください。"
   exit 0
 fi
 
@@ -254,9 +260,29 @@ esac
 # (current branch 解決) ため、 番号は常に gh の応答から取る。
 PR_NUMBER=$(printf '%s' "$PR_JSON" | jq -r '.number // empty' 2>/dev/null) || PR_NUMBER=""
 
+_BLOCK_PRE_MERGE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# PR の変更がテキスト系文書だけなら、 codex review の記録を照合せずに通す。 判定は
+# lib/text-paths.sh で、 wrapper (run-pre-merge-codex-review.sh) と同じ形 (remote-tracking ref
+# の完全な名前と head) で呼ぶ。 base branch 名と head SHA は git の引数になるため、 使えない値
+# (空・`-` 始まり・branch 名として不正な base branch 名と、 40 桁の小文字 16 進数でない head
+# SHA) のときは判定せずに記録の照合へ進む。 lib を読み込めない場合も記録の照合へ進む。
+BASE_NAME=$(printf '%s' "$PR_JSON" | jq -r '.baseRefName // empty' 2>/dev/null) || BASE_NAME=""
+case "$BASE_NAME" in
+  "" | -*) ;;
+  *)
+    # shellcheck source=lib/text-paths.sh
+    if printf '%s' "$HEAD_SHA" | grep -qE '^[0-9a-f]{40}$' \
+      && git check-ref-format --branch "$BASE_NAME" >/dev/null 2>&1 \
+      && source "$_BLOCK_PRE_MERGE_SCRIPT_DIR/lib/text-paths.sh" 2>/dev/null \
+      && is_text_only_range_in "$PAYLOAD_CWD" "refs/remotes/origin/${BASE_NAME}" "$HEAD_SHA"; then
+      exit 0
+    fi
+    ;;
+esac
+
 # レビュー記録のファイル名は lib/markers.sh が単一ソース。 読み込めない場合は記録を検証でき
 # ないため deny に倒す (fail-closed)。
-_BLOCK_PRE_MERGE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/markers.sh
 if ! source "$_BLOCK_PRE_MERGE_SCRIPT_DIR/lib/markers.sh" 2>/dev/null; then
   deny "マージをブロックしました。 plugin の lib (\`hooks/scripts/lib/markers.sh\`) を読み込めず、 codex review のレビュー記録を検証できません。

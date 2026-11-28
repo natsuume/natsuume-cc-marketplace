@@ -85,11 +85,59 @@
 
 # is_text_document_path <repo 相対 path>
 # path がテキスト系文書 (定義はファイルヘッダの「テキスト系文書の定義」) なら 0、それ以外は
-# 1 を返す。
-#
-# 現在の本体は判定を持たない骨格で、常に 1 を返す (どの path もテキスト系文書と判定しない)。
+# 1 を返す。大文字小文字を区別しない照合は、`${var,,}` (bash 3.2 に無い) や tr を使わず、
+# 各文字を `[aA]` の形で書いた case のパターンで行う。
 is_text_document_path() {
-  return 1
+  local path="$1"
+  local basename="${path##*/}"
+  local directories=""
+  case "$path" in
+    */*) directories="${path%/*}" ;;
+  esac
+
+  # 拡張子 (basename の最後の `.` より後ろ) が対象の 4 つのいずれかであること。
+  case "$basename" in
+    *.*) ;;
+    *) return 1 ;;
+  esac
+  case "${basename##*.}" in
+    [mM][dD] | [mM][aA][rR][kK][dD][oO][wW][nN] | [rR][sS][tT] | [aA][dD][oO][cC]) ;;
+    *) return 1 ;;
+  esac
+
+  # agent が指示として読む basename。
+  case "$basename" in
+    [cC][lL][aA][uU][dD][eE].[mM][dD] | \
+      [cC][lL][aA][uU][dD][eE].[lL][oO][cC][aA][lL].[mM][dD] | \
+      [aA][gG][eE][nN][tT][sS].[mM][dD] | \
+      [aA][gG][eE][nN][tT][sS].[oO][vV][eE][rR][rR][iI][dD][eE].[mM][dD] | \
+      [gG][eE][mM][iI][nN][iI].[mM][dD] | \
+      [cC][oO][pP][iI][lL][oO][tT]-[iI][nN][sS][tT][rR][uU][cC][tT][iI][oO][nN][sS].[mM][dD])
+      return 1
+      ;;
+  esac
+
+  # ディレクトリ要素。前後に `/` を付けた文字列に対して照合し、名前の一部だけが一致する
+  # 要素 (`agentsx/` 等) は除外しない。
+  [ -n "$directories" ] || return 0
+  case "/${directories}/" in
+    */[aA][gG][eE][nN][tT][sS]/* | */[cC][oO][mM][mM][aA][nN][dD][sS]/* | \
+      */[sS][kK][iI][lL][lL][sS]/* | */[rR][uU][lL][eE][sS]/* | \
+      */[oO][uU][tT][pP][uU][tT]-[sS][tT][yY][lL][eE][sS]/* | \
+      */.[cC][lL][aA][uU][dD][eE]/* | */.[aA][gG][eE][nN][tT][sS]/* | \
+      */.[cC][uU][rR][sS][oO][rR]/* | */.[gG][eE][mM][iI][nN][iI]/* | \
+      */.[cC][oO][dD][eE][xX]/* | */.[wW][iI][nN][dD][sS][uU][rR][fF]/* | \
+      */.[cC][lL][iI][nN][eE][rR][uU][lL][eE][sS]/* | */.[rR][oO][oO]/* | \
+      */.[kK][iI][rR][oO]/* | */.[cC][oO][nN][tT][iI][nN][uU][eE]/* | \
+      */.[jJ][uU][nN][iI][eE]/* | */.[aA][mM][aA][zZ][oO][nN][qQ]/* | \
+      */[hH][oO][oO][kK][sS]/[pP][rR][oO][mM][pP][tT][sS]/* | \
+      */.[gG][iI][tT][hH][uU][bB]/[iI][nN][sS][tT][rR][uU][cC][tT][iI][oO][nN][sS]/* | \
+      */.[gG][iI][tT][hH][uU][bB]/[pP][rR][oO][mM][pP][tT][sS]/* | \
+      */.[gG][iI][tT][hH][uU][bB]/[cC][hH][aA][tT][mM][oO][dD][eE][sS]/*)
+      return 1
+      ;;
+  esac
+  return 0
 }
 
 # is_text_only_range_in <target_cwd> <base_ref> <head>
@@ -103,8 +151,38 @@ is_text_document_path() {
 #   3. path が 0 件なら 1
 #   4. すべての path が is_text_document_path を満たせば 0、1 つでも満たさなければ 1
 #
-# 現在の本体は判定を持たない骨格で、常に 1 を返す (どの変更もテキスト系文書だけと判定
-# しない)。
+# diff の出力は NUL 区切りで、shell の変数には NUL を入れられないため、一時ファイルに受けて
+# から読む。一時ファイルは関数を抜ける前に消す (source する script の trap には触れない)。
 is_text_only_range_in() {
-  return 1
+  local target_cwd="$1"
+  local base_ref="$2"
+  local head="$3"
+  local -a git_prefix=()
+  if [ -n "$target_cwd" ]; then
+    git_prefix=(-C "$target_cwd")
+  fi
+
+  local merge_base
+  merge_base=$(git "${git_prefix[@]}" merge-base "$base_ref" "$head" 2>/dev/null) || return 1
+  [ -n "$merge_base" ] || return 1
+
+  local listing
+  listing=$(mktemp "${TMPDIR:-/tmp}/text-paths.XXXXXX" 2>/dev/null) || return 1
+  if ! git "${git_prefix[@]}" -c core.quotePath=false -c diff.relative=false \
+    diff --name-only -z --no-renames "$merge_base" "$head" >"$listing" 2>/dev/null; then
+    rm -f "$listing"
+    return 1
+  fi
+
+  local status=1
+  local path=""
+  while IFS= read -r -d '' path || [ -n "$path" ]; do
+    if ! is_text_document_path "$path"; then
+      status=1
+      break
+    fi
+    status=0
+  done <"$listing"
+  rm -f "$listing"
+  return "$status"
 }

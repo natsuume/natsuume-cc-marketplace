@@ -92,6 +92,8 @@ source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/diff-hash.sh"
 source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/markers.sh"
 # shellcheck source=lib/codex-companion-resolver.sh
 source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
+# shellcheck source=lib/text-paths.sh
+source "$_RUN_PRE_PUSH_CODEX_REVIEW_SCRIPT_DIR/lib/text-paths.sh"
 
 # ## wrapper では `install_exit_trap` (lib/exit-trap.sh) を **使わない** 理由
 #
@@ -280,6 +282,16 @@ if is_empty_push "$BASE"; then
   # pending attestation は書かない (空 push 時は block-pre-push-codex.sh が gate を skip するため不要)。
   exit 0
 fi
+
+# 変更がテキスト系文書だけの branch は codex review を起動しない。 block-pre-push-codex.sh も
+# 同じ関数を同じ形 (remote-tracking ref の完全な名前と HEAD) で呼んで marker を要求しないため、
+# pending attestation は書かない (起動時に削除済み)。 stdout には skip の 1 行だけを出し、
+# codex-reviewer はこの行で `Status: skipped` の report を返す。
+if is_text_only_range_in "" "refs/remotes/origin/${BASE}" HEAD; then
+  printf '%s\n' "Review skipped: text-only changes"
+  exit 0
+fi
+
 HASH=$(compute_review_hash "$BASE") || fail "branch diff hash の計算に失敗しました。"
 
 # codex companion path 解決
