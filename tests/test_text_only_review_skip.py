@@ -1959,9 +1959,12 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
 
     def test_user_config_environment_is_respected(self) -> None:
         """`GITLEAKS_CONFIG` / `GITLEAKS_CONFIG_TOML` が空でなければ `--config` を渡さない
-        (ignore の一時ディレクトリは渡す)。空文字なら未設定と同じに扱う。"""
+        (ignore の一時ディレクトリは渡す)。空文字なら未設定と同じに扱う。`GITLEAKS_CONFIG` は
+        読めるファイルを指す (読めなければ検査の失敗になる)。"""
+        user_config = self.root / "user-gitleaks.toml"
+        user_config.write_text(DEFAULT_GITLEAKS_CONFIG, encoding="utf-8")
         cases = {
-            "GITLEAKS_CONFIG": ("/path/to/user/gitleaks.toml", False),
+            "GITLEAKS_CONFIG": (str(user_config), False),
             "GITLEAKS_CONFIG_TOML": ("[extend]\nuseDefault = true\n", False),
             "empty_GITLEAKS_CONFIG": ("", True),
         }
@@ -1980,6 +1983,102 @@ class TextOnlySecretsScanTest(WorkspaceTestCase):
                 args = self.single_gitleaks_record()["args"]
                 self.assertEqual("--config" in args, expects_config, args)
                 self.assertIn("--gitleaks-ignore-path", args)
+
+    # path を条件にした rule (`path =` の key) を含む設定。key の書き方を変えて用意する。
+    CONFIGS_WITH_PATH_KEY = {
+        "rule_path": (
+            "[extend]\nuseDefault = true\n\n"
+            '[[rules]]\nid = "internal-id"\n'
+            "regex = '''INTERNAL-[0-9]{8}'''\npath = '''^docs/'''\n"
+        ),
+        "extend_path": '[extend]\npath = "other-gitleaks.toml"\n',
+        "inline_table": (
+            "[extend]\nuseDefault = true\n\n"
+            'rules = [{ id = "internal-id", regex = '
+            "'''INTERNAL-[0-9]{8}''', path = '''^docs/''' }]\n"
+        ),
+        "quoted_key": (
+            '[[rules]]\nid = "internal-id"\n'
+            "regex = '''INTERNAL-[0-9]{8}'''\n\"path\" = '''^docs/'''\n"
+        ),
+        "dotted_key": 'extend.path = "other-gitleaks.toml"\n',
+    }
+
+    def test_base_config_with_a_path_key_stops_the_skip(self) -> None:
+        """base の `.gitleaks.toml` に `path =` の key があれば (path を条件にした rule・
+        `[extend]` の path・inline table の中・引用符で囲んだ key)、gitleaks を起動せずに 2 を
+        返す。"""
+        for label, config in self.CONFIGS_WITH_PATH_KEY.items():
+            with self.subTest(case=label):
+                self.gitleaks_log.unlink(missing_ok=True)
+                repository = self.create_branch_on_base(
+                    f"repo-{label}",
+                    lambda repository, config=config: repository.write(
+                        ".gitleaks.toml", config
+                    ),
+                )
+                self.assertEqual(self.range_status(repository), 2)
+                self.assertEqual(self.gitleaks_calls(), [])
+                self.assert_no_leftover_temporary_files()
+
+    def test_user_config_with_a_path_key_stops_the_skip(self) -> None:
+        """`GITLEAKS_CONFIG` が指すファイル (相対 path は判定を呼んだ cwd から読む) と
+        `GITLEAKS_CONFIG_TOML` の値に `path =` の key があれば、gitleaks を起動せずに 2 を返す。
+        `GITLEAKS_CONFIG` のファイルを読めない場合も 2。"""
+        config = self.CONFIGS_WITH_PATH_KEY["rule_path"]
+        absolute_config = self.root / "user-with-path.toml"
+        absolute_config.write_text(config, encoding="utf-8")
+        # call_text_paths は self.root を cwd にして判定を呼ぶ。
+        relative_config = Path("relative-user-with-path.toml")
+        (self.root / relative_config).write_text(config, encoding="utf-8")
+        cases: dict[str, dict[str, str]] = {
+            "GITLEAKS_CONFIG": {"GITLEAKS_CONFIG": str(absolute_config)},
+            "relative_GITLEAKS_CONFIG": {"GITLEAKS_CONFIG": str(relative_config)},
+            "GITLEAKS_CONFIG_TOML": {"GITLEAKS_CONFIG_TOML": config},
+            "both_with_path_only_in_toml": {
+                "GITLEAKS_CONFIG_TOML": config,
+                "GITLEAKS_CONFIG": str(self.root / "user-without-path.toml"),
+            },
+            "unreadable_GITLEAKS_CONFIG": {
+                "GITLEAKS_CONFIG": str(self.root / "no-such-gitleaks.toml")
+            },
+        }
+        (self.root / "user-without-path.toml").write_text(
+            DEFAULT_GITLEAKS_CONFIG, encoding="utf-8"
+        )
+        for label, variables in cases.items():
+            with self.subTest(case=label):
+                self.gitleaks_log.unlink(missing_ok=True)
+                repository = self.create_repository(f"repo-{label}")
+                repository.write("README.md", "# updated\n")
+                repository.commit_all("docs")
+                self.env.update(variables)
+                try:
+                    self.assertEqual(self.range_status(repository), 2)
+                finally:
+                    for name in variables:
+                        del self.env[name]
+                self.assertEqual(self.gitleaks_calls(), [])
+                self.assert_no_leftover_temporary_files()
+
+    def test_allowlist_paths_key_does_not_stop_the_skip(self) -> None:
+        """allowlist の `paths =` だけを持つ設定は、今までどおり skip できる。"""
+        config = (
+            "[extend]\nuseDefault = true\n\n"
+            "[allowlist]\npaths = ['''^vendor/''', '''(^|/)node_modules/''']\n"
+        )
+        repository = self.create_branch_on_base(
+            "repo", lambda repository: repository.write(".gitleaks.toml", config)
+        )
+        self.assertEqual(self.range_status(repository), 0)
+        self.assertEqual(self.single_gitleaks_record()["config"], config)
+        self.gitleaks_log.unlink()
+        self.env["GITLEAKS_CONFIG_TOML"] = config
+        try:
+            self.assertEqual(self.range_status(repository), 0)
+        finally:
+            del self.env["GITLEAKS_CONFIG_TOML"]
+        self.assertNotIn("--config", self.single_gitleaks_record()["args"])
 
     def test_canary_differs_for_each_scan(self) -> None:
         """canary は検査ごとにランダムに作る (2 回の検査で値が異なる)。"""
@@ -2465,6 +2564,30 @@ class TextOnlySecretsScanWithRealGitleaksTest(WorkspaceTestCase):
         repository.git("reset", "-q", "--hard", "master")
         repository.write("README.md", "# updated\n")
         repository.commit_all("docs")
+        self.assertEqual(self.range_status(repository), 2)
+
+    def test_rule_with_a_path_condition_stops_the_skip(self) -> None:
+        """base の `.gitleaks.toml` に path を条件にした独自の rule がある場合、path を持たない
+        入力ではその rule が働かないため、その rule だけが当たる値の範囲でも skip せず 2 を返す。"""
+        config = (
+            "[extend]\nuseDefault = true\n\n"
+            '[[rules]]\nid = "internal-id"\n'
+            "regex = '''INTERNAL-[0-9]{8}'''\npath = '''^docs/'''\n"
+        )
+        repository = self.create_repository()
+        repository.git("switch", "-q", "master")
+        repository.write(".gitleaks.toml", config)
+        repository.commit_all("gitleaks config")
+        repository.git("switch", "-q", "feature")
+        repository.git("reset", "-q", "--hard", "master")
+        repository.write("docs/README.md", "id = INTERNAL-12345678\n")
+        repository.commit_all("docs")
+        # 同じ範囲を path を持つ入力 (`gitleaks git`) と同じ設定で走査すると検出される。
+        self.assertTrue(
+            self.naive_scan_detects(
+                repository, "--config", str(repository.path / ".gitleaks.toml")
+            )
+        )
         self.assertEqual(self.range_status(repository), 2)
 
     def test_replace_ref_does_not_hide_the_secret(self) -> None:
@@ -3611,6 +3734,17 @@ class TextOnlySkipDocumentationTest(unittest.TestCase):
                 self.assertIn(
                     "`.gitleaks.toml` があっても読めない場合 (symlink である、blob が手元に"
                     "無い等) は、既定のルールに切り替えず、skip もしません",
+                    body,
+                )
+
+    def test_plugin_readmes_state_that_a_path_key_stops_the_skip(self) -> None:
+        for name, path in PLUGIN_READMES.items():
+            with self.subTest(plugin=name):
+                body = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "に `path =` の key (path を条件にした rule や、`[extend]` の `path` に"
+                    "よる別の設定の読み込み) が 1 つでもある場合も、path を持たない入力では"
+                    "その条件で検査できないため skip しません",
                     body,
                 )
 

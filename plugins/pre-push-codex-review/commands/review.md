@@ -6,7 +6,7 @@ description: push 前レビューを同じアシスタントメッセージで�
 
 このコマンドは `git push` 前に必須となる **push 前レビュー** を、 **同じアシスタントメッセージで並列に** subagent として起動する確定的フローです。 順序入れ替えや引数指定は受け付けません — このコマンド本文に固定された並列発出が既定で、並列発出が技術的に成立しない場合だけ下記の節に従います。
 
-テキスト系文書だけの push は、 本 plugin と `pre-push-review` core のどちらの push gate も deny しないため、 このコマンドを実行する必要はありません (どの push が該当するかは push gate が判定します。定義は plugin README の「テキスト系文書のみの変更」節)。
+テキスト系文書だけの push は、 秘匿情報の検査で止めない限り本 plugin と `pre-push-review` core のどちらの push gate も deny しないため、 このコマンドを実行する必要はありません (どの push が該当するかは push gate が判定します。定義は plugin README の「テキスト系文書のみの変更」節)。 秘匿情報の検査で止めた場合は push gate が deny し、 その理由文に検査で止めた旨が入るので、 通常どおりこのコマンドを実行してください。
 
 起動する subagent は install 構成で決まります:
 

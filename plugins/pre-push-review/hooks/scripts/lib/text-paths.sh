@@ -148,8 +148,9 @@
 #        graft ファイルがある、判定が時間の上限を超えた、または 1-4 の判定に必要な git の
 #        呼び出しが失敗した (判定に必要な object が手元に無い場合を含む)
 #   - 2: テキスト系文書だけだが、gitleaks の結果が canary だけの検出ではなかった (秘匿情報の
-#        候補を検出した・canary を検出しなかった・実行に失敗した)、または gitleaks に渡す入力を
-#        書き出せなかった (`git log` の失敗・空の出力)
+#        候補を検出した・canary を検出しなかった・実行に失敗した)、gitleaks に渡す入力を
+#        書き出せなかった (`git log` の失敗・空の出力)、または実際に使う gitleaks の設定に
+#        `path =` の key がある・設定を読めない (下記「設定と ignore の読み方」)
 #
 # 呼び出し側は 0 のときだけ skip し、1 と 2 では従来どおりレビューを要求する。2 を 1 と
 # 分けるのは、deny の理由文で「テキスト系文書だけだが秘匿情報の検査で止めた」ことを示すため。
@@ -265,6 +266,22 @@
 #   - どの設定でも、既定の `github-pat` rule を含まない場合 (既定のルールを extend しない等) や、
 #     canary を検出から外す場合 (allowlist・`disabledRules` 等) は、canary が検出されないため
 #     exit code 2 になり、skip しない
+#   - 実際に使う設定 (`--config` に渡す一時ファイル、`GITLEAKS_CONFIG` が指すファイル、
+#     `GITLEAKS_CONFIG_TOML` の値。環境変数が両方とも空でなければ両方) のどこかに key `path` の
+#     代入 (`path =`) があれば、gitleaks を起動せず exit code 2 にする (時間の上限の期限を決める
+#     前に確かめる)。gitleaks は path を持たない入力では空文字列を path として rule の `path` の
+#     正規表現と照合するため、path を条件にした rule (`[[rules]]` の `path`) は、その正規表現が
+#     空文字列に当たらない限り働かず、その rule だけが当たる値を検出できない。`[extend]` の
+#     `path` で別の設定を読み込む設定も同じ扱いになる (読み込んだ先の rule を確かめられない
+#     ため)。照合は行ごとの正規表現 (`LC_ALL=C grep -E` で `(^|[[:space:]{,.])["']?path["']?[[:space:]]*=`) で、
+#     引用符で囲んだ key (`"path" =`)・inline table の中 (`{ id = "x", path = "..." }`)・dotted
+#     key (`extend.path =`。`[extend]` の `path` と同じ意味) にも当たり、allowlist の `paths =`
+#     には当たらない。comment の中の `path =` にも当たる
+#     (レビュー必須の側)。`GITLEAKS_CONFIG` のファイルは gitleaks の cwd を移す前の cwd を
+#     基準に読み、読めなければ exit code 2 にする。base の tree に `.gitleaks.toml` が無いときの
+#     一時ファイル (既定のルールだけ) はこの key を持たない。既定のルールにも path を条件にした
+#     rule はあるが (8.30.1 では 5 件)、`.p12`・`.pfx` の鍵ファイル、`.php`・`.tf`・`.hcl`・
+#     `.yaml`・`.yml`・`nuget.config` を対象にしたもので、テキスト系文書の path には当たらない
 #   - ignore (`.gitleaksignore`) は使わない。base の tree にあっても取り出さない。gitleaks は
 #     `--gitleaks-ignore-path` の指定先に加えて cwd の `.gitleaksignore` も読むため、cwd と
 #     `--gitleaks-ignore-path` の両方を同じ空の一時ディレクトリにする (cwd が repo の working
@@ -540,6 +557,18 @@ _text_paths_exec_in_dir_with_input() {
   exec "$@" <"$input"
 }
 
+# _text_paths_config_has_path_key <file>
+# gitleaks の設定ファイル (TOML) に、key `path` の代入 (`path =`。引用符で囲んだ key・
+# inline table の中・dotted key を含み、allowlist の `paths =` は含まない) に当たる行が
+# あれば 0、無ければ 1、読めなければ 2 (grep の exit code) を返す。理由はファイルヘッダの「設定と ignore の読み方」
+# を参照。
+_text_paths_config_has_path_key() {
+  local pattern="(^|[[:space:]{,.])[\"']?path[\"']?[[:space:]]*="
+  local grep_status=0
+  LC_ALL=C grep -Eq -e "$pattern" -- "$1" 2>/dev/null || grep_status=$?
+  return "$grep_status"
+}
+
 # _text_paths_run_gitleaks <target_cwd> <base_oid> <head_oid> <work_dir>
 # <work_dir> (呼び出し側が作り、消す一時ディレクトリ) に gitleaks の設定・canary を先頭に置いた
 # 入力・report の template・空の cwd を用意して gitleaks を起動する。gitleaks が canary だけを
@@ -558,6 +587,8 @@ _text_paths_run_gitleaks() {
   fi
 
   local -a config_args=()
+  # gitleaks が実際に読む設定のファイル (`path =` の key の検査に使う)。
+  local -a used_config_files=()
   if [ -z "${GITLEAKS_CONFIG:-}" ] && [ -z "${GITLEAKS_CONFIG_TOML:-}" ]; then
     local config_path="${work_dir}/gitleaks.toml"
     extract_status=0
@@ -569,7 +600,30 @@ _text_paths_run_gitleaks() {
       *) return 1 ;;
     esac
     config_args=(--config "$config_path")
+    used_config_files+=("$config_path")
   fi
+  # 利用者の環境変数の設定。`GITLEAKS_CONFIG` のファイルは、gitleaks の cwd を移す前のこの
+  # shell の cwd を基準に読む。読めなければ検査しない。
+  if [ -n "${GITLEAKS_CONFIG:-}" ]; then
+    if [ ! -f "$GITLEAKS_CONFIG" ] || [ ! -r "$GITLEAKS_CONFIG" ]; then
+      return 1
+    fi
+    used_config_files+=("$GITLEAKS_CONFIG")
+  fi
+  if [ -n "${GITLEAKS_CONFIG_TOML:-}" ]; then
+    local environment_config_path="${work_dir}/gitleaks-config-toml.toml"
+    printf '%s\n' "$GITLEAKS_CONFIG_TOML" >"$environment_config_path" 2>/dev/null || return 1
+    used_config_files+=("$environment_config_path")
+  fi
+
+  # 使う設定に `path =` の key が 1 つでもあれば、gitleaks を起動せずに失敗を返す (理由は
+  # ファイルヘッダの「設定と ignore の読み方」を参照)。期限を決める前に行う。
+  local used_config_file key_status
+  for used_config_file in "${used_config_files[@]}"; do
+    key_status=0
+    _text_paths_config_has_path_key "$used_config_file" || key_status=$?
+    [ "$key_status" -eq 1 ] || return 1
+  done
 
   # gitleaks の cwd と ignore path を兼ねる空のディレクトリ。設定・入力・template・report・
   # stderr のファイルはこの外 (<work_dir> の直下) に置き、起動時点で中身を空に保つ。
