@@ -19,7 +19,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v7.0.4
+v7.1.0
 ## インストール
 
 ```bash
@@ -53,7 +53,7 @@ push 前 2 レビューを **同じアシスタントメッセージで並列に
 
 **ファイル**: `hooks/scripts/block-pre-push.sh`
 
-`git push` を含むコマンドを検出した際、 commit 列 (HEAD / merge-base の OID) + ブランチ全差分 + 未コミット差分のハッシュと **2 つのレビューマーカー** (code-reviewer / security-reviewer subagent 起因) のハッシュを比較し、 2 マーカーがすべて一致しなければ `deny` を返します。 2 マーカーは常にすべて必須です。
+`git push` を含むコマンドを検出した際、 commit 列 (HEAD / merge-base の OID) + ブランチ全差分 + 未コミット差分のハッシュと **2 つのレビューマーカー** (code-reviewer / security-reviewer subagent 起因) のハッシュを比較し、 2 マーカーがすべて一致しなければ `deny` を返します。 変更がテキスト系文書だけの push では、 security-reviewer のマーカーだけを要求します ([テキスト系文書のみの変更](#テキスト系文書のみの変更))。
 
 **動作**:
 
@@ -65,7 +65,7 @@ push 前 2 レビューを **同じアシスタントメッセージで並列に
 - **working tree が dirty (staged または unstaged 変更あり) の場合は markers の状態に関わらず deny**: push される committed 部分とレビューされた working tree の乖離を防ぐため、 push 前に commit 完了を要求する
 - 2 マーカーがすべて一致した場合はそのまま push を許容する (markers は明示削除しない: PreToolUse は push 成功を確認できないため、 remote rejection / 認証失敗 / ネットワーク失敗時に同じ state での再 push がレビュー必須になる無駄ループを避ける。 markers は次の編集で hash が変わったときに自然に失効する)
 - ハッシュは `head <HEAD の commit OID>` 行 + `mbase <merge-base の commit OID>` 行 + `git diff <merge-base> HEAD` + `git diff --cached` + `git diff` (diff 3 種はいずれも `--no-ext-diff --no-textconv` 付き) を連結した入力に対する sha256 として計算する。 HEAD の commit OID をハッシュ入力に束縛しているため、 レビュー後に commit A を積んでから revert して戻す (net diff は review 時と同一でも commit 列は変わっている) 操作でもマーカーは自動失効する。 未コミットの edit があると `git diff --cached` / `git diff` の内容が変わりハッシュも変わるため、 markers が失効し commit + 再 review を強制できる
-- `deny` 時の `permissionDecisionReason` には、 各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と `/pre-push-review:review` を記載する
+- `deny` 時の `permissionDecisionReason` には、 各マーカーの状態 (`未実行` / `失効` / `✓ 最新の差分でレビュー済み`) と `/pre-push-review:review` を記載する。 変更がテキスト系文書だけの push では、 security review のマーカーの状態と `pre-push-review:security-reviewer` の起動だけを記載する
 
 **deny 制約 (loop discipline 維持に必要な最小防御)**:
 
@@ -182,6 +182,40 @@ branch 全差分に対するセキュリティレビューを **self-contained �
 このため subagent は **同等のレビュー内容を self-contained な prompt として持ち**、 標準 skill を invoke しない設計に倒している。 標準 skill の prompt とは別管理になるため、 Anthropic 側の今後の改善は手動で追随する必要がある (トレードオフ)。
 
 **呼び出しタイミング (2 subagent 共通)**: `/pre-push-review:review` slash command の指示で 2 並列 `Agent` tool calls として起動する (完了は SubagentStop で検知されるため起動 mode は問わない)。 deny メッセージにも個別起動のフォールバック手順を案内している。
+
+## テキスト系文書のみの変更
+
+branch の変更が **テキスト系文書** だけの push では、push gate は code review のマーカー (`.claude-pre-push-code-reviewed`) を要求せず、security review のマーカー (`.claude-pre-push-security-reviewed`) だけを要求します。文書に書かれた秘匿情報を見るため、security review は省きません。deny 文は security review の状態と `pre-push-review:security-reviewer` の起動だけを案内するので、その reviewer だけを起動してください。どの push が該当するかは push gate が判定し、session 側では判定しません。
+
+### テキスト系文書の定義
+
+basename の拡張子 (最後の `.` より後ろ) が、ASCII の大文字小文字を区別せずに `md` / `markdown` / `rst` / `adoc` のいずれかであるファイルです。拡張子の無いファイル、`mdx`、`txt` は含みません。ただし、Claude Code や他の coding agent が指示として読む Markdown はコードとして扱い、次のいずれかに当たるファイルはテキスト系文書から除きます (照合は ASCII の大文字小文字を区別しません):
+
+- basename を除くディレクトリ要素のどれかが `agents` / `commands` / `skills` / `rules` / `output-styles` / `.claude` / `.agents` / `.cursor` / `.gemini` / `.codex` / `.windsurf` / `.clinerules` / `.roo` / `.kiro` / `.continue` / `.junie` / `.amazonq` に一致する (深さは問いません)
+- 連続する 2 つのディレクトリ要素が `hooks` → `prompts`、`.github` → `instructions`、`.github` → `prompts`、`.github` → `chatmodes` のいずれか
+- basename が `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `AGENTS.override.md` / `GEMINI.md` / `copilot-instructions.md` のいずれか
+
+### 判定の範囲
+
+`refs/remotes/origin/<base>` (`<base>` は default branch) と HEAD の merge-base から HEAD までの net diff で変わった path を見て、すべてがテキスト系文書のときだけ成立します。成立しない場合は、従来どおり 2 マーカーを要求します。
+
+- rename は削除と追加に分けて扱います。コードのファイルを `.md` に rename した変更は、元の path がコードなので成立しません
+- net diff が空の push (文書を足して後の commit で消した branch 等) は成立しません。全 commit が空 commit の push は、従来どおり空 push として通します
+- 判定に使う git コマンド (merge-base・diff) が失敗した場合は成立しません
+- 利用者の `diff.relative` の設定や、submodule の変更を隠す設定 (`diff.ignoreSubmodules`・`.gitmodules` の `ignore`) に関わらず、repo 全体の path と submodule の変更を見ます
+
+判定は `hooks/scripts/lib/text-paths.sh` が行います。この lib は本 plugin が canonical で、`pre-push-codex-review` と `pre-merge-cross-review` が byte-identical なコピーを保持し、同じ関数を同じ引数の形 (remote-tracking ref の完全な名前と head) で呼びます。
+
+### 前提
+
+この skip は、リポジトリの持ち主本人が普通の操作で誤ってレビューを省くことを防ぐ想定です。ローカルの状態 (ref・git の設定・履歴) や repo の内容を意図的に細工して skip を成立させることには対策しません。秘匿情報の検出は、push 前の security review と、利用者が commit 時に使う secret scanner に任せます。
+
+### 判定の制約
+
+- **途中の commit の内容は見ません**: net diff だけで判定するため、コードを足した commit を後の commit で消した branch も、net diff が文書だけなら code review を要求しません。push される履歴にはその commit が残ります (security review は各 commit の patch も検査します)
+- **ローカルの `refs/remotes/origin/<base>` を基準にします**: gate は fetch しません。ref が古いと base に取り込み済みの変更も範囲に入り、コードの変更として code review を要求することがあります。逆に、ref が base branch の実際の履歴と食い違う場合 (別の場所で base branch が force push された後に fetch していない、origin 以外の remote から base の変更を取り込んだ等) は、コードの変更を含む範囲を文書だけと判定することがあります
+- **path だけで判定します**: ファイルの mode は見ないため、拡張子が対象の symlink や、文書への実行ビットの付与もテキスト系文書の変更として扱います
+- **列挙に無いものは文書として扱います**: 列挙に無い場所にある agent の指示ファイル、`CLAUDE.md` から `@path` で読み込まれる文書、doctest のように実行される文書は、テキスト系文書と判定されます
 
 ## 既知の制約
 

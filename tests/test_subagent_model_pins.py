@@ -47,6 +47,8 @@ ADVISOR_RUNNER = CODEX_ADVISOR / "agents" / "codex-advisor-runner.md"
 RESCUE_RUNNER = CODEX_ADVISOR / "agents" / "codex-rescue-runner.md"
 REVIEW_RUNNER = CODEX_ADVISOR / "agents" / "codex-review-runner.md"
 MANAGE_CODEX_RUNNERS = CODEX_ADVISOR / "hooks" / "scripts" / "manage-codex-runners.mjs"
+ANTIGRAVITY_ADVISOR = ROOT / "plugins" / "antigravity-advisor"
+ANTIGRAVITY_RUNNER = ANTIGRAVITY_ADVISOR / "agents" / "antigravity-advisor-runner.md"
 CONSULT_SKILL = CODEX_ADVISOR / "skills" / "consult" / "SKILL.md"
 ADVISOR_RULES = CODEX_ADVISOR / "hooks" / "prompts" / "advisor-rules.md"
 ADVISOR_RULES_SUBAGENT = CODEX_ADVISOR / "hooks" / "prompts" / "advisor-rules-subagent.md"
@@ -61,6 +63,7 @@ SONNET_AGENTS = {
     "codex-advisor-runner": ADVISOR_RUNNER,
     "codex-rescue-runner": RESCUE_RUNNER,
     "codex-review-runner": REVIEW_RUNNER,
+    "antigravity-advisor-runner": ANTIGRAVITY_RUNNER,
 }
 ALL_PINNED_AGENTS = {**OPUS_AGENTS, **SONNET_AGENTS}
 
@@ -137,7 +140,7 @@ CONFIDENCE_GATING_PATTERNS = (
 
 
 class AgentFrontmatterModelPinTest(unittest.TestCase):
-    """変更仕様 1: 6 agent の frontmatter model 固定。"""
+    """変更仕様 1: 7 agent の frontmatter model 固定。"""
 
     def test_opus_reviewers_pin_model_opus_without_effort_pin(self) -> None:
         """model: opus は維持し、effort は pin せずセッション既定を継承させる

@@ -14,8 +14,12 @@
 #    (どちらかを欠くと、 head SHA を記録しながら別内容をレビューした記録を残すことになる)
 # 4. PR が記録する base commit がローカルの `origin/<base>` から到達可能 (ancestor) である
 #    ことを確認する (到達不能なら 1 度だけ fetch して再判定し、 それでも到達不能なら実行
-#    しない)。 さらに merge-base..HEAD の差分が空でないことを確認する (空のままレビューすると、
-#    何も見ていない 「レビュー済み」 記録を残すことになるため)
+#    しない)。 続けて、 `refs/remotes/origin/<base>` と HEAD の merge-base から HEAD までの変更が
+#    テキスト系文書だけ (判定は lib/text-paths.sh。 merge gate も同じ形で判定して記録を要求
+#    しない) なら、 codex review を起動せず、 stdout に `Review skipped: text-only changes` の
+#    1 行を出して exit 0 で終わる (記録は書かない)。 さらに merge-base..HEAD の差分が空で
+#    ないことを確認する (空のままレビューすると、 何も見ていない 「レビュー済み」 記録を残す
+#    ことになるため)
 # 5. PR の実 base との merge-base..HEAD 全差分に対して codex review を foreground 実行する
 #    (codex companion に `--base origin/<base>` を渡すと merge-base からの branch diff になる)
 # 6. 記録を書く直前に HEAD と working tree の状態を再確認し、 レビュー中に変化していれば記録を
@@ -62,6 +66,8 @@ _RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &&
 source "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/codex-companion-resolver.sh"
 # shellcheck source=lib/markers.sh
 source "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/markers.sh"
+# shellcheck source=lib/text-paths.sh
+source "$_RUN_PRE_MERGE_CODEX_REVIEW_SCRIPT_DIR/lib/text-paths.sh"
 
 WORK_DIR=""
 # この run を一意に識別する id と、 その run 専用の terminal sentinel の絶対パス。
@@ -276,6 +282,16 @@ if ! base_oid_is_in_origin_base; then
   if ! base_oid_is_in_origin_base; then
     fail "PR #${PR_NUMBER} の base commit (${BASE_OID}) が fetch 後もローカルの ${BASE_REF_FULL} に含まれません。 ローカルの base ref が PR の base branch (${BASE_NAME}) を表していない可能性があります (別 remote を指す PR / base branch の force-push 等)。 remote の設定と \`git fetch origin ${BASE_NAME}\` の結果を確認してから再実行してください。"
   fi
+fi
+
+# PR の変更がテキスト系文書だけなら codex review を起動しない。 merge gate (block-pre-merge.sh)
+# も同じ関数を同じ形 (remote-tracking ref の完全な名前と head) で呼んで記録を要求しないため、
+# 記録は書かない (起動時に削除済み)。 stdout には skip の 1 行だけを出し、 codex-reviewer は
+# この行で `Status: skipped` の report を返す。 net diff が空の PR は判定が成立しないため、
+# 下の空の差分の確認で従来どおり中断する。
+if is_text_only_range_in "" "$BASE_REF_FULL" HEAD; then
+  printf '%s\n' "Review skipped: text-only changes"
+  exit 0
 fi
 
 # レビュー対象範囲 (merge-base..HEAD) に差分が無い状態でレビューすると、 何も見ていない

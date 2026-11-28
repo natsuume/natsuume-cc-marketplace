@@ -74,7 +74,7 @@ REPO_README = ROOT / "README.md"
 PLUGIN_README = PLUGIN_DIR / "README.md"
 
 PLUGIN_NAME = "agent-discipline"
-PLUGIN_VERSION = "4.1.2"
+PLUGIN_VERSION = "4.1.3"
 
 INJECT_ALWAYS = "inject-always.sh"
 INJECT_RULES_PART = "inject-rules-part.sh"
@@ -306,7 +306,7 @@ def rule_ids(text: str) -> list[str]:
 def detect_utf8_locale() -> str | None:
     """`locale -a` から UTF-8 系 locale を 1 つ選ぶ (見つからなければ None)。
 
-    inject-always.sh は ``wc -m`` で文字数を数えるため、UTF-8 locale でないと日本語を
+    inject-always.sh は locale に従う bash の ``${#変数}`` で文字数を数えるため、UTF-8 locale でないと日本語を
     バイト数で数えて 8K ガードが働く。組み立て順を検査するテストだけがこの値を使う。
     """
     try:
