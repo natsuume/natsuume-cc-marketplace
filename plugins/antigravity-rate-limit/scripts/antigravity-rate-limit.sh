@@ -49,10 +49,11 @@
 # ## I/O 契約
 #
 # - stdin: 使用しない
-# - 引数: `--max-used-percent <N>` だけを受け付ける。N は 10 進整数 (数字 0-9 のみ・最大
-#   3 桁) かつ 0 <= N <= 100。空文字の値 (`--max-used-percent ""`) と、空白や改行を含む値も
-#   違反とする。違反・値の欠落・未知の引数は、usage (`--max-used-percent` を含む) を stderr
-#   に出して exit 1。引数の検査は、依存の検査と agy の起動より前に行う
+# - 引数: `--max-used-percent <N>` だけを 1 回まで受け付ける。N は 10 進整数 (数字 0-9 のみ・
+#   最大 3 桁) かつ 0 <= N <= 100。空文字の値 (`--max-used-percent ""`) と、空白や改行を含む
+#   値も違反とする。違反・値の欠落・2 回以上の指定 (同じ値でも)・未知の引数は、usage
+#   (`--max-used-percent` を含む) を stderr に出して exit 1。引数の検査は、依存の検査と agy
+#   の起動より前に行う
 # - stdout: 取得に成功したとき (exit 0 / 2) だけ、次の形の JSON を 1 つ出す。exit 1 では
 #   何も出さない
 #
@@ -160,6 +161,9 @@ MAX_USED_PERCENT_SET=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --max-used-percent)
+      if [ -n "$MAX_USED_PERCENT_SET" ]; then
+        fail_with_usage "--max-used-percent は 1 回だけ指定してください。"
+      fi
       if [ "$#" -lt 2 ]; then
         fail_with_usage "--max-used-percent には値が必要です。"
       fi
@@ -232,7 +236,7 @@ on_signal() {
 }
 
 trap remove_work_dir EXIT
-trap on_signal HUP INT TERM
+trap on_signal HUP INT QUIT TERM
 
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/antigravity-rate-limit.XXXXXX" 2>/dev/null)
 if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then

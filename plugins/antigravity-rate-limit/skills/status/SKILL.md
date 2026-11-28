@@ -71,4 +71,4 @@ stderr に失敗理由が日本語で出る。その内容をそのままユー�
 | agy が終了コード 2 で終了した | `GEMINI_API_KEY` で接続している可能性がある (agy 同梱の changelog の記載。未実測)。この接続では利用枠を取得できないため、`GEMINI_API_KEY` を設定しない状態で `agy` を起動してログインするよう案内する |
 | `num_turns` が 0 でない | agy が 1.1.11 より古く、`/usage` が prompt として送られた可能性がある。quota を消費したおそれがある旨を伝え、agy の更新を案内する |
 | 応答の形式が想定と異なる (`status` / `command.name` / `groups` / bucket) | agy の更新で出力の形式が変わった可能性がある。stderr の内容を報告する |
-| 引数が不正 (usage を表示) | `--max-used-percent` の値を 0〜100 の整数に直して実行し直す |
+| 引数が不正 (usage を表示) | `--max-used-percent` を 1 回だけ、0〜100 の整数の値で指定して実行し直す |

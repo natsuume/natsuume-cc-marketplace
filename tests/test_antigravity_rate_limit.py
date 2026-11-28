@@ -4,8 +4,8 @@
 
 - `plugins/antigravity-rate-limit/scripts/antigravity-rate-limit.sh` の挙動
   (`ScriptBehaviorTestCase` を継承するクラス群)
-  - 引数の validation (`--max-used-percent <N>` のみ受理し、N は 10 進整数・最大 3 桁・
-    0〜100)。違反時は agy を起動しない
+  - 引数の validation (`--max-used-percent <N>` のみ 1 回まで受理し、N は 10 進整数・
+    最大 3 桁・0〜100)。違反時は agy を起動しない
   - 依存 (agy / jq) の不在。jq が無いときは agy を起動しない
   - agy に渡す引数 (`-p /usage --output-format json --print-timeout 60s`) と、agy の
     非 0 終了 (終了コード 2 を含む) を取得失敗として扱うこと。そのとき stderr に出す
@@ -425,7 +425,7 @@ class ScriptBehaviorTestCase(unittest.TestCase):
 
 @unittest.skipUnless(JQ, "script の実行には jq が必要")
 class ArgumentValidationTest(ScriptBehaviorTestCase):
-    """`--max-used-percent <N>` 以外の引数と N の validation 違反は exit 1。"""
+    """`--max-used-percent <N>` 以外の引数・2 回目の指定・N の validation 違反は exit 1。"""
 
     def assert_usage_error(self, *args: str) -> None:
         result = self.run_with_response(measured_response(), *args)
@@ -466,6 +466,14 @@ class ArgumentValidationTest(ScriptBehaviorTestCase):
         ):
             with self.subTest(args=args):
                 self.assert_usage_error(*args)
+
+    def test_repeated_threshold_option_is_rejected(self) -> None:
+        # どちらの値も単独では有効な値にし、2 回目の指定そのものが拒否されることを確かめる。
+        for first, second in (("50", "50"), ("50", "60")):
+            with self.subTest(first=first, second=second):
+                self.assert_usage_error(
+                    THRESHOLD_OPTION, first, THRESHOLD_OPTION, second
+                )
 
 
 @unittest.skipUnless(JQ, "script の実行には jq が必要")
@@ -960,7 +968,17 @@ class SignalHandlingTest(ScriptBehaviorTestCase):
         # TERM の転送後 5 秒待っても終わらない agy は KILL で止める。
         self.assert_signal_stops_agy(TERM_IGNORING_FAKE_AGY_SCRIPT, max_seconds=9)
 
-    def assert_signal_stops_agy(self, fake_agy_script: str, max_seconds: float) -> None:
+    def test_quit_stops_waiting_agy_and_removes_work_dir(self) -> None:
+        self.assert_signal_stops_agy(
+            SLOW_FAKE_AGY_SCRIPT, max_seconds=5, script_signal=signal.SIGQUIT
+        )
+
+    def assert_signal_stops_agy(
+        self,
+        fake_agy_script: str,
+        max_seconds: float,
+        script_signal: signal.Signals = signal.SIGTERM,
+    ) -> None:
         sleep_path = shutil.which("sleep")
         self.assertIsNotNone(sleep_path)
         bin_dir = self.make_bin(with_agy=False, with_jq=True)
@@ -991,8 +1009,8 @@ class SignalHandlingTest(ScriptBehaviorTestCase):
         self.wait_for_file(pid_file, 10)
         agy_pid = int(pid_file.read_text(encoding="utf-8").strip())
 
-        # script のプロセスだけに TERM を送る (agy には直接送らない)。
-        process.send_signal(signal.SIGTERM)
+        # script のプロセスだけにシグナルを送る (agy には直接送らない)。
+        process.send_signal(script_signal)
         started = time.monotonic()
         process.communicate(timeout=15)
         self.assertLess(time.monotonic() - started, max_seconds)
