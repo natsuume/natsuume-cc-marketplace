@@ -45,9 +45,10 @@
 #
 # 1. 2 つの一時ディレクトリを作り、request を agy の cwd にするディレクトリへコピーする
 # 2. cwd が git の work tree 内なら、次の 4 つを記録する。work tree の外なら記録も比較も
-#    しない。wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` と
-#    `-c core.fsmonitor=false -c core.splitIndex=false` を付け、index の更新や fsmonitor の
-#    コマンドを起こさない
+#    しない。git が判定に失敗したのに cwd の祖先に `.git` がある場合は、work tree の中の
+#    可能性があるため agy を起動せず exit 1 にする。wrapper が実行する git コマンドには
+#    すべて `GIT_OPTIONAL_LOCKS=0` と `-c core.fsmonitor=false -c core.splitIndex=false
+#    -c core.hooksPath=/dev/null` を付け、index の更新や fsmonitor のコマンド、hook を起こさない
 #    - `<git-dir>/config`・`config.worktree`・`hooks/` 配下・`info/` 配下 (`info/refs` を
 #      除く) の各ファイルの path と、内容のハッシュ (`git hash-object --no-filters`) と
 #      実行権の一覧 (worktree では git-dir と common dir の両方)
@@ -116,9 +117,10 @@
 # | 6 | incomplete-response | agy の stdout が JSON 1 つでない、`.status` が "SUCCESS" でない、`.denied_actions` が空でない、または `.response` が空 |
 #
 # agy の実行後に複数の条件が同時に成り立つ場合は、5 (workspace-modified) > 4 (agy-failed) > 6 (incomplete-response)
-# の順に採用する。上の表にない失敗 (HOME が絶対パスでない・cd できない、一時ディレクトリの
-# 作成、work tree の外に一時ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は
-# exit 1 とし、runner は Failure class を other とする。
+# の順に採用する。上の表にない失敗 (HOME が絶対パスでない・cd できない、cwd の祖先に `.git`
+# があるのに git が work tree を判定できない、一時ディレクトリの作成、work tree の外に一時
+# ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は exit 1 とし、runner は
+# Failure class を other とする。
 #
 # ## stdout / stderr
 #
@@ -174,9 +176,11 @@ remove_temporary_directories() {
 }
 
 # wrapper が実行する git コマンドの共通形。index の更新・fsmonitor のコマンド・split index
-# の共有ファイルの書き込みを起こさない。
+# の共有ファイルの書き込みを起こさない。一時的な index への書き込みでも git は
+# post-index-change の hook を起動するため、hook の置き場所を /dev/null にして hook を止める。
 run_git() {
-  GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -c core.splitIndex=false "$@"
+  GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false -c core.splitIndex=false \
+    -c core.hooksPath=/dev/null "$@"
 }
 
 # 一時的な index と object ディレクトリで、相談対象のリポジトリに対して git を実行する。
@@ -187,7 +191,8 @@ run_git_with_temporary_index() {
   local index_file=$1 objects=$2
   shift 2
   GIT_INDEX_FILE=$index_file GIT_OBJECT_DIRECTORY=$objects GIT_OPTIONAL_LOCKS=0 \
-    git -c core.fsmonitor=false -c core.splitIndex=false -C "$repository_root" "$@"
+    git -c core.fsmonitor=false -c core.splitIndex=false -c core.hooksPath=/dev/null \
+    -C "$repository_root" "$@"
 }
 
 # 値が model 名として使える文字 (英数字と . _ -) だけでできているか。ロケールによって
@@ -232,19 +237,9 @@ git_is_available() {
   command -v git > /dev/null 2>&1
 }
 
-# wrapper の cwd が git の work tree 内か。git が無い場合と work tree の外の場合は偽。
-cwd_is_inside_git_work_tree() {
-  git_is_available || return 1
-  [ "$(run_git rev-parse --is-inside-work-tree 2> /dev/null)" = "true" ]
-}
-
-# 絶対パスのディレクトリ $1 が git の管理下にあるか。git の判定に加え、git の設定に
-# よらず祖先に `.git` があるかも見る。
-is_under_git_management() {
+# 絶対パスのディレクトリ $1 か、その祖先のどれかに `.git` があるか。git の設定によらない。
+has_git_entry_in_ancestors() {
   local directory=$1
-  if git_is_available && run_git -C "$directory" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-    return 0
-  fi
   while :; do
     if [ -e "$directory/.git" ]; then
       return 0
@@ -254,6 +249,34 @@ is_under_git_management() {
     fi
     directory=$(dirname "$directory")
   done
+}
+
+# wrapper の cwd が git の work tree 内か。
+# 戻り値: 0 work tree 内、1 work tree の外 (git が無い場合を含む)、2 git の判定が失敗した
+# のに祖先に `.git` がある (所有者の検査による拒否や壊れた gitdir の指定など、git が
+# 判定できない work tree の中の可能性がある)
+classify_cwd_work_tree() {
+  local answer cwd
+  git_is_available || return 1
+  if answer=$(run_git rev-parse --is-inside-work-tree 2> /dev/null); then
+    [ "$answer" = "true" ] && return 0
+    return 1
+  fi
+  cwd=$(pwd -P) || return 2
+  if has_git_entry_in_ancestors "$cwd"; then
+    return 2
+  fi
+  return 1
+}
+
+# 絶対パスのディレクトリ $1 が git の管理下にあるか。git の判定に加え、git の設定に
+# よらず祖先に `.git` があるかも見る。
+is_under_git_management() {
+  local directory=$1
+  if git_is_available && run_git -C "$directory" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    return 0
+  fi
+  has_git_entry_in_ancestors "$directory"
 }
 
 # git の work tree の外に一時ディレクトリを作り、その絶対パスを created_directory に入れる。
@@ -471,12 +494,20 @@ permission_settings=$(build_permission_settings "$logical_home" "$physical_home"
 
 # --- 相談対象のリポジトリ ---
 compare_workspace=0
-if cwd_is_inside_git_work_tree; then
-  compare_workspace=1
-  prepare_git_context || fail 1 "相談対象の git リポジトリの情報を取得できません (git 2.31 以降が必要です)"
-else
-  repository_root=$(pwd -P) || fail 1 "cwd の絶対パスを取得できません"
-fi
+cwd_work_tree=0
+classify_cwd_work_tree || cwd_work_tree=$?
+case $cwd_work_tree in
+  0)
+    compare_workspace=1
+    prepare_git_context || fail 1 "相談対象の git リポジトリの情報を取得できません (git 2.31 以降が必要です)"
+    ;;
+  2)
+    fail 1 "cwd の祖先に .git がありますが、git が work tree を判定できません (所有者の検査による拒否など)。working tree の変化を検知できないため、agy を起動しません"
+    ;;
+  *)
+    repository_root=$(pwd -P) || fail 1 "cwd の絶対パスを取得できません"
+    ;;
+esac
 
 # --- 一時ディレクトリと request のコピー ---
 create_private_directory_or_fail antigravity-advisor-cwd

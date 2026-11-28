@@ -956,7 +956,7 @@ class WrapperWorkspaceGuardTest(WrapperHarness):
         self.assertEqual(before, directory_digest(self.repo / ".git"))
         self.assert_wrapper_tmpdir_is_empty()
 
-    def test_every_git_call_disables_fsmonitor_and_optional_locks(self) -> None:
+    def test_every_git_call_disables_fsmonitor_hooks_and_optional_locks(self) -> None:
         git_log = self.base / "git-calls.log"
         result = self.run_in_repo(extra_env={"FAKE_GIT_LOG": str(git_log)})
         self.assert_succeeded(result, "既定の助言")
@@ -966,6 +966,18 @@ class WrapperWorkspaceGuardTest(WrapperHarness):
             with self.subTest(call=call):
                 self.assertTrue(call.startswith("optional_locks=0 "), call)
                 self.assertIn(" -c core.fsmonitor=false ", f"{call} ")
+                self.assertIn(" -c core.hooksPath=/dev/null ", f"{call} ")
+
+    def test_existing_post_index_change_hook_is_not_run(self) -> None:
+        # 一時的な index への書き込みでも、git は post-index-change の hook を起動する。
+        marker = self.base / "hook-ran"
+        hook = self.repo / ".git" / "hooks" / "post-index-change"
+        hook.parent.mkdir(exist_ok=True)
+        hook.write_text(f"#!/bin/sh\n: > '{marker}'\n", encoding="utf-8")
+        hook.chmod(0o755)
+        result = self.run_in_repo()
+        self.assert_succeeded(result, "既定の助言")
+        self.assertFalse(marker.exists(), "wrapper の git の呼び出しが hook を実行した")
 
     def test_prompt_names_the_toplevel_from_a_subdirectory(self) -> None:
         subdirectory = self.repo / "sub"
@@ -1224,6 +1236,14 @@ class WrapperOutsideGitTest(WrapperHarness):
             extra_env={"FAKE_AGY_CREATE_FILE": str(self.workdir / "created.txt")},
         )
         self.assert_succeeded(result, "既定の助言")
+
+    def test_work_tree_git_cannot_inspect_stops_before_agy(self) -> None:
+        # 祖先に .git があるのに、git が work tree を判定できない (gitdir の指定が壊れている)。
+        broken = self.base / "broken-repo"
+        (broken / "sub").mkdir(parents=True)
+        (broken / ".git").write_text("gitdir: /nonexistent/gitdir\n", encoding="utf-8")
+        result = self.run_wrapper(cwd=broken / "sub")
+        self.assert_failed(result, 1, agy_invoked=False)
 
 
 class PluginMetadataContractTest(unittest.TestCase):

@@ -64,7 +64,7 @@ Recovery direction: <概念的な次の一手>
 
 ### wrapper (`scripts/run-antigravity-advisor.sh`)
 
-引数に request ファイルを 1 つ取り、起動したときの cwd を相談対象のリポジトリとみなします。cwd が git の work tree 内ならその toplevel、外ならその cwd をリポジトリのルートとします。
+引数に request ファイルを 1 つ取り、起動したときの cwd を相談対象のリポジトリとみなします。cwd が git の work tree 内ならその toplevel、外ならその cwd をリポジトリのルートとします。git が判定に失敗したのに cwd の祖先に `.git` がある場合 (所有者の検査による拒否、壊れた gitdir の指定など) は、cwd が work tree の中にある可能性があり、その場合は変化を検知できないため、agy を起動せず exit 1 にします。
 
 wrapper 専用の一時ディレクトリを `${TMPDIR:-/tmp}` の直下に 2 つ作ります。1 つは agy の cwd にする空のディレクトリで、request のコピーだけを置きます。もう 1 つは agy の stdout / stderr と working tree の記録を置く、agy に渡さないものです。作ったディレクトリが git の work tree の中にある場合は `/tmp` の直下に作り直し、それでも中なら exit 1 にします。一時ディレクトリはどちらも終了時に削除します。
 
@@ -102,7 +102,7 @@ agy の stdout (JSON 1 つ) を検査し、成功時は `.response` の本文だ
 
 agy の実行後に複数の条件が同時に成り立つ場合は、5 (workspace-modified) > 4 (agy-failed) > 6 (incomplete-response) の順に採用します。working tree の比較は agy の終了コードに関わらず必ず行います。
 
-上の表にない wrapper 内部の失敗 (`$HOME` が絶対パスでない・cd できない、一時ディレクトリの作成、git の work tree の外に一時ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は exit 1 で、runner は Failure class を `other` とします。0 以外で終了するときは stdout に何も出しません。
+上の表にない wrapper 内部の失敗 (`$HOME` が絶対パスでない・cd できない、cwd の祖先に `.git` があるのに git が work tree を判定できない、一時ディレクトリの作成、git の work tree の外に一時ディレクトリを作れない、request のコピー、実行前の記録の失敗等) は exit 1 で、runner は Failure class を `other` とします。0 以外で終了するときは stdout に何も出しません。
 
 ## `ANTIGRAVITY_ADVISOR_MODEL`
 
@@ -155,7 +155,7 @@ deny の規則で拒否された tool の呼び出しは `denied_actions` に記
 | status | `git status --porcelain=v1 -z --untracked-files=all` |
 | working tree の内容 | 一時的な index と object ディレクトリで `git read-tree HEAD` (commit の無い repo では空の index) → `git add -A` → `git write-tree` を実行して得る、working tree 全体 (ignore されていない未追跡のファイルを含む) の tree OID |
 
-wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` と `-c core.fsmonitor=false` を付けます。agy が権限設定をすり抜けて `.git/config` に fsmonitor を仕込んでいても、事後の検査でそのコマンドが実行されないようにするためです。実行後の記録では `.git` の設定・hook・info を最初に比べ、変わっていれば `git add` を実行する前に失敗にします。一時的な index と object ディレクトリは agy に渡さない一時ディレクトリに置き、リポジトリの object ディレクトリと本物の index には書き込みません。
+wrapper が実行する git コマンドにはすべて `GIT_OPTIONAL_LOCKS=0` と `-c core.fsmonitor=false` を付けます。agy が権限設定をすり抜けて `.git/config` に fsmonitor を仕込んでいても、事後の検査でそのコマンドが実行されないようにするためです。あわせて `-c core.hooksPath=/dev/null` を付け、hook を起動しません。git は一時的な index への書き込みでも `post-index-change` の hook を起動するため、付けないと、利用者が置いている hook が記録のたびに実行されます。実行後の記録では `.git` の設定・hook・info を最初に比べ、変わっていれば `git add` を実行する前に失敗にします。一時的な index と object ディレクトリは agy に渡さない一時ディレクトリに置き、リポジトリの object ディレクトリと本物の index には書き込みません。
 
 この検知は事後のもので、変更を防いだり元に戻したりはしません。変更の主体も区別しないため、相談中に親セッションやユーザーが同じ work tree を変更した場合も exit 5 になります。ref は HEAD とその branch だけを比べるため、相談中に、相談対象の work tree の外にある別の worktree で commit や stash をしても、fetch で remote-tracking branch が更新されても、失敗にはしません。
 
