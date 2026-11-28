@@ -19,7 +19,7 @@ Linked worktree では marker、launch attestation、tombstone を main `.git` �
 
 ## バージョン
 
-v7.0.4
+v7.1.0
 ## インストール
 
 ```bash
