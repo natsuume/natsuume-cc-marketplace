@@ -109,13 +109,11 @@
 #    - `.command.name == "usage"`
 #    - `.command.data.groups` が 1 件以上の配列で、各グループが object で `buckets` 配列を
 #      持つ (`buckets` の空配列は許容する。そのグループは閾値判定の対象が無いだけ)
-#    - すべてのグループのすべての bucket が object で、文字列の `id` と `window` を持ち、
-#      `remaining_fraction` が 0 以上 1 以下の数値であるか、`remaining_fraction` と
-#      `remaining_amount` の両方が無い (null を含む)。agy の JSON の定義では
-#      `remaining_fraction` に omitempty が付いており、使い切った枠 (値 0) では省かれる
-#      可能性があるため、両方が無い bucket は残り 0 とみなす (実際に省かれるかは未確認)
-#    - `remaining_fraction` が無く `remaining_amount` がある bucket が無い。残りを量で示す
-#      枠には対応していないため、他の違反と区別して stderr に書く
+#    - `remaining_fraction` が無く (null を含む) `remaining_amount` がある bucket が無い。
+#      残りを割合ではなく量で示す枠には対応していないため、他の違反と区別して stderr に
+#      書く
+#    - すべてのグループのすべての bucket が object で、文字列の `id` と `window`、0 以上
+#      1 以下の数値の `remaining_fraction` を持つ
 #
 # ## 判定 (--max-used-percent <N>)
 #
@@ -303,7 +301,6 @@ def is_valid_bucket:
   if type != "object" then false
   elif (.id | type) != "string" then false
   elif (.window | type) != "string" then false
-  elif .remaining_fraction == null then (.remaining_amount == null)
   else (.remaining_fraction | is_fraction) end;
 def is_valid_group:
   if type != "object" then false else ((.buckets | type) == "array") end;
@@ -362,7 +359,6 @@ esac
 
 # ---- 正規化 ----
 
-# remaining_fraction が無い bucket は残り 0 として扱う (検証の節を参照)。
 # usedPercent は (1 - remaining_fraction) * 100 を小数第 1 位に四捨五入する。値は 0 以上
 # なので「1000 倍に 0.5 を足して floor し 10 で割る」で四捨五入になる (round は jq の
 # build によって無いことがあるため使わない)。floor の前に 1e-9 を足すのは、2 進浮動小数点の
@@ -384,8 +380,8 @@ def used_percent:
           id: .id,
           name: (.name | string_or_null),
           window: .window,
-          remainingFraction: (.remaining_fraction // 0),
-          usedPercent: ((.remaining_fraction // 0) | used_percent),
+          remainingFraction: .remaining_fraction,
+          usedPercent: (.remaining_fraction | used_percent),
           resetTime: (
             if (.reset_time | type) == "string" and .reset_time != $unused_reset_time
             then .reset_time

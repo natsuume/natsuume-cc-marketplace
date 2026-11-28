@@ -73,7 +73,7 @@ stdin は使いません。進捗とエラーは stderr に日本語で出しま
 
 | フィールド | 値 |
 |---|---|
-| `remainingFraction` | agy の `remaining_fraction` (0〜1)。agy の応答に `remaining_fraction` が無い枠は `0` |
+| `remainingFraction` | agy の `remaining_fraction` (0〜1) |
 | `usedPercent` | `(1 - remainingFraction) * 100` を小数第 1 位に四捨五入した数値 |
 | `resetTime` | agy の `reset_time` (RFC3339、UTC)。未使用の枠を表す `1970-01-01T00:00:00Z` と、文字列でない値 (欠損を含む) は `null` |
 | `description` (bucket) | agy の原文。使用済みの枠にだけ付き、無ければ `null` |
@@ -100,8 +100,8 @@ exit 1 になる取得失敗は次のとおりです。
   - `num_turns` が 0。0 でなければ agent turn が実行された (古い agy で `/usage` が prompt として送られた) 可能性があり、quota を消費したおそれがある旨を stderr に出します
   - `command.name` が `"usage"`
   - `command.data.groups` が 1 件以上の配列で、各グループが `buckets` 配列を持つ (空配列は許容します)
-  - 各枠が文字列の `id`・`window` を持ち、`remaining_fraction` が 0〜1 の数値であるか、`remaining_fraction` と `remaining_amount` の両方が無い。agy の JSON の定義では `remaining_fraction` に `omitempty` が付いており、使い切った枠 (値 0) では省かれる可能性があるため、両方が無い枠は残り 0 (`usedPercent` 100) とみなします。実際に省かれるかは未確認です
-  - `remaining_fraction` の代わりに `remaining_amount` で残りを示す枠が無い。残りを量で示す枠には対応しておらず、その旨を stderr に出します
+  - `remaining_fraction` の代わりに `remaining_amount` で残りを示す枠が無い。残りを量で示す枠には対応しておらず、その旨を他の違反と区別して stderr に出します
+  - 各枠が文字列の `id`・`window` と、0〜1 の数値の `remaining_fraction` を持つ
 
 ## 取得方式
 

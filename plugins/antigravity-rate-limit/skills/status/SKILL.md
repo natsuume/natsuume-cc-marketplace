@@ -31,7 +31,7 @@ exit 0 と exit 2 のとき、stdout に次の JSON が返る。枠はモデル�
 | `groups[].buckets[].id` | 枠の識別子 |
 | `groups[].buckets[].name` | 枠の表示名 |
 | `groups[].buckets[].window` | 枠の窓。実測値は `weekly` (週次) と `5h` (5 時間) |
-| `groups[].buckets[].remainingFraction` | 残り割合 (0〜1)。agy の応答に割合が無い枠は、使い切った枠とみなして 0 |
+| `groups[].buckets[].remainingFraction` | 残り割合 (0〜1) |
 | `groups[].buckets[].usedPercent` | 使用率 (%)。`(1 - remainingFraction) * 100` を小数第 1 位に丸めた値 |
 | `groups[].buckets[].resetTime` | reset 時刻 (RFC3339、UTC)。未使用の枠では `null` |
 | `groups[].buckets[].description` | reset までの時間などの説明 (agy の原文)。使用済みの枠にだけ付き、無ければ `null` |
