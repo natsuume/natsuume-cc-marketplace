@@ -172,7 +172,7 @@ merge 実行 repo の `refs/remotes/origin/<base>` (`<base>` は gh が返す PR
 - rename は削除と追加に分けて扱います。コードのファイルを `.md` に rename した変更は、元の path がコードなので成立しません
 - net diff が空の PR (文書を足して後の commit で消した PR 等) は成立しません。wrapper は従来どおり空の差分として中断し、gate は記録を照合します
 - 判定に使う git コマンド (merge-base・diff) が失敗した場合は成立しません。PR の head の commit がローカルに無い (fetch していない) 場合もここに当たります
-- 利用者の `diff.relative` の設定に関わらず、repo 全体の path を見ます
+- 利用者の `diff.relative` の設定や、submodule の変更を隠す設定 (`diff.ignoreSubmodules`・`.gitmodules` の `ignore`) に関わらず、repo 全体の path と submodule の変更を見ます
 
 判定は `hooks/scripts/lib/text-paths.sh` が行います (canonical は `pre-push-review`。「共有 lib の同一性」節を参照)。gate と wrapper は同じ関数を同じ引数の形 (remote-tracking ref の完全な名前と head) で呼びます。
 

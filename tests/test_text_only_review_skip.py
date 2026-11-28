@@ -559,6 +559,49 @@ class TextOnlyRangeTest(WorkspaceTestCase):
         self.assertNotEqual(merge_base.returncode, 0, "merge-base が見つかった")
         self.assertEqual(self.range_status(repository), 1)
 
+    def commit_submodule_bump(self, gitmodules: str) -> Repository:
+        """base (master) に submodule の gitlink と .gitmodules を置き、branch では gitlink の
+        commit を進めて文書も変えた repository を作る。gitlink は update-index で直接置く
+        (submodule の中身は clone しないため、working tree には置かない)。"""
+        repository = self.create_repository()
+        repository.git("switch", "-q", "master")
+        repository.write(".gitmodules", gitmodules)
+        repository.git("add", ".gitmodules")
+        gitlink = f"160000,{'1' * 40},vendor/lib"
+        repository.git("update-index", "--add", "--cacheinfo", gitlink)
+        repository.git("commit", "-q", "-m", "add a submodule")
+        repository.git("switch", "-q", "-c", "submodule-bump")
+        gitlink = f"160000,{'2' * 40},vendor/lib"
+        repository.git("update-index", "--cacheinfo", gitlink)
+        repository.write("README.md", "# updated\n")
+        repository.git("add", "README.md")
+        repository.git("commit", "-q", "-m", "bump the submodule and update the readme")
+        return repository
+
+    def assert_submodule_change_is_seen(self, repository: Repository) -> None:
+        """設定が効く diff では submodule の変更が一覧から消える (fixture の確認) が、判定は
+        submodule の変更を見て 1 を返す。"""
+        hidden = repository.git("diff", "--name-only", MASTER_REF, "HEAD")
+        self.assertEqual(hidden.split(), ["README.md"])
+        shown = repository.git(
+            "diff", "--name-only", "--ignore-submodules=none", MASTER_REF, "HEAD"
+        )
+        self.assertEqual(shown.split(), ["README.md", "vendor/lib"])
+        self.assertEqual(self.range_status(repository), 1)
+
+    def test_submodule_change_hidden_by_git_config_returns_1(self) -> None:
+        gitmodules = '[submodule "lib"]\n\tpath = vendor/lib\n\turl = ./lib\n'
+        repository = self.commit_submodule_bump(gitmodules)
+        repository.git("config", "diff.ignoreSubmodules", "all")
+        self.assert_submodule_change_is_seen(repository)
+
+    def test_submodule_change_hidden_by_gitmodules_returns_1(self) -> None:
+        gitmodules = (
+            '[submodule "lib"]\n\tpath = vendor/lib\n\turl = ./lib\n\tignore = all\n'
+        )
+        repository = self.commit_submodule_bump(gitmodules)
+        self.assert_submodule_change_is_seen(repository)
+
 
 @unittest.skipUnless(JQ, "push gate integration requires jq")
 class PushGateTest(WorkspaceTestCase):

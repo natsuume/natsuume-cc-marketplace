@@ -202,7 +202,7 @@ basename の拡張子 (最後の `.` より後ろ) が、ASCII の大文字小�
 - rename は削除と追加に分けて扱います。コードのファイルを `.md` に rename した変更は、元の path がコードなので成立しません
 - net diff が空の push (文書を足して後の commit で消した branch 等) は成立しません。全 commit が空 commit の push は、従来どおり空 push として通します
 - 判定に使う git コマンド (merge-base・diff) が失敗した場合は成立しません
-- 利用者の `diff.relative` の設定に関わらず、repo 全体の path を見ます
+- 利用者の `diff.relative` の設定や、submodule の変更を隠す設定 (`diff.ignoreSubmodules`・`.gitmodules` の `ignore`) に関わらず、repo 全体の path と submodule の変更を見ます
 
 判定は `hooks/scripts/lib/text-paths.sh` が行います。この lib は本 plugin が canonical で、`pre-push-codex-review` と `pre-merge-cross-review` が byte-identical なコピーを保持し、同じ関数を同じ引数の形 (remote-tracking ref の完全な名前と head) で呼びます。
 

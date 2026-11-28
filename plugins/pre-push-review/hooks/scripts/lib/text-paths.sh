@@ -37,13 +37,15 @@
 # 見る (途中の commit ごとの内容は見ない)。diff は次の形で取る:
 #
 #   git -c core.quotePath=false -c diff.relative=false diff --name-only -z --no-renames \
-#     <merge-base> <head>
+#     --ignore-submodules=none <merge-base> <head>
 #
 #   - `core.quotePath=false` と `-z`: 日本語のファイル名を引用符なしで受け取る
 #   - `--no-renames`: rename を削除と追加に分け、コードを `.md` に rename した変更を文書だけと
 #     判定しない
 #   - `diff.relative=false`: 利用者の `diff.relative` の設定で、cwd の subdirectory の外の path
 #     が欠けないようにする
+#   - `--ignore-submodules=none`: 利用者の git の設定 (`diff.ignoreSubmodules`) や
+#     `.gitmodules` の `ignore` で、submodule の変更が一覧から消えないようにする
 #
 # ## exit code
 #
@@ -169,7 +171,8 @@ is_text_only_range_in() {
   local listing
   listing=$(mktemp "${TMPDIR:-/tmp}/text-paths.XXXXXX" 2>/dev/null) || return 1
   if ! git "${git_prefix[@]}" -c core.quotePath=false -c diff.relative=false \
-    diff --name-only -z --no-renames "$merge_base" "$head" >"$listing" 2>/dev/null; then
+    diff --name-only -z --no-renames --ignore-submodules=none "$merge_base" "$head" \
+    >"$listing" 2>/dev/null; then
     rm -f "$listing"
     return 1
   fi
